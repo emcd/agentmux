@@ -35,5 +35,6 @@
 
 ## 2. Validation
 
-- [ ] 2.1 Run `hatch --env develop run linters`.
-- [ ] 2.2 Run `hatch --env develop run testers`.
+- [ ] 2.1 Run `cargo check --all-targets --all-features`.
+- [ ] 2.2 Run `cargo clippy --all-targets --all-features -- -D warnings`.
+- [ ] 2.3 Run `cargo test --all-features`.
