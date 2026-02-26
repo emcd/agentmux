@@ -23,3 +23,18 @@ args = ["librovore", "serve"]
 [mcp_servers.nb]
 command = "nb-mcp"
 args = ["--notebook", "tmuxmux", "--no-commit-signing"]
+
+[mcp_servers.tmuxmux]
+command = "reloaderoo"
+args = [
+  "--",
+  "cargo",
+  "run",
+  "--bin",
+  "tmuxmux-mcp",
+  "--",
+  "--state-directory",
+  ".auxiliary/state/tmuxmux",
+]
+startup_timeout_sec = 60
+tool_timeout_sec = 900
