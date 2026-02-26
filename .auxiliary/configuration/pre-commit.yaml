@@ -31,52 +31,52 @@ repos:
     - id: check-yaml
       name: 'Validate: YAML Files'
 
-# - repo: local
-#   hooks:
-#
-#     - id: cargo-fmt
-#       name: 'Check Style (Rust)'
-#       language: system
-#       entry: 'cargo fmt --all -- --check'
-#       pass_filenames: false
-#       require_serial: true
-#       stages: [ 'pre-commit' ]
-#       fail_fast: true
-#
-#     - id: cargo-clippy
-#       name: 'Lint (Rust: Clippy)'
-#       language: system
-#       entry: 'cargo clippy --all-targets --all-features -- -D warnings'
-#       pass_filenames: false
-#       require_serial: true
-#       stages: [ 'pre-commit' ]
-#       fail_fast: true
-#
-#     - id: cargo-test
-#       name: 'Test (Rust)'
-#       language: system
-#       entry: 'cargo test --locked'
-#       pass_filenames: false
-#       require_serial: true
-#       stages: [ 'pre-commit' ]
-#       fail_fast: true
-#
-#     - id: cargo-build
-#       name: 'Compile (Rust: Release)'
-#       language: system
-#       entry: 'cargo build --release --locked'
-#       pass_filenames: false
-#       require_serial: true
-#       stages: [ 'pre-push' ]
-#       always_run: true
-#       fail_fast: true
-#
-#     - id: cargo-test-release
-#       name: 'Test (Rust: Release)'
-#       language: system
-#       entry: 'cargo test --release --locked'
-#       pass_filenames: false
-#       require_serial: true
-#       stages: [ 'pre-push' ]
-#       always_run: true
-#       fail_fast: true
+- repo: local
+  hooks:
+
+    - id: cargo-fmt
+      name: 'Check Style (Rust)'
+      language: system
+      entry: 'cargo fmt --all -- --check'
+      pass_filenames: false
+      require_serial: true
+      stages: [ 'pre-commit' ]
+      fail_fast: true
+
+    - id: cargo-clippy
+      name: 'Lint (Rust: Clippy)'
+      language: system
+      entry: 'cargo clippy --all-targets --all-features -- -D warnings'
+      pass_filenames: false
+      require_serial: true
+      stages: [ 'pre-commit' ]
+      fail_fast: true
+
+    - id: cargo-test
+      name: 'Test (Rust)'
+      language: system
+      entry: 'cargo test --locked'
+      pass_filenames: false
+      require_serial: true
+      stages: [ 'pre-commit' ]
+      fail_fast: true
+
+    - id: cargo-build
+      name: 'Compile (Rust: Release)'
+      language: system
+      entry: 'cargo build --release --locked'
+      pass_filenames: false
+      require_serial: true
+      stages: [ 'pre-push' ]
+      always_run: true
+      fail_fast: true
+
+    - id: cargo-test-release
+      name: 'Test (Rust: Release)'
+      language: system
+      entry: 'cargo test --release --locked'
+      pass_filenames: false
+      require_serial: true
+      stages: [ 'pre-push' ]
+      always_run: true
+      fail_fast: true
