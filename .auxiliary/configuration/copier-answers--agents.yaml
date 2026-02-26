@@ -1,0 +1,19 @@
+# Changes here will be overwritten by Copier
+_commit: v1.0a8-15-g7be6aa5
+_src_path: gh:emcd/agents-common
+coders:
+- claude
+- codex
+- gemini
+- opencode
+instructions_sources:
+-   files:
+        '*.rst':
+            strip_header_lines: 20
+    source: github:emcd/python-project-common@docs-1#documentation/common
+instructions_target: .auxiliary/instructions
+languages:
+- rust
+project_name: tmuxmux
+provide_instructions: true
+support_local_models: true
