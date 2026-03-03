@@ -67,6 +67,18 @@ cargo test --all-features
 Pre-commit hooks are configured in
 `.auxiliary/configuration/pre-commit.yaml`.
 
+## Quiescence Delivery Notes
+
+Relay delivery waits for pane output to remain stable before injecting a prompt.
+
+Default values:
+
+- `quiet_window_ms = 750`
+- `delivery_timeout_ms = 30000`
+
+If pane output changes continuously (for example, clock-like status output),
+delivery may time out for that target.
+
 ## Planned Runtime Layout (MVP)
 
 Configuration root:

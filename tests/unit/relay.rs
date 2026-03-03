@@ -50,6 +50,8 @@ fn chat_rejects_unknown_target() {
             message: "hello".to_string(),
             targets: vec!["missing".to_string()],
             broadcast: false,
+            quiet_window_ms: None,
+            delivery_timeout_ms: None,
         },
         &config_root,
         "party",

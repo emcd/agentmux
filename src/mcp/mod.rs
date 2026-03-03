@@ -126,6 +126,8 @@ impl McpServer {
             message: params.message.clone(),
             targets: params.targets.clone(),
             broadcast: params.broadcast,
+            quiet_window_ms: None,
+            delivery_timeout_ms: None,
         };
         match request_relay(
             &self.state.configuration.bundle_paths.relay_socket,

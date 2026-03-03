@@ -5,6 +5,8 @@ use std::{
     os::unix::net::UnixStream,
     path::Path,
     process::Command,
+    thread,
+    time::{Duration, Instant},
 };
 
 use serde::{Deserialize, Serialize};
@@ -18,6 +20,8 @@ use crate::{
 };
 
 const SCHEMA_VERSION: &str = "1";
+const DEFAULT_QUIET_WINDOW_MS: u64 = 750;
+const DEFAULT_DELIVERY_TIMEOUT_MS: u64 = 30_000;
 
 /// Recipient metadata returned by `list`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -77,6 +81,10 @@ pub enum RelayRequest {
         message: String,
         targets: Vec<String>,
         broadcast: bool,
+        #[serde(default)]
+        quiet_window_ms: Option<u64>,
+        #[serde(default)]
+        delivery_timeout_ms: Option<u64>,
     },
 }
 
@@ -111,6 +119,8 @@ struct ChatRequestContext {
     message: String,
     targets: Vec<String>,
     broadcast: bool,
+    quiet_window_ms: Option<u64>,
+    delivery_timeout_ms: Option<u64>,
 }
 
 /// Handles one relay socket request/response exchange on a connected stream.
@@ -162,6 +172,8 @@ pub fn handle_request(
             message,
             targets,
             broadcast,
+            quiet_window_ms,
+            delivery_timeout_ms,
         } => handle_chat(
             &bundle,
             ChatRequestContext {
@@ -170,6 +182,8 @@ pub fn handle_request(
                 message,
                 targets,
                 broadcast,
+                quiet_window_ms,
+                delivery_timeout_ms,
             },
             tmux_socket,
         ),
@@ -205,6 +219,8 @@ fn handle_chat(
         message,
         targets,
         broadcast,
+        quiet_window_ms,
+        delivery_timeout_ms,
     } = request;
 
     if message.trim().is_empty() {
@@ -270,25 +286,49 @@ fn handle_chat(
     }
 
     let mut results = Vec::with_capacity(resolved_targets.len());
+    let quiescence = QuiescenceOptions::new(quiet_window_ms, delivery_timeout_ms);
     for target_session in resolved_targets {
         let message_id = Uuid::new_v4().to_string();
-        let envelope = render_json_envelope(
-            &bundle.bundle_name,
-            &sender.session_name,
-            &target_session,
-            &message_id,
-            &message,
-        );
-        match inject_prompt(tmux_socket, &target_session, &envelope) {
-            Ok(()) => {
+        match wait_for_quiescent_pane(tmux_socket, &target_session, quiescence) {
+            Ok(pane_target) => {
+                let envelope = render_json_envelope(
+                    &bundle.bundle_name,
+                    &sender.session_name,
+                    &target_session,
+                    &message_id,
+                    &message,
+                );
+                match inject_prompt(tmux_socket, &pane_target, &envelope) {
+                    Ok(()) => {
+                        results.push(ChatResult {
+                            target_session,
+                            message_id,
+                            outcome: ChatOutcome::Delivered,
+                            reason: None,
+                        });
+                    }
+                    Err(reason) => {
+                        results.push(ChatResult {
+                            target_session,
+                            message_id,
+                            outcome: ChatOutcome::Failed,
+                            reason: Some(reason),
+                        });
+                    }
+                }
+            }
+            Err(DeliveryWaitError::Timeout { timeout }) => {
                 results.push(ChatResult {
                     target_session,
                     message_id,
-                    outcome: ChatOutcome::Delivered,
-                    reason: None,
+                    outcome: ChatOutcome::Timeout,
+                    reason: Some(format!(
+                        "quiescence wait timed out after {}ms",
+                        timeout.as_millis()
+                    )),
                 });
             }
-            Err(reason) => {
+            Err(DeliveryWaitError::Failed { reason }) => {
                 results.push(ChatResult {
                     target_session,
                     message_id,
@@ -346,26 +386,128 @@ fn render_json_envelope(
     serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| message.to_string())
 }
 
-fn inject_prompt(tmux_socket: &Path, target_session: &str, prompt: &str) -> Result<(), String> {
-    let output = Command::new("tmux")
-        .arg("-S")
-        .arg(tmux_socket)
-        .arg("send-keys")
-        .arg("-t")
-        .arg(target_session)
-        .arg("--")
-        .arg(prompt)
-        .arg("Enter")
-        .output()
-        .map_err(|source| source.to_string())?;
+#[derive(Clone, Copy, Debug)]
+struct QuiescenceOptions {
+    quiet_window: Duration,
+    delivery_timeout: Duration,
+}
+
+impl Default for QuiescenceOptions {
+    fn default() -> Self {
+        Self {
+            quiet_window: Duration::from_millis(DEFAULT_QUIET_WINDOW_MS),
+            delivery_timeout: Duration::from_millis(DEFAULT_DELIVERY_TIMEOUT_MS),
+        }
+    }
+}
+
+impl QuiescenceOptions {
+    fn new(quiet_window_ms: Option<u64>, delivery_timeout_ms: Option<u64>) -> Self {
+        Self {
+            quiet_window: Duration::from_millis(
+                quiet_window_ms
+                    .filter(|value| *value > 0)
+                    .unwrap_or(DEFAULT_QUIET_WINDOW_MS),
+            ),
+            delivery_timeout: Duration::from_millis(
+                delivery_timeout_ms
+                    .filter(|value| *value > 0)
+                    .unwrap_or(DEFAULT_DELIVERY_TIMEOUT_MS),
+            ),
+        }
+    }
+}
+
+#[derive(Debug)]
+enum DeliveryWaitError {
+    Timeout { timeout: Duration },
+    Failed { reason: String },
+}
+
+fn wait_for_quiescent_pane(
+    tmux_socket: &Path,
+    target_session: &str,
+    options: QuiescenceOptions,
+) -> Result<String, DeliveryWaitError> {
+    let deadline = Instant::now() + options.delivery_timeout;
+    loop {
+        let pane_before = resolve_active_pane_target(tmux_socket, target_session)
+            .map_err(|reason| DeliveryWaitError::Failed { reason })?;
+        let snapshot_before = capture_pane_snapshot(tmux_socket, &pane_before)
+            .map_err(|reason| DeliveryWaitError::Failed { reason })?;
+
+        thread::sleep(options.quiet_window);
+
+        let pane_after = resolve_active_pane_target(tmux_socket, target_session)
+            .map_err(|reason| DeliveryWaitError::Failed { reason })?;
+        let snapshot_after = capture_pane_snapshot(tmux_socket, &pane_after)
+            .map_err(|reason| DeliveryWaitError::Failed { reason })?;
+        if pane_before == pane_after && snapshot_before == snapshot_after {
+            return Ok(pane_after);
+        }
+
+        if Instant::now() >= deadline {
+            return Err(DeliveryWaitError::Timeout {
+                timeout: options.delivery_timeout,
+            });
+        }
+    }
+}
+
+fn resolve_active_pane_target(tmux_socket: &Path, target_session: &str) -> Result<String, String> {
+    let output = run_tmux_command(
+        tmux_socket,
+        &["display-message", "-p", "-t", target_session, "#{pane_id}"],
+    )?;
+    let pane_target = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if pane_target.is_empty() {
+        return Err(format!(
+            "tmux did not return an active pane for session {target_session}"
+        ));
+    }
+    Ok(pane_target)
+}
+
+fn capture_pane_snapshot(tmux_socket: &Path, pane_target: &str) -> Result<String, String> {
+    let output = run_tmux_command(
+        tmux_socket,
+        &["capture-pane", "-p", "-t", pane_target, "-S", "-200"],
+    )?;
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn inject_prompt(tmux_socket: &Path, pane_target: &str, prompt: &str) -> Result<(), String> {
+    run_tmux_command(
+        tmux_socket,
+        &["send-keys", "-t", pane_target, "--", prompt, "Enter"],
+    )?;
+    Ok(())
+}
+
+fn run_tmux_command(
+    tmux_socket: &Path,
+    command_arguments: &[&str],
+) -> Result<std::process::Output, String> {
+    let mut command = Command::new(tmux_program());
+    command.arg("-S").arg(tmux_socket).args(command_arguments);
+    let output = command.output().map_err(|source| source.to_string())?;
     if output.status.success() {
-        return Ok(());
+        return Ok(output);
     }
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let command_name = command_arguments.first().copied().unwrap_or("tmux");
     if stderr.is_empty() {
-        return Err(format!("tmux send-keys failed for target {target_session}"));
+        return Err(format!("tmux {command_name} failed"));
     }
     Err(stderr)
+}
+
+fn tmux_program() -> String {
+    std::env::var("TMUXMUX_TMUX_COMMAND")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "tmux".to_string())
 }
 
 fn read_request(stream: &UnixStream) -> Result<RelayRequest, io::Error> {
