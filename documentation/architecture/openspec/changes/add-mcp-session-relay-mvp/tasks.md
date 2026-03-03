@@ -13,14 +13,14 @@
       for ownership-aware pruning.
 - [ ] 1.6 Implement dedicated-socket cleanup when no tmuxmux-owned sessions
       remain.
-- [ ] 1.7 Implement session-target resolution to an injection pane using the
+- [x] 1.7 Implement session-target resolution to an injection pane using the
       session's currently active pane.
-- [ ] 1.8 Implement strict JSON envelope rendering with stable field order and
+- [x] 1.8 Implement strict JSON envelope rendering with stable field order and
       pretty-printed formatting before `send-keys` injection.
-- [ ] 1.9 Implement quiescence detection before delivery with configurable quiet
+- [x] 1.9 Implement quiescence detection before delivery with configurable quiet
       window and timeout values, defaulting to `quiet_window_ms = 750` and
       `delivery_timeout_ms = 30000`.
-- [ ] 1.10 Return per-target delivery results from MCP operations, including
+- [x] 1.10 Return per-target delivery results from MCP operations, including
       message identifier, target session, outcome, and failure reason when
       applicable.
 - [ ] 1.11 Add configurable tmux socket selection to all tmux operations with a
@@ -29,12 +29,12 @@
       bootstrap-plus-parallel startup, retry/jitter behavior, ownership tagging,
       dedicated-socket cleanup, quiescence gating, timeout behavior, and
       failure reporting.
-- [ ] 1.13 Add user-facing documentation for quiescence behavior, including
+- [x] 1.13 Add user-facing documentation for quiescence behavior, including
       warning about continuously changing pane output such as clock-style
       statusline content.
 
 ## 2. Validation
 
-- [ ] 2.1 Run `cargo check --all-targets --all-features`.
-- [ ] 2.2 Run `cargo clippy --all-targets --all-features -- -D warnings`.
-- [ ] 2.3 Run `cargo test --all-features`.
+- [x] 2.1 Run `cargo check --all-targets --all-features`.
+- [x] 2.2 Run `cargo clippy --all-targets --all-features -- -D warnings`.
+- [x] 2.3 Run `cargo test --all-features`.
