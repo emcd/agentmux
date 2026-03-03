@@ -54,6 +54,12 @@ MCP server:
 cargo run --bin tmuxmux-mcp
 ```
 
+Optional explicit association overrides:
+
+```bash
+cargo run --bin tmuxmux-mcp -- --bundle-name tmuxmux --session-name relay
+```
+
 ## Development
 
 Validation commands:
@@ -122,6 +128,10 @@ Example:
   ]
 }
 ```
+
+Per-worktree local MCP overrides (Git-ignored) may be placed at:
+
+- `.auxiliary/configuration/tmuxmux/overrides/mcp.toml`
 
 See runtime bootstrap spec for full details:
 [runtime-bootstrap spec](documentation/architecture/openspec/changes/add-runtime-bootstrap-and-xdg-layout/specs/runtime-bootstrap/spec.md).

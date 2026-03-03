@@ -16,6 +16,10 @@ pub enum RuntimeError {
         argument: String,
         message: String,
     },
+    Validation {
+        code: String,
+        message: String,
+    },
     InvalidBundleName {
         bundle_name: String,
     },
@@ -48,6 +52,13 @@ impl RuntimeError {
             source,
         }
     }
+
+    pub fn validation(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::Validation {
+            code: code.into(),
+            message: message.into(),
+        }
+    }
 }
 
 impl Display for RuntimeError {
@@ -58,6 +69,9 @@ impl Display for RuntimeError {
             }
             Self::InvalidArgument { argument, message } => {
                 write!(formatter, "invalid argument {argument}: {message}")
+            }
+            Self::Validation { code, message } => {
+                write!(formatter, "{code}: {message}")
             }
             Self::InvalidBundleName { bundle_name } => {
                 write!(formatter, "invalid bundle name '{bundle_name}'")

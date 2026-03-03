@@ -1,11 +1,13 @@
 use std::{env, path::PathBuf, time::Duration};
 
 use tmuxmux::{
-    configuration::{
-        ConfigurationError, infer_sender_from_working_directory, load_bundle_configuration,
-    },
+    configuration::{ConfigurationError, load_bundle_configuration},
     mcp::McpConfiguration,
     runtime::{
+        association::{
+            McpAssociationCli, load_local_mcp_overrides, resolve_association,
+            validate_sender_session,
+        },
         bootstrap::{
             BootstrapOptions, bootstrap_relay, resolve_relay_program, spawn_relay_process,
         },
@@ -16,25 +18,25 @@ use tmuxmux::{
 
 #[derive(Debug)]
 struct McpArguments {
-    bundle_name: String,
+    bundle_name: Option<String>,
     auto_start_relay: bool,
     startup_timeout_ms: u64,
     configuration_root: Option<PathBuf>,
     state_root: Option<PathBuf>,
     repository_root: Option<PathBuf>,
-    sender_session: Option<String>,
+    session_name: Option<String>,
 }
 
 impl Default for McpArguments {
     fn default() -> Self {
         Self {
-            bundle_name: "default".to_string(),
+            bundle_name: None,
             auto_start_relay: true,
             startup_timeout_ms: 10_000,
             configuration_root: None,
             state_root: None,
             repository_root: None,
-            sender_session: None,
+            session_name: None,
         }
     }
 }
@@ -49,13 +51,33 @@ async fn main() {
 
 async fn run() -> Result<(), RuntimeError> {
     let arguments = parse_arguments(env::args().skip(1).collect())?;
+    let current_directory = env::current_dir()
+        .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
+    let workspace = tmuxmux::runtime::association::WorkspaceContext::discover(&current_directory)?;
+    let local_overrides = load_local_mcp_overrides(&workspace.workspace_root)?;
+    let configuration_root = arguments.configuration_root.clone().or_else(|| {
+        local_overrides
+            .as_ref()
+            .and_then(|overrides| overrides.config_root.clone())
+    });
+    let association = resolve_association(
+        &McpAssociationCli {
+            bundle_name: arguments.bundle_name.clone(),
+            session_name: arguments.session_name.clone(),
+        },
+        local_overrides.as_ref(),
+        &workspace,
+    )?;
     let overrides = RuntimeRootOverrides {
-        configuration_root: arguments.configuration_root,
+        configuration_root,
         state_root: arguments.state_root,
         repository_root: arguments.repository_root,
     };
     let roots = RuntimeRoots::resolve(&overrides)?;
-    let paths = BundleRuntimePaths::resolve(&roots.state_root, &arguments.bundle_name)?;
+    let bundle = load_bundle_configuration(&roots.configuration_root, &association.bundle_name)
+        .map_err(map_bundle_load_error)?;
+    let session_name = validate_sender_session(&bundle, &association.session_name)?;
+    let paths = BundleRuntimePaths::resolve(&roots.state_root, &association.bundle_name)?;
     let relay_program = resolve_relay_program()?;
     let options = BootstrapOptions {
         auto_start_relay: arguments.auto_start_relay,
@@ -65,12 +87,9 @@ async fn run() -> Result<(), RuntimeError> {
         let _child = spawn_relay_process(&relay_program, &paths, &roots.configuration_root)?;
         Ok(())
     })?;
-
-    let sender_session =
-        resolve_sender_session(arguments.sender_session, &roots.configuration_root, &paths)?;
     let configuration = McpConfiguration {
         bundle_paths: paths,
-        sender_session,
+        sender_session: Some(session_name),
     };
     tmuxmux::mcp::run(configuration)
         .await
@@ -83,8 +102,9 @@ fn parse_arguments(arguments: Vec<String>) -> Result<McpArguments, RuntimeError>
 
     while index < arguments.len() {
         match arguments[index].as_str() {
-            "--bundle" => {
-                parsed.bundle_name = take_value(&arguments, &mut index, "--bundle")?;
+            "--bundle-name" => {
+                let value = take_value(&arguments, &mut index, "--bundle-name")?;
+                parsed.bundle_name = Some(value);
             }
             "--config-directory" => {
                 let value = take_value(&arguments, &mut index, "--config-directory")?;
@@ -98,9 +118,9 @@ fn parse_arguments(arguments: Vec<String>) -> Result<McpArguments, RuntimeError>
                 let value = take_value(&arguments, &mut index, "--repository-root")?;
                 parsed.repository_root = Some(PathBuf::from(value));
             }
-            "--sender-session" => {
-                let value = take_value(&arguments, &mut index, "--sender-session")?;
-                parsed.sender_session = Some(value);
+            "--session-name" => {
+                let value = take_value(&arguments, &mut index, "--session-name")?;
+                parsed.session_name = Some(value);
             }
             "--startup-timeout-ms" => {
                 let value = take_value(&arguments, &mut index, "--startup-timeout-ms")?;
@@ -143,49 +163,35 @@ fn take_value(arguments: &[String], index: &mut usize, flag: &str) -> Result<Str
 
 fn print_help() {
     println!(
-        "Usage: tmuxmux-mcp [--bundle NAME] [--config-directory PATH] \
+        "Usage: tmuxmux-mcp [--bundle-name NAME] [--config-directory PATH] \
          [--state-directory PATH] \
-         [--repository-root PATH] [--sender-session NAME] \
+         [--repository-root PATH] [--session-name NAME] \
          [--startup-timeout-ms N] [--no-auto-start-relay]"
     );
 }
 
-fn resolve_sender_session(
-    explicit_sender: Option<String>,
-    configuration_root: &std::path::Path,
-    bundle_paths: &BundleRuntimePaths,
-) -> Result<Option<String>, RuntimeError> {
-    if explicit_sender.is_some() {
-        return Ok(explicit_sender);
-    }
-    let bundle = match load_bundle_configuration(configuration_root, &bundle_paths.bundle_name) {
-        Ok(value) => value,
-        Err(ConfigurationError::UnknownBundle { .. }) => return Ok(None),
-        Err(ConfigurationError::AmbiguousSender { .. }) => return Ok(None),
-        Err(source) => {
-            return Err(RuntimeError::io(
-                "load bundle configuration for sender resolution",
-                anyhow_to_io(anyhow::Error::from(source)),
-            ));
-        }
-    };
-    infer_sender_from_working_directory(
-        &bundle,
-        &env::current_dir().map_err(|source| {
-            RuntimeError::io(
-                "resolve current working directory for sender resolution",
-                source,
-            )
-        })?,
-    )
-    .map_err(|source| {
-        RuntimeError::io(
-            "infer sender session",
-            anyhow_to_io(anyhow::Error::from(source)),
-        )
-    })
-}
-
 fn anyhow_to_io(source: anyhow::Error) -> std::io::Error {
     std::io::Error::other(source.to_string())
+}
+
+fn map_bundle_load_error(source: ConfigurationError) -> RuntimeError {
+    match source {
+        ConfigurationError::UnknownBundle { bundle_name, .. } => RuntimeError::validation(
+            "validation_unknown_bundle",
+            format!("bundle '{}' is not configured", bundle_name),
+        ),
+        ConfigurationError::AmbiguousSender { .. } => RuntimeError::validation(
+            "validation_unknown_sender",
+            "sender association is ambiguous".to_string(),
+        ),
+        ConfigurationError::InvalidConfiguration { path, message } => RuntimeError::validation(
+            "validation_invalid_arguments",
+            format!(
+                "invalid bundle configuration {}: {}",
+                path.display(),
+                message
+            ),
+        ),
+        ConfigurationError::Io { context, source } => RuntimeError::io(context, source),
+    }
 }
