@@ -100,5 +100,5 @@ safely and easy for humans to inspect.
 
 ## Open Questions
 
-- Should MCP auto-start relay runtime when unavailable, or fail fast with a
-  remediation error?
+- None for MVP. MCP startup uses connect-only relay checks and returns a
+  remediation error when relay is unavailable.

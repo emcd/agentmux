@@ -36,24 +36,25 @@ Auto-discovered sender session SHALL use:
 - **WHEN** sender association candidate matches multiple configured members
 - **THEN** MCP startup returns a structured `validation_unknown_sender` error
 
-### Requirement: Relay Auto-Start from MCP
+### Requirement: Relay Connectivity Gate from MCP
 
-MCP bootstrap SHALL resolve association before attempting relay startup.
+MCP bootstrap SHALL resolve association before relay connectivity checks.
 After association resolves, MCP bootstrap SHALL attempt to connect to bundle
 `relay.sock` first.
-If connection fails and auto-start is enabled, MCP SHALL attempt to start the
-relay and wait for connectability until timeout.
-
-Default bootstrap values SHALL be:
-
-- `auto_start_relay = true`
-- `startup_timeout_ms = 10000`
+If connection fails, MCP startup SHALL fail with a structured runtime error.
 
 #### Scenario: Fail startup before relay bootstrap when bundle is unknown
 
 - **WHEN** bundle discovery resolves to an unknown or missing bundle
 - **THEN** MCP startup returns structured `validation_unknown_bundle`
-- **AND** relay auto-start is not attempted
+- **AND** relay connectivity checks are not attempted
+
+#### Scenario: Fail startup when relay is unavailable after association resolves
+
+- **WHEN** bundle and sender association resolve successfully
+- **AND** `relay.sock` is not connectable
+- **THEN** MCP startup returns a structured runtime error
+- **AND** MCP does not attempt relay auto-spawn
 
 ## ADDED Requirements
 

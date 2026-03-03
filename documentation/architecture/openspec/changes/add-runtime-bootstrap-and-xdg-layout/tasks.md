@@ -12,21 +12,21 @@
       operations.
 - [x] 1.6 Implement relay bootstrap lock files (`relay.lock`,
       `relay.spawn.lock`) and single-spawner coordination.
-- [x] 1.7 Implement MCP-side relay auto-start flow with connect-first,
-      lock-coordinated spawn, stale-socket cleanup, and timeout wait.
-- [x] 1.8 Add bootstrap configuration for `auto_start_relay` and
-      `startup_timeout_ms` with documented defaults.
+- [x] 1.7 Implement MCP-side relay connectivity gate with connect-first and
+      fail-fast behavior (no MCP auto-spawn).
+- [x] 1.8 Add reusable bootstrap configuration for `auto_start_relay` and
+      `startup_timeout_ms` with documented defaults for non-MCP clients.
 - [x] 1.9 Implement sender association resolver with explicit-session override
       and working-directory match fallback.
-- [ ] 1.10 Return structured bootstrap errors for unknown/ambiguous sender
+- [x] 1.10 Return structured bootstrap errors for unknown/ambiguous sender
       association and relay startup timeout/failure.
 - [x] 1.11 Enforce runtime artifact ownership and restrictive permission
       posture for bundle runtime directories and sockets.
-- [ ] 1.12 Add integration tests for concurrent MCP bootstrap, stale-socket
-      cleanup, and sender association resolution.
+- [ ] 1.12 Add integration tests for concurrent client bootstrap,
+      stale-socket cleanup, and sender association resolution.
 - [ ] 1.13 Add integration tests for debug-build repository-local state
       override selection.
-- [ ] 1.14 Add documentation for XDG layout, bundle runtime paths, startup
+- [x] 1.14 Add documentation for XDG layout, bundle runtime paths, startup
       behavior, and debug-build repository-local override usage.
 
 ## 2. Validation

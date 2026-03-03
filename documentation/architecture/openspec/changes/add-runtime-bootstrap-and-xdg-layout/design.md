@@ -15,7 +15,8 @@ The design uses a lock-coordinated bootstrap pattern:
 
 - Goals:
   - Standardize where `tmuxmux` reads config and writes runtime state.
-  - Provide deterministic, race-safe relay auto-start from MCP servers.
+  - Provide deterministic MCP relay connectivity checks at startup.
+  - Preserve race-safe relay auto-start primitives for future non-MCP clients.
   - Keep one tmux socket and one relay socket per bundle.
   - Preserve same-host, same-user trust assumptions.
 - Non-Goals:
@@ -50,14 +51,23 @@ The design uses a lock-coordinated bootstrap pattern:
     - `relay.spawn.lock`
   - Rationale: isolates bundle runtimes and avoids cross-bundle collisions.
 
-- Decision: default MCP bootstrap is auto-start enabled.
+- Decision: MCP bootstrap is connect-only and fail-fast.
   - Behavior:
-    - MCP first tries `relay.sock`.
-    - If unavailable, MCP attempts relay startup unless auto-start is disabled.
+    - MCP tries `relay.sock`.
+    - If unavailable, startup fails with a structured remediation error.
+  - Rationale: avoids MCP-driven bootstrap loops and keeps startup ownership
+    explicit.
+
+- Decision: keep relay auto-start primitives for non-MCP clients.
+  - Behavior:
+    - bootstrap helper supports optional spawn, lock coordination, stale-socket
+      cleanup, and startup timeout.
+    - intended for future TUI/CLI flows rather than MCP startup path.
   - Config:
     - `bootstrap.auto_start_relay` (default: `true`)
     - `bootstrap.startup_timeout_ms` (default: `10000`)
-  - Rationale: matching user expectation that clients "just work."
+  - Rationale: preserves tested startup mechanics for later interactive
+    clients without coupling MCP to relay lifecycle.
 
 - Decision: spawn coordination uses lock files.
   - Behavior:
@@ -84,7 +94,8 @@ The design uses a lock-coordinated bootstrap pattern:
 
 ## Risks / Trade-offs
 
-- Auto-start improves UX but can hide failures until timeout boundaries.
+- Connect-only MCP requires explicit operator startup order.
+- State-root mismatches between relay and MCP can fail startup until corrected.
 - Working-directory inference can be ambiguous in shared repos/worktrees.
 - Enforcing restrictive permissions may expose misconfigured environments.
 
@@ -93,5 +104,5 @@ The design uses a lock-coordinated bootstrap pattern:
 1. Implement XDG path resolver and bundle runtime directory helper.
 2. Implement relay bootstrap coordinator with lock-based single spawner.
 3. Implement sender association resolver for MCP startup context.
-4. Update MCP bootstrap to use relay auto-start policy and timeout handling.
-5. Add docs for path layout and operational troubleshooting.
+4. Update MCP bootstrap to use connect-only relay availability checks.
+5. Add operational guidance for startup ordering and shared state-root usage.

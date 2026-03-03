@@ -1,4 +1,4 @@
-//! Relay bootstrap coordination primitives for MCP startup.
+//! Relay bootstrap coordination primitives for client startup.
 
 use std::{
     fs::{self, OpenOptions},
@@ -24,7 +24,7 @@ use super::{
 const SOCKET_MODE_OWNER_ONLY: u32 = 0o600;
 const POLL_SLEEP_INTERVAL: Duration = Duration::from_millis(50);
 
-/// MCP-side bootstrap options for relay startup behavior.
+/// Client-side bootstrap options for relay startup behavior.
 #[derive(Clone, Copy, Debug)]
 pub struct BootstrapOptions {
     pub auto_start_relay: bool,
@@ -367,7 +367,8 @@ mod tests {
         };
         let err = bootstrap_relay(&paths, options, || Ok(())).expect_err("bootstrap should fail");
         assert!(
-            err.to_string().contains("auto-start is disabled"),
+            err.to_string()
+                .contains("start tmuxmux-relay with matching --bundle and --state-directory"),
             "unexpected error: {err}"
         );
     }

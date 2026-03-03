@@ -60,6 +60,21 @@ Optional explicit association overrides:
 cargo run --bin tmuxmux-mcp -- --bundle-name tmuxmux --session-name relay
 ```
 
+## Recommended Startup Pattern
+
+Start relay first, then MCP servers.
+
+Use the same `--bundle` and `--state-directory` values for relay and MCP so
+both resolve the same `relay.sock`.
+MCP startup is connect-only and fails fast if the relay socket is unavailable.
+
+Example:
+
+```bash
+cargo run --bin tmuxmux-relay -- --bundle tmuxmux --state-directory .auxiliary/state/tmuxmux
+cargo run --bin tmuxmux-mcp -- --bundle-name tmuxmux --session-name relay --state-directory .auxiliary/state/tmuxmux
+```
+
 ## Development
 
 Validation commands:
@@ -68,6 +83,17 @@ Validation commands:
 cargo check --all-targets --all-features
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features
+```
+
+### Local Testing Tip
+
+For relay/MCP smoke tests, use a shared shell variable to reduce
+`--state-directory` mismatch mistakes:
+
+```bash
+TMUXMUX_STATE_DIRECTORY=.auxiliary/state/tmuxmux
+cargo run --bin tmuxmux-relay -- --bundle tmuxmux --state-directory "${TMUXMUX_STATE_DIRECTORY}"
+cargo run --bin tmuxmux-mcp -- --bundle-name tmuxmux --session-name relay --state-directory "${TMUXMUX_STATE_DIRECTORY}"
 ```
 
 Pre-commit hooks are configured in

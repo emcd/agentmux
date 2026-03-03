@@ -16,8 +16,10 @@ drift across machines.
 - Define per-bundle runtime directories with:
   - `tmux.sock` for tmux server control.
   - `relay.sock` for client-to-relay IPC.
-- Define MCP-side relay auto-start behavior with lock-based spawn
-  coordination, stale-socket handling, and startup timeout.
+- Define MCP-side relay connectivity gate behavior (connect-first, fail-fast;
+  no auto-spawn).
+- Preserve lock-based relay auto-spawn primitives for non-MCP clients (future
+  TUI/CLI bootstrap), including stale-socket handling and startup timeout.
 - Define sender-session association bootstrap from MCP runtime context with
   working-directory matching as best-effort inference.
 - Define local security posture for runtime artifacts (same-user ownership and
@@ -31,5 +33,5 @@ drift across machines.
   - `mcp-tool-surface` from `add-mcp-tool-surface-contract`
 - Affected code:
   - path resolution and configuration loading
-  - relay process manager and spawn coordination
-  - MCP bootstrap path for relay connectivity and sender association
+  - relay process manager and spawn coordination helpers
+  - MCP startup path for relay connectivity and sender association

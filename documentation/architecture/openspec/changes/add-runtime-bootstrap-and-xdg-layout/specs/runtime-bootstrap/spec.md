@@ -67,32 +67,53 @@ The system SHALL use:
 - **THEN** tmux operations use that bundle's `tmux.sock`
 - **AND** MCP-to-relay IPC uses that bundle's `relay.sock`
 
-### Requirement: Relay Auto-Start from MCP
+### Requirement: Relay Connectivity Gate from MCP
 
 MCP bootstrap SHALL attempt to connect to bundle `relay.sock` first.
-If connection fails and auto-start is enabled, MCP SHALL attempt to start the
-relay and wait for connectability until timeout.
-
-Default bootstrap values SHALL be:
-
-- `auto_start_relay = true`
-- `startup_timeout_ms = 10000`
+MCP bootstrap SHALL NOT auto-start relay.
+If connection fails, MCP startup SHALL fail fast with a structured runtime
+error that includes the resolved relay socket path and remediation guidance.
 
 #### Scenario: Use running relay when available
 
 - **WHEN** `relay.sock` is connectable during MCP bootstrap
 - **THEN** MCP continues without spawning a new relay process
 
+#### Scenario: Fail fast when relay is unavailable
+
+- **WHEN** `relay.sock` is not connectable during MCP bootstrap
+- **THEN** MCP returns a structured bootstrap error
+- **AND** MCP does not attempt relay auto-spawn
+
+#### Scenario: Surface state-root mismatch remediation
+
+- **WHEN** relay and MCP use different state roots and MCP cannot connect to
+  `relay.sock`
+- **THEN** startup failure includes guidance to use matching `--bundle` and
+  `--state-directory` values
+
+### Requirement: Relay Auto-Start Primitive for Non-MCP Clients
+
+Runtime bootstrap helpers SHALL support optional relay auto-start for future
+non-MCP clients such as TUI/CLI entrypoints.
+
+Default bootstrap values SHALL be:
+
+- `auto_start_relay = true`
+- `startup_timeout_ms = 10000`
+
 #### Scenario: Auto-start relay when unavailable
 
-- **WHEN** `relay.sock` is not connectable and auto-start is enabled
-- **THEN** MCP executes relay bootstrap flow
+- **WHEN** bootstrap helper is called with `auto_start_relay = true`
+- **AND** `relay.sock` is not connectable
+- **THEN** helper executes relay spawn flow
 - **AND** waits up to configured timeout for relay connectivity
 
-#### Scenario: Fail fast when auto-start disabled
+#### Scenario: Fail fast when helper auto-start is disabled
 
-- **WHEN** `relay.sock` is not connectable and auto-start is disabled
-- **THEN** MCP returns a structured bootstrap error
+- **WHEN** bootstrap helper is called with `auto_start_relay = false`
+- **AND** `relay.sock` is not connectable
+- **THEN** helper returns a structured bootstrap error
 
 ### Requirement: Spawn Coordination and Stale Socket Handling
 
@@ -101,7 +122,8 @@ spawns relay while others wait for socket readiness.
 
 #### Scenario: Single spawner under contention
 
-- **WHEN** multiple MCP servers bootstrap concurrently for one bundle
+- **WHEN** multiple clients invoke relay auto-start bootstrap concurrently for
+  one bundle
 - **THEN** only one process performs relay spawn
 - **AND** other processes wait for relay socket connectability
 
@@ -148,3 +170,16 @@ permissions.
 
 - **WHEN** an existing runtime socket or lock file is not owned by current user
 - **THEN** bootstrap returns a structured security error
+
+### Requirement: Startup Guidance for Shared Runtime Roots
+
+Project documentation SHALL provide a recommended startup pattern where relay
+starts before MCP, and relay/MCP use matching `--bundle` and
+`--state-directory` values.
+
+#### Scenario: Document startup order and shared state directory
+
+- **WHEN** an operator configures local runtime startup
+- **THEN** documented guidance specifies relay-first startup
+- **AND** documented guidance specifies matching bundle and state-directory
+  values across relay and MCP commands
