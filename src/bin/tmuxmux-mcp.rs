@@ -1,6 +1,9 @@
 use std::{env, path::PathBuf, time::Duration};
 
 use tmuxmux::{
+    configuration::{
+        ConfigurationError, infer_sender_from_working_directory, load_bundle_configuration,
+    },
     mcp::McpConfiguration,
     runtime::{
         bootstrap::{
@@ -16,6 +19,7 @@ struct McpArguments {
     bundle_name: String,
     auto_start_relay: bool,
     startup_timeout_ms: u64,
+    configuration_root: Option<PathBuf>,
     state_root: Option<PathBuf>,
     repository_root: Option<PathBuf>,
     sender_session: Option<String>,
@@ -27,6 +31,7 @@ impl Default for McpArguments {
             bundle_name: "default".to_string(),
             auto_start_relay: true,
             startup_timeout_ms: 10_000,
+            configuration_root: None,
             state_root: None,
             repository_root: None,
             sender_session: None,
@@ -45,7 +50,7 @@ async fn main() {
 async fn run() -> Result<(), RuntimeError> {
     let arguments = parse_arguments(env::args().skip(1).collect())?;
     let overrides = RuntimeRootOverrides {
-        configuration_root: None,
+        configuration_root: arguments.configuration_root,
         state_root: arguments.state_root,
         repository_root: arguments.repository_root,
     };
@@ -57,13 +62,15 @@ async fn run() -> Result<(), RuntimeError> {
         startup_timeout: Duration::from_millis(arguments.startup_timeout_ms),
     };
     let _ = bootstrap_relay(&paths, options, || {
-        let _child = spawn_relay_process(&relay_program, &paths)?;
+        let _child = spawn_relay_process(&relay_program, &paths, &roots.configuration_root)?;
         Ok(())
     })?;
 
+    let sender_session =
+        resolve_sender_session(arguments.sender_session, &roots.configuration_root, &paths)?;
     let configuration = McpConfiguration {
         bundle_paths: paths,
-        sender_session: arguments.sender_session,
+        sender_session,
     };
     tmuxmux::mcp::run(configuration)
         .await
@@ -78,6 +85,10 @@ fn parse_arguments(arguments: Vec<String>) -> Result<McpArguments, RuntimeError>
         match arguments[index].as_str() {
             "--bundle" => {
                 parsed.bundle_name = take_value(&arguments, &mut index, "--bundle")?;
+            }
+            "--config-directory" => {
+                let value = take_value(&arguments, &mut index, "--config-directory")?;
+                parsed.configuration_root = Some(PathBuf::from(value));
             }
             "--state-directory" => {
                 let value = take_value(&arguments, &mut index, "--state-directory")?;
@@ -132,10 +143,47 @@ fn take_value(arguments: &[String], index: &mut usize, flag: &str) -> Result<Str
 
 fn print_help() {
     println!(
-        "Usage: tmuxmux-mcp [--bundle NAME] [--state-directory PATH] \
+        "Usage: tmuxmux-mcp [--bundle NAME] [--config-directory PATH] \
+         [--state-directory PATH] \
          [--repository-root PATH] [--sender-session NAME] \
          [--startup-timeout-ms N] [--no-auto-start-relay]"
     );
+}
+
+fn resolve_sender_session(
+    explicit_sender: Option<String>,
+    configuration_root: &std::path::Path,
+    bundle_paths: &BundleRuntimePaths,
+) -> Result<Option<String>, RuntimeError> {
+    if explicit_sender.is_some() {
+        return Ok(explicit_sender);
+    }
+    let bundle = match load_bundle_configuration(configuration_root, &bundle_paths.bundle_name) {
+        Ok(value) => value,
+        Err(ConfigurationError::UnknownBundle { .. }) => return Ok(None),
+        Err(ConfigurationError::AmbiguousSender { .. }) => return Ok(None),
+        Err(source) => {
+            return Err(RuntimeError::io(
+                "load bundle configuration for sender resolution",
+                anyhow_to_io(anyhow::Error::from(source)),
+            ));
+        }
+    };
+    infer_sender_from_working_directory(
+        &bundle,
+        &env::current_dir().map_err(|source| {
+            RuntimeError::io(
+                "resolve current working directory for sender resolution",
+                source,
+            )
+        })?,
+    )
+    .map_err(|source| {
+        RuntimeError::io(
+            "infer sender session",
+            anyhow_to_io(anyhow::Error::from(source)),
+        )
+    })
 }
 
 fn anyhow_to_io(source: anyhow::Error) -> std::io::Error {

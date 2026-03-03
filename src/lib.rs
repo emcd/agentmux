@@ -1,6 +1,8 @@
 //! Shared primitives for tmuxmux executables.
 
+pub mod configuration;
 pub mod mcp;
+pub mod relay;
 pub mod runtime;
 
 /// Returns a human-readable startup line for a binary.

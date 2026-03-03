@@ -130,11 +130,14 @@ where
 pub fn spawn_relay_process(
     relay_program: &Path,
     paths: &BundleRuntimePaths,
+    configuration_root: &Path,
 ) -> Result<Child, RuntimeError> {
     let mut command = Command::new(relay_program);
     command
         .arg("--bundle")
         .arg(&paths.bundle_name)
+        .arg("--config-directory")
+        .arg(configuration_root)
         .arg("--state-directory")
         .arg(&paths.state_root)
         .stdin(Stdio::null())

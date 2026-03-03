@@ -82,6 +82,35 @@ Per-bundle sockets:
 - `tmux.sock`
 - `relay.sock`
 
+## Bundle Configuration (MVP)
+
+Bundle membership is operator-managed in MVP and is not mutated via MCP tools.
+
+Configuration path:
+
+- `$XDG_CONFIG_HOME/tmuxmux/bundles/<bundle-name>.json`
+- fallback: `~/.config/tmuxmux/bundles/<bundle-name>.json`
+
+Example:
+
+```json
+{
+  "schema_version": "1",
+  "members": [
+    {
+      "session_name": "codex-a",
+      "display_name": "Codex A",
+      "working_directory": "/home/me/src/tmuxmux",
+      "start_command": "codex resume <uuid>"
+    },
+    {
+      "session_name": "codex-b",
+      "display_name": "Codex B"
+    }
+  ]
+}
+```
+
 See runtime bootstrap spec for full details:
 [runtime-bootstrap spec](documentation/architecture/openspec/changes/add-runtime-bootstrap-and-xdg-layout/specs/runtime-bootstrap/spec.md).
 

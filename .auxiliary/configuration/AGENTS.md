@@ -112,3 +112,9 @@ Use `openspec/AGENTS.md` to learn:
 
 <!-- This section accumulates project-specific knowledge, constraints, and deviations.
      For structured items, use documentation/architecture/decisions/ and `nb`. -->
+
+- For Rust tests, prefer files under `tests/unit` and `tests/integration`
+  rather than inline `#[cfg(test)]` modules, unless there is a strong locality
+  reason to keep tests adjacent to implementation.
+- Prefer tests that exercise public interfaces; avoid source-inclusion patterns
+  used only to reach private internals.

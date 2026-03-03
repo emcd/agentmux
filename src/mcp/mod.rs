@@ -15,6 +15,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::relay::{RelayError, RelayRequest, RelayResponse, request_relay};
 use crate::runtime::paths::BundleRuntimePaths;
 
 /// Configuration provided when booting MCP stdio service.
@@ -40,6 +41,9 @@ struct ListParams {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct ChatParams {
+    /// Optional client request identifier echoed in responses.
+    #[serde(default)]
+    request_id: Option<String>,
     /// Message body to route to targets.
     message: String,
     /// Explicit target sessions (one or many).
@@ -64,14 +68,36 @@ impl McpServer {
         &self,
         Parameters(_params): Parameters<ListParams>,
     ) -> Result<CallToolResult, McpError> {
-        let response = json!({
-            "schema_version": "1",
-            "bundle": self.state.configuration.bundle_paths.bundle_name,
-            "sender_session": self.state.configuration.sender_session,
-            "sessions": [],
-            "note": "Session discovery is not implemented yet."
-        });
-        Ok(CallToolResult::success(vec![Content::json(response)?]))
+        match request_relay(
+            &self.state.configuration.bundle_paths.relay_socket,
+            &RelayRequest::List {
+                sender_session: self.state.configuration.sender_session.clone(),
+            },
+        ) {
+            Ok(RelayResponse::List {
+                schema_version,
+                bundle_name,
+                recipients,
+            }) => {
+                let response = json!({
+                    "schema_version": schema_version,
+                    "bundle_name": bundle_name,
+                    "recipients": recipients,
+                });
+                Ok(CallToolResult::success(vec![Content::json(response)?]))
+            }
+            Ok(RelayResponse::Error { error }) => Err(map_relay_error(error)),
+            Ok(other) => Err(internal_tool_error(
+                "internal_unexpected_failure",
+                "relay returned unexpected response variant",
+                Some(json!({"response": other})),
+            )),
+            Err(source) => Err(internal_tool_error(
+                "internal_unexpected_failure",
+                "relay request failed",
+                Some(json!({"cause": source.to_string()})),
+            )),
+        }
     }
 
     #[tool(description = "Submit a chat message to explicit targets or broadcast.")]
@@ -80,21 +106,63 @@ impl McpServer {
         Parameters(params): Parameters<ChatParams>,
     ) -> Result<CallToolResult, McpError> {
         validate_chat_request(&params)?;
-        let target_count = if params.broadcast {
-            0usize
-        } else {
-            params.targets.len()
+        let sender_session = self
+            .state
+            .configuration
+            .sender_session
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| {
+                validation_tool_error(
+                    "validation_unknown_sender",
+                    "sender session is not configured for this MCP server",
+                    None,
+                )
+            })?;
+
+        let request = RelayRequest::Chat {
+            request_id: params.request_id.clone(),
+            sender_session,
+            message: params.message.clone(),
+            targets: params.targets.clone(),
+            broadcast: params.broadcast,
         };
-        let response = json!({
-            "schema_version": "1",
-            "accepted": false,
-            "bundle": self.state.configuration.bundle_paths.bundle_name,
-            "sender_session": self.state.configuration.sender_session,
-            "target_mode": if params.broadcast { "broadcast" } else { "targets" },
-            "target_count": target_count,
-            "note": "Message routing is not implemented yet."
-        });
-        Ok(CallToolResult::success(vec![Content::json(response)?]))
+        match request_relay(
+            &self.state.configuration.bundle_paths.relay_socket,
+            &request,
+        ) {
+            Ok(RelayResponse::Chat {
+                schema_version,
+                bundle_name,
+                request_id,
+                sender_session,
+                sender_display_name,
+                status,
+                results,
+            }) => {
+                let response = json!({
+                    "schema_version": schema_version,
+                    "bundle_name": bundle_name,
+                    "request_id": request_id,
+                    "sender_session": sender_session,
+                    "sender_display_name": sender_display_name,
+                    "status": status,
+                    "results": results,
+                });
+                Ok(CallToolResult::success(vec![Content::json(response)?]))
+            }
+            Ok(RelayResponse::Error { error }) => Err(map_relay_error(error)),
+            Ok(other) => Err(internal_tool_error(
+                "internal_unexpected_failure",
+                "relay returned unexpected response variant",
+                Some(json!({"response": other})),
+            )),
+            Err(source) => Err(internal_tool_error(
+                "internal_unexpected_failure",
+                "relay request failed",
+                Some(json!({"cause": source.to_string()})),
+            )),
+        }
     }
 }
 
@@ -122,19 +190,62 @@ pub async fn run(configuration: McpConfiguration) -> Result<()> {
 fn validate_chat_request(params: &ChatParams) -> Result<(), McpError> {
     let message = params.message.trim();
     if message.is_empty() {
-        return Err(McpError::invalid_params("message must be non-empty", None));
+        return Err(validation_tool_error(
+            "validation_invalid_arguments",
+            "message must be non-empty",
+            None,
+        ));
     }
     if params.broadcast && !params.targets.is_empty() {
-        return Err(McpError::invalid_params(
+        return Err(validation_tool_error(
+            "validation_conflicting_targets",
             "targets must be empty when broadcast=true",
             None,
         ));
     }
     if !params.broadcast && params.targets.is_empty() {
-        return Err(McpError::invalid_params(
+        return Err(validation_tool_error(
+            "validation_empty_targets",
             "provide at least one target or set broadcast=true",
             None,
         ));
     }
     Ok(())
+}
+
+fn map_relay_error(error: RelayError) -> McpError {
+    if error.code.starts_with("validation_") {
+        return validation_tool_error(&error.code, &error.message, error.details);
+    }
+    internal_tool_error(&error.code, &error.message, error.details)
+}
+
+fn validation_tool_error(
+    code: &str,
+    message: &str,
+    details: Option<serde_json::Value>,
+) -> McpError {
+    McpError::invalid_params(
+        message.to_string(),
+        Some(error_payload(code, message, details)),
+    )
+}
+
+fn internal_tool_error(code: &str, message: &str, details: Option<serde_json::Value>) -> McpError {
+    McpError::internal_error(
+        message.to_string(),
+        Some(error_payload(code, message, details)),
+    )
+}
+
+fn error_payload(
+    code: &str,
+    message: &str,
+    details: Option<serde_json::Value>,
+) -> serde_json::Value {
+    json!({
+        "code": code,
+        "message": message,
+        "details": details,
+    })
 }
