@@ -11,13 +11,16 @@ use std::{
     time::{Duration, Instant},
 };
 
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
 use crate::{
-    configuration::{BundleConfiguration, ConfigurationError, load_bundle_configuration},
+    configuration::{
+        BundleConfiguration, ConfigurationError, PromptReadinessTemplate, load_bundle_configuration,
+    },
     envelope::{
         AddressIdentity, ENVELOPE_SCHEMA_VERSION, EnvelopeRenderInput, ManifestPreamble,
         PromptBatchSettings, batch_envelopes, parse_tokenizer_profile, render_envelope,
@@ -35,6 +38,8 @@ const CREATE_RETRY_BASE_DELAY_MS: u64 = 35;
 const CREATE_RETRY_JITTER_MS: u64 = 35;
 const MAX_PROMPT_TOKENS_ENVVAR: &str = "TMUXMUX_MAX_PROMPT_TOKENS";
 const TOKENIZER_PROFILE_ENVVAR: &str = "TMUXMUX_TOKENIZER_PROFILE";
+const DEFAULT_PROMPT_INSPECT_LINES: usize = 6;
+const MAX_PROMPT_INSPECT_LINES: usize = 40;
 
 /// Recipient metadata returned by `list`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -352,7 +357,12 @@ fn handle_chat(
             })
             .cloned()
             .collect::<Vec<_>>();
-        match wait_for_quiescent_pane(tmux_socket, &target_session, quiescence) {
+        match wait_for_quiescent_pane(
+            tmux_socket,
+            &target_session,
+            quiescence,
+            target_member.prompt_readiness.as_ref(),
+        ) {
             Ok(pane_target) => {
                 let envelope = render_envelope(&EnvelopeRenderInput {
                     manifest: ManifestPreamble {
@@ -418,15 +428,23 @@ fn handle_chat(
                     }
                 }
             }
-            Err(DeliveryWaitError::Timeout { timeout }) => {
+            Err(DeliveryWaitError::Timeout {
+                timeout,
+                readiness_mismatch,
+            }) => {
+                let reason = if readiness_mismatch {
+                    format!(
+                        "prompt readiness did not match before timeout after {}ms",
+                        timeout.as_millis()
+                    )
+                } else {
+                    format!("quiescence wait timed out after {}ms", timeout.as_millis())
+                };
                 results.push(ChatResult {
                     target_session,
                     message_id,
                     outcome: ChatOutcome::Timeout,
-                    reason: Some(format!(
-                        "quiescence wait timed out after {}ms",
-                        timeout.as_millis()
-                    )),
+                    reason: Some(reason),
                 });
             }
             Err(DeliveryWaitError::Failed { reason }) => {
@@ -812,16 +830,31 @@ impl QuiescenceOptions {
 
 #[derive(Debug)]
 enum DeliveryWaitError {
-    Timeout { timeout: Duration },
-    Failed { reason: String },
+    Timeout {
+        timeout: Duration,
+        readiness_mismatch: bool,
+    },
+    Failed {
+        reason: String,
+    },
+}
+
+#[derive(Debug)]
+struct PromptReadinessMatcher {
+    prompt_regex: Regex,
+    inspect_lines: usize,
 }
 
 fn wait_for_quiescent_pane(
     tmux_socket: &Path,
     target_session: &str,
     options: QuiescenceOptions,
+    prompt_readiness: Option<&PromptReadinessTemplate>,
 ) -> Result<String, DeliveryWaitError> {
+    let readiness = build_prompt_readiness_matcher(prompt_readiness)
+        .map_err(|reason| DeliveryWaitError::Failed { reason })?;
     let deadline = Instant::now() + options.delivery_timeout;
+    let mut readiness_mismatch = false;
     loop {
         let pane_before = resolve_active_pane_target(tmux_socket, target_session)
             .map_err(|reason| DeliveryWaitError::Failed { reason })?;
@@ -835,15 +868,59 @@ fn wait_for_quiescent_pane(
         let snapshot_after = capture_pane_snapshot(tmux_socket, &pane_after)
             .map_err(|reason| DeliveryWaitError::Failed { reason })?;
         if pane_before == pane_after && snapshot_before == snapshot_after {
-            return Ok(pane_after);
+            if prompt_readiness_matches(snapshot_after.as_str(), readiness.as_ref()) {
+                return Ok(pane_after);
+            }
+            readiness_mismatch = true;
         }
 
         if Instant::now() >= deadline {
             return Err(DeliveryWaitError::Timeout {
                 timeout: options.delivery_timeout,
+                readiness_mismatch,
             });
         }
     }
+}
+
+fn build_prompt_readiness_matcher(
+    template: Option<&PromptReadinessTemplate>,
+) -> Result<Option<PromptReadinessMatcher>, String> {
+    let Some(template) = template else {
+        return Ok(None);
+    };
+
+    let prompt_regex = Regex::new(template.prompt_regex.as_str())
+        .map_err(|source| format!("invalid prompt_readiness.prompt_regex: {source}"))?;
+    let inspect_lines = template
+        .inspect_lines
+        .unwrap_or(DEFAULT_PROMPT_INSPECT_LINES)
+        .clamp(1, MAX_PROMPT_INSPECT_LINES);
+
+    Ok(Some(PromptReadinessMatcher {
+        prompt_regex,
+        inspect_lines,
+    }))
+}
+
+fn prompt_readiness_matches(snapshot: &str, matcher: Option<&PromptReadinessMatcher>) -> bool {
+    let Some(matcher) = matcher else {
+        return true;
+    };
+
+    let inspected = snapshot
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .rev()
+        .take(matcher.inspect_lines)
+        .collect::<Vec<_>>();
+    if inspected.is_empty() {
+        return false;
+    }
+    let mut ordered = inspected;
+    ordered.reverse();
+    let block = ordered.join("\n");
+    matcher.prompt_regex.is_match(block.as_str())
 }
 
 fn resolve_active_pane_target(tmux_socket: &Path, target_session: &str) -> Result<String, String> {

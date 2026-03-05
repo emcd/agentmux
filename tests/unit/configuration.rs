@@ -23,7 +23,13 @@ fn loads_valid_bundle_configuration() {
         r#"{
             "schema_version": "1",
             "members": [
-                {"session_name": "a"},
+                {
+                    "session_name": "a",
+                    "prompt_readiness": {
+                        "prompt_regex": "^›",
+                        "inspect_lines": 8
+                    }
+                },
                 {"session_name": "b", "display_name": "Bravo"}
             ]
         }"#,
@@ -33,6 +39,12 @@ fn loads_valid_bundle_configuration() {
     assert_eq!(loaded.bundle_name, "alpha");
     assert_eq!(loaded.members.len(), 2);
     assert_eq!(loaded.members[1].display_name.as_deref(), Some("Bravo"));
+    let readiness = loaded.members[0]
+        .prompt_readiness
+        .as_ref()
+        .expect("member a prompt_readiness");
+    assert_eq!(readiness.prompt_regex, "^›");
+    assert_eq!(readiness.inspect_lines, Some(8));
 }
 
 #[test]
@@ -120,4 +132,55 @@ fn rejects_ambiguous_sender_from_working_directory() {
         }
         _ => panic!("expected ambiguous sender error"),
     }
+}
+
+#[test]
+fn rejects_invalid_prompt_regex() {
+    let temporary = TempDir::new().expect("temporary");
+    let root = write_bundle(
+        &temporary,
+        "alpha",
+        r#"{
+            "members": [
+                {
+                    "session_name": "a",
+                    "prompt_readiness": {
+                        "prompt_regex": "["
+                    }
+                }
+            ]
+        }"#,
+    );
+
+    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    assert!(
+        err.to_string().contains("prompt_readiness.prompt_regex"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn rejects_zero_prompt_inspect_lines() {
+    let temporary = TempDir::new().expect("temporary");
+    let root = write_bundle(
+        &temporary,
+        "alpha",
+        r#"{
+            "members": [
+                {
+                    "session_name": "a",
+                    "prompt_readiness": {
+                        "prompt_regex": "^ok$",
+                        "inspect_lines": 0
+                    }
+                }
+            ]
+        }"#,
+    );
+
+    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    assert!(
+        err.to_string().contains("prompt_readiness.inspect_lines"),
+        "unexpected error: {err}"
+    );
 }

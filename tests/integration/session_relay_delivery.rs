@@ -35,13 +35,21 @@ fn tmux_command(socket: &Path, arguments: &[&str]) -> std::process::Output {
 }
 
 fn write_bundle_configuration(root: &Path, bundle_name: &str, sessions: &[&str]) -> PathBuf {
-    let config_root = root.join("config");
-    let bundles = config_root.join("bundles");
-    fs::create_dir_all(&bundles).expect("create bundles directory");
     let members = sessions
         .iter()
         .map(|session| serde_json::json!({"session_name": session}))
         .collect::<Vec<_>>();
+    write_bundle_configuration_members(root, bundle_name, &members)
+}
+
+fn write_bundle_configuration_members(
+    root: &Path,
+    bundle_name: &str,
+    members: &[serde_json::Value],
+) -> PathBuf {
+    let config_root = root.join("config");
+    let bundles = config_root.join("bundles");
+    fs::create_dir_all(&bundles).expect("create bundles directory");
     let body = serde_json::json!({
         "schema_version": "1",
         "members": members,
@@ -193,6 +201,139 @@ fn relay_chat_reports_timeout_for_noisy_target_with_partial_status() {
             .is_some_and(|reason| reason.contains("timed out")),
         "timeout reason should describe quiescence timeout: {:?}",
         charlie.reason
+    );
+
+    let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
+}
+
+#[test]
+fn relay_chat_delivers_when_prompt_readiness_template_matches() {
+    if !tmux_available() {
+        eprintln!("skipping relay delivery test because tmux is unavailable");
+        return;
+    }
+
+    let temporary = TempDir::new().expect("temporary");
+    let bundle_name = "party";
+    let config_root = write_bundle_configuration_members(
+        temporary.path(),
+        bundle_name,
+        &[
+            serde_json::json!({"session_name": "alpha"}),
+            serde_json::json!({
+                "session_name": "bravo",
+                "prompt_readiness": {
+                    "prompt_regex": "READY>",
+                    "inspect_lines": 8
+                }
+            }),
+        ],
+    );
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
+
+    spawn_session(&paths.tmux_socket, "alpha", "exec sleep 45");
+    spawn_session(
+        &paths.tmux_socket,
+        "bravo",
+        "printf 'booting\\n'; sleep 0.2; printf 'READY>\\n'; exec sleep 45",
+    );
+
+    let response = handle_request(
+        RelayRequest::Chat {
+            request_id: Some("req-ready".to_string()),
+            sender_session: "alpha".to_string(),
+            message: "hello".to_string(),
+            targets: vec!["bravo".to_string()],
+            broadcast: false,
+            quiet_window_ms: Some(50),
+            delivery_timeout_ms: Some(2_000),
+        },
+        &config_root,
+        bundle_name,
+        &paths.tmux_socket,
+    )
+    .expect("delivery should complete");
+
+    let RelayResponse::Chat {
+        status, results, ..
+    } = response
+    else {
+        panic!("expected chat response");
+    };
+
+    assert_eq!(status, ChatStatus::Success);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].outcome, ChatOutcome::Delivered);
+
+    let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
+}
+
+#[test]
+fn relay_chat_times_out_when_prompt_readiness_never_matches() {
+    if !tmux_available() {
+        eprintln!("skipping relay delivery test because tmux is unavailable");
+        return;
+    }
+
+    let temporary = TempDir::new().expect("temporary");
+    let bundle_name = "party";
+    let config_root = write_bundle_configuration_members(
+        temporary.path(),
+        bundle_name,
+        &[
+            serde_json::json!({"session_name": "alpha"}),
+            serde_json::json!({
+                "session_name": "bravo",
+                "prompt_readiness": {
+                    "prompt_regex": "^›"
+                }
+            }),
+        ],
+    );
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
+
+    spawn_session(&paths.tmux_socket, "alpha", "exec sleep 45");
+    spawn_session(
+        &paths.tmux_socket,
+        "bravo",
+        "printf 'idle\\n'; exec sleep 45",
+    );
+
+    let response = handle_request(
+        RelayRequest::Chat {
+            request_id: Some("req-unready".to_string()),
+            sender_session: "alpha".to_string(),
+            message: "hello".to_string(),
+            targets: vec!["bravo".to_string()],
+            broadcast: false,
+            quiet_window_ms: Some(50),
+            delivery_timeout_ms: Some(350),
+        },
+        &config_root,
+        bundle_name,
+        &paths.tmux_socket,
+    )
+    .expect("delivery should complete");
+
+    let RelayResponse::Chat {
+        status, results, ..
+    } = response
+    else {
+        panic!("expected chat response");
+    };
+
+    assert_eq!(status, ChatStatus::Failure);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].outcome, ChatOutcome::Timeout);
+    assert!(
+        results[0]
+            .reason
+            .as_ref()
+            .is_some_and(|reason| reason.contains("prompt readiness")),
+        "expected prompt readiness timeout reason: {:?}",
+        results[0].reason
     );
 
     let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);

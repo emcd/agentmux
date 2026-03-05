@@ -55,6 +55,7 @@ fn bundle_with_sessions(sessions: &[&str]) -> BundleConfiguration {
                 display_name: None,
                 working_directory: None,
                 start_command: None,
+                prompt_readiness: None,
             })
             .collect(),
     }

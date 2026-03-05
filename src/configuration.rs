@@ -8,6 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 const SCHEMA_VERSION: &str = "1";
@@ -24,6 +25,16 @@ pub struct BundleMember {
     pub working_directory: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_readiness: Option<PromptReadinessTemplate>,
+}
+
+/// Optional prompt-readiness template for one bundle member.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PromptReadinessTemplate {
+    pub prompt_regex: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inspect_lines: Option<usize>,
 }
 
 /// Configuration for one named bundle.
@@ -229,6 +240,7 @@ fn validate_loaded_configuration(
                 message: format!("duplicate session_name '{session_name}'"),
             });
         }
+        validate_prompt_readiness(member, path)?;
     }
 
     Ok(BundleConfiguration {
@@ -236,6 +248,54 @@ fn validate_loaded_configuration(
         bundle_name,
         members: parsed.members,
     })
+}
+
+fn validate_prompt_readiness(member: &BundleMember, path: &Path) -> Result<(), ConfigurationError> {
+    let Some(template) = member.prompt_readiness.as_ref() else {
+        return Ok(());
+    };
+
+    if template.prompt_regex.trim().is_empty() {
+        return Err(ConfigurationError::InvalidConfiguration {
+            path: path.to_path_buf(),
+            message: format!(
+                "prompt_readiness.prompt_regex must be non-empty for session '{}'",
+                member.session_name
+            ),
+        });
+    }
+    compile_prompt_regex(
+        &template.prompt_regex,
+        path,
+        member.session_name.as_str(),
+        "prompt_regex",
+    )?;
+    if matches!(template.inspect_lines, Some(0)) {
+        return Err(ConfigurationError::InvalidConfiguration {
+            path: path.to_path_buf(),
+            message: format!(
+                "prompt_readiness.inspect_lines must be greater than zero for session '{}'",
+                member.session_name
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn compile_prompt_regex(
+    pattern: &str,
+    path: &Path,
+    session_name: &str,
+    field_name: &str,
+) -> Result<(), ConfigurationError> {
+    Regex::new(pattern)
+        .map(|_| ())
+        .map_err(|source| ConfigurationError::InvalidConfiguration {
+            path: path.to_path_buf(),
+            message: format!(
+                "invalid prompt_readiness.{field_name} for session '{session_name}': {source}"
+            ),
+        })
 }
 
 fn canonicalize_best_effort(path: &Path) -> PathBuf {
