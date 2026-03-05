@@ -2,16 +2,16 @@
 
 - [ ] 1.1 Create MCP tools for bundle creation, bundle reconciliation, directed
       single-target send, directed multi-target send, and broadcast send.
-- [ ] 1.2 Implement tmux bundle reconciliation that ensures each configured
+- [x] 1.2 Implement tmux bundle reconciliation that ensures each configured
       session exists and starts its configured coder command in the configured
       working directory, without relying on `tmux start-server` alone.
-- [ ] 1.3 Implement deterministic bootstrap-then-parallel reconciliation for
+- [x] 1.3 Implement deterministic bootstrap-then-parallel reconciliation for
       missing sessions.
-- [ ] 1.4 Implement bounded retry with short jitter for transient tmux startup
+- [x] 1.4 Implement bounded retry with short jitter for transient tmux startup
       races.
-- [ ] 1.5 Mark tmuxmux-created sessions with tmux metadata and use that marker
+- [x] 1.5 Mark tmuxmux-created sessions with tmux metadata and use that marker
       for ownership-aware pruning.
-- [ ] 1.6 Implement dedicated-socket cleanup when no tmuxmux-owned sessions
+- [x] 1.6 Implement dedicated-socket cleanup when no tmuxmux-owned sessions
       remain.
 - [x] 1.7 Implement session-target resolution to an injection pane using the
       session's currently active pane.

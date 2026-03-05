@@ -67,6 +67,8 @@ Start relay first, then MCP servers.
 Use the same `--bundle` and `--state-directory` values for relay and MCP so
 both resolve the same `relay.sock`.
 MCP startup is connect-only and fails fast if the relay socket is unavailable.
+Relay startup performs a reconciliation pass that ensures configured bundle
+sessions are present on the bundle tmux socket.
 
 Example:
 

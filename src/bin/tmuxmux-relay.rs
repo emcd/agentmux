@@ -1,5 +1,6 @@
 use std::{env, path::PathBuf};
 
+use tmuxmux::relay::reconcile_bundle;
 use tmuxmux::runtime::{
     bootstrap::{acquire_relay_runtime_lock, bind_relay_listener},
     error::RuntimeError,
@@ -45,11 +46,20 @@ fn run() -> Result<(), RuntimeError> {
     let paths = BundleRuntimePaths::resolve(&roots.state_root, &arguments.bundle_name)?;
     ensure_bundle_runtime_directory(&paths)?;
     let _runtime_lock = acquire_relay_runtime_lock(&paths)?;
+    let report = reconcile_bundle(
+        &roots.configuration_root,
+        &paths.bundle_name,
+        &paths.tmux_socket,
+    )
+    .map_err(map_reconcile_error)?;
     let listener = bind_relay_listener(&paths)?;
     println!(
-        "tmuxmux-relay listening bundle={} socket={}",
+        "tmuxmux-relay listening bundle={} socket={} bootstrap={:?} created={} pruned={}",
         paths.bundle_name,
-        paths.relay_socket.display()
+        paths.relay_socket.display(),
+        report.bootstrap_session,
+        report.created_sessions.len(),
+        report.pruned_sessions.len(),
     );
     for incoming in listener.incoming() {
         match incoming {
@@ -69,6 +79,14 @@ fn run() -> Result<(), RuntimeError> {
         }
     }
     Ok(())
+}
+
+fn map_reconcile_error(source: tmuxmux::relay::RelayError) -> RuntimeError {
+    if source.code.starts_with("validation_") {
+        return RuntimeError::validation(source.code, source.message);
+    }
+    let message = source.message.clone();
+    RuntimeError::io(message, std::io::Error::other(format!("{source:?}")))
 }
 
 fn parse_arguments(arguments: Vec<String>) -> Result<RelayArguments, RuntimeError> {
