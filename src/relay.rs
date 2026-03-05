@@ -18,10 +18,14 @@ use uuid::Uuid;
 
 use crate::{
     configuration::{BundleConfiguration, ConfigurationError, load_bundle_configuration},
+    envelope::{
+        AddressIdentity, ENVELOPE_SCHEMA_VERSION, EnvelopeRenderInput, ManifestPreamble,
+        PromptBatchSettings, batch_envelopes, parse_tokenizer_profile, render_envelope,
+    },
     runtime::paths::BundleRuntimePaths,
 };
 
-const SCHEMA_VERSION: &str = "1";
+const SCHEMA_VERSION: &str = ENVELOPE_SCHEMA_VERSION;
 const DEFAULT_QUIET_WINDOW_MS: u64 = 750;
 const DEFAULT_DELIVERY_TIMEOUT_MS: u64 = 30_000;
 const OWNERSHIP_OPTION_NAME: &str = "@tmuxmux_owned";
@@ -29,6 +33,8 @@ const OWNERSHIP_OPTION_VALUE: &str = "1";
 const CREATE_MAX_ATTEMPTS: usize = 4;
 const CREATE_RETRY_BASE_DELAY_MS: u64 = 35;
 const CREATE_RETRY_JITTER_MS: u64 = 35;
+const MAX_PROMPT_TOKENS_ENVVAR: &str = "TMUXMUX_MAX_PROMPT_TOKENS";
+const TOKENIZER_PROFILE_ENVVAR: &str = "TMUXMUX_TOKENIZER_PROFILE";
 
 /// Recipient metadata returned by `list`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -316,20 +322,85 @@ fn handle_chat(
     }
 
     let mut results = Vec::with_capacity(resolved_targets.len());
+    let all_target_sessions = resolved_targets.clone();
+    let batch_settings = prompt_batch_settings();
     let quiescence = QuiescenceOptions::new(quiet_window_ms, delivery_timeout_ms);
     for target_session in resolved_targets {
         let message_id = Uuid::new_v4().to_string();
+        let created_at = time::OffsetDateTime::now_utc()
+            .format(&Rfc3339)
+            .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
+        let target_member = bundle
+            .members
+            .iter()
+            .find(|member| member.session_name == target_session)
+            .ok_or_else(|| {
+                relay_error(
+                    "internal_unexpected_failure",
+                    "resolved target member is missing from bundle configuration",
+                    Some(json!({"target_session": target_session})),
+                )
+            })?;
+        let cc_members = all_target_sessions
+            .iter()
+            .filter(|candidate| **candidate != target_session)
+            .filter_map(|session_name| {
+                bundle
+                    .members
+                    .iter()
+                    .find(|member| member.session_name == *session_name)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
         match wait_for_quiescent_pane(tmux_socket, &target_session, quiescence) {
             Ok(pane_target) => {
-                let envelope = render_json_envelope(
-                    &bundle.bundle_name,
-                    &sender.session_name,
-                    &target_session,
-                    &message_id,
-                    &message,
-                );
-                match inject_prompt(tmux_socket, &pane_target, &envelope) {
-                    Ok(()) => {
+                let envelope = render_envelope(&EnvelopeRenderInput {
+                    manifest: ManifestPreamble {
+                        schema_version: SCHEMA_VERSION.to_string(),
+                        message_id: message_id.clone(),
+                        bundle_name: bundle.bundle_name.clone(),
+                        sender_session: sender.session_name.clone(),
+                        target_sessions: vec![target_session.clone()],
+                        cc_sessions: if cc_members.is_empty() {
+                            None
+                        } else {
+                            Some(
+                                cc_members
+                                    .iter()
+                                    .map(|member| member.session_name.clone())
+                                    .collect::<Vec<_>>(),
+                            )
+                        },
+                        created_at,
+                    },
+                    from: AddressIdentity {
+                        session_name: sender.session_name.clone(),
+                        display_name: sender.display_name.clone(),
+                    },
+                    to: vec![AddressIdentity {
+                        session_name: target_member.session_name.clone(),
+                        display_name: target_member.display_name.clone(),
+                    }],
+                    cc: cc_members
+                        .iter()
+                        .map(|member| AddressIdentity {
+                            session_name: member.session_name.clone(),
+                            display_name: member.display_name.clone(),
+                        })
+                        .collect::<Vec<_>>(),
+                    subject: None,
+                    body: message.clone(),
+                });
+                let prompt_batches = batch_envelopes(&[envelope], batch_settings);
+                let mut failed_reason = None::<String>;
+                for prompt in prompt_batches {
+                    if let Err(reason) = inject_prompt(tmux_socket, &pane_target, &prompt) {
+                        failed_reason = Some(reason);
+                        break;
+                    }
+                }
+                match failed_reason {
+                    None => {
                         results.push(ChatResult {
                             target_session,
                             message_id,
@@ -337,7 +408,7 @@ fn handle_chat(
                             reason: None,
                         });
                     }
-                    Err(reason) => {
+                    Some(reason) => {
                         results.push(ChatResult {
                             target_session,
                             message_id,
@@ -690,26 +761,21 @@ fn aggregate_chat_status(results: &[ChatResult]) -> ChatStatus {
     ChatStatus::Failure
 }
 
-fn render_json_envelope(
-    bundle_name: &str,
-    sender_session: &str,
-    target_session: &str,
-    message_id: &str,
-    message: &str,
-) -> String {
-    let created_at = time::OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
-    let envelope = json!({
-        "schema_version": SCHEMA_VERSION,
-        "message_id": message_id,
-        "bundle_name": bundle_name,
-        "sender_session": sender_session,
-        "target_session": target_session,
-        "created_at": created_at,
-        "body": message,
-    });
-    serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| message.to_string())
+fn prompt_batch_settings() -> PromptBatchSettings {
+    let max_prompt_tokens = std::env::var(MAX_PROMPT_TOKENS_ENVVAR)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(PromptBatchSettings::default().max_prompt_tokens);
+    let tokenizer_profile = std::env::var(TOKENIZER_PROFILE_ENVVAR)
+        .ok()
+        .as_deref()
+        .and_then(parse_tokenizer_profile)
+        .unwrap_or_default();
+    PromptBatchSettings {
+        max_prompt_tokens,
+        tokenizer_profile,
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

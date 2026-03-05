@@ -158,6 +158,37 @@ data (for example `validation_conflicting_targets`,
 `validation_empty_targets`, `validation_unknown_sender`,
 `relay_unavailable`).
 
+## Pane Envelope Format (MVP)
+
+Relay pane injection now renders a structured envelope with:
+
+1. Compact single-line JSON manifest preamble.
+2. RFC 822-style headers (`Envelope-Version`, `Message-Id`, `Date`, `From`,
+   `To`, optional `Cc`, optional `Subject`, and `Content-Type`).
+3. `multipart/mixed` MIME body with:
+   - required `text/plain; charset=utf-8` chat body part
+   - reserved `application/vnd.tmuxmux.path-pointer+json` extension part
+4. Closing MIME boundary `--<boundary>--` as end marker.
+
+Rendered addresses use:
+
+- `Display Name <session:session_name>`
+
+Canonical routing remains driven by manifest `target_sessions`; `Cc` is
+informational only.
+
+## Prompt Batching
+
+Envelope prompts are batched under a token budget with default:
+
+- `max_prompt_tokens = 4096`
+- tokenizer profile default `characters_0_point_3`
+
+Configuration environment variables:
+
+- `TMUXMUX_MAX_PROMPT_TOKENS` (positive integer)
+- `TMUXMUX_TOKENIZER_PROFILE` (`characters_0_point_3`, `whitespace_rough`)
+
 ## Development
 
 Validation commands:

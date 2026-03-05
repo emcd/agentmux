@@ -1,6 +1,7 @@
 //! Shared primitives for tmuxmux executables.
 
 pub mod configuration;
+pub mod envelope;
 pub mod mcp;
 pub mod relay;
 pub mod runtime;
