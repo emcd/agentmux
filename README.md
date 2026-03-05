@@ -75,6 +75,82 @@ cargo run --bin tmuxmux-relay -- --bundle tmuxmux --state-directory .auxiliary/s
 cargo run --bin tmuxmux-mcp -- --bundle-name tmuxmux --session-name relay --state-directory .auxiliary/state/tmuxmux
 ```
 
+## MCP Tool Schemas (MVP)
+
+### `list`
+
+Arguments:
+
+```json
+{}
+```
+
+Success payload shape:
+
+```json
+{
+  "schema_version": "1",
+  "bundle_name": "tmuxmux",
+  "recipients": [
+    {"session_name": "codex-b", "display_name": "Codex B"}
+  ]
+}
+```
+
+### `chat`
+
+Arguments (explicit targets):
+
+```json
+{
+  "request_id": "req-1",
+  "message": "Can you review the runtime tests?",
+  "targets": ["codex-b"],
+  "broadcast": false
+}
+```
+
+Arguments (broadcast):
+
+```json
+{
+  "request_id": "req-2",
+  "message": "Standup in 5 minutes.",
+  "targets": [],
+  "broadcast": true
+}
+```
+
+Success payload shape:
+
+```json
+{
+  "schema_version": "1",
+  "bundle_name": "tmuxmux",
+  "request_id": "req-1",
+  "sender_session": "codex-a",
+  "sender_display_name": "Codex A",
+  "status": "partial",
+  "results": [
+    {
+      "target_session": "codex-b",
+      "message_id": "4f5f2b40-8c25-4a95-8b7d-42aa6b0ab070",
+      "outcome": "delivered"
+    },
+    {
+      "target_session": "codex-c",
+      "message_id": "9f4f6e22-913a-49f5-82e9-2215d24c3907",
+      "outcome": "timeout",
+      "reason": "delivery_quiescence_timeout"
+    }
+  ]
+}
+```
+
+Validation and delivery failures return structured error codes in MCP error
+data (for example `validation_conflicting_targets`,
+`validation_empty_targets`, `validation_unknown_sender`).
+
 ## Development
 
 Validation commands:

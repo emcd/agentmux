@@ -1,0 +1,504 @@
+use std::{
+    fs,
+    io::{BufRead, BufReader, Write},
+    os::unix::net::{UnixListener, UnixStream},
+    path::{Path, PathBuf},
+    sync::{
+        Arc, Barrier, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
+    thread,
+    time::{Duration, Instant},
+};
+
+use rmcp::model::{
+    CallToolRequest, CallToolRequestParam, ClientCapabilities, ClientJsonRpcMessage,
+    Implementation, InitializeRequest, InitializeRequestParam, InitializedNotification, RequestId,
+};
+use serde_json::{Map, Value, json};
+use tempfile::TempDir;
+use tmuxmux::runtime::{
+    bootstrap::{BootstrapOptions, bootstrap_relay},
+    paths::{BundleRuntimePaths, ensure_bundle_runtime_directory},
+};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt},
+    process::Command,
+};
+
+const READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+type RelayResponder = Arc<dyn Fn(&Value) -> Value + Send + Sync>;
+
+struct FakeRelay {
+    socket_path: PathBuf,
+    stop: Arc<AtomicBool>,
+    requests: Arc<Mutex<Vec<Value>>>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl FakeRelay {
+    fn start(socket_path: PathBuf, responder: RelayResponder) -> Self {
+        if socket_path.exists() {
+            fs::remove_file(&socket_path).expect("remove stale socket");
+        }
+        fs::create_dir_all(
+            socket_path
+                .parent()
+                .expect("relay socket parent should exist"),
+        )
+        .expect("create relay socket parent");
+        let listener = UnixListener::bind(&socket_path).expect("bind fake relay");
+        listener
+            .set_nonblocking(true)
+            .expect("set fake relay listener nonblocking");
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let stop_inner = Arc::clone(&stop);
+        let requests_inner = Arc::clone(&requests);
+        let socket_path_inner = socket_path.clone();
+
+        let thread = thread::spawn(move || {
+            while !stop_inner.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((stream, _address)) => {
+                        handle_connection(stream, &requests_inner, &responder);
+                    }
+                    Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => break,
+                }
+            }
+            let _ = fs::remove_file(socket_path_inner);
+        });
+
+        Self {
+            socket_path,
+            stop,
+            requests,
+            thread: Some(thread),
+        }
+    }
+
+    fn requests_for_operation(&self, operation: &str) -> Vec<Value> {
+        self.requests
+            .lock()
+            .expect("fake relay requests lock")
+            .iter()
+            .filter(|request| request.get("operation").and_then(Value::as_str) == Some(operation))
+            .cloned()
+            .collect::<Vec<_>>()
+    }
+}
+
+impl Drop for FakeRelay {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        let _ = UnixStream::connect(&self.socket_path);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn handle_connection(
+    mut stream: UnixStream,
+    requests: &Arc<Mutex<Vec<Value>>>,
+    responder: &RelayResponder,
+) {
+    let mut line = String::new();
+    let mut reader = BufReader::new(
+        stream
+            .try_clone()
+            .expect("clone fake relay stream for reader"),
+    );
+    let bytes = reader
+        .read_line(&mut line)
+        .expect("read fake relay request");
+    if bytes == 0 {
+        return;
+    }
+    let request: Value = serde_json::from_str(line.trim_end()).expect("decode fake relay request");
+    requests
+        .lock()
+        .expect("fake relay requests lock")
+        .push(request.clone());
+    let response = responder(&request);
+    let text = serde_json::to_string(&response).expect("encode fake relay response");
+    stream
+        .write_all(text.as_bytes())
+        .expect("write fake relay response");
+    stream.write_all(b"\n").expect("write fake relay newline");
+    stream.flush().expect("flush fake relay response");
+}
+
+struct McpHarness {
+    child: tokio::process::Child,
+    stdin: tokio::process::ChildStdin,
+    stdout: tokio::io::BufReader<tokio::process::ChildStdout>,
+    stderr: tokio::io::BufReader<tokio::process::ChildStderr>,
+}
+
+impl McpHarness {
+    async fn spawn(current_directory: &Path, arguments: &[&str]) -> Self {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_tmuxmux-mcp"));
+        command
+            .current_dir(current_directory)
+            .args(arguments)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        let mut child = command.spawn().expect("spawn tmuxmux-mcp");
+        let stdin = child.stdin.take().expect("take mcp stdin");
+        let stdout = child.stdout.take().expect("take mcp stdout");
+        let stderr = child.stderr.take().expect("take mcp stderr");
+        let mut harness = Self {
+            child,
+            stdin,
+            stdout: tokio::io::BufReader::new(stdout),
+            stderr: tokio::io::BufReader::new(stderr),
+        };
+        harness.initialize().await;
+        harness
+    }
+
+    async fn initialize(&mut self) {
+        let initialize = InitializeRequest::new(InitializeRequestParam {
+            protocol_version: Default::default(),
+            capabilities: ClientCapabilities::default(),
+            client_info: Implementation {
+                name: "runtime-bootstrap-tests".to_string(),
+                title: None,
+                version: "0.0.0".to_string(),
+                icons: None,
+                website_url: None,
+            },
+        });
+        self.send(ClientJsonRpcMessage::request(
+            initialize.into(),
+            RequestId::Number(1),
+        ))
+        .await;
+        let response = self.read_response(1).await;
+        assert!(
+            response.get("result").is_some(),
+            "initialize response must contain result: {response}"
+        );
+
+        let initialized = InitializedNotification::default();
+        self.send(ClientJsonRpcMessage::notification(initialized.into()))
+            .await;
+    }
+
+    async fn call_tool(&mut self, id: i64, name: &str, arguments: Map<String, Value>) -> Value {
+        let request = CallToolRequest::new(CallToolRequestParam {
+            name: name.to_string().into(),
+            arguments: Some(arguments),
+        });
+        self.send(ClientJsonRpcMessage::request(
+            request.into(),
+            RequestId::Number(id),
+        ))
+        .await;
+        self.read_response(id).await
+    }
+
+    async fn send(&mut self, message: ClientJsonRpcMessage) {
+        let line = serde_json::to_string(&message).expect("encode mcp request");
+        self.stdin
+            .write_all(line.as_bytes())
+            .await
+            .expect("write mcp request");
+        self.stdin
+            .write_all(b"\n")
+            .await
+            .expect("write mcp newline");
+        self.stdin.flush().await.expect("flush mcp request");
+    }
+
+    async fn read_response(&mut self, id: i64) -> Value {
+        let expected = RequestId::Number(id);
+        let deadline = Instant::now() + READ_TIMEOUT;
+        let mut line = String::new();
+        loop {
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for MCP response id {id}"
+            );
+            line.clear();
+            let count = self
+                .stdout
+                .read_line(&mut line)
+                .await
+                .expect("read mcp response line");
+            if count == 0 {
+                let mut stderr = String::new();
+                self.stderr
+                    .read_to_string(&mut stderr)
+                    .await
+                    .expect("read mcp stderr");
+                panic!("mcp process closed stdout; stderr: {stderr}");
+            }
+            let decoded: Value =
+                serde_json::from_str(line.trim_end()).expect("decode mcp response");
+            let response_id = decoded
+                .get("id")
+                .and_then(|id_value| serde_json::from_value::<RequestId>(id_value.clone()).ok());
+            if response_id == Some(expected.clone()) {
+                return decoded;
+            }
+        }
+    }
+}
+
+impl Drop for McpHarness {
+    fn drop(&mut self) {
+        let _ = self.child.start_kill();
+    }
+}
+
+fn write_bundle_configuration(config_root: &Path, bundle_name: &str, sessions: &[&str]) {
+    fs::create_dir_all(config_root.join("bundles")).expect("create bundles directory");
+    let members = sessions
+        .iter()
+        .map(|session| json!({"session_name": session}))
+        .collect::<Vec<_>>();
+    let content = json!({
+        "schema_version": "1",
+        "members": members,
+    });
+    let path = config_root
+        .join("bundles")
+        .join(format!("{bundle_name}.json"));
+    fs::write(
+        path,
+        serde_json::to_string_pretty(&content).expect("encode bundle"),
+    )
+    .expect("write bundle config");
+}
+
+fn decode_tool_payload(response: &Value) -> Value {
+    if let Some(payload) = response
+        .get("result")
+        .and_then(|result| result.get("structuredContent"))
+        && !payload.is_null()
+    {
+        return payload.clone();
+    }
+    let content = response
+        .get("result")
+        .and_then(|result| result.get("content"))
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .unwrap_or_else(|| panic!("missing result.content in response: {response}"));
+
+    if let Some(json_payload) = content.get("json") {
+        return json_payload.clone();
+    }
+    let text = content
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("missing content.text in response: {response}"));
+    serde_json::from_str(text).expect("decode content.text as json")
+}
+
+#[test]
+fn concurrent_bootstrap_spawns_single_relay() {
+    const CLIENTS: usize = 4;
+
+    let temporary = TempDir::new().expect("temporary");
+    let paths = BundleRuntimePaths::resolve(temporary.path(), "party").expect("paths");
+    ensure_bundle_runtime_directory(&paths).expect("runtime directory");
+
+    let spawn_count = Arc::new(AtomicUsize::new(0));
+    let barrier = Arc::new(Barrier::new(CLIENTS));
+    let listener = Arc::new(Mutex::new(None::<UnixListener>));
+    let options = BootstrapOptions {
+        auto_start_relay: true,
+        startup_timeout: Duration::from_secs(2),
+    };
+
+    let mut handles = Vec::new();
+    for _ in 0..CLIENTS {
+        let paths = paths.clone();
+        let spawn_count = Arc::clone(&spawn_count);
+        let barrier = Arc::clone(&barrier);
+        let listener = Arc::clone(&listener);
+        handles.push(thread::spawn(move || {
+            barrier.wait();
+            bootstrap_relay(&paths, options, || {
+                if spawn_count.fetch_add(1, Ordering::SeqCst) == 0 {
+                    let bound =
+                        UnixListener::bind(&paths.relay_socket).expect("bind relay listener");
+                    *listener.lock().expect("listener lock") = Some(bound);
+                }
+                Ok(())
+            })
+            .map(|_| ())
+        }));
+    }
+
+    for handle in handles {
+        handle
+            .join()
+            .expect("thread join")
+            .expect("bootstrap should succeed");
+    }
+
+    assert_eq!(spawn_count.load(Ordering::SeqCst), 1);
+    drop(listener.lock().expect("listener lock").take());
+}
+
+#[test]
+fn bootstrap_removes_stale_socket_before_spawn() {
+    let temporary = TempDir::new().expect("temporary");
+    let paths = BundleRuntimePaths::resolve(temporary.path(), "party").expect("paths");
+    ensure_bundle_runtime_directory(&paths).expect("runtime directory");
+    fs::write(&paths.relay_socket, "stale").expect("write stale file");
+
+    let options = BootstrapOptions {
+        auto_start_relay: true,
+        startup_timeout: Duration::from_secs(2),
+    };
+    let mut listener = None;
+
+    let report = bootstrap_relay(&paths, options, || {
+        assert!(
+            !paths.relay_socket.exists(),
+            "stale socket should be removed"
+        );
+        listener = Some(UnixListener::bind(&paths.relay_socket).expect("bind listener"));
+        Ok(())
+    })
+    .expect("bootstrap should succeed");
+
+    assert!(report.spawned_relay);
+    drop(listener.take());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_auto_discovers_association_from_non_git_cwd() {
+    let temporary = TempDir::new().expect("temporary");
+    let root = temporary.path().to_path_buf();
+    let workspace = root.join("relay");
+    let config_root = root.join("config");
+    let state_root = root.join("state");
+    fs::create_dir_all(&workspace).expect("create workspace");
+    write_bundle_configuration(&config_root, "relay", &["relay", "bravo"]);
+
+    let relay_socket = state_root.join("bundles/relay/relay.sock");
+    let relay = FakeRelay::start(
+        relay_socket,
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("chat") => json!({
+                    "kind": "chat",
+                    "schema_version": "1",
+                    "bundle_name": "relay",
+                    "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
+                    "sender_session": request.get("sender_session").cloned().unwrap_or(Value::Null),
+                    "status": "success",
+                    "results": [{
+                        "target_session": "bravo",
+                        "message_id": "msg-1",
+                        "outcome": "delivered",
+                    }],
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+
+    let mut harness = McpHarness::spawn(
+        &workspace,
+        &[
+            "--config-directory",
+            config_root.to_str().expect("utf8 config path"),
+            "--state-directory",
+            state_root.to_str().expect("utf8 state path"),
+        ],
+    )
+    .await;
+
+    let mut arguments = Map::new();
+    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments.insert(
+        "targets".to_string(),
+        Value::Array(vec![Value::String("bravo".to_string())]),
+    );
+    arguments.insert("broadcast".to_string(), Value::Bool(false));
+    let response = harness.call_tool(2, "chat", arguments).await;
+    let payload = decode_tool_payload(&response);
+    assert_eq!(payload["sender_session"], "relay");
+    assert_eq!(payload["status"], "success");
+
+    let chat_requests = relay.requests_for_operation("chat");
+    assert_eq!(chat_requests.len(), 1);
+    assert_eq!(chat_requests[0]["sender_session"], "relay");
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_uses_repository_root_debug_state_override() {
+    let temporary = TempDir::new().expect("temporary");
+    let root = temporary.path().to_path_buf();
+    let workspace = root.join("workspace");
+    let repository_root = root.join("repository");
+    let config_root = root.join("config");
+    fs::create_dir_all(&workspace).expect("create workspace");
+    fs::create_dir_all(&repository_root).expect("create repository root");
+    write_bundle_configuration(&config_root, "party", &["alpha", "bravo"]);
+
+    let relay_socket = repository_root
+        .join(".auxiliary/state/tmuxmux")
+        .join("bundles/party/relay.sock");
+    let relay = FakeRelay::start(
+        relay_socket,
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("list") => json!({
+                    "kind": "list",
+                    "schema_version": "1",
+                    "bundle_name": "party",
+                    "recipients": [{"session_name": "bravo"}],
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+
+    let mut harness = McpHarness::spawn(
+        &workspace,
+        &[
+            "--bundle-name",
+            "party",
+            "--session-name",
+            "alpha",
+            "--config-directory",
+            config_root.to_str().expect("utf8 config path"),
+            "--repository-root",
+            repository_root.to_str().expect("utf8 repository path"),
+        ],
+    )
+    .await;
+
+    let response = harness.call_tool(2, "list", Map::new()).await;
+    let payload = decode_tool_payload(&response);
+    assert_eq!(payload["bundle_name"], "party");
+    assert_eq!(relay.requests_for_operation("list").len(), 1);
+}

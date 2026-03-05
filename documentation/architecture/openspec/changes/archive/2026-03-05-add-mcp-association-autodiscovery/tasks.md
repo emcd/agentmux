@@ -16,7 +16,7 @@
       bundle member and fail fast when unknown or ambiguous.
 - [x] 1.9 Return structured bootstrap errors for unknown bundle, unknown
       sender, and ambiguous sender.
-- [ ] 1.10 Add tests for:
+- [x] 1.10 Add tests for:
       clone discovery, worktree discovery, non-Git fallback, override
       precedence, unknown bundle failure, and ambiguous sender failure.
 - [x] 1.11 Add Git ignore entry for

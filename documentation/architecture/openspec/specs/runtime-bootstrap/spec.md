@@ -1,0 +1,269 @@
+# runtime-bootstrap Specification
+
+## Purpose
+TBD - created by archiving change add-runtime-bootstrap-and-xdg-layout. Update Purpose after archive.
+## Requirements
+### Requirement: XDG Configuration Root
+
+The system SHALL resolve the configuration root using:
+
+- `$XDG_CONFIG_HOME/tmuxmux` when `XDG_CONFIG_HOME` is set and non-empty
+- `~/.config/tmuxmux` otherwise
+
+#### Scenario: Resolve config root from XDG variable
+
+- **WHEN** `XDG_CONFIG_HOME` is set to a non-empty value
+- **THEN** configuration root resolves under that directory
+
+#### Scenario: Resolve config root from fallback
+
+- **WHEN** `XDG_CONFIG_HOME` is unset or empty
+- **THEN** configuration root resolves to `~/.config/tmuxmux`
+
+### Requirement: XDG State Root
+
+The system SHALL resolve the state root using:
+
+- `$XDG_STATE_HOME/tmuxmux` when `XDG_STATE_HOME` is set and non-empty
+- `~/.local/state/tmuxmux` otherwise
+
+#### Scenario: Resolve state root from XDG variable
+
+- **WHEN** `XDG_STATE_HOME` is set to a non-empty value
+- **THEN** state root resolves under that directory
+
+#### Scenario: Resolve state root from fallback
+
+- **WHEN** `XDG_STATE_HOME` is unset or empty
+- **THEN** state root resolves to `~/.local/state/tmuxmux`
+
+### Requirement: Debug Repository-Local State Override
+
+Debug builds SHALL support an optional repository-local state override to
+isolate development runtime data from deployed runtime state.
+
+#### Scenario: Use repository-local override in debug build
+
+- **WHEN** runtime is debug/development mode
+- **AND** repository-local override is configured
+- **THEN** state root resolves to repository-local override path
+
+#### Scenario: Ignore repository-local override in non-debug build
+
+- **WHEN** runtime is not debug/development mode
+- **THEN** state root resolution follows XDG state rules
+
+### Requirement: Per-Bundle Runtime Layout
+
+Each bundle SHALL use a dedicated runtime directory:
+
+- `<state_root>/bundles/<bundle_name>/`
+
+The system SHALL use:
+
+- `<bundle_runtime>/tmux.sock`
+- `<bundle_runtime>/relay.sock`
+
+#### Scenario: Resolve per-bundle sockets
+
+- **WHEN** runtime paths are resolved for a bundle
+- **THEN** tmux operations use that bundle's `tmux.sock`
+- **AND** MCP-to-relay IPC uses that bundle's `relay.sock`
+
+### Requirement: Relay Connectivity Gate from MCP
+
+MCP bootstrap SHALL resolve association before relay connectivity checks.
+After association resolves, MCP bootstrap SHALL attempt to connect to bundle
+`relay.sock` first.
+If connection fails, MCP startup SHALL fail with a structured runtime error.
+
+#### Scenario: Fail startup before relay bootstrap when bundle is unknown
+
+- **WHEN** bundle discovery resolves to an unknown or missing bundle
+- **THEN** MCP startup returns structured `validation_unknown_bundle`
+- **AND** relay connectivity checks are not attempted
+
+#### Scenario: Fail startup when relay is unavailable after association resolves
+
+- **WHEN** bundle and sender association resolve successfully
+- **AND** `relay.sock` is not connectable
+- **THEN** MCP startup returns a structured runtime error
+- **AND** MCP does not attempt relay auto-spawn
+
+### Requirement: Relay Auto-Start Primitive for Non-MCP Clients
+
+Runtime bootstrap helpers SHALL support optional relay auto-start for future
+non-MCP clients such as TUI/CLI entrypoints.
+
+Default bootstrap values SHALL be:
+
+- `auto_start_relay = true`
+- `startup_timeout_ms = 10000`
+
+#### Scenario: Auto-start relay when unavailable
+
+- **WHEN** bootstrap helper is called with `auto_start_relay = true`
+- **AND** `relay.sock` is not connectable
+- **THEN** helper executes relay spawn flow
+- **AND** waits up to configured timeout for relay connectivity
+
+#### Scenario: Fail fast when helper auto-start is disabled
+
+- **WHEN** bootstrap helper is called with `auto_start_relay = false`
+- **AND** `relay.sock` is not connectable
+- **THEN** helper returns a structured bootstrap error
+
+### Requirement: Spawn Coordination and Stale Socket Handling
+
+Relay startup SHALL use lock-based spawn coordination so exactly one contender
+spawns relay while others wait for socket readiness.
+
+#### Scenario: Single spawner under contention
+
+- **WHEN** multiple clients invoke relay auto-start bootstrap concurrently for
+  one bundle
+- **THEN** only one process performs relay spawn
+- **AND** other processes wait for relay socket connectability
+
+#### Scenario: Remove stale relay socket before spawn
+
+- **WHEN** relay socket exists but no live relay process holds runtime lock
+- **THEN** bootstrap removes the stale socket before spawning relay
+
+### Requirement: Sender Association Resolution
+
+The MCP server SHALL resolve sender association at startup using precedence:
+
+1. explicit CLI `--session-name` when present
+2. local override file `session_name` when present
+3. auto-discovered sender session
+
+Auto-discovered sender session SHALL use:
+
+- basename of Git worktree top-level directory when running inside Git
+- otherwise basename of current working directory
+
+#### Scenario: Resolve sender from worktree basename
+
+- **WHEN** MCP starts inside a Git worktree rooted at
+  `/home/me/src/WORKTREES/tmuxmux/relay`
+- **AND** no CLI or override sender is provided
+- **THEN** sender association resolves to `relay`
+
+#### Scenario: Resolve sender from explicit CLI value
+
+- **WHEN** MCP startup has explicit `--session-name`
+- **THEN** sender association is set to that configured session
+
+#### Scenario: Resolve sender from local override file
+
+- **WHEN** CLI sender is absent
+- **AND** local override file provides `session_name`
+- **THEN** sender association is set to override value
+
+#### Scenario: Reject ambiguous sender association
+
+- **WHEN** sender association candidate matches multiple configured members
+- **THEN** MCP startup returns a structured `validation_unknown_sender` error
+
+### Requirement: Runtime Security Posture
+
+Runtime artifacts SHALL remain inside same-user ownership and restrictive local
+permissions.
+
+#### Scenario: Create restrictive runtime directory
+
+- **WHEN** system creates bundle runtime directory
+- **THEN** directory mode is `0700`
+
+#### Scenario: Reject foreign-owned runtime artifact
+
+- **WHEN** an existing runtime socket or lock file is not owned by current user
+- **THEN** bootstrap returns a structured security error
+
+### Requirement: Startup Guidance for Shared Runtime Roots
+
+Project documentation SHALL provide a recommended startup pattern where relay
+starts before MCP, and relay/MCP use matching `--bundle` and
+`--state-directory` values.
+
+#### Scenario: Document startup order and shared state directory
+
+- **WHEN** an operator configures local runtime startup
+- **THEN** documented guidance specifies relay-first startup
+- **AND** documented guidance specifies matching bundle and state-directory
+  values across relay and MCP commands
+
+### Requirement: Bundle Association Resolution
+
+The MCP server SHALL resolve bundle association at startup using precedence:
+
+1. explicit CLI `--bundle-name` when present
+2. local override file `bundle_name` when present
+3. auto-discovered bundle
+
+Auto-discovered bundle SHALL use:
+
+- basename of parent directory of Git common-dir when running inside Git
+- otherwise basename of current working directory
+
+Resolved bundle SHALL map to a configured bundle definition; otherwise startup
+fails with structured `validation_unknown_bundle`.
+
+#### Scenario: Resolve bundle from Git common-dir
+
+- **WHEN** MCP starts in a Git worktree whose Git common-dir is
+  `/home/me/src/tmuxmux/.git`
+- **AND** no CLI or override bundle is provided
+- **THEN** bundle association resolves to `tmuxmux`
+
+#### Scenario: Resolve bundle from local override file
+
+- **WHEN** CLI bundle is absent
+- **AND** local override file provides `bundle_name`
+- **THEN** bundle association resolves to override value
+
+#### Scenario: Reject unknown bundle association
+
+- **WHEN** resolved bundle has no corresponding configured bundle definition
+- **THEN** MCP startup returns structured `validation_unknown_bundle`
+
+#### Scenario: Resolve bundle from explicit CLI value
+
+- **WHEN** MCP startup has explicit `--bundle-name`
+- **THEN** bundle association is set to that configured bundle
+
+### Requirement: Local MCP Association Override File
+
+The MCP server SHALL support optional local association overrides in:
+
+- `.auxiliary/configuration/tmuxmux/overrides/mcp.toml`
+
+Supported override fields SHALL include:
+
+- `bundle_name`
+- `session_name`
+
+The system MAY support optional config-root override fields for cross-project
+bundle coordination.
+
+#### Scenario: Ignore missing override file
+
+- **WHEN** local override file does not exist
+- **THEN** startup continues using CLI and auto-discovery resolution
+
+#### Scenario: Reject malformed override file
+
+- **WHEN** local override file exists but has invalid TOML or invalid fields
+- **THEN** MCP startup returns a structured bootstrap validation error
+
+### Requirement: Override Directory VCS Posture
+
+The project SHALL Git-ignore the local override directory so overrides can be
+used per worktree without leaking to shared commits.
+
+#### Scenario: Ignore local override directory in Git
+
+- **WHEN** repository ignore rules are evaluated
+- **THEN** `.auxiliary/configuration/tmuxmux/overrides/` is ignored
+

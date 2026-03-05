@@ -22,9 +22,9 @@
       association and relay startup timeout/failure.
 - [x] 1.11 Enforce runtime artifact ownership and restrictive permission
       posture for bundle runtime directories and sockets.
-- [ ] 1.12 Add integration tests for concurrent client bootstrap,
+- [x] 1.12 Add integration tests for concurrent client bootstrap,
       stale-socket cleanup, and sender association resolution.
-- [ ] 1.13 Add integration tests for debug-build repository-local state
+- [x] 1.13 Add integration tests for debug-build repository-local state
       override selection.
 - [x] 1.14 Add documentation for XDG layout, bundle runtime paths, startup
       behavior, and debug-build repository-local override usage.

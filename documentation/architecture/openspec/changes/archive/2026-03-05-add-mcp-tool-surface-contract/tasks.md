@@ -21,7 +21,7 @@
       target conflicts, empty target lists, and partial delivery outcomes.
 - [x] 1.12 Add contract tests for sender inference behavior and unknown-sender
       failure handling.
-- [ ] 1.13 Add user-facing documentation for tool schemas and examples.
+- [x] 1.13 Add user-facing documentation for tool schemas and examples.
 - [x] 1.14 Document that bundle configuration is manual/operator-managed for
       MVP and not mutated through MCP tools.
 

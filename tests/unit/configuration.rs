@@ -92,3 +92,32 @@ fn infers_sender_from_matching_working_directory() {
         infer_sender_from_working_directory(&loaded, temporary.path()).expect("infer sender");
     assert_eq!(inferred.as_deref(), Some("a"));
 }
+
+#[test]
+fn rejects_ambiguous_sender_from_working_directory() {
+    let temporary = TempDir::new().expect("temporary");
+    let root = write_bundle(
+        &temporary,
+        "alpha",
+        &format!(
+            r#"{{
+            "members": [
+                {{"session_name": "a", "working_directory": "{}"}},
+                {{"session_name": "b", "working_directory": "{}"}}
+            ]
+        }}"#,
+            temporary.path().display(),
+            temporary.path().display()
+        ),
+    );
+    let loaded = load_bundle_configuration(&root, "alpha").expect("load");
+
+    let err = infer_sender_from_working_directory(&loaded, temporary.path())
+        .expect_err("ambiguous sender should fail");
+    match err {
+        ConfigurationError::AmbiguousSender { matches, .. } => {
+            assert_eq!(matches, vec!["a".to_string(), "b".to_string()]);
+        }
+        _ => panic!("expected ambiguous sender error"),
+    }
+}
