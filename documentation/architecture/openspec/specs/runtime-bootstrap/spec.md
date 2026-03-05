@@ -70,25 +70,33 @@ The system SHALL use:
 - **THEN** tmux operations use that bundle's `tmux.sock`
 - **AND** MCP-to-relay IPC uses that bundle's `relay.sock`
 
-### Requirement: Relay Connectivity Gate from MCP
+### Requirement: Relay Connectivity Handling from MCP
 
-MCP bootstrap SHALL resolve association before relay connectivity checks.
-After association resolves, MCP bootstrap SHALL attempt to connect to bundle
-`relay.sock` first.
-If connection fails, MCP startup SHALL fail with a structured runtime error.
+MCP bootstrap SHALL resolve bundle and sender association at startup without
+requiring relay connectivity.
+Relay connectivity SHALL be checked when MCP tools invoke relay-backed
+operations.
+If connection fails, MCP tool responses SHALL return a structured
+`relay_unavailable` error and MCP process startup SHALL remain successful.
 
 #### Scenario: Fail startup before relay bootstrap when bundle is unknown
 
 - **WHEN** bundle discovery resolves to an unknown or missing bundle
 - **THEN** MCP startup returns structured `validation_unknown_bundle`
-- **AND** relay connectivity checks are not attempted
+- **AND** relay connectivity checks are not required for startup
 
-#### Scenario: Fail startup when relay is unavailable after association resolves
+#### Scenario: Start MCP when relay is unavailable after association resolves
 
 - **WHEN** bundle and sender association resolve successfully
 - **AND** `relay.sock` is not connectable
-- **THEN** MCP startup returns a structured runtime error
+- **THEN** MCP startup succeeds
 - **AND** MCP does not attempt relay auto-spawn
+
+#### Scenario: Return structured relay-unavailable error from tool call
+
+- **WHEN** MCP receives a relay-backed tool request
+- **AND** `relay.sock` is not connectable
+- **THEN** MCP returns a structured `relay_unavailable` tool error
 
 ### Requirement: Relay Auto-Start Primitive for Non-MCP Clients
 
@@ -266,4 +274,3 @@ used per worktree without leaking to shared commits.
 
 - **WHEN** repository ignore rules are evaluated
 - **THEN** `.auxiliary/configuration/tmuxmux/overrides/` is ignored
-

@@ -66,7 +66,9 @@ Start relay first, then MCP servers.
 
 Use the same `--bundle` and `--state-directory` values for relay and MCP so
 both resolve the same `relay.sock`.
-MCP startup is connect-only and fails fast if the relay socket is unavailable.
+MCP startup does not require relay availability.
+If relay is down, MCP `list` and `chat` return structured `relay_unavailable`
+errors until relay is reachable.
 Relay startup performs a reconciliation pass that ensures configured bundle
 sessions are present on the bundle tmux socket.
 Relay tmux operations use the bundle runtime socket path:
@@ -153,7 +155,8 @@ Success payload shape:
 
 Validation and delivery failures return structured error codes in MCP error
 data (for example `validation_conflicting_targets`,
-`validation_empty_targets`, `validation_unknown_sender`).
+`validation_empty_targets`, `validation_unknown_sender`,
+`relay_unavailable`).
 
 ## Development
 

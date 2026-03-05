@@ -455,6 +455,19 @@ async fn list_returns_recipient_payload_from_relay() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_reports_relay_unavailable_when_relay_is_not_running() {
+    let runtime = TestRuntime::create();
+    let mut harness = McpHarness::spawn(&runtime).await;
+    let response = harness.call_tool(2, "list", Map::new()).await;
+
+    assert_eq!(error_code(&response), Some("relay_unavailable"));
+    assert_eq!(
+        response["error"]["data"]["details"]["relay_socket"],
+        Value::String(runtime.relay_socket.display().to_string())
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_rejects_conflicting_targets_before_relay_request() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(

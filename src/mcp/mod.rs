@@ -1,6 +1,6 @@
 //! MCP server surface for tmuxmux.
 
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use anyhow::Result;
 use rmcp::{
@@ -92,10 +92,9 @@ impl McpServer {
                 "relay returned unexpected response variant",
                 Some(json!({"response": other})),
             )),
-            Err(source) => Err(internal_tool_error(
-                "internal_unexpected_failure",
-                "relay request failed",
-                Some(json!({"cause": source.to_string()})),
+            Err(source) => Err(map_relay_request_failure(
+                &self.state.configuration.bundle_paths.relay_socket,
+                source,
             )),
         }
     }
@@ -159,10 +158,9 @@ impl McpServer {
                 "relay returned unexpected response variant",
                 Some(json!({"response": other})),
             )),
-            Err(source) => Err(internal_tool_error(
-                "internal_unexpected_failure",
-                "relay request failed",
-                Some(json!({"cause": source.to_string()})),
+            Err(source) => Err(map_relay_request_failure(
+                &self.state.configuration.bundle_paths.relay_socket,
+                source,
             )),
         }
     }
@@ -220,6 +218,43 @@ fn map_relay_error(error: RelayError) -> McpError {
         return validation_tool_error(&error.code, &error.message, error.details);
     }
     internal_tool_error(&error.code, &error.message, error.details)
+}
+
+fn map_relay_request_failure(socket_path: &Path, source: std::io::Error) -> McpError {
+    if is_relay_unavailable_error(&source) {
+        return internal_tool_error(
+            "relay_unavailable",
+            "relay is unavailable; start tmuxmux-relay with matching bundle and state-directory",
+            Some(json!({
+                "relay_socket": socket_path,
+                "io_error_kind": format!("{:?}", source.kind()),
+                "cause": source.to_string(),
+            })),
+        );
+    }
+
+    internal_tool_error(
+        "internal_unexpected_failure",
+        "relay request failed",
+        Some(json!({
+            "relay_socket": socket_path,
+            "io_error_kind": format!("{:?}", source.kind()),
+            "cause": source.to_string(),
+        })),
+    )
+}
+
+fn is_relay_unavailable_error(source: &std::io::Error) -> bool {
+    matches!(
+        source.kind(),
+        std::io::ErrorKind::NotFound
+            | std::io::ErrorKind::ConnectionRefused
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::TimedOut
+            | std::io::ErrorKind::UnexpectedEof
+    )
 }
 
 fn validation_tool_error(

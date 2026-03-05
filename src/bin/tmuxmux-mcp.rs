@@ -8,7 +8,6 @@ use tmuxmux::{
             McpAssociationCli, load_local_mcp_overrides, resolve_association,
             validate_sender_session,
         },
-        bootstrap::{BootstrapOptions, bootstrap_relay},
         error::RuntimeError,
         paths::{BundleRuntimePaths, RuntimeRootOverrides, RuntimeRoots},
     },
@@ -60,14 +59,6 @@ async fn run() -> Result<(), RuntimeError> {
         .map_err(map_bundle_load_error)?;
     let session_name = validate_sender_session(&bundle, &association.session_name)?;
     let paths = BundleRuntimePaths::resolve(&roots.state_root, &association.bundle_name)?;
-    let _ = bootstrap_relay(
-        &paths,
-        BootstrapOptions {
-            auto_start_relay: false,
-            ..BootstrapOptions::default()
-        },
-        || -> Result<(), RuntimeError> { Ok(()) },
-    )?;
     let configuration = McpConfiguration {
         bundle_paths: paths,
         sender_session: Some(session_name),
