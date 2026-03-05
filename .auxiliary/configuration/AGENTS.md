@@ -5,7 +5,6 @@
 - Development Practices: @.auxiliary/instructions/
 
 - Use the 'context7' MCP server to retrieve up-to-date documentation for any SDKs or APIs.
-- Use the 'librovore' MCP server to search structured documentation sites with object inventories (Sphinx-based, compatible MkDocs with mkdocstrings). This bridges curated documentation (context7) and raw scraping (firecrawl).
 - Use the 'nb' MCP server for project note-taking, issue tracking, and collaboration. The server provides LLM-friendly access to the `nb` note-taking system with proper escaping and project-specific notebook context.
 - Check README files in directories you're working with for insights about architecture, constraints, and TODO items.
 
@@ -22,19 +21,23 @@ Before implementing code changes, consult these files in `.auxiliary/instruction
 - `practices-rust.rst` - Rust-specific patterns (error handling, trait design, module organization)
 - `nomenclature.rst` - Naming conventions for variables, functions, classes, exceptions
 - `style.rst` - Code formatting standards (spacing, line length, documentation mood)
-- `validation.rst` - Quality assurance requirements (linters, type checkers, tests)
 
 # Operation
 
 - Use `rg --line-number --column` to get precise coordinates for MCP tools that require line/column positions.
 - Choose appropriate editing tools based on the task complexity and your familiarity with the tools.
-- Use the 'rust-analyzer' MCP server where appropriate:
-    - `rename_symbol` for refactors
-    - `references` for precise symbol analysis
+- If instruction files mention multiple language ecosystems, prefer tools and commands that match the project's configured languages; ignore language-inapplicable tooling unless the user explicitly requests it.
+- Use a README-first discovery workflow to reduce token churn:
+  - Start at the repository root `README.{md,rst}`, then read the nearest relevant subtree README.
+  - After reading the nearest README, scope code searches to that subtree before considering repo-wide searches.
+  - If a touched subsystem README is stale after your change, update it in the same batch.
 - Batch related changes together when possible to maintain consistency.
 - Use relative paths rather than absolute paths when possible.
 - Do not write to paths outside the current project unless explicitly requested.
-- Use the `.auxiliary/scribbles` directory for scratch space instead of `/tmp`.
+- Use `.auxiliary/scribbles` for scratch work and one-off experiments instead of `/tmp`; use `.auxiliary/temporary` for ephemeral test state and build artifacts that are safe to delete.
+- In sandboxed environments (e.g., Codex CLI), treat file/network permission failures as escalation boundaries:
+  - If an operation fails due to sandbox, file access, or network restrictions, rerun it with user escalation.
+  - Do not spend time on retry loops or workaround exploration before escalating blocked operations.
 
 ## Note-Taking with `nb` MCP Server
 
@@ -83,6 +86,10 @@ Use consistent tags for discoverability:
 - Use **`nb` todos/notes** for scoped, self-contained implementation tasks where the path is straightforward.
 - For each active OpenSpec proposal, keep **exactly one** linked `nb` todo as the tracking anchor (with proposal reference), rather than duplicating full task trees in both systems.
 - When in doubt, prefer OpenSpec first for design clarity, then track execution updates in the linked `nb` todo.
+## Tests Development
+
+- Prefer tests under `tests/unit` and `tests/integration` over inline `#[cfg(test)]` modules in `src/**`, unless there is a strong locality reason to keep tests adjacent to implementation.
+- Prefer tests that exercise public interfaces; avoid source-inclusion patterns used only to reach private internals.
 
 ## OpenSpec Instructions
 

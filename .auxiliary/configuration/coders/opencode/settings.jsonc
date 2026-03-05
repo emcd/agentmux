@@ -57,19 +57,9 @@
   },
 
   "mcp": {
-    "rust-analyzer": {
-      "type": "local",
-      "command": ["mcp-language-server", "--lsp", "rust-analyzer", "--workspace", "."],
-      "enabled": true
-    },
     "context7": {
       "type": "local",
       "command": ["npx", "-y", "@upstash/context7-mcp"],
-      "enabled": true
-    },
-    "librovore": {
-      "type": "local",
-      "command": ["uvx", "librovore", "serve"],
       "enabled": true
     },
     "nb": {

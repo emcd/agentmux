@@ -6,19 +6,10 @@ personality = "friendly"
 # sandbox_mode = "workspace-write"
 trust_level = "trusted"
 # web_search = "cached"
-[mcp_servers.rust-analyzer]
-command = "/bin/bash"
-args = ["-lc", "mcp-language-server --lsp rust-analyzer --workspace . 2>/dev/null"]
-startup_timeout_sec = 30
-tool_timeout_sec = 90
 
 [mcp_servers.context7]
 command = "npx"
 args = ["-y", "@upstash/context7-mcp"]
-
-[mcp_servers.librovore]
-command = "uvx"
-args = ["librovore", "serve"]
 
 [mcp_servers.nb]
 command = "nb-mcp"
