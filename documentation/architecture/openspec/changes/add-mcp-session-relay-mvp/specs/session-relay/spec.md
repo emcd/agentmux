@@ -2,23 +2,22 @@
 
 ### Requirement: Bundle Membership Configuration
 
-The system SHALL let callers define a bundle as a set of session members where
-each member includes:
+The system SHALL let operators define a bundle as a set of session members in
+configuration, where each member includes:
 
 - session name
 - working directory
 - coder start command
 
-#### Scenario: Create bundle with valid members
+#### Scenario: Load valid configured bundle
 
-- **WHEN** a caller submits a bundle definition with unique session names
-- **THEN** the system stores the bundle definition
-- **AND** the system returns the stored member list
+- **WHEN** a configured bundle definition contains unique session names
+- **THEN** the system loads the bundle definition successfully
 
 #### Scenario: Reject duplicate session names in one bundle
 
-- **WHEN** a caller submits a bundle definition with duplicate session names
-- **THEN** the system rejects the request with a validation error
+- **WHEN** a configured bundle definition contains duplicate session names
+- **THEN** the system rejects the bundle definition with a validation error
 
 ### Requirement: Bundle Reconciliation
 
@@ -65,12 +64,18 @@ creation races and avoids leaking idle tmux servers.
 - **WHEN** the system creates a session during reconciliation
 - **THEN** the system marks that session as tmuxmux-owned using tmux metadata
 
-#### Scenario: Cleanup dedicated socket server with zero owned sessions
+#### Scenario: Cleanup dedicated socket server only when fully idle
 
 - **WHEN** reconciliation or pruning finds zero tmuxmux-owned sessions on a
-  dedicated configured socket
+  dedicated configured socket and zero total sessions remain on that socket
 - **THEN** the system shuts down that socket's tmux server
 - **AND** does not require `exit-empty` to be turned off for startup
+
+#### Scenario: Preserve socket server while non-owned sessions exist
+
+- **WHEN** reconciliation or pruning finds zero tmuxmux-owned sessions on a
+  dedicated configured socket but non-owned sessions remain
+- **THEN** the system does not shut down that socket's tmux server
 
 ### Requirement: Session Routing Primitive
 
@@ -196,16 +201,17 @@ The system SHALL operate in a same-host, same-user trust boundary for MVP.
 
 ### Requirement: Configurable tmux socket
 
-The system SHALL support configurable tmux socket selection for all tmux
-operations.
+The system SHALL derive the tmux socket path for all tmux operations from the
+configured state root and bundle name.
 
-#### Scenario: Use default socket when none is configured
+#### Scenario: Derive socket from default runtime roots
 
-- **WHEN** no explicit socket path is configured
-- **THEN** the system uses tmux default socket selection behavior
+- **WHEN** no runtime root overrides are provided
+- **THEN** the system uses the bundle runtime socket path under the default
+  state root
 
-#### Scenario: Use explicit socket path when configured
+#### Scenario: Derive socket from explicit runtime state root
 
-- **WHEN** an explicit tmux socket path is configured
-- **THEN** the system uses that socket path for session checks, reconciliation,
+- **WHEN** an explicit runtime state root is configured
+- **THEN** the system uses that derived bundle socket path for session checks, reconciliation,
   pane capture, and message injection

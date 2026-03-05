@@ -17,8 +17,11 @@ inject visible prompts into agent sessions while staying simple and local-first.
   output bursts.
 - Document quiescence caveats for dynamic pane output such as clock-style
   statusline content.
-- Define MCP-first operations for bundle management and message delivery.
-- Define configurable tmux socket selection for server operations.
+- Define an MCP-first message surface for recipient listing and chat delivery.
+- Keep bundle definitions operator-managed in configuration for MVP.
+- Keep automatic bundle reconciliation relay-enforced rather than MCP-invoked.
+- Define tmux socket selection for server operations as a bundle/state-derived
+  runtime path.
 - Exclude transport/accept/done ACK protocols from MVP.
 - Exclude urgent quiescence-bypass overrides from MVP (future change).
 - Exclude crash-recovery durability for queued messages from MVP.
@@ -27,7 +30,7 @@ inject visible prompts into agent sessions while staying simple and local-first.
 
 - Affected specs: `session-relay` (new capability).
 - Affected code:
-  - MCP server surface for bundle/session/message operations.
+  - MCP server surface for recipient listing and chat delivery operations.
   - tmux adapter for session lifecycle, pane resolution, capture, and
     `send-keys` injection.
   - delivery scheduler logic for quiescence checks and timeout handling.

@@ -69,6 +69,8 @@ both resolve the same `relay.sock`.
 MCP startup is connect-only and fails fast if the relay socket is unavailable.
 Relay startup performs a reconciliation pass that ensures configured bundle
 sessions are present on the bundle tmux socket.
+Relay tmux operations use the bundle runtime socket path:
+`$STATE_ROOT/bundles/<bundle-name>/tmux.sock`.
 
 Example:
 

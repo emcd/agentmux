@@ -1,7 +1,8 @@
 ## 1. Implementation
 
-- [ ] 1.1 Create MCP tools for bundle creation, bundle reconciliation, directed
-      single-target send, directed multi-target send, and broadcast send.
+- [x] 1.1 Create MVP MCP tools for recipient listing and chat delivery
+      (`list`, `chat`), including explicit one/many target sends and
+      broadcast sends.
 - [x] 1.2 Implement tmux bundle reconciliation that ensures each configured
       session exists and starts its configured coder command in the configured
       working directory, without relying on `tmux start-server` alone.
@@ -12,7 +13,7 @@
 - [x] 1.5 Mark tmuxmux-created sessions with tmux metadata and use that marker
       for ownership-aware pruning.
 - [x] 1.6 Implement dedicated-socket cleanup when no tmuxmux-owned sessions
-      remain.
+      remain and no other sessions exist on the socket.
 - [x] 1.7 Implement session-target resolution to an injection pane using the
       session's currently active pane.
 - [x] 1.8 Implement strict JSON envelope rendering with stable field order and
@@ -23,9 +24,9 @@
 - [x] 1.10 Return per-target delivery results from MCP operations, including
       message identifier, target session, outcome, and failure reason when
       applicable.
-- [ ] 1.11 Add configurable tmux socket selection to all tmux operations with a
-      documented default.
-- [ ] 1.12 Add tests for reconciliation, directed send, broadcast send,
+- [x] 1.11 Add bundle/state-derived tmux socket selection to all tmux
+      operations with a documented default.
+- [x] 1.12 Add tests for reconciliation, directed send, broadcast send,
       bootstrap-plus-parallel startup, retry/jitter behavior, ownership tagging,
       dedicated-socket cleanup, quiescence gating, timeout behavior, and
       failure reporting.
