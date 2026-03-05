@@ -225,6 +225,36 @@ Default values:
 If pane output changes continuously (for example, clock-like status output),
 delivery may time out for that target.
 
+## Prompt-Readiness Templates
+
+Quiescence can still occur when a session is not at an input-ready prompt.
+Bundle members may define an optional `prompt_readiness` template that must
+match before relay injection.
+
+Configuration fields:
+
+- `prompt_regex` (required): regular expression evaluated against inspected
+  pane tail text.
+- `inspect_lines` (optional): non-empty tail lines to inspect.
+  Default is `6`; effective range is clamped to `1..=40`.
+
+Example member:
+
+```json
+{
+  "session_name": "codex-b",
+  "display_name": "Codex B",
+  "prompt_readiness": {
+    "prompt_regex": "READY>",
+    "inspect_lines": 8
+  }
+}
+```
+
+If a session reaches quiescence but `prompt_regex` never matches before
+`delivery_timeout_ms`, relay reports a timeout reason indicating prompt
+readiness mismatch and does not inject that message.
+
 ## Planned Runtime Layout (MVP)
 
 Configuration root:
@@ -274,7 +304,13 @@ Per-worktree local MCP overrides (Git-ignored) may be placed at:
 - `.auxiliary/configuration/tmuxmux/overrides/mcp.toml`
 
 See runtime bootstrap spec for full details:
-[runtime-bootstrap spec](documentation/architecture/openspec/changes/add-runtime-bootstrap-and-xdg-layout/specs/runtime-bootstrap/spec.md).
+[runtime-bootstrap spec](documentation/architecture/openspec/specs/runtime-bootstrap/spec.md).
+
+## Smoke Tests
+
+Manual prompt-readiness smoke procedure:
+
+- [tests/smoke/prompt_readiness_manual.md](tests/smoke/prompt_readiness_manual.md)
 
 ## License
 

@@ -10,7 +10,7 @@
 - [x] 1.5 Add tests for valid and invalid prompt-readiness templates.
 - [x] 1.6 Add integration tests for delivery success and timeout with
       prompt-readiness templates.
-- [ ] 1.7 Document prompt-readiness template configuration and behavior after
+- [x] 1.7 Document prompt-readiness template configuration and behavior after
       design review approval.
 
 ## 2. Validation
