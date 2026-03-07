@@ -108,3 +108,31 @@ fn chat_accepts_target_by_recipient_name() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].target_session, "bravo");
 }
+
+#[test]
+fn chat_broadcast_excludes_sender_session() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    let tmux_socket = temporary.path().join("tmux.sock");
+    let response = handle_request(
+        RelayRequest::Chat {
+            request_id: None,
+            sender_session: "alpha".to_string(),
+            message: "hello".to_string(),
+            targets: Vec::new(),
+            broadcast: true,
+            quiet_window_ms: Some(1),
+            delivery_timeout_ms: Some(1),
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect("chat response");
+
+    let RelayResponse::Chat { results, .. } = response else {
+        panic!("expected chat response");
+    };
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].target_session, "bravo");
+}

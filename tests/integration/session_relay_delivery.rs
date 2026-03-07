@@ -170,7 +170,7 @@ fn spawn_session(socket: &Path, session_name: &str, shell_command: &str) {
 }
 
 #[test]
-fn relay_chat_broadcast_delivers_to_all_configured_sessions() {
+fn relay_chat_broadcast_delivers_to_all_other_configured_sessions() {
     if !tmux_available() {
         eprintln!("skipping relay delivery test because tmux is unavailable");
         return;
@@ -214,7 +214,12 @@ fn relay_chat_broadcast_delivers_to_all_configured_sessions() {
     };
 
     assert_eq!(status, ChatStatus::Success);
-    assert_eq!(results.len(), 3);
+    assert_eq!(results.len(), 2);
+    assert!(
+        results
+            .iter()
+            .all(|result| result.target_session != "alpha")
+    );
     for result in results {
         assert_eq!(result.outcome, ChatOutcome::Delivered);
     }

@@ -118,6 +118,8 @@ Arguments (broadcast):
 }
 ```
 
+Broadcast targets every configured bundle member except the sender session.
+
 Success payload shape:
 
 ```json

@@ -116,6 +116,7 @@ session names as aliases.
 
 - **WHEN** a caller sends a broadcast message
 - **THEN** the system attempts delivery to every known session in the bundle
+  except the sender session
 
 #### Scenario: Deliver to explicit target subset
 

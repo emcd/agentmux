@@ -302,6 +302,7 @@ fn handle_chat(
         bundle
             .members
             .iter()
+            .filter(|member| member.id != sender.id)
             .map(|member| member.id.clone())
             .collect::<Vec<_>>()
     } else {
