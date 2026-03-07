@@ -5,14 +5,36 @@ fn write_bundle(temporary: &TempDir, name: &str) -> std::path::PathBuf {
     let root = temporary.path().join("config");
     let bundles = root.join("bundles");
     std::fs::create_dir_all(&bundles).expect("create bundles directory");
-    let body = r#"{
-        "schema_version": "1",
-        "members": [
-            {"session_name": "alpha", "display_name": "Alpha"},
-            {"session_name": "bravo", "display_name": "Bravo"}
-        ]
-    }"#;
-    std::fs::write(bundles.join(format!("{name}.json")), body).expect("write bundle file");
+    std::fs::write(
+        root.join("coders.toml"),
+        r#"
+format-version = 1
+
+[[coders]]
+id = "shell"
+initial-command = "sh -lc 'exec sleep 45'"
+resume-command = "sh -lc 'exec sleep 45'"
+"#,
+    )
+    .expect("write coders file");
+    let body = r#"
+format-version = 1
+
+[[sessions]]
+id = "alpha"
+name = "alpha"
+display-name = "Alpha"
+directory = "/tmp"
+coder = "shell"
+
+[[sessions]]
+id = "bravo"
+name = "bravo"
+display-name = "Bravo"
+directory = "/tmp"
+coder = "shell"
+"#;
+    std::fs::write(bundles.join(format!("{name}.toml")), body).expect("write bundle file");
     root
 }
 

@@ -53,6 +53,7 @@ Each coder definition SHALL include:
 - `resume-command`
 - optional `prompt-regex`
 - optional `prompt-inspect-lines`
+- optional `prompt-idle-column`
 
 Resolution SHALL follow:
 
@@ -95,3 +96,9 @@ Sessions that reference a coder inherit that coder's prompt-readiness settings.
 - **WHEN** a coder defines `prompt-inspect-lines`
 - **THEN** relay uses that value as the prompt-readiness inspection window for
   sessions that reference the coder
+
+#### Scenario: Use coder prompt idle column when configured
+
+- **WHEN** a coder defines `prompt-idle-column`
+- **THEN** relay requires tmux `cursor_x` to match that value before injection
+  for sessions that reference the coder

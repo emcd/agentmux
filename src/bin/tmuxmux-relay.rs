@@ -37,10 +37,12 @@ fn main() {
 
 fn run() -> Result<(), RuntimeError> {
     let arguments = parse_arguments(env::args().skip(1).collect())?;
+    let current_directory = env::current_dir()
+        .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
     let overrides = RuntimeRootOverrides {
         configuration_root: arguments.configuration_root,
         state_root: arguments.state_root,
-        repository_root: arguments.repository_root,
+        repository_root: arguments.repository_root.or(Some(current_directory)),
     };
     let roots = RuntimeRoots::resolve(&overrides)?;
     let paths = BundleRuntimePaths::resolve(&roots.state_root, &arguments.bundle_name)?;

@@ -34,31 +34,121 @@ fn tmux_command(socket: &Path, arguments: &[&str]) -> std::process::Output {
         .expect("run tmux command")
 }
 
+fn wait_for_pane_contains(socket: &Path, target: &str, needle: &str, timeout: Duration) {
+    let started = Instant::now();
+    loop {
+        let output = tmux_command(socket, &["capture-pane", "-p", "-t", target, "-S", "-40"]);
+        assert!(
+            output.status.success(),
+            "failed to capture pane for {target}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let snapshot = String::from_utf8_lossy(&output.stdout);
+        if snapshot.contains(needle) {
+            return;
+        }
+        assert!(
+            started.elapsed() < timeout,
+            "timed out waiting for '{needle}' in {target} pane, snapshot={snapshot:?}"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
 fn write_bundle_configuration(root: &Path, bundle_name: &str, sessions: &[&str]) -> PathBuf {
-    let members = sessions
+    let coders = vec![CoderSpec {
+        id: "default".to_string(),
+        initial_command: "sh -lc 'exec sleep 45'".to_string(),
+        resume_command: "sh -lc 'exec sleep 45'".to_string(),
+        prompt_regex: None,
+        prompt_inspect_lines: None,
+        prompt_idle_column: None,
+    }];
+    let session_specs = sessions
         .iter()
-        .map(|session| serde_json::json!({"session_name": session}))
+        .map(|session| SessionSpec {
+            id: (*session).to_string(),
+            name: (*session).to_string(),
+            display_name: None,
+            directory: PathBuf::from("/tmp"),
+            coder: "default".to_string(),
+            coder_session_id: None,
+        })
         .collect::<Vec<_>>();
-    write_bundle_configuration_members(root, bundle_name, &members)
+    write_bundle_configuration_members(root, bundle_name, &coders, &session_specs)
+}
+
+#[derive(Clone)]
+struct CoderSpec {
+    id: String,
+    initial_command: String,
+    resume_command: String,
+    prompt_regex: Option<String>,
+    prompt_inspect_lines: Option<usize>,
+    prompt_idle_column: Option<usize>,
+}
+
+#[derive(Clone)]
+struct SessionSpec {
+    id: String,
+    name: String,
+    display_name: Option<String>,
+    directory: PathBuf,
+    coder: String,
+    coder_session_id: Option<String>,
 }
 
 fn write_bundle_configuration_members(
     root: &Path,
     bundle_name: &str,
-    members: &[serde_json::Value],
+    coders: &[CoderSpec],
+    sessions: &[SessionSpec],
 ) -> PathBuf {
     let config_root = root.join("config");
     let bundles = config_root.join("bundles");
     fs::create_dir_all(&bundles).expect("create bundles directory");
-    let body = serde_json::json!({
-        "schema_version": "1",
-        "members": members,
-    });
-    fs::write(
-        bundles.join(format!("{bundle_name}.json")),
-        serde_json::to_string_pretty(&body).expect("encode bundle"),
-    )
-    .expect("write bundle config");
+    let mut coders_toml = String::from("format-version = 1\n");
+    for coder in coders {
+        coders_toml.push_str(
+            format!(
+                "\n[[coders]]\nid = \"{}\"\ninitial-command = \"{}\"\nresume-command = \"{}\"\n",
+                coder.id, coder.initial_command, coder.resume_command
+            )
+            .as_str(),
+        );
+        if let Some(prompt_regex) = coder.prompt_regex.as_deref() {
+            coders_toml.push_str(format!("prompt-regex = \"{}\"\n", prompt_regex).as_str());
+        }
+        if let Some(lines) = coder.prompt_inspect_lines {
+            coders_toml.push_str(format!("prompt-inspect-lines = {lines}\n").as_str());
+        }
+        if let Some(column) = coder.prompt_idle_column {
+            coders_toml.push_str(format!("prompt-idle-column = {column}\n").as_str());
+        }
+    }
+    fs::write(config_root.join("coders.toml"), coders_toml).expect("write coders config");
+
+    let mut bundle_toml = String::from("format-version = 1\n");
+    for session in sessions {
+        bundle_toml.push_str(
+            format!(
+                "\n[[sessions]]\nid = \"{}\"\nname = \"{}\"\ndirectory = \"{}\"\ncoder = \"{}\"\n",
+                session.id,
+                session.name,
+                session.directory.display(),
+                session.coder
+            )
+            .as_str(),
+        );
+        if let Some(display_name) = session.display_name.as_deref() {
+            bundle_toml.push_str(format!("display-name = \"{}\"\n", display_name).as_str());
+        }
+        if let Some(coder_session_id) = session.coder_session_id.as_deref() {
+            bundle_toml.push_str(format!("coder-session-id = \"{}\"\n", coder_session_id).as_str());
+        }
+    }
+    fs::write(bundles.join(format!("{bundle_name}.toml")), bundle_toml)
+        .expect("write bundle config");
     config_root
 }
 
@@ -219,14 +309,40 @@ fn relay_chat_delivers_when_prompt_readiness_template_matches() {
         temporary.path(),
         bundle_name,
         &[
-            serde_json::json!({"session_name": "alpha"}),
-            serde_json::json!({
-                "session_name": "bravo",
-                "prompt_readiness": {
-                    "prompt_regex": "READY>",
-                    "inspect_lines": 8
-                }
-            }),
+            CoderSpec {
+                id: "default".to_string(),
+                initial_command: "sh -lc 'exec sleep 45'".to_string(),
+                resume_command: "sh -lc 'exec sleep 45'".to_string(),
+                prompt_regex: None,
+                prompt_inspect_lines: None,
+                prompt_idle_column: None,
+            },
+            CoderSpec {
+                id: "prompt".to_string(),
+                initial_command: "sh -lc 'exec sleep 45'".to_string(),
+                resume_command: "sh -lc 'exec sleep 45'".to_string(),
+                prompt_regex: Some("READY>".to_string()),
+                prompt_inspect_lines: Some(8),
+                prompt_idle_column: None,
+            },
+        ],
+        &[
+            SessionSpec {
+                id: "alpha".to_string(),
+                name: "alpha".to_string(),
+                display_name: None,
+                directory: PathBuf::from("/tmp"),
+                coder: "default".to_string(),
+                coder_session_id: None,
+            },
+            SessionSpec {
+                id: "bravo".to_string(),
+                name: "bravo".to_string(),
+                display_name: None,
+                directory: PathBuf::from("/tmp"),
+                coder: "prompt".to_string(),
+                coder_session_id: None,
+            },
         ],
     );
     let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
@@ -282,13 +398,40 @@ fn relay_chat_times_out_when_prompt_readiness_never_matches() {
         temporary.path(),
         bundle_name,
         &[
-            serde_json::json!({"session_name": "alpha"}),
-            serde_json::json!({
-                "session_name": "bravo",
-                "prompt_readiness": {
-                    "prompt_regex": "^›"
-                }
-            }),
+            CoderSpec {
+                id: "default".to_string(),
+                initial_command: "sh -lc 'exec sleep 45'".to_string(),
+                resume_command: "sh -lc 'exec sleep 45'".to_string(),
+                prompt_regex: None,
+                prompt_inspect_lines: None,
+                prompt_idle_column: None,
+            },
+            CoderSpec {
+                id: "prompt".to_string(),
+                initial_command: "sh -lc 'exec sleep 45'".to_string(),
+                resume_command: "sh -lc 'exec sleep 45'".to_string(),
+                prompt_regex: Some("^›".to_string()),
+                prompt_inspect_lines: None,
+                prompt_idle_column: None,
+            },
+        ],
+        &[
+            SessionSpec {
+                id: "alpha".to_string(),
+                name: "alpha".to_string(),
+                display_name: None,
+                directory: PathBuf::from("/tmp"),
+                coder: "default".to_string(),
+                coder_session_id: None,
+            },
+            SessionSpec {
+                id: "bravo".to_string(),
+                name: "bravo".to_string(),
+                display_name: None,
+                directory: PathBuf::from("/tmp"),
+                coder: "prompt".to_string(),
+                coder_session_id: None,
+            },
         ],
     );
     let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
@@ -333,6 +476,211 @@ fn relay_chat_times_out_when_prompt_readiness_never_matches() {
             .as_ref()
             .is_some_and(|reason| reason.contains("prompt readiness")),
         "expected prompt readiness timeout reason: {:?}",
+        results[0].reason
+    );
+
+    let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
+}
+
+#[test]
+fn relay_chat_delivers_when_prompt_idle_column_matches() {
+    if !tmux_available() {
+        eprintln!("skipping relay delivery test because tmux is unavailable");
+        return;
+    }
+
+    let temporary = TempDir::new().expect("temporary");
+    let bundle_name = "party";
+    let config_root = write_bundle_configuration_members(
+        temporary.path(),
+        bundle_name,
+        &[
+            CoderSpec {
+                id: "default".to_string(),
+                initial_command: "sh -lc 'exec sleep 45'".to_string(),
+                resume_command: "sh -lc 'exec sleep 45'".to_string(),
+                prompt_regex: None,
+                prompt_inspect_lines: None,
+                prompt_idle_column: None,
+            },
+            CoderSpec {
+                id: "prompt".to_string(),
+                initial_command: "sh -lc 'exec sleep 45'".to_string(),
+                resume_command: "sh -lc 'exec sleep 45'".to_string(),
+                prompt_regex: Some("(?m)^READY>".to_string()),
+                prompt_inspect_lines: Some(3),
+                prompt_idle_column: Some(6),
+            },
+        ],
+        &[
+            SessionSpec {
+                id: "alpha".to_string(),
+                name: "alpha".to_string(),
+                display_name: None,
+                directory: PathBuf::from("/tmp"),
+                coder: "default".to_string(),
+                coder_session_id: None,
+            },
+            SessionSpec {
+                id: "bravo".to_string(),
+                name: "bravo".to_string(),
+                display_name: None,
+                directory: PathBuf::from("/tmp"),
+                coder: "prompt".to_string(),
+                coder_session_id: None,
+            },
+        ],
+    );
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
+
+    spawn_session(&paths.tmux_socket, "alpha", "exec sleep 45");
+    spawn_session(
+        &paths.tmux_socket,
+        "bravo",
+        "PS1='READY>'; export PS1; exec bash --noprofile --norc -i",
+    );
+    wait_for_pane_contains(
+        &paths.tmux_socket,
+        "bravo",
+        "READY>",
+        Duration::from_millis(1_200),
+    );
+
+    let response = handle_request(
+        RelayRequest::Chat {
+            request_id: Some("req-idle-match".to_string()),
+            sender_session: "alpha".to_string(),
+            message: "hello".to_string(),
+            targets: vec!["bravo".to_string()],
+            broadcast: false,
+            quiet_window_ms: Some(70),
+            delivery_timeout_ms: Some(1_000),
+        },
+        &config_root,
+        bundle_name,
+        &paths.tmux_socket,
+    )
+    .expect("delivery should complete");
+
+    let RelayResponse::Chat {
+        status, results, ..
+    } = response
+    else {
+        panic!("expected chat response");
+    };
+    assert_eq!(status, ChatStatus::Success);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].outcome, ChatOutcome::Delivered);
+
+    let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
+}
+
+#[test]
+fn relay_chat_times_out_when_prompt_idle_column_does_not_match() {
+    if !tmux_available() {
+        eprintln!("skipping relay delivery test because tmux is unavailable");
+        return;
+    }
+
+    let temporary = TempDir::new().expect("temporary");
+    let bundle_name = "party";
+    let config_root = write_bundle_configuration_members(
+        temporary.path(),
+        bundle_name,
+        &[
+            CoderSpec {
+                id: "default".to_string(),
+                initial_command: "sh -lc 'exec sleep 45'".to_string(),
+                resume_command: "sh -lc 'exec sleep 45'".to_string(),
+                prompt_regex: None,
+                prompt_inspect_lines: None,
+                prompt_idle_column: None,
+            },
+            CoderSpec {
+                id: "prompt".to_string(),
+                initial_command: "sh -lc 'exec sleep 45'".to_string(),
+                resume_command: "sh -lc 'exec sleep 45'".to_string(),
+                prompt_regex: Some("(?m)^READY>".to_string()),
+                prompt_inspect_lines: Some(3),
+                prompt_idle_column: Some(6),
+            },
+        ],
+        &[
+            SessionSpec {
+                id: "alpha".to_string(),
+                name: "alpha".to_string(),
+                display_name: None,
+                directory: PathBuf::from("/tmp"),
+                coder: "default".to_string(),
+                coder_session_id: None,
+            },
+            SessionSpec {
+                id: "bravo".to_string(),
+                name: "bravo".to_string(),
+                display_name: None,
+                directory: PathBuf::from("/tmp"),
+                coder: "prompt".to_string(),
+                coder_session_id: None,
+            },
+        ],
+    );
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
+
+    spawn_session(&paths.tmux_socket, "alpha", "exec sleep 45");
+    spawn_session(
+        &paths.tmux_socket,
+        "bravo",
+        "PS1='READY>'; export PS1; exec bash --noprofile --norc -i",
+    );
+    wait_for_pane_contains(
+        &paths.tmux_socket,
+        "bravo",
+        "READY>",
+        Duration::from_millis(1_200),
+    );
+    let typed = tmux_command(
+        &paths.tmux_socket,
+        &["send-keys", "-t", "bravo", "--", "echo hi"],
+    );
+    assert!(
+        typed.status.success(),
+        "failed to prefill prompt input: {}",
+        String::from_utf8_lossy(&typed.stderr)
+    );
+
+    let response = handle_request(
+        RelayRequest::Chat {
+            request_id: Some("req-idle-mismatch".to_string()),
+            sender_session: "alpha".to_string(),
+            message: "hello".to_string(),
+            targets: vec!["bravo".to_string()],
+            broadcast: false,
+            quiet_window_ms: Some(70),
+            delivery_timeout_ms: Some(450),
+        },
+        &config_root,
+        bundle_name,
+        &paths.tmux_socket,
+    )
+    .expect("delivery should complete");
+
+    let RelayResponse::Chat {
+        status, results, ..
+    } = response
+    else {
+        panic!("expected chat response");
+    };
+    assert_eq!(status, ChatStatus::Failure);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].outcome, ChatOutcome::Timeout);
+    assert!(
+        results[0]
+            .reason
+            .as_ref()
+            .is_some_and(|reason| reason.contains("prompt readiness")),
+        "expected prompt readiness mismatch: {:?}",
         results[0].reason
     );
 

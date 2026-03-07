@@ -18,15 +18,6 @@ can still exchange messages through a shared transport.
 
 The project is in early implementation phase.
 
-Design contracts are captured in OpenSpec proposals:
-
-- `add-mcp-session-relay-mvp`
-- `add-mcp-tool-surface-contract`
-- `add-runtime-bootstrap-and-xdg-layout`
-- `add-pane-envelope-rfc822-mime`
-
-See [documentation/architecture/openspec](documentation/architecture/openspec).
-
 ## Quick Start
 
 ### Prerequisites
@@ -228,30 +219,20 @@ delivery may time out for that target.
 ## Prompt-Readiness Templates
 
 Quiescence can still occur when a session is not at an input-ready prompt.
-Bundle members may define an optional `prompt_readiness` template that must
+Coder definitions may define an optional prompt-readiness template that must
 match before relay injection.
 
 Configuration fields:
 
-- `prompt_regex` (required): regular expression evaluated against inspected
-  pane tail text.
-- `inspect_lines` (optional): non-empty tail lines to inspect.
-  Default is `6`; effective range is clamped to `1..=40`.
+- `prompt-regex` (optional): regular expression evaluated against inspected
+  pane tail text. Multi-line matching is supported (for example `(?m)^›`).
+- `prompt-inspect-lines` (optional): non-empty tail lines to inspect after
+  trimming trailing blank lines from pane capture output. Default is `3`;
+  effective range is clamped to `1..=40`.
+- `prompt-idle-column` (optional): required tmux `cursor_x` value for
+  input-idle delivery. Use this to avoid injecting while a user is typing.
 
-Example member:
-
-```json
-{
-  "session_name": "codex-b",
-  "display_name": "Codex B",
-  "prompt_readiness": {
-    "prompt_regex": "READY>",
-    "inspect_lines": 8
-  }
-}
-```
-
-If a session reaches quiescence but `prompt_regex` never matches before
+If a session reaches quiescence but prompt regex never matches before
 `delivery_timeout_ms`, relay reports a timeout reason indicating prompt
 readiness mismatch and does not inject that message.
 
@@ -274,29 +255,51 @@ Per-bundle sockets:
 
 Bundle membership is operator-managed in MVP and is not mutated via MCP tools.
 
-Configuration path:
+Configuration paths:
 
-- `$XDG_CONFIG_HOME/tmuxmux/bundles/<bundle-name>.json`
-- fallback: `~/.config/tmuxmux/bundles/<bundle-name>.json`
+- `<config-root>/coders.toml`
+- `<config-root>/bundles/<bundle-name>.toml`
 
-Example:
+Default config root:
 
-```json
-{
-  "schema_version": "1",
-  "members": [
-    {
-      "session_name": "codex-a",
-      "display_name": "Codex A",
-      "working_directory": "/home/me/src/tmuxmux",
-      "start_command": "codex resume <uuid>"
-    },
-    {
-      "session_name": "codex-b",
-      "display_name": "Codex B"
-    }
-  ]
-}
+- debug builds:
+  - repository-local `.auxiliary/configuration/tmuxmux/` when present
+- otherwise:
+  - `$XDG_CONFIG_HOME/tmuxmux` or `~/.config/tmuxmux`
+
+Example `coders.toml`:
+
+```toml
+format-version = 1
+
+[[coders]]
+id = "codex"
+initial-command = "codex"
+resume-command = "codex resume {coder-session-id}"
+prompt-regex = "(?m)^›"
+prompt-inspect-lines = 3
+prompt-idle-column = 2
+```
+
+Example `bundles/tmuxmux.toml`:
+
+```toml
+format-version = 1
+
+[[sessions]]
+id = "relay"
+name = "relay"
+display-name = "Relay"
+directory = "/home/me/src/WORKTREES/tmuxmux/relay"
+coder = "codex"
+coder-session-id = "00000000-0000-0000-0000-000000000000"
+
+[[sessions]]
+id = "tui"
+name = "tui"
+display-name = "TUI"
+directory = "/home/me/src/WORKTREES/tmuxmux/tui"
+coder = "codex"
 ```
 
 Per-worktree local MCP overrides (Git-ignored) may be placed at:

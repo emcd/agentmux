@@ -5,65 +5,120 @@ use tmuxmux::configuration::{
     ConfigurationError, infer_sender_from_working_directory, load_bundle_configuration,
 };
 
-fn write_bundle(temporary: &TempDir, bundle_name: &str, content: &str) -> PathBuf {
+fn write_config(
+    temporary: &TempDir,
+    bundle_name: &str,
+    coders_toml: &str,
+    bundle_toml: &str,
+) -> PathBuf {
     let root = temporary.path().join("config");
     let bundles = root.join("bundles");
     fs::create_dir_all(&bundles).expect("create directories");
-    let path = bundles.join(format!("{bundle_name}.json"));
-    fs::write(&path, content).expect("write config");
+    fs::write(root.join("coders.toml"), coders_toml).expect("write coders");
+    fs::write(bundles.join(format!("{bundle_name}.toml")), bundle_toml).expect("write bundle");
     root
 }
 
 #[test]
 fn loads_valid_bundle_configuration() {
     let temporary = TempDir::new().expect("temporary");
-    let root = write_bundle(
+    let root = write_config(
         &temporary,
         "alpha",
-        r#"{
-            "schema_version": "1",
-            "members": [
-                {
-                    "session_name": "a",
-                    "prompt_readiness": {
-                        "prompt_regex": "^›",
-                        "inspect_lines": 8
-                    }
-                },
-                {"session_name": "b", "display_name": "Bravo"}
-            ]
-        }"#,
+        r#"
+format-version = 1
+
+[[coders]]
+id = "codex"
+initial-command = "codex start"
+resume-command = "codex resume {coder-session-id}"
+prompt-regex = "^›"
+prompt-inspect-lines = 8
+prompt-idle-column = 3
+
+[[coders]]
+id = "shell"
+initial-command = "sh -lc 'exec sleep 45'"
+resume-command = "sh -lc 'exec sleep 45'"
+"#,
+        &format!(
+            r#"
+format-version = 1
+
+[[sessions]]
+id = "session-a"
+name = "a"
+directory = "{}"
+coder = "codex"
+coder-session-id = "abc123"
+
+[[sessions]]
+id = "session-b"
+name = "b"
+display-name = "Bravo"
+directory = "{}"
+coder = "shell"
+"#,
+            temporary.path().display(),
+            temporary.path().display()
+        ),
     );
 
     let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
     assert_eq!(loaded.bundle_name, "alpha");
     assert_eq!(loaded.members.len(), 2);
     assert_eq!(loaded.members[1].display_name.as_deref(), Some("Bravo"));
+    assert_eq!(
+        loaded.members[0].start_command.as_deref(),
+        Some("codex resume abc123")
+    );
     let readiness = loaded.members[0]
         .prompt_readiness
         .as_ref()
         .expect("member a prompt_readiness");
     assert_eq!(readiness.prompt_regex, "^›");
     assert_eq!(readiness.inspect_lines, Some(8));
+    assert_eq!(readiness.input_idle_cursor_column, Some(3));
 }
 
 #[test]
 fn rejects_duplicate_session_names() {
     let temporary = TempDir::new().expect("temporary");
-    let root = write_bundle(
+    let root = write_config(
         &temporary,
         "alpha",
-        r#"{
-            "members": [
-                {"session_name": "dup"},
-                {"session_name": "dup"}
-            ]
-        }"#,
+        r#"
+format-version = 1
+
+[[coders]]
+id = "shell"
+initial-command = "sh -lc 'exec sleep 45'"
+resume-command = "sh -lc 'exec sleep 45'"
+"#,
+        &format!(
+            r#"
+format-version = 1
+
+[[sessions]]
+id = "one"
+name = "dup"
+directory = "{}"
+coder = "shell"
+
+[[sessions]]
+id = "two"
+name = "dup"
+directory = "{}"
+coder = "shell"
+"#,
+            temporary.path().display(),
+            temporary.path().display()
+        ),
     );
 
     let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
     assert!(
-        err.to_string().contains("duplicate session_name"),
+        err.to_string().contains("duplicate session name"),
         "unexpected error: {err}"
     );
 }
@@ -72,6 +127,20 @@ fn rejects_duplicate_session_names() {
 fn reports_unknown_bundle() {
     let temporary = TempDir::new().expect("temporary");
     let root = temporary.path().join("config");
+    fs::create_dir_all(&root).expect("create config root");
+    fs::write(
+        root.join("coders.toml"),
+        r#"
+format-version = 1
+
+[[coders]]
+id = "shell"
+initial-command = "sh -lc 'exec sleep 45'"
+resume-command = "sh -lc 'exec sleep 45'"
+"#,
+    )
+    .expect("write coders");
+
     let err = load_bundle_configuration(&root, "missing").expect_err("missing bundle");
     match err {
         ConfigurationError::UnknownBundle { bundle_name, .. } => {
@@ -84,16 +153,33 @@ fn reports_unknown_bundle() {
 #[test]
 fn infers_sender_from_matching_working_directory() {
     let temporary = TempDir::new().expect("temporary");
-    let root = write_bundle(
+    let root = write_config(
         &temporary,
         "alpha",
+        r#"
+format-version = 1
+
+[[coders]]
+id = "shell"
+initial-command = "sh -lc 'exec sleep 45'"
+resume-command = "sh -lc 'exec sleep 45'"
+"#,
         &format!(
-            r#"{{
-            "members": [
-                {{"session_name": "a", "working_directory": "{}"}},
-                {{"session_name": "b", "working_directory": "{}"}}
-            ]
-        }}"#,
+            r#"
+format-version = 1
+
+[[sessions]]
+id = "a"
+name = "a"
+directory = "{}"
+coder = "shell"
+
+[[sessions]]
+id = "b"
+name = "b"
+directory = "{}"
+coder = "shell"
+"#,
             temporary.path().display(),
             temporary.path().join("other").display()
         ),
@@ -108,16 +194,33 @@ fn infers_sender_from_matching_working_directory() {
 #[test]
 fn rejects_ambiguous_sender_from_working_directory() {
     let temporary = TempDir::new().expect("temporary");
-    let root = write_bundle(
+    let root = write_config(
         &temporary,
         "alpha",
+        r#"
+format-version = 1
+
+[[coders]]
+id = "shell"
+initial-command = "sh -lc 'exec sleep 45'"
+resume-command = "sh -lc 'exec sleep 45'"
+"#,
         &format!(
-            r#"{{
-            "members": [
-                {{"session_name": "a", "working_directory": "{}"}},
-                {{"session_name": "b", "working_directory": "{}"}}
-            ]
-        }}"#,
+            r#"
+format-version = 1
+
+[[sessions]]
+id = "a"
+name = "a"
+directory = "{}"
+coder = "shell"
+
+[[sessions]]
+id = "b"
+name = "b"
+directory = "{}"
+coder = "shell"
+"#,
             temporary.path().display(),
             temporary.path().display()
         ),
@@ -137,24 +240,35 @@ fn rejects_ambiguous_sender_from_working_directory() {
 #[test]
 fn rejects_invalid_prompt_regex() {
     let temporary = TempDir::new().expect("temporary");
-    let root = write_bundle(
+    let root = write_config(
         &temporary,
         "alpha",
-        r#"{
-            "members": [
-                {
-                    "session_name": "a",
-                    "prompt_readiness": {
-                        "prompt_regex": "["
-                    }
-                }
-            ]
-        }"#,
+        r#"
+format-version = 1
+
+[[coders]]
+id = "shell"
+initial-command = "sh -lc 'exec sleep 45'"
+resume-command = "sh -lc 'exec sleep 45'"
+prompt-regex = "["
+"#,
+        &format!(
+            r#"
+format-version = 1
+
+[[sessions]]
+id = "a"
+name = "a"
+directory = "{}"
+coder = "shell"
+"#,
+            temporary.path().display()
+        ),
     );
 
     let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
     assert!(
-        err.to_string().contains("prompt_readiness.prompt_regex"),
+        err.to_string().contains("prompt-regex"),
         "unexpected error: {err}"
     );
 }
@@ -162,25 +276,146 @@ fn rejects_invalid_prompt_regex() {
 #[test]
 fn rejects_zero_prompt_inspect_lines() {
     let temporary = TempDir::new().expect("temporary");
-    let root = write_bundle(
+    let root = write_config(
         &temporary,
         "alpha",
-        r#"{
-            "members": [
-                {
-                    "session_name": "a",
-                    "prompt_readiness": {
-                        "prompt_regex": "^ok$",
-                        "inspect_lines": 0
-                    }
-                }
-            ]
-        }"#,
+        r#"
+format-version = 1
+
+[[coders]]
+id = "shell"
+initial-command = "sh -lc 'exec sleep 45'"
+resume-command = "sh -lc 'exec sleep 45'"
+prompt-regex = "^ok$"
+prompt-inspect-lines = 0
+"#,
+        &format!(
+            r#"
+format-version = 1
+
+[[sessions]]
+id = "a"
+name = "a"
+directory = "{}"
+coder = "shell"
+"#,
+            temporary.path().display()
+        ),
     );
 
     let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
     assert!(
-        err.to_string().contains("prompt_readiness.inspect_lines"),
+        err.to_string().contains("prompt-inspect-lines"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn rejects_unknown_coder_reference() {
+    let temporary = TempDir::new().expect("temporary");
+    let root = write_config(
+        &temporary,
+        "alpha",
+        r#"
+format-version = 1
+
+[[coders]]
+id = "shell"
+initial-command = "sh -lc 'exec sleep 45'"
+resume-command = "sh -lc 'exec sleep 45'"
+"#,
+        &format!(
+            r#"
+format-version = 1
+
+[[sessions]]
+id = "a"
+name = "a"
+directory = "{}"
+coder = "missing"
+"#,
+            temporary.path().display()
+        ),
+    );
+
+    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    assert!(
+        err.to_string().contains("unknown coder"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn rejects_duplicate_coder_ids() {
+    let temporary = TempDir::new().expect("temporary");
+    let root = write_config(
+        &temporary,
+        "alpha",
+        r#"
+format-version = 1
+
+[[coders]]
+id = "dup"
+initial-command = "sh -lc 'exec sleep 45'"
+resume-command = "sh -lc 'exec sleep 45'"
+
+[[coders]]
+id = "dup"
+initial-command = "sh -lc 'exec sleep 45'"
+resume-command = "sh -lc 'exec sleep 45'"
+"#,
+        &format!(
+            r#"
+format-version = 1
+
+[[sessions]]
+id = "a"
+name = "a"
+directory = "{}"
+coder = "dup"
+"#,
+            temporary.path().display()
+        ),
+    );
+
+    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    assert!(
+        err.to_string().contains("duplicate coder id"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn rejects_unknown_command_placeholder() {
+    let temporary = TempDir::new().expect("temporary");
+    let root = write_config(
+        &temporary,
+        "alpha",
+        r#"
+format-version = 1
+
+[[coders]]
+id = "shell"
+initial-command = "echo {unknown-token}"
+resume-command = "sh -lc 'exec sleep 45'"
+"#,
+        &format!(
+            r#"
+format-version = 1
+
+[[sessions]]
+id = "a"
+name = "a"
+directory = "{}"
+coder = "shell"
+"#,
+            temporary.path().display()
+        ),
+    );
+
+    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    assert!(
+        err.to_string().contains("unknown placeholder"),
         "unexpected error: {err}"
     );
 }

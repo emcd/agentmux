@@ -6,7 +6,7 @@ The system SHALL resolve default configuration root as:
 
 - debug builds: repository-local
   `.auxiliary/configuration/tmuxmux/` when that directory exists
-- non-debug builds: `~/.config/tmuxmux/`
+- otherwise: `$XDG_CONFIG_HOME/tmuxmux` or `~/.config/tmuxmux`
 
 Explicit configuration path overrides (CLI or local override file fields) SHALL
 continue to take precedence over default file resolution.
@@ -23,7 +23,7 @@ continue to take precedence over default file resolution.
 - **WHEN** runtime is non-debug/release mode
 - **AND** `.auxiliary/configuration/tmuxmux/` exists
 - **AND** no explicit config path override is provided
-- **THEN** bundle loading uses `~/.config/tmuxmux/`
+- **THEN** bundle loading uses XDG/home configuration resolution
 
 #### Scenario: Explicit config override takes precedence
 

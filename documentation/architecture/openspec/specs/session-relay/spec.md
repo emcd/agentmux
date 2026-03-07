@@ -228,9 +228,13 @@ A prompt-readiness template SHALL support:
 
 - `prompt_regex` (required)
 - `inspect_lines` (optional, defaults to a bounded tail window)
+- `input_idle_cursor_column` (optional)
 
 `prompt_regex` SHALL be evaluated against a multiline string built from the
 inspected non-empty tail lines of pane output.
+
+When `input_idle_cursor_column` is configured, relay SHALL treat the target as
+prompt-ready only when tmux reports `cursor_x` at that configured column.
 
 #### Scenario: Deliver when prompt-readiness template matches
 
@@ -244,6 +248,27 @@ inspected non-empty tail lines of pane output.
 - **WHEN** target member uses one regex that spans prompt and status lines
 - **AND** pane output tail contains those lines in order
 - **THEN** relay treats target as prompt-ready
+
+#### Scenario: Require idle input column before injection
+
+- **WHEN** target member prompt-readiness template defines
+  `input_idle_cursor_column`
+- **AND** pane output is quiescent
+- **AND** `prompt_regex` matches inspected pane tail text
+- **AND** tmux-reported `cursor_x` equals configured
+  `input_idle_cursor_column`
+- **THEN** relay injects the message
+
+#### Scenario: Do not inject while user is typing
+
+- **WHEN** target member prompt-readiness template defines
+  `input_idle_cursor_column`
+- **AND** pane output is quiescent
+- **AND** `prompt_regex` matches inspected pane tail text
+- **AND** tmux-reported `cursor_x` differs from configured
+  `input_idle_cursor_column`
+- **THEN** relay does not inject the message
+- **AND** relay continues waiting until timeout
 
 #### Scenario: Time out when quiescent pane never becomes prompt-ready
 
@@ -264,4 +289,3 @@ configuration loading.
 - **WHEN** bundle configuration includes a malformed `prompt_regex`
 - **THEN** bundle loading fails with a structured configuration validation
   error
-

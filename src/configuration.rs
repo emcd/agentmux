@@ -1,7 +1,7 @@
 //! Bundle configuration loading and sender-association helpers.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     error::Error,
     fmt::{Display, Formatter},
     fs, io,
@@ -11,9 +11,10 @@ use std::{
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-const SCHEMA_VERSION: &str = "1";
+const FORMAT_VERSION: u32 = 1;
+const CODERS_FILE: &str = "coders.toml";
 const BUNDLES_DIRECTORY: &str = "bundles";
-const BUNDLE_EXTENSION: &str = "json";
+const BUNDLE_EXTENSION: &str = "toml";
 
 /// One configured bundle member.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -35,6 +36,8 @@ pub struct PromptReadinessTemplate {
     pub prompt_regex: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inspect_lines: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_idle_cursor_column: Option<usize>,
 }
 
 /// Configuration for one named bundle.
@@ -45,13 +48,47 @@ pub struct BundleConfiguration {
     pub members: Vec<BundleMember>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-struct BundleConfigurationFile {
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct RawCodersFile {
+    format_version: u32,
     #[serde(default)]
-    schema_version: Option<String>,
+    coders: Vec<RawCoder>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct RawCoder {
+    id: String,
+    initial_command: String,
+    resume_command: String,
     #[serde(default)]
-    bundle_name: Option<String>,
-    members: Vec<BundleMember>,
+    prompt_regex: Option<String>,
+    #[serde(default)]
+    prompt_inspect_lines: Option<usize>,
+    #[serde(default)]
+    prompt_idle_column: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct RawBundleFile {
+    format_version: u32,
+    #[serde(default)]
+    sessions: Vec<RawSession>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct RawSession {
+    id: String,
+    name: String,
+    #[serde(default)]
+    display_name: Option<String>,
+    directory: PathBuf,
+    coder: String,
+    #[serde(default)]
+    coder_session_id: Option<String>,
 }
 
 /// Configuration load/validation failures.
@@ -124,6 +161,11 @@ impl Error for ConfigurationError {
     }
 }
 
+/// Resolves path to shared coder definitions.
+pub fn coders_configuration_path(configuration_root: &Path) -> PathBuf {
+    configuration_root.join(CODERS_FILE)
+}
+
 /// Resolves path to one bundle definition file.
 pub fn bundle_configuration_path(configuration_root: &Path, bundle_name: &str) -> PathBuf {
     configuration_root
@@ -140,22 +182,43 @@ pub fn load_bundle_configuration(
     configuration_root: &Path,
     bundle_name: &str,
 ) -> Result<BundleConfiguration, ConfigurationError> {
-    let path = bundle_configuration_path(configuration_root, bundle_name);
-    if !path.exists() {
+    let coders_path = coders_configuration_path(configuration_root);
+    let bundle_path = bundle_configuration_path(configuration_root, bundle_name);
+
+    if !bundle_path.exists() {
         return Err(ConfigurationError::UnknownBundle {
             bundle_name: bundle_name.to_string(),
-            path,
+            path: bundle_path,
         });
     }
-    let raw = fs::read_to_string(&path)
-        .map_err(|source| ConfigurationError::io(format!("read {}", path.display()), source))?;
-    let parsed = serde_json::from_str::<BundleConfigurationFile>(&raw).map_err(|source| {
+
+    let coders_raw = fs::read_to_string(&coders_path).map_err(|source| {
+        ConfigurationError::io(format!("read {}", coders_path.display()), source)
+    })?;
+    let bundle_raw = fs::read_to_string(&bundle_path).map_err(|source| {
+        ConfigurationError::io(format!("read {}", bundle_path.display()), source)
+    })?;
+
+    let coders_file = toml::from_str::<RawCodersFile>(&coders_raw).map_err(|source| {
         ConfigurationError::InvalidConfiguration {
-            path: path.clone(),
+            path: coders_path.clone(),
             message: source.to_string(),
         }
     })?;
-    validate_loaded_configuration(bundle_name, parsed, &path)
+    let bundle_file = toml::from_str::<RawBundleFile>(&bundle_raw).map_err(|source| {
+        ConfigurationError::InvalidConfiguration {
+            path: bundle_path.clone(),
+            message: source.to_string(),
+        }
+    })?;
+
+    validate_loaded_configuration(
+        bundle_name,
+        coders_file,
+        &coders_path,
+        bundle_file,
+        &bundle_path,
+    )
 }
 
 /// Infers sender session from bundle member working-directory matches.
@@ -192,94 +255,253 @@ pub fn infer_sender_from_working_directory(
 
 fn validate_loaded_configuration(
     expected_bundle_name: &str,
-    parsed: BundleConfigurationFile,
-    path: &Path,
+    coders_file: RawCodersFile,
+    coders_path: &Path,
+    bundle_file: RawBundleFile,
+    bundle_path: &Path,
 ) -> Result<BundleConfiguration, ConfigurationError> {
-    if parsed.members.is_empty() {
+    validate_format_version(coders_file.format_version, coders_path)?;
+    validate_format_version(bundle_file.format_version, bundle_path)?;
+
+    let coders = validate_coders(coders_file.coders, coders_path)?;
+
+    if bundle_file.sessions.is_empty() {
         return Err(ConfigurationError::InvalidConfiguration {
-            path: path.to_path_buf(),
-            message: "members must contain at least one session".to_string(),
+            path: bundle_path.to_path_buf(),
+            message: "sessions must contain at least one session".to_string(),
         });
     }
 
-    let bundle_name = parsed
-        .bundle_name
-        .unwrap_or_else(|| expected_bundle_name.to_string());
-    if bundle_name != expected_bundle_name {
-        return Err(ConfigurationError::InvalidConfiguration {
-            path: path.to_path_buf(),
-            message: format!(
-                "bundle_name '{bundle_name}' does not match requested '{}'",
-                expected_bundle_name
-            ),
-        });
-    }
+    let mut session_ids = HashSet::new();
+    let mut session_names = HashSet::new();
+    let mut members = Vec::with_capacity(bundle_file.sessions.len());
 
-    let schema_version = parsed
-        .schema_version
-        .unwrap_or_else(|| SCHEMA_VERSION.to_string());
-    if schema_version != SCHEMA_VERSION {
-        return Err(ConfigurationError::InvalidConfiguration {
-            path: path.to_path_buf(),
-            message: format!("unsupported schema_version '{schema_version}'"),
-        });
-    }
+    for session in &bundle_file.sessions {
+        let session_id = normalize_field(session.id.as_str());
+        if session_id.is_empty() {
+            return Err(ConfigurationError::InvalidConfiguration {
+                path: bundle_path.to_path_buf(),
+                message: "session id must be non-empty".to_string(),
+            });
+        }
+        if !session_ids.insert(session_id.to_string()) {
+            return Err(ConfigurationError::InvalidConfiguration {
+                path: bundle_path.to_path_buf(),
+                message: format!("duplicate session id '{session_id}'"),
+            });
+        }
 
-    let mut names = HashSet::new();
-    for member in &parsed.members {
-        let session_name = member.session_name.trim();
+        let session_name = normalize_field(session.name.as_str());
         if session_name.is_empty() {
             return Err(ConfigurationError::InvalidConfiguration {
-                path: path.to_path_buf(),
-                message: "member session_name must be non-empty".to_string(),
+                path: bundle_path.to_path_buf(),
+                message: "session name must be non-empty".to_string(),
             });
         }
-        if !names.insert(session_name.to_string()) {
+        if !session_names.insert(session_name.to_string()) {
             return Err(ConfigurationError::InvalidConfiguration {
-                path: path.to_path_buf(),
-                message: format!("duplicate session_name '{session_name}'"),
+                path: bundle_path.to_path_buf(),
+                message: format!("duplicate session name '{session_name}'"),
             });
         }
-        validate_prompt_readiness(member, path)?;
+
+        let coder_id = normalize_field(session.coder.as_str());
+        let Some(coder) = coders.get(coder_id) else {
+            return Err(ConfigurationError::InvalidConfiguration {
+                path: bundle_path.to_path_buf(),
+                message: format!(
+                    "session '{}' references unknown coder '{}'",
+                    session_name, coder_id
+                ),
+            });
+        };
+
+        if session.directory.as_os_str().is_empty() {
+            return Err(ConfigurationError::InvalidConfiguration {
+                path: bundle_path.to_path_buf(),
+                message: format!("session '{}' directory must be non-empty", session_name),
+            });
+        }
+
+        let coder_session_id = session
+            .coder_session_id
+            .as_deref()
+            .map(normalize_field)
+            .filter(|value| !value.is_empty());
+        let command_template = if coder_session_id.is_some() {
+            coder.resume_command.as_str()
+        } else {
+            coder.initial_command.as_str()
+        };
+        let start_command = render_command_template(
+            command_template,
+            coder_session_id,
+            bundle_path,
+            session_name,
+        )?;
+
+        let prompt_readiness = prompt_readiness_from_coder(coder, coders_path, session_name)?;
+        members.push(BundleMember {
+            session_name: session_name.to_string(),
+            display_name: session
+                .display_name
+                .as_deref()
+                .map(normalize_field)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string),
+            working_directory: Some(session.directory.clone()),
+            start_command: Some(start_command),
+            prompt_readiness,
+        });
     }
 
     Ok(BundleConfiguration {
-        schema_version,
-        bundle_name,
-        members: parsed.members,
+        schema_version: FORMAT_VERSION.to_string(),
+        bundle_name: expected_bundle_name.to_string(),
+        members,
     })
 }
 
-fn validate_prompt_readiness(member: &BundleMember, path: &Path) -> Result<(), ConfigurationError> {
-    let Some(template) = member.prompt_readiness.as_ref() else {
-        return Ok(());
-    };
+fn validate_coders(
+    coders: Vec<RawCoder>,
+    coders_path: &Path,
+) -> Result<HashMap<String, RawCoder>, ConfigurationError> {
+    if coders.is_empty() {
+        return Err(ConfigurationError::InvalidConfiguration {
+            path: coders_path.to_path_buf(),
+            message: "coders must contain at least one coder".to_string(),
+        });
+    }
 
-    if template.prompt_regex.trim().is_empty() {
+    let mut unique = HashMap::new();
+    for coder in coders {
+        let coder_id = normalize_field(coder.id.as_str());
+        if coder_id.is_empty() {
+            return Err(ConfigurationError::InvalidConfiguration {
+                path: coders_path.to_path_buf(),
+                message: "coder id must be non-empty".to_string(),
+            });
+        }
+        if unique.contains_key(coder_id) {
+            return Err(ConfigurationError::InvalidConfiguration {
+                path: coders_path.to_path_buf(),
+                message: format!("duplicate coder id '{coder_id}'"),
+            });
+        }
+
+        if normalize_field(coder.initial_command.as_str()).is_empty() {
+            return Err(ConfigurationError::InvalidConfiguration {
+                path: coders_path.to_path_buf(),
+                message: format!("coder '{}' initial-command must be non-empty", coder_id),
+            });
+        }
+        if normalize_field(coder.resume_command.as_str()).is_empty() {
+            return Err(ConfigurationError::InvalidConfiguration {
+                path: coders_path.to_path_buf(),
+                message: format!("coder '{}' resume-command must be non-empty", coder_id),
+            });
+        }
+
+        if let Some(prompt_regex) = coder.prompt_regex.as_deref() {
+            if normalize_field(prompt_regex).is_empty() {
+                return Err(ConfigurationError::InvalidConfiguration {
+                    path: coders_path.to_path_buf(),
+                    message: format!(
+                        "coder '{}' prompt-regex must be non-empty when set",
+                        coder_id
+                    ),
+                });
+            }
+            compile_prompt_regex(prompt_regex, coders_path, coder_id, "prompt-regex")?;
+        }
+
+        if matches!(coder.prompt_inspect_lines, Some(0)) {
+            return Err(ConfigurationError::InvalidConfiguration {
+                path: coders_path.to_path_buf(),
+                message: format!(
+                    "coder '{}' prompt-inspect-lines must be greater than zero",
+                    coder_id
+                ),
+            });
+        }
+
+        unique.insert(coder_id.to_string(), coder);
+    }
+
+    Ok(unique)
+}
+
+fn validate_format_version(version: u32, path: &Path) -> Result<(), ConfigurationError> {
+    if version == FORMAT_VERSION {
+        return Ok(());
+    }
+    Err(ConfigurationError::InvalidConfiguration {
+        path: path.to_path_buf(),
+        message: format!("unsupported format-version '{version}'"),
+    })
+}
+
+fn render_command_template(
+    template: &str,
+    coder_session_id: Option<&str>,
+    path: &Path,
+    session_name: &str,
+) -> Result<String, ConfigurationError> {
+    let mut rendered = template.to_string();
+
+    if rendered.contains("{coder-session-id}") {
+        let Some(coder_session_id) = coder_session_id else {
+            return Err(ConfigurationError::InvalidConfiguration {
+                path: path.to_path_buf(),
+                message: format!(
+                    "session '{}' requires coder-session-id for template",
+                    session_name
+                ),
+            });
+        };
+        rendered = rendered.replace("{coder-session-id}", coder_session_id);
+    }
+
+    let placeholder_regex = Regex::new(r"\{[a-z][a-z0-9-]*\}").map_err(|source| {
+        ConfigurationError::InvalidConfiguration {
+            path: path.to_path_buf(),
+            message: format!("internal placeholder regex failure: {source}"),
+        }
+    })?;
+    if let Some(found) = placeholder_regex.find(rendered.as_str()) {
         return Err(ConfigurationError::InvalidConfiguration {
             path: path.to_path_buf(),
             message: format!(
-                "prompt_readiness.prompt_regex must be non-empty for session '{}'",
-                member.session_name
+                "session '{}' template has unknown placeholder '{}'",
+                session_name,
+                found.as_str()
             ),
         });
     }
-    compile_prompt_regex(
-        &template.prompt_regex,
-        path,
-        member.session_name.as_str(),
-        "prompt_regex",
-    )?;
-    if matches!(template.inspect_lines, Some(0)) {
+
+    if normalize_field(rendered.as_str()).is_empty() {
         return Err(ConfigurationError::InvalidConfiguration {
             path: path.to_path_buf(),
-            message: format!(
-                "prompt_readiness.inspect_lines must be greater than zero for session '{}'",
-                member.session_name
-            ),
+            message: format!("session '{}' resolved command is empty", session_name),
         });
     }
-    Ok(())
+    Ok(rendered)
+}
+
+fn prompt_readiness_from_coder(
+    coder: &RawCoder,
+    path: &Path,
+    session_name: &str,
+) -> Result<Option<PromptReadinessTemplate>, ConfigurationError> {
+    let Some(prompt_regex) = coder.prompt_regex.as_deref() else {
+        return Ok(None);
+    };
+    compile_prompt_regex(prompt_regex, path, session_name, "prompt-regex")?;
+    Ok(Some(PromptReadinessTemplate {
+        prompt_regex: prompt_regex.to_string(),
+        inspect_lines: coder.prompt_inspect_lines,
+        input_idle_cursor_column: coder.prompt_idle_column,
+    }))
 }
 
 fn compile_prompt_regex(
@@ -292,10 +514,12 @@ fn compile_prompt_regex(
         .map(|_| ())
         .map_err(|source| ConfigurationError::InvalidConfiguration {
             path: path.to_path_buf(),
-            message: format!(
-                "invalid prompt_readiness.{field_name} for session '{session_name}': {source}"
-            ),
+            message: format!("invalid {field_name} for session/coder '{session_name}': {source}"),
         })
+}
+
+fn normalize_field(value: &str) -> &str {
+    value.trim()
 }
 
 fn canonicalize_best_effort(path: &Path) -> PathBuf {

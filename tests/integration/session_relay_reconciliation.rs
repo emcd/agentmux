@@ -4,12 +4,26 @@ use std::{
     process::Command,
 };
 
-use serde_json::json;
 use tempfile::TempDir;
 use tmuxmux::{
     relay::reconcile_bundle,
     runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory},
 };
+
+#[derive(Clone)]
+struct CoderSpec {
+    id: String,
+    initial_command: String,
+    resume_command: String,
+}
+
+#[derive(Clone)]
+struct SessionSpec {
+    id: String,
+    name: String,
+    directory: PathBuf,
+    coder: String,
+}
 
 fn tmux_available() -> bool {
     Command::new("tmux")
@@ -31,20 +45,40 @@ fn tmux_command(socket: &Path, arguments: &[&str]) -> std::process::Output {
 fn write_bundle_configuration(
     root: &Path,
     bundle_name: &str,
-    members: &[serde_json::Value],
+    coders: &[CoderSpec],
+    sessions: &[SessionSpec],
 ) -> PathBuf {
     let config_root = root.join("config");
     let bundles = config_root.join("bundles");
     fs::create_dir_all(&bundles).expect("create bundles directory");
-    let body = json!({
-        "schema_version": "1",
-        "members": members,
-    });
-    fs::write(
-        bundles.join(format!("{bundle_name}.json")),
-        serde_json::to_string_pretty(&body).expect("encode bundle"),
-    )
-    .expect("write bundle config");
+
+    let mut coders_toml = String::from("format-version = 1\n");
+    for coder in coders {
+        coders_toml.push_str(
+            format!(
+                "\n[[coders]]\nid = \"{}\"\ninitial-command = \"{}\"\nresume-command = \"{}\"\n",
+                coder.id, coder.initial_command, coder.resume_command
+            )
+            .as_str(),
+        );
+    }
+    fs::write(config_root.join("coders.toml"), coders_toml).expect("write coders");
+
+    let mut bundle_toml = String::from("format-version = 1\n");
+    for session in sessions {
+        bundle_toml.push_str(
+            format!(
+                "\n[[sessions]]\nid = \"{}\"\nname = \"{}\"\ndirectory = \"{}\"\ncoder = \"{}\"\n",
+                session.id,
+                session.name,
+                session.directory.display(),
+                session.coder
+            )
+            .as_str(),
+        );
+    }
+    fs::write(bundles.join(format!("{bundle_name}.toml")), bundle_toml)
+        .expect("write bundle config");
     config_root
 }
 
@@ -86,16 +120,30 @@ fn reconciliation_creates_missing_members_and_sets_owned_metadata() {
         temporary.path(),
         bundle_name,
         &[
-            json!({
-                "session_name": "alpha",
-                "working_directory": alpha_directory,
-                "start_command": "sh -lc 'printf alpha > alpha.started; exec sleep 45'",
-            }),
-            json!({
-                "session_name": "bravo",
-                "working_directory": bravo_directory,
-                "start_command": "sh -lc 'printf bravo > bravo.started; exec sleep 45'",
-            }),
+            CoderSpec {
+                id: "alpha-coder".to_string(),
+                initial_command: "sh -lc 'printf alpha > alpha.started; exec sleep 45'".to_string(),
+                resume_command: "sh -lc 'printf alpha > alpha.started; exec sleep 45'".to_string(),
+            },
+            CoderSpec {
+                id: "bravo-coder".to_string(),
+                initial_command: "sh -lc 'printf bravo > bravo.started; exec sleep 45'".to_string(),
+                resume_command: "sh -lc 'printf bravo > bravo.started; exec sleep 45'".to_string(),
+            },
+        ],
+        &[
+            SessionSpec {
+                id: "alpha".to_string(),
+                name: "alpha".to_string(),
+                directory: alpha_directory.clone(),
+                coder: "alpha-coder".to_string(),
+            },
+            SessionSpec {
+                id: "bravo".to_string(),
+                name: "bravo".to_string(),
+                directory: bravo_directory.clone(),
+                coder: "bravo-coder".to_string(),
+            },
         ],
     );
 
@@ -133,7 +181,17 @@ fn reconciliation_prunes_stale_owned_sessions_without_killing_non_owned_sessions
     let config_root = write_bundle_configuration(
         temporary.path(),
         bundle_name,
-        &[json!({"session_name": "alpha"})],
+        &[CoderSpec {
+            id: "default".to_string(),
+            initial_command: "sh -lc 'exec sleep 45'".to_string(),
+            resume_command: "sh -lc 'exec sleep 45'".to_string(),
+        }],
+        &[SessionSpec {
+            id: "alpha".to_string(),
+            name: "alpha".to_string(),
+            directory: temporary.path().to_path_buf(),
+            coder: "default".to_string(),
+        }],
     );
     let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");

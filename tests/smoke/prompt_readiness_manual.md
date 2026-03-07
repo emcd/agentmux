@@ -28,25 +28,39 @@ mkdir --parents "${CONFIG_ROOT}/bundles" "${STATE_ROOT}"
 ## 2. Write bundle configuration
 
 ```bash
-cat > "${CONFIG_ROOT}/bundles/${BUNDLE_NAME}.json" <<'JSON'
-{
-  "schema_version": "1",
-  "members": [
-    {
-      "session_name": "sender",
-      "display_name": "Sender"
-    },
-    {
-      "session_name": "human",
-      "display_name": "Human",
-      "prompt_readiness": {
-        "prompt_regex": "READY>",
-        "inspect_lines": 8
-      }
-    }
-  ]
-}
-JSON
+cat > "${CONFIG_ROOT}/coders.toml" <<'TOML'
+format-version = 1
+
+[[coders]]
+id = "sender-coder"
+initial-command = "sh -lc 'exec sleep 3600'"
+resume-command = "sh -lc 'exec sleep 3600'"
+
+[[coders]]
+id = "human-coder"
+initial-command = "sh -lc 'exec sleep 3600'"
+resume-command = "sh -lc 'exec sleep 3600'"
+prompt-regex = "READY>"
+prompt-inspect-lines = 8
+TOML
+
+cat > "${CONFIG_ROOT}/bundles/${BUNDLE_NAME}.toml" <<'TOML'
+format-version = 1
+
+[[sessions]]
+id = "sender"
+name = "sender"
+display-name = "Sender"
+directory = "/tmp"
+coder = "sender-coder"
+
+[[sessions]]
+id = "human"
+name = "human"
+display-name = "Human"
+directory = "/tmp"
+coder = "human-coder"
+TOML
 ```
 
 ## 3. Create tmux sessions on the bundle socket

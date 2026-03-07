@@ -262,22 +262,33 @@ impl Drop for McpHarness {
 
 fn write_bundle_configuration(config_root: &Path, bundle_name: &str, sessions: &[&str]) {
     fs::create_dir_all(config_root.join("bundles")).expect("create bundles directory");
-    let members = sessions
-        .iter()
-        .map(|session| json!({"session_name": session}))
-        .collect::<Vec<_>>();
-    let content = json!({
-        "schema_version": "1",
-        "members": members,
-    });
+    fs::write(
+        config_root.join("coders.toml"),
+        r#"
+format-version = 1
+
+[[coders]]
+id = "default"
+initial-command = "sh -lc 'exec sleep 45'"
+resume-command = "sh -lc 'exec sleep 45'"
+"#,
+    )
+    .expect("write coders config");
+
+    let mut bundle = String::from("format-version = 1\n");
+    for session in sessions {
+        bundle.push_str(
+            format!(
+                "\n[[sessions]]\nid = \"{name}\"\nname = \"{name}\"\ndirectory = \"/tmp\"\ncoder = \"default\"\n",
+                name = session
+            )
+            .as_str(),
+        );
+    }
     let path = config_root
         .join("bundles")
-        .join(format!("{bundle_name}.json"));
-    fs::write(
-        path,
-        serde_json::to_string_pretty(&content).expect("encode bundle"),
-    )
-    .expect("write bundle config");
+        .join(format!("{bundle_name}.toml"));
+    fs::write(path, bundle).expect("write bundle config");
 }
 
 fn decode_tool_payload(response: &Value) -> Value {

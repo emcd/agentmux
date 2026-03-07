@@ -32,6 +32,7 @@ workflows such as `codex resume <session-id>`.
 - Add optional coder-level prompt-readiness fields:
   - `prompt-regex`
   - `prompt-inspect-lines`
+  - `prompt-idle-column`
 - Define startup command resolution:
   - use `resume-command` when `coder-session-id` is set
   - otherwise use `initial-command`
@@ -40,7 +41,7 @@ workflows such as `codex resume <session-id>`.
 - Resolve default configuration root as:
   - debug builds: repository-local `.auxiliary/configuration/tmuxmux/` when
     present
-  - release builds: `~/.config/tmuxmux/`
+  - otherwise: `$XDG_CONFIG_HOME/tmuxmux` or `~/.config/tmuxmux`
   - explicit CLI/config override paths continue to take precedence.
 - Resolve configuration artifacts from that root:
   - `coders.toml`

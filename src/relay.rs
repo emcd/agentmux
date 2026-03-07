@@ -38,7 +38,7 @@ const CREATE_RETRY_BASE_DELAY_MS: u64 = 35;
 const CREATE_RETRY_JITTER_MS: u64 = 35;
 const MAX_PROMPT_TOKENS_ENVVAR: &str = "TMUXMUX_MAX_PROMPT_TOKENS";
 const TOKENIZER_PROFILE_ENVVAR: &str = "TMUXMUX_TOKENIZER_PROFILE";
-const DEFAULT_PROMPT_INSPECT_LINES: usize = 6;
+const DEFAULT_PROMPT_INSPECT_LINES: usize = 3;
 const MAX_PROMPT_INSPECT_LINES: usize = 40;
 
 /// Recipient metadata returned by `list`.
@@ -843,6 +843,7 @@ enum DeliveryWaitError {
 struct PromptReadinessMatcher {
     prompt_regex: Regex,
     inspect_lines: usize,
+    input_idle_cursor_column: Option<usize>,
 }
 
 fn wait_for_quiescent_pane(
@@ -868,10 +869,16 @@ fn wait_for_quiescent_pane(
         let snapshot_after = capture_pane_snapshot(tmux_socket, &pane_after)
             .map_err(|reason| DeliveryWaitError::Failed { reason })?;
         if pane_before == pane_after && snapshot_before == snapshot_after {
-            if prompt_readiness_matches(snapshot_after.as_str(), readiness.as_ref()) {
-                return Ok(pane_after);
+            match prompt_readiness_matches(
+                tmux_socket,
+                pane_after.as_str(),
+                snapshot_after.as_str(),
+                readiness.as_ref(),
+            ) {
+                Ok(true) => return Ok(pane_after),
+                Ok(false) => readiness_mismatch = true,
+                Err(reason) => return Err(DeliveryWaitError::Failed { reason }),
             }
-            readiness_mismatch = true;
         }
 
         if Instant::now() >= deadline {
@@ -900,12 +907,18 @@ fn build_prompt_readiness_matcher(
     Ok(Some(PromptReadinessMatcher {
         prompt_regex,
         inspect_lines,
+        input_idle_cursor_column: template.input_idle_cursor_column,
     }))
 }
 
-fn prompt_readiness_matches(snapshot: &str, matcher: Option<&PromptReadinessMatcher>) -> bool {
+fn prompt_readiness_matches(
+    tmux_socket: &Path,
+    pane_target: &str,
+    snapshot: &str,
+    matcher: Option<&PromptReadinessMatcher>,
+) -> Result<bool, String> {
     let Some(matcher) = matcher else {
-        return true;
+        return Ok(true);
     };
 
     let inspected = snapshot
@@ -915,12 +928,20 @@ fn prompt_readiness_matches(snapshot: &str, matcher: Option<&PromptReadinessMatc
         .take(matcher.inspect_lines)
         .collect::<Vec<_>>();
     if inspected.is_empty() {
-        return false;
+        return Ok(false);
     }
     let mut ordered = inspected;
     ordered.reverse();
     let block = ordered.join("\n");
-    matcher.prompt_regex.is_match(block.as_str())
+    if !matcher.prompt_regex.is_match(block.as_str()) {
+        return Ok(false);
+    }
+
+    let Some(expected_cursor_column) = matcher.input_idle_cursor_column else {
+        return Ok(true);
+    };
+    let cursor_column = resolve_cursor_column(tmux_socket, pane_target)?;
+    Ok(cursor_column == expected_cursor_column)
 }
 
 fn resolve_active_pane_target(tmux_socket: &Path, target_session: &str) -> Result<String, String> {
@@ -943,6 +964,17 @@ fn capture_pane_snapshot(tmux_socket: &Path, pane_target: &str) -> Result<String
         &["capture-pane", "-p", "-t", pane_target, "-S", "-200"],
     )?;
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn resolve_cursor_column(tmux_socket: &Path, pane_target: &str) -> Result<usize, String> {
+    let output = run_tmux_command(
+        tmux_socket,
+        &["display-message", "-p", "-t", pane_target, "#{cursor_x}"],
+    )?;
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    value
+        .parse::<usize>()
+        .map_err(|source| format!("failed to parse tmux cursor_x '{value}': {source}"))
 }
 
 fn inject_prompt(tmux_socket: &Path, pane_target: &str, prompt: &str) -> Result<(), String> {
