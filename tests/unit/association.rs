@@ -90,6 +90,45 @@ fn resolves_auto_association_from_non_git_context() {
 }
 
 #[test]
+fn debug_repository_root_prefers_git_common_dir_parent() {
+    let workspace = context(
+        "/home/me/src/WORKTREES/tmuxmux/tui",
+        "/home/me/src/WORKTREES/tmuxmux/tui",
+        Some("/home/me/src/WORKTREES/tmuxmux/tui"),
+        Some("/home/me/src/tmuxmux/.git"),
+    );
+    assert_eq!(
+        workspace.debug_repository_root(),
+        Some(PathBuf::from("/home/me/src/tmuxmux"))
+    );
+}
+
+#[test]
+fn debug_repository_root_handles_nested_common_dir_layout() {
+    let workspace = context(
+        "/home/me/src/WORKTREES/tmuxmux/tui",
+        "/home/me/src/WORKTREES/tmuxmux/tui",
+        Some("/home/me/src/WORKTREES/tmuxmux/tui"),
+        Some("/home/me/src/tmuxmux/.git/worktrees/tui"),
+    );
+    assert_eq!(
+        workspace.debug_repository_root(),
+        Some(PathBuf::from("/home/me/src/tmuxmux"))
+    );
+}
+
+#[test]
+fn debug_repository_root_is_none_without_git_common_dir() {
+    let workspace = context(
+        "/home/me/src/WORKTREES/tmuxmux/tui",
+        "/home/me/src/WORKTREES/tmuxmux/tui",
+        Some("/home/me/src/WORKTREES/tmuxmux/tui"),
+        None,
+    );
+    assert_eq!(workspace.debug_repository_root(), None);
+}
+
+#[test]
 fn applies_cli_precedence_over_local_overrides() {
     let workspace = context(
         "/home/me/src/WORKTREES/tmuxmux/relay",

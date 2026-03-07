@@ -102,6 +102,20 @@ impl WorkspaceContext {
             "session",
         )
     }
+
+    /// Resolves the repository root used for debug local state/config defaults.
+    ///
+    /// Uses the Git common-dir owner repository root when available (for
+    /// example, for worktrees). Returns `None` when this cannot be resolved.
+    #[must_use]
+    pub fn debug_repository_root(&self) -> Option<PathBuf> {
+        if let Some(common_dir) = self.git_common_dir.as_ref()
+            && let Some(repository_root) = repository_root_from_git_common_dir(common_dir)
+        {
+            return Some(repository_root);
+        }
+        None
+    }
 }
 
 /// CLI association hints provided by MCP startup arguments.
@@ -258,6 +272,17 @@ fn normalize_overrides(
         session_name: parsed.session_name.and_then(normalize_string),
         config_root,
     }
+}
+
+fn repository_root_from_git_common_dir(common_dir: &Path) -> Option<PathBuf> {
+    let mut cursor = Some(common_dir);
+    while let Some(path) = cursor {
+        if path.file_name().is_some_and(|name| name == ".git") {
+            return path.parent().map(Path::to_path_buf);
+        }
+        cursor = path.parent();
+    }
+    None
 }
 
 fn normalize_path(current_directory: &Path, path: &Path) -> PathBuf {

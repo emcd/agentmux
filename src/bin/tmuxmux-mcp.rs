@@ -54,7 +54,7 @@ async fn run() -> Result<(), RuntimeError> {
         state_root: arguments.state_root,
         repository_root: arguments
             .repository_root
-            .or_else(|| Some(workspace.workspace_root.clone())),
+            .or_else(|| workspace.debug_repository_root()),
     };
     let roots = RuntimeRoots::resolve(&overrides)?;
     let bundle = load_bundle_configuration(&roots.configuration_root, &association.bundle_name)
