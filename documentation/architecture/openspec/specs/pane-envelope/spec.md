@@ -122,7 +122,7 @@ Envelope MIME parts SHALL include exactly one chat text part with
 ### Requirement: Extension Part Reservation
 
 The system SHALL reserve MIME part type
-`application/vnd.tmuxmux.path-pointer+json` for future pointer-style
+`application/vnd.agentmux.path-pointer+json` for future pointer-style
 attachments.
 
 #### Scenario: Ignore reserved extension part in MVP

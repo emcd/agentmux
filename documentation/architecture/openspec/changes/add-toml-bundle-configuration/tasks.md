@@ -16,8 +16,8 @@
       (session `name`) and support coder-scoped prompt-readiness
       templates.
 - [x] 1.6 Implement default config file discovery rules:
-      debug repository-local `.auxiliary/configuration/tmuxmux/`
-      and XDG/home fallback (`$XDG_CONFIG_HOME/tmuxmux` or `~/.config/tmuxmux`),
+      debug repository-local `.auxiliary/configuration/agentmux/`
+      and XDG/home fallback (`$XDG_CONFIG_HOME/agentmux` or `~/.config/agentmux`),
       with explicit overrides still
       taking precedence.
 - [x] 1.7 Remove JSON bundle file assumptions from tests and rewrite fixtures

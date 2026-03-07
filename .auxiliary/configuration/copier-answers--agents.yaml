@@ -14,6 +14,6 @@ instructions_sources:
 instructions_target: .auxiliary/instructions
 languages:
 - rust
-project_name: tmuxmux
+project_name: agentmux
 provide_instructions: true
 support_local_models: true

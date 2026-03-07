@@ -38,9 +38,9 @@ workflows such as `codex resume <session-id>`.
   - fail validation if required placeholders are unresolved.
 - Perform a TOML-only cutover now (no JSON backward-compatibility path).
 - Resolve default configuration root as:
-  - debug builds: repository-local `.auxiliary/configuration/tmuxmux/` when
+  - debug builds: repository-local `.auxiliary/configuration/agentmux/` when
     present
-  - otherwise: `$XDG_CONFIG_HOME/tmuxmux` or `~/.config/tmuxmux`
+  - otherwise: `$XDG_CONFIG_HOME/agentmux` or `~/.config/agentmux`
   - explicit CLI/config override paths continue to take precedence.
 - Resolve configuration artifacts from that root:
   - `coders.toml`

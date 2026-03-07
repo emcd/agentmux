@@ -1,6 +1,6 @@
-# tmuxmux
+# agentmux
 
-`tmuxmux` is a tmux-backed coordination layer for agentic coding sessions.
+`agentmux` is a tmux-backed coordination layer for agentic coding sessions.
 
 It provides:
 
@@ -10,7 +10,7 @@ It provides:
 
 ## Motivation
 
-Some coding agents support hooks for coordination, while others do not. `tmuxmux`
+Some coding agents support hooks for coordination, while others do not. `agentmux`
 uses tmux session control as a common denominator so different agent harnesses
 can still exchange messages through a shared transport.
 
@@ -36,19 +36,19 @@ cargo build
 Relay:
 
 ```bash
-cargo run --bin tmuxmux-relay
+cargo run --bin agentmux-relay
 ```
 
 MCP server:
 
 ```bash
-cargo run --bin tmuxmux-mcp
+cargo run --bin agentmux-mcp
 ```
 
 Optional explicit association overrides:
 
 ```bash
-cargo run --bin tmuxmux-mcp -- --bundle-name tmuxmux --session-name relay
+cargo run --bin agentmux-mcp -- --bundle-name agentmux --session-name relay
 ```
 
 ## Recommended Startup Pattern
@@ -68,8 +68,8 @@ Relay tmux operations use the bundle runtime socket path:
 Example:
 
 ```bash
-cargo run --bin tmuxmux-relay -- --bundle tmuxmux --state-directory .auxiliary/state/tmuxmux
-cargo run --bin tmuxmux-mcp -- --bundle-name tmuxmux --session-name relay --state-directory .auxiliary/state/tmuxmux
+cargo run --bin agentmux-relay -- --bundle agentmux --state-directory .auxiliary/state/agentmux
+cargo run --bin agentmux-mcp -- --bundle-name agentmux --session-name relay --state-directory .auxiliary/state/agentmux
 ```
 
 ## MCP Tool Schemas (MVP)
@@ -87,7 +87,7 @@ Success payload shape:
 ```json
 {
   "schema_version": "1",
-  "bundle_name": "tmuxmux",
+  "bundle_name": "agentmux",
   "recipients": [
     {"session_name": "codex-b", "display_name": "Codex B"}
   ]
@@ -125,7 +125,7 @@ Success payload shape:
 ```json
 {
   "schema_version": "1",
-  "bundle_name": "tmuxmux",
+  "bundle_name": "agentmux",
   "request_id": "req-1",
   "sender_session": "codex-a",
   "sender_display_name": "Codex A",
@@ -160,7 +160,7 @@ Relay pane injection now renders a structured envelope with:
    `To`, optional `Cc`, optional `Subject`, and `Content-Type`).
 3. `multipart/mixed` MIME body with:
    - required `text/plain; charset=utf-8` chat body part
-   - reserved `application/vnd.tmuxmux.path-pointer+json` extension part
+   - reserved `application/vnd.agentmux.path-pointer+json` extension part
 4. Closing MIME boundary `--<boundary>--` as end marker.
 
 Rendered addresses use:
@@ -179,8 +179,8 @@ Envelope prompts are batched under a token budget with default:
 
 Configuration environment variables:
 
-- `TMUXMUX_MAX_PROMPT_TOKENS` (positive integer)
-- `TMUXMUX_TOKENIZER_PROFILE` (`characters_0_point_3`, `whitespace_rough`)
+- `AGENTMUX_MAX_PROMPT_TOKENS` (positive integer)
+- `AGENTMUX_TOKENIZER_PROFILE` (`characters_0_point_3`, `whitespace_rough`)
 
 ## Development
 
@@ -198,9 +198,9 @@ For relay/MCP smoke tests, use a shared shell variable to reduce
 `--state-directory` mismatch mistakes:
 
 ```bash
-TMUXMUX_STATE_DIRECTORY=.auxiliary/state/tmuxmux
-cargo run --bin tmuxmux-relay -- --bundle tmuxmux --state-directory "${TMUXMUX_STATE_DIRECTORY}"
-cargo run --bin tmuxmux-mcp -- --bundle-name tmuxmux --session-name relay --state-directory "${TMUXMUX_STATE_DIRECTORY}"
+AGENTMUX_STATE_DIRECTORY=.auxiliary/state/agentmux
+cargo run --bin agentmux-relay -- --bundle agentmux --state-directory "${AGENTMUX_STATE_DIRECTORY}"
+cargo run --bin agentmux-mcp -- --bundle-name agentmux --session-name relay --state-directory "${AGENTMUX_STATE_DIRECTORY}"
 ```
 
 Pre-commit hooks are configured in
@@ -243,11 +243,11 @@ readiness mismatch and does not inject that message.
 
 Configuration root:
 
-- `$XDG_CONFIG_HOME/tmuxmux` or `~/.config/tmuxmux`
+- `$XDG_CONFIG_HOME/agentmux` or `~/.config/agentmux`
 
 State root:
 
-- `$XDG_STATE_HOME/tmuxmux` or `~/.local/state/tmuxmux`
+- `$XDG_STATE_HOME/agentmux` or `~/.local/state/agentmux`
 
 Per-bundle sockets:
 
@@ -272,9 +272,9 @@ Session fields:
 Default config root:
 
 - debug builds:
-  - repository-local `.auxiliary/configuration/tmuxmux/` when present
+  - repository-local `.auxiliary/configuration/agentmux/` when present
 - otherwise:
-  - `$XDG_CONFIG_HOME/tmuxmux` or `~/.config/tmuxmux`
+  - `$XDG_CONFIG_HOME/agentmux` or `~/.config/agentmux`
 
 Example `coders.toml`:
 
@@ -290,7 +290,7 @@ prompt-inspect-lines = 3
 prompt-idle-column = 3
 ```
 
-Example `bundles/tmuxmux.toml`:
+Example `bundles/agentmux.toml`:
 
 ```toml
 format-version = 1
@@ -298,20 +298,20 @@ format-version = 1
 [[sessions]]
 id = "relay"
 name = "Relay"
-directory = "/home/me/src/WORKTREES/tmuxmux/relay"
+directory = "/home/me/src/WORKTREES/agentmux/relay"
 coder = "codex"
 coder-session-id = "00000000-0000-0000-0000-000000000000"
 
 [[sessions]]
 id = "tui"
 name = "TUI"
-directory = "/home/me/src/WORKTREES/tmuxmux/tui"
+directory = "/home/me/src/WORKTREES/agentmux/tui"
 coder = "codex"
 ```
 
 Per-worktree local MCP overrides (Git-ignored) may be placed at:
 
-- `.auxiliary/configuration/tmuxmux/overrides/mcp.toml`
+- `.auxiliary/configuration/agentmux/overrides/mcp.toml`
 
 See runtime bootstrap spec for full details:
 [runtime-bootstrap spec](documentation/architecture/openspec/specs/runtime-bootstrap/spec.md).

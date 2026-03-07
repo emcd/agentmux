@@ -97,7 +97,7 @@
     "nb": {
       "command": "nb-mcp",
       "args": [
-        "--notebook", "tmuxmux",
+        "--notebook", "agentmux",
         "--no-commit-signing"
       ]
     }

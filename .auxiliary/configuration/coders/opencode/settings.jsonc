@@ -67,7 +67,7 @@
       "command": [
         "nb-mcp",
         "--notebook",
-        "tmuxmux",
+        "agentmux",
         "--no-commit-signing"
       ],
       "enabled": true

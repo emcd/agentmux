@@ -7,8 +7,8 @@ TBD - created by archiving change add-runtime-bootstrap-and-xdg-layout. Update P
 
 The system SHALL resolve the configuration root using:
 
-- `$XDG_CONFIG_HOME/tmuxmux` when `XDG_CONFIG_HOME` is set and non-empty
-- `~/.config/tmuxmux` otherwise
+- `$XDG_CONFIG_HOME/agentmux` when `XDG_CONFIG_HOME` is set and non-empty
+- `~/.config/agentmux` otherwise
 
 #### Scenario: Resolve config root from XDG variable
 
@@ -18,14 +18,14 @@ The system SHALL resolve the configuration root using:
 #### Scenario: Resolve config root from fallback
 
 - **WHEN** `XDG_CONFIG_HOME` is unset or empty
-- **THEN** configuration root resolves to `~/.config/tmuxmux`
+- **THEN** configuration root resolves to `~/.config/agentmux`
 
 ### Requirement: XDG State Root
 
 The system SHALL resolve the state root using:
 
-- `$XDG_STATE_HOME/tmuxmux` when `XDG_STATE_HOME` is set and non-empty
-- `~/.local/state/tmuxmux` otherwise
+- `$XDG_STATE_HOME/agentmux` when `XDG_STATE_HOME` is set and non-empty
+- `~/.local/state/agentmux` otherwise
 
 #### Scenario: Resolve state root from XDG variable
 
@@ -35,7 +35,7 @@ The system SHALL resolve the state root using:
 #### Scenario: Resolve state root from fallback
 
 - **WHEN** `XDG_STATE_HOME` is unset or empty
-- **THEN** state root resolves to `~/.local/state/tmuxmux`
+- **THEN** state root resolves to `~/.local/state/agentmux`
 
 ### Requirement: Debug Repository-Local State Override
 
@@ -154,7 +154,7 @@ Auto-discovered sender session SHALL use:
 #### Scenario: Resolve sender from worktree basename
 
 - **WHEN** MCP starts inside a Git worktree rooted at
-  `/home/me/src/WORKTREES/tmuxmux/relay`
+  `/home/me/src/WORKTREES/agentmux/relay`
 - **AND** no CLI or override sender is provided
 - **THEN** sender association resolves to `relay`
 
@@ -221,9 +221,9 @@ fails with structured `validation_unknown_bundle`.
 #### Scenario: Resolve bundle from Git common-dir
 
 - **WHEN** MCP starts in a Git worktree whose Git common-dir is
-  `/home/me/src/tmuxmux/.git`
+  `/home/me/src/agentmux/.git`
 - **AND** no CLI or override bundle is provided
-- **THEN** bundle association resolves to `tmuxmux`
+- **THEN** bundle association resolves to `agentmux`
 
 #### Scenario: Resolve bundle from local override file
 
@@ -245,7 +245,7 @@ fails with structured `validation_unknown_bundle`.
 
 The MCP server SHALL support optional local association overrides in:
 
-- `.auxiliary/configuration/tmuxmux/overrides/mcp.toml`
+- `.auxiliary/configuration/agentmux/overrides/mcp.toml`
 
 Supported override fields SHALL include:
 
@@ -273,4 +273,4 @@ used per worktree without leaking to shared commits.
 #### Scenario: Ignore local override directory in Git
 
 - **WHEN** repository ignore rules are evaluated
-- **THEN** `.auxiliary/configuration/tmuxmux/overrides/` is ignored
+- **THEN** `.auxiliary/configuration/agentmux/overrides/` is ignored

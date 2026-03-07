@@ -5,8 +5,8 @@
 The system SHALL resolve default configuration root as:
 
 - debug builds: repository-local
-  `.auxiliary/configuration/tmuxmux/` when that directory exists
-- otherwise: `$XDG_CONFIG_HOME/tmuxmux` or `~/.config/tmuxmux`
+  `.auxiliary/configuration/agentmux/` when that directory exists
+- otherwise: `$XDG_CONFIG_HOME/agentmux` or `~/.config/agentmux`
 
 Explicit configuration path overrides (CLI or local override file fields) SHALL
 continue to take precedence over default file resolution.
@@ -14,14 +14,14 @@ continue to take precedence over default file resolution.
 #### Scenario: Use repository-local config root in debug build
 
 - **WHEN** runtime is debug/development mode
-- **AND** `.auxiliary/configuration/tmuxmux/` exists under workspace root
+- **AND** `.auxiliary/configuration/agentmux/` exists under workspace root
 - **AND** no explicit config path override is provided
 - **THEN** bundle loading uses that repository-local config root
 
 #### Scenario: Ignore repository-local file in release build
 
 - **WHEN** runtime is non-debug/release mode
-- **AND** `.auxiliary/configuration/tmuxmux/` exists
+- **AND** `.auxiliary/configuration/agentmux/` exists
 - **AND** no explicit config path override is provided
 - **THEN** bundle loading uses XDG/home configuration resolution
 

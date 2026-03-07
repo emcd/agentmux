@@ -64,21 +64,21 @@ creation races and avoids leaking idle tmux servers.
 - **THEN** the system retries with bounded attempts
 - **AND** applies short jitter between retries
 
-#### Scenario: Track tmuxmux-owned sessions
+#### Scenario: Track agentmux-owned sessions
 
 - **WHEN** the system creates a session during reconciliation
-- **THEN** the system marks that session as tmuxmux-owned using tmux metadata
+- **THEN** the system marks that session as agentmux-owned using tmux metadata
 
 #### Scenario: Cleanup dedicated socket server only when fully idle
 
-- **WHEN** reconciliation or pruning finds zero tmuxmux-owned sessions on a
+- **WHEN** reconciliation or pruning finds zero agentmux-owned sessions on a
   dedicated configured socket and zero total sessions remain on that socket
 - **THEN** the system shuts down that socket's tmux server
 - **AND** does not require `exit-empty` to be turned off for startup
 
 #### Scenario: Preserve socket server while non-owned sessions exist
 
-- **WHEN** reconciliation or pruning finds zero tmuxmux-owned sessions on a
+- **WHEN** reconciliation or pruning finds zero agentmux-owned sessions on a
   dedicated configured socket but non-owned sessions remain
 - **THEN** the system does not shut down that socket's tmux server
 
