@@ -4,9 +4,11 @@ use agentmux::relay::reconcile_bundle;
 use agentmux::runtime::{
     bootstrap::{acquire_relay_runtime_lock, bind_relay_listener},
     error::RuntimeError,
+    inscriptions::{configure_process_inscriptions, emit_inscription, relay_inscriptions_path},
     paths::{
         BundleRuntimePaths, RuntimeRootOverrides, RuntimeRoots, ensure_bundle_runtime_directory,
     },
+    starter::ensure_starter_configuration_layout,
 };
 
 #[derive(Debug)]
@@ -14,6 +16,7 @@ struct RelayArguments {
     bundle_name: String,
     configuration_root: Option<PathBuf>,
     state_root: Option<PathBuf>,
+    inscriptions_root: Option<PathBuf>,
     repository_root: Option<PathBuf>,
 }
 
@@ -23,6 +26,7 @@ impl Default for RelayArguments {
             bundle_name: "default".to_string(),
             configuration_root: None,
             state_root: None,
+            inscriptions_root: None,
             repository_root: None,
         }
     }
@@ -30,6 +34,10 @@ impl Default for RelayArguments {
 
 fn main() {
     if let Err(err) = run() {
+        emit_inscription(
+            "relay.startup_failed",
+            &serde_json::json!({"error": err.to_string()}),
+        );
         eprintln!("agentmux-relay: {err}");
         std::process::exit(1);
     }
@@ -42,10 +50,27 @@ fn run() -> Result<(), RuntimeError> {
     let overrides = RuntimeRootOverrides {
         configuration_root: arguments.configuration_root,
         state_root: arguments.state_root,
+        inscriptions_root: arguments.inscriptions_root,
         repository_root: arguments.repository_root.or(Some(current_directory)),
     };
     let roots = RuntimeRoots::resolve(&overrides)?;
+    ensure_starter_configuration_layout(&roots.configuration_root)?;
     let paths = BundleRuntimePaths::resolve(&roots.state_root, &arguments.bundle_name)?;
+    configure_process_inscriptions(&relay_inscriptions_path(
+        &roots.inscriptions_root,
+        &paths.bundle_name,
+    ))?;
+    emit_inscription(
+        "relay.startup",
+        &serde_json::json!({
+            "bundle_name": paths.bundle_name,
+            "relay_socket": paths.relay_socket,
+            "tmux_socket": paths.tmux_socket,
+            "configuration_root": roots.configuration_root,
+            "state_root": roots.state_root,
+            "inscriptions_root": roots.inscriptions_root,
+        }),
+    );
     ensure_bundle_runtime_directory(&paths)?;
     let _runtime_lock = acquire_relay_runtime_lock(&paths)?;
     let report = reconcile_bundle(
@@ -71,6 +96,10 @@ fn run() -> Result<(), RuntimeError> {
                     &roots.configuration_root,
                     &paths,
                 ) {
+                    emit_inscription(
+                        "relay.request_failed",
+                        &serde_json::json!({"error": source.to_string()}),
+                    );
                     eprintln!("agentmux-relay: request handling failed: {source}");
                 }
             }
@@ -110,6 +139,14 @@ fn parse_arguments(arguments: Vec<String>) -> Result<RelayArguments, RuntimeErro
                 let value = take_value(&arguments, &mut index, "--state-directory")?;
                 parsed.state_root = Some(PathBuf::from(value));
             }
+            "--inscriptions-directory" => {
+                let value = take_value(&arguments, &mut index, "--inscriptions-directory")?;
+                parsed.inscriptions_root = Some(PathBuf::from(value));
+            }
+            "--logs-directory" => {
+                let value = take_value(&arguments, &mut index, "--logs-directory")?;
+                parsed.inscriptions_root = Some(PathBuf::from(value));
+            }
             "--repository-root" => {
                 let value = take_value(&arguments, &mut index, "--repository-root")?;
                 parsed.repository_root = Some(PathBuf::from(value));
@@ -146,6 +183,7 @@ fn print_help() {
     println!(
         "Usage: agentmux-relay [--bundle NAME] [--config-directory PATH] \
          [--state-directory PATH] \
+         [--inscriptions-directory PATH|--logs-directory PATH] \
          [--repository-root PATH]"
     );
 }

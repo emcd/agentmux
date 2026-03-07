@@ -1,4 +1,5 @@
 /target/
 /.auxiliary/scribbles
 /.auxiliary/state
+/.auxiliary/inscriptions
 /.auxiliary/configuration/agentmux/

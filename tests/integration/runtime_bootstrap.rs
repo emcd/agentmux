@@ -291,6 +291,42 @@ resume-command = "sh -lc 'exec sleep 45'"
     fs::write(path, bundle).expect("write bundle config");
 }
 
+fn write_bundle_configuration_with_directories(
+    config_root: &Path,
+    bundle_name: &str,
+    sessions: &[(&str, &Path)],
+) {
+    fs::create_dir_all(config_root.join("bundles")).expect("create bundles directory");
+    fs::write(
+        config_root.join("coders.toml"),
+        r#"
+format-version = 1
+
+[[coders]]
+id = "default"
+initial-command = "sh -lc 'exec sleep 45'"
+resume-command = "sh -lc 'exec sleep 45'"
+"#,
+    )
+    .expect("write coders config");
+
+    let mut bundle = String::from("format-version = 1\n");
+    for (session, directory) in sessions {
+        bundle.push_str(
+            format!(
+                "\n[[sessions]]\nid = \"{name}\"\nname = \"{name}\"\ndirectory = \"{}\"\ncoder = \"default\"\n",
+                directory.display(),
+                name = session
+            )
+            .as_str(),
+        );
+    }
+    let path = config_root
+        .join("bundles")
+        .join(format!("{bundle_name}.toml"));
+    fs::write(path, bundle).expect("write bundle config");
+}
+
 fn decode_tool_payload(response: &Value) -> Value {
     if let Some(payload) = response
         .get("result")
@@ -455,6 +491,79 @@ async fn mcp_auto_discovers_association_from_non_git_cwd() {
     let chat_requests = relay.requests_for_operation("chat");
     assert_eq!(chat_requests.len(), 1);
     assert_eq!(chat_requests[0]["sender_session"], "relay");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_falls_back_to_directory_match_when_auto_sender_is_not_member() {
+    let temporary = TempDir::new().expect("temporary");
+    let root = temporary.path().to_path_buf();
+    let workspace = root.join("master");
+    let other = root.join("other");
+    let config_root = root.join("config");
+    let state_root = root.join("state");
+    fs::create_dir_all(&workspace).expect("create workspace");
+    fs::create_dir_all(&other).expect("create other");
+    write_bundle_configuration_with_directories(
+        &config_root,
+        "master",
+        &[("coordinator", &workspace), ("bravo", &other)],
+    );
+
+    let relay_socket = state_root.join("bundles/master/relay.sock");
+    let relay = FakeRelay::start(
+        relay_socket,
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("chat") => json!({
+                    "kind": "chat",
+                    "schema_version": "1",
+                    "bundle_name": "master",
+                    "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
+                    "sender_session": request.get("sender_session").cloned().unwrap_or(Value::Null),
+                    "status": "success",
+                    "results": [{
+                        "target_session": "bravo",
+                        "message_id": "msg-1",
+                        "outcome": "delivered",
+                    }],
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+
+    let mut harness = McpHarness::spawn(
+        &workspace,
+        &[
+            "--config-directory",
+            config_root.to_str().expect("utf8 config path"),
+            "--state-directory",
+            state_root.to_str().expect("utf8 state path"),
+        ],
+    )
+    .await;
+
+    let mut arguments = Map::new();
+    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments.insert(
+        "targets".to_string(),
+        Value::Array(vec![Value::String("bravo".to_string())]),
+    );
+    arguments.insert("broadcast".to_string(), Value::Bool(false));
+    let response = harness.call_tool(2, "chat", arguments).await;
+    let payload = decode_tool_payload(&response);
+    assert_eq!(payload["sender_session"], "coordinator");
+    assert_eq!(payload["status"], "success");
+
+    let chat_requests = relay.requests_for_operation("chat");
+    assert_eq!(chat_requests.len(), 1);
+    assert_eq!(chat_requests[0]["sender_session"], "coordinator");
 }
 
 #[cfg(debug_assertions)]

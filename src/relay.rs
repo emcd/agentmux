@@ -25,7 +25,7 @@ use crate::{
         AddressIdentity, ENVELOPE_SCHEMA_VERSION, EnvelopeRenderInput, ManifestPreamble,
         PromptBatchSettings, batch_envelopes, parse_tokenizer_profile, render_envelope,
     },
-    runtime::paths::BundleRuntimePaths,
+    runtime::{inscriptions::emit_inscription, paths::BundleRuntimePaths},
 };
 
 const SCHEMA_VERSION: &str = ENVELOPE_SCHEMA_VERSION;
@@ -40,6 +40,7 @@ const MAX_PROMPT_TOKENS_ENVVAR: &str = "AGENTMUX_MAX_PROMPT_TOKENS";
 const TOKENIZER_PROFILE_ENVVAR: &str = "AGENTMUX_TOKENIZER_PROFILE";
 const DEFAULT_PROMPT_INSPECT_LINES: usize = 3;
 const MAX_PROMPT_INSPECT_LINES: usize = 40;
+const DELIVERY_DIAGNOSTICS_ENVVAR: &str = "AGENTMUX_RELAY_DELIVERY_DIAGNOSTICS";
 
 /// Recipient metadata returned by `list`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -242,11 +243,27 @@ fn handle_list(bundle: &BundleConfiguration, sender_session: Option<String>) -> 
         })
         .collect::<Vec<_>>();
 
-    RelayResponse::List {
+    let response = RelayResponse::List {
         schema_version: SCHEMA_VERSION.to_string(),
         bundle_name: bundle.bundle_name.clone(),
         recipients,
+    };
+    if let RelayResponse::List {
+        bundle_name,
+        recipients,
+        ..
+    } = &response
+    {
+        emit_inscription(
+            "relay.list.response",
+            &json!({
+                "bundle_name": bundle_name,
+                "sender_session": sender_session,
+                "recipient_count": recipients.len(),
+            }),
+        );
     }
+    response
 }
 
 fn handle_chat(
@@ -297,6 +314,18 @@ fn handle_chat(
                 Some(json!({"sender_session": sender_session})),
             )
         })?;
+
+    emit_inscription(
+        "relay.chat.request",
+        &json!({
+            "bundle_name": bundle.bundle_name,
+            "sender_session": sender.id,
+            "broadcast": broadcast,
+            "target_count": targets.len(),
+            "message_length": message.len(),
+            "request_id": request_id.clone(),
+        }),
+    );
 
     let resolved_targets = if broadcast {
         bundle
@@ -414,11 +443,16 @@ fn handle_chat(
             Err(DeliveryWaitError::Timeout {
                 timeout,
                 readiness_mismatch,
+                mismatch_reason,
             }) => {
                 let reason = if readiness_mismatch {
+                    let detail = mismatch_reason
+                        .map(|value| format!(": {value}"))
+                        .unwrap_or_default();
                     format!(
-                        "prompt readiness did not match before timeout after {}ms",
-                        timeout.as_millis()
+                        "prompt readiness did not match before timeout after {}ms{}",
+                        timeout.as_millis(),
+                        detail
                     )
                 } else {
                     format!("quiescence wait timed out after {}ms", timeout.as_millis())
@@ -441,7 +475,7 @@ fn handle_chat(
         }
     }
 
-    Ok(RelayResponse::Chat {
+    let response = RelayResponse::Chat {
         schema_version: SCHEMA_VERSION.to_string(),
         bundle_name: bundle.bundle_name.clone(),
         request_id,
@@ -449,7 +483,31 @@ fn handle_chat(
         sender_display_name: sender.name.clone(),
         status: aggregate_chat_status(&results),
         results,
-    })
+    };
+    if let RelayResponse::Chat {
+        bundle_name,
+        sender_session,
+        status,
+        results,
+        ..
+    } = &response
+    {
+        let delivered_count = results
+            .iter()
+            .filter(|result| result.outcome == ChatOutcome::Delivered)
+            .count();
+        emit_inscription(
+            "relay.chat.response",
+            &json!({
+                "bundle_name": bundle_name,
+                "sender_session": sender_session,
+                "status": status,
+                "result_count": results.len(),
+                "delivered_count": delivered_count,
+            }),
+        );
+    }
+    Ok(response)
 }
 
 fn resolve_explicit_targets(
@@ -865,6 +923,7 @@ enum DeliveryWaitError {
     Timeout {
         timeout: Duration,
         readiness_mismatch: bool,
+        mismatch_reason: Option<String>,
     },
     Failed {
         reason: String,
@@ -878,6 +937,16 @@ struct PromptReadinessMatcher {
     input_idle_cursor_column: Option<usize>,
 }
 
+#[derive(Debug, Default)]
+struct PromptReadinessEvaluation {
+    ready: bool,
+    mismatch_reason: Option<String>,
+    inspected_block: Option<String>,
+    regex_matched: Option<bool>,
+    expected_cursor_column: Option<usize>,
+    observed_cursor_column: Option<usize>,
+}
+
 fn wait_for_quiescent_pane(
     tmux_socket: &Path,
     target_session: &str,
@@ -888,6 +957,7 @@ fn wait_for_quiescent_pane(
         .map_err(|reason| DeliveryWaitError::Failed { reason })?;
     let deadline = Instant::now() + options.delivery_timeout;
     let mut readiness_mismatch = false;
+    let mut mismatch_reason = None::<String>;
     loop {
         let pane_before = resolve_active_pane_target(tmux_socket, target_session)
             .map_err(|reason| DeliveryWaitError::Failed { reason })?;
@@ -901,22 +971,55 @@ fn wait_for_quiescent_pane(
         let snapshot_after = capture_pane_snapshot(tmux_socket, &pane_after)
             .map_err(|reason| DeliveryWaitError::Failed { reason })?;
         if pane_before == pane_after && snapshot_before == snapshot_after {
-            match prompt_readiness_matches(
+            let evaluation = match prompt_readiness_matches(
                 tmux_socket,
                 pane_after.as_str(),
                 snapshot_after.as_str(),
                 readiness.as_ref(),
             ) {
-                Ok(true) => return Ok(pane_after),
-                Ok(false) => readiness_mismatch = true,
+                Ok(evaluation) => evaluation,
                 Err(reason) => return Err(DeliveryWaitError::Failed { reason }),
+            };
+            if evaluation.ready {
+                emit_delivery_diagnostic(
+                    "delivery_ready",
+                    &json!({
+                        "target_session": target_session,
+                        "pane_target": pane_after,
+                    }),
+                );
+                return Ok(pane_after);
             }
+            readiness_mismatch = true;
+            mismatch_reason = evaluation.mismatch_reason.clone();
+            emit_delivery_diagnostic(
+                "delivery_prompt_mismatch",
+                &json!({
+                    "target_session": target_session,
+                    "pane_target": pane_after,
+                    "mismatch_reason": evaluation.mismatch_reason,
+                    "regex_matched": evaluation.regex_matched,
+                    "inspected_block": evaluation.inspected_block,
+                    "expected_cursor_column": evaluation.expected_cursor_column,
+                    "observed_cursor_column": evaluation.observed_cursor_column,
+                }),
+            );
         }
 
         if Instant::now() >= deadline {
+            emit_delivery_diagnostic(
+                "delivery_timeout",
+                &json!({
+                    "target_session": target_session,
+                    "delivery_timeout_ms": options.delivery_timeout.as_millis(),
+                    "readiness_mismatch": readiness_mismatch,
+                    "mismatch_reason": mismatch_reason,
+                }),
+            );
             return Err(DeliveryWaitError::Timeout {
                 timeout: options.delivery_timeout,
                 readiness_mismatch,
+                mismatch_reason,
             });
         }
     }
@@ -948,9 +1051,12 @@ fn prompt_readiness_matches(
     pane_target: &str,
     snapshot: &str,
     matcher: Option<&PromptReadinessMatcher>,
-) -> Result<bool, String> {
+) -> Result<PromptReadinessEvaluation, String> {
     let Some(matcher) = matcher else {
-        return Ok(true);
+        return Ok(PromptReadinessEvaluation {
+            ready: true,
+            ..PromptReadinessEvaluation::default()
+        });
     };
 
     let inspected = snapshot
@@ -960,20 +1066,59 @@ fn prompt_readiness_matches(
         .take(matcher.inspect_lines)
         .collect::<Vec<_>>();
     if inspected.is_empty() {
-        return Ok(false);
+        return Ok(PromptReadinessEvaluation {
+            mismatch_reason: Some(
+                "inspected pane tail was empty after trimming trailing blank lines".to_string(),
+            ),
+            regex_matched: Some(false),
+            expected_cursor_column: matcher.input_idle_cursor_column,
+            ..PromptReadinessEvaluation::default()
+        });
     }
     let mut ordered = inspected;
     ordered.reverse();
     let block = ordered.join("\n");
     if !matcher.prompt_regex.is_match(block.as_str()) {
-        return Ok(false);
+        return Ok(PromptReadinessEvaluation {
+            mismatch_reason: Some("prompt regex did not match inspected pane tail".to_string()),
+            inspected_block: Some(sanitize_diagnostic_text(&block)),
+            regex_matched: Some(false),
+            expected_cursor_column: matcher.input_idle_cursor_column,
+            ..PromptReadinessEvaluation::default()
+        });
     }
 
     let Some(expected_cursor_column) = matcher.input_idle_cursor_column else {
-        return Ok(true);
+        return Ok(PromptReadinessEvaluation {
+            ready: true,
+            inspected_block: Some(sanitize_diagnostic_text(&block)),
+            regex_matched: Some(true),
+            ..PromptReadinessEvaluation::default()
+        });
     };
     let cursor_column = resolve_cursor_column(tmux_socket, pane_target)?;
-    Ok(cursor_column == expected_cursor_column)
+    if cursor_column != expected_cursor_column {
+        return Ok(PromptReadinessEvaluation {
+            mismatch_reason: Some(format!(
+                "cursor column {} did not match required {}",
+                cursor_column, expected_cursor_column
+            )),
+            inspected_block: Some(sanitize_diagnostic_text(&block)),
+            regex_matched: Some(true),
+            expected_cursor_column: Some(expected_cursor_column),
+            observed_cursor_column: Some(cursor_column),
+            ..PromptReadinessEvaluation::default()
+        });
+    }
+
+    Ok(PromptReadinessEvaluation {
+        ready: true,
+        inspected_block: Some(sanitize_diagnostic_text(&block)),
+        regex_matched: Some(true),
+        expected_cursor_column: Some(expected_cursor_column),
+        observed_cursor_column: Some(cursor_column),
+        ..PromptReadinessEvaluation::default()
+    })
 }
 
 fn resolve_active_pane_target(tmux_socket: &Path, target_session: &str) -> Result<String, String> {
@@ -1051,6 +1196,33 @@ fn tmux_program() -> String {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "tmux".to_string())
+}
+
+fn sanitize_diagnostic_text(text: &str) -> String {
+    const MAX_CHARS: usize = 512;
+    let mut clipped = text.chars().take(MAX_CHARS).collect::<String>();
+    if text.chars().count() > MAX_CHARS {
+        clipped.push_str("...");
+    }
+    clipped
+}
+
+fn emit_delivery_diagnostic(event: &str, details: &Value) {
+    if !delivery_diagnostics_enabled() {
+        return;
+    }
+    emit_inscription(format!("relay.{event}").as_str(), details);
+}
+
+fn delivery_diagnostics_enabled() -> bool {
+    std::env::var(DELIVERY_DIAGNOSTICS_ENVVAR)
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
 }
 
 fn read_request(stream: &UnixStream) -> Result<RelayRequest, io::Error> {

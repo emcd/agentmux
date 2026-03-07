@@ -6,10 +6,12 @@ use agentmux::{
     runtime::{
         association::{
             McpAssociationCli, load_local_mcp_overrides, resolve_association,
-            validate_sender_session,
+            resolve_sender_session,
         },
         error::RuntimeError,
+        inscriptions::{configure_process_inscriptions, emit_inscription, mcp_inscriptions_path},
         paths::{BundleRuntimePaths, RuntimeRootOverrides, RuntimeRoots},
+        starter::ensure_starter_configuration_layout,
     },
 };
 
@@ -18,6 +20,7 @@ struct McpArguments {
     bundle_name: Option<String>,
     configuration_root: Option<PathBuf>,
     state_root: Option<PathBuf>,
+    inscriptions_root: Option<PathBuf>,
     repository_root: Option<PathBuf>,
     session_name: Option<String>,
 }
@@ -25,6 +28,10 @@ struct McpArguments {
 #[tokio::main]
 async fn main() {
     if let Err(err) = run().await {
+        emit_inscription(
+            "mcp.startup_failed",
+            &serde_json::json!({"error": err.to_string()}),
+        );
         eprintln!("agentmux-mcp: {err}");
         std::process::exit(1);
     }
@@ -52,14 +59,32 @@ async fn run() -> Result<(), RuntimeError> {
     let overrides = RuntimeRootOverrides {
         configuration_root,
         state_root: arguments.state_root,
+        inscriptions_root: arguments.inscriptions_root,
         repository_root: arguments
             .repository_root
             .or_else(|| workspace.debug_repository_root()),
     };
     let roots = RuntimeRoots::resolve(&overrides)?;
+    ensure_starter_configuration_layout(&roots.configuration_root)?;
     let bundle = load_bundle_configuration(&roots.configuration_root, &association.bundle_name)
         .map_err(map_bundle_load_error)?;
-    let session_name = validate_sender_session(&bundle, &association.session_name)?;
+    let session_name =
+        resolve_sender_session(&bundle, &association.session_name, &current_directory)?;
+    configure_process_inscriptions(&mcp_inscriptions_path(
+        &roots.inscriptions_root,
+        &association.bundle_name,
+        &session_name,
+    ))?;
+    emit_inscription(
+        "mcp.startup",
+        &serde_json::json!({
+            "bundle_name": association.bundle_name,
+            "session_name": session_name,
+            "configuration_root": roots.configuration_root,
+            "state_root": roots.state_root,
+            "inscriptions_root": roots.inscriptions_root,
+        }),
+    );
     let paths = BundleRuntimePaths::resolve(&roots.state_root, &association.bundle_name)?;
     let configuration = McpConfiguration {
         bundle_paths: paths,
@@ -87,6 +112,14 @@ fn parse_arguments(arguments: Vec<String>) -> Result<McpArguments, RuntimeError>
             "--state-directory" => {
                 let value = take_value(&arguments, &mut index, "--state-directory")?;
                 parsed.state_root = Some(PathBuf::from(value));
+            }
+            "--inscriptions-directory" => {
+                let value = take_value(&arguments, &mut index, "--inscriptions-directory")?;
+                parsed.inscriptions_root = Some(PathBuf::from(value));
+            }
+            "--logs-directory" => {
+                let value = take_value(&arguments, &mut index, "--logs-directory")?;
+                parsed.inscriptions_root = Some(PathBuf::from(value));
             }
             "--repository-root" => {
                 let value = take_value(&arguments, &mut index, "--repository-root")?;
@@ -128,6 +161,7 @@ fn print_help() {
     println!(
         "Usage: agentmux-mcp [--bundle-name NAME] [--config-directory PATH] \
          [--state-directory PATH] \
+         [--inscriptions-directory PATH|--logs-directory PATH] \
          [--repository-root PATH] [--session-name NAME]"
     );
 }

@@ -85,6 +85,16 @@ cargo run --bin agentmux-relay -- \
   --state-directory "${STATE_ROOT}"
 ```
 
+Optional diagnostics for prompt-readiness triage:
+
+```bash
+AGENTMUX_RELAY_DELIVERY_DIAGNOSTICS=1 \
+cargo run --bin agentmux-relay -- \
+  --bundle "${BUNDLE_NAME}" \
+  --config-directory "${CONFIG_ROOT}" \
+  --state-directory "${STATE_ROOT}"
+```
+
 Expected startup line includes:
 
 - `agentmux-relay listening`

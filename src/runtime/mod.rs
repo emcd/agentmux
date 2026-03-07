@@ -3,4 +3,6 @@
 pub mod association;
 pub mod bootstrap;
 pub mod error;
+pub mod inscriptions;
 pub mod paths;
+pub mod starter;

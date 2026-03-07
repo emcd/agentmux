@@ -8,7 +8,9 @@ use std::{
 
 use serde::Deserialize;
 
-use crate::configuration::BundleConfiguration;
+use crate::configuration::{
+    BundleConfiguration, ConfigurationError, infer_sender_from_working_directory,
+};
 
 use super::error::RuntimeError;
 
@@ -240,6 +242,42 @@ pub fn validate_sender_session(
     ))
 }
 
+/// Resolves sender session from candidate name with working-directory fallback.
+///
+/// First tries direct session membership. If candidate is not configured,
+/// attempts to infer sender from the current working directory by matching
+/// bundle member `directory` paths.
+///
+/// # Errors
+///
+/// Returns `validation_unknown_sender` when no sender can be resolved or when
+/// working-directory inference is ambiguous.
+pub fn resolve_sender_session(
+    bundle: &BundleConfiguration,
+    candidate_session_name: &str,
+    working_directory: &Path,
+) -> Result<String, RuntimeError> {
+    if let Ok(session_name) = validate_sender_session(bundle, candidate_session_name) {
+        return Ok(session_name);
+    }
+
+    let inferred = infer_sender_from_working_directory(bundle, working_directory)
+        .map_err(map_sender_inference_error)?;
+    if let Some(inferred) = inferred {
+        return Ok(inferred);
+    }
+
+    Err(RuntimeError::validation(
+        "validation_unknown_sender",
+        format!(
+            "session '{}' is not configured in bundle '{}' and working directory '{}' did not match any configured session directory",
+            candidate_session_name,
+            bundle.bundle_name,
+            working_directory.display()
+        ),
+    ))
+}
+
 fn run_git(directory: &Path, arguments: &[&str]) -> Option<String> {
     let output = Command::new("git")
         .current_dir(directory)
@@ -316,4 +354,24 @@ fn normalize_str(value: &str) -> Option<&str> {
         return None;
     }
     Some(value)
+}
+
+fn map_sender_inference_error(source: ConfigurationError) -> RuntimeError {
+    match source {
+        ConfigurationError::AmbiguousSender {
+            working_directory,
+            matches,
+        } => RuntimeError::validation(
+            "validation_unknown_sender",
+            format!(
+                "working directory '{}' matched multiple configured sessions: {}",
+                working_directory.display(),
+                matches.join(", ")
+            ),
+        ),
+        other => RuntimeError::validation(
+            "validation_unknown_sender",
+            format!("failed to infer sender from working directory: {other}"),
+        ),
+    }
 }

@@ -11,6 +11,7 @@ use super::error::RuntimeError;
 const APPLICATION_DIRECTORY: &str = "agentmux";
 const DEFAULT_CONFIGURATION_DIRECTORY: &str = ".config";
 const DEFAULT_STATE_DIRECTORY: &str = ".local/state";
+const DEFAULT_INSCRIPTIONS_DIRECTORY: &str = "inscriptions";
 const BUNDLES_DIRECTORY: &str = "bundles";
 const RELAY_SOCKET_FILE: &str = "relay.sock";
 const TMUX_SOCKET_FILE: &str = "tmux.sock";
@@ -23,6 +24,7 @@ const DIRECTORY_MODE_OWNER_ONLY: u32 = 0o700;
 pub struct RuntimeRootOverrides {
     pub configuration_root: Option<PathBuf>,
     pub state_root: Option<PathBuf>,
+    pub inscriptions_root: Option<PathBuf>,
     pub repository_root: Option<PathBuf>,
 }
 
@@ -31,6 +33,7 @@ pub struct RuntimeRootOverrides {
 pub struct RuntimeRoots {
     pub configuration_root: PathBuf,
     pub state_root: PathBuf,
+    pub inscriptions_root: PathBuf,
 }
 
 impl RuntimeRoots {
@@ -43,9 +46,11 @@ impl RuntimeRoots {
     pub fn resolve(overrides: &RuntimeRootOverrides) -> Result<Self, RuntimeError> {
         let configuration_root = resolve_configuration_root(overrides)?;
         let state_root = resolve_state_root(overrides)?;
+        let inscriptions_root = resolve_inscriptions_root(overrides, &state_root);
         Ok(Self {
             configuration_root,
             state_root,
+            inscriptions_root,
         })
     }
 }
@@ -95,6 +100,13 @@ pub fn debug_repository_state_root(repository_root: &Path) -> PathBuf {
 pub fn debug_repository_configuration_root(repository_root: &Path) -> PathBuf {
     repository_root
         .join(".auxiliary/configuration")
+        .join(APPLICATION_DIRECTORY)
+}
+
+/// Resolves the debug repository-local inscriptions root.
+pub fn debug_repository_inscriptions_root(repository_root: &Path) -> PathBuf {
+    repository_root
+        .join(".auxiliary/inscriptions")
         .join(APPLICATION_DIRECTORY)
 }
 
@@ -152,6 +164,18 @@ fn resolve_state_root(overrides: &RuntimeRootOverrides) -> Result<PathBuf, Runti
     }
     let home_directory = resolve_home_directory()?;
     Ok(state_root_from_sources(None, &home_directory))
+}
+
+fn resolve_inscriptions_root(overrides: &RuntimeRootOverrides, state_root: &Path) -> PathBuf {
+    if let Some(path) = overrides.inscriptions_root.clone() {
+        return path;
+    }
+    if cfg!(debug_assertions)
+        && let Some(repository_root) = overrides.repository_root.as_ref()
+    {
+        return debug_repository_inscriptions_root(repository_root);
+    }
+    state_root.join(DEFAULT_INSCRIPTIONS_DIRECTORY)
 }
 
 fn resolve_home_directory() -> Result<PathBuf, RuntimeError> {

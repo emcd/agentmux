@@ -1,0 +1,33 @@
+# agentmux coder definitions
+format-version = 1
+
+[[coders]]
+id = "claude"
+initial-command = "claude"
+resume-command = "claude --resume {coder-session-id}"
+prompt-regex = '(?ms)^[─-]{20,}.*\n❯\s*$\n[─-]{20,}\n.*$'
+prompt-inspect-lines = 4
+prompt-idle-column = 2
+
+[[coders]]
+id = "codex"
+initial-command = "codex"
+resume-command = "codex resume {coder-session-id}"
+prompt-regex = '(?ms)^›.*\n\s*\n.*$'
+prompt-inspect-lines = 3
+prompt-idle-column = 2
+
+[[coders]]
+id = "gemini"
+initial-command = "gemini"
+resume-command = "gemini --resume {coder-session-id}"
+prompt-regex = '(?ms)^\s*>\s+Type your message.*\n[▄]{20,}\n.*$'
+prompt-inspect-lines = 3
+prompt-idle-column = 3
+
+[[coders]]
+id = "opencode"
+initial-command = "opencode"
+resume-command = "opencode --session {coder-session-id}"
+# Start with quiescence-only delivery for opencode; add prompt template after
+# collecting stable pane-tail and cursor_x samples across themes/layouts.

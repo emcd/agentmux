@@ -1,6 +1,7 @@
 use agentmux::runtime::paths::{
     BundleRuntimePaths, RuntimeRootOverrides, RuntimeRoots, debug_repository_configuration_root,
-    debug_repository_state_root, ensure_bundle_runtime_directory,
+    debug_repository_inscriptions_root, debug_repository_state_root,
+    ensure_bundle_runtime_directory,
 };
 use tempfile::TempDir;
 
@@ -19,6 +20,15 @@ fn resolves_debug_repository_configuration_root() {
     assert_eq!(
         root,
         std::path::Path::new("/repo/.auxiliary/configuration/agentmux")
+    );
+}
+
+#[test]
+fn resolves_debug_repository_inscriptions_root() {
+    let root = debug_repository_inscriptions_root(std::path::Path::new("/repo"));
+    assert_eq!(
+        root,
+        std::path::Path::new("/repo/.auxiliary/inscriptions/agentmux")
     );
 }
 
@@ -55,6 +65,7 @@ fn resolves_roots_from_explicit_overrides() {
     let overrides = RuntimeRootOverrides {
         configuration_root: Some("/configuration".into()),
         state_root: Some("/state".into()),
+        inscriptions_root: Some("/inscriptions".into()),
         repository_root: None,
     };
     let roots = RuntimeRoots::resolve(&overrides).expect("roots should resolve");
@@ -63,6 +74,10 @@ fn resolves_roots_from_explicit_overrides() {
         std::path::Path::new("/configuration")
     );
     assert_eq!(roots.state_root, std::path::Path::new("/state"));
+    assert_eq!(
+        roots.inscriptions_root,
+        std::path::Path::new("/inscriptions")
+    );
 }
 
 #[test]

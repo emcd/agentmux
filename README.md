@@ -51,6 +51,11 @@ Optional explicit association overrides:
 cargo run --bin agentmux-mcp -- --bundle-name agentmux --session-name relay
 ```
 
+On first run, relay/MCP create starter config files when missing:
+
+- `<config-root>/coders.toml`
+- `<config-root>/bundles/example.toml`
+
 ## Recommended Startup Pattern
 
 Start relay first, then MCP servers.
@@ -60,6 +65,9 @@ both resolve the same `relay.sock`.
 MCP startup does not require relay availability.
 If relay is down, MCP `list` and `chat` return structured `relay_unavailable`
 errors until relay is reachable.
+If auto-discovered sender session name is not configured in the bundle, MCP
+falls back to matching current working directory against configured session
+`directory` entries.
 Relay startup performs a reconciliation pass that ensures configured bundle
 sessions are present on the bundle tmux socket.
 Relay tmux operations use the bundle runtime socket path:
@@ -70,6 +78,13 @@ Example:
 ```bash
 cargo run --bin agentmux-relay -- --bundle agentmux --state-directory .auxiliary/state/agentmux
 cargo run --bin agentmux-mcp -- --bundle-name agentmux --session-name relay --state-directory .auxiliary/state/agentmux
+```
+
+Optional log root override:
+
+```bash
+cargo run --bin agentmux-relay -- --bundle agentmux --logs-directory .auxiliary/inscriptions/agentmux
+cargo run --bin agentmux-mcp -- --bundle-name agentmux --session-name relay --logs-directory .auxiliary/inscriptions/agentmux
 ```
 
 ## MCP Tool Schemas (MVP)
@@ -206,6 +221,21 @@ cargo run --bin agentmux-mcp -- --bundle-name agentmux --session-name relay --st
 Pre-commit hooks are configured in
 `.auxiliary/configuration/pre-commit.yaml`.
 
+### Inscriptions (Logs)
+
+Default inscriptions root:
+
+- debug builds: `<repository-root>/.auxiliary/inscriptions/agentmux`
+- release builds: `<state-root>/inscriptions`
+
+Relay log path (per bundle):
+
+- `<inscriptions-root>/bundles/<bundle-name>/relay.log`
+
+MCP log path (per bundle/session):
+
+- `<inscriptions-root>/bundles/<bundle-name>/sessions/<session-name>/mcp.log`
+
 ## Quiescence Delivery Notes
 
 Relay delivery waits for pane output to remain stable before injecting a prompt.
@@ -217,6 +247,12 @@ Default values:
 
 If pane output changes continuously (for example, clock-like status output),
 delivery may time out for that target.
+
+### Prompt-Readiness Diagnostics
+
+Relay can emit structured prompt-readiness diagnostics in relay inscriptions:
+
+- `AGENTMUX_RELAY_DELIVERY_DIAGNOSTICS=1` enables diagnostics
 
 ## Prompt-Readiness Templates
 
@@ -248,6 +284,13 @@ Configuration root:
 State root:
 
 - `$XDG_STATE_HOME/agentmux` or `~/.local/state/agentmux`
+
+Inscriptions root:
+
+- debug builds:
+  - repository-local `.auxiliary/inscriptions/agentmux`
+- otherwise:
+  - `<state-root>/inscriptions`
 
 Per-bundle sockets:
 
@@ -287,7 +330,7 @@ initial-command = "codex"
 resume-command = "codex resume {coder-session-id}"
 prompt-regex = "(?m)^›"
 prompt-inspect-lines = 3
-prompt-idle-column = 3
+prompt-idle-column = 2
 ```
 
 Example `bundles/agentmux.toml`:

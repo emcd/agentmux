@@ -5,20 +5,34 @@ TBD - created by archiving change add-runtime-bootstrap-and-xdg-layout. Update P
 ## Requirements
 ### Requirement: XDG Configuration Root
 
-The system SHALL resolve the configuration root using:
+The system SHALL resolve default configuration root as:
 
-- `$XDG_CONFIG_HOME/agentmux` when `XDG_CONFIG_HOME` is set and non-empty
-- `~/.config/agentmux` otherwise
+- debug builds: repository-local
+  `.auxiliary/configuration/agentmux/` when that directory exists
+- otherwise: `$XDG_CONFIG_HOME/agentmux` or `~/.config/agentmux`
 
-#### Scenario: Resolve config root from XDG variable
+Explicit configuration path overrides (CLI or local override file fields) SHALL
+continue to take precedence over default file resolution.
 
-- **WHEN** `XDG_CONFIG_HOME` is set to a non-empty value
-- **THEN** configuration root resolves under that directory
+#### Scenario: Use repository-local config root in debug build
 
-#### Scenario: Resolve config root from fallback
+- **WHEN** runtime is debug/development mode
+- **AND** `.auxiliary/configuration/agentmux/` exists under workspace root
+- **AND** no explicit config path override is provided
+- **THEN** bundle loading uses that repository-local config root
 
-- **WHEN** `XDG_CONFIG_HOME` is unset or empty
-- **THEN** configuration root resolves to `~/.config/agentmux`
+#### Scenario: Ignore repository-local file in release build
+
+- **WHEN** runtime is non-debug/release mode
+- **AND** `.auxiliary/configuration/agentmux/` exists
+- **AND** no explicit config path override is provided
+- **THEN** bundle loading uses XDG/home configuration resolution
+
+#### Scenario: Explicit config override takes precedence
+
+- **WHEN** runtime startup receives an explicit config path override
+- **THEN** bundle loading uses the explicit path
+- **AND** default debug/release config path logic is bypassed
 
 ### Requirement: XDG State Root
 
@@ -274,3 +288,25 @@ used per worktree without leaking to shared commits.
 
 - **WHEN** repository ignore rules are evaluated
 - **THEN** `.auxiliary/configuration/agentmux/overrides/` is ignored
+
+### Requirement: Bundle Configuration File Name
+
+Bundle configuration SHALL be stored as:
+
+- `coders.toml`
+- `bundles/<bundle-id>.toml`
+
+Per-bundle `bundles/<bundle-name>.json` files SHALL NOT be required.
+
+#### Scenario: Load bundle from per-bundle TOML plus coders TOML
+
+- **WHEN** runtime resolves configuration defaults or explicit config path
+- **THEN** bundle lookup reads `bundles/<bundle-id>.toml`
+- **AND** coder lookup reads `coders.toml`
+
+#### Scenario: Fail when bundle file is absent
+
+- **WHEN** requested bundle ID does not have matching
+  `bundles/<bundle-id>.toml`
+- **THEN** startup returns structured `validation_unknown_bundle`
+

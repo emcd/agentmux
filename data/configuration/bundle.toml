@@ -1,0 +1,16 @@
+# Example bundle definition.
+# Copy this file to bundles/<bundle-id>.toml and customize sessions.
+format-version = 1
+
+# [[sessions]]
+# id = "agent-a"
+# name = "Agent A"
+# directory = "/home/me/src/WORKTREES/agentmux/agent-a"
+# coder = "codex"
+# coder-session-id = "00000000-0000-0000-0000-000000000000"
+
+# [[sessions]]
+# id = "agent-b"
+# name = "Agent B"
+# directory = "/home/me/src/WORKTREES/agentmux/agent-b"
+# coder = "codex"

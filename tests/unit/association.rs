@@ -4,7 +4,7 @@ use agentmux::{
     configuration::BundleConfiguration,
     runtime::association::{
         McpAssociationCli, McpAssociationOverrides, WorkspaceContext, load_local_mcp_overrides,
-        resolve_association, validate_sender_session,
+        resolve_association, resolve_sender_session, validate_sender_session,
     },
 };
 use tempfile::TempDir;
@@ -57,6 +57,27 @@ fn bundle_with_sessions(sessions: &[&str]) -> BundleConfiguration {
                 start_command: None,
                 prompt_readiness: None,
             })
+            .collect(),
+    }
+}
+
+fn bundle_with_directories(
+    session_directories: &[(&str, &std::path::Path)],
+) -> BundleConfiguration {
+    BundleConfiguration {
+        schema_version: "1".to_string(),
+        bundle_name: "agentmux".to_string(),
+        members: session_directories
+            .iter()
+            .map(
+                |(session_name, directory)| agentmux::configuration::BundleMember {
+                    id: (*session_name).to_string(),
+                    name: None,
+                    working_directory: Some((*directory).to_path_buf()),
+                    start_command: None,
+                    prompt_readiness: None,
+                },
+            )
             .collect(),
     }
 }
@@ -203,6 +224,66 @@ fn rejects_unknown_sender_membership() {
     let bundle = bundle_with_sessions(&["relay", "tui"]);
     let err = validate_sender_session(&bundle, "planner").expect_err("should fail");
     assert!(err.to_string().contains("validation_unknown_sender"));
+}
+
+#[test]
+fn resolves_sender_from_working_directory_when_candidate_is_unknown() {
+    let temporary = TempDir::new().expect("temporary");
+    let relay_directory = temporary.path().join("relay");
+    let other_directory = temporary.path().join("other");
+    std::fs::create_dir_all(&relay_directory).expect("create relay directory");
+    std::fs::create_dir_all(&other_directory).expect("create other directory");
+    let bundle = bundle_with_directories(&[
+        ("master", relay_directory.as_path()),
+        ("other", other_directory.as_path()),
+    ]);
+
+    let resolved =
+        resolve_sender_session(&bundle, "relay", relay_directory.as_path()).expect("resolve");
+    assert_eq!(resolved, "master");
+}
+
+#[test]
+fn rejects_unknown_sender_when_directory_does_not_match_any_member() {
+    let temporary = TempDir::new().expect("temporary");
+    let relay_directory = temporary.path().join("relay");
+    let other_directory = temporary.path().join("other");
+    std::fs::create_dir_all(&relay_directory).expect("create relay directory");
+    std::fs::create_dir_all(&other_directory).expect("create other directory");
+    let bundle = bundle_with_directories(&[
+        ("master", relay_directory.as_path()),
+        ("other", other_directory.as_path()),
+    ]);
+
+    let unknown_directory = temporary.path().join("unknown");
+    std::fs::create_dir_all(&unknown_directory).expect("create unknown directory");
+    let err = resolve_sender_session(&bundle, "relay", unknown_directory.as_path())
+        .expect_err("unknown sender should fail");
+    assert!(err.to_string().contains("validation_unknown_sender"));
+    assert!(
+        err.to_string()
+            .contains("did not match any configured session directory"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn rejects_ambiguous_sender_when_directory_matches_multiple_members() {
+    let temporary = TempDir::new().expect("temporary");
+    let relay_directory = temporary.path().join("relay");
+    std::fs::create_dir_all(&relay_directory).expect("create relay directory");
+    let bundle = bundle_with_directories(&[
+        ("master", relay_directory.as_path()),
+        ("shadow", relay_directory.as_path()),
+    ]);
+
+    let err = resolve_sender_session(&bundle, "relay", relay_directory.as_path())
+        .expect_err("ambiguous sender should fail");
+    assert!(err.to_string().contains("validation_unknown_sender"));
+    assert!(
+        err.to_string()
+            .contains("matched multiple configured sessions")
+    );
 }
 
 #[test]

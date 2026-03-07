@@ -16,6 +16,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::relay::{RelayError, RelayRequest, RelayResponse, request_relay};
+use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::paths::BundleRuntimePaths;
 
 /// Configuration provided when booting MCP stdio service.
@@ -68,6 +69,13 @@ impl McpServer {
         &self,
         Parameters(_params): Parameters<ListParams>,
     ) -> Result<CallToolResult, McpError> {
+        emit_inscription(
+            "mcp.tool.list.request",
+            &json!({
+                "bundle_name": self.state.configuration.bundle_paths.bundle_name,
+                "sender_session": self.state.configuration.sender_session.clone(),
+            }),
+        );
         match request_relay(
             &self.state.configuration.bundle_paths.relay_socket,
             &RelayRequest::List {
@@ -84,18 +92,47 @@ impl McpServer {
                     "bundle_name": bundle_name,
                     "recipients": recipients,
                 });
+                emit_inscription(
+                    "mcp.tool.list.success",
+                    &json!({
+                        "bundle_name": response["bundle_name"],
+                        "recipient_count": response["recipients"].as_array().map_or(0, |value| value.len()),
+                    }),
+                );
                 Ok(CallToolResult::success(vec![Content::json(response)?]))
             }
-            Ok(RelayResponse::Error { error }) => Err(map_relay_error(error)),
-            Ok(other) => Err(internal_tool_error(
-                "internal_unexpected_failure",
-                "relay returned unexpected response variant",
-                Some(json!({"response": other})),
-            )),
-            Err(source) => Err(map_relay_request_failure(
-                &self.state.configuration.bundle_paths.relay_socket,
-                source,
-            )),
+            Ok(RelayResponse::Error { error }) => {
+                emit_inscription(
+                    "mcp.tool.list.relay_error",
+                    &json!({
+                        "code": error.code.clone(),
+                        "message": error.message.clone(),
+                        "details": error.details.clone(),
+                    }),
+                );
+                Err(map_relay_error(error))
+            }
+            Ok(other) => {
+                emit_inscription(
+                    "mcp.tool.list.unexpected_response",
+                    &json!({"response": other}),
+                );
+                Err(internal_tool_error(
+                    "internal_unexpected_failure",
+                    "relay returned unexpected response variant",
+                    Some(json!({"response": other})),
+                ))
+            }
+            Err(source) => {
+                emit_inscription(
+                    "mcp.tool.list.io_error",
+                    &json!({"error": source.to_string()}),
+                );
+                Err(map_relay_request_failure(
+                    &self.state.configuration.bundle_paths.relay_socket,
+                    source,
+                ))
+            }
         }
     }
 
@@ -105,6 +142,16 @@ impl McpServer {
         Parameters(params): Parameters<ChatParams>,
     ) -> Result<CallToolResult, McpError> {
         validate_chat_request(&params)?;
+        emit_inscription(
+            "mcp.tool.chat.request",
+            &json!({
+                "bundle_name": self.state.configuration.bundle_paths.bundle_name,
+                "request_id": params.request_id.clone(),
+                "targets": params.targets.clone(),
+                "broadcast": params.broadcast,
+                "message_length": params.message.len(),
+            }),
+        );
         let sender_session = self
             .state
             .configuration
@@ -150,18 +197,48 @@ impl McpServer {
                     "status": status,
                     "results": results,
                 });
+                emit_inscription(
+                    "mcp.tool.chat.success",
+                    &json!({
+                        "bundle_name": response["bundle_name"],
+                        "status": response["status"],
+                        "result_count": response["results"].as_array().map_or(0, |value| value.len()),
+                    }),
+                );
                 Ok(CallToolResult::success(vec![Content::json(response)?]))
             }
-            Ok(RelayResponse::Error { error }) => Err(map_relay_error(error)),
-            Ok(other) => Err(internal_tool_error(
-                "internal_unexpected_failure",
-                "relay returned unexpected response variant",
-                Some(json!({"response": other})),
-            )),
-            Err(source) => Err(map_relay_request_failure(
-                &self.state.configuration.bundle_paths.relay_socket,
-                source,
-            )),
+            Ok(RelayResponse::Error { error }) => {
+                emit_inscription(
+                    "mcp.tool.chat.relay_error",
+                    &json!({
+                        "code": error.code.clone(),
+                        "message": error.message.clone(),
+                        "details": error.details.clone(),
+                    }),
+                );
+                Err(map_relay_error(error))
+            }
+            Ok(other) => {
+                emit_inscription(
+                    "mcp.tool.chat.unexpected_response",
+                    &json!({"response": other}),
+                );
+                Err(internal_tool_error(
+                    "internal_unexpected_failure",
+                    "relay returned unexpected response variant",
+                    Some(json!({"response": other})),
+                ))
+            }
+            Err(source) => {
+                emit_inscription(
+                    "mcp.tool.chat.io_error",
+                    &json!({"error": source.to_string()}),
+                );
+                Err(map_relay_request_failure(
+                    &self.state.configuration.bundle_paths.relay_socket,
+                    source,
+                ))
+            }
         }
     }
 }
