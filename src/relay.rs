@@ -963,6 +963,8 @@ fn wait_for_quiescent_pane(
             .map_err(|reason| DeliveryWaitError::Failed { reason })?;
         let snapshot_before = capture_pane_snapshot(tmux_socket, &pane_before)
             .map_err(|reason| DeliveryWaitError::Failed { reason })?;
+        let activity_before = resolve_window_activity_marker(tmux_socket, &pane_before)
+            .map_err(|reason| DeliveryWaitError::Failed { reason })?;
 
         thread::sleep(options.quiet_window);
 
@@ -970,7 +972,15 @@ fn wait_for_quiescent_pane(
             .map_err(|reason| DeliveryWaitError::Failed { reason })?;
         let snapshot_after = capture_pane_snapshot(tmux_socket, &pane_after)
             .map_err(|reason| DeliveryWaitError::Failed { reason })?;
-        if pane_before == pane_after && snapshot_before == snapshot_after {
+        let activity_after = resolve_window_activity_marker(tmux_socket, &pane_after)
+            .map_err(|reason| DeliveryWaitError::Failed { reason })?;
+        let pane_is_quiescent = pane_before == pane_after
+            && snapshot_before == snapshot_after
+            && match (activity_before.as_ref(), activity_after.as_ref()) {
+                (Some(before), Some(after)) => before == after,
+                _ => true,
+            };
+        if pane_is_quiescent {
             let evaluation = match prompt_readiness_matches(
                 tmux_socket,
                 pane_after.as_str(),
@@ -1133,6 +1143,41 @@ fn resolve_active_pane_target(tmux_socket: &Path, target_session: &str) -> Resul
         ));
     }
     Ok(pane_target)
+}
+
+fn resolve_window_activity_marker(
+    tmux_socket: &Path,
+    pane_target: &str,
+) -> Result<Option<String>, String> {
+    let output = run_tmux_command_capture(
+        tmux_socket,
+        &[
+            "display-message",
+            "-p",
+            "-t",
+            pane_target,
+            "#{window_activity}",
+        ],
+    )?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let lower = stderr.to_ascii_lowercase();
+        if lower.contains("unknown format")
+            || lower.contains("invalid format")
+            || lower.contains("bad format")
+        {
+            return Ok(None);
+        }
+        if stderr.is_empty() {
+            return Err("tmux display-message for window_activity failed".to_string());
+        }
+        return Err(stderr);
+    }
+    let marker = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if marker.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(marker))
 }
 
 fn capture_pane_snapshot(tmux_socket: &Path, pane_target: &str) -> Result<String, String> {
