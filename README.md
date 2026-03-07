@@ -226,8 +226,9 @@ Configuration fields:
 
 - `prompt-regex` (optional): regular expression evaluated against inspected
   pane tail text. Multi-line matching is supported (for example `(?m)^›`).
-- `prompt-inspect-lines` (optional): non-empty tail lines to inspect after
-  trimming trailing blank lines from pane capture output. Default is `3`;
+- `prompt-inspect-lines` (optional): tail lines to inspect after trimming only
+  trailing blank lines from pane capture output (interior blank lines are
+  preserved). Default is `3`;
   effective range is clamped to `1..=40`.
 - `prompt-idle-column` (optional): required tmux `cursor_x` value for
   input-idle delivery. Use this to avoid injecting while a user is typing.

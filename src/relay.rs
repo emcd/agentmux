@@ -954,8 +954,8 @@ fn prompt_readiness_matches(
 
     let inspected = snapshot
         .lines()
-        .filter(|line| !line.trim().is_empty())
         .rev()
+        .skip_while(|line| line.trim().is_empty())
         .take(matcher.inspect_lines)
         .collect::<Vec<_>>();
     if inspected.is_empty() {
