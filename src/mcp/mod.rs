@@ -46,7 +46,7 @@ struct ChatParams {
     request_id: Option<String>,
     /// Message body to route to targets.
     message: String,
-    /// Explicit target sessions (one or many).
+    /// Explicit target recipients by session id or display name (one or many).
     #[serde(default)]
     targets: Vec<String>,
     /// Broadcast to all known sessions for the bundle.

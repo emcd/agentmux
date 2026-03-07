@@ -213,7 +213,7 @@ pub fn validate_sender_session(
     if bundle
         .members
         .iter()
-        .any(|member| member.session_name == session_name)
+        .any(|member| member.id == session_name)
     {
         return Ok(session_name.to_string());
     }

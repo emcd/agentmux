@@ -50,14 +50,12 @@ format-version = 1
 [[sessions]]
 id = "sender"
 name = "sender"
-display-name = "Sender"
 directory = "/tmp"
 coder = "sender-coder"
 
 [[sessions]]
 id = "human"
 name = "human"
-display-name = "Human"
 directory = "/tmp"
 coder = "human-coder"
 TOML

@@ -24,8 +24,7 @@ workflows such as `codex resume <session-id>`.
 - Add `bundles/<bundle-id>.toml` with:
   - `[[sessions]]` entries with:
   - `id`
-  - `name`
-  - optional `display-name`
+  - optional `name`
   - `directory`
   - `coder`
   - optional `coder-session-id`

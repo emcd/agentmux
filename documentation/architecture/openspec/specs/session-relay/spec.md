@@ -8,18 +8,20 @@ TBD - created by archiving change add-mcp-session-relay-mvp. Update Purpose afte
 The system SHALL let operators define a bundle as a set of session members in
 configuration, where each member includes:
 
-- session name
+- session id
+- optional session name
 - working directory
 - coder start command
 
 #### Scenario: Load valid configured bundle
 
-- **WHEN** a configured bundle definition contains unique session names
+- **WHEN** a configured bundle definition contains unique session ids
+- **AND** optional session names are unique when present
 - **THEN** the system loads the bundle definition successfully
 
 #### Scenario: Reject duplicate session names in one bundle
 
-- **WHEN** a configured bundle definition contains duplicate session names
+- **WHEN** a configured bundle definition contains duplicate non-empty session names
 - **THEN** the system rejects the bundle definition with a validation error
 
 ### Requirement: Bundle Reconciliation
@@ -82,19 +84,27 @@ creation races and avoids leaking idle tmux servers.
 
 ### Requirement: Session Routing Primitive
 
-The system SHALL expose session names as the routing primitive for message
+The system SHALL expose session ids as the routing primitive for message
 delivery.
 The system SHALL resolve each target session to its currently active pane at
 delivery time.
 The system SHALL support directed delivery to one or more explicitly selected
 target sessions.
+The system SHALL additionally allow explicit targets to reference configured
+session names as aliases.
 
 #### Scenario: Resolve session target for direct send
 
-- **WHEN** a caller sends a message to one target session
-- **THEN** the system routes by that session name
+- **WHEN** a caller sends a message to one target session id
+- **THEN** the system routes by that session id
 - **AND** resolves the session's active pane as the concrete tmux injection
   endpoint
+
+#### Scenario: Resolve session target by configured name alias
+
+- **WHEN** a caller sends a message using a configured session name
+- **THEN** the system resolves that name to one session id
+- **AND** routes delivery to that resolved id
 
 #### Scenario: Active pane changes before delivery
 

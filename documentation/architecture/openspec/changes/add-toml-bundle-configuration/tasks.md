@@ -5,15 +5,15 @@
       serde-mapped structs for kebab-case keys.
 - [x] 1.2 Validate TOML configuration invariants:
       unique coder IDs, unique session IDs per bundle,
-      unique session names per bundle, and valid references from session
+      unique optional session `name` values per bundle, and valid references from session
       `coder` to `[[coders]].id` in `coders.toml`.
 - [x] 1.3 Implement startup command template resolution using coder templates:
       use `resume-command` when `coder-session-id` is set, otherwise use
       `initial-command`; fail on unresolved placeholders.
-- [x] 1.4 Update reconciliation and routing code paths to use session `name`
+- [x] 1.4 Update reconciliation and routing code paths to use session `id`
       as tmux routing primitive while preserving current relay behavior.
 - [x] 1.5 Preserve existing optional session metadata used by current features
-      (for example `display-name`) and support coder-scoped prompt-readiness
+      (session `name`) and support coder-scoped prompt-readiness
       templates.
 - [x] 1.6 Implement default config file discovery rules:
       debug repository-local `.auxiliary/configuration/tmuxmux/`

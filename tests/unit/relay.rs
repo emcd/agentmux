@@ -22,15 +22,13 @@ format-version = 1
 
 [[sessions]]
 id = "alpha"
-name = "alpha"
-display-name = "Alpha"
+name = "Alpha"
 directory = "/tmp"
 coder = "shell"
 
 [[sessions]]
 id = "bravo"
-name = "bravo"
-display-name = "Bravo"
+name = "Bravo"
 directory = "/tmp"
 coder = "shell"
 "#;
@@ -81,4 +79,32 @@ fn chat_rejects_unknown_target() {
     )
     .expect_err("chat should fail");
     assert_eq!(response.code, "validation_unknown_recipient");
+}
+
+#[test]
+fn chat_accepts_target_by_recipient_name() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    let tmux_socket = temporary.path().join("tmux.sock");
+    let response = handle_request(
+        RelayRequest::Chat {
+            request_id: None,
+            sender_session: "alpha".to_string(),
+            message: "hello".to_string(),
+            targets: vec!["Bravo".to_string()],
+            broadcast: false,
+            quiet_window_ms: Some(1),
+            delivery_timeout_ms: Some(1),
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect("chat response");
+
+    let RelayResponse::Chat { results, .. } = response else {
+        panic!("expected chat response");
+    };
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].target_session, "bravo");
 }

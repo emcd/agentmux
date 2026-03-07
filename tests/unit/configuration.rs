@@ -54,8 +54,7 @@ coder-session-id = "abc123"
 
 [[sessions]]
 id = "session-b"
-name = "b"
-display-name = "Bravo"
+name = "Bravo"
 directory = "{}"
 coder = "shell"
 "#,
@@ -67,7 +66,8 @@ coder = "shell"
     let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
     assert_eq!(loaded.bundle_name, "alpha");
     assert_eq!(loaded.members.len(), 2);
-    assert_eq!(loaded.members[1].display_name.as_deref(), Some("Bravo"));
+    assert_eq!(loaded.members[1].id, "session-b");
+    assert_eq!(loaded.members[1].name.as_deref(), Some("Bravo"));
     assert_eq!(
         loaded.members[0].start_command.as_deref(),
         Some("codex resume abc123")

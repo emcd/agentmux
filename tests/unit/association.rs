@@ -51,8 +51,8 @@ fn bundle_with_sessions(sessions: &[&str]) -> BundleConfiguration {
         members: sessions
             .iter()
             .map(|session_name| tmuxmux::configuration::BundleMember {
-                session_name: (*session_name).to_string(),
-                display_name: None,
+                id: (*session_name).to_string(),
+                name: None,
                 working_directory: None,
                 start_command: None,
                 prompt_readiness: None,

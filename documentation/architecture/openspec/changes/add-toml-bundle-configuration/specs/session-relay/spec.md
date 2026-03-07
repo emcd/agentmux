@@ -12,19 +12,18 @@ Each bundle file SHALL include:
 - `format-version`
 - `[[sessions]]` entries with:
   - `id`
-  - `name` (tmux routing session name)
-  - optional `display-name`
+  - optional `name` (human-readable recipient name)
   - `directory`
   - `coder`
   - optional `coder-session-id`
 
-Routing and delivery SHALL continue to use session `name` values.
+Routing and delivery SHALL use session `id` values.
 Bundle identity SHALL be derived from bundle filename (`<bundle-id>.toml`).
 
 #### Scenario: Load valid TOML bundle configuration
 
-- **WHEN** target `bundles/<bundle-id>.toml` contains unique session IDs and
-  unique session names
+- **WHEN** target `bundles/<bundle-id>.toml` contains unique session IDs
+- **AND** optional session `name` values are unique when present
 - **AND** each session `coder` references an existing coder ID from
   `coders.toml`
 - **THEN** the system loads the bundle definition successfully

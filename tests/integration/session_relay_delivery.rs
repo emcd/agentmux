@@ -68,8 +68,7 @@ fn write_bundle_configuration(root: &Path, bundle_name: &str, sessions: &[&str])
         .iter()
         .map(|session| SessionSpec {
             id: (*session).to_string(),
-            name: (*session).to_string(),
-            display_name: None,
+            name: Some((*session).to_string()),
             directory: PathBuf::from("/tmp"),
             coder: "default".to_string(),
             coder_session_id: None,
@@ -91,8 +90,7 @@ struct CoderSpec {
 #[derive(Clone)]
 struct SessionSpec {
     id: String,
-    name: String,
-    display_name: Option<String>,
+    name: Option<String>,
     directory: PathBuf,
     coder: String,
     coder_session_id: Option<String>,
@@ -130,19 +128,18 @@ fn write_bundle_configuration_members(
 
     let mut bundle_toml = String::from("format-version = 1\n");
     for session in sessions {
+        bundle_toml.push_str(format!("\n[[sessions]]\nid = \"{}\"\n", session.id).as_str());
+        if let Some(name) = session.name.as_deref() {
+            bundle_toml.push_str(format!("name = \"{}\"\n", name).as_str());
+        }
         bundle_toml.push_str(
             format!(
-                "\n[[sessions]]\nid = \"{}\"\nname = \"{}\"\ndirectory = \"{}\"\ncoder = \"{}\"\n",
-                session.id,
-                session.name,
+                "directory = \"{}\"\ncoder = \"{}\"\n",
                 session.directory.display(),
                 session.coder
             )
             .as_str(),
         );
-        if let Some(display_name) = session.display_name.as_deref() {
-            bundle_toml.push_str(format!("display-name = \"{}\"\n", display_name).as_str());
-        }
         if let Some(coder_session_id) = session.coder_session_id.as_deref() {
             bundle_toml.push_str(format!("coder-session-id = \"{}\"\n", coder_session_id).as_str());
         }
@@ -329,16 +326,14 @@ fn relay_chat_delivers_when_prompt_readiness_template_matches() {
         &[
             SessionSpec {
                 id: "alpha".to_string(),
-                name: "alpha".to_string(),
-                display_name: None,
+                name: Some("alpha".to_string()),
                 directory: PathBuf::from("/tmp"),
                 coder: "default".to_string(),
                 coder_session_id: None,
             },
             SessionSpec {
                 id: "bravo".to_string(),
-                name: "bravo".to_string(),
-                display_name: None,
+                name: Some("bravo".to_string()),
                 directory: PathBuf::from("/tmp"),
                 coder: "prompt".to_string(),
                 coder_session_id: None,
@@ -418,16 +413,14 @@ fn relay_chat_times_out_when_prompt_readiness_never_matches() {
         &[
             SessionSpec {
                 id: "alpha".to_string(),
-                name: "alpha".to_string(),
-                display_name: None,
+                name: Some("alpha".to_string()),
                 directory: PathBuf::from("/tmp"),
                 coder: "default".to_string(),
                 coder_session_id: None,
             },
             SessionSpec {
                 id: "bravo".to_string(),
-                name: "bravo".to_string(),
-                display_name: None,
+                name: Some("bravo".to_string()),
                 directory: PathBuf::from("/tmp"),
                 coder: "prompt".to_string(),
                 coder_session_id: None,
@@ -515,16 +508,14 @@ fn relay_chat_delivers_when_prompt_idle_column_matches() {
         &[
             SessionSpec {
                 id: "alpha".to_string(),
-                name: "alpha".to_string(),
-                display_name: None,
+                name: Some("alpha".to_string()),
                 directory: PathBuf::from("/tmp"),
                 coder: "default".to_string(),
                 coder_session_id: None,
             },
             SessionSpec {
                 id: "bravo".to_string(),
-                name: "bravo".to_string(),
-                display_name: None,
+                name: Some("bravo".to_string()),
                 directory: PathBuf::from("/tmp"),
                 coder: "prompt".to_string(),
                 coder_session_id: None,
@@ -609,16 +600,14 @@ fn relay_chat_times_out_when_prompt_idle_column_does_not_match() {
         &[
             SessionSpec {
                 id: "alpha".to_string(),
-                name: "alpha".to_string(),
-                display_name: None,
+                name: Some("alpha".to_string()),
                 directory: PathBuf::from("/tmp"),
                 coder: "default".to_string(),
                 coder_session_id: None,
             },
             SessionSpec {
                 id: "bravo".to_string(),
-                name: "bravo".to_string(),
-                display_name: None,
+                name: Some("bravo".to_string()),
                 directory: PathBuf::from("/tmp"),
                 coder: "prompt".to_string(),
                 coder_session_id: None,

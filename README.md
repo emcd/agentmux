@@ -260,6 +260,12 @@ Configuration paths:
 - `<config-root>/coders.toml`
 - `<config-root>/bundles/<bundle-name>.toml`
 
+Session fields:
+
+- `id`: canonical routing identity (tmux session target).
+- `name` (optional): human-readable recipient label; chat targets may use
+  either `id` or `name`.
+
 Default config root:
 
 - debug builds:
@@ -278,7 +284,7 @@ initial-command = "codex"
 resume-command = "codex resume {coder-session-id}"
 prompt-regex = "(?m)^›"
 prompt-inspect-lines = 3
-prompt-idle-column = 2
+prompt-idle-column = 3
 ```
 
 Example `bundles/tmuxmux.toml`:
@@ -288,16 +294,14 @@ format-version = 1
 
 [[sessions]]
 id = "relay"
-name = "relay"
-display-name = "Relay"
+name = "Relay"
 directory = "/home/me/src/WORKTREES/tmuxmux/relay"
 coder = "codex"
 coder-session-id = "00000000-0000-0000-0000-000000000000"
 
 [[sessions]]
 id = "tui"
-name = "tui"
-display-name = "TUI"
+name = "TUI"
 directory = "/home/me/src/WORKTREES/tmuxmux/tui"
 coder = "codex"
 ```

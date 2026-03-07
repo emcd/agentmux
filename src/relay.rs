@@ -235,10 +235,10 @@ fn handle_list(bundle: &BundleConfiguration, sender_session: Option<String>) -> 
     let recipients = bundle
         .members
         .iter()
-        .filter(|member| Some(member.session_name.as_str()) != sender_session.as_deref())
+        .filter(|member| Some(member.id.as_str()) != sender_session.as_deref())
         .map(|member| Recipient {
-            session_name: member.session_name.clone(),
-            display_name: member.display_name.clone(),
+            session_name: member.id.clone(),
+            display_name: member.name.clone(),
         })
         .collect::<Vec<_>>();
 
@@ -289,7 +289,7 @@ fn handle_chat(
     let sender = bundle
         .members
         .iter()
-        .find(|member| member.session_name == sender_session)
+        .find(|member| member.id == sender_session)
         .ok_or_else(|| {
             relay_error(
                 "validation_unknown_sender",
@@ -302,29 +302,11 @@ fn handle_chat(
         bundle
             .members
             .iter()
-            .map(|member| member.session_name.clone())
+            .map(|member| member.id.clone())
             .collect::<Vec<_>>()
     } else {
-        targets
+        resolve_explicit_targets(bundle, &targets)?
     };
-
-    let unknown_targets = resolved_targets
-        .iter()
-        .filter(|target| {
-            !bundle
-                .members
-                .iter()
-                .any(|member| member.session_name == **target)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    if !unknown_targets.is_empty() {
-        return Err(relay_error(
-            "validation_unknown_recipient",
-            "one or more targets are not in bundle configuration",
-            Some(json!({"unknown_targets": unknown_targets})),
-        ));
-    }
 
     let mut results = Vec::with_capacity(resolved_targets.len());
     let all_target_sessions = resolved_targets.clone();
@@ -338,7 +320,7 @@ fn handle_chat(
         let target_member = bundle
             .members
             .iter()
-            .find(|member| member.session_name == target_session)
+            .find(|member| member.id == target_session)
             .ok_or_else(|| {
                 relay_error(
                     "internal_unexpected_failure",
@@ -353,7 +335,7 @@ fn handle_chat(
                 bundle
                     .members
                     .iter()
-                    .find(|member| member.session_name == *session_name)
+                    .find(|member| member.id == *session_name)
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -369,7 +351,7 @@ fn handle_chat(
                         schema_version: SCHEMA_VERSION.to_string(),
                         message_id: message_id.clone(),
                         bundle_name: bundle.bundle_name.clone(),
-                        sender_session: sender.session_name.clone(),
+                        sender_session: sender.id.clone(),
                         target_sessions: vec![target_session.clone()],
                         cc_sessions: if cc_members.is_empty() {
                             None
@@ -377,25 +359,25 @@ fn handle_chat(
                             Some(
                                 cc_members
                                     .iter()
-                                    .map(|member| member.session_name.clone())
+                                    .map(|member| member.id.clone())
                                     .collect::<Vec<_>>(),
                             )
                         },
                         created_at,
                     },
                     from: AddressIdentity {
-                        session_name: sender.session_name.clone(),
-                        display_name: sender.display_name.clone(),
+                        session_name: sender.id.clone(),
+                        display_name: sender.name.clone(),
                     },
                     to: vec![AddressIdentity {
-                        session_name: target_member.session_name.clone(),
-                        display_name: target_member.display_name.clone(),
+                        session_name: target_member.id.clone(),
+                        display_name: target_member.name.clone(),
                     }],
                     cc: cc_members
                         .iter()
                         .map(|member| AddressIdentity {
-                            session_name: member.session_name.clone(),
-                            display_name: member.display_name.clone(),
+                            session_name: member.id.clone(),
+                            display_name: member.name.clone(),
                         })
                         .collect::<Vec<_>>(),
                     subject: None,
@@ -462,11 +444,64 @@ fn handle_chat(
         schema_version: SCHEMA_VERSION.to_string(),
         bundle_name: bundle.bundle_name.clone(),
         request_id,
-        sender_session: sender.session_name.clone(),
-        sender_display_name: sender.display_name.clone(),
+        sender_session: sender.id.clone(),
+        sender_display_name: sender.name.clone(),
         status: aggregate_chat_status(&results),
         results,
     })
+}
+
+fn resolve_explicit_targets(
+    bundle: &BundleConfiguration,
+    targets: &[String],
+) -> Result<Vec<String>, RelayError> {
+    let mut resolved = Vec::with_capacity(targets.len());
+    let mut unknown_targets = Vec::new();
+
+    for target in targets {
+        let requested = target.trim();
+        if requested.is_empty() {
+            unknown_targets.push(target.clone());
+            continue;
+        }
+        if let Some(member) = bundle.members.iter().find(|member| member.id == requested) {
+            resolved.push(member.id.clone());
+            continue;
+        }
+
+        let matched_by_name = bundle
+            .members
+            .iter()
+            .filter(|member| member.name.as_deref() == Some(requested))
+            .collect::<Vec<_>>();
+        match matched_by_name.as_slice() {
+            [] => unknown_targets.push(target.clone()),
+            [member] => resolved.push(member.id.clone()),
+            _ => {
+                let matching_sessions = matched_by_name
+                    .iter()
+                    .map(|member| member.id.clone())
+                    .collect::<Vec<_>>();
+                return Err(relay_error(
+                    "validation_ambiguous_recipient",
+                    "target matches multiple configured session names",
+                    Some(json!({
+                        "target": target,
+                        "matching_sessions": matching_sessions,
+                    })),
+                ));
+            }
+        }
+    }
+
+    if !unknown_targets.is_empty() {
+        return Err(relay_error(
+            "validation_unknown_recipient",
+            "one or more targets are not in bundle configuration",
+            Some(json!({"unknown_targets": unknown_targets})),
+        ));
+    }
+    Ok(resolved)
 }
 
 fn reconcile_loaded_bundle(
@@ -476,24 +511,22 @@ fn reconcile_loaded_bundle(
     let configured_sessions = bundle
         .members
         .iter()
-        .map(|member| member.session_name.clone())
+        .map(|member| member.id.clone())
         .collect::<HashSet<_>>();
     let mut missing = bundle
         .members
         .iter()
-        .filter_map(
-            |member| match session_exists(tmux_socket, &member.session_name) {
-                Ok(true) => None,
-                Ok(false) => Some(Ok(member.clone())),
-                Err(reason) => Some(Err(relay_error(
-                    "internal_unexpected_failure",
-                    "failed to query tmux session state during reconciliation",
-                    Some(json!({"session_name": member.session_name, "cause": reason})),
-                ))),
-            },
-        )
+        .filter_map(|member| match session_exists(tmux_socket, &member.id) {
+            Ok(true) => None,
+            Ok(false) => Some(Ok(member.clone())),
+            Err(reason) => Some(Err(relay_error(
+                "internal_unexpected_failure",
+                "failed to query tmux session state during reconciliation",
+                Some(json!({"session_name": member.id, "cause": reason})),
+            ))),
+        })
         .collect::<Result<Vec<_>, _>>()?;
-    missing.sort_by(|left, right| left.session_name.cmp(&right.session_name));
+    missing.sort_by(|left, right| left.id.cmp(&right.id));
 
     let mut report = ReconciliationReport::default();
 
@@ -509,10 +542,8 @@ fn reconcile_loaded_bundle(
 
     if let Some(bootstrap_member) = missing.first().cloned() {
         create_member_with_retry(tmux_socket, &bootstrap_member)?;
-        report.bootstrap_session = Some(bootstrap_member.session_name.clone());
-        report
-            .created_sessions
-            .push(bootstrap_member.session_name.clone());
+        report.bootstrap_session = Some(bootstrap_member.id.clone());
+        report.created_sessions.push(bootstrap_member.id.clone());
     }
 
     let remaining = missing.into_iter().skip(1).collect::<Vec<_>>();
@@ -521,7 +552,7 @@ fn reconcile_loaded_bundle(
         for member in remaining {
             let tmux_socket = tmux_socket.to_path_buf();
             handles.push(thread::spawn(move || {
-                create_member_with_retry(&tmux_socket, &member).map(|_| member.session_name.clone())
+                create_member_with_retry(&tmux_socket, &member).map(|_| member.id.clone())
             }));
         }
         for handle in handles {
@@ -556,7 +587,7 @@ fn create_member_with_retry(
                 let retryable = transient && attempt < CREATE_MAX_ATTEMPTS;
                 last_error = Some(reason);
                 if retryable {
-                    thread::sleep(retry_delay_for_attempt(&member.session_name, attempt));
+                    thread::sleep(retry_delay_for_attempt(&member.id, attempt));
                     continue;
                 }
                 break;
@@ -567,7 +598,7 @@ fn create_member_with_retry(
         "internal_unexpected_failure",
         "failed to create tmux session during reconciliation",
         Some(json!({
-            "session_name": member.session_name,
+            "session_name": member.id,
             "cause": last_error.unwrap_or_else(|| "unknown tmux error".to_string())
         })),
     ))
@@ -581,7 +612,7 @@ fn create_member_once(
         "new-session".to_string(),
         "-d".to_string(),
         "-s".to_string(),
-        member.session_name.clone(),
+        member.id.clone(),
     ];
     if let Some(working_directory) = member.working_directory.as_ref() {
         arguments.push("-c".to_string());
@@ -596,7 +627,7 @@ fn create_member_once(
         &[
             "set-option",
             "-t",
-            member.session_name.as_str(),
+            member.id.as_str(),
             OWNERSHIP_OPTION_NAME,
             OWNERSHIP_OPTION_VALUE,
         ],

@@ -59,7 +59,7 @@ Each recipient entry SHALL include:
 
 `chat` SHALL support exactly one target mode per request:
 
-- `targets` (non-empty list of session names)
+- `targets` (non-empty list of recipient identifiers)
 - `broadcast=true` for full bundle delivery
 
 #### Scenario: Send to explicit subset
@@ -69,8 +69,14 @@ Each recipient entry SHALL include:
 
 #### Scenario: Single target via list mode
 
-- **WHEN** a caller provides one session name in `targets`
+- **WHEN** a caller provides one recipient identifier in `targets`
 - **THEN** the system treats the request as a valid single-recipient delivery
+
+#### Scenario: Resolve explicit target by configured recipient name
+
+- **WHEN** a caller provides a configured recipient name in `targets`
+- **THEN** the system resolves that target to one configured session
+- **AND** attempts delivery to that resolved session
 
 #### Scenario: Reject conflicting target modes
 
@@ -146,6 +152,12 @@ The system SHALL use stable machine-readable error codes.
 - **THEN** the tool returns error code `validation_unknown_recipient`
 - **AND** includes a human-readable message
 
+#### Scenario: Ambiguous recipient name error
+
+- **WHEN** `chat` targets a configured recipient name shared by multiple sessions
+- **THEN** the tool returns error code `validation_ambiguous_recipient`
+- **AND** includes matching session identifiers in error details
+
 ### Requirement: MCP Schema Versioning
 
 All successful responses for relay tools SHALL include `schema_version`.
@@ -154,4 +166,3 @@ All successful responses for relay tools SHALL include `schema_version`.
 
 - **WHEN** any relay MCP tool succeeds
 - **THEN** the response includes `schema_version`
-
