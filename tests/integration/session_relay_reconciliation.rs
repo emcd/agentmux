@@ -4,11 +4,11 @@ use std::{
     process::Command,
 };
 
-use tempfile::TempDir;
-use tmuxmux::{
+use agentmux::{
     relay::reconcile_bundle,
     runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory},
 };
+use tempfile::TempDir;
 
 #[derive(Clone)]
 struct CoderSpec {
@@ -85,7 +85,7 @@ fn write_bundle_configuration(
 fn list_owned_sessions(socket: &Path) -> Vec<String> {
     let output = tmux_command(
         socket,
-        &["list-sessions", "-F", "#{session_name}\t#{@tmuxmux_owned}"],
+        &["list-sessions", "-F", "#{session_name}\t#{@agentmux_owned}"],
     );
     if !output.status.success() {
         return Vec::new();
@@ -216,7 +216,7 @@ fn reconciliation_prunes_stale_owned_sessions_without_killing_non_owned_sessions
     );
     let mark_stale = tmux_command(
         &paths.tmux_socket,
-        &["set-option", "-t", "stale", "@tmuxmux_owned", "1"],
+        &["set-option", "-t", "stale", "@agentmux_owned", "1"],
     );
     assert!(
         mark_stale.status.success(),

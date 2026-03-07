@@ -13,16 +13,16 @@ args = ["-y", "@upstash/context7-mcp"]
 
 [mcp_servers.nb]
 command = "nb-mcp"
-args = ["--notebook", "tmuxmux", "--no-commit-signing"]
+args = ["--notebook", "agentmux", "--no-commit-signing"]
 
-[mcp_servers.tmuxmux]
+[mcp_servers.agentmux]
 command = "reloaderoo"
 args = [
   "--",
   "cargo",
   "run",
   "--bin",
-  "tmuxmux-mcp",
+  "agentmux-mcp",
 ]
 startup_timeout_sec = 60
 tool_timeout_sec = 900

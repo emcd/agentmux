@@ -78,7 +78,7 @@ impl Display for RuntimeError {
             }
             Self::RelayAutostartDisabled { relay_socket } => write!(
                 formatter,
-                "relay unavailable at {}; start tmuxmux-relay with matching --bundle and --state-directory",
+                "relay unavailable at {}; start agentmux-relay with matching --bundle and --state-directory",
                 relay_socket.display()
             ),
             Self::RelayStartupTimeout {

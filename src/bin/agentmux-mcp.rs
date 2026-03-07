@@ -1,6 +1,6 @@
 use std::{env, path::PathBuf};
 
-use tmuxmux::{
+use agentmux::{
     configuration::{ConfigurationError, load_bundle_configuration},
     mcp::McpConfiguration,
     runtime::{
@@ -25,7 +25,7 @@ struct McpArguments {
 #[tokio::main]
 async fn main() {
     if let Err(err) = run().await {
-        eprintln!("tmuxmux-mcp: {err}");
+        eprintln!("agentmux-mcp: {err}");
         std::process::exit(1);
     }
 }
@@ -34,7 +34,7 @@ async fn run() -> Result<(), RuntimeError> {
     let arguments = parse_arguments(env::args().skip(1).collect())?;
     let current_directory = env::current_dir()
         .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
-    let workspace = tmuxmux::runtime::association::WorkspaceContext::discover(&current_directory)?;
+    let workspace = agentmux::runtime::association::WorkspaceContext::discover(&current_directory)?;
     let local_overrides = load_local_mcp_overrides(&workspace.workspace_root)?;
     let configuration_root = arguments.configuration_root.clone().or_else(|| {
         local_overrides
@@ -65,7 +65,7 @@ async fn run() -> Result<(), RuntimeError> {
         bundle_paths: paths,
         sender_session: Some(session_name),
     };
-    tmuxmux::mcp::run(configuration)
+    agentmux::mcp::run(configuration)
         .await
         .map_err(|source| RuntimeError::io("run MCP stdio service", anyhow_to_io(source)))
 }
@@ -126,7 +126,7 @@ fn take_value(arguments: &[String], index: &mut usize, flag: &str) -> Result<Str
 
 fn print_help() {
     println!(
-        "Usage: tmuxmux-mcp [--bundle-name NAME] [--config-directory PATH] \
+        "Usage: agentmux-mcp [--bundle-name NAME] [--config-directory PATH] \
          [--state-directory PATH] \
          [--repository-root PATH] [--session-name NAME]"
     );

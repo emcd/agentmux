@@ -79,7 +79,7 @@ tmux -S "${TMUX_SOCKET}" attach-session -t human
 Terminal A:
 
 ```bash
-cargo run --bin tmuxmux-relay -- \
+cargo run --bin agentmux-relay -- \
   --bundle "${BUNDLE_NAME}" \
   --config-directory "${CONFIG_ROOT}" \
   --state-directory "${STATE_ROOT}"
@@ -87,7 +87,7 @@ cargo run --bin tmuxmux-relay -- \
 
 Expected startup line includes:
 
-- `tmuxmux-relay listening`
+- `agentmux-relay listening`
 - `bundle=smoke-pr`
 
 ## 5. Start MCP server bound to sender session
@@ -95,7 +95,7 @@ Expected startup line includes:
 Terminal B:
 
 ```bash
-cargo run --bin tmuxmux-mcp -- \
+cargo run --bin agentmux-mcp -- \
   --bundle-name "${BUNDLE_NAME}" \
   --session-name sender \
   --config-directory "${CONFIG_ROOT}" \

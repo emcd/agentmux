@@ -180,7 +180,7 @@ struct McpHarness {
 
 impl McpHarness {
     async fn spawn(runtime: &TestRuntime) -> Self {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_tmuxmux-mcp"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_agentmux-mcp"));
         command
             .arg("--bundle-name")
             .arg(BUNDLE_NAME)
@@ -194,7 +194,7 @@ impl McpHarness {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null());
 
-        let mut child = command.spawn().expect("spawn tmuxmux-mcp");
+        let mut child = command.spawn().expect("spawn agentmux-mcp");
         let stdin = child.stdin.take().expect("take mcp stdin");
         let stdout = child.stdout.take().expect("take mcp stdout");
         let mut harness = Self {
@@ -211,7 +211,7 @@ impl McpHarness {
             protocol_version: Default::default(),
             capabilities: ClientCapabilities::default(),
             client_info: Implementation {
-                name: "tmuxmux-contract-tests".to_string(),
+                name: "agentmux-contract-tests".to_string(),
                 title: None,
                 version: "0.0.0".to_string(),
                 icons: None,

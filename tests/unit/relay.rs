@@ -1,5 +1,5 @@
+use agentmux::relay::{RelayRequest, RelayResponse, handle_request};
 use tempfile::TempDir;
-use tmuxmux::relay::{RelayRequest, RelayResponse, handle_request};
 
 fn write_bundle(temporary: &TempDir, name: &str) -> std::path::PathBuf {
     let root = temporary.path().join("config");

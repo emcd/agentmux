@@ -1,4 +1,4 @@
-//! Shared primitives for tmuxmux executables.
+//! Shared primitives for agentmux executables.
 
 pub mod configuration;
 pub mod envelope;

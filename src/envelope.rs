@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const ENVELOPE_SCHEMA_VERSION: &str = "1";
-pub const RESERVED_PATH_POINTER_CONTENT_TYPE: &str = "application/vnd.tmuxmux.path-pointer+json";
+pub const RESERVED_PATH_POINTER_CONTENT_TYPE: &str = "application/vnd.agentmux.path-pointer+json";
 pub const DEFAULT_MAX_PROMPT_TOKENS: usize = 4096;
 
 const REQUIRED_HEADER_ENVELOPE_VERSION: &str = "Envelope-Version";
@@ -377,7 +377,7 @@ pub fn batch_envelopes(envelopes: &[String], settings: PromptBatchSettings) -> V
     batches
 }
 
-/// Parses profile values for `TMUXMUX_TOKENIZER_PROFILE`.
+/// Parses profile values for `AGENTMUX_TOKENIZER_PROFILE`.
 pub fn parse_tokenizer_profile(value: &str) -> Option<TokenizerProfile> {
     let normalized = value.trim().to_ascii_lowercase();
     match normalized.as_str() {
@@ -399,9 +399,9 @@ fn deterministic_boundary(message_id: &str) -> String {
         .filter(|character| character.is_ascii_alphanumeric())
         .collect::<String>();
     if normalized.is_empty() {
-        return "tmuxmux-boundary".to_string();
+        return "agentmux-boundary".to_string();
     }
-    format!("tmuxmux-{normalized}")
+    format!("agentmux-{normalized}")
 }
 
 fn first_non_empty_line(lines: &[&str]) -> Option<usize> {

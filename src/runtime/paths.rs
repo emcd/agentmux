@@ -8,7 +8,7 @@ use std::{
 
 use super::error::RuntimeError;
 
-const APPLICATION_DIRECTORY: &str = "tmuxmux";
+const APPLICATION_DIRECTORY: &str = "agentmux";
 const DEFAULT_CONFIGURATION_DIRECTORY: &str = ".config";
 const DEFAULT_STATE_DIRECTORY: &str = ".local/state";
 const BUNDLES_DIRECTORY: &str = "bundles";

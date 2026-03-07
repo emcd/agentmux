@@ -1,7 +1,7 @@
 use std::{env, path::PathBuf};
 
-use tmuxmux::relay::reconcile_bundle;
-use tmuxmux::runtime::{
+use agentmux::relay::reconcile_bundle;
+use agentmux::runtime::{
     bootstrap::{acquire_relay_runtime_lock, bind_relay_listener},
     error::RuntimeError,
     paths::{
@@ -30,7 +30,7 @@ impl Default for RelayArguments {
 
 fn main() {
     if let Err(err) = run() {
-        eprintln!("tmuxmux-relay: {err}");
+        eprintln!("agentmux-relay: {err}");
         std::process::exit(1);
     }
 }
@@ -56,7 +56,7 @@ fn run() -> Result<(), RuntimeError> {
     .map_err(map_reconcile_error)?;
     let listener = bind_relay_listener(&paths)?;
     println!(
-        "tmuxmux-relay listening bundle={} socket={} bootstrap={:?} created={} pruned={}",
+        "agentmux-relay listening bundle={} socket={} bootstrap={:?} created={} pruned={}",
         paths.bundle_name,
         paths.relay_socket.display(),
         report.bootstrap_session,
@@ -66,10 +66,12 @@ fn run() -> Result<(), RuntimeError> {
     for incoming in listener.incoming() {
         match incoming {
             Ok(mut stream) => {
-                if let Err(source) =
-                    tmuxmux::relay::serve_connection(&mut stream, &roots.configuration_root, &paths)
-                {
-                    eprintln!("tmuxmux-relay: request handling failed: {source}");
+                if let Err(source) = agentmux::relay::serve_connection(
+                    &mut stream,
+                    &roots.configuration_root,
+                    &paths,
+                ) {
+                    eprintln!("agentmux-relay: request handling failed: {source}");
                 }
             }
             Err(source) if source.kind() == std::io::ErrorKind::Interrupted => {
@@ -83,7 +85,7 @@ fn run() -> Result<(), RuntimeError> {
     Ok(())
 }
 
-fn map_reconcile_error(source: tmuxmux::relay::RelayError) -> RuntimeError {
+fn map_reconcile_error(source: agentmux::relay::RelayError) -> RuntimeError {
     if source.code.starts_with("validation_") {
         return RuntimeError::validation(source.code, source.message);
     }
@@ -142,7 +144,7 @@ fn take_value(arguments: &[String], index: &mut usize, flag: &str) -> Result<Str
 
 fn print_help() {
     println!(
-        "Usage: tmuxmux-relay [--bundle NAME] [--config-directory PATH] \
+        "Usage: agentmux-relay [--bundle NAME] [--config-directory PATH] \
          [--state-directory PATH] \
          [--repository-root PATH]"
     );

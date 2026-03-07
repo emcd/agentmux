@@ -31,13 +31,13 @@ use crate::{
 const SCHEMA_VERSION: &str = ENVELOPE_SCHEMA_VERSION;
 const DEFAULT_QUIET_WINDOW_MS: u64 = 750;
 const DEFAULT_DELIVERY_TIMEOUT_MS: u64 = 30_000;
-const OWNERSHIP_OPTION_NAME: &str = "@tmuxmux_owned";
+const OWNERSHIP_OPTION_NAME: &str = "@agentmux_owned";
 const OWNERSHIP_OPTION_VALUE: &str = "1";
 const CREATE_MAX_ATTEMPTS: usize = 4;
 const CREATE_RETRY_BASE_DELAY_MS: u64 = 35;
 const CREATE_RETRY_JITTER_MS: u64 = 35;
-const MAX_PROMPT_TOKENS_ENVVAR: &str = "TMUXMUX_MAX_PROMPT_TOKENS";
-const TOKENIZER_PROFILE_ENVVAR: &str = "TMUXMUX_TOKENIZER_PROFILE";
+const MAX_PROMPT_TOKENS_ENVVAR: &str = "AGENTMUX_MAX_PROMPT_TOKENS";
+const TOKENIZER_PROFILE_ENVVAR: &str = "AGENTMUX_TOKENIZER_PROFILE";
 const DEFAULT_PROMPT_INSPECT_LINES: usize = 3;
 const MAX_PROMPT_INSPECT_LINES: usize = 40;
 
@@ -691,7 +691,7 @@ fn prune_owned_session(tmux_socket: &Path, session_name: &str) -> Result<(), Rel
     .map_err(|reason| {
         relay_error(
             "internal_unexpected_failure",
-            "failed to prune tmuxmux-owned session",
+            "failed to prune agentmux-owned session",
             Some(json!({"session_name": session_name, "cause": reason})),
         )
     })
@@ -700,7 +700,7 @@ fn prune_owned_session(tmux_socket: &Path, session_name: &str) -> Result<(), Rel
 fn list_owned_sessions(tmux_socket: &Path) -> Result<Vec<String>, RelayError> {
     let output = match run_tmux_command_capture(
         tmux_socket,
-        &["list-sessions", "-F", "#{session_name}\t#{@tmuxmux_owned}"],
+        &["list-sessions", "-F", "#{session_name}\t#{@agentmux_owned}"],
     ) {
         Ok(output) => output,
         Err(reason) if is_missing_session_error(reason.as_str()) => return Ok(Vec::new()),
@@ -1046,7 +1046,7 @@ fn run_tmux_command_capture(
 }
 
 fn tmux_program() -> String {
-    std::env::var("TMUXMUX_TMUX_COMMAND")
+    std::env::var("AGENTMUX_TMUX_COMMAND")
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())

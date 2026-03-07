@@ -11,16 +11,16 @@ use std::{
     time::{Duration, Instant},
 };
 
+use agentmux::runtime::{
+    bootstrap::{BootstrapOptions, bootstrap_relay},
+    paths::{BundleRuntimePaths, ensure_bundle_runtime_directory},
+};
 use rmcp::model::{
     CallToolRequest, CallToolRequestParam, ClientCapabilities, ClientJsonRpcMessage,
     Implementation, InitializeRequest, InitializeRequestParam, InitializedNotification, RequestId,
 };
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
-use tmuxmux::runtime::{
-    bootstrap::{BootstrapOptions, bootstrap_relay},
-    paths::{BundleRuntimePaths, ensure_bundle_runtime_directory},
-};
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt},
     process::Command,
@@ -143,7 +143,7 @@ struct McpHarness {
 
 impl McpHarness {
     async fn spawn(current_directory: &Path, arguments: &[&str]) -> Self {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_tmuxmux-mcp"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_agentmux-mcp"));
         command
             .current_dir(current_directory)
             .args(arguments)
@@ -151,7 +151,7 @@ impl McpHarness {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
-        let mut child = command.spawn().expect("spawn tmuxmux-mcp");
+        let mut child = command.spawn().expect("spawn agentmux-mcp");
         let stdin = child.stdin.take().expect("take mcp stdin");
         let stdout = child.stdout.take().expect("take mcp stdout");
         let stderr = child.stderr.take().expect("take mcp stderr");
@@ -470,7 +470,7 @@ async fn mcp_uses_repository_root_debug_state_override() {
     write_bundle_configuration(&config_root, "party", &["alpha", "bravo"]);
 
     let relay_socket = repository_root
-        .join(".auxiliary/state/tmuxmux")
+        .join(".auxiliary/state/agentmux")
         .join("bundles/party/relay.sock");
     let relay = FakeRelay::start(
         relay_socket,

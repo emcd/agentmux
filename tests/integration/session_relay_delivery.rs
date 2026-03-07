@@ -6,11 +6,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use tempfile::TempDir;
-use tmuxmux::{
+use agentmux::{
     relay::{ChatOutcome, ChatStatus, RelayRequest, RelayResponse, handle_request},
     runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory},
 };
+use tempfile::TempDir;
 use tokio::{
     io::AsyncBufReadExt,
     process::{Child, Command},
@@ -800,7 +800,7 @@ async fn relay_startup_retries_transient_tmux_create_failures() {
     let _ = child.wait().await;
 
     assert!(
-        stdout.contains("tmuxmux-relay listening"),
+        stdout.contains("agentmux-relay listening"),
         "relay should report successful startup, stdout={stdout:?}"
     );
     let attempts = fs::read_to_string(&attempts_file)
@@ -849,13 +849,13 @@ case "${{command_name}}" in
     ;;
   list-sessions)
     if [[ ! -s "${{SESSIONS_FILE}}" ]]; then
-      echo "no server running on /tmp/tmuxmux-fake" >&2
+      echo "no server running on /tmp/agentmux-fake" >&2
       exit 1
     fi
     format="${{args[2]-}}"
     while IFS= read -r session; do
       [[ -z "${{session}}" ]] && continue
-      if [[ "${{format}}" == "#{{session_name}}\t#{{@tmuxmux_owned}}" ]]; then
+      if [[ "${{format}}" == "#{{session_name}}\t#{{@agentmux_owned}}" ]]; then
         marker=""
         if [[ -s "${{OWNED_FILE}}" ]] && grep -Fxq "${{session}}" "${{OWNED_FILE}}"; then
           marker="1"
@@ -919,7 +919,7 @@ fn spawn_relay_with_fake_tmux(
     state_root: &Path,
     fake_tmux_script: &Path,
 ) -> Child {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_tmuxmux-relay"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_agentmux-relay"));
     command
         .arg("--bundle")
         .arg(bundle_name)
@@ -927,7 +927,7 @@ fn spawn_relay_with_fake_tmux(
         .arg(config_root)
         .arg("--state-directory")
         .arg(state_root)
-        .env("TMUXMUX_TMUX_COMMAND", fake_tmux_script)
+        .env("AGENTMUX_TMUX_COMMAND", fake_tmux_script)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());

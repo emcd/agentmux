@@ -1,13 +1,13 @@
 use std::{path::PathBuf, process::Command};
 
-use tempfile::TempDir;
-use tmuxmux::{
+use agentmux::{
     configuration::BundleConfiguration,
     runtime::association::{
         McpAssociationCli, McpAssociationOverrides, WorkspaceContext, load_local_mcp_overrides,
         resolve_association, validate_sender_session,
     },
 };
+use tempfile::TempDir;
 
 fn run_git(directory: &std::path::Path, arguments: &[&str]) {
     let output = Command::new("git")
@@ -47,10 +47,10 @@ fn context(
 fn bundle_with_sessions(sessions: &[&str]) -> BundleConfiguration {
     BundleConfiguration {
         schema_version: "1".to_string(),
-        bundle_name: "tmuxmux".to_string(),
+        bundle_name: "agentmux".to_string(),
         members: sessions
             .iter()
-            .map(|session_name| tmuxmux::configuration::BundleMember {
+            .map(|session_name| agentmux::configuration::BundleMember {
                 id: (*session_name).to_string(),
                 name: None,
                 working_directory: None,
@@ -64,14 +64,14 @@ fn bundle_with_sessions(sessions: &[&str]) -> BundleConfiguration {
 #[test]
 fn resolves_auto_association_from_git_context() {
     let workspace = context(
-        "/home/me/src/WORKTREES/tmuxmux/relay",
-        "/home/me/src/WORKTREES/tmuxmux/relay",
-        Some("/home/me/src/WORKTREES/tmuxmux/relay"),
-        Some("/home/me/src/tmuxmux/.git"),
+        "/home/me/src/WORKTREES/agentmux/relay",
+        "/home/me/src/WORKTREES/agentmux/relay",
+        Some("/home/me/src/WORKTREES/agentmux/relay"),
+        Some("/home/me/src/agentmux/.git"),
     );
     let resolved =
         resolve_association(&McpAssociationCli::default(), None, &workspace).expect("association");
-    assert_eq!(resolved.bundle_name, "tmuxmux");
+    assert_eq!(resolved.bundle_name, "agentmux");
     assert_eq!(resolved.session_name, "relay");
 }
 
@@ -92,37 +92,37 @@ fn resolves_auto_association_from_non_git_context() {
 #[test]
 fn debug_repository_root_prefers_git_common_dir_parent() {
     let workspace = context(
-        "/home/me/src/WORKTREES/tmuxmux/tui",
-        "/home/me/src/WORKTREES/tmuxmux/tui",
-        Some("/home/me/src/WORKTREES/tmuxmux/tui"),
-        Some("/home/me/src/tmuxmux/.git"),
+        "/home/me/src/WORKTREES/agentmux/tui",
+        "/home/me/src/WORKTREES/agentmux/tui",
+        Some("/home/me/src/WORKTREES/agentmux/tui"),
+        Some("/home/me/src/agentmux/.git"),
     );
     assert_eq!(
         workspace.debug_repository_root(),
-        Some(PathBuf::from("/home/me/src/tmuxmux"))
+        Some(PathBuf::from("/home/me/src/agentmux"))
     );
 }
 
 #[test]
 fn debug_repository_root_handles_nested_common_dir_layout() {
     let workspace = context(
-        "/home/me/src/WORKTREES/tmuxmux/tui",
-        "/home/me/src/WORKTREES/tmuxmux/tui",
-        Some("/home/me/src/WORKTREES/tmuxmux/tui"),
-        Some("/home/me/src/tmuxmux/.git/worktrees/tui"),
+        "/home/me/src/WORKTREES/agentmux/tui",
+        "/home/me/src/WORKTREES/agentmux/tui",
+        Some("/home/me/src/WORKTREES/agentmux/tui"),
+        Some("/home/me/src/agentmux/.git/worktrees/tui"),
     );
     assert_eq!(
         workspace.debug_repository_root(),
-        Some(PathBuf::from("/home/me/src/tmuxmux"))
+        Some(PathBuf::from("/home/me/src/agentmux"))
     );
 }
 
 #[test]
 fn debug_repository_root_is_none_without_git_common_dir() {
     let workspace = context(
-        "/home/me/src/WORKTREES/tmuxmux/tui",
-        "/home/me/src/WORKTREES/tmuxmux/tui",
-        Some("/home/me/src/WORKTREES/tmuxmux/tui"),
+        "/home/me/src/WORKTREES/agentmux/tui",
+        "/home/me/src/WORKTREES/agentmux/tui",
+        Some("/home/me/src/WORKTREES/agentmux/tui"),
         None,
     );
     assert_eq!(workspace.debug_repository_root(), None);
@@ -131,10 +131,10 @@ fn debug_repository_root_is_none_without_git_common_dir() {
 #[test]
 fn applies_cli_precedence_over_local_overrides() {
     let workspace = context(
-        "/home/me/src/WORKTREES/tmuxmux/relay",
-        "/home/me/src/WORKTREES/tmuxmux/relay",
-        Some("/home/me/src/WORKTREES/tmuxmux/relay"),
-        Some("/home/me/src/tmuxmux/.git"),
+        "/home/me/src/WORKTREES/agentmux/relay",
+        "/home/me/src/WORKTREES/agentmux/relay",
+        Some("/home/me/src/WORKTREES/agentmux/relay"),
+        Some("/home/me/src/agentmux/.git"),
     );
     let overrides = McpAssociationOverrides {
         bundle_name: Some("override-bundle".to_string()),
@@ -158,11 +158,11 @@ fn applies_cli_precedence_over_local_overrides() {
 fn loads_local_override_file_and_normalizes_relative_config_root() {
     let temporary = TempDir::new().expect("temporary");
     let root = temporary.path();
-    let override_directory = root.join(".auxiliary/configuration/tmuxmux/overrides");
+    let override_directory = root.join(".auxiliary/configuration/agentmux/overrides");
     std::fs::create_dir_all(&override_directory).expect("create override dir");
     std::fs::write(
         override_directory.join("mcp.toml"),
-        "bundle_name = 'tmuxmux'\nsession_name = 'relay'\nconfig_root = '../shared-config'\n",
+        "bundle_name = 'agentmux'\nsession_name = 'relay'\nconfig_root = '../shared-config'\n",
     )
     .expect("write override");
 
@@ -170,7 +170,7 @@ fn loads_local_override_file_and_normalizes_relative_config_root() {
     let Some(loaded) = loaded else {
         panic!("expected override file");
     };
-    assert_eq!(loaded.bundle_name.as_deref(), Some("tmuxmux"));
+    assert_eq!(loaded.bundle_name.as_deref(), Some("agentmux"));
     assert_eq!(loaded.session_name.as_deref(), Some("relay"));
     assert_eq!(loaded.config_root, Some(root.join("../shared-config")));
 }
@@ -179,11 +179,11 @@ fn loads_local_override_file_and_normalizes_relative_config_root() {
 fn rejects_malformed_local_override_file() {
     let temporary = TempDir::new().expect("temporary");
     let root = temporary.path();
-    let override_directory = root.join(".auxiliary/configuration/tmuxmux/overrides");
+    let override_directory = root.join(".auxiliary/configuration/agentmux/overrides");
     std::fs::create_dir_all(&override_directory).expect("create override dir");
     std::fs::write(
         override_directory.join("mcp.toml"),
-        "bundle_name = 'tmuxmux'\nunknown_field = 1\n",
+        "bundle_name = 'agentmux'\nunknown_field = 1\n",
     )
     .expect("write override");
 
@@ -208,7 +208,7 @@ fn rejects_unknown_sender_membership() {
 #[test]
 fn discovers_bundle_and_session_from_real_git_worktree() {
     let temporary = TempDir::new().expect("temporary");
-    let project_root = temporary.path().join("tmuxmux");
+    let project_root = temporary.path().join("agentmux");
     std::fs::create_dir_all(&project_root).expect("create project root");
 
     run_git(&project_root, &["init"]);
@@ -226,7 +226,7 @@ fn discovers_bundle_and_session_from_real_git_worktree() {
         ],
     );
 
-    let worktree_root = temporary.path().join("WORKTREES/tmuxmux/relay");
+    let worktree_root = temporary.path().join("WORKTREES/agentmux/relay");
     std::fs::create_dir_all(
         worktree_root
             .parent()
@@ -247,6 +247,6 @@ fn discovers_bundle_and_session_from_real_git_worktree() {
     let bundle_name = discovered.auto_bundle_name().expect("auto bundle");
     let session_name = discovered.auto_session_name().expect("auto session");
 
-    assert_eq!(bundle_name, "tmuxmux");
+    assert_eq!(bundle_name, "agentmux");
     assert_eq!(session_name, "relay");
 }

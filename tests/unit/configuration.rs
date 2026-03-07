@@ -1,9 +1,9 @@
 use std::{fs, path::PathBuf};
 
-use tempfile::TempDir;
-use tmuxmux::configuration::{
+use agentmux::configuration::{
     ConfigurationError, infer_sender_from_working_directory, load_bundle_configuration,
 };
+use tempfile::TempDir;
 
 fn write_config(
     temporary: &TempDir,

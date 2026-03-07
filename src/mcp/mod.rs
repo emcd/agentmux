@@ -1,4 +1,4 @@
-//! MCP server surface for tmuxmux.
+//! MCP server surface for agentmux.
 
 use std::{path::Path, sync::Arc};
 
@@ -171,7 +171,7 @@ impl rmcp::ServerHandler for McpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some(
-                "tmuxmux MCP server for tmux-backed multi-agent coordination.".to_string(),
+                "agentmux MCP server for tmux-backed multi-agent coordination.".to_string(),
             ),
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
@@ -224,7 +224,7 @@ fn map_relay_request_failure(socket_path: &Path, source: std::io::Error) -> McpE
     if is_relay_unavailable_error(&source) {
         return internal_tool_error(
             "relay_unavailable",
-            "relay is unavailable; start tmuxmux-relay with matching bundle and state-directory",
+            "relay is unavailable; start agentmux-relay with matching bundle and state-directory",
             Some(json!({
                 "relay_socket": socket_path,
                 "io_error_kind": format!("{:?}", source.kind()),

@@ -12,7 +12,7 @@ use crate::configuration::BundleConfiguration;
 
 use super::error::RuntimeError;
 
-const OVERRIDE_FILE_PATH: &str = ".auxiliary/configuration/tmuxmux/overrides/mcp.toml";
+const OVERRIDE_FILE_PATH: &str = ".auxiliary/configuration/agentmux/overrides/mcp.toml";
 
 /// Git and workspace context used for association auto-discovery.
 #[derive(Clone, Debug, PartialEq, Eq)]

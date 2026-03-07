@@ -210,7 +210,7 @@ pub fn bind_relay_listener(paths: &BundleRuntimePaths) -> Result<UnixListener, R
 
 /// Resolves a best-effort relay program path.
 pub fn resolve_relay_program() -> Result<PathBuf, RuntimeError> {
-    if let Ok(command_path) = std::env::var("TMUXMUX_RELAY_COMMAND") {
+    if let Ok(command_path) = std::env::var("AGENTMUX_RELAY_COMMAND") {
         let trimmed = command_path.trim();
         if !trimmed.is_empty() {
             return Ok(PathBuf::from(trimmed));
@@ -218,7 +218,7 @@ pub fn resolve_relay_program() -> Result<PathBuf, RuntimeError> {
     }
     let mut sibling = std::env::current_exe()
         .map_err(|source| RuntimeError::io("resolve current executable path", source))?;
-    sibling.set_file_name(format!("tmuxmux-relay{}", std::env::consts::EXE_SUFFIX));
+    sibling.set_file_name(format!("agentmux-relay{}", std::env::consts::EXE_SUFFIX));
     Ok(sibling)
 }
 
@@ -368,7 +368,7 @@ mod tests {
         let err = bootstrap_relay(&paths, options, || Ok(())).expect_err("bootstrap should fail");
         assert!(
             err.to_string()
-                .contains("start tmuxmux-relay with matching --bundle and --state-directory"),
+                .contains("start agentmux-relay with matching --bundle and --state-directory"),
             "unexpected error: {err}"
         );
     }

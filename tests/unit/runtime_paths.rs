@@ -1,13 +1,16 @@
-use tempfile::TempDir;
-use tmuxmux::runtime::paths::{
+use agentmux::runtime::paths::{
     BundleRuntimePaths, RuntimeRootOverrides, RuntimeRoots, debug_repository_configuration_root,
     debug_repository_state_root, ensure_bundle_runtime_directory,
 };
+use tempfile::TempDir;
 
 #[test]
 fn resolves_debug_repository_state_root() {
     let root = debug_repository_state_root(std::path::Path::new("/repo"));
-    assert_eq!(root, std::path::Path::new("/repo/.auxiliary/state/tmuxmux"));
+    assert_eq!(
+        root,
+        std::path::Path::new("/repo/.auxiliary/state/agentmux")
+    );
 }
 
 #[test]
@@ -15,7 +18,7 @@ fn resolves_debug_repository_configuration_root() {
     let root = debug_repository_configuration_root(std::path::Path::new("/repo"));
     assert_eq!(
         root,
-        std::path::Path::new("/repo/.auxiliary/configuration/tmuxmux")
+        std::path::Path::new("/repo/.auxiliary/configuration/agentmux")
     );
 }
 

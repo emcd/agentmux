@@ -1,4 +1,4 @@
-use tmuxmux::envelope::{
+use agentmux::envelope::{
     AddressIdentity, ENVELOPE_SCHEMA_VERSION, EnvelopeRenderInput, ManifestPreamble,
     PromptBatchSettings, TokenizerProfile, batch_envelopes, parse_address, parse_envelope,
     parse_tokenizer_profile, render_address, render_envelope,
@@ -28,7 +28,7 @@ fn sample_render_input() -> EnvelopeRenderInput {
             display_name: Some("Charlie".to_string()),
         }],
         subject: None,
-        body: "hello from tmuxmux".to_string(),
+        body: "hello from agentmux".to_string(),
     }
 }
 
@@ -164,7 +164,7 @@ Cc: Charlie <session:charlie>
 Content-Type: multipart/mixed; boundary=\"b\"
 
 --b
-Content-Type: application/vnd.tmuxmux.path-pointer+json
+Content-Type: application/vnd.agentmux.path-pointer+json
 
 {\"label\":\"artifact\",\"local_path\":\"./.auxiliary/temporary/file.txt\"}
 --b
