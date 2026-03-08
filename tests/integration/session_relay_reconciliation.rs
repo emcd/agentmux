@@ -43,6 +43,26 @@ fn tmux_command(socket: &Path, arguments: &[&str]) -> std::process::Output {
         .expect("run tmux command")
 }
 
+struct TmuxServerGuard {
+    socket: PathBuf,
+}
+
+impl TmuxServerGuard {
+    fn new(socket: PathBuf) -> Self {
+        Self { socket }
+    }
+}
+
+impl Drop for TmuxServerGuard {
+    fn drop(&mut self) {
+        let _ = Command::new("tmux")
+            .arg("-S")
+            .arg(&self.socket)
+            .args(["kill-server"])
+            .output();
+    }
+}
+
 fn wait_for_file(path: &Path, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     loop {
@@ -165,6 +185,7 @@ fn reconciliation_creates_missing_members_and_sets_owned_metadata() {
 
     let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
+    let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
     let report = reconcile_bundle(&config_root, bundle_name, &paths.tmux_socket)
         .expect("bundle reconciliation");
@@ -187,8 +208,6 @@ fn reconciliation_creates_missing_members_and_sets_owned_metadata() {
         &bravo_directory.join("bravo.started"),
         Duration::from_millis(800),
     );
-
-    let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
 }
 
 #[test]
@@ -217,6 +236,7 @@ fn reconciliation_prunes_stale_owned_sessions_without_killing_non_owned_sessions
     );
     let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
+    let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
     let alpha_new = tmux_command(
         &paths.tmux_socket,
@@ -261,6 +281,4 @@ fn reconciliation_prunes_stale_owned_sessions_without_killing_non_owned_sessions
     );
     let sessions = String::from_utf8_lossy(&list.stdout);
     assert!(sessions.lines().any(|line| line.trim() == "alpha"));
-
-    let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
 }

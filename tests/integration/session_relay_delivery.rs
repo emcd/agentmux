@@ -37,6 +37,26 @@ fn tmux_command(socket: &Path, arguments: &[&str]) -> std::process::Output {
         .expect("run tmux command")
 }
 
+struct TmuxServerGuard {
+    socket: PathBuf,
+}
+
+impl TmuxServerGuard {
+    fn new(socket: PathBuf) -> Self {
+        Self { socket }
+    }
+}
+
+impl Drop for TmuxServerGuard {
+    fn drop(&mut self) {
+        let _ = StdCommand::new("tmux")
+            .arg("-S")
+            .arg(&self.socket)
+            .args(["kill-server"])
+            .output();
+    }
+}
+
 fn wait_for_pane_contains(socket: &Path, target: &str, needle: &str, timeout: Duration) {
     let started = Instant::now();
     loop {
@@ -198,6 +218,7 @@ fn relay_chat_broadcast_delivers_to_all_other_configured_sessions() {
     );
     let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
+    let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
     spawn_session(&paths.tmux_socket, "alpha", "exec sleep 45");
     spawn_session(&paths.tmux_socket, "bravo", "exec sleep 45");
@@ -254,6 +275,7 @@ fn relay_chat_async_processes_repeated_target_messages_in_fifo_order() {
         write_bundle_configuration(temporary.path(), bundle_name, &["alpha", "bravo"]);
     let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
+    let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
     spawn_session(&paths.tmux_socket, "alpha", "exec sleep 45");
     spawn_session(&paths.tmux_socket, "bravo", "exec sleep 45");
@@ -358,6 +380,7 @@ fn relay_chat_async_without_timeout_waits_for_late_quiescence() {
         write_bundle_configuration(temporary.path(), bundle_name, &["alpha", "bravo"]);
     let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
+    let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
     spawn_session(&paths.tmux_socket, "alpha", "exec sleep 45");
     spawn_session(
@@ -423,6 +446,7 @@ fn relay_chat_async_timeout_override_stops_wait_before_late_quiescence() {
         write_bundle_configuration(temporary.path(), bundle_name, &["alpha", "bravo"]);
     let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
+    let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
     spawn_session(&paths.tmux_socket, "alpha", "exec sleep 45");
     spawn_session(
@@ -491,6 +515,7 @@ fn relay_chat_reports_timeout_for_noisy_target_with_partial_status() {
     );
     let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
+    let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
     spawn_session(&paths.tmux_socket, "alpha", "exec sleep 45");
     spawn_session(&paths.tmux_socket, "bravo", "exec sleep 45");
@@ -596,6 +621,7 @@ fn relay_chat_times_out_when_activity_changes_despite_stable_visible_text() {
     );
     let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
+    let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
     spawn_session(&paths.tmux_socket, "alpha", "exec sleep 45");
     spawn_session(
@@ -710,6 +736,7 @@ fn relay_chat_delivers_when_prompt_readiness_template_matches() {
     );
     let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
+    let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
     spawn_session(&paths.tmux_socket, "alpha", "exec sleep 45");
     spawn_session(
@@ -798,6 +825,7 @@ fn relay_chat_times_out_when_prompt_readiness_never_matches() {
     );
     let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
+    let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
     spawn_session(&paths.tmux_socket, "alpha", "exec sleep 45");
     spawn_session(
@@ -894,6 +922,7 @@ fn relay_chat_delivers_when_prompt_idle_column_matches() {
     );
     let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
+    let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
     spawn_session(&paths.tmux_socket, "alpha", "exec sleep 45");
     spawn_session(
@@ -987,6 +1016,7 @@ fn relay_chat_delivers_when_prompt_regex_requires_blank_separator_line() {
     );
     let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
+    let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
     spawn_session(&paths.tmux_socket, "alpha", "exec sleep 45");
     spawn_session(
@@ -1080,6 +1110,7 @@ fn relay_chat_times_out_when_prompt_idle_column_does_not_match() {
     );
     let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
+    let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
     spawn_session(&paths.tmux_socket, "alpha", "exec sleep 45");
     spawn_session(
