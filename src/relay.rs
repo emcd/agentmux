@@ -1,12 +1,13 @@
 //! Relay IPC contract and message-routing implementation.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     ffi::OsStr,
     io::{self, BufRead, BufReader, Write},
     os::unix::net::UnixStream,
-    path::Path,
+    path::{Path, PathBuf},
     process::Command,
+    sync::{Mutex, OnceLock, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -30,7 +31,7 @@ use crate::{
 
 const SCHEMA_VERSION: &str = ENVELOPE_SCHEMA_VERSION;
 const DEFAULT_QUIET_WINDOW_MS: u64 = 750;
-const DEFAULT_DELIVERY_TIMEOUT_MS: u64 = 30_000;
+const DEFAULT_QUIESCENCE_TIMEOUT_MS: u64 = 30_000;
 const OWNERSHIP_OPTION_NAME: &str = "@agentmux_owned";
 const OWNERSHIP_OPTION_VALUE: &str = "1";
 const CREATE_MAX_ATTEMPTS: usize = 4;
@@ -72,6 +73,7 @@ pub struct ReconciliationReport {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ChatStatus {
+    Accepted,
     Success,
     Partial,
     Failure,
@@ -81,9 +83,19 @@ pub enum ChatStatus {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ChatOutcome {
+    Queued,
     Delivered,
     Timeout,
     Failed,
+}
+
+/// Chat delivery behavior requested by caller.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatDeliveryMode {
+    Async,
+    #[default]
+    Sync,
 }
 
 /// Structured relay error object.
@@ -109,9 +121,11 @@ pub enum RelayRequest {
         targets: Vec<String>,
         broadcast: bool,
         #[serde(default)]
+        delivery_mode: ChatDeliveryMode,
+        #[serde(default)]
         quiet_window_ms: Option<u64>,
         #[serde(default)]
-        delivery_timeout_ms: Option<u64>,
+        quiescence_timeout_ms: Option<u64>,
     },
 }
 
@@ -131,6 +145,7 @@ pub enum RelayResponse {
         sender_session: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         sender_display_name: Option<String>,
+        delivery_mode: ChatDeliveryMode,
         status: ChatStatus,
         results: Vec<ChatResult>,
     },
@@ -146,9 +161,37 @@ struct ChatRequestContext {
     message: String,
     targets: Vec<String>,
     broadcast: bool,
+    delivery_mode: ChatDeliveryMode,
     quiet_window_ms: Option<u64>,
-    delivery_timeout_ms: Option<u64>,
+    quiescence_timeout_ms: Option<u64>,
 }
+
+#[derive(Clone, Debug)]
+struct AsyncDeliveryTask {
+    bundle: BundleConfiguration,
+    sender: crate::configuration::BundleMember,
+    all_target_sessions: Vec<String>,
+    target_session: String,
+    message: String,
+    message_id: String,
+    quiescence: QuiescenceOptions,
+    batch_settings: PromptBatchSettings,
+    tmux_socket: PathBuf,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct AsyncWorkerKey {
+    tmux_socket: PathBuf,
+    bundle_name: String,
+    target_session: String,
+}
+
+#[derive(Default)]
+struct AsyncDeliveryRegistry {
+    workers: Mutex<HashMap<AsyncWorkerKey, mpsc::Sender<AsyncDeliveryTask>>>,
+}
+
+static ASYNC_DELIVERY_REGISTRY: OnceLock<AsyncDeliveryRegistry> = OnceLock::new();
 
 /// Handles one relay socket request/response exchange on a connected stream.
 pub fn serve_connection(
@@ -199,8 +242,9 @@ pub fn handle_request(
             message,
             targets,
             broadcast,
+            delivery_mode,
             quiet_window_ms,
-            delivery_timeout_ms,
+            quiescence_timeout_ms,
         } => handle_chat(
             &bundle,
             ChatRequestContext {
@@ -209,8 +253,9 @@ pub fn handle_request(
                 message,
                 targets,
                 broadcast,
+                delivery_mode,
                 quiet_window_ms,
-                delivery_timeout_ms,
+                quiescence_timeout_ms,
             },
             tmux_socket,
         ),
@@ -277,8 +322,9 @@ fn handle_chat(
         message,
         targets,
         broadcast,
+        delivery_mode,
         quiet_window_ms,
-        delivery_timeout_ms,
+        quiescence_timeout_ms,
     } = request;
 
     if message.trim().is_empty() {
@@ -302,11 +348,19 @@ fn handle_chat(
             None,
         ));
     }
+    if matches!(quiescence_timeout_ms, Some(0)) {
+        return Err(relay_error(
+            "validation_invalid_quiescence_timeout",
+            "quiescence timeout override must be greater than zero milliseconds",
+            None,
+        ));
+    }
 
     let sender = bundle
         .members
         .iter()
         .find(|member| member.id == sender_session)
+        .cloned()
         .ok_or_else(|| {
             relay_error(
                 "validation_unknown_sender",
@@ -321,6 +375,7 @@ fn handle_chat(
             "bundle_name": bundle.bundle_name,
             "sender_session": sender.id,
             "broadcast": broadcast,
+            "delivery_mode": delivery_mode,
             "target_count": targets.len(),
             "message_length": message.len(),
             "request_id": request_id.clone(),
@@ -338,142 +393,66 @@ fn handle_chat(
         resolve_explicit_targets(bundle, &targets)?
     };
 
-    let mut results = Vec::with_capacity(resolved_targets.len());
     let all_target_sessions = resolved_targets.clone();
     let batch_settings = prompt_batch_settings();
-    let quiescence = QuiescenceOptions::new(quiet_window_ms, delivery_timeout_ms);
-    for target_session in resolved_targets {
-        let message_id = Uuid::new_v4().to_string();
-        let created_at = time::OffsetDateTime::now_utc()
-            .format(&Rfc3339)
-            .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
-        let target_member = bundle
-            .members
-            .iter()
-            .find(|member| member.id == target_session)
-            .ok_or_else(|| {
-                relay_error(
-                    "internal_unexpected_failure",
-                    "resolved target member is missing from bundle configuration",
-                    Some(json!({"target_session": target_session})),
-                )
-            })?;
-        let cc_members = all_target_sessions
-            .iter()
-            .filter(|candidate| **candidate != target_session)
-            .filter_map(|session_name| {
-                bundle
-                    .members
-                    .iter()
-                    .find(|member| member.id == *session_name)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        match wait_for_quiescent_pane(
-            tmux_socket,
-            &target_session,
-            quiescence,
-            target_member.prompt_readiness.as_ref(),
-        ) {
-            Ok(pane_target) => {
-                let envelope = render_envelope(&EnvelopeRenderInput {
-                    manifest: ManifestPreamble {
-                        schema_version: SCHEMA_VERSION.to_string(),
-                        message_id: message_id.clone(),
-                        bundle_name: bundle.bundle_name.clone(),
-                        sender_session: sender.id.clone(),
-                        target_sessions: vec![target_session.clone()],
-                        cc_sessions: if cc_members.is_empty() {
-                            None
-                        } else {
-                            Some(
-                                cc_members
-                                    .iter()
-                                    .map(|member| member.id.clone())
-                                    .collect::<Vec<_>>(),
-                            )
-                        },
-                        created_at,
-                    },
-                    from: AddressIdentity {
-                        session_name: sender.id.clone(),
-                        display_name: sender.name.clone(),
-                    },
-                    to: vec![AddressIdentity {
-                        session_name: target_member.id.clone(),
-                        display_name: target_member.name.clone(),
-                    }],
-                    cc: cc_members
-                        .iter()
-                        .map(|member| AddressIdentity {
-                            session_name: member.id.clone(),
-                            display_name: member.name.clone(),
-                        })
-                        .collect::<Vec<_>>(),
-                    subject: None,
-                    body: message.clone(),
-                });
-                let prompt_batches = batch_envelopes(&[envelope], batch_settings);
-                let mut failed_reason = None::<String>;
-                for prompt in prompt_batches {
-                    if let Err(reason) = inject_prompt(tmux_socket, &pane_target, &prompt) {
-                        failed_reason = Some(reason);
-                        break;
-                    }
-                }
-                match failed_reason {
-                    None => {
-                        results.push(ChatResult {
-                            target_session,
-                            message_id,
-                            outcome: ChatOutcome::Delivered,
-                            reason: None,
-                        });
-                    }
-                    Some(reason) => {
-                        results.push(ChatResult {
-                            target_session,
-                            message_id,
-                            outcome: ChatOutcome::Failed,
-                            reason: Some(reason),
-                        });
-                    }
-                }
-            }
-            Err(DeliveryWaitError::Timeout {
-                timeout,
-                readiness_mismatch,
-                mismatch_reason,
-            }) => {
-                let reason = if readiness_mismatch {
-                    let detail = mismatch_reason
-                        .map(|value| format!(": {value}"))
-                        .unwrap_or_default();
-                    format!(
-                        "prompt readiness did not match before timeout after {}ms{}",
-                        timeout.as_millis(),
-                        detail
-                    )
-                } else {
-                    format!("quiescence wait timed out after {}ms", timeout.as_millis())
+    let (status, results) = match delivery_mode {
+        ChatDeliveryMode::Sync => {
+            let quiescence = QuiescenceOptions::for_sync(quiet_window_ms, quiescence_timeout_ms);
+            let mut results = Vec::with_capacity(resolved_targets.len());
+            for target_session in resolved_targets {
+                let message_id = Uuid::new_v4().to_string();
+                let task = AsyncDeliveryTask {
+                    bundle: bundle.clone(),
+                    sender: sender.clone(),
+                    all_target_sessions: all_target_sessions.clone(),
+                    target_session,
+                    message: message.clone(),
+                    message_id,
+                    quiescence,
+                    batch_settings,
+                    tmux_socket: tmux_socket.to_path_buf(),
                 };
-                results.push(ChatResult {
-                    target_session,
-                    message_id,
-                    outcome: ChatOutcome::Timeout,
-                    reason: Some(reason),
-                });
+                let result = deliver_one_target(&task)?;
+                results.push(result);
             }
-            Err(DeliveryWaitError::Failed { reason }) => {
-                results.push(ChatResult {
-                    target_session,
-                    message_id,
-                    outcome: ChatOutcome::Failed,
-                    reason: Some(reason),
-                });
-            }
+            (aggregate_chat_status(&results), results)
         }
-    }
+        ChatDeliveryMode::Async => {
+            let quiescence = QuiescenceOptions::for_async(quiet_window_ms, quiescence_timeout_ms);
+            let mut results = Vec::with_capacity(resolved_targets.len());
+            for target_session in resolved_targets {
+                let message_id = Uuid::new_v4().to_string();
+                let task = AsyncDeliveryTask {
+                    bundle: bundle.clone(),
+                    sender: sender.clone(),
+                    all_target_sessions: all_target_sessions.clone(),
+                    target_session: target_session.clone(),
+                    message: message.clone(),
+                    message_id: message_id.clone(),
+                    quiescence,
+                    batch_settings,
+                    tmux_socket: tmux_socket.to_path_buf(),
+                };
+                enqueue_async_delivery(task)?;
+                emit_inscription(
+                    "relay.chat.async.queued",
+                    &json!({
+                        "bundle_name": bundle.bundle_name,
+                        "sender_session": sender.id,
+                        "target_session": target_session,
+                        "message_id": message_id,
+                    }),
+                );
+                results.push(ChatResult {
+                    target_session,
+                    message_id,
+                    outcome: ChatOutcome::Queued,
+                    reason: None,
+                });
+            }
+            (ChatStatus::Accepted, results)
+        }
+    };
 
     let response = RelayResponse::Chat {
         schema_version: SCHEMA_VERSION.to_string(),
@@ -481,7 +460,8 @@ fn handle_chat(
         request_id,
         sender_session: sender.id.clone(),
         sender_display_name: sender.name.clone(),
-        status: aggregate_chat_status(&results),
+        delivery_mode,
+        status,
         results,
     };
     if let RelayResponse::Chat {
@@ -499,15 +479,227 @@ fn handle_chat(
         emit_inscription(
             "relay.chat.response",
             &json!({
-                "bundle_name": bundle_name,
-                "sender_session": sender_session,
-                "status": status,
-                "result_count": results.len(),
-                "delivered_count": delivered_count,
+            "bundle_name": bundle_name,
+            "sender_session": sender_session,
+            "delivery_mode": delivery_mode,
+            "status": status,
+            "result_count": results.len(),
+            "delivered_count": delivered_count,
             }),
         );
     }
     Ok(response)
+}
+
+fn deliver_one_target(task: &AsyncDeliveryTask) -> Result<ChatResult, RelayError> {
+    let bundle = &task.bundle;
+    let sender = &task.sender;
+    let all_target_sessions = &task.all_target_sessions;
+    let target_session = task.target_session.clone();
+    let message = task.message.as_str();
+    let message_id = task.message_id.clone();
+    let tmux_socket = task.tmux_socket.as_path();
+    let quiescence = task.quiescence;
+    let batch_settings = task.batch_settings;
+    let created_at = time::OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
+    let target_member = bundle
+        .members
+        .iter()
+        .find(|member| member.id == target_session)
+        .ok_or_else(|| {
+            relay_error(
+                "internal_unexpected_failure",
+                "resolved target member is missing from bundle configuration",
+                Some(json!({"target_session": target_session})),
+            )
+        })?;
+    let cc_members = all_target_sessions
+        .iter()
+        .filter(|candidate| **candidate != target_session)
+        .filter_map(|session_name| {
+            bundle
+                .members
+                .iter()
+                .find(|member| member.id == *session_name)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    match wait_for_quiescent_pane(
+        tmux_socket,
+        &target_session,
+        quiescence,
+        target_member.prompt_readiness.as_ref(),
+    ) {
+        Ok(pane_target) => {
+            let envelope = render_envelope(&EnvelopeRenderInput {
+                manifest: ManifestPreamble {
+                    schema_version: SCHEMA_VERSION.to_string(),
+                    message_id: message_id.clone(),
+                    bundle_name: bundle.bundle_name.clone(),
+                    sender_session: sender.id.clone(),
+                    target_sessions: vec![target_session.clone()],
+                    cc_sessions: if cc_members.is_empty() {
+                        None
+                    } else {
+                        Some(
+                            cc_members
+                                .iter()
+                                .map(|member| member.id.clone())
+                                .collect::<Vec<_>>(),
+                        )
+                    },
+                    created_at,
+                },
+                from: AddressIdentity {
+                    session_name: sender.id.clone(),
+                    display_name: sender.name.clone(),
+                },
+                to: vec![AddressIdentity {
+                    session_name: target_member.id.clone(),
+                    display_name: target_member.name.clone(),
+                }],
+                cc: cc_members
+                    .iter()
+                    .map(|member| AddressIdentity {
+                        session_name: member.id.clone(),
+                        display_name: member.name.clone(),
+                    })
+                    .collect::<Vec<_>>(),
+                subject: None,
+                body: message.to_string(),
+            });
+            let prompt_batches = batch_envelopes(&[envelope], batch_settings);
+            let mut failed_reason = None::<String>;
+            for prompt in prompt_batches {
+                if let Err(reason) = inject_prompt(tmux_socket, &pane_target, &prompt) {
+                    failed_reason = Some(reason);
+                    break;
+                }
+            }
+            match failed_reason {
+                None => Ok(ChatResult {
+                    target_session,
+                    message_id,
+                    outcome: ChatOutcome::Delivered,
+                    reason: None,
+                }),
+                Some(reason) => Ok(ChatResult {
+                    target_session,
+                    message_id,
+                    outcome: ChatOutcome::Failed,
+                    reason: Some(reason),
+                }),
+            }
+        }
+        Err(DeliveryWaitError::Timeout {
+            timeout,
+            readiness_mismatch,
+            mismatch_reason,
+        }) => {
+            let reason = if readiness_mismatch {
+                let detail = mismatch_reason
+                    .map(|value| format!(": {value}"))
+                    .unwrap_or_default();
+                format!(
+                    "prompt readiness did not match before timeout after {}ms{}",
+                    timeout.as_millis(),
+                    detail
+                )
+            } else {
+                format!("quiescence wait timed out after {}ms", timeout.as_millis())
+            };
+            Ok(ChatResult {
+                target_session,
+                message_id,
+                outcome: ChatOutcome::Timeout,
+                reason: Some(reason),
+            })
+        }
+        Err(DeliveryWaitError::Failed { reason }) => Ok(ChatResult {
+            target_session,
+            message_id,
+            outcome: ChatOutcome::Failed,
+            reason: Some(reason),
+        }),
+    }
+}
+
+fn async_delivery_registry() -> &'static AsyncDeliveryRegistry {
+    ASYNC_DELIVERY_REGISTRY.get_or_init(AsyncDeliveryRegistry::default)
+}
+
+fn enqueue_async_delivery(task: AsyncDeliveryTask) -> Result<(), RelayError> {
+    let key = AsyncWorkerKey {
+        tmux_socket: task.tmux_socket.clone(),
+        bundle_name: task.bundle.bundle_name.clone(),
+        target_session: task.target_session.clone(),
+    };
+    let registry = async_delivery_registry();
+    let mut workers = registry.workers.lock().map_err(|_| {
+        relay_error(
+            "internal_unexpected_failure",
+            "failed to lock async delivery registry",
+            None,
+        )
+    })?;
+
+    if let Some(sender) = workers.get(&key) {
+        if sender.send(task.clone()).is_ok() {
+            return Ok(());
+        }
+        workers.remove(&key);
+    }
+
+    let (sender, receiver) = mpsc::channel::<AsyncDeliveryTask>();
+    sender.send(task).map_err(|source| {
+        relay_error(
+            "internal_unexpected_failure",
+            "failed to enqueue async delivery task",
+            Some(json!({"cause": source.to_string()})),
+        )
+    })?;
+    spawn_async_delivery_worker(key.clone(), receiver);
+    workers.insert(key, sender);
+    Ok(())
+}
+
+fn spawn_async_delivery_worker(key: AsyncWorkerKey, receiver: mpsc::Receiver<AsyncDeliveryTask>) {
+    thread::spawn(move || {
+        for task in receiver {
+            let outcome = deliver_one_target(&task);
+            match outcome {
+                Ok(result) => emit_inscription(
+                    "relay.chat.async.completed",
+                    &json!({
+                        "bundle_name": task.bundle.bundle_name,
+                        "sender_session": task.sender.id,
+                        "target_session": result.target_session,
+                        "message_id": result.message_id,
+                        "outcome": result.outcome,
+                        "reason": result.reason,
+                    }),
+                ),
+                Err(error) => emit_inscription(
+                    "relay.chat.async.completed",
+                    &json!({
+                        "bundle_name": task.bundle.bundle_name,
+                        "sender_session": task.sender.id,
+                        "target_session": task.target_session,
+                        "message_id": task.message_id,
+                        "outcome": ChatOutcome::Failed,
+                        "reason": error.message,
+                        "error_code": error.code,
+                    }),
+                ),
+            }
+        }
+        if let Ok(mut workers) = async_delivery_registry().workers.lock() {
+            workers.remove(&key);
+        }
+    });
 }
 
 fn resolve_explicit_targets(
@@ -889,31 +1081,44 @@ fn prompt_batch_settings() -> PromptBatchSettings {
 #[derive(Clone, Copy, Debug)]
 struct QuiescenceOptions {
     quiet_window: Duration,
-    delivery_timeout: Duration,
+    quiescence_timeout: Option<Duration>,
 }
 
 impl Default for QuiescenceOptions {
     fn default() -> Self {
         Self {
             quiet_window: Duration::from_millis(DEFAULT_QUIET_WINDOW_MS),
-            delivery_timeout: Duration::from_millis(DEFAULT_DELIVERY_TIMEOUT_MS),
+            quiescence_timeout: Some(Duration::from_millis(DEFAULT_QUIESCENCE_TIMEOUT_MS)),
         }
     }
 }
 
 impl QuiescenceOptions {
-    fn new(quiet_window_ms: Option<u64>, delivery_timeout_ms: Option<u64>) -> Self {
+    fn for_sync(quiet_window_ms: Option<u64>, quiescence_timeout_ms: Option<u64>) -> Self {
         Self {
             quiet_window: Duration::from_millis(
                 quiet_window_ms
                     .filter(|value| *value > 0)
                     .unwrap_or(DEFAULT_QUIET_WINDOW_MS),
             ),
-            delivery_timeout: Duration::from_millis(
-                delivery_timeout_ms
+            quiescence_timeout: Some(Duration::from_millis(
+                quiescence_timeout_ms
                     .filter(|value| *value > 0)
-                    .unwrap_or(DEFAULT_DELIVERY_TIMEOUT_MS),
+                    .unwrap_or(DEFAULT_QUIESCENCE_TIMEOUT_MS),
+            )),
+        }
+    }
+
+    fn for_async(quiet_window_ms: Option<u64>, quiescence_timeout_ms: Option<u64>) -> Self {
+        Self {
+            quiet_window: Duration::from_millis(
+                quiet_window_ms
+                    .filter(|value| *value > 0)
+                    .unwrap_or(DEFAULT_QUIET_WINDOW_MS),
             ),
+            quiescence_timeout: quiescence_timeout_ms
+                .filter(|value| *value > 0)
+                .map(Duration::from_millis),
         }
     }
 }
@@ -955,7 +1160,9 @@ fn wait_for_quiescent_pane(
 ) -> Result<String, DeliveryWaitError> {
     let readiness = build_prompt_readiness_matcher(prompt_readiness)
         .map_err(|reason| DeliveryWaitError::Failed { reason })?;
-    let deadline = Instant::now() + options.delivery_timeout;
+    let deadline = options
+        .quiescence_timeout
+        .map(|timeout| Instant::now() + timeout);
     let mut readiness_mismatch = false;
     let mut mismatch_reason = None::<String>;
     loop {
@@ -1016,18 +1223,19 @@ fn wait_for_quiescent_pane(
             );
         }
 
-        if Instant::now() >= deadline {
+        if deadline.is_some_and(|value| Instant::now() >= value) {
+            let timeout = options.quiescence_timeout.unwrap_or_default();
             emit_delivery_diagnostic(
-                "delivery_timeout",
+                "quiescence_timeout",
                 &json!({
                     "target_session": target_session,
-                    "delivery_timeout_ms": options.delivery_timeout.as_millis(),
+                    "quiescence_timeout_ms": timeout.as_millis(),
                     "readiness_mismatch": readiness_mismatch,
                     "mismatch_reason": mismatch_reason,
                 }),
             );
             return Err(DeliveryWaitError::Timeout {
-                timeout: options.delivery_timeout,
+                timeout,
                 readiness_mismatch,
                 mismatch_reason,
             });

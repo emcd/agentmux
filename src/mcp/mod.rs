@@ -12,10 +12,10 @@ use rmcp::{
     transport::stdio,
 };
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::relay::{RelayError, RelayRequest, RelayResponse, request_relay};
+use crate::relay::{ChatDeliveryMode, RelayError, RelayRequest, RelayResponse, request_relay};
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::paths::BundleRuntimePaths;
 
@@ -53,6 +53,29 @@ struct ChatParams {
     /// Broadcast to all known sessions for the bundle.
     #[serde(default)]
     broadcast: bool,
+    /// Delivery behavior: async queues and returns immediately, sync blocks for completion.
+    #[serde(default)]
+    delivery_mode: ChatDeliveryModeParam,
+    /// Optional quiescence timeout override in milliseconds.
+    #[serde(default)]
+    quiescence_timeout_ms: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum ChatDeliveryModeParam {
+    #[default]
+    Async,
+    Sync,
+}
+
+impl From<ChatDeliveryModeParam> for ChatDeliveryMode {
+    fn from(value: ChatDeliveryModeParam) -> Self {
+        match value {
+            ChatDeliveryModeParam::Async => ChatDeliveryMode::Async,
+            ChatDeliveryModeParam::Sync => ChatDeliveryMode::Sync,
+        }
+    }
 }
 
 #[tool_router]
@@ -149,6 +172,8 @@ impl McpServer {
                 "request_id": params.request_id.clone(),
                 "targets": params.targets.clone(),
                 "broadcast": params.broadcast,
+                "delivery_mode": params.delivery_mode,
+                "quiescence_timeout_ms": params.quiescence_timeout_ms,
                 "message_length": params.message.len(),
             }),
         );
@@ -172,8 +197,9 @@ impl McpServer {
             message: params.message.clone(),
             targets: params.targets.clone(),
             broadcast: params.broadcast,
+            delivery_mode: params.delivery_mode.into(),
             quiet_window_ms: None,
-            delivery_timeout_ms: None,
+            quiescence_timeout_ms: params.quiescence_timeout_ms,
         };
         match request_relay(
             &self.state.configuration.bundle_paths.relay_socket,
@@ -185,6 +211,7 @@ impl McpServer {
                 request_id,
                 sender_session,
                 sender_display_name,
+                delivery_mode,
                 status,
                 results,
             }) => {
@@ -194,6 +221,7 @@ impl McpServer {
                     "request_id": request_id,
                     "sender_session": sender_session,
                     "sender_display_name": sender_display_name,
+                    "delivery_mode": delivery_mode,
                     "status": status,
                     "results": results,
                 });
@@ -284,6 +312,13 @@ fn validate_chat_request(params: &ChatParams) -> Result<(), McpError> {
         return Err(validation_tool_error(
             "validation_empty_targets",
             "provide at least one target or set broadcast=true",
+            None,
+        ));
+    }
+    if matches!(params.quiescence_timeout_ms, Some(0)) {
+        return Err(validation_tool_error(
+            "validation_invalid_quiescence_timeout",
+            "quiescence_timeout_ms must be greater than zero milliseconds",
             None,
         ));
     }
