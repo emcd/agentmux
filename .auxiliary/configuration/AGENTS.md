@@ -179,6 +179,10 @@ Use a coordinator-plus-specialists model:
   - archive/spec-merge correctness.
 - For cross-cutting proposals, specialists should tag relevant specialist
   owners for review before coordinator final approval.
+- Do not request proposal review for files that reviewers cannot access.
+  Use one of these visibility paths before asking for review:
+  - share first draft as an `nb` note and reference its note id, or
+  - merge proposal files into `master` so all reviewers can read them.
 
 ## Agentmux Message Handling Guidance
 
