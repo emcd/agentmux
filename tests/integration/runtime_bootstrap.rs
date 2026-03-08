@@ -143,6 +143,14 @@ struct McpHarness {
 
 impl McpHarness {
     async fn spawn(current_directory: &Path, arguments: &[&str]) -> Self {
+        Self::spawn_with_environment(current_directory, arguments, &[]).await
+    }
+
+    async fn spawn_with_environment(
+        current_directory: &Path,
+        arguments: &[&str],
+        environment: &[(String, String)],
+    ) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_agentmux-mcp"));
         command
             .current_dir(current_directory)
@@ -150,6 +158,9 @@ impl McpHarness {
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+        for (key, value) in environment {
+            command.env(key, value);
+        }
 
         let mut child = command.spawn().expect("spawn agentmux-mcp");
         let stdin = child.stdin.take().expect("take mcp stdin");
@@ -352,6 +363,28 @@ fn decode_tool_payload(response: &Value) -> Value {
     serde_json::from_str(text).expect("decode content.text as json")
 }
 
+fn hook_git_environment() -> Vec<(String, String)> {
+    let repository_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let output = std::process::Command::new("git")
+        .current_dir(repository_root)
+        .args(["rev-parse", "--path-format=absolute", "--git-dir"])
+        .output()
+        .expect("resolve repository git directory");
+    assert!(
+        output.status.success(),
+        "resolve repository git directory failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let git_directory = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    vec![
+        ("GIT_DIR".to_string(), git_directory),
+        (
+            "GIT_WORK_TREE".to_string(),
+            repository_root.display().to_string(),
+        ),
+    ]
+}
+
 #[test]
 fn concurrent_bootstrap_spawns_single_relay() {
     const CLIENTS: usize = 4;
@@ -447,6 +480,7 @@ async fn mcp_auto_discovers_association_from_non_git_cwd() {
                     "bundle_name": "relay",
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
                     "sender_session": request.get("sender_session").cloned().unwrap_or(Value::Null),
+                    "delivery_mode": request.get("delivery_mode").cloned().unwrap_or(Value::Null),
                     "status": "success",
                     "results": [{
                         "target_session": "bravo",
@@ -465,7 +499,8 @@ async fn mcp_auto_discovers_association_from_non_git_cwd() {
         ),
     );
 
-    let mut harness = McpHarness::spawn(
+    let git_environment = hook_git_environment();
+    let mut harness = McpHarness::spawn_with_environment(
         &workspace,
         &[
             "--config-directory",
@@ -473,6 +508,7 @@ async fn mcp_auto_discovers_association_from_non_git_cwd() {
             "--state-directory",
             state_root.to_str().expect("utf8 state path"),
         ],
+        &git_environment,
     )
     .await;
 
@@ -520,6 +556,7 @@ async fn mcp_falls_back_to_directory_match_when_auto_sender_is_not_member() {
                     "bundle_name": "master",
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
                     "sender_session": request.get("sender_session").cloned().unwrap_or(Value::Null),
+                    "delivery_mode": request.get("delivery_mode").cloned().unwrap_or(Value::Null),
                     "status": "success",
                     "results": [{
                         "target_session": "bravo",
@@ -538,7 +575,8 @@ async fn mcp_falls_back_to_directory_match_when_auto_sender_is_not_member() {
         ),
     );
 
-    let mut harness = McpHarness::spawn(
+    let git_environment = hook_git_environment();
+    let mut harness = McpHarness::spawn_with_environment(
         &workspace,
         &[
             "--config-directory",
@@ -546,6 +584,7 @@ async fn mcp_falls_back_to_directory_match_when_auto_sender_is_not_member() {
             "--state-directory",
             state_root.to_str().expect("utf8 state path"),
         ],
+        &git_environment,
     )
     .await;
 
