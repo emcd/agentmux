@@ -2,10 +2,10 @@
 
 `agentmux` is a tmux-backed coordination layer for agentic coding sessions.
 
-It provides two runtime processes:
+It provides two runtime hosts:
 
-- `agentmux-relay`: manages bundle sessions and routes messages into tmux panes.
-- `agentmux-mcp`: exposes MCP tools (`list`, `chat`) for LLM agents.
+- relay host: manages bundle sessions and routes messages into tmux panes
+- MCP host: exposes MCP tools (`list`, `chat`) for LLM agents
 
 ## Motivation
 
@@ -15,8 +15,55 @@ agent harnesses can exchange messages through a shared transport.
 
 ## Requirements
 
-- Rust stable toolchain
 - `tmux` on `PATH`
+
+## Quick Start
+
+Install `agentmux`:
+
+```bash
+cargo install --path .
+```
+
+Start relay host:
+
+```bash
+agentmux host relay myproject
+```
+
+Start MCP host:
+
+```bash
+agentmux host mcp --bundle myproject --session-name master
+```
+
+Configure MCP client integration (for example, in `.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "agentmux": {
+      "command": "agentmux",
+      "args": [
+        "host",
+        "mcp",
+        "--bundle",
+        "myproject",
+        "--session-name",
+        "master"
+      ]
+    }
+  }
+}
+```
+
+Run relay/MCP with shared state root:
+
+```bash
+AGENTMUX_STATE_DIRECTORY=.auxiliary/state/myproject
+agentmux host relay myproject --state-directory "${AGENTMUX_STATE_DIRECTORY}"
+agentmux host mcp --bundle myproject --session-name master --state-directory "${AGENTMUX_STATE_DIRECTORY}"
+```
 
 ## Configuration
 
@@ -51,7 +98,7 @@ prompt-inspect-lines = 3
 prompt-idle-column = 2
 ```
 
-### Example `bundles/agentmux.toml`
+### Example `bundles/myproject.toml`
 
 ```toml
 format-version = 1
@@ -59,20 +106,20 @@ format-version = 1
 [[sessions]]
 id = "master"
 name = "GPT (Coordinator)"
-directory = "/home/me/src/agentmux"
+directory = "/home/me/src/myproject"
 coder = "codex"
 coder-session-id = "00000000-0000-0000-0000-000000000000"
 
 [[sessions]]
 id = "tui"
 name = "GPT (Frontend Engineer)"
-directory = "/home/me/src/WORKTREES/agentmux/tui"
+directory = "/home/me/src/WORKTREES/myproject/tui"
 coder = "codex"
 ```
 
 ## Runtime Notes
 
-- Start relay before MCP servers for normal operation.
+- Start relay host before MCP host for normal operation.
 - MCP startup does not require relay to already be reachable.
 - If relay is unavailable, MCP tools return structured `relay_unavailable`
   errors.
@@ -105,12 +152,6 @@ Per-session MCP log:
 - `<inscriptions-root>/bundles/<bundle-name>/sessions/<session-name>/mcp.log`
 
 ## Development
-
-Build:
-
-```bash
-cargo build
-```
 
 Validation commands:
 
