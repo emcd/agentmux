@@ -57,6 +57,16 @@ fn wait_for_pane_contains(socket: &Path, target: &str, needle: &str, timeout: Du
     }
 }
 
+fn capture_pane(socket: &Path, target: &str, lines: &str) -> String {
+    let output = tmux_command(socket, &["capture-pane", "-p", "-t", target, "-S", lines]);
+    assert!(
+        output.status.success(),
+        "failed to capture pane for {target}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
 fn write_bundle_configuration(root: &Path, bundle_name: &str, sessions: &[&str]) -> PathBuf {
     let coders = vec![CoderSpec {
         id: "default".to_string(),
@@ -226,6 +236,240 @@ fn relay_chat_broadcast_delivers_to_all_other_configured_sessions() {
     for result in results {
         assert_eq!(result.outcome, ChatOutcome::Delivered);
     }
+
+    let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
+}
+
+#[test]
+fn relay_chat_async_processes_repeated_target_messages_in_fifo_order() {
+    if !tmux_available() {
+        eprintln!("skipping relay delivery test because tmux is unavailable");
+        return;
+    }
+
+    let temporary = TempDir::new().expect("temporary");
+    let bundle_name = "party";
+    let config_root =
+        write_bundle_configuration(temporary.path(), bundle_name, &["alpha", "bravo"]);
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
+
+    spawn_session(&paths.tmux_socket, "alpha", "exec sleep 45");
+    spawn_session(&paths.tmux_socket, "bravo", "exec sleep 45");
+
+    let first_marker = "FIFO-ONE-MARKER";
+    let second_marker = "FIFO-TWO-MARKER";
+
+    let first = handle_request(
+        RelayRequest::Chat {
+            request_id: Some("req-fifo-1".to_string()),
+            sender_session: "alpha".to_string(),
+            message: first_marker.to_string(),
+            targets: vec!["bravo".to_string()],
+            broadcast: false,
+            delivery_mode: ChatDeliveryMode::Async,
+            quiet_window_ms: Some(70),
+            quiescence_timeout_ms: None,
+        },
+        &config_root,
+        bundle_name,
+        &paths.tmux_socket,
+    )
+    .expect("first async send should be accepted");
+    let RelayResponse::Chat {
+        status: first_status,
+        results: first_results,
+        ..
+    } = first
+    else {
+        panic!("expected chat response");
+    };
+    assert_eq!(first_status, ChatStatus::Accepted);
+    assert_eq!(first_results.len(), 1);
+    assert_eq!(first_results[0].outcome, ChatOutcome::Queued);
+
+    let second = handle_request(
+        RelayRequest::Chat {
+            request_id: Some("req-fifo-2".to_string()),
+            sender_session: "alpha".to_string(),
+            message: second_marker.to_string(),
+            targets: vec!["bravo".to_string()],
+            broadcast: false,
+            delivery_mode: ChatDeliveryMode::Async,
+            quiet_window_ms: Some(70),
+            quiescence_timeout_ms: None,
+        },
+        &config_root,
+        bundle_name,
+        &paths.tmux_socket,
+    )
+    .expect("second async send should be accepted");
+    let RelayResponse::Chat {
+        status: second_status,
+        results: second_results,
+        ..
+    } = second
+    else {
+        panic!("expected chat response");
+    };
+    assert_eq!(second_status, ChatStatus::Accepted);
+    assert_eq!(second_results.len(), 1);
+    assert_eq!(second_results[0].outcome, ChatOutcome::Queued);
+
+    wait_for_pane_contains(
+        &paths.tmux_socket,
+        "bravo",
+        first_marker,
+        Duration::from_millis(2_000),
+    );
+    wait_for_pane_contains(
+        &paths.tmux_socket,
+        "bravo",
+        second_marker,
+        Duration::from_millis(2_000),
+    );
+
+    let snapshot = capture_pane(&paths.tmux_socket, "bravo", "-200");
+    let first_index = snapshot
+        .find(first_marker)
+        .expect("first marker should exist in pane");
+    let second_index = snapshot
+        .find(second_marker)
+        .expect("second marker should exist in pane");
+    assert!(
+        first_index < second_index,
+        "expected FIFO marker order, snapshot={snapshot:?}"
+    );
+
+    let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
+}
+
+#[test]
+fn relay_chat_async_without_timeout_waits_for_late_quiescence() {
+    if !tmux_available() {
+        eprintln!("skipping relay delivery test because tmux is unavailable");
+        return;
+    }
+
+    let temporary = TempDir::new().expect("temporary");
+    let bundle_name = "party";
+    let config_root =
+        write_bundle_configuration(temporary.path(), bundle_name, &["alpha", "bravo"]);
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
+
+    spawn_session(&paths.tmux_socket, "alpha", "exec sleep 45");
+    spawn_session(
+        &paths.tmux_socket,
+        "bravo",
+        "i=0; while [ \"$i\" -lt 30 ]; do printf '\\rWORK-%02d' \"$i\"; i=$((i+1)); sleep 0.02; done; printf '\\nIDLE\\n'; exec sleep 45",
+    );
+    wait_for_pane_contains(
+        &paths.tmux_socket,
+        "bravo",
+        "WORK-",
+        Duration::from_millis(1_200),
+    );
+
+    let marker = "ASYNC-LATE-QUIESCENCE-MARKER";
+    let response = handle_request(
+        RelayRequest::Chat {
+            request_id: Some("req-async-default".to_string()),
+            sender_session: "alpha".to_string(),
+            message: marker.to_string(),
+            targets: vec!["bravo".to_string()],
+            broadcast: false,
+            delivery_mode: ChatDeliveryMode::Async,
+            quiet_window_ms: Some(120),
+            quiescence_timeout_ms: None,
+        },
+        &config_root,
+        bundle_name,
+        &paths.tmux_socket,
+    )
+    .expect("async send should be accepted");
+
+    let RelayResponse::Chat {
+        status, results, ..
+    } = response
+    else {
+        panic!("expected chat response");
+    };
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].outcome, ChatOutcome::Queued);
+
+    wait_for_pane_contains(
+        &paths.tmux_socket,
+        "bravo",
+        marker,
+        Duration::from_millis(3_000),
+    );
+
+    let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
+}
+
+#[test]
+fn relay_chat_async_timeout_override_stops_wait_before_late_quiescence() {
+    if !tmux_available() {
+        eprintln!("skipping relay delivery test because tmux is unavailable");
+        return;
+    }
+
+    let temporary = TempDir::new().expect("temporary");
+    let bundle_name = "party";
+    let config_root =
+        write_bundle_configuration(temporary.path(), bundle_name, &["alpha", "bravo"]);
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
+
+    spawn_session(&paths.tmux_socket, "alpha", "exec sleep 45");
+    spawn_session(
+        &paths.tmux_socket,
+        "bravo",
+        "i=0; while [ \"$i\" -lt 80 ]; do printf '\\rWORK-%02d' \"$i\"; i=$((i+1)); sleep 0.02; done; printf '\\nIDLE\\n'; exec sleep 45",
+    );
+    wait_for_pane_contains(
+        &paths.tmux_socket,
+        "bravo",
+        "WORK-",
+        Duration::from_millis(1_200),
+    );
+
+    let marker = "ASYNC-TIMEOUT-OVERRIDE-MARKER";
+    let response = handle_request(
+        RelayRequest::Chat {
+            request_id: Some("req-async-timeout".to_string()),
+            sender_session: "alpha".to_string(),
+            message: marker.to_string(),
+            targets: vec!["bravo".to_string()],
+            broadcast: false,
+            delivery_mode: ChatDeliveryMode::Async,
+            quiet_window_ms: Some(120),
+            quiescence_timeout_ms: Some(350),
+        },
+        &config_root,
+        bundle_name,
+        &paths.tmux_socket,
+    )
+    .expect("async send should be accepted");
+
+    let RelayResponse::Chat {
+        status, results, ..
+    } = response
+    else {
+        panic!("expected chat response");
+    };
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].outcome, ChatOutcome::Queued);
+
+    std::thread::sleep(Duration::from_millis(2_100));
+    let snapshot = capture_pane(&paths.tmux_socket, "bravo", "-200");
+    assert!(
+        !snapshot.contains(marker),
+        "marker should not be delivered after async timeout override, snapshot={snapshot:?}"
+    );
 
     let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
 }

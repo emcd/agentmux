@@ -2,324 +2,42 @@
 
 `agentmux` is a tmux-backed coordination layer for agentic coding sessions.
 
-It provides:
+It provides two runtime processes:
 
-- A relay process for routing chat envelopes between tmux sessions.
-- An MCP server surface for LLM-facing tools (`list`, `chat` in MVP).
-- A local-first runtime model with XDG-compliant configuration and state.
+- `agentmux-relay`: manages bundle sessions and routes messages into tmux panes.
+- `agentmux-mcp`: exposes MCP tools (`list`, `chat`) for LLM agents.
 
 ## Motivation
 
-Some coding agents support hooks for coordination, while others do not. `agentmux`
-uses tmux session control as a common denominator so different agent harnesses
-can still exchange messages through a shared transport.
+Some coding agents support hooks for coordination, while others do not.
+`agentmux` uses tmux session control as a common denominator so different
+agent harnesses can exchange messages through a shared transport.
 
-## Status
-
-The project is in early implementation phase.
-
-## Quick Start
-
-### Prerequisites
+## Requirements
 
 - Rust stable toolchain
-- `tmux` available on `PATH`
+- `tmux` on `PATH`
 
-### Build
+## Configuration
 
-```bash
-cargo build
-```
+By default:
 
-### Run binaries
+- Config root: `$XDG_CONFIG_HOME/agentmux` or `~/.config/agentmux`
+- State root: `$XDG_STATE_HOME/agentmux` or `~/.local/state/agentmux`
 
-Relay:
+In debug builds, repository-local defaults are used when available under
+`.auxiliary/configuration/agentmux` and `.auxiliary/state/agentmux`.
 
-```bash
-cargo run --bin agentmux-relay
-```
-
-MCP server:
-
-```bash
-cargo run --bin agentmux-mcp
-```
-
-Optional explicit association overrides:
-
-```bash
-cargo run --bin agentmux-mcp -- --bundle-name agentmux --session-name relay
-```
-
-On first run, relay/MCP create starter config files when missing:
+Starter files are created when missing:
 
 - `<config-root>/coders.toml`
 - `<config-root>/bundles/example.toml`
 
-## Recommended Startup Pattern
+Bundle config files live at:
 
-Start relay first, then MCP servers.
-
-Use the same `--bundle` and `--state-directory` values for relay and MCP so
-both resolve the same `relay.sock`.
-MCP startup does not require relay availability.
-If relay is down, MCP `list` and `chat` return structured `relay_unavailable`
-errors until relay is reachable.
-If auto-discovered sender session name is not configured in the bundle, MCP
-falls back to matching current working directory against configured session
-`directory` entries.
-Relay startup performs a reconciliation pass that ensures configured bundle
-sessions are present on the bundle tmux socket.
-Relay tmux operations use the bundle runtime socket path:
-`$STATE_ROOT/bundles/<bundle-name>/tmux.sock`.
-
-Example:
-
-```bash
-cargo run --bin agentmux-relay -- --bundle agentmux --state-directory .auxiliary/state/agentmux
-cargo run --bin agentmux-mcp -- --bundle-name agentmux --session-name relay --state-directory .auxiliary/state/agentmux
-```
-
-Optional log root override:
-
-```bash
-cargo run --bin agentmux-relay -- --bundle agentmux --logs-directory .auxiliary/inscriptions/agentmux
-cargo run --bin agentmux-mcp -- --bundle-name agentmux --session-name relay --logs-directory .auxiliary/inscriptions/agentmux
-```
-
-## MCP Tool Schemas (MVP)
-
-### `list`
-
-Arguments:
-
-```json
-{}
-```
-
-Success payload shape:
-
-```json
-{
-  "schema_version": "1",
-  "bundle_name": "agentmux",
-  "recipients": [
-    {"session_name": "codex-b", "display_name": "Codex B"}
-  ]
-}
-```
-
-### `chat`
-
-Arguments (explicit targets):
-
-```json
-{
-  "request_id": "req-1",
-  "message": "Can you review the runtime tests?",
-  "targets": ["codex-b"],
-  "broadcast": false
-}
-```
-
-Arguments (broadcast):
-
-```json
-{
-  "request_id": "req-2",
-  "message": "Standup in 5 minutes.",
-  "targets": [],
-  "broadcast": true
-}
-```
-
-Broadcast targets every configured bundle member except the sender session.
-
-Success payload shape:
-
-```json
-{
-  "schema_version": "1",
-  "bundle_name": "agentmux",
-  "request_id": "req-1",
-  "sender_session": "codex-a",
-  "sender_display_name": "Codex A",
-  "status": "partial",
-  "results": [
-    {
-      "target_session": "codex-b",
-      "message_id": "4f5f2b40-8c25-4a95-8b7d-42aa6b0ab070",
-      "outcome": "delivered"
-    },
-    {
-      "target_session": "codex-c",
-      "message_id": "9f4f6e22-913a-49f5-82e9-2215d24c3907",
-      "outcome": "timeout",
-      "reason": "delivery_quiescence_timeout"
-    }
-  ]
-}
-```
-
-Validation and delivery failures return structured error codes in MCP error
-data (for example `validation_conflicting_targets`,
-`validation_empty_targets`, `validation_unknown_sender`,
-`relay_unavailable`).
-
-## Pane Envelope Format (MVP)
-
-Relay pane injection now renders a structured envelope with:
-
-1. Compact single-line JSON manifest preamble.
-2. RFC 822-style headers (`Envelope-Version`, `Message-Id`, `Date`, `From`,
-   `To`, optional `Cc`, optional `Subject`, and `Content-Type`).
-3. `multipart/mixed` MIME body with:
-   - required `text/plain; charset=utf-8` chat body part
-   - reserved `application/vnd.agentmux.path-pointer+json` extension part
-4. Closing MIME boundary `--<boundary>--` as end marker.
-
-Rendered addresses use:
-
-- `Display Name <session:session_name>`
-
-Canonical routing remains driven by manifest `target_sessions`; `Cc` is
-informational only.
-
-## Prompt Batching
-
-Envelope prompts are batched under a token budget with default:
-
-- `max_prompt_tokens = 4096`
-- tokenizer profile default `characters_0_point_3`
-
-Configuration environment variables:
-
-- `AGENTMUX_MAX_PROMPT_TOKENS` (positive integer)
-- `AGENTMUX_TOKENIZER_PROFILE` (`characters_0_point_3`, `whitespace_rough`)
-
-## Development
-
-Validation commands:
-
-```bash
-cargo check --all-targets --all-features
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-features
-```
-
-### Local Testing Tip
-
-For relay/MCP smoke tests, use a shared shell variable to reduce
-`--state-directory` mismatch mistakes:
-
-```bash
-AGENTMUX_STATE_DIRECTORY=.auxiliary/state/agentmux
-cargo run --bin agentmux-relay -- --bundle agentmux --state-directory "${AGENTMUX_STATE_DIRECTORY}"
-cargo run --bin agentmux-mcp -- --bundle-name agentmux --session-name relay --state-directory "${AGENTMUX_STATE_DIRECTORY}"
-```
-
-Pre-commit hooks are configured in
-`.auxiliary/configuration/pre-commit.yaml`.
-
-### Inscriptions (Logs)
-
-Default inscriptions root:
-
-- debug builds: `<repository-root>/.auxiliary/inscriptions/agentmux`
-- release builds: `<state-root>/inscriptions`
-
-Relay log path (per bundle):
-
-- `<inscriptions-root>/bundles/<bundle-name>/relay.log`
-
-MCP log path (per bundle/session):
-
-- `<inscriptions-root>/bundles/<bundle-name>/sessions/<session-name>/mcp.log`
-
-## Quiescence Delivery Notes
-
-Relay delivery waits for pane output to remain stable before injecting a prompt.
-
-Default values:
-
-- `quiet_window_ms = 750`
-- `delivery_timeout_ms = 30000`
-
-If pane output changes continuously (for example, clock-like status output),
-delivery may time out for that target.
-
-### Prompt-Readiness Diagnostics
-
-Relay can emit structured prompt-readiness diagnostics in relay inscriptions:
-
-- `AGENTMUX_RELAY_DELIVERY_DIAGNOSTICS=1` enables diagnostics
-
-## Prompt-Readiness Templates
-
-Quiescence can still occur when a session is not at an input-ready prompt.
-Coder definitions may define an optional prompt-readiness template that must
-match before relay injection.
-
-Configuration fields:
-
-- `prompt-regex` (optional): regular expression evaluated against inspected
-  pane tail text. Multi-line matching is supported (for example `(?m)^›`).
-- `prompt-inspect-lines` (optional): tail lines to inspect after trimming only
-  trailing blank lines from pane capture output (interior blank lines are
-  preserved). Default is `3`;
-  effective range is clamped to `1..=40`.
-- `prompt-idle-column` (optional): required tmux `cursor_x` value for
-  input-idle delivery. Use this to avoid injecting while a user is typing.
-
-If a session reaches quiescence but prompt regex never matches before
-`delivery_timeout_ms`, relay reports a timeout reason indicating prompt
-readiness mismatch and does not inject that message.
-
-## Planned Runtime Layout (MVP)
-
-Configuration root:
-
-- `$XDG_CONFIG_HOME/agentmux` or `~/.config/agentmux`
-
-State root:
-
-- `$XDG_STATE_HOME/agentmux` or `~/.local/state/agentmux`
-
-Inscriptions root:
-
-- debug builds:
-  - repository-local `.auxiliary/inscriptions/agentmux`
-- otherwise:
-  - `<state-root>/inscriptions`
-
-Per-bundle sockets:
-
-- `tmux.sock`
-- `relay.sock`
-
-## Bundle Configuration (MVP)
-
-Bundle membership is operator-managed in MVP and is not mutated via MCP tools.
-
-Configuration paths:
-
-- `<config-root>/coders.toml`
 - `<config-root>/bundles/<bundle-name>.toml`
 
-Session fields:
-
-- `id`: canonical routing identity (tmux session target).
-- `name` (optional): human-readable recipient label; chat targets may use
-  either `id` or `name`.
-
-Default config root:
-
-- debug builds:
-  - repository-local `.auxiliary/configuration/agentmux/` when present
-- otherwise:
-  - `$XDG_CONFIG_HOME/agentmux` or `~/.config/agentmux`
-
-Example `coders.toml`:
+### Example `coders.toml`
 
 ```toml
 format-version = 1
@@ -333,37 +51,79 @@ prompt-inspect-lines = 3
 prompt-idle-column = 2
 ```
 
-Example `bundles/agentmux.toml`:
+### Example `bundles/agentmux.toml`
 
 ```toml
 format-version = 1
 
 [[sessions]]
-id = "relay"
-name = "Relay"
-directory = "/home/me/src/WORKTREES/agentmux/relay"
+id = "master"
+name = "GPT (Coordinator)"
+directory = "/home/me/src/agentmux"
 coder = "codex"
 coder-session-id = "00000000-0000-0000-0000-000000000000"
 
 [[sessions]]
 id = "tui"
-name = "TUI"
+name = "GPT (Frontend Engineer)"
 directory = "/home/me/src/WORKTREES/agentmux/tui"
 coder = "codex"
 ```
 
-Per-worktree local MCP overrides (Git-ignored) may be placed at:
+## Runtime Notes
 
-- `.auxiliary/configuration/agentmux/overrides/mcp.toml`
+- Start relay before MCP servers for normal operation.
+- MCP startup does not require relay to already be reachable.
+- If relay is unavailable, MCP tools return structured `relay_unavailable`
+  errors.
+- Relay reconciliation ensures configured sessions exist on the bundle tmux
+  socket.
 
-See runtime bootstrap spec for full details:
-[runtime-bootstrap spec](documentation/architecture/openspec/specs/runtime-bootstrap/spec.md).
+## Delivery Behavior
 
-## Smoke Tests
+MCP `chat` supports:
 
-Manual prompt-readiness smoke procedure:
+- `delivery_mode=async` (default): accept immediately, deliver in background.
+- `delivery_mode=sync`: block until per-target delivery outcomes are known.
 
-- [tests/smoke/prompt_readiness_manual.md](tests/smoke/prompt_readiness_manual.md)
+Optional `quiescence_timeout_ms` bounds how long delivery waits for prompt
+quiescence.
+
+## Logging (Inscriptions)
+
+Default inscriptions root:
+
+- Debug builds: `<repository-root>/.auxiliary/inscriptions/agentmux`
+- Release builds: `<state-root>/inscriptions`
+
+Per-bundle relay log:
+
+- `<inscriptions-root>/bundles/<bundle-name>/relay.log`
+
+Per-session MCP log:
+
+- `<inscriptions-root>/bundles/<bundle-name>/sessions/<session-name>/mcp.log`
+
+## Development
+
+Build:
+
+```bash
+cargo build
+```
+
+Validation commands:
+
+```bash
+cargo check --all-targets --all-features
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-features
+```
+
+Architecture and implementation notes:
+
+- `src/README.md` and subsystem README files under `src/`
+- `documentation/architecture/openspec/specs/`
 
 ## License
 
