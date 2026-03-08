@@ -10,8 +10,8 @@ subcommands:
 - `list`
 - `send`
 
-The system SHALL retain `agentmux-relay` and `agentmux-mcp` as compatibility
-entrypoints.
+The system SHALL use `agentmux` as the canonical executable entrypoint for
+host/list/send operations.
 
 #### Scenario: Host relay from unified command
 
@@ -24,11 +24,12 @@ entrypoints.
 - **THEN** the system starts MCP hosting flow with configured association
   resolution
 
-#### Scenario: Preserve legacy binary entrypoints
+#### Scenario: Route host operations through unified executable
 
-- **WHEN** an operator runs `agentmux-relay` or `agentmux-mcp`
-- **THEN** the command remains supported
-- **AND** behavior remains equivalent to the unified host command paths
+- **WHEN** an operator runs `agentmux host relay <bundle-id>` or
+  `agentmux host mcp`
+- **THEN** the command path is handled by the unified executable
+- **AND** runtime behavior is equivalent to prior host flow semantics
 
 ### Requirement: Relay Host Bundle Selection
 

@@ -22,7 +22,10 @@ args = [
   "cargo",
   "run",
   "--bin",
-  "agentmux-mcp",
+  "agentmux",
+  "--",
+  "host",
+  "mcp",
 ]
 startup_timeout_sec = 60
 tool_timeout_sec = 900

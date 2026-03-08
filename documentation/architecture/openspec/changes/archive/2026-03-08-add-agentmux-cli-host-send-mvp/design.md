@@ -1,12 +1,8 @@
 ## Context
 
-The project currently exposes service binaries (`agentmux-relay`,
-`agentmux-mcp`) and MCP tool operations (`list`, `chat`), but not a unified
-operator-facing CLI command topology. Recent team discussion favors short
-Germanic verbs and a primary `agentmux` command.
-
-This change introduces that topology without breaking existing harness
-configurations that still invoke legacy binaries.
+The project targets a unified operator-facing CLI topology under `agentmux`
+for hosting and direct relay operations. The design scope includes migration to
+one canonical executable surface for host/list/send flows.
 
 ## Goals
 
@@ -14,7 +10,7 @@ configurations that still invoke legacy binaries.
 - Choose command verbs that fit current naming preferences (`host`, `list`,
   `send`).
 - Support common shell workflow for sending message bodies from pipelines.
-- Preserve backward compatibility for existing relay/MCP binary invocations.
+- Complete migration to a single executable surface (`agentmux ...`).
 
 ## Non-Goals
 
@@ -43,8 +39,9 @@ Tracked follow-up todos:
 - Decision: Resolve `send` message content from one source in MVP:
   `--message` or piped stdin.
   - Why: supports shell composition while keeping MVP interaction model simple.
-- Decision: Preserve legacy binaries as wrappers.
-  - Why: existing harnesses and configs can migrate gradually.
+- Decision: Remove legacy wrapper binaries.
+  - Why: one canonical executable reduces ambiguity, startup guidance drift,
+    and maintenance overhead.
 
 ## Message Input Resolution
 
@@ -62,18 +59,19 @@ This proposal intentionally defers interactive TTY line-capture mode.
 ## Risks / Trade-offs
 
 - Introducing a new primary command adds parser and routing complexity.
-  - Mitigation: wrapper delegation and integration tests for parity.
+  - Mitigation: integration tests around canonical `agentmux` host/list/send
+    surfaces.
 - Positional `<bundle-id>` for relay may diverge from existing flag-based
   startup habits.
-  - Mitigation: document migration and keep wrapper compatibility.
+  - Mitigation: document migration and keep aliases (`--bundle-name`) on
+    relevant host/list/send flags where applicable.
 
 ## Migration Plan
 
 1. Introduce `agentmux` command with new subcommand topology.
 2. Reuse existing runtime startup code paths to minimize behavior drift.
-3. Keep `agentmux-relay` and `agentmux-mcp` wrappers delegating to shared
-   execution logic.
-4. Update documentation to prefer canonical commands.
+3. Remove wrapper binaries and legacy wrapper tests.
+4. Update documentation to use canonical commands exclusively.
 
 ## Follow-Up Direction
 

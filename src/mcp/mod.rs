@@ -336,7 +336,7 @@ fn map_relay_request_failure(socket_path: &Path, source: std::io::Error) -> McpE
     if is_relay_unavailable_error(&source) {
         return internal_tool_error(
             "relay_unavailable",
-            "relay is unavailable; start agentmux-relay with matching bundle and state-directory",
+            "relay is unavailable; start agentmux host relay <bundle-id> with matching state-directory",
             Some(json!({
                 "relay_socket": socket_path,
                 "io_error_kind": format!("{:?}", source.kind()),

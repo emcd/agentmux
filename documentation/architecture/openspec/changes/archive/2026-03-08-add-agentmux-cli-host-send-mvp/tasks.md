@@ -12,8 +12,8 @@
 - [x] 1.6 Implement `send` message input resolution:
       `--message` first, else piped stdin, else structured missing-message
       validation error.
-- [x] 1.7 Keep `agentmux-relay` and `agentmux-mcp` as compatibility wrappers
-      that delegate into shared command execution paths.
+- [x] 1.7 Remove `agentmux-relay` and `agentmux-mcp` wrappers and route host
+      execution through `agentmux host ...` exclusively.
 - [x] 1.8 Update README/operator docs with canonical `agentmux host ...`,
       `agentmux list`, and `agentmux send` examples.
 
@@ -22,8 +22,8 @@
 - [x] 2.1 Add integration tests for command topology and argument parsing.
 - [x] 2.2 Add integration tests for `send` message-source precedence and
       missing-message failures.
-- [x] 2.3 Add integration tests confirming wrapper parity with new host
-      subcommands.
+- [x] 2.3 Add integration tests confirming host help/argument behavior under
+      the unified `agentmux` executable.
 
 ## 3. Validation
 

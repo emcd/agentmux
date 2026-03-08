@@ -101,32 +101,6 @@ pub async fn run_agentmux(arguments: Vec<String>) -> Result<(), RuntimeError> {
     }
 }
 
-/// Runs compatibility `agentmux-relay` behavior.
-pub fn run_agentmux_relay_legacy(arguments: Vec<String>) -> Result<(), RuntimeError> {
-    if arguments
-        .iter()
-        .any(|value| value == "--help" || value == "-h")
-    {
-        print_legacy_relay_help();
-        return Ok(());
-    }
-    let parsed = parse_relay_legacy_arguments(arguments)?;
-    run_relay_host(parsed)
-}
-
-/// Runs compatibility `agentmux-mcp` behavior.
-pub async fn run_agentmux_mcp_legacy(arguments: Vec<String>) -> Result<(), RuntimeError> {
-    if arguments
-        .iter()
-        .any(|value| value == "--help" || value == "-h")
-    {
-        print_legacy_mcp_help();
-        return Ok(());
-    }
-    let parsed = parse_mcp_legacy_arguments(arguments)?;
-    run_mcp_host(parsed).await
-}
-
 async fn run_agentmux_host(arguments: &[String]) -> Result<(), RuntimeError> {
     if arguments.is_empty() {
         return Err(RuntimeError::InvalidArgument {
@@ -392,7 +366,7 @@ fn run_relay_host(arguments: RelayHostArguments) -> Result<(), RuntimeError> {
         .map_err(|source| RuntimeError::io("set relay socket listener nonblocking", source))?;
     let _signal_handlers = install_shutdown_signal_handlers()?;
     println!(
-        "agentmux-relay listening bundle={} socket={} bootstrap={:?} created={} pruned={}",
+        "agentmux host relay listening bundle={} socket={} bootstrap={:?} created={} pruned={}",
         paths.bundle_name,
         paths.relay_socket.display(),
         report.bootstrap_session,
@@ -410,7 +384,7 @@ fn run_relay_host(arguments: RelayHostArguments) -> Result<(), RuntimeError> {
                         "relay.request_failed",
                         &json!({"error": source.to_string()}),
                     );
-                    eprintln!("agentmux-relay: request handling failed: {source}");
+                    eprintln!("agentmux host relay: request handling failed: {source}");
                 }
             }
             Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
@@ -491,62 +465,6 @@ async fn run_mcp_host(arguments: McpHostArguments) -> Result<(), RuntimeError> {
     })
     .await
     .map_err(|source| RuntimeError::io("run MCP stdio service", std::io::Error::other(source)))
-}
-
-fn parse_relay_legacy_arguments(
-    arguments: Vec<String>,
-) -> Result<RelayHostArguments, RuntimeError> {
-    let mut parsed = RelayHostArguments {
-        bundle_name: "default".to_string(),
-        runtime: RuntimeArguments::default(),
-    };
-    let mut index = 0usize;
-    while index < arguments.len() {
-        if parse_runtime_flag(&arguments, &mut index, &mut parsed.runtime)? {
-            index += 1;
-            continue;
-        }
-        match arguments[index].as_str() {
-            "--bundle" => {
-                parsed.bundle_name = take_value(&arguments, &mut index, "--bundle")?;
-            }
-            unknown => {
-                return Err(RuntimeError::InvalidArgument {
-                    argument: unknown.to_string(),
-                    message: "unknown argument".to_string(),
-                });
-            }
-        }
-        index += 1;
-    }
-    Ok(parsed)
-}
-
-fn parse_mcp_legacy_arguments(arguments: Vec<String>) -> Result<McpHostArguments, RuntimeError> {
-    let mut parsed = McpHostArguments::default();
-    let mut index = 0usize;
-    while index < arguments.len() {
-        if parse_runtime_flag(&arguments, &mut index, &mut parsed.runtime)? {
-            index += 1;
-            continue;
-        }
-        match arguments[index].as_str() {
-            "--bundle-name" | "--bundle" => {
-                parsed.bundle_name = Some(take_value(&arguments, &mut index, "--bundle-name")?);
-            }
-            "--session-name" => {
-                parsed.session_name = Some(take_value(&arguments, &mut index, "--session-name")?);
-            }
-            unknown => {
-                return Err(RuntimeError::InvalidArgument {
-                    argument: unknown.to_string(),
-                    message: "unknown argument".to_string(),
-                });
-            }
-        }
-        index += 1;
-    }
-    Ok(parsed)
 }
 
 fn parse_host_relay_arguments(arguments: &[String]) -> Result<RelayHostArguments, RuntimeError> {
@@ -968,17 +886,5 @@ fn print_list_help() {
 fn print_send_help() {
     println!(
         "Usage: agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--quiescence-timeout-ms MS] [--request-id ID] [--bundle NAME] [--sender NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
-    );
-}
-
-fn print_legacy_relay_help() {
-    println!(
-        "Usage: agentmux-relay [--bundle NAME] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
-    );
-}
-
-fn print_legacy_mcp_help() {
-    println!(
-        "Usage: agentmux-mcp [--bundle-name NAME] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH] [--session-name NAME]"
     );
 }

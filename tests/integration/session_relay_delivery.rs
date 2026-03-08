@@ -1205,7 +1205,7 @@ async fn relay_startup_retries_transient_tmux_create_failures() {
     let _ = child.wait().await;
 
     assert!(
-        stdout.contains("agentmux-relay listening"),
+        stdout.contains("agentmux host relay listening"),
         "relay should report successful startup, stdout={stdout:?}"
     );
     let attempts = fs::read_to_string(&attempts_file)
@@ -1552,9 +1552,10 @@ fn spawn_relay_with_fake_tmux_and_env(
     fake_tmux_script: &Path,
     environment: &[(&str, &str)],
 ) -> Child {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_agentmux-relay"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_agentmux"));
     command
-        .arg("--bundle")
+        .arg("host")
+        .arg("relay")
         .arg(bundle_name)
         .arg("--config-directory")
         .arg(config_root)

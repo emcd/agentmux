@@ -151,9 +151,11 @@ impl McpHarness {
         arguments: &[&str],
         environment: &[(String, String)],
     ) -> Self {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_agentmux-mcp"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_agentmux"));
         command
             .current_dir(current_directory)
+            .arg("host")
+            .arg("mcp")
             .args(arguments)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -162,7 +164,7 @@ impl McpHarness {
             command.env(key, value);
         }
 
-        let mut child = command.spawn().expect("spawn agentmux-mcp");
+        let mut child = command.spawn().expect("spawn agentmux host mcp");
         let stdin = child.stdin.take().expect("take mcp stdin");
         let stdout = child.stdout.take().expect("take mcp stdout");
         let stderr = child.stderr.take().expect("take mcp stderr");

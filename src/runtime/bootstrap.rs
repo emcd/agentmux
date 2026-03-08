@@ -122,7 +122,7 @@ where
     }
 }
 
-/// Spawns the relay process using a binary path and bundle arguments.
+/// Spawns the relay process using the unified host relay subcommand.
 ///
 /// # Errors
 ///
@@ -134,7 +134,8 @@ pub fn spawn_relay_process(
 ) -> Result<Child, RuntimeError> {
     let mut command = Command::new(relay_program);
     command
-        .arg("--bundle")
+        .arg("host")
+        .arg("relay")
         .arg(&paths.bundle_name)
         .arg("--config-directory")
         .arg(configuration_root)
@@ -208,8 +209,14 @@ pub fn bind_relay_listener(paths: &BundleRuntimePaths) -> Result<UnixListener, R
     Ok(listener)
 }
 
-/// Resolves a best-effort relay program path.
+/// Resolves a best-effort path for the unified `agentmux` executable.
 pub fn resolve_relay_program() -> Result<PathBuf, RuntimeError> {
+    if let Ok(command_path) = std::env::var("AGENTMUX_COMMAND") {
+        let trimmed = command_path.trim();
+        if !trimmed.is_empty() {
+            return Ok(PathBuf::from(trimmed));
+        }
+    }
     if let Ok(command_path) = std::env::var("AGENTMUX_RELAY_COMMAND") {
         let trimmed = command_path.trim();
         if !trimmed.is_empty() {
@@ -218,7 +225,7 @@ pub fn resolve_relay_program() -> Result<PathBuf, RuntimeError> {
     }
     let mut sibling = std::env::current_exe()
         .map_err(|source| RuntimeError::io("resolve current executable path", source))?;
-    sibling.set_file_name(format!("agentmux-relay{}", std::env::consts::EXE_SUFFIX));
+    sibling.set_file_name(format!("agentmux{}", std::env::consts::EXE_SUFFIX));
     Ok(sibling)
 }
 
@@ -368,7 +375,7 @@ mod tests {
         let err = bootstrap_relay(&paths, options, || Ok(())).expect_err("bootstrap should fail");
         assert!(
             err.to_string()
-                .contains("start agentmux-relay with matching --bundle and --state-directory"),
+                .contains("start agentmux host relay <bundle-id> with matching --state-directory"),
             "unexpected error: {err}"
         );
     }

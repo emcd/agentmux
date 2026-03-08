@@ -57,26 +57,26 @@ fn send_rejects_conflicting_flag_and_piped_message_sources() {
 }
 
 #[test]
-fn legacy_wrappers_still_support_help_output() {
-    let relay = Command::new(env!("CARGO_BIN_EXE_agentmux-relay"))
-        .arg("--help")
+fn unified_host_help_output_includes_relay_and_mcp_modes() {
+    let relay = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args(["host", "relay", "--help"])
         .output()
-        .expect("run agentmux-relay --help");
+        .expect("run agentmux host relay --help");
     assert!(relay.status.success(), "relay help should succeed");
     let relay_stdout = String::from_utf8_lossy(&relay.stdout);
     assert!(
-        relay_stdout.contains("Usage: agentmux-relay"),
+        relay_stdout.contains("Usage: agentmux host relay"),
         "unexpected relay help output: {relay_stdout}"
     );
 
-    let mcp = Command::new(env!("CARGO_BIN_EXE_agentmux-mcp"))
-        .arg("--help")
+    let mcp = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args(["host", "mcp", "--help"])
         .output()
-        .expect("run agentmux-mcp --help");
+        .expect("run agentmux host mcp --help");
     assert!(mcp.status.success(), "mcp help should succeed");
     let mcp_stdout = String::from_utf8_lossy(&mcp.stdout);
     assert!(
-        mcp_stdout.contains("Usage: agentmux-mcp"),
+        mcp_stdout.contains("Usage: agentmux host mcp"),
         "unexpected mcp help output: {mcp_stdout}"
     );
 }

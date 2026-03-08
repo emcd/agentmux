@@ -7,8 +7,7 @@
 operations. This makes command discovery harder and leaves CLI verb style
 inconsistent.
 
-We want one primary command with short Germanic verbs, while preserving
-existing binary entrypoints for compatibility.
+We want one primary command with short Germanic verbs.
 
 ## What Changes
 
@@ -24,7 +23,7 @@ existing binary entrypoints for compatibility.
   - use `--message` when provided,
   - else read piped stdin when present,
   - else fail with a structured missing-message validation error.
-- Keep `agentmux-relay` and `agentmux-mcp` as compatibility wrappers.
+- Remove `agentmux-relay` and `agentmux-mcp` wrapper entrypoints.
 - Keep runtime override flags available across relevant subcommands.
 
 ## Non-Goals (Follow-Up Changes)
@@ -45,6 +44,6 @@ These follow-ups are tracked in notebook todos:
   - `cli-surface` (new)
 - Affected code:
   - New `agentmux` CLI binary and command parser
-  - Wrapper wiring in `agentmux-relay` and `agentmux-mcp`
+  - Runtime/bootstrap and test updates to use `agentmux host ...` exclusively
   - Direct relay request path for CLI `list`/`send`
   - CLI integration tests and usage docs
