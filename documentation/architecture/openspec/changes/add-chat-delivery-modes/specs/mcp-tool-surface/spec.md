@@ -24,6 +24,12 @@ If `delivery_mode` is omitted, the system SHALL default to `async`.
 - **WHEN** a caller invokes `chat` without specifying `delivery_mode`
 - **THEN** the system processes the request using `delivery_mode=async`
 
+#### Scenario: Preserve blocking semantics for explicit sync callers
+
+- **WHEN** a caller invokes `chat` with `delivery_mode=sync`
+- **THEN** the system returns completion-style outcomes for the request
+- **AND** does not downgrade that request to async acceptance semantics
+
 #### Scenario: Reject unknown delivery mode value
 
 - **WHEN** a caller provides a `delivery_mode` value outside `async` or `sync`

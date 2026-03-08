@@ -15,6 +15,10 @@ submit messages quickly and let relay deliver when targets become ready.
   - MCP returns immediately.
   - Relay queues accepted targets and waits indefinitely for quiescence before
     injection by default.
+- Define async queue policy for MVP:
+  - in-memory only (non-durable across relay restarts),
+  - FIFO ordering per target session,
+  - no deduplication/coalescing.
 - Keep `sync` behavior for blocking delivery with current per-target outcomes
   (`delivered`, `timeout`, `failed`).
 - Define mode-aware timeout defaults when `quiescence_timeout_ms` is omitted:
@@ -26,6 +30,10 @@ submit messages quickly and let relay deliver when targets become ready.
     timeout.
 - Extend MCP chat response contract to distinguish acceptance (`async`) from
   completion (`sync`).
+- Define async lifecycle observability via relay inscriptions for queued and
+  terminal outcomes (delivered, timeout, dropped on shutdown).
+- Accept unbounded pending queue growth as an MVP risk and document operator
+  implications.
 - Keep ACK protocol out of scope.
 
 ## Impact

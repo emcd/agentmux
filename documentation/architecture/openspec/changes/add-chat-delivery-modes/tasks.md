@@ -8,18 +8,26 @@
       `outcome=queued`) while preserving sync completion contract.
 - [ ] 1.4 Introduce relay-side async queueing/worker flow so accepted async
       targets wait indefinitely for quiescence before injection.
-- [ ] 1.5 Apply mode-aware timeout defaults and overrides
+- [ ] 1.5 Define async queue lifecycle semantics:
+      - in-memory/non-durable queue,
+      - per-target FIFO ordering,
+      - no dedupe/coalescing.
+- [ ] 1.6 Apply mode-aware timeout defaults and overrides
       (`sync` omitted -> relay sync default, `async` omitted -> no timeout,
       explicit value -> mode-specific bounded wait).
-- [ ] 1.6 Keep sync mode blocking behavior with bounded timeout and existing
+- [ ] 1.7 Keep sync mode blocking behavior with bounded timeout and existing
       delivered/timeout/failed outcomes.
-- [ ] 1.7 Add tests for:
+- [ ] 1.8 Emit async lifecycle inscriptions/events for queued and terminal
+      outcomes (`delivered`, `timeout`, `dropped_on_shutdown`).
+- [ ] 1.9 Add tests for:
       - default async mode when omitted,
       - explicit sync behavior,
       - timeout default/override behavior in both modes,
       - async accepted/queued response shape,
+      - async FIFO ordering for repeated target sends,
       - sync mixed partial results.
-- [ ] 1.8 Update operator/developer documentation for chat mode selection.
+- [ ] 1.10 Update operator/developer documentation for async queue durability
+      and growth-risk expectations for MVP.
 
 ## 2. Validation
 

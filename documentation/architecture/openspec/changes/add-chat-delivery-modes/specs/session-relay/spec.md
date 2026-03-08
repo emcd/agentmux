@@ -16,6 +16,9 @@ indefinitely for quiescence before injection.
 When request-level `quiescence_timeout_ms` is provided, relay SHALL use that
 value as the wait bound for both modes.
 
+Request-level `quiescence_timeout_ms` SHALL map to relay's effective delivery
+wait timeout for the request.
+
 #### Scenario: Deliver after quiescent window
 
 - **WHEN** the target pane output remains unchanged for the configured quiet
@@ -50,6 +53,64 @@ value as the wait bound for both modes.
 - **AND** no quiescent window is observed before that timeout
 - **THEN** the system drops that pending target
 - **AND** records timeout in relay diagnostics/inscriptions
+
+#### Scenario: Map request timeout to relay delivery wait bound
+
+- **WHEN** a request includes `quiescence_timeout_ms`
+- **THEN** relay uses that value as the effective delivery wait timeout for the
+  request
+
+### Requirement: Async Queue Lifecycle and Ordering
+
+For `delivery_mode=async`, relay SHALL maintain an in-memory pending queue.
+The queue SHALL be non-durable in MVP.
+Relay SHALL preserve FIFO ordering per target session and SHALL NOT deduplicate
+or coalesce queued messages.
+
+#### Scenario: Drop pending async queue on relay restart
+
+- **WHEN** relay exits or restarts before delivering queued async targets
+- **THEN** pending async entries are discarded
+- **AND** they are not recovered from durable storage in MVP
+
+#### Scenario: Preserve per-target FIFO ordering
+
+- **WHEN** multiple async messages are queued for the same target session
+- **THEN** relay attempts delivery in enqueue order for that target
+
+#### Scenario: Do not deduplicate queued async messages
+
+- **WHEN** queued async messages have identical body content or same target set
+- **THEN** relay treats them as distinct queue entries
+- **AND** attempts each entry independently
+
+### Requirement: Async Delivery Observability
+
+Relay SHALL emit inscriptions for async queue lifecycle transitions.
+
+#### Scenario: Record queued async acceptance
+
+- **WHEN** relay accepts an async target for queued delivery
+- **THEN** relay writes an inscription event containing target session and
+  message id with queued state
+
+#### Scenario: Record terminal async outcome
+
+- **WHEN** an async queued target reaches a terminal state (`delivered`,
+  `timeout`, or dropped on shutdown)
+- **THEN** relay writes an inscription event containing target session,
+  message id, and terminal outcome
+
+### Requirement: Async Queue Growth Risk Disclosure
+
+The system SHALL document that MVP async queueing has no built-in hard cap and
+may grow without bound if targets never become ready.
+
+#### Scenario: Document unbounded queue risk for operators
+
+- **WHEN** operator-facing documentation is updated for async delivery mode
+- **THEN** it includes explicit guidance on unbounded pending queue risk
+- **AND** suggests using `quiescence_timeout_ms` where bounded waits are needed
 
 ### Requirement: Delivery Results Without ACK Protocol
 
