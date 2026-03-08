@@ -2,6 +2,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
+    time::{Duration, Instant},
 };
 
 use agentmux::{
@@ -40,6 +41,21 @@ fn tmux_command(socket: &Path, arguments: &[&str]) -> std::process::Output {
         .args(arguments)
         .output()
         .expect("run tmux command")
+}
+
+fn wait_for_file(path: &Path, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if path.exists() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for file {}",
+            path.display()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 fn write_bundle_configuration(
@@ -163,8 +179,14 @@ fn reconciliation_creates_missing_members_and_sets_owned_metadata() {
     assert!(owned.contains(&"alpha".to_string()));
     assert!(owned.contains(&"bravo".to_string()));
 
-    assert!(alpha_directory.join("alpha.started").exists());
-    assert!(bravo_directory.join("bravo.started").exists());
+    wait_for_file(
+        &alpha_directory.join("alpha.started"),
+        Duration::from_millis(800),
+    );
+    wait_for_file(
+        &bravo_directory.join("bravo.started"),
+        Duration::from_millis(800),
+    );
 
     let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
 }

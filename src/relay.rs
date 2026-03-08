@@ -26,7 +26,9 @@ use crate::{
         AddressIdentity, ENVELOPE_SCHEMA_VERSION, EnvelopeRenderInput, ManifestPreamble,
         PromptBatchSettings, batch_envelopes, parse_tokenizer_profile, render_envelope,
     },
-    runtime::{inscriptions::emit_inscription, paths::BundleRuntimePaths},
+    runtime::{
+        inscriptions::emit_inscription, paths::BundleRuntimePaths, signals::shutdown_requested,
+    },
 };
 
 const SCHEMA_VERSION: &str = ENVELOPE_SCHEMA_VERSION;
@@ -42,6 +44,9 @@ const TOKENIZER_PROFILE_ENVVAR: &str = "AGENTMUX_TOKENIZER_PROFILE";
 const DEFAULT_PROMPT_INSPECT_LINES: usize = 3;
 const MAX_PROMPT_INSPECT_LINES: usize = 40;
 const DELIVERY_DIAGNOSTICS_ENVVAR: &str = "AGENTMUX_RELAY_DELIVERY_DIAGNOSTICS";
+const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;
+const ASYNC_SHUTDOWN_WAIT_POLL_MS: u64 = 25;
+const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delivery";
 
 /// Recipient metadata returned by `list`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -93,6 +98,7 @@ pub enum ChatOutcome {
     Queued,
     Delivered,
     Timeout,
+    DroppedOnShutdown,
     Failed,
 }
 
@@ -648,11 +654,43 @@ fn deliver_one_target(task: &AsyncDeliveryTask) -> Result<ChatResult, RelayError
             outcome: ChatOutcome::Failed,
             reason: Some(reason),
         }),
+        Err(DeliveryWaitError::Shutdown) => Ok(ChatResult {
+            target_session,
+            message_id,
+            outcome: ChatOutcome::DroppedOnShutdown,
+            reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
+        }),
     }
 }
 
 fn async_delivery_registry() -> &'static AsyncDeliveryRegistry {
     ASYNC_DELIVERY_REGISTRY.get_or_init(AsyncDeliveryRegistry::default)
+}
+
+/// Waits for async delivery workers to stop after shutdown is requested.
+///
+/// Returns the number of workers still running when timeout is reached.
+#[must_use]
+pub fn wait_for_async_delivery_shutdown(timeout: Duration) -> usize {
+    if !shutdown_requested() {
+        return 0;
+    }
+    let deadline = Instant::now() + timeout;
+    loop {
+        let remaining = async_worker_count();
+        if remaining == 0 || Instant::now() >= deadline {
+            return remaining;
+        }
+        thread::sleep(Duration::from_millis(ASYNC_SHUTDOWN_WAIT_POLL_MS));
+    }
+}
+
+fn async_worker_count() -> usize {
+    async_delivery_registry()
+        .workers
+        .lock()
+        .map(|workers| workers.len())
+        .unwrap_or(0)
 }
 
 fn enqueue_async_delivery(task: AsyncDeliveryTask) -> Result<(), RelayError> {
@@ -692,7 +730,24 @@ fn enqueue_async_delivery(task: AsyncDeliveryTask) -> Result<(), RelayError> {
 
 fn spawn_async_delivery_worker(key: AsyncWorkerKey, receiver: mpsc::Receiver<AsyncDeliveryTask>) {
     thread::spawn(move || {
-        for task in receiver {
+        loop {
+            if shutdown_requested() {
+                drop_pending_async_tasks_on_shutdown(&receiver);
+                break;
+            }
+            let received =
+                receiver.recv_timeout(Duration::from_millis(ASYNC_WORKER_POLL_INTERVAL_MS));
+            let task = match received {
+                Ok(task) => task,
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            };
+            if shutdown_requested() {
+                emit_async_shutdown_drop(&task);
+                drop_pending_async_tasks_on_shutdown(&receiver);
+                break;
+            }
+
             let outcome = deliver_one_target(&task);
             match outcome {
                 Ok(result) => emit_inscription(
@@ -724,6 +779,26 @@ fn spawn_async_delivery_worker(key: AsyncWorkerKey, receiver: mpsc::Receiver<Asy
             workers.remove(&key);
         }
     });
+}
+
+fn drop_pending_async_tasks_on_shutdown(receiver: &mpsc::Receiver<AsyncDeliveryTask>) {
+    while let Ok(task) = receiver.try_recv() {
+        emit_async_shutdown_drop(&task);
+    }
+}
+
+fn emit_async_shutdown_drop(task: &AsyncDeliveryTask) {
+    emit_inscription(
+        "relay.chat.async.completed",
+        &json!({
+            "bundle_name": task.bundle.bundle_name,
+            "sender_session": task.sender.id,
+            "target_session": task.target_session,
+            "message_id": task.message_id,
+            "outcome": ChatOutcome::DroppedOnShutdown,
+            "reason": DROPPED_ON_SHUTDOWN_REASON,
+        }),
+    );
 }
 
 fn resolve_explicit_targets(
@@ -1157,6 +1232,7 @@ enum DeliveryWaitError {
     Failed {
         reason: String,
     },
+    Shutdown,
 }
 
 #[derive(Debug)]
@@ -1190,6 +1266,9 @@ fn wait_for_quiescent_pane(
     let mut readiness_mismatch = false;
     let mut mismatch_reason = None::<String>;
     loop {
+        if shutdown_requested() {
+            return Err(DeliveryWaitError::Shutdown);
+        }
         let pane_before = resolve_active_pane_target(tmux_socket, target_session)
             .map_err(|reason| DeliveryWaitError::Failed { reason })?;
         let snapshot_before = capture_pane_snapshot(tmux_socket, &pane_before)
@@ -1198,6 +1277,9 @@ fn wait_for_quiescent_pane(
             .map_err(|reason| DeliveryWaitError::Failed { reason })?;
 
         thread::sleep(options.quiet_window);
+        if shutdown_requested() {
+            return Err(DeliveryWaitError::Shutdown);
+        }
 
         let pane_after = resolve_active_pane_target(tmux_socket, target_session)
             .map_err(|reason| DeliveryWaitError::Failed { reason })?;

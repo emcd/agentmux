@@ -9,6 +9,7 @@ use std::{
 use agentmux::{
     relay::{
         ChatDeliveryMode, ChatOutcome, ChatStatus, RelayRequest, RelayResponse, handle_request,
+        request_relay,
     },
     runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory},
 };
@@ -1149,6 +1150,7 @@ async fn relay_startup_retries_transient_tmux_create_failures() {
     let fake_tmux_script = temporary.path().join("fake-tmux.sh");
     let attempts_file = temporary.path().join("attempts.txt");
     let log_file = temporary.path().join("fake-tmux.log");
+    let inscriptions_root = temporary.path().join("inscriptions");
     write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
 
     let relay_socket = state_root
@@ -1157,8 +1159,13 @@ async fn relay_startup_retries_transient_tmux_create_failures() {
         .join("relay.sock");
 
     let started = Instant::now();
-    let mut child =
-        spawn_relay_with_fake_tmux(bundle_name, &config_root, &state_root, &fake_tmux_script);
+    let mut child = spawn_relay_with_fake_tmux(
+        bundle_name,
+        &config_root,
+        &state_root,
+        &inscriptions_root,
+        &fake_tmux_script,
+    );
     wait_for_relay_socket(&relay_socket).await;
     let elapsed = started.elapsed();
 
@@ -1191,15 +1198,49 @@ async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
     let fake_tmux_script = temporary.path().join("fake-tmux.sh");
     let attempts_file = temporary.path().join("attempts.txt");
     let log_file = temporary.path().join("fake-tmux.log");
+    let inscriptions_root = temporary.path().join("inscriptions");
     write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
 
     let relay_socket = state_root
         .join("bundles")
         .join(bundle_name)
         .join("relay.sock");
-    let mut child =
-        spawn_relay_with_fake_tmux(bundle_name, &config_root, &state_root, &fake_tmux_script);
+    let mut child = spawn_relay_with_fake_tmux(
+        bundle_name,
+        &config_root,
+        &state_root,
+        &inscriptions_root,
+        &fake_tmux_script,
+    );
     wait_for_relay_socket(&relay_socket).await;
+
+    let chat_response = request_relay(
+        &relay_socket,
+        &RelayRequest::Chat {
+            request_id: Some("req-shutdown-drop".to_string()),
+            sender_session: "alpha".to_string(),
+            message: "queued async message".to_string(),
+            targets: vec!["alpha".to_string()],
+            broadcast: false,
+            delivery_mode: ChatDeliveryMode::Async,
+            quiet_window_ms: None,
+            quiescence_timeout_ms: None,
+        },
+    )
+    .expect("queue async request");
+    let RelayResponse::Chat {
+        status,
+        results,
+        delivery_mode,
+        ..
+    } = chat_response
+    else {
+        panic!("expected chat response");
+    };
+    assert_eq!(delivery_mode, ChatDeliveryMode::Async);
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].outcome, ChatOutcome::Queued);
 
     let pid = child.id().expect("relay pid");
     let pid = i32::try_from(pid).expect("relay pid fits i32");
@@ -1231,6 +1272,19 @@ async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
     assert!(
         log.contains("kill-server"),
         "shutdown should reap tmux server when no sessions remain, log={log:?}"
+    );
+
+    let inscriptions = fs::read_to_string(
+        inscriptions_root
+            .join("bundles")
+            .join(bundle_name)
+            .join("relay.log"),
+    )
+    .expect("read relay inscriptions");
+    assert!(
+        inscriptions.contains("\"event\":\"relay.chat.async.completed\"")
+            && inscriptions.contains("\"outcome\":\"dropped_on_shutdown\""),
+        "expected dropped_on_shutdown async terminal inscription, inscriptions={inscriptions:?}"
     );
 }
 
@@ -1286,6 +1340,31 @@ case "${{command_name}}" in
       fi
     done < "${{SESSIONS_FILE}}"
     ;;
+  display-message)
+    format="${{args[4]-}}"
+    case "${{format}}" in
+      '#{{pane_id}}')
+        printf "%%1\n"
+        ;;
+      '#{{window_activity}}')
+        printf "1\n"
+        ;;
+      '#{{cursor_x}}')
+        printf "0\n"
+        ;;
+      *)
+        printf "\n"
+        ;;
+    esac
+    ;;
+  capture-pane)
+    CAPTURE_FILE="${{ATTEMPTS_FILE}}.capture"
+    capture_count="$(cat "${{CAPTURE_FILE}}" 2>/dev/null || true)"
+    if [[ -z "${{capture_count}}" ]]; then capture_count=0; fi
+    capture_count="$((capture_count + 1))"
+    printf "%s" "${{capture_count}}" > "${{CAPTURE_FILE}}"
+    printf "frame-%s\n" "${{capture_count}}"
+    ;;
   new-session)
     count="$(cat "${{ATTEMPTS_FILE}}" 2>/dev/null || true)"
     if [[ -z "${{count}}" ]]; then count=0; fi
@@ -1337,6 +1416,7 @@ fn spawn_relay_with_fake_tmux(
     bundle_name: &str,
     config_root: &Path,
     state_root: &Path,
+    inscriptions_root: &Path,
     fake_tmux_script: &Path,
 ) -> Child {
     let mut command = Command::new(env!("CARGO_BIN_EXE_agentmux-relay"));
@@ -1347,6 +1427,8 @@ fn spawn_relay_with_fake_tmux(
         .arg(config_root)
         .arg("--state-directory")
         .arg(state_root)
+        .arg("--inscriptions-directory")
+        .arg(inscriptions_root)
         .env("AGENTMUX_TMUX_COMMAND", fake_tmux_script)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())

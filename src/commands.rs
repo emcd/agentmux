@@ -15,7 +15,7 @@ use crate::{
     mcp::McpConfiguration,
     relay::{
         ChatDeliveryMode, RelayError, RelayRequest, RelayResponse, reconcile_bundle, request_relay,
-        shutdown_bundle_runtime,
+        shutdown_bundle_runtime, wait_for_async_delivery_shutdown,
     },
     runtime::{
         association::{
@@ -426,6 +426,11 @@ fn run_relay_host(arguments: RelayHostArguments) -> Result<(), RuntimeError> {
     if shutdown_requested() {
         emit_inscription("relay.shutdown.signal", &json!({"signal": "termination"}));
     }
+    let async_workers_remaining = if shutdown_requested() {
+        wait_for_async_delivery_shutdown(Duration::from_millis(1_500))
+    } else {
+        0
+    };
     drop(listener);
     remove_relay_socket_file(&paths.relay_socket)?;
     let shutdown = shutdown_bundle_runtime(&paths.tmux_socket).map_err(map_reconcile_error)?;
@@ -436,6 +441,7 @@ fn run_relay_host(arguments: RelayHostArguments) -> Result<(), RuntimeError> {
             "pruned_count": shutdown.pruned_sessions.len(),
             "killed_tmux_server": shutdown.killed_tmux_server,
             "pruned_sessions": shutdown.pruned_sessions,
+            "async_workers_remaining": async_workers_remaining,
         }),
     );
     if let Some(error) = accept_error {

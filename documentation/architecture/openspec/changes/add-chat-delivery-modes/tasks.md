@@ -17,10 +17,11 @@
       explicit value -> mode-specific bounded wait).
 - [x] 1.7 Keep sync mode blocking behavior with bounded timeout and existing
       delivered/timeout/failed outcomes.
-- [ ] 1.8 Emit async lifecycle inscriptions/events for queued and terminal
+- [x] 1.8 Emit async lifecycle inscriptions/events for queued and terminal
       outcomes (`delivered`, `timeout`, `dropped_on_shutdown`).
-      Status: queued and terminal completion inscriptions are implemented;
-      explicit `dropped_on_shutdown` terminal event is not yet implemented.
+      Status: completed. Relay shutdown now drains async workers and emits
+      `relay.chat.async.completed` terminal outcomes with
+      `outcome=dropped_on_shutdown` for queued/in-flight deliveries.
 - [x] 1.9 Add tests for:
       - default async mode when omitted,
       - explicit sync behavior,
