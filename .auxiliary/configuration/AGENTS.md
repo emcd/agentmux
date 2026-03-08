@@ -125,3 +125,69 @@ Use `openspec/AGENTS.md` to learn:
   reason to keep tests adjacent to implementation.
 - Prefer tests that exercise public interfaces; avoid source-inclusion patterns
   used only to reach private internals.
+
+## Team Topology and Roles
+
+Use a coordinator-plus-specialists model:
+
+- `master` worktree agent: coordinator and integrator.
+- `relay` worktree agent: relay runtime specialist.
+- `mcp` worktree agent: MCP surface specialist.
+- `tui` worktree agent: CLI shape and TUI design/implementation specialist.
+
+### Coordinator Responsibilities (`master`)
+
+- Own roadmap sequencing and assignment of scoped work slices.
+- Review and refine OpenSpec proposals for cross-cutting changes.
+- Keep one active merge lane at a time into `master`.
+- Request rebase to latest `master` before accepting any branch merge.
+- Run integration-level validation and resolve cross-worktree conflicts.
+- Maintain notebook hygiene (`nb`) for handoffs, decisions, and tracker todos.
+
+### Specialist Responsibilities (`relay`, `mcp`, `tui`)
+
+- Stay focused on owned subsystem scope unless coordinator requests otherwise.
+- Raise an OpenSpec delta or question when subsystem work becomes cross-cutting.
+- Rebase onto latest `master` before requesting review/merge.
+- Provide handoff notes with:
+  - summary of behavior change,
+  - touched files,
+  - tests/validation performed,
+  - risks or open questions.
+
+### Merge and Conflict Policy
+
+- Default ownership map:
+  - `relay` agent: `src/relay.rs`, relay runtime paths, relay integration tests.
+  - `mcp` agent: `src/mcp/**`, MCP tool contracts/tests, MCP startup behavior.
+  - `tui` agent: CLI surface shape, user workflow, and future TUI implementation.
+  - coordinator: OpenSpec archives/spec merges, shared CLI/runtime glue, final
+    integration and release-facing docs.
+- If a change spans multiple ownership areas, coordinator approval is required
+  before implementation begins.
+- Use long-lived worktree branches by concern (for example `relay`, `mcp`,
+  `tui`). Worktree branches rebase onto `master`; `master` merges from those
+  worktree branches.
+- Resolve conflicts on the owning worktree branch before merge to `master`.
+  Merges into `master` should be conflict-free.
+
+### OpenSpec Workflow in Multi-Agent Mode
+
+- Specialists may draft component deltas; coordinator is final reviewer for:
+  - proposal scope,
+  - task checklist accuracy,
+  - archive/spec-merge correctness.
+- For cross-cutting proposals, specialists should tag relevant specialist
+  owners for review before coordinator final approval.
+
+## Agentmux Message Handling Guidance
+
+- `agentmux` messages are wrapped in envelopes and may appear as user prompts.
+  Treat envelope-shaped prompts as inter-agent messages, not necessarily as
+  human-user instructions.
+- Respond to envelope messages via `agentmux` MCP tools (`list`, `chat`) rather
+  than by emitting a normal assistant reply intended for a human.
+- Immediate interruption is not required. If in the middle of active execution,
+  make note of the message and respond when safe.
+- If response will be delayed, send a brief acknowledgement via `chat` and, when
+  useful, record a follow-up todo in `nb`.
