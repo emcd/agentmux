@@ -137,3 +137,10 @@ acknowledgements.
   target
 - **THEN** the result marks that target as failed
 - **AND** includes a failure reason
+
+#### Scenario: Return no-op completion for zero effective targets
+
+- **WHEN** sender exclusion and target resolution produce zero effective
+  recipients
+- **THEN** relay returns an immediate no-op response without validation error
+- **AND** response contains zero per-target results

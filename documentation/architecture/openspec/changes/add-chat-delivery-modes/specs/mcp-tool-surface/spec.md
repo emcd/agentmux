@@ -69,6 +69,12 @@ If `delivery_mode` is omitted, the system SHALL default to `async`.
 - **WHEN** a caller provides `targets` as an empty list
 - **THEN** the system rejects the request with `validation_empty_targets`
 
+#### Scenario: Allow broadcast with zero effective recipients
+
+- **WHEN** a caller requests `broadcast=true`
+- **AND** sender exclusion yields zero effective target sessions
+- **THEN** the system treats the request as valid (not a validation error)
+
 ### Requirement: Chat Response Contract
 
 `chat` SHALL return a response containing:
@@ -109,3 +115,11 @@ In `delivery_mode=sync`, `status` SHALL be one of `success`, `partial`, or
 - **AND** at least one target succeeds and at least one target fails
 - **THEN** `status` is `partial`
 - **AND** each target result includes its own outcome and reason data
+
+#### Scenario: Return empty results for zero effective recipients
+
+- **WHEN** a caller invokes `chat`
+- **AND** effective target resolution yields zero recipients
+- **THEN** the response includes `results=[]`
+- **AND** `status` is `accepted` for `delivery_mode=async`
+- **AND** `status` is `success` for `delivery_mode=sync`

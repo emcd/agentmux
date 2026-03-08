@@ -25,6 +25,8 @@
       - timeout default/override behavior in both modes,
       - async accepted/queued response shape,
       - async FIFO ordering for repeated target sends,
+      - zero effective recipient handling (async accepted/sync success with
+        empty results),
       - sync mixed partial results.
 - [ ] 1.10 Update operator/developer documentation for async queue durability
       and growth-risk expectations for MVP.
