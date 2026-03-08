@@ -62,6 +62,41 @@ Each recipient entry SHALL include:
 - `targets` (non-empty list of recipient identifiers)
 - `broadcast=true` for full bundle delivery
 
+`chat` SHALL additionally support optional `delivery_mode` with values:
+
+- `async`
+- `sync`
+
+If `delivery_mode` is omitted, the system SHALL default to `async`.
+
+`chat` SHALL additionally support optional `quiescence_timeout_ms`:
+
+- positive integer milliseconds
+- omitted means mode-aware defaults are applied by relay
+
+#### Scenario: Default to async delivery mode
+
+- **WHEN** a caller invokes `chat` without specifying `delivery_mode`
+- **THEN** the system processes the request using `delivery_mode=async`
+
+#### Scenario: Preserve blocking semantics for explicit sync callers
+
+- **WHEN** a caller invokes `chat` with `delivery_mode=sync`
+- **THEN** the system returns completion-style outcomes for the request
+- **AND** does not downgrade that request to async acceptance semantics
+
+#### Scenario: Reject unknown delivery mode value
+
+- **WHEN** a caller provides a `delivery_mode` value outside `async` or `sync`
+- **THEN** the system rejects the request with
+  `validation_invalid_delivery_mode`
+
+#### Scenario: Reject invalid quiescence timeout value
+
+- **WHEN** a caller provides `quiescence_timeout_ms` as zero or non-integer
+- **THEN** the system rejects the request with
+  `validation_invalid_quiescence_timeout`
+
 #### Scenario: Send to explicit subset
 
 - **WHEN** a caller provides `targets` with one or more bundle members
@@ -89,6 +124,12 @@ Each recipient entry SHALL include:
 - **WHEN** a caller provides `targets` as an empty list
 - **THEN** the system rejects the request with `validation_empty_targets`
 
+#### Scenario: Allow broadcast with zero effective recipients
+
+- **WHEN** a caller requests `broadcast=true`
+- **AND** sender exclusion yields zero effective target sessions
+- **THEN** the system treats the request as valid (not a validation error)
+
 ### Requirement: Sender Identity Inference
 
 `chat` SHALL infer sender identity from the MCP server's configured session
@@ -107,28 +148,52 @@ association and SHALL NOT require a sender identity in request payloads.
 
 ### Requirement: Chat Response Contract
 
-`chat` SHALL return a synchronous response containing:
+`chat` SHALL return a response containing:
 
 - `schema_version`
 - `bundle_name`
 - `request_id` (when provided by caller)
 - `sender_session`
 - `sender_display_name` (optional)
-- `status` (`success`, `partial`, or `failure`)
+- `delivery_mode` (`async` or `sync`)
+- `status`
 - `results` (per-target entries)
 
-Each per-target result SHALL include:
+In `delivery_mode=async`, `status` SHALL be `accepted` and each per-target
+result SHALL include:
+
+- `target_session`
+- `message_id`
+- `outcome` = `queued`
+
+In `delivery_mode=sync`, `status` SHALL be one of `success`, `partial`, or
+`failure`, and each per-target result SHALL include:
 
 - `target_session`
 - `message_id`
 - `outcome` (`delivered`, `timeout`, or `failed`)
 - `reason` (required when outcome is not `delivered`)
 
-#### Scenario: Return partial outcome for mixed delivery
+#### Scenario: Return accepted outcome for async request
 
-- **WHEN** at least one target succeeds and at least one target fails
+- **WHEN** a caller invokes `chat` with `delivery_mode=async`
+- **THEN** the response status is `accepted`
+- **AND** per-target outcomes are `queued`
+
+#### Scenario: Return partial outcome for sync mixed delivery
+
+- **WHEN** a caller invokes `chat` with `delivery_mode=sync`
+- **AND** at least one target succeeds and at least one target fails
 - **THEN** `status` is `partial`
 - **AND** each target result includes its own outcome and reason data
+
+#### Scenario: Return empty results for zero effective recipients
+
+- **WHEN** a caller invokes `chat`
+- **AND** effective target resolution yields zero recipients
+- **THEN** the response includes `results=[]`
+- **AND** `status` is `accepted` for `delivery_mode=async`
+- **AND** `status` is `success` for `delivery_mode=sync`
 
 ### Requirement: Error Object Contract
 
@@ -166,3 +231,4 @@ All successful responses for relay tools SHALL include `schema_version`.
 
 - **WHEN** any relay MCP tool succeeds
 - **THEN** the response includes `schema_version`
+

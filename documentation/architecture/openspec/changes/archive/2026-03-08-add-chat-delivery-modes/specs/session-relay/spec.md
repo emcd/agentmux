@@ -60,6 +60,41 @@ wait timeout for the request.
 - **THEN** relay uses that value as the effective delivery wait timeout for the
   request
 
+### Requirement: Delivery Results Without ACK Protocol
+
+The system SHALL support both asynchronous acceptance responses and
+synchronous completion responses, and SHALL NOT require accept/done
+acknowledgements.
+
+#### Scenario: Report accepted async delivery
+
+- **WHEN** relay accepts an `async` chat request for one or more targets
+- **THEN** the immediate result marks those targets as `queued`
+- **AND** does not wait for final delivery outcome before responding
+
+#### Scenario: Report successful sync tmux injection
+
+- **WHEN** relay processes a `sync` chat request and tmux injection succeeds for
+  a target
+- **THEN** the result marks that target as delivered to pane input
+- **AND** includes the `message_id` and target session name
+
+#### Scenario: Report failed sync tmux injection
+
+- **WHEN** relay processes a `sync` chat request and tmux injection fails for a
+  target
+- **THEN** the result marks that target as failed
+- **AND** includes a failure reason
+
+#### Scenario: Return no-op completion for zero effective targets
+
+- **WHEN** sender exclusion and target resolution produce zero effective
+  recipients
+- **THEN** relay returns an immediate no-op response without validation error
+- **AND** response contains zero per-target results
+
+## ADDED Requirements
+
 ### Requirement: Async Queue Lifecycle and Ordering
 
 For `delivery_mode=async`, relay SHALL maintain an in-memory pending queue.
@@ -111,36 +146,3 @@ may grow without bound if targets never become ready.
 - **WHEN** operator-facing documentation is updated for async delivery mode
 - **THEN** it includes explicit guidance on unbounded pending queue risk
 - **AND** suggests using `quiescence_timeout_ms` where bounded waits are needed
-
-### Requirement: Delivery Results Without ACK Protocol
-
-The system SHALL support both asynchronous acceptance responses and
-synchronous completion responses, and SHALL NOT require accept/done
-acknowledgements.
-
-#### Scenario: Report accepted async delivery
-
-- **WHEN** relay accepts an `async` chat request for one or more targets
-- **THEN** the immediate result marks those targets as `queued`
-- **AND** does not wait for final delivery outcome before responding
-
-#### Scenario: Report successful sync tmux injection
-
-- **WHEN** relay processes a `sync` chat request and tmux injection succeeds for
-  a target
-- **THEN** the result marks that target as delivered to pane input
-- **AND** includes the `message_id` and target session name
-
-#### Scenario: Report failed sync tmux injection
-
-- **WHEN** relay processes a `sync` chat request and tmux injection fails for a
-  target
-- **THEN** the result marks that target as failed
-- **AND** includes a failure reason
-
-#### Scenario: Return no-op completion for zero effective targets
-
-- **WHEN** sender exclusion and target resolution produce zero effective
-  recipients
-- **THEN** relay returns an immediate no-op response without validation error
-- **AND** response contains zero per-target results
