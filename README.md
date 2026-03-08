@@ -5,7 +5,7 @@
 It provides two runtime hosts:
 
 - relay host: manages bundle sessions and routes messages into tmux panes
-- MCP host: exposes MCP tools (`list`, `chat`) for LLM agents
+- MCP host: exposes MCP tools (`list`, `send`) for LLM agents
 
 ## Motivation
 
@@ -128,7 +128,7 @@ coder = "codex"
 
 ## Delivery Behavior
 
-MCP `chat` supports:
+MCP `send` supports:
 
 - `delivery_mode=async` (default): accept immediately, deliver in background.
 - `delivery_mode=sync`: block until per-target delivery outcomes are known.

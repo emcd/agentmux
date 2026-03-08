@@ -382,7 +382,7 @@ fn error_code(response: &Value) -> Option<&str> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tool_catalog_contains_list_and_chat() {
+async fn tool_catalog_contains_list_and_send() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -426,7 +426,7 @@ async fn tool_catalog_contains_list_and_chat() {
         .collect::<BTreeSet<_>>();
     assert_eq!(
         names,
-        BTreeSet::from(["chat".to_string(), "list".to_string()])
+        BTreeSet::from(["list".to_string(), "send".to_string()])
     );
 
     assert!(relay.requests_for_operation("list").is_empty());
@@ -483,7 +483,7 @@ async fn list_reports_relay_unavailable_when_relay_is_not_running() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn chat_rejects_conflicting_targets_before_relay_request() {
+async fn send_rejects_conflicting_targets_before_relay_request() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -498,7 +498,7 @@ async fn chat_rejects_conflicting_targets_before_relay_request() {
         Value::Array(vec![Value::String("bravo".to_string())]),
     );
     arguments.insert("broadcast".to_string(), Value::Bool(true));
-    let response = harness.call_tool(2, "chat", arguments).await;
+    let response = harness.call_tool(2, "send", arguments).await;
 
     assert_eq!(
         error_code(&response),
@@ -508,7 +508,7 @@ async fn chat_rejects_conflicting_targets_before_relay_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn chat_rejects_empty_targets_before_relay_request() {
+async fn send_rejects_empty_targets_before_relay_request() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -520,14 +520,14 @@ async fn chat_rejects_empty_targets_before_relay_request() {
     arguments.insert("message".to_string(), Value::String("hello".to_string()));
     arguments.insert("targets".to_string(), Value::Array(Vec::new()));
     arguments.insert("broadcast".to_string(), Value::Bool(false));
-    let response = harness.call_tool(2, "chat", arguments).await;
+    let response = harness.call_tool(2, "send", arguments).await;
 
     assert_eq!(error_code(&response), Some("validation_empty_targets"));
     assert!(relay.requests_for_operation("chat").is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn chat_rejects_empty_message_before_relay_request() {
+async fn send_rejects_empty_message_before_relay_request() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -542,14 +542,14 @@ async fn chat_rejects_empty_message_before_relay_request() {
         Value::Array(vec![Value::String("bravo".to_string())]),
     );
     arguments.insert("broadcast".to_string(), Value::Bool(false));
-    let response = harness.call_tool(2, "chat", arguments).await;
+    let response = harness.call_tool(2, "send", arguments).await;
 
     assert_eq!(error_code(&response), Some("validation_invalid_arguments"));
     assert!(relay.requests_for_operation("chat").is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn chat_rejects_invalid_quiescence_timeout_before_relay_request() {
+async fn send_rejects_invalid_quiescence_timeout_before_relay_request() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -565,7 +565,7 @@ async fn chat_rejects_invalid_quiescence_timeout_before_relay_request() {
     );
     arguments.insert("broadcast".to_string(), Value::Bool(false));
     arguments.insert("quiescence_timeout_ms".to_string(), Value::Number(0.into()));
-    let response = harness.call_tool(2, "chat", arguments).await;
+    let response = harness.call_tool(2, "send", arguments).await;
 
     assert_eq!(
         error_code(&response),
@@ -575,7 +575,7 @@ async fn chat_rejects_invalid_quiescence_timeout_before_relay_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn chat_returns_partial_and_forwards_sender_session() {
+async fn send_returns_partial_and_forwards_sender_session() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -627,7 +627,7 @@ async fn chat_returns_partial_and_forwards_sender_session() {
         ]),
     );
     arguments.insert("broadcast".to_string(), Value::Bool(false));
-    let response = harness.call_tool(2, "chat", arguments).await;
+    let response = harness.call_tool(2, "send", arguments).await;
     let payload = decode_tool_payload(&response);
 
     assert_eq!(payload["status"], "partial");
@@ -649,7 +649,7 @@ async fn chat_returns_partial_and_forwards_sender_session() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn chat_forwards_sync_mode_and_timeout_override() {
+async fn send_forwards_sync_mode_and_timeout_override() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -692,7 +692,7 @@ async fn chat_forwards_sync_mode_and_timeout_override() {
         "quiescence_timeout_ms".to_string(),
         Value::Number(1234.into()),
     );
-    let response = harness.call_tool(2, "chat", arguments).await;
+    let response = harness.call_tool(2, "send", arguments).await;
     let payload = decode_tool_payload(&response);
     assert_eq!(payload["delivery_mode"], "sync");
 
@@ -703,7 +703,7 @@ async fn chat_forwards_sync_mode_and_timeout_override() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn chat_maps_unknown_sender_error_from_relay() {
+async fn send_maps_unknown_sender_error_from_relay() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -736,7 +736,7 @@ async fn chat_maps_unknown_sender_error_from_relay() {
         Value::Array(vec![Value::String("bravo".to_string())]),
     );
     arguments.insert("broadcast".to_string(), Value::Bool(false));
-    let response = harness.call_tool(2, "chat", arguments).await;
+    let response = harness.call_tool(2, "send", arguments).await;
 
     assert_eq!(error_code(&response), Some("validation_unknown_sender"));
 }

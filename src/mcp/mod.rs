@@ -41,7 +41,7 @@ struct McpState {
 struct ListParams {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
-struct ChatParams {
+struct SendParams {
     /// Optional client request identifier echoed in responses.
     #[serde(default)]
     request_id: Option<String>,
@@ -55,7 +55,7 @@ struct ChatParams {
     broadcast: bool,
     /// Delivery behavior: async queues and returns immediately, sync blocks for completion.
     #[serde(default)]
-    delivery_mode: ChatDeliveryModeParam,
+    delivery_mode: SendDeliveryModeParam,
     /// Optional quiescence timeout override in milliseconds.
     #[serde(default)]
     quiescence_timeout_ms: Option<u64>,
@@ -63,17 +63,17 @@ struct ChatParams {
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-enum ChatDeliveryModeParam {
+enum SendDeliveryModeParam {
     #[default]
     Async,
     Sync,
 }
 
-impl From<ChatDeliveryModeParam> for ChatDeliveryMode {
-    fn from(value: ChatDeliveryModeParam) -> Self {
+impl From<SendDeliveryModeParam> for ChatDeliveryMode {
+    fn from(value: SendDeliveryModeParam) -> Self {
         match value {
-            ChatDeliveryModeParam::Async => ChatDeliveryMode::Async,
-            ChatDeliveryModeParam::Sync => ChatDeliveryMode::Sync,
+            SendDeliveryModeParam::Async => ChatDeliveryMode::Async,
+            SendDeliveryModeParam::Sync => ChatDeliveryMode::Sync,
         }
     }
 }
@@ -159,14 +159,14 @@ impl McpServer {
         }
     }
 
-    #[tool(description = "Submit a chat message to explicit targets or broadcast.")]
-    async fn chat(
+    #[tool(description = "Submit a message to explicit targets or broadcast.")]
+    async fn send(
         &self,
-        Parameters(params): Parameters<ChatParams>,
+        Parameters(params): Parameters<SendParams>,
     ) -> Result<CallToolResult, McpError> {
-        validate_chat_request(&params)?;
+        validate_send_request(&params)?;
         emit_inscription(
-            "mcp.tool.chat.request",
+            "mcp.tool.send.request",
             &json!({
                 "bundle_name": self.state.configuration.bundle_paths.bundle_name,
                 "request_id": params.request_id.clone(),
@@ -226,7 +226,7 @@ impl McpServer {
                     "results": results,
                 });
                 emit_inscription(
-                    "mcp.tool.chat.success",
+                    "mcp.tool.send.success",
                     &json!({
                         "bundle_name": response["bundle_name"],
                         "status": response["status"],
@@ -237,7 +237,7 @@ impl McpServer {
             }
             Ok(RelayResponse::Error { error }) => {
                 emit_inscription(
-                    "mcp.tool.chat.relay_error",
+                    "mcp.tool.send.relay_error",
                     &json!({
                         "code": error.code.clone(),
                         "message": error.message.clone(),
@@ -248,7 +248,7 @@ impl McpServer {
             }
             Ok(other) => {
                 emit_inscription(
-                    "mcp.tool.chat.unexpected_response",
+                    "mcp.tool.send.unexpected_response",
                     &json!({"response": other}),
                 );
                 Err(internal_tool_error(
@@ -259,7 +259,7 @@ impl McpServer {
             }
             Err(source) => {
                 emit_inscription(
-                    "mcp.tool.chat.io_error",
+                    "mcp.tool.send.io_error",
                     &json!({"error": source.to_string()}),
                 );
                 Err(map_relay_request_failure(
@@ -292,7 +292,7 @@ pub async fn run(configuration: McpConfiguration) -> Result<()> {
     Ok(())
 }
 
-fn validate_chat_request(params: &ChatParams) -> Result<(), McpError> {
+fn validate_send_request(params: &SendParams) -> Result<(), McpError> {
     let message = params.message.trim();
     if message.is_empty() {
         return Err(validation_tool_error(
