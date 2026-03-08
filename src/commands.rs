@@ -1,9 +1,11 @@
 //! Shared command execution for agentmux binaries.
 
 use std::{
-    env,
+    env, fs,
     io::{IsTerminal, Read},
     path::{Path, PathBuf},
+    thread,
+    time::Duration,
 };
 
 use serde_json::json;
@@ -13,6 +15,7 @@ use crate::{
     mcp::McpConfiguration,
     relay::{
         ChatDeliveryMode, RelayError, RelayRequest, RelayResponse, reconcile_bundle, request_relay,
+        shutdown_bundle_runtime,
     },
     runtime::{
         association::{
@@ -28,6 +31,7 @@ use crate::{
         paths::{
             BundleRuntimePaths, RuntimeRootOverrides, RuntimeRoots, ensure_bundle_runtime_directory,
         },
+        signals::{install_shutdown_signal_handlers, shutdown_requested},
         starter::ensure_starter_configuration_layout,
     },
 };
@@ -383,6 +387,10 @@ fn run_relay_host(arguments: RelayHostArguments) -> Result<(), RuntimeError> {
     )
     .map_err(map_reconcile_error)?;
     let listener = bind_relay_listener(&paths)?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|source| RuntimeError::io("set relay socket listener nonblocking", source))?;
+    let _signal_handlers = install_shutdown_signal_handlers()?;
     println!(
         "agentmux-relay listening bundle={} socket={} bootstrap={:?} created={} pruned={}",
         paths.bundle_name,
@@ -391,9 +399,10 @@ fn run_relay_host(arguments: RelayHostArguments) -> Result<(), RuntimeError> {
         report.created_sessions.len(),
         report.pruned_sessions.len(),
     );
-    for incoming in listener.incoming() {
-        match incoming {
-            Ok(mut stream) => {
+    let mut accept_error = None::<RuntimeError>;
+    while !shutdown_requested() {
+        match listener.accept() {
+            Ok((mut stream, _)) => {
                 if let Err(source) =
                     crate::relay::serve_connection(&mut stream, &roots.configuration_root, &paths)
                 {
@@ -404,11 +413,33 @@ fn run_relay_host(arguments: RelayHostArguments) -> Result<(), RuntimeError> {
                     eprintln!("agentmux-relay: request handling failed: {source}");
                 }
             }
+            Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(50));
+            }
             Err(source) if source.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(source) => {
-                return Err(RuntimeError::io("accept relay socket connection", source));
+                accept_error = Some(RuntimeError::io("accept relay socket connection", source));
+                break;
             }
         }
+    }
+    if shutdown_requested() {
+        emit_inscription("relay.shutdown.signal", &json!({"signal": "termination"}));
+    }
+    drop(listener);
+    remove_relay_socket_file(&paths.relay_socket)?;
+    let shutdown = shutdown_bundle_runtime(&paths.tmux_socket).map_err(map_reconcile_error)?;
+    emit_inscription(
+        "relay.shutdown.complete",
+        &json!({
+            "bundle_name": paths.bundle_name,
+            "pruned_count": shutdown.pruned_sessions.len(),
+            "killed_tmux_server": shutdown.killed_tmux_server,
+            "pruned_sessions": shutdown.pruned_sessions,
+        }),
+    );
+    if let Some(error) = accept_error {
+        return Err(error);
     }
     Ok(())
 }
@@ -877,6 +908,17 @@ fn map_relay_request_failure(socket_path: &Path, source: std::io::Error) -> Runt
         format!("relay request failed for {}", socket_path.display()),
         source,
     )
+}
+
+fn remove_relay_socket_file(socket_path: &Path) -> Result<(), RuntimeError> {
+    match fs::remove_file(socket_path) {
+        Ok(()) => Ok(()),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(RuntimeError::io(
+            format!("remove relay socket {}", socket_path.display()),
+            source,
+        )),
+    }
 }
 
 fn is_relay_unavailable_error(source: &std::io::Error) -> bool {

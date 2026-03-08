@@ -69,6 +69,13 @@ pub struct ReconciliationReport {
     pub pruned_sessions: Vec<String>,
 }
 
+/// Managed-session cleanup results for relay shutdown.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ShutdownReport {
+    pub pruned_sessions: Vec<String>,
+    pub killed_tmux_server: bool,
+}
+
 /// Aggregate delivery status for `chat`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -275,6 +282,23 @@ pub fn reconcile_bundle(
 ) -> Result<ReconciliationReport, RelayError> {
     let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
     reconcile_loaded_bundle(&bundle, tmux_socket)
+}
+
+/// Prunes managed sessions and reaps tmux server when safe during shutdown.
+///
+/// # Errors
+///
+/// Returns internal failures when tmux session operations fail.
+pub fn shutdown_bundle_runtime(tmux_socket: &Path) -> Result<ShutdownReport, RelayError> {
+    let mut report = ShutdownReport::default();
+    let mut owned_sessions = list_owned_sessions(tmux_socket)?;
+    owned_sessions.sort();
+    for session_name in owned_sessions {
+        prune_owned_session(tmux_socket, &session_name)?;
+        report.pruned_sessions.push(session_name);
+    }
+    report.killed_tmux_server = cleanup_tmux_server_when_unowned(tmux_socket)?;
+    Ok(report)
 }
 
 fn handle_list(bundle: &BundleConfiguration, sender_session: Option<String>) -> RelayResponse {
@@ -821,7 +845,7 @@ fn reconcile_loaded_bundle(
         }
     }
 
-    cleanup_tmux_server_when_unowned(tmux_socket)?;
+    let _ = cleanup_tmux_server_when_unowned(tmux_socket)?;
     Ok(report)
 }
 
@@ -986,12 +1010,12 @@ fn list_owned_sessions(tmux_socket: &Path) -> Result<Vec<String>, RelayError> {
     Ok(owned)
 }
 
-fn cleanup_tmux_server_when_unowned(tmux_socket: &Path) -> Result<(), RelayError> {
+fn cleanup_tmux_server_when_unowned(tmux_socket: &Path) -> Result<bool, RelayError> {
     if !list_owned_sessions(tmux_socket)?.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
     if !list_all_sessions(tmux_socket)?.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
     let output = run_tmux_command_capture(tmux_socket, &["kill-server"]).map_err(|reason| {
         relay_error(
@@ -1001,11 +1025,11 @@ fn cleanup_tmux_server_when_unowned(tmux_socket: &Path) -> Result<(), RelayError
         )
     })?;
     if output.status.success() {
-        return Ok(());
+        return Ok(true);
     }
     let reason = String::from_utf8_lossy(&output.stderr).trim().to_string();
     if reason.to_ascii_lowercase().contains("no server running") {
-        return Ok(());
+        return Ok(false);
     }
     Err(relay_error(
         "internal_unexpected_failure",

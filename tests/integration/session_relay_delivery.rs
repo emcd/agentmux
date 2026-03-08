@@ -16,7 +16,7 @@ use tempfile::TempDir;
 use tokio::{
     io::AsyncBufReadExt,
     process::{Child, Command},
-    time::sleep,
+    time::{sleep, timeout},
 };
 
 fn tmux_available() -> bool {
@@ -1182,6 +1182,58 @@ async fn relay_startup_retries_transient_tmux_create_failures() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
+    let temporary = TempDir::new().expect("temporary");
+    let bundle_name = "party";
+    let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
+    let state_root = temporary.path().join("state");
+    let fake_tmux_script = temporary.path().join("fake-tmux.sh");
+    let attempts_file = temporary.path().join("attempts.txt");
+    let log_file = temporary.path().join("fake-tmux.log");
+    write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
+
+    let relay_socket = state_root
+        .join("bundles")
+        .join(bundle_name)
+        .join("relay.sock");
+    let mut child =
+        spawn_relay_with_fake_tmux(bundle_name, &config_root, &state_root, &fake_tmux_script);
+    wait_for_relay_socket(&relay_socket).await;
+
+    let pid = child.id().expect("relay pid");
+    let pid = i32::try_from(pid).expect("relay pid fits i32");
+    let kill_result = unsafe { libc::kill(pid, libc::SIGINT) };
+    assert_eq!(kill_result, 0, "failed to send SIGINT");
+
+    let wait_result = timeout(Duration::from_secs(3), child.wait()).await;
+    let status = match wait_result {
+        Ok(result) => result.expect("wait relay"),
+        Err(_) => {
+            child.start_kill().expect("kill relay after timeout");
+            panic!("timed out waiting for relay to exit after SIGINT");
+        }
+    };
+    assert!(
+        status.success(),
+        "relay should exit cleanly after SIGINT, status={status}"
+    );
+    assert!(
+        !relay_socket.exists(),
+        "relay socket should be removed during shutdown"
+    );
+
+    let log = fs::read_to_string(&log_file).expect("read fake tmux log");
+    assert!(
+        log.contains("kill-session -t =alpha"),
+        "shutdown should prune owned session, log={log:?}"
+    );
+    assert!(
+        log.contains("kill-server"),
+        "shutdown should reap tmux server when no sessions remain, log={log:?}"
+    );
+}
+
 fn write_fake_tmux_script(script_path: &Path, attempts_file: &Path, log_file: &Path) {
     let body = format!(
         r##"#!/usr/bin/env bash
@@ -1220,9 +1272,10 @@ case "${{command_name}}" in
       exit 1
     fi
     format="${{args[2]-}}"
+    owned_format=$'#{{session_name}}\t#{{@agentmux_owned}}'
     while IFS= read -r session; do
       [[ -z "${{session}}" ]] && continue
-      if [[ "${{format}}" == "#{{session_name}}\t#{{@agentmux_owned}}" ]]; then
+      if [[ "${{format}}" == "${{owned_format}}" || "${{format}}" == "#{{session_name}}\\t#{{@agentmux_owned}}" ]]; then
         marker=""
         if [[ -s "${{OWNED_FILE}}" ]] && grep -Fxq "${{session}}" "${{OWNED_FILE}}"; then
           marker="1"
