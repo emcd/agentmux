@@ -1514,10 +1514,8 @@ fn resolve_cursor_column(tmux_socket: &Path, pane_target: &str) -> Result<usize,
 }
 
 fn inject_prompt(tmux_socket: &Path, pane_target: &str, prompt: &str) -> Result<(), String> {
-    run_tmux_command(
-        tmux_socket,
-        &["send-keys", "-t", pane_target, "--", prompt, "Enter"],
-    )?;
+    run_tmux_command(tmux_socket, &["send-keys", "-t", pane_target, "--", prompt])?;
+    run_tmux_command(tmux_socket, &["send-keys", "-t", pane_target, "Enter"])?;
     Ok(())
 }
 

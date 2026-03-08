@@ -1319,6 +1319,82 @@ async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn relay_sync_delivery_sends_submit_in_separate_tmux_command() {
+    let temporary = TempDir::new().expect("temporary");
+    let bundle_name = "party";
+    let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
+    let state_root = temporary.path().join("state");
+    let fake_tmux_script = temporary.path().join("fake-tmux.sh");
+    let attempts_file = temporary.path().join("attempts.txt");
+    let log_file = temporary.path().join("fake-tmux.log");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
+
+    let relay_socket = state_root
+        .join("bundles")
+        .join(bundle_name)
+        .join("relay.sock");
+    let mut child = spawn_relay_with_fake_tmux_and_env(
+        bundle_name,
+        &config_root,
+        &state_root,
+        &inscriptions_root,
+        &fake_tmux_script,
+        &[("FAKE_TMUX_CAPTURE_MODE", "stable")],
+    );
+    wait_for_relay_socket(&relay_socket).await;
+
+    let response = request_relay(
+        &relay_socket,
+        &RelayRequest::Chat {
+            request_id: Some("req-submit-separate-enter".to_string()),
+            sender_session: "alpha".to_string(),
+            message: "A".repeat(6_000),
+            targets: vec!["alpha".to_string()],
+            broadcast: false,
+            delivery_mode: ChatDeliveryMode::Sync,
+            quiet_window_ms: Some(50),
+            quiescence_timeout_ms: Some(2_000),
+        },
+    )
+    .expect("chat request should succeed");
+    let RelayResponse::Chat {
+        status, results, ..
+    } = response
+    else {
+        panic!("expected chat response");
+    };
+    assert_eq!(status, ChatStatus::Success);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].outcome, ChatOutcome::Delivered);
+
+    child.start_kill().expect("kill relay");
+    let _ = child.wait().await;
+
+    let log = fs::read_to_string(&log_file).expect("read fake tmux log");
+    let send_keys_lines = log
+        .lines()
+        .filter(|line| line.contains(" send-keys "))
+        .collect::<Vec<_>>();
+    assert!(
+        send_keys_lines.len() >= 2,
+        "expected at least two send-keys commands, log={log:?}"
+    );
+    let prompt_index = send_keys_lines
+        .iter()
+        .position(|line| line.contains("send-keys -t %1 --"))
+        .expect("expected prompt send-keys command");
+    let enter_index = send_keys_lines
+        .iter()
+        .position(|line| line.ends_with("send-keys -t %1 Enter"))
+        .expect("expected separate Enter send-keys command");
+    assert!(
+        prompt_index < enter_index,
+        "expected prompt command before Enter command, log={log:?}"
+    );
+}
+
 fn write_fake_tmux_script(script_path: &Path, attempts_file: &Path, log_file: &Path) {
     let body = format!(
         r##"#!/usr/bin/env bash
@@ -1389,12 +1465,20 @@ case "${{command_name}}" in
     esac
     ;;
   capture-pane)
-    CAPTURE_FILE="${{ATTEMPTS_FILE}}.capture"
-    capture_count="$(cat "${{CAPTURE_FILE}}" 2>/dev/null || true)"
-    if [[ -z "${{capture_count}}" ]]; then capture_count=0; fi
-    capture_count="$((capture_count + 1))"
-    printf "%s" "${{capture_count}}" > "${{CAPTURE_FILE}}"
-    printf "frame-%s\n" "${{capture_count}}"
+    CAPTURE_MODE="${{FAKE_TMUX_CAPTURE_MODE:-incremental}}"
+    if [[ "${{CAPTURE_MODE}}" == "stable" ]]; then
+      printf "frame-stable\n"
+    else
+      CAPTURE_FILE="${{ATTEMPTS_FILE}}.capture"
+      capture_count="$(cat "${{CAPTURE_FILE}}" 2>/dev/null || true)"
+      if [[ -z "${{capture_count}}" ]]; then capture_count=0; fi
+      capture_count="$((capture_count + 1))"
+      printf "%s" "${{capture_count}}" > "${{CAPTURE_FILE}}"
+      printf "frame-%s\n" "${{capture_count}}"
+    fi
+    ;;
+  send-keys)
+    :
     ;;
   new-session)
     count="$(cat "${{ATTEMPTS_FILE}}" 2>/dev/null || true)"
@@ -1450,6 +1534,24 @@ fn spawn_relay_with_fake_tmux(
     inscriptions_root: &Path,
     fake_tmux_script: &Path,
 ) -> Child {
+    spawn_relay_with_fake_tmux_and_env(
+        bundle_name,
+        config_root,
+        state_root,
+        inscriptions_root,
+        fake_tmux_script,
+        &[],
+    )
+}
+
+fn spawn_relay_with_fake_tmux_and_env(
+    bundle_name: &str,
+    config_root: &Path,
+    state_root: &Path,
+    inscriptions_root: &Path,
+    fake_tmux_script: &Path,
+    environment: &[(&str, &str)],
+) -> Child {
     let mut command = Command::new(env!("CARGO_BIN_EXE_agentmux-relay"));
     command
         .arg("--bundle")
@@ -1464,6 +1566,9 @@ fn spawn_relay_with_fake_tmux(
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    for (name, value) in environment {
+        command.env(name, value);
+    }
     command.spawn().expect("spawn relay")
 }
 
