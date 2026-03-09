@@ -1614,6 +1614,16 @@ fn map_config(error: ConfigurationError) -> RelayError {
             "bundle configuration is invalid",
             Some(json!({"path": path, "cause": message})),
         ),
+        ConfigurationError::InvalidGroupName { path, group_name } => relay_error(
+            "validation_invalid_group_name",
+            "bundle configuration uses invalid group name",
+            Some(json!({"path": path, "group_name": group_name})),
+        ),
+        ConfigurationError::ReservedGroupName { path, group_name } => relay_error(
+            "validation_reserved_group_name",
+            "bundle configuration uses reserved group name",
+            Some(json!({"path": path, "group_name": group_name})),
+        ),
         ConfigurationError::AmbiguousSender {
             working_directory,
             matches,

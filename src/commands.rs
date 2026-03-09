@@ -11,7 +11,10 @@ use std::{
 use serde_json::json;
 
 use crate::{
-    configuration::{ConfigurationError, load_bundle_configuration},
+    configuration::{
+        ConfigurationError, RESERVED_GROUP_ALL, load_bundle_configuration,
+        load_bundle_group_memberships,
+    },
     mcp::McpConfiguration,
     relay::{
         ChatDeliveryMode, RelayError, RelayRequest, RelayResponse, reconcile_bundle, request_relay,
@@ -22,7 +25,10 @@ use crate::{
             McpAssociationCli, WorkspaceContext, load_local_mcp_overrides, resolve_association,
             resolve_sender_session,
         },
-        bootstrap::{acquire_relay_runtime_lock, bind_relay_listener},
+        bootstrap::{
+            BootstrapOptions, acquire_relay_runtime_lock, bind_relay_listener, bootstrap_relay,
+            relay_runtime_lock_is_held, resolve_relay_program, spawn_relay_process,
+        },
         error::RuntimeError,
         inscriptions::{
             configure_process_inscriptions, emit_inscription, mcp_inscriptions_path,
@@ -46,8 +52,14 @@ struct RuntimeArguments {
 
 #[derive(Clone, Debug)]
 struct RelayHostArguments {
-    bundle_name: String,
+    selector: RelayHostSelector,
     runtime: RuntimeArguments,
+}
+
+#[derive(Clone, Debug)]
+enum RelayHostSelector {
+    Bundle(String),
+    Group(String),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -77,6 +89,26 @@ struct SendArguments {
     quiescence_timeout_ms: Option<u64>,
     output_json: bool,
     runtime: RuntimeArguments,
+}
+
+#[derive(Clone, Debug)]
+struct RelayHostStartupBundle {
+    bundle_name: String,
+    outcome: String,
+    reason_code: Option<String>,
+    reason: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct RelayHostStartupSummary {
+    schema_version: u32,
+    host_mode: String,
+    group_name: Option<String>,
+    bundles: Vec<RelayHostStartupBundle>,
+    hosted_bundle_count: usize,
+    skipped_bundle_count: usize,
+    failed_bundle_count: usize,
+    hosted_any: bool,
 }
 
 /// Runs the unified `agentmux` CLI entrypoint.
@@ -336,7 +368,17 @@ fn run_relay_host(arguments: RelayHostArguments) -> Result<(), RuntimeError> {
     };
     let roots = RuntimeRoots::resolve(&overrides)?;
     ensure_starter_configuration_layout(&roots.configuration_root)?;
-    let paths = BundleRuntimePaths::resolve(&roots.state_root, &arguments.bundle_name)?;
+
+    match arguments.selector {
+        RelayHostSelector::Bundle(bundle_name) => {
+            run_relay_host_single(&roots, bundle_name.as_str())
+        }
+        RelayHostSelector::Group(group_name) => run_relay_host_group(&roots, group_name.as_str()),
+    }
+}
+
+fn run_relay_host_single(roots: &RuntimeRoots, bundle_name: &str) -> Result<(), RuntimeError> {
+    let paths = BundleRuntimePaths::resolve(&roots.state_root, bundle_name)?;
     configure_process_inscriptions(&relay_inscriptions_path(
         &roots.inscriptions_root,
         &paths.bundle_name,
@@ -373,6 +415,13 @@ fn run_relay_host(arguments: RelayHostArguments) -> Result<(), RuntimeError> {
         report.created_sessions.len(),
         report.pruned_sessions.len(),
     );
+    let summary = build_startup_summary(
+        "single_bundle",
+        None,
+        vec![hosted_startup_bundle(paths.bundle_name.as_str())],
+    );
+    emit_inscription("relay.startup.summary", &startup_summary_payload(&summary));
+    render_startup_summary(&summary);
     let mut accept_error = None::<RuntimeError>;
     while !shutdown_requested() {
         match listener.accept() {
@@ -424,6 +473,225 @@ fn run_relay_host(arguments: RelayHostArguments) -> Result<(), RuntimeError> {
     Ok(())
 }
 
+fn run_relay_host_group(roots: &RuntimeRoots, group_name: &str) -> Result<(), RuntimeError> {
+    validate_group_selector_name(group_name)?;
+    let memberships =
+        load_bundle_group_memberships(&roots.configuration_root).map_err(map_bundle_load_error)?;
+    let selected_bundles = resolve_group_bundles(memberships, group_name)?;
+    let relay_program = resolve_relay_program()?;
+
+    let mut outcomes = Vec::with_capacity(selected_bundles.len());
+    for bundle_name in selected_bundles {
+        outcomes.push(host_group_bundle(
+            roots,
+            relay_program.as_path(),
+            bundle_name.as_str(),
+        ));
+    }
+
+    let summary = build_startup_summary("bundle_group", Some(group_name.to_string()), outcomes);
+    render_startup_summary(&summary);
+    if !summary.hosted_any {
+        return Err(RuntimeError::validation(
+            "validation_no_hosted_bundles",
+            format!("no bundles were hosted for group '{group_name}'"),
+        ));
+    }
+    Ok(())
+}
+
+fn host_group_bundle(
+    roots: &RuntimeRoots,
+    relay_program: &Path,
+    bundle_name: &str,
+) -> RelayHostStartupBundle {
+    let paths = match BundleRuntimePaths::resolve(&roots.state_root, bundle_name) {
+        Ok(paths) => paths,
+        Err(source) => return failed_startup_bundle(bundle_name, source),
+    };
+
+    match relay_runtime_lock_is_held(&paths) {
+        Ok(true) => {
+            return skipped_startup_bundle(
+                bundle_name,
+                "lock_held",
+                "relay runtime lock is already held".to_string(),
+            );
+        }
+        Err(source) => return failed_startup_bundle(bundle_name, source),
+        Ok(false) => {}
+    }
+
+    let startup = bootstrap_relay(&paths, BootstrapOptions::default(), || {
+        let _child = spawn_relay_process(relay_program, &paths, &roots.configuration_root)?;
+        Ok(())
+    });
+    match startup {
+        Ok(report) => {
+            if report.spawned_relay {
+                hosted_startup_bundle(bundle_name)
+            } else {
+                skipped_startup_bundle(
+                    bundle_name,
+                    "lock_held",
+                    "relay runtime lock is already held".to_string(),
+                )
+            }
+        }
+        Err(source) => match relay_runtime_lock_is_held(&paths) {
+            Ok(true) => skipped_startup_bundle(
+                bundle_name,
+                "lock_held",
+                "relay runtime lock is already held".to_string(),
+            ),
+            _ => failed_startup_bundle(bundle_name, source),
+        },
+    }
+}
+
+fn build_startup_summary(
+    host_mode: &str,
+    group_name: Option<String>,
+    bundles: Vec<RelayHostStartupBundle>,
+) -> RelayHostStartupSummary {
+    let hosted_bundle_count = bundles
+        .iter()
+        .filter(|bundle| bundle.outcome == "hosted")
+        .count();
+    let skipped_bundle_count = bundles
+        .iter()
+        .filter(|bundle| bundle.outcome == "skipped")
+        .count();
+    let failed_bundle_count = bundles
+        .iter()
+        .filter(|bundle| bundle.outcome == "failed")
+        .count();
+    RelayHostStartupSummary {
+        schema_version: 1,
+        host_mode: host_mode.to_string(),
+        group_name,
+        bundles,
+        hosted_bundle_count,
+        skipped_bundle_count,
+        failed_bundle_count,
+        hosted_any: hosted_bundle_count > 0,
+    }
+}
+
+fn startup_summary_payload(summary: &RelayHostStartupSummary) -> serde_json::Value {
+    json!({
+        "schema_version": summary.schema_version,
+        "host_mode": summary.host_mode,
+        "group_name": summary.group_name,
+        "bundles": summary.bundles.iter().map(|bundle| json!({
+            "bundle_name": bundle.bundle_name,
+            "outcome": bundle.outcome,
+            "reason_code": bundle.reason_code,
+            "reason": bundle.reason,
+        })).collect::<Vec<_>>(),
+        "hosted_bundle_count": summary.hosted_bundle_count,
+        "skipped_bundle_count": summary.skipped_bundle_count,
+        "failed_bundle_count": summary.failed_bundle_count,
+        "hosted_any": summary.hosted_any,
+    })
+}
+
+fn render_startup_summary(summary: &RelayHostStartupSummary) {
+    let group_value = summary.group_name.as_deref().unwrap_or("-");
+    println!(
+        "agentmux host relay summary mode={} group={} hosted={} skipped={} failed={} hosted_any={}",
+        summary.host_mode,
+        group_value,
+        summary.hosted_bundle_count,
+        summary.skipped_bundle_count,
+        summary.failed_bundle_count,
+        summary.hosted_any,
+    );
+    for bundle in &summary.bundles {
+        match (bundle.reason_code.as_deref(), bundle.reason.as_deref()) {
+            (Some(reason_code), Some(reason)) => {
+                println!(
+                    "bundle={} outcome={} reason_code={} reason={}",
+                    bundle.bundle_name, bundle.outcome, reason_code, reason
+                );
+            }
+            (Some(reason_code), None) => {
+                println!(
+                    "bundle={} outcome={} reason_code={}",
+                    bundle.bundle_name, bundle.outcome, reason_code
+                );
+            }
+            _ => println!("bundle={} outcome={}", bundle.bundle_name, bundle.outcome),
+        }
+    }
+}
+
+fn hosted_startup_bundle(bundle_name: &str) -> RelayHostStartupBundle {
+    RelayHostStartupBundle {
+        bundle_name: bundle_name.to_string(),
+        outcome: "hosted".to_string(),
+        reason_code: None,
+        reason: None,
+    }
+}
+
+fn skipped_startup_bundle(
+    bundle_name: &str,
+    reason_code: &str,
+    reason: String,
+) -> RelayHostStartupBundle {
+    RelayHostStartupBundle {
+        bundle_name: bundle_name.to_string(),
+        outcome: "skipped".to_string(),
+        reason_code: Some(reason_code.to_string()),
+        reason: Some(reason),
+    }
+}
+
+fn failed_startup_bundle(bundle_name: &str, source: RuntimeError) -> RelayHostStartupBundle {
+    let (reason_code, reason) = runtime_error_reason(&source);
+    RelayHostStartupBundle {
+        bundle_name: bundle_name.to_string(),
+        outcome: "failed".to_string(),
+        reason_code: Some(reason_code),
+        reason: Some(reason),
+    }
+}
+
+fn runtime_error_reason(source: &RuntimeError) -> (String, String) {
+    match source {
+        RuntimeError::Validation { code, message } => (code.clone(), message.clone()),
+        RuntimeError::InvalidArgument { message, .. } => {
+            ("validation_invalid_arguments".to_string(), message.clone())
+        }
+        _ => ("runtime_startup_failed".to_string(), source.to_string()),
+    }
+}
+
+fn resolve_group_bundles(
+    memberships: Vec<crate::configuration::BundleGroupMembership>,
+    group_name: &str,
+) -> Result<Vec<String>, RuntimeError> {
+    if group_name == RESERVED_GROUP_ALL {
+        return Ok(memberships
+            .into_iter()
+            .map(|membership| membership.bundle_name)
+            .collect::<Vec<_>>());
+    }
+    let selected = memberships
+        .into_iter()
+        .filter(|membership| membership.groups.iter().any(|group| group == group_name))
+        .map(|membership| membership.bundle_name)
+        .collect::<Vec<_>>();
+    if selected.is_empty() {
+        return Err(RuntimeError::validation(
+            "validation_unknown_group",
+            format!("group '{}' is not configured", group_name),
+        ));
+    }
+    Ok(selected)
+}
+
 async fn run_mcp_host(arguments: McpHostArguments) -> Result<(), RuntimeError> {
     let current_directory = env::current_dir()
         .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
@@ -468,35 +736,105 @@ async fn run_mcp_host(arguments: McpHostArguments) -> Result<(), RuntimeError> {
 }
 
 fn parse_host_relay_arguments(arguments: &[String]) -> Result<RelayHostArguments, RuntimeError> {
-    if arguments.is_empty() {
-        return Err(RuntimeError::InvalidArgument {
-            argument: "<bundle-id>".to_string(),
-            message: "missing value".to_string(),
-        });
-    }
-    if arguments[0].starts_with('-') {
-        return Err(RuntimeError::InvalidArgument {
-            argument: "<bundle-id>".to_string(),
-            message: "missing value".to_string(),
-        });
-    }
-
     let mut parsed = RelayHostArguments {
-        bundle_name: arguments[0].clone(),
+        selector: RelayHostSelector::Bundle(String::new()),
         runtime: RuntimeArguments::default(),
     };
-    let mut index = 1usize;
+    let mut positional_bundle = None::<String>;
+    let mut group_name = None::<String>;
+    let mut index = 0usize;
     while index < arguments.len() {
         if parse_runtime_flag(arguments, &mut index, &mut parsed.runtime)? {
             index += 1;
             continue;
         }
-        return Err(RuntimeError::InvalidArgument {
-            argument: arguments[index].clone(),
-            message: "unknown argument".to_string(),
-        });
+        match arguments[index].as_str() {
+            "--group" => group_name = Some(take_value(arguments, &mut index, "--group")?),
+            "--all" | "--include-bundle" | "--exclude-bundle" => {
+                return Err(RuntimeError::validation(
+                    "validation_invalid_arguments",
+                    format!("'{}' is not supported in relay host MVP", arguments[index]),
+                ));
+            }
+            value if !value.starts_with('-') => {
+                if positional_bundle.is_some() {
+                    return Err(RuntimeError::InvalidArgument {
+                        argument: value.to_string(),
+                        message: "unknown argument".to_string(),
+                    });
+                }
+                positional_bundle = Some(value.to_string());
+            }
+            unknown => {
+                return Err(RuntimeError::InvalidArgument {
+                    argument: unknown.to_string(),
+                    message: "unknown argument".to_string(),
+                });
+            }
+        }
+        index += 1;
     }
+
+    parsed.selector = match (positional_bundle, group_name) {
+        (Some(_), Some(_)) => {
+            return Err(RuntimeError::validation(
+                "validation_conflicting_selectors",
+                "provide either positional <bundle-id> or --group <GROUP>, not both".to_string(),
+            ));
+        }
+        (None, None) => {
+            return Err(RuntimeError::InvalidArgument {
+                argument: "<bundle-id>|--group".to_string(),
+                message: "missing selector".to_string(),
+            });
+        }
+        (Some(bundle_name), None) => RelayHostSelector::Bundle(bundle_name),
+        (None, Some(group_name)) => {
+            validate_group_selector_name(group_name.as_str())?;
+            RelayHostSelector::Group(group_name)
+        }
+    };
     Ok(parsed)
+}
+
+fn validate_group_selector_name(group_name: &str) -> Result<(), RuntimeError> {
+    if group_name == RESERVED_GROUP_ALL {
+        return Ok(());
+    }
+    if is_custom_group_name(group_name) {
+        return Ok(());
+    }
+    if is_reserved_group_name(group_name) {
+        return Err(RuntimeError::validation(
+            "validation_invalid_group_name",
+            format!(
+                "group '{}' is reserved; only '{}' is currently supported",
+                group_name, RESERVED_GROUP_ALL
+            ),
+        ));
+    }
+    Err(RuntimeError::validation(
+        "validation_invalid_group_name",
+        format!(
+            "group '{}' must be lowercase (custom) or '{}'",
+            group_name, RESERVED_GROUP_ALL
+        ),
+    ))
+}
+
+fn is_reserved_group_name(group_name: &str) -> bool {
+    group_name.chars().all(|character| {
+        character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
+    })
+}
+
+fn is_custom_group_name(group_name: &str) -> bool {
+    group_name.chars().all(|character| {
+        character.is_ascii_lowercase()
+            || character.is_ascii_digit()
+            || character == '_'
+            || character == '-'
+    })
 }
 
 fn parse_host_mcp_arguments(arguments: &[String]) -> Result<McpHostArguments, RuntimeError> {
@@ -804,6 +1142,22 @@ fn map_bundle_load_error(source: ConfigurationError) -> RuntimeError {
                 message
             ),
         ),
+        ConfigurationError::InvalidGroupName { path, group_name } => RuntimeError::validation(
+            "validation_invalid_group_name",
+            format!(
+                "invalid group '{}' in bundle configuration {}",
+                group_name,
+                path.display()
+            ),
+        ),
+        ConfigurationError::ReservedGroupName { path, group_name } => RuntimeError::validation(
+            "validation_reserved_group_name",
+            format!(
+                "group '{}' is reserved in bundle configuration {}",
+                group_name,
+                path.display()
+            ),
+        ),
         ConfigurationError::Io { context, source } => RuntimeError::io(context, source),
     }
 }
@@ -857,7 +1211,7 @@ fn is_relay_unavailable_error(source: &std::io::Error) -> bool {
 
 fn print_agentmux_help() {
     println!(
-        "Usage: agentmux <command> [options]\n\nCommands:\n  host relay <bundle-id> [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\n  host mcp [--bundle NAME] [--session-name NAME] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\n  list [--bundle NAME] [--sender NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\n  send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--quiescence-timeout-ms MS] [--request-id ID] [--bundle NAME] [--sender NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux <command> [options]\n\nCommands:\n  host relay (<bundle-id> | --group GROUP) [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\n  host mcp [--bundle NAME] [--session-name NAME] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\n  list [--bundle NAME] [--sender NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\n  send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--quiescence-timeout-ms MS] [--request-id ID] [--bundle NAME] [--sender NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }
 
@@ -867,7 +1221,7 @@ fn print_host_help() {
 
 fn print_host_relay_help() {
     println!(
-        "Usage: agentmux host relay <bundle-id> [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux host relay (<bundle-id> | --group GROUP) [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }
 

@@ -31,6 +31,12 @@ Start relay host:
 agentmux host relay myproject
 ```
 
+Start relay host for a bundle group:
+
+```bash
+agentmux host relay --group ALL
+```
+
 Start MCP host:
 
 ```bash
@@ -102,6 +108,7 @@ prompt-idle-column = 2
 
 ```toml
 format-version = 1
+groups = ["dev", "login"]
 
 [[sessions]]
 id = "master"

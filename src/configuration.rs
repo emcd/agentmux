@@ -15,6 +15,7 @@ const FORMAT_VERSION: u32 = 1;
 const CODERS_FILE: &str = "coders.toml";
 const BUNDLES_DIRECTORY: &str = "bundles";
 const BUNDLE_EXTENSION: &str = "toml";
+pub const RESERVED_GROUP_ALL: &str = "ALL";
 
 /// One configured bundle member.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -47,7 +48,15 @@ pub struct PromptReadinessTemplate {
 pub struct BundleConfiguration {
     pub schema_version: String,
     pub bundle_name: String,
+    pub groups: Vec<String>,
     pub members: Vec<BundleMember>,
+}
+
+/// Group membership metadata for one bundle.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleGroupMembership {
+    pub bundle_name: String,
+    pub groups: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -76,6 +85,8 @@ struct RawCoder {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 struct RawBundleFile {
     format_version: u32,
+    #[serde(default)]
+    groups: Vec<String>,
     #[serde(default)]
     sessions: Vec<RawSession>,
 }
@@ -106,6 +117,14 @@ pub enum ConfigurationError {
     InvalidConfiguration {
         path: PathBuf,
         message: String,
+    },
+    InvalidGroupName {
+        path: PathBuf,
+        group_name: String,
+    },
+    ReservedGroupName {
+        path: PathBuf,
+        group_name: String,
     },
     Io {
         context: String,
@@ -148,6 +167,18 @@ impl Display for ConfigurationError {
                     message
                 )
             }
+            Self::InvalidGroupName { path, group_name } => write!(
+                formatter,
+                "invalid group name '{}' in {}",
+                group_name,
+                path.display()
+            ),
+            Self::ReservedGroupName { path, group_name } => write!(
+                formatter,
+                "group name '{}' is reserved in {}",
+                group_name,
+                path.display()
+            ),
             Self::Io { context, source } => write!(formatter, "{context}: {source}"),
         }
     }
@@ -172,6 +203,58 @@ pub fn bundle_configuration_path(configuration_root: &Path, bundle_name: &str) -
     configuration_root
         .join(BUNDLES_DIRECTORY)
         .join(format!("{bundle_name}.{BUNDLE_EXTENSION}"))
+}
+
+/// Loads bundle-group membership metadata for configured bundles.
+///
+/// # Errors
+///
+/// Returns `ConfigurationError` for malformed bundle files and I/O failures.
+pub fn load_bundle_group_memberships(
+    configuration_root: &Path,
+) -> Result<Vec<BundleGroupMembership>, ConfigurationError> {
+    let bundles_directory = configuration_root.join(BUNDLES_DIRECTORY);
+    if !bundles_directory.exists() {
+        return Ok(Vec::new());
+    }
+    let mut bundle_names = fs::read_dir(&bundles_directory)
+        .map_err(|source| {
+            ConfigurationError::io(
+                format!("read bundle directory {}", bundles_directory.display()),
+                source,
+            )
+        })?
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| entry.path().file_name().map(ToOwned::to_owned))
+        .filter_map(|name| name.to_str().map(ToOwned::to_owned))
+        .filter(|name| name.ends_with(".toml"))
+        .filter_map(|name| name.strip_suffix(".toml").map(ToOwned::to_owned))
+        .collect::<Vec<_>>();
+    bundle_names.sort_unstable();
+
+    let mut memberships = Vec::with_capacity(bundle_names.len());
+    for bundle_name in bundle_names {
+        let bundle_path = bundle_configuration_path(configuration_root, &bundle_name);
+        let bundle_raw = fs::read_to_string(&bundle_path).map_err(|source| {
+            ConfigurationError::io(format!("read {}", bundle_path.display()), source)
+        })?;
+        let bundle_file = toml::from_str::<RawBundleFile>(&bundle_raw).map_err(|source| {
+            ConfigurationError::InvalidConfiguration {
+                path: bundle_path.clone(),
+                message: source.to_string(),
+            }
+        })?;
+        validate_format_version(bundle_file.format_version, &bundle_path)?;
+        if bundle_file.sessions.is_empty() {
+            continue;
+        }
+        let groups = validate_bundle_groups(&bundle_file.groups, &bundle_path)?;
+        memberships.push(BundleGroupMembership {
+            bundle_name,
+            groups,
+        });
+    }
+    Ok(memberships)
 }
 
 /// Loads one bundle configuration and applies schema validation.
@@ -266,6 +349,8 @@ fn validate_loaded_configuration(
 
     let coders = validate_coders(coders_file.coders, coders_path)?;
 
+    let groups = validate_bundle_groups(&bundle_file.groups, bundle_path)?;
+
     if bundle_file.sessions.is_empty() {
         return Err(ConfigurationError::InvalidConfiguration {
             path: bundle_path.to_path_buf(),
@@ -350,6 +435,7 @@ fn validate_loaded_configuration(
     Ok(BundleConfiguration {
         schema_version: FORMAT_VERSION.to_string(),
         bundle_name: expected_bundle_name.to_string(),
+        groups,
         members,
     })
 }
@@ -421,6 +507,54 @@ fn validate_coders(
     }
 
     Ok(unique)
+}
+
+fn validate_bundle_groups(
+    groups: &[String],
+    bundle_path: &Path,
+) -> Result<Vec<String>, ConfigurationError> {
+    let mut validated = Vec::<String>::with_capacity(groups.len());
+    let mut seen = HashSet::<String>::new();
+    for raw_group in groups {
+        let group = normalize_field(raw_group.as_str());
+        if group.is_empty() {
+            return Err(ConfigurationError::InvalidGroupName {
+                path: bundle_path.to_path_buf(),
+                group_name: raw_group.clone(),
+            });
+        }
+        if group == RESERVED_GROUP_ALL {
+            return Err(ConfigurationError::ReservedGroupName {
+                path: bundle_path.to_path_buf(),
+                group_name: group.to_string(),
+            });
+        }
+        if is_reserved_group_name(group) || !is_custom_group_name(group) {
+            return Err(ConfigurationError::InvalidGroupName {
+                path: bundle_path.to_path_buf(),
+                group_name: group.to_string(),
+            });
+        }
+        if seen.insert(group.to_string()) {
+            validated.push(group.to_string());
+        }
+    }
+    Ok(validated)
+}
+
+fn is_reserved_group_name(group: &str) -> bool {
+    group.chars().all(|character| {
+        character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
+    })
+}
+
+fn is_custom_group_name(group: &str) -> bool {
+    group.chars().all(|character| {
+        character.is_ascii_lowercase()
+            || character.is_ascii_digit()
+            || character == '_'
+            || character == '-'
+    })
 }
 
 fn validate_format_version(version: u32, path: &Path) -> Result<(), ConfigurationError> {

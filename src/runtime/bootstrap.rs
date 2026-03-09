@@ -281,7 +281,12 @@ fn remove_stale_relay_socket(paths: &BundleRuntimePaths) -> Result<bool, Runtime
     Ok(true)
 }
 
-fn relay_runtime_lock_is_held(paths: &BundleRuntimePaths) -> Result<bool, RuntimeError> {
+/// Checks whether the relay runtime lock is currently held for one bundle.
+///
+/// # Errors
+///
+/// Returns `RuntimeError` when lock-file access fails.
+pub fn relay_runtime_lock_is_held(paths: &BundleRuntimePaths) -> Result<bool, RuntimeError> {
     let lock_file = open_lock_file(&paths.relay_lock_file)?;
     let lock_obtained = try_lock_exclusive_nonblocking(&lock_file)?;
     if lock_obtained {

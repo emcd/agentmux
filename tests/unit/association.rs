@@ -48,6 +48,7 @@ fn bundle_with_sessions(sessions: &[&str]) -> BundleConfiguration {
     BundleConfiguration {
         schema_version: "1".to_string(),
         bundle_name: "agentmux".to_string(),
+        groups: Vec::new(),
         members: sessions
             .iter()
             .map(|session_name| agentmux::configuration::BundleMember {
@@ -67,6 +68,7 @@ fn bundle_with_directories(
     BundleConfiguration {
         schema_version: "1".to_string(),
         bundle_name: "agentmux".to_string(),
+        groups: Vec::new(),
         members: session_directories
             .iter()
             .map(
