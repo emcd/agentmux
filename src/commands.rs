@@ -597,6 +597,12 @@ fn startup_summary_payload(summary: &RelayHostStartupSummary) -> serde_json::Val
 }
 
 fn render_startup_summary(summary: &RelayHostStartupSummary) {
+    match serde_json::to_string(&startup_summary_payload(summary)) {
+        Ok(encoded) => println!("{encoded}"),
+        Err(source) => {
+            eprintln!("agentmux host relay: failed to encode startup summary json: {source}");
+        }
+    }
     let group_value = summary.group_name.as_deref().unwrap_or("-");
     println!(
         "agentmux host relay summary mode={} group={} hosted={} skipped={} failed={} hosted_any={}",
