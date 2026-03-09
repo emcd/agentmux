@@ -12,6 +12,7 @@ use agentmux::runtime::{
     bootstrap::acquire_relay_runtime_lock,
     paths::{BundleRuntimePaths, ensure_bundle_runtime_directory},
 };
+use serde_json::Value;
 use tempfile::TempDir;
 
 #[test]
@@ -251,6 +252,69 @@ fn host_relay_group_all_selects_all_configured_bundles() {
 }
 
 #[test]
+fn host_relay_single_bundle_summary_json_omits_group_name() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration(&config_root, "alpha", Some(&["dev"]), &["a"]);
+
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "alpha",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay alpha");
+
+    let relay_socket = state_root.join("bundles").join("alpha").join("relay.sock");
+    wait_for_relay_socket(&relay_socket);
+    thread::sleep(Duration::from_millis(100));
+    shutdown_relay_if_present(&state_root, "alpha");
+
+    let output = child.wait_with_output().expect("wait for relay process");
+    assert!(
+        output.status.success(),
+        "relay should exit cleanly, stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let summary_line = stdout
+        .lines()
+        .find(|line| line.trim_start().starts_with('{') && line.contains("\"host_mode\""))
+        .expect("find startup summary json line");
+    let payload: Value = serde_json::from_str(summary_line).expect("parse summary payload");
+    let payload_object = payload.as_object().expect("summary payload object");
+    assert_eq!(
+        payload_object
+            .get("host_mode")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        "single_bundle"
+    );
+    assert!(
+        !payload_object.contains_key("group_name"),
+        "group_name should be omitted in single-bundle mode payload: {payload_object:?}"
+    );
+}
+
+#[test]
 fn send_rejects_missing_message_input() {
     let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
         .args(["send", "--target", "bravo"])
@@ -460,4 +524,18 @@ fn shutdown_relay_if_present(state_root: &Path, bundle_name: &str) {
         }
         thread::sleep(Duration::from_millis(20));
     }
+}
+
+fn wait_for_relay_socket(socket_path: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        if socket_path.exists() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    panic!(
+        "timed out waiting for relay socket {}",
+        socket_path.display()
+    );
 }

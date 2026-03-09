@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use serde_json::json;
+use serde_json::{Map, Value, json};
 
 use crate::{
     configuration::{
@@ -578,22 +578,44 @@ fn build_startup_summary(
     }
 }
 
-fn startup_summary_payload(summary: &RelayHostStartupSummary) -> serde_json::Value {
-    json!({
-        "schema_version": summary.schema_version,
-        "host_mode": summary.host_mode,
-        "group_name": summary.group_name,
-        "bundles": summary.bundles.iter().map(|bundle| json!({
-            "bundle_name": bundle.bundle_name,
-            "outcome": bundle.outcome,
-            "reason_code": bundle.reason_code,
-            "reason": bundle.reason,
-        })).collect::<Vec<_>>(),
-        "hosted_bundle_count": summary.hosted_bundle_count,
-        "skipped_bundle_count": summary.skipped_bundle_count,
-        "failed_bundle_count": summary.failed_bundle_count,
-        "hosted_any": summary.hosted_any,
-    })
+fn startup_summary_payload(summary: &RelayHostStartupSummary) -> Value {
+    let mut payload = Map::<String, Value>::new();
+    payload.insert("schema_version".to_string(), json!(summary.schema_version));
+    payload.insert("host_mode".to_string(), json!(summary.host_mode));
+    if let Some(group_name) = summary.group_name.as_ref() {
+        payload.insert("group_name".to_string(), json!(group_name));
+    }
+    payload.insert(
+        "bundles".to_string(),
+        Value::Array(
+            summary
+                .bundles
+                .iter()
+                .map(|bundle| {
+                    json!({
+                        "bundle_name": bundle.bundle_name,
+                        "outcome": bundle.outcome,
+                        "reason_code": bundle.reason_code,
+                        "reason": bundle.reason,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        ),
+    );
+    payload.insert(
+        "hosted_bundle_count".to_string(),
+        json!(summary.hosted_bundle_count),
+    );
+    payload.insert(
+        "skipped_bundle_count".to_string(),
+        json!(summary.skipped_bundle_count),
+    );
+    payload.insert(
+        "failed_bundle_count".to_string(),
+        json!(summary.failed_bundle_count),
+    );
+    payload.insert("hosted_any".to_string(), json!(summary.hosted_any));
+    Value::Object(payload)
 }
 
 fn render_startup_summary(summary: &RelayHostStartupSummary) {
