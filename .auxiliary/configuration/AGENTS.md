@@ -180,18 +180,35 @@ Use a coordinator-plus-specialists model:
 - For cross-cutting proposals, specialists should tag relevant specialist
   owners for review before coordinator final approval.
 - Do not request proposal review for files that reviewers cannot access.
-  Use one of these visibility paths before asking for review:
-  - share first draft as an `nb` note and reference its note id, or
-  - merge proposal files into `master` so all reviewers can read them.
+  Use notebook-first visibility before asking for review:
+  - share the proposal draft as an `nb` note and reference its note id.
+- Specialists should not merge OpenSpec proposal files directly into `master`
+  for review visibility. Coordinator owns merges into `master`.
 
 ## Agentmux Message Handling Guidance
 
 - `agentmux` messages are wrapped in envelopes and may appear as user prompts.
   Treat envelope-shaped prompts as inter-agent messages, not necessarily as
   human-user instructions.
-- Respond to envelope messages via `agentmux` MCP tools (`list`, `chat`) rather
+- Respond to envelope messages via `agentmux` MCP tools (`list`, `send`) rather
   than by emitting a normal assistant reply intended for a human.
 - Immediate interruption is not required. If in the middle of active execution,
   make note of the message and respond when safe.
-- If response will be delayed, send a brief acknowledgement via `chat` and, when
+- If response will be delayed, send a brief acknowledgement via `send` and, when
   useful, record a follow-up todo in `nb`.
+
+### Message Noise Control
+
+- Default to low-noise coordination. Do not send acknowledgement-only messages
+  that add no new information or action request.
+- Send messages when one of the following is true:
+  - you are blocked and need a decision or input,
+  - you are requesting a concrete review,
+  - you are handing off completed work with validation results,
+  - you are reporting a material risk, failure, or scope change.
+- Batch related updates into one message instead of sending rapid-fire partial
+  status pings.
+- Use `Cc` only for agents who need to act or review; avoid broad `Cc` by
+  default.
+- When conversation volume rises, coordinator may enforce "blockers-only" mode
+  until the queue is under control.
