@@ -8,7 +8,9 @@ TBD - created by archiving change add-mcp-tool-surface-contract. Update Purpose 
 The system SHALL expose the following MCP tools for the relay MVP:
 
 - `list`
-- `chat`
+- `send`
+
+The system SHALL NOT expose a temporary `chat` compatibility alias by default.
 
 #### Scenario: Advertise full tool set
 
@@ -55,33 +57,33 @@ Each recipient entry SHALL include:
 - **WHEN** a recipient has configured display metadata
 - **THEN** `list` includes `display_name` for that recipient
 
-### Requirement: Chat Target Selection
+### Requirement: Send Target Selection
 
-`chat` SHALL support exactly one target mode per request:
+`send` SHALL support exactly one target mode per request:
 
 - `targets` (non-empty list of recipient identifiers)
 - `broadcast=true` for full bundle delivery
 
-`chat` SHALL additionally support optional `delivery_mode` with values:
+`send` SHALL additionally support optional `delivery_mode` with values:
 
 - `async`
 - `sync`
 
 If `delivery_mode` is omitted, the system SHALL default to `async`.
 
-`chat` SHALL additionally support optional `quiescence_timeout_ms`:
+`send` SHALL additionally support optional `quiescence_timeout_ms`:
 
 - positive integer milliseconds
 - omitted means mode-aware defaults are applied by relay
 
 #### Scenario: Default to async delivery mode
 
-- **WHEN** a caller invokes `chat` without specifying `delivery_mode`
+- **WHEN** a caller invokes `send` without specifying `delivery_mode`
 - **THEN** the system processes the request using `delivery_mode=async`
 
 #### Scenario: Preserve blocking semantics for explicit sync callers
 
-- **WHEN** a caller invokes `chat` with `delivery_mode=sync`
+- **WHEN** a caller invokes `send` with `delivery_mode=sync`
 - **THEN** the system returns completion-style outcomes for the request
 - **AND** does not downgrade that request to async acceptance semantics
 
@@ -132,12 +134,12 @@ If `delivery_mode` is omitted, the system SHALL default to `async`.
 
 ### Requirement: Sender Identity Inference
 
-`chat` SHALL infer sender identity from the MCP server's configured session
+`send` SHALL infer sender identity from the MCP server's configured session
 association and SHALL NOT require a sender identity in request payloads.
 
 #### Scenario: Infer sender session identity
 
-- **WHEN** a caller invokes `chat`
+- **WHEN** a caller invokes `send`
 - **THEN** the system resolves sender identity from MCP server association
 - **AND** uses that sender session identity for delivery metadata
 
@@ -146,9 +148,9 @@ association and SHALL NOT require a sender identity in request payloads.
 - **WHEN** the MCP server instance has no valid session association
 - **THEN** the system rejects the request with `validation_unknown_sender`
 
-### Requirement: Chat Response Contract
+### Requirement: Send Response Contract
 
-`chat` SHALL return a response containing:
+`send` SHALL return a response containing:
 
 - `schema_version`
 - `bundle_name`
@@ -176,20 +178,20 @@ In `delivery_mode=sync`, `status` SHALL be one of `success`, `partial`, or
 
 #### Scenario: Return accepted outcome for async request
 
-- **WHEN** a caller invokes `chat` with `delivery_mode=async`
+- **WHEN** a caller invokes `send` with `delivery_mode=async`
 - **THEN** the response status is `accepted`
 - **AND** per-target outcomes are `queued`
 
 #### Scenario: Return partial outcome for sync mixed delivery
 
-- **WHEN** a caller invokes `chat` with `delivery_mode=sync`
+- **WHEN** a caller invokes `send` with `delivery_mode=sync`
 - **AND** at least one target succeeds and at least one target fails
 - **THEN** `status` is `partial`
 - **AND** each target result includes its own outcome and reason data
 
 #### Scenario: Return empty results for zero effective recipients
 
-- **WHEN** a caller invokes `chat`
+- **WHEN** a caller invokes `send`
 - **AND** effective target resolution yields zero recipients
 - **THEN** the response includes `results=[]`
 - **AND** `status` is `accepted` for `delivery_mode=async`
@@ -213,13 +215,13 @@ The system SHALL use stable machine-readable error codes.
 
 #### Scenario: Unknown recipient error
 
-- **WHEN** `chat` targets a session that is not in the selected bundle
+- **WHEN** `send` targets a session that is not in the selected bundle
 - **THEN** the tool returns error code `validation_unknown_recipient`
 - **AND** includes a human-readable message
 
 #### Scenario: Ambiguous recipient name error
 
-- **WHEN** `chat` targets a configured recipient name shared by multiple sessions
+- **WHEN** `send` targets a configured recipient name shared by multiple sessions
 - **THEN** the tool returns error code `validation_ambiguous_recipient`
 - **AND** includes matching session identifiers in error details
 
@@ -231,4 +233,3 @@ All successful responses for relay tools SHALL include `schema_version`.
 
 - **WHEN** any relay MCP tool succeeds
 - **THEN** the response includes `schema_version`
-
