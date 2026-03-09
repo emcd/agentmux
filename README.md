@@ -1,94 +1,156 @@
 # agentmux
 
-`agentmux` is a tmux-backed coordination layer for agentic coding sessions.
+`agentmux` is a tmux-backed coordination runtime for multi-agent coding.
+It provides one CLI (`agentmux`) with host + operator subcommands and one MCP
+tool surface for LLM clients.
 
-It provides two runtime hosts:
+## Architecture At A Glance
 
-- relay host: manages bundle sessions and routes messages into tmux panes
-- MCP host: exposes MCP tools (`list`, `send`) for LLM agents
+- Relay host:
+  - Command: `agentmux host relay <bundle-id>`
+  - Responsibility: reconcile bundle sessions and route envelopes to tmux panes.
+- MCP host:
+  - Command: `agentmux host mcp`
+  - Responsibility: expose MCP tools (`list`, `send`) and forward requests to relay.
+- Operator CLI:
+  - Commands: `agentmux list`, `agentmux send`
+  - Responsibility: direct local inspection of recipients and message delivery.
 
-## Motivation
-
-Some coding agents support hooks for coordination, while others do not.
-`agentmux` uses tmux session control as a common denominator so different
-agent harnesses can exchange messages through a shared transport.
+Both host modes use shared runtime roots for configuration, sockets, locks, and
+logs.
 
 ## Requirements
 
 - `tmux` on `PATH`
 
-## Quick Start
-
-Install `agentmux`:
+## Install
 
 ```bash
-cargo install --path .
+cargo install agentmux
 ```
 
-Start relay host:
+## Quick Start
+
+1. Start relay for your bundle:
 
 ```bash
 agentmux host relay myproject
 ```
 
-Start relay host for a bundle group:
+Optional: start relay host for a bundle group:
 
 ```bash
 agentmux host relay --group ALL
 ```
 
-Start MCP host:
+2. Start MCP host:
 
 ```bash
-agentmux host mcp --bundle myproject --session-name master
+agentmux host mcp
 ```
 
-Configure MCP client integration (for example, in `.mcp.json`):
+3. Add MCP server wiring in `.mcp.json` (or equivalent MCP config):
 
 ```json
 {
   "mcpServers": {
     "agentmux": {
       "command": "agentmux",
-      "args": [
-        "host",
-        "mcp",
-        "--bundle",
-        "myproject",
-        "--session-name",
-        "master"
-      ]
+      "args": ["host", "mcp"]
     }
   }
 }
 ```
 
-Run relay/MCP with shared state root:
+## CLI Surface
+
+```text
+agentmux host relay <bundle-id>
+agentmux host mcp [--bundle NAME] [--session-name NAME]
+agentmux list [--bundle NAME] [--sender NAME] [--json]
+agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--bundle NAME] [--sender NAME] [--json]
+```
+
+Use `--help` on each command for the full flag list.
+
+Common runtime flags for all commands:
+
+- `--config-directory PATH`
+- `--state-directory PATH`
+- `--inscriptions-directory PATH` (alias: `--logs-directory PATH`)
+- `--repository-root PATH`
+
+`send` message input rules:
+
+- Use `--message TEXT`, or pipe stdin.
+- Do not provide both `--message` and piped stdin.
+- Empty messages are rejected.
+
+Example piped send:
 
 ```bash
-AGENTMUX_STATE_DIRECTORY=.auxiliary/state/myproject
-agentmux host relay myproject --state-directory "${AGENTMUX_STATE_DIRECTORY}"
-agentmux host mcp --bundle myproject --session-name master --state-directory "${AGENTMUX_STATE_DIRECTORY}"
+printf 'queued hello\n' | agentmux send --bundle myproject --sender master --target tui
 ```
+
+## MCP Surface
+
+The MCP server advertises:
+
+- `list`: return candidate recipients in the selected bundle.
+- `send`: deliver to explicit targets or broadcast.
+
+Delivery behavior:
+
+- `delivery_mode=async` (default): accept immediately and queue background delivery.
+- `delivery_mode=sync`: block until per-target outcomes are known.
+- `quiescence_timeout_ms` optionally bounds prompt-readiness waiting.
+
+Example `.mcp.json` snippet:
+
+```json
+{
+  "mcpServers": {
+    "agentmux": {
+      "command": "agentmux",
+      "args": ["host", "mcp"]
+    }
+  }
+}
+```
+
+## Multi-Worktree Workflow
+
+Typical topology:
+
+- one shared bundle id (for example `agentmux`),
+- one relay host process for that bundle,
+- one MCP host per worktree/session identity (`master`, `relay`, `mcp`, `tui`).
+
+Association resolution for `list`/`send` and MCP host startup:
+
+- CLI flags have highest precedence (`--bundle`, `--sender` / `--session-name`).
+- Auto-discovery fallback:
+  - bundle from Git common-dir owner name,
+  - session from worktree top-level directory name.
 
 ## Configuration
 
-By default:
+Runtime roots by default:
 
-- Config root: `$XDG_CONFIG_HOME/agentmux` or `~/.config/agentmux`
-- State root: `$XDG_STATE_HOME/agentmux` or `~/.local/state/agentmux`
+- config root: `$XDG_CONFIG_HOME/agentmux` or `~/.config/agentmux`
+- state root: `$XDG_STATE_HOME/agentmux` or `~/.local/state/agentmux`
+- inscriptions (logs) root:
+  - release: `<state-root>/inscriptions`
+  - debug with `--repository-root` available: `<repo>/.auxiliary/inscriptions/agentmux`
 
-In debug builds, repository-local defaults are used when available under
-`.auxiliary/configuration/agentmux` and `.auxiliary/state/agentmux`.
+Bundle configuration file path:
 
-Starter files are created when missing:
+- `<config-root>/bundles/<bundle-name>.toml`
+
+Starter files are generated when missing:
 
 - `<config-root>/coders.toml`
 - `<config-root>/bundles/example.toml`
-
-Bundle config files live at:
-
-- `<config-root>/bundles/<bundle-name>.toml`
 
 ### Example `coders.toml`
 
@@ -124,41 +186,27 @@ directory = "/home/me/src/WORKTREES/myproject/tui"
 coder = "codex"
 ```
 
-## Runtime Notes
+## Runtime Artifacts
 
-- Start relay host before MCP host for normal operation.
-- MCP startup does not require relay to already be reachable.
-- If relay is unavailable, MCP tools return structured `relay_unavailable`
-  errors.
-- Relay reconciliation ensures configured sessions exist on the bundle tmux
-  socket.
+Per-bundle state directory:
 
-## Delivery Behavior
+- `<state-root>/bundles/<bundle-name>/`
 
-MCP `send` supports:
+Important files:
 
-- `delivery_mode=async` (default): accept immediately, deliver in background.
-- `delivery_mode=sync`: block until per-target delivery outcomes are known.
+- `relay.sock`: relay Unix socket
+- `tmux.sock`: bundle tmux socket
+- `relay.lock`: relay host lock
+- `relay.spawn.lock`: relay spawn lock
 
-Optional `quiescence_timeout_ms` bounds how long delivery waits for prompt
-quiescence.
+Inscriptions:
 
-## Logging (Inscriptions)
-
-Default inscriptions root:
-
-- Debug builds: `<repository-root>/.auxiliary/inscriptions/agentmux`
-- Release builds: `<state-root>/inscriptions`
-
-Per-bundle relay log:
-
-- `<inscriptions-root>/bundles/<bundle-name>/relay.log`
-
-Per-session MCP log:
-
-- `<inscriptions-root>/bundles/<bundle-name>/sessions/<session-name>/mcp.log`
+- relay log: `<inscriptions-root>/bundles/<bundle-name>/relay.log`
+- MCP log: `<inscriptions-root>/bundles/<bundle-name>/sessions/<session-name>/mcp.log`
 
 ## Development
+
+For local source development, install a Rust toolchain.
 
 Validation commands:
 
@@ -168,9 +216,12 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features
 ```
 
-Architecture and implementation notes:
+Source map:
 
-- `src/README.md` and subsystem README files under `src/`
+- [src/README.md](src/README.md)
+- [src/bin/README.md](src/bin/README.md)
+- [src/runtime/README.md](src/runtime/README.md)
+- [src/mcp/README.md](src/mcp/README.md)
 - `documentation/architecture/openspec/specs/`
 
 ## License

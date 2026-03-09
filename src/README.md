@@ -1,25 +1,50 @@
-# Source Notes
+# Source Layout
+
+This directory contains the implementation for the unified `agentmux` binary.
+
+## Module Map
+
+- `bin/`
+  - binary entrypoints.
+  - See [src/bin/README.md](bin/README.md).
+- `commands.rs`
+  - CLI parsing and command execution for `host relay`, `host mcp`, `list`,
+    and `send`.
+- `configuration.rs`
+  - bundle/coder TOML loading and sender resolution helpers.
+- `envelope.rs`
+  - relay envelope rendering + batching primitives.
+- `relay.rs`
+  - relay request/response contract and tmux delivery engine.
+- `mcp/`
+  - MCP stdio server surface and relay forwarding.
+  - See [src/mcp/README.md](mcp/README.md).
+- `runtime/`
+  - path resolution, startup locks, association discovery, inscriptions, and
+    starter template hydration.
+  - See [src/runtime/README.md](runtime/README.md).
+- `lib.rs`
+  - crate module exports and shared startup helpers.
 
 ## Starter Template Embedding
 
-Starter configuration templates are version-controlled and embedded into the
-binary with `include_str!`:
+Starter configuration templates are version-controlled and embedded via
+`include_str!`:
 
 - coders template: `data/configuration/coders.toml`
 - bundle template: `data/configuration/bundle.toml`
 
-Runtime startup copies these templates into configuration roots only when the
-target files are missing.
+Runtime startup writes these templates only when target files are missing.
 
-## Relay Delivery Internals (MVP)
+## Delivery Notes
 
-`chat` supports `delivery_mode=async` and `delivery_mode=sync`.
+Relay `chat` currently supports `delivery_mode=async` and `delivery_mode=sync`.
 
-Async mode queue semantics:
+Current async queue semantics:
 
 - in-memory only (non-durable),
 - FIFO ordering per target session,
 - no dedupe/coalescing,
 - no hard queue cap in MVP.
 
-If relay exits or restarts, pending async queue entries are currently lost.
+Pending async entries are lost if relay exits or restarts.
