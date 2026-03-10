@@ -126,6 +126,23 @@ Use `openspec/AGENTS.md` to learn:
 - Prefer tests that exercise public interfaces; avoid source-inclusion patterns
   used only to reach private internals.
 
+## Notebook Conventions
+
+- Standardized top-level notebook folders for this project are:
+  - `coordination/`
+  - `issues/`
+  - `todos/`
+  - `ideas/`
+- Use `coordination/<component>` as the active handoff lane for each owner
+  (for example `coordination/relay`, `coordination/mcp`, `coordination/tui`).
+- Keep one rolling handoff note per component and update it in place instead of
+  creating a new note for each checkpoint.
+- Use `coordination/general` for coordinator-wide state and cross-component
+  snapshots.
+- For cross-component notes, apply multiple `#component-*` tags.
+- Prefer pruning stale/superseded coordination checkpoints while preserving the
+  current per-component handoff context.
+
 ## Team Topology and Roles
 
 Use a coordinator-plus-specialists model:
@@ -149,7 +166,8 @@ Use a coordinator-plus-specialists model:
 - Stay focused on owned subsystem scope unless coordinator requests otherwise.
 - Raise an OpenSpec delta or question when subsystem work becomes cross-cutting.
 - Rebase onto latest `master` before requesting review/merge.
-- Provide handoff notes with:
+- Maintain a current rolling handoff note under `coordination/<component>`
+  (update-in-place), including:
   - summary of behavior change,
   - touched files,
   - tests/validation performed,
