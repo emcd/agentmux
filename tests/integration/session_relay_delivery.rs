@@ -1377,20 +1377,29 @@ async fn relay_sync_delivery_sends_submit_in_separate_tmux_command() {
         .lines()
         .filter(|line| line.contains(" send-keys "))
         .collect::<Vec<_>>();
-    assert!(
-        send_keys_lines.len() >= 2,
-        "expected at least two send-keys commands, log={log:?}"
-    );
-    let prompt_index = send_keys_lines
+    let prompt_indexes = send_keys_lines
         .iter()
-        .position(|line| line.contains("send-keys -t %1 --"))
-        .expect("expected prompt send-keys command");
+        .enumerate()
+        .filter(|(_, line)| line.contains("send-keys -l -t %1 --"))
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    assert!(
+        !prompt_indexes.is_empty(),
+        "expected at least one prompt send-keys command, log={log:?}"
+    );
+    assert!(
+        prompt_indexes.len() > 1,
+        "expected chunked prompt send-keys commands for large payload, log={log:?}"
+    );
     let enter_index = send_keys_lines
         .iter()
         .position(|line| line.ends_with("send-keys -t %1 Enter"))
         .expect("expected separate Enter send-keys command");
+    let last_prompt_index = *prompt_indexes
+        .last()
+        .expect("expected at least one prompt command");
     assert!(
-        prompt_index < enter_index,
+        last_prompt_index < enter_index,
         "expected prompt command before Enter command, log={log:?}"
     );
 }

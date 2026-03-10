@@ -47,6 +47,7 @@ const DELIVERY_DIAGNOSTICS_ENVVAR: &str = "AGENTMUX_RELAY_DELIVERY_DIAGNOSTICS";
 const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;
 const ASYNC_SHUTDOWN_WAIT_POLL_MS: u64 = 25;
 const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delivery";
+const SEND_KEYS_CHUNK_BYTES: usize = 1024;
 const DEFAULT_LOOK_LINES: usize = 120;
 const MAX_LOOK_LINES: usize = 1000;
 
@@ -1791,9 +1792,37 @@ fn resolve_cursor_column(tmux_socket: &Path, pane_target: &str) -> Result<usize,
 }
 
 fn inject_prompt(tmux_socket: &Path, pane_target: &str, prompt: &str) -> Result<(), String> {
-    run_tmux_command(tmux_socket, &["send-keys", "-t", pane_target, "--", prompt])?;
+    for chunk in split_send_keys_chunks(prompt, SEND_KEYS_CHUNK_BYTES) {
+        run_tmux_command(
+            tmux_socket,
+            &["send-keys", "-l", "-t", pane_target, "--", chunk.as_str()],
+        )?;
+    }
     run_tmux_command(tmux_socket, &["send-keys", "-t", pane_target, "Enter"])?;
     Ok(())
+}
+
+fn split_send_keys_chunks(text: &str, max_bytes: usize) -> Vec<String> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let max_bytes = max_bytes.max(1);
+    let mut chunks = Vec::new();
+    let mut start = 0usize;
+    let mut current_bytes = 0usize;
+    for (index, ch) in text.char_indices() {
+        let ch_bytes = ch.len_utf8();
+        if current_bytes != 0 && current_bytes + ch_bytes > max_bytes {
+            chunks.push(text[start..index].to_string());
+            start = index;
+            current_bytes = 0;
+        }
+        current_bytes += ch_bytes;
+    }
+    if start < text.len() {
+        chunks.push(text[start..].to_string());
+    }
+    chunks
 }
 
 fn run_tmux_command(
