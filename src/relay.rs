@@ -1446,6 +1446,19 @@ fn wait_for_quiescent_pane(
                 _ => true,
             };
         if pane_is_quiescent {
+            if let Some(reason) = operator_interaction_active(tmux_socket, target_session)
+                .map_err(|reason| DeliveryWaitError::Failed { reason })?
+            {
+                emit_delivery_diagnostic(
+                    "delivery_operator_interaction",
+                    &json!({
+                        "target_session": target_session,
+                        "pane_target": pane_after,
+                        "reason": reason,
+                    }),
+                );
+                continue;
+            }
             let evaluation = match prompt_readiness_matches(
                 tmux_socket,
                 pane_after.as_str(),
@@ -1644,6 +1657,86 @@ fn resolve_window_activity_marker(
         return Ok(None);
     }
     Ok(Some(marker))
+}
+
+fn operator_interaction_active(
+    tmux_socket: &Path,
+    target_session: &str,
+) -> Result<Option<String>, String> {
+    if session_in_mode_active(tmux_socket, target_session)? {
+        return Ok(Some("session_in_mode".to_string()));
+    }
+    if let Some(table) = active_client_key_table(tmux_socket, target_session)? {
+        return Ok(Some(format!("client_key_table={table}")));
+    }
+    Ok(None)
+}
+
+fn session_in_mode_active(tmux_socket: &Path, target_session: &str) -> Result<bool, String> {
+    let output = run_tmux_command_capture(
+        tmux_socket,
+        &[
+            "display-message",
+            "-p",
+            "-t",
+            target_session,
+            "#{session_in_mode}",
+        ],
+    )?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let lower = stderr.to_ascii_lowercase();
+        if lower.contains("unknown format")
+            || lower.contains("invalid format")
+            || lower.contains("bad format")
+        {
+            return Ok(false);
+        }
+        if stderr.is_empty() {
+            return Err("tmux display-message for session_in_mode failed".to_string());
+        }
+        return Err(stderr);
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim() == "1")
+}
+
+fn active_client_key_table(
+    tmux_socket: &Path,
+    target_session: &str,
+) -> Result<Option<String>, String> {
+    let output = run_tmux_command_capture(
+        tmux_socket,
+        &[
+            "list-clients",
+            "-t",
+            target_session,
+            "-F",
+            "#{client_key_table}",
+        ],
+    )?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let lower = stderr.to_ascii_lowercase();
+        if lower.contains("no current client")
+            || lower.contains("unknown command")
+            || lower.contains("unsupported")
+            || lower.contains("unknown format")
+            || lower.contains("invalid format")
+            || lower.contains("bad format")
+        {
+            return Ok(None);
+        }
+        if stderr.is_empty() {
+            return Err("tmux list-clients for key table failed".to_string());
+        }
+        return Err(stderr);
+    }
+    let active = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|value| !value.is_empty() && *value != "root")
+        .map(ToOwned::to_owned);
+    Ok(active)
 }
 
 fn capture_pane_snapshot(tmux_socket: &Path, pane_target: &str) -> Result<String, String> {
