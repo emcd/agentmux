@@ -28,11 +28,11 @@ Session transport schema SHALL follow format-version rules:
   - for `kind = "tmux"`:
     - required `coder`
     - optional `coder-session-id`
-  - for `kind = "acp"`:
+- for `kind = "acp"`:
     - required `[sessions.transport.acp]` table
     - required `transport` (`stdio` | `http`)
-    - required `session_mode` (`new` | `load`)
-    - required `session_id` when `session_mode = "load"`
+    - required `session-mode` (`new` | `load`)
+    - required `session-id` when `session-mode = "load"`
     - for `transport = "stdio"`:
       - required `command`
       - optional `args` (`string[]`)
@@ -63,7 +63,7 @@ Bundle identity SHALL be derived from bundle filename (`<bundle-id>.toml`).
 - **AND** a `[[sessions]]` entry sets `sessions.transport.kind = "acp"`
 - **AND** `sessions.transport.acp.transport = "stdio"`
 - **AND** `sessions.transport.acp.command` is provided
-- **AND** `sessions.transport.acp.session_mode = "new"`
+- **AND** `sessions.transport.acp.session-mode = "new"`
 - **THEN** the system loads the ACP session configuration successfully
 
 #### Scenario: Reject unknown transport kind in v2
@@ -72,11 +72,11 @@ Bundle identity SHALL be derived from bundle filename (`<bundle-id>.toml`).
   `tmux` or `acp`
 - **THEN** the system rejects configuration with a validation error
 
-#### Scenario: Reject ACP load mode without session_id
+#### Scenario: Reject ACP load mode without session-id
 
 - **WHEN** a v2 session sets `sessions.transport.kind = "acp"`
-- **AND** `sessions.transport.acp.session_mode = "load"`
-- **AND** `sessions.transport.acp.session_id` is missing
+- **AND** `sessions.transport.acp.session-mode = "load"`
+- **AND** `sessions.transport.acp.session-id` is missing
 - **THEN** the system rejects configuration with a validation error
 
 #### Scenario: Reject ACP stdio transport without command

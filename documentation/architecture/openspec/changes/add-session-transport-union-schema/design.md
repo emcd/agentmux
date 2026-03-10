@@ -63,8 +63,8 @@ In `format-version = 2`, omitted `sessions.transport` defaults to tmux.
 For `kind = "acp"`:
 
 - required: `transport` (`stdio` | `http`)
-- required: `session_mode` (`new` | `load`)
-- required-if: `session_id` when `session_mode = "load"`
+- required: `session-mode` (`new` | `load`)
+- required-if: `session-id` when `session-mode = "load"`
 - for `transport = "stdio"`:
   - required: `command`
   - optional: `args`, `env[]`

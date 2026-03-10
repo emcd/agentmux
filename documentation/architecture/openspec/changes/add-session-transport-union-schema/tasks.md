@@ -6,8 +6,8 @@
 - [ ] 1.3 For v2, default omitted `sessions.transport` to `kind = "tmux"`.
 - [ ] 1.4 Add ACP descriptor validation:
       - `transport = "stdio" | "http"`
-      - `session_mode = "new" | "load"`
-      - `session_id` required for load mode
+      - `session-mode = "new" | "load"`
+      - `session-id` required for load mode
       - stdio requires `command`
       - http requires `url`
 - [ ] 1.5 Keep v1 behavior compatible for existing tmux-only bundles.
