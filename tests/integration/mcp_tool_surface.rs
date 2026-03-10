@@ -13,9 +13,9 @@ use std::{
 };
 
 use rmcp::model::{
-    CallToolRequest, CallToolRequestParam, ClientCapabilities, ClientJsonRpcMessage,
-    Implementation, InitializeRequest, InitializeRequestParam, InitializedNotification,
-    ListToolsRequest, PaginatedRequestParam, RequestId,
+    CallToolRequest, CallToolRequestParams, ClientCapabilities, ClientJsonRpcMessage,
+    Implementation, InitializeRequest, InitializeRequestParams, InitializedNotification,
+    ListToolsRequest, PaginatedRequestParams, RequestId,
 };
 use serde_json::{Map, Value, json};
 use tokio::{
@@ -209,17 +209,10 @@ impl McpHarness {
     }
 
     async fn initialize(&mut self) {
-        let initialize = InitializeRequest::new(InitializeRequestParam {
-            protocol_version: Default::default(),
-            capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "agentmux-contract-tests".to_string(),
-                title: None,
-                version: "0.0.0".to_string(),
-                icons: None,
-                website_url: None,
-            },
-        });
+        let initialize = InitializeRequest::new(InitializeRequestParams::new(
+            ClientCapabilities::default(),
+            Implementation::new("agentmux-contract-tests", "0.0.0"),
+        ));
         self.send(ClientJsonRpcMessage::request(
             initialize.into(),
             RequestId::Number(1),
@@ -237,7 +230,7 @@ impl McpHarness {
     }
 
     async fn list_tools(&mut self, id: i64) -> Value {
-        let request = ListToolsRequest::with_param(PaginatedRequestParam { cursor: None });
+        let request = ListToolsRequest::with_param(PaginatedRequestParams::default());
         self.send(ClientJsonRpcMessage::request(
             request.into(),
             RequestId::Number(id),
@@ -247,10 +240,9 @@ impl McpHarness {
     }
 
     async fn call_tool(&mut self, id: i64, name: &str, arguments: Map<String, Value>) -> Value {
-        let request = CallToolRequest::new(CallToolRequestParam {
-            name: name.to_string().into(),
-            arguments: Some(arguments),
-        });
+        let request = CallToolRequest::new(
+            CallToolRequestParams::new(name.to_string()).with_arguments(arguments),
+        );
         self.send(ClientJsonRpcMessage::request(
             request.into(),
             RequestId::Number(id),

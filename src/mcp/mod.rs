@@ -274,13 +274,8 @@ impl McpServer {
 #[tool_handler]
 impl rmcp::ServerHandler for McpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            instructions: Some(
-                "agentmux MCP server for tmux-backed multi-agent coordination.".to_string(),
-            ),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            ..Default::default()
-        }
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions("agentmux MCP server for tmux-backed multi-agent coordination.")
     }
 }
 

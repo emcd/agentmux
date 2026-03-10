@@ -16,8 +16,8 @@ use agentmux::runtime::{
     paths::{BundleRuntimePaths, ensure_bundle_runtime_directory},
 };
 use rmcp::model::{
-    CallToolRequest, CallToolRequestParam, ClientCapabilities, ClientJsonRpcMessage,
-    Implementation, InitializeRequest, InitializeRequestParam, InitializedNotification, RequestId,
+    CallToolRequest, CallToolRequestParams, ClientCapabilities, ClientJsonRpcMessage,
+    Implementation, InitializeRequest, InitializeRequestParams, InitializedNotification, RequestId,
 };
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
@@ -179,17 +179,10 @@ impl McpHarness {
     }
 
     async fn initialize(&mut self) {
-        let initialize = InitializeRequest::new(InitializeRequestParam {
-            protocol_version: Default::default(),
-            capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "runtime-bootstrap-tests".to_string(),
-                title: None,
-                version: "0.0.0".to_string(),
-                icons: None,
-                website_url: None,
-            },
-        });
+        let initialize = InitializeRequest::new(InitializeRequestParams::new(
+            ClientCapabilities::default(),
+            Implementation::new("runtime-bootstrap-tests", "0.0.0"),
+        ));
         self.send(ClientJsonRpcMessage::request(
             initialize.into(),
             RequestId::Number(1),
@@ -207,10 +200,9 @@ impl McpHarness {
     }
 
     async fn call_tool(&mut self, id: i64, name: &str, arguments: Map<String, Value>) -> Value {
-        let request = CallToolRequest::new(CallToolRequestParam {
-            name: name.to_string().into(),
-            arguments: Some(arguments),
-        });
+        let request = CallToolRequest::new(
+            CallToolRequestParams::new(name.to_string()).with_arguments(arguments),
+        );
         self.send(ClientJsonRpcMessage::request(
             request.into(),
             RequestId::Number(id),
