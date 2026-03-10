@@ -78,6 +78,14 @@ struct ListArguments {
 }
 
 #[derive(Clone, Debug)]
+struct LookArguments {
+    bundle_name: Option<String>,
+    target_session: String,
+    lines: Option<u64>,
+    runtime: RuntimeArguments,
+}
+
+#[derive(Clone, Debug)]
 struct SendArguments {
     bundle_name: Option<String>,
     sender_session: Option<String>,
@@ -111,6 +119,9 @@ struct RelayHostStartupSummary {
     hosted_any: bool,
 }
 
+const MIN_LOOK_LINES: u64 = 1;
+const MAX_LOOK_LINES: u64 = 1000;
+
 /// Runs the unified `agentmux` CLI entrypoint.
 pub async fn run_agentmux(arguments: Vec<String>) -> Result<(), RuntimeError> {
     if arguments.is_empty() {
@@ -125,6 +136,7 @@ pub async fn run_agentmux(arguments: Vec<String>) -> Result<(), RuntimeError> {
         }
         "host" => run_agentmux_host(&arguments[1..]).await,
         "list" => run_agentmux_list(&arguments[1..]),
+        "look" => run_agentmux_look(&arguments[1..]),
         "send" => run_agentmux_send(&arguments[1..]),
         unknown => Err(RuntimeError::InvalidArgument {
             argument: unknown.to_string(),
@@ -351,6 +363,83 @@ fn run_agentmux_send(arguments: &[String]) -> Result<(), RuntimeError> {
             }
         }
     }
+    Ok(())
+}
+
+fn run_agentmux_look(arguments: &[String]) -> Result<(), RuntimeError> {
+    if arguments
+        .iter()
+        .any(|value| value == "--help" || value == "-h")
+    {
+        print_look_help();
+        return Ok(());
+    }
+    let parsed = parse_look_arguments(arguments)?;
+    let current_directory = env::current_dir()
+        .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
+    let workspace = WorkspaceContext::discover(&current_directory)?;
+    let local_overrides = load_local_mcp_overrides(&workspace.workspace_root)?;
+    let associated = resolve_association(
+        &McpAssociationCli::default(),
+        local_overrides.as_ref(),
+        &workspace,
+    )?;
+    if let Some(requested_bundle_name) = parsed.bundle_name.as_ref()
+        && requested_bundle_name != &associated.bundle_name
+    {
+        return Err(RuntimeError::validation(
+            "validation_cross_bundle_unsupported",
+            "look is limited to the associated bundle in MVP".to_string(),
+        ));
+    }
+
+    let roots = resolve_roots(&parsed.runtime, &workspace, local_overrides.as_ref())?;
+    ensure_starter_configuration_layout(&roots.configuration_root)?;
+    let bundle = load_bundle_configuration(&roots.configuration_root, &associated.bundle_name)
+        .map_err(map_bundle_load_error)?;
+    let requester_session =
+        resolve_sender_session(&bundle, &associated.session_name, &current_directory)?;
+    let paths = BundleRuntimePaths::resolve(&roots.state_root, &associated.bundle_name)?;
+    let response = request_relay(
+        &paths.relay_socket,
+        &RelayRequest::Look {
+            requester_session,
+            target_session: parsed.target_session,
+            lines: parsed.lines.map(|value| value as usize),
+            bundle_name: parsed.bundle_name,
+        },
+    )
+    .map_err(|source| map_relay_request_failure(&paths.relay_socket, source))?;
+    let payload = match response {
+        RelayResponse::Look {
+            schema_version,
+            bundle_name,
+            requester_session,
+            target_session,
+            captured_at,
+            snapshot_lines,
+        } => json!({
+            "schema_version": schema_version,
+            "bundle_name": bundle_name,
+            "requester_session": requester_session,
+            "target_session": target_session,
+            "captured_at": captured_at,
+            "snapshot_lines": snapshot_lines,
+        }),
+        RelayResponse::Error { error } => return Err(map_relay_error(error)),
+        other => {
+            return Err(RuntimeError::validation(
+                "internal_unexpected_failure",
+                format!("relay returned unexpected response variant: {other:?}"),
+            ));
+        }
+    };
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&payload).map_err(|source| {
+            RuntimeError::io("encode look response json", std::io::Error::other(source))
+        })?
+    );
     Ok(())
 }
 
@@ -992,6 +1081,69 @@ fn parse_send_arguments(arguments: &[String]) -> Result<SendArguments, RuntimeEr
     })
 }
 
+fn parse_look_arguments(arguments: &[String]) -> Result<LookArguments, RuntimeError> {
+    let mut parsed = LookArguments {
+        bundle_name: None,
+        target_session: String::new(),
+        lines: None,
+        runtime: RuntimeArguments::default(),
+    };
+    let mut target_session = None::<String>;
+    let mut index = 0usize;
+    while index < arguments.len() {
+        if parse_runtime_flag(arguments, &mut index, &mut parsed.runtime)? {
+            index += 1;
+            continue;
+        }
+        match arguments[index].as_str() {
+            "--bundle" | "--bundle-name" => {
+                parsed.bundle_name = Some(take_value(arguments, &mut index, "--bundle")?);
+            }
+            "--lines" => {
+                let value = take_value(arguments, &mut index, "--lines")?;
+                parsed.lines = Some(parse_look_lines(value.as_str())?);
+            }
+            value if !value.starts_with('-') => {
+                if target_session.is_some() {
+                    return Err(RuntimeError::InvalidArgument {
+                        argument: value.to_string(),
+                        message: "unknown argument".to_string(),
+                    });
+                }
+                target_session = Some(value.to_string());
+            }
+            unknown => {
+                return Err(RuntimeError::InvalidArgument {
+                    argument: unknown.to_string(),
+                    message: "unknown argument".to_string(),
+                });
+            }
+        }
+        index += 1;
+    }
+    parsed.target_session = target_session.ok_or_else(|| RuntimeError::InvalidArgument {
+        argument: "<target-session>".to_string(),
+        message: "missing value".to_string(),
+    })?;
+    Ok(parsed)
+}
+
+fn parse_look_lines(value: &str) -> Result<u64, RuntimeError> {
+    let lines = value.parse::<u64>().map_err(|_| {
+        RuntimeError::validation(
+            "validation_invalid_lines",
+            "lines must be between 1 and 1000".to_string(),
+        )
+    })?;
+    if !(MIN_LOOK_LINES..=MAX_LOOK_LINES).contains(&lines) {
+        return Err(RuntimeError::validation(
+            "validation_invalid_lines",
+            "lines must be between 1 and 1000".to_string(),
+        ));
+    }
+    Ok(lines)
+}
+
 fn resolve_send_message(message_flag: Option<String>) -> Result<String, RuntimeError> {
     let stdin_is_terminal = std::io::stdin().is_terminal();
     if let Some(message) = message_flag {
@@ -1239,7 +1391,7 @@ fn is_relay_unavailable_error(source: &std::io::Error) -> bool {
 
 fn print_agentmux_help() {
     println!(
-        "Usage: agentmux <command> [options]\n\nCommands:\n  host relay (<bundle-id> | --group GROUP) [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\n  host mcp [--bundle NAME] [--session-name NAME] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\n  list [--bundle NAME] [--sender NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\n  send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--quiescence-timeout-ms MS] [--request-id ID] [--bundle NAME] [--sender NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux <command> [options]\n\nCommands:\n  host relay (<bundle-id> | --group GROUP) [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\n  host mcp [--bundle NAME] [--session-name NAME] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\n  list [--bundle NAME] [--sender NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\n  look <target-session> [--bundle NAME] [--lines N] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\n  send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--quiescence-timeout-ms MS] [--request-id ID] [--bundle NAME] [--sender NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }
 
@@ -1262,6 +1414,12 @@ fn print_host_mcp_help() {
 fn print_list_help() {
     println!(
         "Usage: agentmux list [--bundle NAME] [--sender NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+    );
+}
+
+fn print_look_help() {
+    println!(
+        "Usage: agentmux look <target-session> [--bundle NAME] [--lines N] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }
 

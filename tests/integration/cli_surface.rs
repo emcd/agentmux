@@ -1,13 +1,16 @@
 use std::{
     fs,
-    io::Write,
+    io::{BufRead, BufReader, Write},
     os::unix::fs::PermissionsExt,
+    os::unix::net::UnixListener,
     path::Path,
     process::{Command, Stdio},
+    sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
 
+use agentmux::relay::RelayResponse;
 use agentmux::runtime::{
     bootstrap::acquire_relay_runtime_lock,
     paths::{BundleRuntimePaths, ensure_bundle_runtime_directory},
@@ -354,6 +357,114 @@ fn send_rejects_conflicting_flag_and_piped_message_sources() {
 }
 
 #[test]
+fn look_returns_canonical_json_payload() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration(&config_root, "agentmux", Some(&["dev"]), &["tui", "bravo"]);
+
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux").expect("bundle paths");
+    ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
+    let request_log = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let relay_thread = spawn_fake_relay_once(
+        &bundle_paths.relay_socket,
+        RelayResponse::Look {
+            schema_version: "1".to_string(),
+            bundle_name: "agentmux".to_string(),
+            requester_session: "tui".to_string(),
+            target_session: "bravo".to_string(),
+            captured_at: "2026-03-08T00:00:00Z".to_string(),
+            snapshot_lines: vec!["LOOK-A".to_string(), "LOOK-B".to_string()],
+        },
+        Arc::clone(&request_log),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "look",
+            "bravo",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .output()
+        .expect("run agentmux look");
+    relay_thread.join().expect("join fake relay thread");
+
+    assert!(output.status.success(), "command should succeed");
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("decode look json payload");
+    assert_eq!(payload["schema_version"], "1");
+    assert_eq!(payload["bundle_name"], "agentmux");
+    assert_eq!(payload["requester_session"], "tui");
+    assert_eq!(payload["target_session"], "bravo");
+    assert_eq!(payload["captured_at"], "2026-03-08T00:00:00Z");
+    assert_eq!(
+        payload["snapshot_lines"],
+        serde_json::json!(["LOOK-A", "LOOK-B"])
+    );
+
+    let requests = request_log.lock().expect("request log lock");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0]["operation"], "look");
+    assert_eq!(requests[0]["requester_session"], "tui");
+    assert_eq!(requests[0]["target_session"], "bravo");
+}
+
+#[test]
+fn look_rejects_cross_bundle_request_in_mvp() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "look",
+            "bravo",
+            "--bundle",
+            "other-bundle",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .output()
+        .expect("run agentmux look --bundle");
+    assert!(!output.status.success(), "command should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("validation_cross_bundle_unsupported"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
+fn look_rejects_invalid_lines_bounds() {
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args(["look", "bravo", "--lines", "0"])
+        .output()
+        .expect("run agentmux look --lines 0");
+    assert!(!output.status.success(), "command should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("validation_invalid_lines"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
 fn unified_host_help_output_includes_relay_and_mcp_modes() {
     let relay = Command::new(env!("CARGO_BIN_EXE_agentmux"))
         .args(["host", "relay", "--help"])
@@ -538,4 +649,53 @@ fn wait_for_relay_socket(socket_path: &Path) {
         "timed out waiting for relay socket {}",
         socket_path.display()
     );
+}
+
+fn spawn_fake_relay_once(
+    socket_path: &Path,
+    response: RelayResponse,
+    request_log: Arc<Mutex<Vec<Value>>>,
+) -> thread::JoinHandle<()> {
+    if socket_path.exists() {
+        fs::remove_file(socket_path).expect("remove stale relay socket");
+    }
+    let parent = socket_path.parent().expect("relay socket parent");
+    fs::create_dir_all(parent).expect("create relay socket parent");
+    let listener = UnixListener::bind(socket_path).expect("bind fake relay socket");
+    listener
+        .set_nonblocking(true)
+        .expect("set fake relay listener nonblocking");
+    let socket_path = socket_path.to_path_buf();
+    thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _address)) => {
+                    let mut request_line = String::new();
+                    let mut reader =
+                        BufReader::new(stream.try_clone().expect("clone fake relay stream"));
+                    reader
+                        .read_line(&mut request_line)
+                        .expect("read fake relay request");
+                    let request: Value =
+                        serde_json::from_str(request_line.trim_end()).expect("decode request");
+                    request_log.lock().expect("request log lock").push(request);
+                    let encoded =
+                        serde_json::to_string(&response).expect("encode fake relay response");
+                    stream
+                        .write_all(encoded.as_bytes())
+                        .expect("write fake relay response");
+                    stream.write_all(b"\n").expect("write fake relay newline");
+                    stream.flush().expect("flush fake relay response");
+                    let _ = fs::remove_file(socket_path);
+                    return;
+                }
+                Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(source) => panic!("accept fake relay connection: {source}"),
+            }
+        }
+        panic!("timed out waiting for fake relay request");
+    })
 }

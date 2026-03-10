@@ -9,7 +9,7 @@ This directory contains the implementation for the unified `agentmux` binary.
   - See [src/bin/README.md](bin/README.md).
 - `commands.rs`
   - CLI parsing and command execution for `host relay`, `host mcp`, `list`,
-    and `send`.
+    `look`, and `send`.
 - `configuration.rs`
   - bundle/coder TOML loading and sender resolution helpers.
 - `envelope.rs`

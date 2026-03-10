@@ -13,7 +13,7 @@ tool surface for LLM clients.
   - Command: `agentmux host mcp`
   - Responsibility: expose MCP tools (`list`, `send`) and forward requests to relay.
 - Operator CLI:
-  - Commands: `agentmux list`, `agentmux send`
+  - Commands: `agentmux list`, `agentmux look`, `agentmux send`
   - Responsibility: direct local inspection of recipients and message delivery.
 
 Both host modes use shared runtime roots for configuration, sockets, locks, and
@@ -68,6 +68,7 @@ agentmux host mcp
 agentmux host relay <bundle-id>
 agentmux host mcp [--bundle NAME] [--session-name NAME]
 agentmux list [--bundle NAME] [--sender NAME] [--json]
+agentmux look <target-session> [--bundle NAME] [--lines N] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]
 agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--bundle NAME] [--sender NAME] [--json]
 ```
 
@@ -97,6 +98,7 @@ printf 'queued hello\n' | agentmux send --bundle myproject --sender master --tar
 The MCP server advertises:
 
 - `list`: return candidate recipients in the selected bundle.
+- `look`: capture a read-only pane snapshot from a target session.
 - `send`: deliver to explicit targets or broadcast.
 
 Delivery behavior:

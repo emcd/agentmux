@@ -6,10 +6,10 @@
       - same-bundle-only scope in MVP,
       - lines default/max bounds (`120`, `1000`),
       - stable structured error codes.
-- [ ] 1.3 Add CLI `agentmux look <target-session>` with optional
+- [x] 1.3 Add CLI `agentmux look <target-session>` with optional
       `--bundle` and `--lines` flags and default JSON output.
 - [x] 1.4 Add MCP `look` tool mapped to relay `look` with schema parity.
-- [ ] 1.5 Ensure MCP and CLI surfaces share aligned error taxonomy and payload
+- [x] 1.5 Ensure MCP and CLI surfaces share aligned error taxonomy and payload
       semantics.
 - [x] 1.6 Keep naming semantics aligned with `mcp/11` direction (`send` for
       delivery, `look` for inspection) and update follow-up tracker references
@@ -19,7 +19,7 @@
 
 ## 2. Testing
 
-- [ ] 2.1 Add CLI integration tests for:
+- [x] 2.1 Add CLI integration tests for:
       - successful look response shape,
       - same-bundle scope enforcement,
       - invalid lines bounds.
