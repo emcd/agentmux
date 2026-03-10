@@ -6,5 +6,7 @@ mod mcp_tool_surface;
 mod runtime_bootstrap;
 #[path = "integration/session_relay_delivery.rs"]
 mod session_relay_delivery;
+#[path = "integration/session_relay_look.rs"]
+mod session_relay_look;
 #[path = "integration/session_relay_reconciliation.rs"]
 mod session_relay_reconciliation;

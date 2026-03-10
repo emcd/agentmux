@@ -289,3 +289,66 @@ fn chat_broadcast_with_only_sender_returns_empty_results() {
     assert_eq!(async_status, agentmux::relay::ChatStatus::Accepted);
     assert!(async_results.is_empty());
 }
+
+#[test]
+fn look_rejects_cross_bundle_scope() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    let response = handle_request(
+        RelayRequest::Look {
+            requester_session: "alpha".to_string(),
+            target_session: "bravo".to_string(),
+            lines: Some(3),
+            bundle_name: Some("other".to_string()),
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect_err("look should fail");
+    assert_eq!(response.code, "validation_cross_bundle_unsupported");
+}
+
+#[test]
+fn look_rejects_out_of_range_lines() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    let response = handle_request(
+        RelayRequest::Look {
+            requester_session: "alpha".to_string(),
+            target_session: "bravo".to_string(),
+            lines: Some(1001),
+            bundle_name: None,
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect_err("look should fail");
+    assert_eq!(response.code, "validation_invalid_lines");
+}
+
+#[test]
+fn look_rejects_unknown_target() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    let response = handle_request(
+        RelayRequest::Look {
+            requester_session: "alpha".to_string(),
+            target_session: "missing".to_string(),
+            lines: Some(5),
+            bundle_name: None,
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect_err("look should fail");
+    assert_eq!(response.code, "validation_unknown_target");
+}

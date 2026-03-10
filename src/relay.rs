@@ -47,6 +47,8 @@ const DELIVERY_DIAGNOSTICS_ENVVAR: &str = "AGENTMUX_RELAY_DELIVERY_DIAGNOSTICS";
 const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;
 const ASYNC_SHUTDOWN_WAIT_POLL_MS: u64 = 25;
 const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delivery";
+const DEFAULT_LOOK_LINES: usize = 120;
+const MAX_LOOK_LINES: usize = 1000;
 
 /// Recipient metadata returned by `list`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -140,6 +142,14 @@ pub enum RelayRequest {
         #[serde(default)]
         quiescence_timeout_ms: Option<u64>,
     },
+    Look {
+        requester_session: String,
+        target_session: String,
+        #[serde(default)]
+        lines: Option<usize>,
+        #[serde(default)]
+        bundle_name: Option<String>,
+    },
 }
 
 /// Relay response protocol.
@@ -162,6 +172,14 @@ pub enum RelayResponse {
         status: ChatStatus,
         results: Vec<ChatResult>,
     },
+    Look {
+        schema_version: String,
+        bundle_name: String,
+        requester_session: String,
+        target_session: String,
+        captured_at: String,
+        snapshot_lines: Vec<String>,
+    },
     Error {
         error: RelayError,
     },
@@ -177,6 +195,14 @@ struct ChatRequestContext {
     delivery_mode: ChatDeliveryMode,
     quiet_window_ms: Option<u64>,
     quiescence_timeout_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug)]
+struct LookRequestContext {
+    requester_session: String,
+    target_session: String,
+    lines: Option<usize>,
+    bundle_name: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -269,6 +295,21 @@ pub fn handle_request(
                 delivery_mode,
                 quiet_window_ms,
                 quiescence_timeout_ms,
+            },
+            tmux_socket,
+        ),
+        RelayRequest::Look {
+            requester_session,
+            target_session,
+            lines,
+            bundle_name: request_bundle_name,
+        } => handle_look(
+            &bundle,
+            LookRequestContext {
+                requester_session,
+                target_session,
+                lines,
+                bundle_name: request_bundle_name,
             },
             tmux_socket,
         ),
@@ -515,6 +556,117 @@ fn handle_chat(
             "status": status,
             "result_count": results.len(),
             "delivered_count": delivered_count,
+            }),
+        );
+    }
+    Ok(response)
+}
+
+fn handle_look(
+    bundle: &BundleConfiguration,
+    request: LookRequestContext,
+    tmux_socket: &Path,
+) -> Result<RelayResponse, RelayError> {
+    let LookRequestContext {
+        requester_session,
+        target_session,
+        lines,
+        bundle_name: request_bundle_name,
+    } = request;
+    if let Some(request_bundle_name) = request_bundle_name.as_deref()
+        && request_bundle_name != bundle.bundle_name
+    {
+        return Err(relay_error(
+            "validation_cross_bundle_unsupported",
+            "look is limited to the associated bundle in MVP",
+            Some(json!({
+                "associated_bundle_name": bundle.bundle_name,
+                "requested_bundle_name": request_bundle_name,
+            })),
+        ));
+    }
+
+    let requested_lines = lines.unwrap_or(DEFAULT_LOOK_LINES);
+    if !(1..=MAX_LOOK_LINES).contains(&requested_lines) {
+        return Err(relay_error(
+            "validation_invalid_lines",
+            "lines must be between 1 and 1000",
+            Some(json!({
+                "lines": requested_lines,
+                "min": 1,
+                "max": MAX_LOOK_LINES,
+            })),
+        ));
+    }
+
+    let requester = bundle
+        .members
+        .iter()
+        .find(|member| member.id == requester_session)
+        .ok_or_else(|| {
+            relay_error(
+                "validation_unknown_sender",
+                "requester_session is not in bundle configuration",
+                Some(json!({"requester_session": requester_session})),
+            )
+        })?;
+    let target = bundle
+        .members
+        .iter()
+        .find(|member| member.id == target_session)
+        .ok_or_else(|| {
+            relay_error(
+                "validation_unknown_target",
+                "target_session is not in bundle configuration",
+                Some(json!({"target_session": target_session})),
+            )
+        })?;
+
+    let pane_target =
+        resolve_active_pane_target(tmux_socket, target.id.as_str()).map_err(|reason| {
+            relay_error(
+                "internal_unexpected_failure",
+                "failed to resolve active pane for look target",
+                Some(json!({"target_session": target.id, "cause": reason})),
+            )
+        })?;
+    let snapshot_lines =
+        capture_pane_tail_lines(tmux_socket, pane_target.as_str(), requested_lines).map_err(
+            |reason| {
+                relay_error(
+                    "internal_unexpected_failure",
+                    "failed to capture look snapshot",
+                    Some(json!({"target_session": target.id, "cause": reason})),
+                )
+            },
+        )?;
+    let captured_at = time::OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
+    let response = RelayResponse::Look {
+        schema_version: SCHEMA_VERSION.to_string(),
+        bundle_name: bundle.bundle_name.clone(),
+        requester_session: requester.id.clone(),
+        target_session: target.id.clone(),
+        captured_at,
+        snapshot_lines,
+    };
+    if let RelayResponse::Look {
+        bundle_name,
+        requester_session,
+        target_session,
+        snapshot_lines,
+        ..
+    } = &response
+    {
+        emit_inscription(
+            "relay.look.response",
+            &json!({
+                "bundle_name": bundle_name,
+                "requester_session": requester_session,
+                "target_session": target_session,
+                "snapshot_line_count": snapshot_lines.len(),
+                "lines_requested": requested_lines,
             }),
         );
     }
@@ -1500,6 +1652,36 @@ fn capture_pane_snapshot(tmux_socket: &Path, pane_target: &str) -> Result<String
         &["capture-pane", "-p", "-t", pane_target, "-S", "-200"],
     )?;
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn capture_pane_tail_lines(
+    tmux_socket: &Path,
+    pane_target: &str,
+    requested_lines: usize,
+) -> Result<Vec<String>, String> {
+    let start = format!("-{MAX_LOOK_LINES}");
+    let output = run_tmux_command(
+        tmux_socket,
+        &[
+            "capture-pane",
+            "-p",
+            "-t",
+            pane_target,
+            "-S",
+            start.as_str(),
+        ],
+    )?;
+    let mut lines = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    while lines.last().is_some_and(|line| line.trim().is_empty()) {
+        lines.pop();
+    }
+    if lines.len() > requested_lines {
+        lines = lines.split_off(lines.len() - requested_lines);
+    }
+    Ok(lines)
 }
 
 fn resolve_cursor_column(tmux_socket: &Path, pane_target: &str) -> Result<usize, String> {
