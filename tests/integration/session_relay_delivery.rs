@@ -688,109 +688,6 @@ fn relay_chat_times_out_when_activity_changes_despite_stable_visible_text() {
 }
 
 #[test]
-fn relay_chat_times_out_while_target_session_is_in_interaction_mode() {
-    if !tmux_available() {
-        eprintln!("skipping relay delivery test because tmux is unavailable");
-        return;
-    }
-
-    let temporary = TempDir::new().expect("temporary");
-    let bundle_name = "party";
-    let config_root =
-        write_bundle_configuration(temporary.path(), bundle_name, &["alpha", "bravo"]);
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
-    ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
-    let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
-
-    spawn_session(&paths.tmux_socket, "alpha", "exec sleep 45");
-    spawn_session(
-        &paths.tmux_socket,
-        "bravo",
-        "printf 'READY>\\n'; exec sleep 45",
-    );
-    wait_for_pane_contains(
-        &paths.tmux_socket,
-        "bravo",
-        "READY>",
-        Duration::from_secs(2),
-    );
-
-    let session_mode_probe = tmux_command(
-        &paths.tmux_socket,
-        &["display-message", "-p", "-t", "bravo", "#{session_in_mode}"],
-    );
-    if !session_mode_probe.status.success()
-        || String::from_utf8_lossy(&session_mode_probe.stdout)
-            .trim()
-            .is_empty()
-    {
-        eprintln!("skipping interaction-mode test because tmux lacks #{{session_in_mode}}");
-        let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
-        return;
-    }
-
-    let copy_mode = tmux_command(&paths.tmux_socket, &["copy-mode", "-t", "bravo"]);
-    if !copy_mode.status.success() {
-        eprintln!("skipping interaction-mode test because tmux copy-mode failed");
-        let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
-        return;
-    }
-    let in_mode = tmux_command(
-        &paths.tmux_socket,
-        &["display-message", "-p", "-t", "bravo", "#{session_in_mode}"],
-    );
-    if !in_mode.status.success() || String::from_utf8_lossy(&in_mode.stdout).trim() != "1" {
-        eprintln!("skipping interaction-mode test because session did not enter mode");
-        let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
-        return;
-    }
-
-    let marker = format!("INTERACTION-MODE-{}", std::process::id());
-    let response = handle_request(
-        RelayRequest::Chat {
-            request_id: Some("req-interaction-mode".to_string()),
-            sender_session: "alpha".to_string(),
-            message: marker.clone(),
-            targets: vec!["bravo".to_string()],
-            broadcast: false,
-            delivery_mode: ChatDeliveryMode::Sync,
-            quiet_window_ms: Some(50),
-            quiescence_timeout_ms: Some(400),
-        },
-        &config_root,
-        bundle_name,
-        &paths.tmux_socket,
-    )
-    .expect("delivery should complete");
-
-    let RelayResponse::Chat {
-        status, results, ..
-    } = response
-    else {
-        panic!("expected chat response");
-    };
-    assert_eq!(status, ChatStatus::Failure);
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].outcome, ChatOutcome::Timeout);
-    assert!(
-        results[0]
-            .reason
-            .as_ref()
-            .is_some_and(|reason| reason.contains("quiescence")),
-        "expected quiescence timeout while in interaction mode: {:?}",
-        results[0].reason
-    );
-
-    let snapshot = capture_pane(&paths.tmux_socket, "bravo", "-200");
-    assert!(
-        !snapshot.contains(marker.as_str()),
-        "delivery marker should not inject while interaction mode is active, snapshot={snapshot:?}"
-    );
-
-    let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
-}
-
-#[test]
 fn relay_chat_delivers_when_prompt_readiness_template_matches() {
     if !tmux_available() {
         eprintln!("skipping relay delivery test because tmux is unavailable");
@@ -1498,6 +1395,71 @@ async fn relay_sync_delivery_sends_submit_in_separate_tmux_command() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn relay_async_delivery_does_not_inject_while_pane_in_mode() {
+    let temporary = TempDir::new().expect("temporary");
+    let bundle_name = "party";
+    let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
+    let state_root = temporary.path().join("state");
+    let fake_tmux_script = temporary.path().join("fake-tmux.sh");
+    let attempts_file = temporary.path().join("attempts.txt");
+    let log_file = temporary.path().join("fake-tmux.log");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
+
+    let relay_socket = state_root
+        .join("bundles")
+        .join(bundle_name)
+        .join("relay.sock");
+    let mut child = spawn_relay_with_fake_tmux_and_env(
+        bundle_name,
+        &config_root,
+        &state_root,
+        &inscriptions_root,
+        &fake_tmux_script,
+        &[
+            ("FAKE_TMUX_CAPTURE_MODE", "stable"),
+            ("FAKE_TMUX_PANE_IN_MODE", "1"),
+        ],
+    );
+    wait_for_relay_socket(&relay_socket).await;
+
+    let response = request_relay(
+        &relay_socket,
+        &RelayRequest::Chat {
+            request_id: Some("req-interaction-mode".to_string()),
+            sender_session: "alpha".to_string(),
+            message: "interaction marker".to_string(),
+            targets: vec!["alpha".to_string()],
+            broadcast: false,
+            delivery_mode: ChatDeliveryMode::Async,
+            quiet_window_ms: Some(50),
+            quiescence_timeout_ms: Some(250),
+        },
+    )
+    .expect("chat request should complete");
+    let RelayResponse::Chat {
+        status, results, ..
+    } = response
+    else {
+        panic!("expected chat response");
+    };
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].outcome, ChatOutcome::Queued);
+
+    sleep(Duration::from_millis(500)).await;
+
+    child.start_kill().expect("kill relay");
+    let _ = child.wait().await;
+
+    let log = fs::read_to_string(&log_file).expect("read fake tmux log");
+    assert!(
+        !log.contains("send-keys"),
+        "no send-keys should be injected while pane_in_mode stays active, log={log:?}"
+    );
+}
+
 fn write_fake_tmux_script(script_path: &Path, attempts_file: &Path, log_file: &Path) {
     let body = format!(
         r##"#!/usr/bin/env bash
@@ -1558,6 +1520,9 @@ case "${{command_name}}" in
         ;;
       '#{{window_activity}}')
         printf "1\n"
+        ;;
+      '#{{pane_in_mode}}')
+        printf "%s\n" "${{FAKE_TMUX_PANE_IN_MODE:-0}}"
         ;;
       '#{{cursor_x}}')
         printf "0\n"

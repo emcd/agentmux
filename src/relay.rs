@@ -1446,8 +1446,9 @@ fn wait_for_quiescent_pane(
                 _ => true,
             };
         if pane_is_quiescent {
-            if let Some(reason) = operator_interaction_active(tmux_socket, target_session)
-                .map_err(|reason| DeliveryWaitError::Failed { reason })?
+            if let Some(reason) =
+                operator_interaction_active(tmux_socket, target_session, pane_after.as_str())
+                    .map_err(|reason| DeliveryWaitError::Failed { reason })?
             {
                 emit_delivery_diagnostic(
                     "delivery_operator_interaction",
@@ -1662,9 +1663,10 @@ fn resolve_window_activity_marker(
 fn operator_interaction_active(
     tmux_socket: &Path,
     target_session: &str,
+    pane_target: &str,
 ) -> Result<Option<String>, String> {
-    if session_in_mode_active(tmux_socket, target_session)? {
-        return Ok(Some("session_in_mode".to_string()));
+    if pane_in_mode_active(tmux_socket, pane_target)? {
+        return Ok(Some("pane_in_mode".to_string()));
     }
     if let Some(table) = active_client_key_table(tmux_socket, target_session)? {
         return Ok(Some(format!("client_key_table={table}")));
@@ -1672,15 +1674,15 @@ fn operator_interaction_active(
     Ok(None)
 }
 
-fn session_in_mode_active(tmux_socket: &Path, target_session: &str) -> Result<bool, String> {
+fn pane_in_mode_active(tmux_socket: &Path, pane_target: &str) -> Result<bool, String> {
     let output = run_tmux_command_capture(
         tmux_socket,
         &[
             "display-message",
             "-p",
             "-t",
-            target_session,
-            "#{session_in_mode}",
+            pane_target,
+            "#{pane_in_mode}",
         ],
     )?;
     if !output.status.success() {
@@ -1693,7 +1695,7 @@ fn session_in_mode_active(tmux_socket: &Path, target_session: &str) -> Result<bo
             return Ok(false);
         }
         if stderr.is_empty() {
-            return Err("tmux display-message for session_in_mode failed".to_string());
+            return Err("tmux display-message for pane_in_mode failed".to_string());
         }
         return Err(stderr);
     }
