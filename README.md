@@ -68,7 +68,7 @@ agentmux host mcp
 agentmux host relay <bundle-id>
 agentmux host mcp [--bundle NAME] [--session-name NAME]
 agentmux list [--bundle NAME] [--sender NAME] [--json]
-agentmux look <target-session> [--bundle NAME] [--lines N] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]
+agentmux look <target-session> [--bundle NAME] [--lines N]
 agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--bundle NAME] [--sender NAME] [--json]
 ```
 
