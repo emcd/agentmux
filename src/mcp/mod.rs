@@ -61,6 +61,18 @@ struct SendParams {
     quiescence_timeout_ms: Option<u64>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+struct LookParams {
+    /// Session identifier to inspect.
+    target_session: String,
+    /// Optional override for bundle name (MVP rejects cross-bundle requests).
+    #[serde(default)]
+    bundle_name: Option<String>,
+    /// Optional number of pane snapshot lines to capture.
+    #[serde(default)]
+    lines: Option<u64>,
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum SendDeliveryModeParam {
@@ -77,6 +89,9 @@ impl From<SendDeliveryModeParam> for ChatDeliveryMode {
         }
     }
 }
+
+const MIN_LOOK_LINES: u64 = 1;
+const MAX_LOOK_LINES: u64 = 1000;
 
 #[tool_router]
 impl McpServer {
@@ -269,6 +284,108 @@ impl McpServer {
             }
         }
     }
+
+    #[tool(description = "Inspect a target session pane snapshot for this bundle.")]
+    async fn look(
+        &self,
+        Parameters(params): Parameters<LookParams>,
+    ) -> Result<CallToolResult, McpError> {
+        validate_look_request(&params)?;
+        emit_inscription(
+            "mcp.tool.look.request",
+            &json!({
+                "bundle_name": self.state.configuration.bundle_paths.bundle_name,
+                "requester_session": self.state.configuration.sender_session.clone(),
+                "target_session": params.target_session.clone(),
+                "requested_bundle_name": params.bundle_name.clone(),
+                "lines": params.lines,
+            }),
+        );
+        let requester_session = self
+            .state
+            .configuration
+            .sender_session
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| {
+                validation_tool_error(
+                    "validation_unknown_sender",
+                    "sender session is not configured for this MCP server",
+                    None,
+                )
+            })?;
+
+        let request = RelayRequest::Look {
+            requester_session,
+            target_session: params.target_session.clone(),
+            lines: params.lines.map(|value| value as usize),
+            bundle_name: params.bundle_name.clone(),
+        };
+        match request_relay(
+            &self.state.configuration.bundle_paths.relay_socket,
+            &request,
+        ) {
+            Ok(RelayResponse::Look {
+                schema_version,
+                bundle_name,
+                requester_session,
+                target_session,
+                captured_at,
+                snapshot_lines,
+            }) => {
+                let response = json!({
+                    "schema_version": schema_version,
+                    "bundle_name": bundle_name,
+                    "requester_session": requester_session,
+                    "target_session": target_session,
+                    "captured_at": captured_at,
+                    "snapshot_lines": snapshot_lines,
+                });
+                emit_inscription(
+                    "mcp.tool.look.success",
+                    &json!({
+                        "bundle_name": response["bundle_name"],
+                        "requester_session": response["requester_session"],
+                        "target_session": response["target_session"],
+                        "snapshot_line_count": response["snapshot_lines"].as_array().map_or(0, |value| value.len()),
+                    }),
+                );
+                Ok(CallToolResult::success(vec![Content::json(response)?]))
+            }
+            Ok(RelayResponse::Error { error }) => {
+                emit_inscription(
+                    "mcp.tool.look.relay_error",
+                    &json!({
+                        "code": error.code.clone(),
+                        "message": error.message.clone(),
+                        "details": error.details.clone(),
+                    }),
+                );
+                Err(map_relay_error(error))
+            }
+            Ok(other) => {
+                emit_inscription(
+                    "mcp.tool.look.unexpected_response",
+                    &json!({"response": other}),
+                );
+                Err(internal_tool_error(
+                    "internal_unexpected_failure",
+                    "relay returned unexpected response variant",
+                    Some(json!({"response": other})),
+                ))
+            }
+            Err(source) => {
+                emit_inscription(
+                    "mcp.tool.look.io_error",
+                    &json!({"error": source.to_string()}),
+                );
+                Err(map_relay_request_failure(
+                    &self.state.configuration.bundle_paths.relay_socket,
+                    source,
+                ))
+            }
+        }
+    }
 }
 
 #[tool_handler]
@@ -315,6 +432,31 @@ fn validate_send_request(params: &SendParams) -> Result<(), McpError> {
             "validation_invalid_quiescence_timeout",
             "quiescence_timeout_ms must be greater than zero milliseconds",
             None,
+        ));
+    }
+    Ok(())
+}
+
+fn validate_look_request(params: &LookParams) -> Result<(), McpError> {
+    if params.target_session.trim().is_empty() {
+        return Err(validation_tool_error(
+            "validation_unknown_target",
+            "target_session must be non-empty",
+            None,
+        ));
+    }
+
+    if let Some(lines) = params.lines
+        && !(MIN_LOOK_LINES..=MAX_LOOK_LINES).contains(&lines)
+    {
+        return Err(validation_tool_error(
+            "validation_invalid_lines",
+            "lines must be between 1 and 1000",
+            Some(json!({
+                "lines": lines,
+                "min": MIN_LOOK_LINES,
+                "max": MAX_LOOK_LINES,
+            })),
         ));
     }
     Ok(())

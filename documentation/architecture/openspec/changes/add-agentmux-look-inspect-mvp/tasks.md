@@ -8,7 +8,7 @@
       - stable structured error codes.
 - [ ] 1.3 Add CLI `agentmux look <target-session>` with optional
       `--bundle` and `--lines` flags and default JSON output.
-- [ ] 1.4 Add MCP `look` tool mapped to relay `look` with schema parity.
+- [x] 1.4 Add MCP `look` tool mapped to relay `look` with schema parity.
 - [ ] 1.5 Ensure MCP and CLI surfaces share aligned error taxonomy and payload
       semantics.
 - [x] 1.6 Keep naming semantics aligned with `mcp/11` direction (`send` for
@@ -23,7 +23,7 @@
       - successful look response shape,
       - same-bundle scope enforcement,
       - invalid lines bounds.
-- [ ] 2.2 Add MCP integration tests for:
+- [x] 2.2 Add MCP integration tests for:
       - tool catalog includes `look`,
       - successful look response shape,
       - validation errors.
