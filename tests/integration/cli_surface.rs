@@ -369,6 +369,8 @@ fn look_returns_canonical_json_payload() {
 
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux").expect("bundle paths");
     ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
+    let workspace_root = temporary.path().join("workspace");
+    configure_local_mcp_override(&workspace_root, "agentmux", "tui");
     let request_log = Arc::new(Mutex::new(Vec::<Value>::new()));
     let relay_thread = spawn_fake_relay_once(
         &bundle_paths.relay_socket,
@@ -384,6 +386,7 @@ fn look_returns_canonical_json_payload() {
     );
 
     let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .current_dir(&workspace_root)
         .args([
             "look",
             "bravo",
@@ -426,8 +429,11 @@ fn look_rejects_cross_bundle_request_in_mvp() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    let workspace_root = temporary.path().join("workspace");
+    configure_local_mcp_override(&workspace_root, "agentmux", "tui");
 
     let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .current_dir(&workspace_root)
         .args([
             "look",
             "bravo",
@@ -698,4 +704,12 @@ fn spawn_fake_relay_once(
         }
         panic!("timed out waiting for fake relay request");
     })
+}
+
+fn configure_local_mcp_override(workspace_root: &Path, bundle_name: &str, session_name: &str) {
+    let override_path = workspace_root.join(".auxiliary/configuration/agentmux/overrides");
+    fs::create_dir_all(&override_path).expect("create local override directory");
+    let override_file = override_path.join("mcp.toml");
+    let content = format!("bundle_name = \"{bundle_name}\"\nsession_name = \"{session_name}\"\n");
+    fs::write(override_file, content).expect("write local mcp override file");
 }
