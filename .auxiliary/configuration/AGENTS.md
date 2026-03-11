@@ -9,10 +9,17 @@
 - Check README files in directories you're working with for insights about architecture, constraints, and TODO items.
 
 ## Purpose
-[Describe your project's purpose and goals]
+Agentmux is a multi-agent coordination runtime for coder sessions. It
+provides relay-hosted inter-agent messaging, MCP tool surfaces, and a unified
+CLI so operators and agents can list peers, send messages, inspect pane state,
+and coordinate work across multiple worktrees with clear contracts.
 
 ## Tech Stack
-[List your primary technologies]
+- Rust (relay runtime, MCP server, CLI surfaces, configuration/runtime boot)
+- TOML + serde (bundle/coder configuration and validation)
+- tmux process orchestration for pane/session management
+- OpenSpec for contract-first design and change tracking
+- MCP-based tooling for coordination and documentation workflows
 
 # Development Standards
 
@@ -120,12 +127,6 @@ Use `openspec/AGENTS.md` to learn:
 <!-- This section accumulates project-specific knowledge, constraints, and deviations.
      For structured items, use documentation/architecture/decisions/ and `nb`. -->
 
-- For Rust tests, prefer files under `tests/unit` and `tests/integration`
-  rather than inline `#[cfg(test)]` modules, unless there is a strong locality
-  reason to keep tests adjacent to implementation.
-- Prefer tests that exercise public interfaces; avoid source-inclusion patterns
-  used only to reach private internals.
-
 ## Notebook Conventions
 
 - Standardized top-level notebook folders for this project are:
@@ -230,3 +231,19 @@ Use a coordinator-plus-specialists model:
   default.
 - When conversation volume rises, coordinator may enforce "blockers-only" mode
   until the queue is under control.
+
+## Pre-MVP Defaults
+
+- This project is **pre-MVP**. Do **not** preserve backwards compatibility
+  unless the human developer explicitly requests it.
+- Prefer **raising errors** (fail fast) over “graceful degradation” with
+  defaults; only use silent fallbacks when explicitly requested.
+
+## MCP Tool Inventory Refresh
+
+- After changes that add/remove/rename MCP tools, perform a refresh check:
+  - restart the relevant MCP server,
+  - verify tool inventory from the client side,
+  - if stale tools persist, request a client restart to force a fresh MCP
+    handshake.
+- Record refresh outcome in the lane handoff note when tool inventory changed.

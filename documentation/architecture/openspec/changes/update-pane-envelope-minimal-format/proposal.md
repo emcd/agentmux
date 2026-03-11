@@ -15,10 +15,12 @@ preserving machine metadata in inscriptions/logs.
   - top-level multipart `Content-Type`
   - per-part `Content-Transfer-Encoding`
 - Keep boundary-delimited message framing and closing marker.
+- Lock boundary token derivation without top-level multipart `Content-Type`
+  (first boundary line introduces token; closing line must match).
 - Keep human-relevant addressing headers (`From`, `To`, optional `Cc`,
   optional `Subject`) and timestamp/message identity headers.
 - Clarify that canonical machine metadata remains out-of-band (relay
-  inscriptions/logs), not in the injected envelope body.
+  inscriptions/logs), with explicit required field parity.
 - Update malformed-envelope validation rules to match the simplified format.
 
 ## Impact

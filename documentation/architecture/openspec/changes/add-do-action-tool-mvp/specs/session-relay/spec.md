@@ -4,8 +4,9 @@
 The system SHALL support configured do-action entries for relay-dispatched
 automation prompts.
 
-Action entries SHALL be defined in `coders.toml` for each coder so prompts can
-vary by coder/session context.
+Action entries SHALL be defined in `coders.toml` at canonical path
+`[[coders.do-actions]]` for each coder so prompts can vary by
+coder/session context.
 
 Each action definition SHALL include:
 
@@ -16,6 +17,12 @@ Each action definition SHALL include:
 
 Action definitions SHALL be resolved from active runtime configuration for the
 sender/session context.
+
+#### Scenario: Load configured action registry from canonical coder path
+
+- **WHEN** `coders.toml` defines `[[coders]]` entries with nested
+  `[[coders.do-actions]]` tables
+- **THEN** relay resolves do-action entries from that canonical path
 
 #### Scenario: Load configured action registry
 
@@ -39,6 +46,12 @@ Relay SHALL expose a `do` operation with modes:
 `show` returns metadata for one action.
 `run` dispatches configured prompt injection for one action.
 
+Run mode request contract SHALL include:
+
+- required `mode=run`
+- required `action`
+- no target selector fields in MVP
+
 #### Scenario: Return available actions for list mode
 
 - **WHEN** relay receives `do` request with `mode=list`
@@ -55,12 +68,18 @@ Relay SHALL expose a `do` operation with modes:
 - **WHEN** relay receives `do` run request for unknown action id
 - **THEN** relay returns `validation_unknown_action`
 
+#### Scenario: Reject target selector fields for do run
+
+- **WHEN** relay receives do run request with `target_session` or
+  `target_sessions`
+- **THEN** relay returns `validation_invalid_arguments`
+
 ### Requirement: Relay Do Safety and Execution Semantics
 
 Relay do execution SHALL enforce:
 
 - action allowlist from configuration
-- action target policy (`self-only`)
+- self-target-only execution in MVP
 - effective async behavior for self-target actions
 
 MVP SHALL NOT introduce broader authorization constraints beyond `self-only`;
@@ -68,15 +87,9 @@ those are deferred to the existing authorization track.
 
 Relay SHALL emit action lifecycle inscriptions for observability.
 
-#### Scenario: Enforce self-only policy
-
-- **WHEN** action has `self-only=true`
-- **AND** run request targets non-self session
-- **THEN** relay returns `authorization_forbidden`
-
 #### Scenario: Force async behavior for self run
 
-- **WHEN** run request targets sender session
+- **WHEN** relay receives a valid do run request (self-target by MVP contract)
 - **THEN** relay treats dispatch as accepted/queued
 - **AND** does not block waiting for sync completion semantics
 
@@ -85,3 +98,20 @@ Relay SHALL emit action lifecycle inscriptions for observability.
 - **WHEN** relay processes do run request
 - **THEN** relay emits inscriptions for request and downstream delivery
   lifecycle events
+
+### Requirement: Relay Do Run Acceptance Payload
+
+Successful `do` `run` response SHALL include required fields:
+
+- `schema_version`
+- `bundle_name`
+- `requester_session`
+- `action`
+- `status` (`accepted`)
+- `outcome` (`queued`)
+- `message_id`
+
+#### Scenario: Return canonical acceptance payload for do run
+
+- **WHEN** relay accepts `do` run request for configured action
+- **THEN** relay response includes all required acceptance payload fields

@@ -21,7 +21,8 @@ operations where synchronous waiting can deadlock.
 ## Decisions
 
 - Decision: `do` command surface uses two primary forms:
-  - `agentmux do` (survey/list)
+  - `agentmux do` (list)
+  - `agentmux do --show <action>` (show metadata)
   - `agentmux do <action>` (execute)
 - Decision: query details are available through action-specific show mode
   (`do --show <action>` in CLI; `mode=show` in MCP), which can be
@@ -29,10 +30,16 @@ operations where synchronous waiting can deadlock.
 - Decision: MCP exposes one `do` tool with mode-based payload rather than
   multiple tools to keep dynamic action evolution stable.
 - Decision: action configuration uses kebab-case TOML keys and is defined per
-  coder in `coders.toml` so action prompts can differ by coder.
+  coder in `coders.toml` under canonical path `[[coders.do-actions]]` so
+  action prompts can differ by coder.
 - Decision: action entries include `self-only` with default `true`.
+- Decision: MVP run execution is self-target only and does not expose target
+  selector fields in CLI/MCP/relay request contracts.
 - Decision: self-target execution is always effective async; request-level sync
   preference does not override this rule.
+- Decision: `do run` returns one canonical acceptance payload across
+  relay/CLI/MCP with required fields: `schema_version`, `bundle_name`,
+  `requester_session`, `action`, `status`, `outcome`, `message_id`.
 - Decision: MVP enforces allowlist + `self-only` only; broader authorization
   constraints are deferred to the existing authorization track.
 - Decision: action execution emits standard inscriptions for observability.
@@ -49,7 +56,7 @@ operations where synchronous waiting can deadlock.
 
 - Add `coders.toml` action parsing (kebab-case) with conservative defaults.
 - Add relay dispatch operation and wire CLI/MCP adapters.
-- Introduce tests before enabling non-self targets.
+- Introduce tests before enabling non-self targets in a follow-up change.
 
 ## Follow-Ups
 

@@ -24,16 +24,18 @@ entrypoints.
 
 The system SHALL expose a configured action dispatcher through:
 
-- `agentmux do` (survey mode)
+- `agentmux do` (list mode)
+- `agentmux do --show <action>` (show mode)
 - `agentmux do <action>` (execute mode)
 
-Survey mode SHALL return available configured actions for the resolved session
+List mode SHALL return available configured actions for the resolved session
 context.
 
 Execute mode SHALL run only configured actions and SHALL reject unknown action
-ids.
+ids. Execute mode SHALL target the caller's own session in MVP and SHALL NOT
+accept target selector arguments.
 
-#### Scenario: List available actions in survey mode
+#### Scenario: List available actions in list mode
 
 - **WHEN** an operator runs `agentmux do`
 - **THEN** the system returns configured action ids and short descriptions
@@ -53,17 +55,16 @@ ids.
 
 The CLI SHALL support action metadata query mode for one action.
 
-MVP MAY express this as `agentmux do --show <action>` (or an equivalent
-single-action query shape) as long as it is machine-parsable and documented.
+MVP SHALL express this as `agentmux do --show <action>`.
 
-Describe output SHALL include:
+Show output SHALL include:
 
 - action id
 - description (when configured)
 - parameter model for execution payload (MVP may be empty/none)
 - self-target policy (`self-only`)
 
-#### Scenario: Describe configured action metadata
+#### Scenario: Show configured action metadata
 
 - **WHEN** an operator queries one action in show mode
 - **THEN** the system returns action metadata and execution policy
@@ -73,7 +74,7 @@ Describe output SHALL include:
 Action execution SHALL enforce:
 
 - configured action allowlist
-- target policy checks (`self-only`)
+- self-target-only execution in MVP (no target selector arguments)
 - effective async execution for self-target runs
 
 MVP SHALL NOT introduce broader authorization constraints beyond the `self-only`
@@ -85,8 +86,25 @@ policy; those are deferred to the existing authorization track.
 - **THEN** execution uses effective async behavior
 - **AND** does not block waiting for prompt quiescence completion outcome
 
-#### Scenario: Reject disallowed non-self execution
+#### Scenario: Reject target selector argument in MVP
 
-- **WHEN** action policy is `self-only=true`
-- **AND** caller targets a different session
-- **THEN** the system rejects with `authorization_forbidden`
+- **WHEN** an operator provides target selector arguments to `agentmux do`
+- **THEN** the system rejects with `validation_invalid_arguments`
+
+### Requirement: Do Run Acceptance Payload
+
+Successful `agentmux do <action>` execution SHALL return a structured
+acceptance payload with required fields:
+
+- `schema_version`
+- `bundle_name`
+- `requester_session`
+- `action`
+- `status` (`accepted`)
+- `outcome` (`queued`)
+- `message_id`
+
+#### Scenario: Return canonical acceptance payload for run mode
+
+- **WHEN** an operator runs `agentmux do compact`
+- **THEN** the command returns all required acceptance payload fields

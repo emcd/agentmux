@@ -45,9 +45,18 @@ Optional headers MAY include:
 ### Requirement: MIME Multipart Envelope
 
 The envelope SHALL use boundary-delimited framing in pane text.
-Envelope end SHALL be indicated by closing boundary:
+
+Boundary token introduction SHALL be:
+
+- first boundary line immediately after header block:
+  - `--agentmux-<message-id-without-hyphens>`
+
+Envelope end SHALL be indicated by matching closing boundary:
 
 - `--<boundary>--`
+
+The parser SHALL derive the boundary token from the first boundary line and
+require the same token in the closing boundary line.
 
 The renderer SHALL NOT emit top-level multipart `Content-Type` header in pane
 text.
@@ -57,6 +66,12 @@ text.
 - **WHEN** relay renders envelope headers and body
 - **THEN** envelope includes boundary start and closing marker
 - **AND** top-level `Content-Type: multipart/mixed; boundary=...` is absent
+
+#### Scenario: Reject closing boundary token mismatch
+
+- **WHEN** parsed envelope closing boundary token differs from first boundary
+  token
+- **THEN** parser reports envelope as malformed
 
 ### Requirement: Required Text Body Part
 
@@ -103,8 +118,26 @@ Canonical machine metadata for routing/audit SHALL be preserved out-of-band in
 relay-managed metadata streams (for example inscriptions/logs) rather than
 injected into pane envelope text.
 
+Required out-of-band metadata fields SHALL include:
+
+- `schema_version`
+- `message_id`
+- `bundle_name`
+- `sender_session`
+- `target_sessions`
+- `created_at`
+
+Optional out-of-band metadata fields MAY include:
+
+- `cc_sessions`
+
 #### Scenario: Preserve machine metadata without pane preamble
 
 - **WHEN** relay emits an injected envelope
 - **THEN** pane text excludes JSON manifest preamble
 - **AND** equivalent machine metadata remains available out-of-band
+
+#### Scenario: Preserve canonical metadata field set out-of-band
+
+- **WHEN** relay emits simplified pane envelope text
+- **THEN** out-of-band metadata includes all required canonical fields
