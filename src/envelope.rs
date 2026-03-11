@@ -13,14 +13,13 @@ pub const ENVELOPE_SCHEMA_VERSION: &str = "1";
 pub const RESERVED_PATH_POINTER_CONTENT_TYPE: &str = "application/vnd.agentmux.path-pointer+json";
 pub const DEFAULT_MAX_PROMPT_TOKENS: usize = 4096;
 
-const REQUIRED_HEADER_ENVELOPE_VERSION: &str = "Envelope-Version";
 const REQUIRED_HEADER_MESSAGE_ID: &str = "Message-Id";
 const REQUIRED_HEADER_DATE: &str = "Date";
 const REQUIRED_HEADER_FROM: &str = "From";
 const REQUIRED_HEADER_TO: &str = "To";
-const REQUIRED_HEADER_CONTENT_TYPE: &str = "Content-Type";
 const OPTIONAL_HEADER_CC: &str = "Cc";
 const OPTIONAL_HEADER_SUBJECT: &str = "Subject";
+const PART_HEADER_CONTENT_TYPE: &str = "Content-Type";
 
 /// Canonical machine-readable manifest line that starts each envelope.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -53,11 +52,9 @@ pub struct EnvelopeRenderInput {
     pub body: String,
 }
 
-/// Parsed envelope with canonical preamble, validated headers, and body text.
+/// Parsed envelope with validated headers and body text.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ParsedEnvelope {
-    pub manifest: ManifestPreamble,
-    pub envelope_version: String,
     pub message_id: String,
     pub date: String,
     pub from: AddressIdentity,
@@ -126,16 +123,10 @@ impl Display for EnvelopeParseError {
 
 impl Error for EnvelopeParseError {}
 
-/// Renders one envelope as compact-manifest + RFC 822 headers + MIME body.
+/// Renders one envelope as RFC 822-style headers + boundary-delimited body.
 pub fn render_envelope(input: &EnvelopeRenderInput) -> String {
     let mut lines = Vec::new();
-    lines.push(serde_json::to_string(&input.manifest).unwrap_or_else(|_| "{}".to_string()));
-
     let boundary = deterministic_boundary(&input.manifest.message_id);
-    lines.push(format!(
-        "{REQUIRED_HEADER_ENVELOPE_VERSION}: {}",
-        input.manifest.schema_version
-    ));
     lines.push(format!(
         "{REQUIRED_HEADER_MESSAGE_ID}: {}",
         input.manifest.message_id
@@ -174,13 +165,9 @@ pub fn render_envelope(input: &EnvelopeRenderInput) -> String {
             lines.push(format!("{OPTIONAL_HEADER_SUBJECT}: {subject}"));
         }
     }
-    lines.push(format!(
-        "{REQUIRED_HEADER_CONTENT_TYPE}: multipart/mixed; boundary=\"{boundary}\""
-    ));
     lines.push(String::new());
     lines.push(format!("--{boundary}"));
     lines.push("Content-Type: text/plain; charset=utf-8".to_string());
-    lines.push("Content-Transfer-Encoding: 8bit".to_string());
     lines.push(String::new());
     lines.push(input.body.clone());
     lines.push(format!("--{boundary}--"));
@@ -191,23 +178,23 @@ pub fn render_envelope(input: &EnvelopeRenderInput) -> String {
 /// Parses and validates one injected envelope.
 pub fn parse_envelope(text: &str) -> Result<ParsedEnvelope, EnvelopeParseError> {
     let lines = text.lines().collect::<Vec<_>>();
-    let mut index = first_non_empty_line(&lines)
-        .ok_or_else(|| EnvelopeParseError::new("missing manifest preamble"))?;
-    let manifest_line = lines[index].trim();
-    let manifest = serde_json::from_str::<ManifestPreamble>(manifest_line)
-        .map_err(|_| EnvelopeParseError::new("manifest preamble is not valid JSON"))?;
-    validate_manifest(&manifest)?;
-    index += 1;
-
+    let index = first_non_empty_line(&lines)
+        .ok_or_else(|| EnvelopeParseError::new("missing required header block"))?;
     let (headers, body_start_index) = parse_header_block(&lines, index)?;
     validate_required_headers(&headers)?;
-
-    let boundary = parse_boundary_from_content_type(
-        headers
-            .get(REQUIRED_HEADER_CONTENT_TYPE)
-            .ok_or_else(|| EnvelopeParseError::new("missing Content-Type header"))?,
-    )?;
-    let (parts, had_closing_boundary) = parse_mime_parts(&lines, body_start_index, &boundary)?;
+    let message_id = headers
+        .get(REQUIRED_HEADER_MESSAGE_ID)
+        .cloned()
+        .unwrap_or_default();
+    let expected_boundary = deterministic_boundary(&message_id);
+    let (boundary, first_boundary_index) =
+        parse_boundary_from_first_marker(&lines, body_start_index)?;
+    if boundary != expected_boundary {
+        return Err(EnvelopeParseError::new(
+            "MIME boundary token must match Message-Id-derived boundary",
+        ));
+    }
+    let (parts, had_closing_boundary) = parse_mime_parts(&lines, first_boundary_index, &boundary)?;
     if !had_closing_boundary {
         return Err(EnvelopeParseError::new(
             "missing MIME closing boundary terminator",
@@ -253,15 +240,7 @@ pub fn parse_envelope(text: &str) -> Result<ParsedEnvelope, EnvelopeParseError> 
         .unwrap_or_default();
 
     Ok(ParsedEnvelope {
-        manifest,
-        envelope_version: headers
-            .get(REQUIRED_HEADER_ENVELOPE_VERSION)
-            .cloned()
-            .unwrap_or_default(),
-        message_id: headers
-            .get(REQUIRED_HEADER_MESSAGE_ID)
-            .cloned()
-            .unwrap_or_default(),
+        message_id,
         date: headers
             .get(REQUIRED_HEADER_DATE)
             .cloned()
@@ -394,10 +373,7 @@ pub fn parse_tokenizer_profile(value: &str) -> Option<TokenizerProfile> {
 // o200k_base when a maintained Rust tokenizer crate is selected.
 
 fn deterministic_boundary(message_id: &str) -> String {
-    let normalized = message_id
-        .chars()
-        .filter(|character| character.is_ascii_alphanumeric())
-        .collect::<String>();
+    let normalized = message_id.trim().replace('-', "");
     if normalized.is_empty() {
         return "agentmux-boundary".to_string();
     }
@@ -406,34 +382,6 @@ fn deterministic_boundary(message_id: &str) -> String {
 
 fn first_non_empty_line(lines: &[&str]) -> Option<usize> {
     lines.iter().position(|line| !line.trim().is_empty())
-}
-
-fn validate_manifest(manifest: &ManifestPreamble) -> Result<(), EnvelopeParseError> {
-    if manifest.schema_version.trim().is_empty() {
-        return Err(EnvelopeParseError::new(
-            "manifest schema_version is required",
-        ));
-    }
-    if manifest.message_id.trim().is_empty() {
-        return Err(EnvelopeParseError::new("manifest message_id is required"));
-    }
-    if manifest.bundle_name.trim().is_empty() {
-        return Err(EnvelopeParseError::new("manifest bundle_name is required"));
-    }
-    if manifest.sender_session.trim().is_empty() {
-        return Err(EnvelopeParseError::new(
-            "manifest sender_session is required",
-        ));
-    }
-    if manifest.created_at.trim().is_empty() {
-        return Err(EnvelopeParseError::new("manifest created_at is required"));
-    }
-    if manifest.target_sessions.is_empty() {
-        return Err(EnvelopeParseError::new(
-            "manifest target_sessions is required",
-        ));
-    }
-    Ok(())
 }
 
 fn parse_header_block(
@@ -470,12 +418,10 @@ fn parse_header_block(
 
 fn validate_required_headers(headers: &BTreeMap<String, String>) -> Result<(), EnvelopeParseError> {
     let required = [
-        REQUIRED_HEADER_ENVELOPE_VERSION,
         REQUIRED_HEADER_MESSAGE_ID,
         REQUIRED_HEADER_DATE,
         REQUIRED_HEADER_FROM,
         REQUIRED_HEADER_TO,
-        REQUIRED_HEADER_CONTENT_TYPE,
     ];
     for header in required {
         if !headers.contains_key(header) {
@@ -487,39 +433,34 @@ fn validate_required_headers(headers: &BTreeMap<String, String>) -> Result<(), E
     Ok(())
 }
 
-fn parse_boundary_from_content_type(value: &str) -> Result<String, EnvelopeParseError> {
-    let mut pieces = value.split(';');
-    let media_type = pieces
-        .next()
-        .map(str::trim)
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if media_type != "multipart/mixed" {
+fn parse_boundary_from_first_marker(
+    lines: &[&str],
+    mut index: usize,
+) -> Result<(String, usize), EnvelopeParseError> {
+    while index < lines.len() && lines[index].trim().is_empty() {
+        index += 1;
+    }
+    let marker = lines
+        .get(index)
+        .map(|value| value.trim())
+        .ok_or_else(|| EnvelopeParseError::new("MIME body must start with boundary marker"))?;
+    if !marker.starts_with("--") {
         return Err(EnvelopeParseError::new(
-            "Content-Type must be multipart/mixed",
+            "MIME body must start with boundary marker",
         ));
     }
-
-    for piece in pieces {
-        let (name, parameter_value) = match piece.split_once('=') {
-            Some(value) => value,
-            None => continue,
-        };
-        if !name.trim().eq_ignore_ascii_case("boundary") {
-            continue;
-        }
-        let boundary = parameter_value.trim().trim_matches('"');
-        if boundary.is_empty() {
-            return Err(EnvelopeParseError::new(
-                "multipart boundary parameter must be non-empty",
-            ));
-        }
-        return Ok(boundary.to_string());
+    if marker == "--" || marker.ends_with("--") {
+        return Err(EnvelopeParseError::new(
+            "first MIME boundary marker must be opening boundary",
+        ));
     }
-
-    Err(EnvelopeParseError::new(
-        "Content-Type multipart boundary parameter is required",
-    ))
+    let boundary = marker.trim_start_matches("--").trim();
+    if boundary.is_empty() {
+        return Err(EnvelopeParseError::new(
+            "MIME opening boundary token must be non-empty",
+        ));
+    }
+    Ok((boundary.to_string(), index))
 }
 
 fn parse_mime_parts(
@@ -553,7 +494,7 @@ fn parse_mime_parts(
         let (part_headers, next_index) = parse_header_block(lines, index)?;
         index = next_index;
         let content_type = part_headers
-            .get("Content-Type")
+            .get(PART_HEADER_CONTENT_TYPE)
             .cloned()
             .ok_or_else(|| EnvelopeParseError::new("MIME part is missing Content-Type"))?;
 

@@ -717,25 +717,38 @@ fn deliver_one_target(task: &AsyncDeliveryTask) -> Result<ChatResult, RelayError
         target_member.prompt_readiness.as_ref(),
     ) {
         Ok(pane_target) => {
-            let envelope = render_envelope(&EnvelopeRenderInput {
-                manifest: ManifestPreamble {
-                    schema_version: SCHEMA_VERSION.to_string(),
-                    message_id: message_id.clone(),
-                    bundle_name: bundle.bundle_name.clone(),
-                    sender_session: sender.id.clone(),
-                    target_sessions: vec![target_session.clone()],
-                    cc_sessions: if cc_members.is_empty() {
-                        None
-                    } else {
-                        Some(
-                            cc_members
-                                .iter()
-                                .map(|member| member.id.clone())
-                                .collect::<Vec<_>>(),
-                        )
-                    },
-                    created_at,
+            let manifest = ManifestPreamble {
+                schema_version: SCHEMA_VERSION.to_string(),
+                message_id: message_id.clone(),
+                bundle_name: bundle.bundle_name.clone(),
+                sender_session: sender.id.clone(),
+                target_sessions: vec![target_session.clone()],
+                cc_sessions: if cc_members.is_empty() {
+                    None
+                } else {
+                    Some(
+                        cc_members
+                            .iter()
+                            .map(|member| member.id.clone())
+                            .collect::<Vec<_>>(),
+                    )
                 },
+                created_at,
+            };
+            emit_inscription(
+                "relay.chat.envelope.metadata",
+                &json!({
+                    "schema_version": manifest.schema_version,
+                    "message_id": manifest.message_id,
+                    "bundle_name": manifest.bundle_name,
+                    "sender_session": manifest.sender_session,
+                    "target_sessions": manifest.target_sessions,
+                    "cc_sessions": manifest.cc_sessions,
+                    "created_at": manifest.created_at,
+                }),
+            );
+            let envelope = render_envelope(&EnvelopeRenderInput {
+                manifest,
                 from: AddressIdentity {
                     session_name: sender.id.clone(),
                     display_name: sender.name.clone(),

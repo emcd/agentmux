@@ -33,33 +33,24 @@ fn sample_render_input() -> EnvelopeRenderInput {
 }
 
 #[test]
-fn envelope_starts_with_compact_manifest_line() {
+fn envelope_starts_with_required_header_block() {
     let input = sample_render_input();
     let rendered = render_envelope(&input);
     let first_line = rendered
         .lines()
         .find(|line| !line.trim().is_empty())
         .expect("first non-empty line");
-    let expected = serde_json::to_string(&input.manifest).expect("manifest json");
-    assert_eq!(first_line, expected);
+    assert_eq!(first_line, "Message-Id: msg-1");
 }
 
 #[test]
 fn envelope_contains_required_headers_and_optional_subject_is_not_required() {
     let rendered = render_envelope(&sample_render_input());
-    let mut lines = rendered.lines();
-    let _manifest = lines.next().expect("manifest line");
-    let header_lines = lines
+    let header_lines = rendered
+        .lines()
         .take_while(|line| !line.trim().is_empty())
         .collect::<Vec<_>>();
-    let required_headers = [
-        "Envelope-Version:",
-        "Message-Id:",
-        "Date:",
-        "From:",
-        "To:",
-        "Content-Type:",
-    ];
+    let required_headers = ["Message-Id:", "Date:", "From:", "To:"];
     for header in required_headers {
         assert_eq!(
             header_lines
@@ -70,6 +61,8 @@ fn envelope_contains_required_headers_and_optional_subject_is_not_required() {
             "required header should appear exactly once: {header}"
         );
     }
+    assert!(!rendered.contains("Envelope-Version:"));
+    assert!(!rendered.contains("Content-Type: multipart/mixed;"));
     assert_eq!(
         header_lines
             .iter()
@@ -80,6 +73,7 @@ fn envelope_contains_required_headers_and_optional_subject_is_not_required() {
 
     let parsed = parse_envelope(&rendered).expect("parse rendered envelope");
     assert_eq!(parsed.subject, None);
+    assert_eq!(parsed.message_id, "msg-1");
 }
 
 #[test]
@@ -95,57 +89,69 @@ fn address_renderer_and_parser_support_display_identity_format() {
 }
 
 #[test]
-fn envelope_uses_multipart_boundary_and_closing_marker() {
+fn envelope_uses_boundary_and_closing_marker_without_top_level_content_type() {
     let rendered = render_envelope(&sample_render_input());
-    let content_type_line = rendered
-        .lines()
-        .find(|line| line.starts_with("Content-Type: multipart/mixed;"))
-        .expect("content type header");
-    let boundary = content_type_line
-        .split("boundary=\"")
-        .nth(1)
-        .and_then(|value| value.strip_suffix('"'))
-        .expect("boundary value");
-    assert!(rendered.contains(&format!("--{boundary}\n")));
-    assert!(rendered.trim_end().ends_with(&format!("--{boundary}--")));
+    let lines = rendered.lines().collect::<Vec<_>>();
+    let header_end = lines
+        .iter()
+        .position(|line| line.trim().is_empty())
+        .expect("header terminator");
+    let boundary_line = lines
+        .get(header_end + 1)
+        .copied()
+        .expect("opening boundary line");
+    assert_eq!(boundary_line, "--agentmux-msg1");
+    assert!(rendered.trim_end().ends_with("--agentmux-msg1--"));
+    assert!(!rendered.contains("Content-Type: multipart/mixed;"));
 }
 
 #[test]
-fn parser_rejects_missing_manifest_preamble() {
+fn parser_rejects_missing_boundary_start_marker() {
     let malformed = "\
-Envelope-Version: 1
 Message-Id: msg-1
 Date: 2026-03-05T00:00:00Z
 From: Alpha <session:alpha>
 To: Bravo <session:bravo>
-Content-Type: multipart/mixed; boundary=\"b\"
 
---b
 Content-Type: text/plain; charset=utf-8
 
 hello
---b--
 ";
-    let error = parse_envelope(malformed).expect_err("missing manifest should fail");
-    assert!(error.to_string().contains("manifest"));
+    let error = parse_envelope(malformed).expect_err("missing boundary should fail");
+    assert!(error.to_string().contains("boundary marker"));
+}
+
+#[test]
+fn parser_rejects_boundary_token_mismatch() {
+    let malformed = "\
+Message-Id: msg-1
+Date: 2026-03-05T00:00:00Z
+From: Alpha <session:alpha>
+To: Bravo <session:bravo>
+
+--agentmux-different
+Content-Type: text/plain; charset=utf-8
+
+hello
+--agentmux-different--
+";
+    let error = parse_envelope(malformed).expect_err("boundary mismatch should fail");
+    assert!(error.to_string().contains("Message-Id-derived boundary"));
 }
 
 #[test]
 fn parser_rejects_missing_text_plain_body_part() {
     let malformed = "\
-{\"schema_version\":\"1\",\"message_id\":\"msg-1\",\"bundle_name\":\"party\",\"sender_session\":\"alpha\",\"target_sessions\":[\"bravo\"],\"created_at\":\"2026-03-05T00:00:00Z\"}
-Envelope-Version: 1
 Message-Id: msg-1
 Date: 2026-03-05T00:00:00Z
 From: Alpha <session:alpha>
 To: Bravo <session:bravo>
-Content-Type: multipart/mixed; boundary=\"b\"
 
---b
+--agentmux-msg1
 Content-Type: application/json
 
 {\"hello\":\"world\"}
---b--
+--agentmux-msg1--
 ";
     let error = parse_envelope(malformed).expect_err("missing text/plain should fail");
     assert!(error.to_string().contains("text/plain"));
@@ -154,33 +160,31 @@ Content-Type: application/json
 #[test]
 fn parser_accepts_reserved_path_pointer_part_and_ignores_it_for_body_selection() {
     let envelope = "\
-{\"schema_version\":\"1\",\"message_id\":\"msg-1\",\"bundle_name\":\"party\",\"sender_session\":\"alpha\",\"target_sessions\":[\"bravo\"],\"cc_sessions\":[\"charlie\"],\"created_at\":\"2026-03-05T00:00:00Z\"}
-Envelope-Version: 1
 Message-Id: msg-1
 Date: 2026-03-05T00:00:00Z
 From: Alpha <session:alpha>
 To: Bravo <session:bravo>
 Cc: Charlie <session:charlie>
-Content-Type: multipart/mixed; boundary=\"b\"
 
---b
+--agentmux-msg1
 Content-Type: application/vnd.agentmux.path-pointer+json
 
 {\"label\":\"artifact\",\"local_path\":\"./.auxiliary/temporary/file.txt\"}
---b
+--agentmux-msg1
 Content-Type: text/plain; charset=utf-8
 
 hello
---b--
+--agentmux-msg1--
 ";
     let parsed = parse_envelope(envelope).expect("reserved part envelope should parse");
     assert_eq!(parsed.text_body, "hello");
     assert_eq!(parsed.reserved_path_pointer_parts.len(), 1);
-    assert_eq!(parsed.manifest.target_sessions, vec!["bravo".to_string()]);
-    assert_eq!(
-        parsed.manifest.cc_sessions,
-        Some(vec!["charlie".to_string()])
-    );
+    assert_eq!(parsed.message_id, "msg-1");
+    assert_eq!(parsed.from.session_name, "alpha");
+    assert_eq!(parsed.to.len(), 1);
+    assert_eq!(parsed.to[0].session_name, "bravo");
+    assert_eq!(parsed.cc.len(), 1);
+    assert_eq!(parsed.cc[0].session_name, "charlie");
 }
 
 #[test]

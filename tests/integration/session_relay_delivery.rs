@@ -1373,6 +1373,38 @@ async fn relay_sync_delivery_sends_submit_in_separate_tmux_command() {
     let _ = child.wait().await;
 
     let log = fs::read_to_string(&log_file).expect("read fake tmux log");
+    assert!(
+        log.contains("Message-Id:"),
+        "expected pane envelope to include Message-Id header, log={log:?}"
+    );
+    assert!(
+        log.contains("Date:"),
+        "expected pane envelope to include Date header, log={log:?}"
+    );
+    assert!(
+        log.contains("From:"),
+        "expected pane envelope to include From header, log={log:?}"
+    );
+    assert!(
+        log.contains("To:"),
+        "expected pane envelope to include To header, log={log:?}"
+    );
+    assert!(
+        log.contains("--agentmux-"),
+        "expected pane envelope boundary marker, log={log:?}"
+    );
+    assert!(
+        !log.contains("Envelope-Version:"),
+        "pane envelope must omit Envelope-Version header, log={log:?}"
+    );
+    assert!(
+        !log.contains("multipart/mixed; boundary="),
+        "pane envelope must omit top-level multipart header, log={log:?}"
+    );
+    assert!(
+        !log.contains("Content-Transfer-Encoding:"),
+        "pane envelope must omit per-part transfer encoding header, log={log:?}"
+    );
     let send_keys_lines = log
         .lines()
         .filter(|line| line.contains(" send-keys "))
@@ -1401,6 +1433,24 @@ async fn relay_sync_delivery_sends_submit_in_separate_tmux_command() {
     assert!(
         last_prompt_index < enter_index,
         "expected prompt command before Enter command, log={log:?}"
+    );
+
+    let inscriptions = fs::read_to_string(
+        inscriptions_root
+            .join("bundles")
+            .join(bundle_name)
+            .join("relay.log"),
+    )
+    .expect("read relay inscriptions");
+    assert!(
+        inscriptions.contains("\"event\":\"relay.chat.envelope.metadata\"")
+            && inscriptions.contains("\"schema_version\"")
+            && inscriptions.contains("\"message_id\"")
+            && inscriptions.contains("\"bundle_name\"")
+            && inscriptions.contains("\"sender_session\"")
+            && inscriptions.contains("\"target_sessions\"")
+            && inscriptions.contains("\"created_at\""),
+        "expected out-of-band envelope metadata inscription, inscriptions={inscriptions:?}"
     );
 }
 
