@@ -15,6 +15,10 @@ represents a separate non-coder session category.
   - `tmux`
   - `acp`
 - Preserve clear raw-to-validated modeling for Serde and diagnostics.
+- Preserve existing bundle-membership invariants:
+  - unique session IDs,
+  - unique optional session names,
+  - rejection of unknown coder references.
 
 ## Non-Goals
 

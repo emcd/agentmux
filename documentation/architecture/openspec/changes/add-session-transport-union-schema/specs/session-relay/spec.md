@@ -17,6 +17,12 @@ Each bundle file SHALL include:
   - required `coder` reference
   - optional `coder-session-id`
 
+Session membership invariants SHALL remain enforced:
+
+- session `id` values are unique within one bundle
+- optional session `name` values are unique within one bundle when present
+- each session `coder` references an existing coder id from `coders.toml`
+
 Coder definitions SHALL include target descriptors in `coders.toml`:
 
 - `format-version` (supported value for this schema: `2`)
@@ -58,7 +64,9 @@ Bundle identity SHALL be derived from bundle filename (`<bundle-id>.toml`).
 - **WHEN** bundle file uses `format-version = 2`
 - **AND** coders file uses `format-version = 2`
 - **AND** a coder defines `[coders.tmux]` with required fields
-- **AND** a session references that coder
+- **AND** sessions use unique `id` values
+- **AND** optional session `name` values are unique when present
+- **AND** each session references an existing coder
 - **THEN** the system loads configuration successfully
 
 #### Scenario: Load valid v2 ACP stdio coder + session configuration
@@ -67,8 +75,25 @@ Bundle identity SHALL be derived from bundle filename (`<bundle-id>.toml`).
 - **AND** a coder defines `[coders.acp]`
 - **AND** `coders.acp.channel = "stdio"`
 - **AND** `coders.acp.command` is provided
-- **AND** a session references that coder
+- **AND** sessions use unique `id` values
+- **AND** optional session `name` values are unique when present
+- **AND** each session references an existing coder
 - **THEN** the system loads configuration successfully
+
+#### Scenario: Reject unknown coder reference
+
+- **WHEN** a session references a `coder` value not present in `coders.toml`
+- **THEN** the system rejects configuration with a validation error
+
+#### Scenario: Reject duplicate session id in one bundle
+
+- **WHEN** one bundle contains duplicate session `id` values
+- **THEN** the system rejects configuration with a validation error
+
+#### Scenario: Reject duplicate session name in one bundle
+
+- **WHEN** one bundle contains duplicate session `name` values
+- **THEN** the system rejects configuration with a validation error
 
 #### Scenario: Reject missing coder target descriptor
 

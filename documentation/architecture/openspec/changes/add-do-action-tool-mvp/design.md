@@ -33,6 +33,9 @@ operations where synchronous waiting can deadlock.
   coder in `coders.toml` under canonical path `[[coders.do-actions]]` so
   action prompts can differ by coder.
 - Decision: action entries include `self-only` with default `true`.
+- Decision: in MVP, `self-only` is forward-compat/reserved because non-self
+  targeting is out of scope; runtime behavior is still self-target-only by
+  contract.
 - Decision: MVP run execution is self-target only and does not expose target
   selector fields in CLI/MCP/relay request contracts.
 - Decision: self-target execution is always effective async; request-level sync

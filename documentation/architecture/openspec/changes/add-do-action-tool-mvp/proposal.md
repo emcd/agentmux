@@ -25,6 +25,8 @@ safe, standardized actuator for configured maintenance actions.
   - `do run` is self-target only in MVP (no target selector fields)
   - action entries default to `self-only=true`
   - self-target execution is always async (no sync override)
+  - `self-only` is retained as a forward-compat policy field for post-MVP
+    targeted execution.
 - Defer broader authorization policy (beyond `self-only`) to follow-up work
   under the existing authorization todo/proposal track.
 - Define standard execution envelope/inscriptions for `do` action dispatch.

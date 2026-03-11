@@ -19,6 +19,8 @@
       - http requires `url`
 - [ ] 1.6 Add session-to-coder constraint validation:
       - sessions reference existing coders
+      - session ids are unique per bundle
+      - optional session names are unique per bundle
       - if coder `session-mode = "load"`, session must include
         `coder-session-id`
 
@@ -33,7 +35,11 @@
 - [ ] 3.1 Add unit tests for coder target one-of validation.
 - [ ] 3.2 Add tests for missing/multiple coder target tables.
 - [ ] 3.3 Add tests for ACP load-mode requiring session `coder-session-id`.
-- [ ] 3.4 Add mixed-coder bundle tests (tmux + acp coders across sessions).
+- [ ] 3.4 Add regression tests for preserved membership invariants:
+      - reject unknown coder references
+      - reject duplicate session ids
+      - reject duplicate optional session names
+- [ ] 3.5 Add mixed-coder bundle tests (tmux + acp coders across sessions).
 
 ## 4. Validation
 

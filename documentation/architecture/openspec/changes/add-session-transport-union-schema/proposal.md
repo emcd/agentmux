@@ -16,6 +16,10 @@ focused on routing identity and coder association.
 - Require exactly one target table per coder.
 - Keep sessions referencing coders via `sessions.coder`.
 - Keep `coder-session-id` as session-level data for per-session identity state.
+- Preserve existing bundle membership invariants:
+  - unique session IDs per bundle,
+  - unique optional session names per bundle,
+  - rejection of unknown coder references.
 - Define ACP coder descriptor fields with:
   - `channel` (`stdio` | `http`)
   - optional `session-mode` (`new` | `load`, default `new`)
@@ -40,6 +44,8 @@ focused on routing identity and coder association.
 4. For ACP coders, place connection/lifecycle defaults under `[coders.acp]`.
 5. Sessions continue to reference coders; `coder-session-id` remains the
    per-session identity token for resume/load semantics.
+6. Existing bundle membership invariants remain enforced during migration
+   (unique IDs/names and known coder references).
 
 ## Impact
 

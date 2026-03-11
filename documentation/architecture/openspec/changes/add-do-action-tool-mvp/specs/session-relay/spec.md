@@ -15,6 +15,10 @@ Each action definition SHALL include:
 - optional `description`
 - optional `self-only` (default `true`)
 
+In MVP, `self-only` is a forward-compat policy field; non-self targeting is not
+supported yet, so do-run behavior remains self-target-only regardless of this
+field value.
+
 Action definitions SHALL be resolved from active runtime configuration for the
 sender/session context.
 
