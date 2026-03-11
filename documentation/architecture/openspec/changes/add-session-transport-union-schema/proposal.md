@@ -1,50 +1,54 @@
-# Change: Add transport-aware session schema for tmux and ACP
+# Change: Add coder-target schema for tmux and ACP sessions
 
 ## Why
 
-Bundle session configuration is currently tmux-only. ACP feasibility work in
-`todos/transport/2` confirmed a viable path for ACP-based session delivery, but
-the existing `[[sessions]]` contract does not model transport alternatives.
+Session entries already reference coders. The target model should therefore be a
+property of coder definitions, not duplicated per session.
 
-We need a schema-level contract that supports both tmux and ACP while keeping a
-safe migration path for current tmux bundles.
+This enables reuse, reduces repeated configuration, and keeps session files
+focused on routing identity and coder association.
 
 ## What Changes
 
-- Extend bundle session schema to support transport alternatives under
-  `[[sessions]]` using a per-session transport descriptor.
-- Canonicalize a tagged transport shape centered on `[sessions.transport]`.
-- Define `tmux` and `acp` transport alternatives.
-- Define minimal ACP descriptor fields for `stdio` and `http` variants.
-- Define migration behavior for `format-version = 1` (legacy tmux) and
-  `format-version = 2` (transport-aware).
-- Keep this change strictly at the contract/spec level; no runtime or parser
-  implementation is included in this pass.
+- Adopt direct class-specific target tables on `[[coders]]` (not sessions):
+  - `[coders.tmux]`
+  - `[coders.acp]`
+- Require exactly one target table per coder.
+- Keep sessions referencing coders via `sessions.coder`.
+- Keep `coder-session-id` as session-level data for per-session identity state.
+- Define ACP coder descriptor fields with:
+  - `channel` (`stdio` | `http`)
+  - optional `session-mode` (`new` | `load`, default `new`)
+  - `session-mode = "load"` requires each referencing session to provide
+    `coder-session-id`.
+- Move tmux-specific startup/readiness fields into `[coders.tmux]`.
+- Exclude `tui` from this proposal; TUI is treated as a separate category.
+- Keep this as contract/spec only (no implementation in this pass).
 
 ## Non-Goals
 
 - Implementing parser/runtime changes.
-- Adding CLI flags or behavior changes.
-- Changing MCP tool contracts in this proposal.
-- Defining full ACP runtime adapter semantics beyond schema fields.
+- Changing CLI/MCP command surfaces.
+- Defining TUI session category/schema in this proposal.
 
-## Migration Notes
+## Concise Migration Notes
 
-- Existing `format-version = 1` bundle files remain valid and continue to imply
-  tmux transport.
-- New transport-aware bundles use `format-version = 2`.
-- In `format-version = 2`, omitted `[sessions.transport]` defaults to
-  `kind = "tmux"` for low-friction migration.
-- ACP transport is opt-in per session via explicit `kind = "acp"`.
+1. Move configuration files to `format-version = 2` for this contract.
+2. For each coder, define exactly one target table:
+   `[coders.tmux]` or `[coders.acp]`.
+3. For tmux coders, place command/readiness keys under `[coders.tmux]`.
+4. For ACP coders, place connection/lifecycle defaults under `[coders.acp]`.
+5. Sessions continue to reference coders; `coder-session-id` remains the
+   per-session identity token for resume/load semantics.
 
 ## Impact
 
 - Affected specs:
   - `session-relay`
-- Expected implementation touchpoints (follow-up work):
-  - `src/configuration.rs` bundle/session schema parsing and validation
-  - relay transport abstraction for tmux/acp alternatives
-  - unit and integration test coverage for v1/v2 schema handling
+- Expected follow-up implementation touchpoints:
+  - `src/configuration.rs` (`RawCoder` one-of target validation + imputation)
+  - session validation against referenced coder target class
+  - relay/runtime target abstraction for coder-backed tmux/acp execution
 
 ## Source References
 

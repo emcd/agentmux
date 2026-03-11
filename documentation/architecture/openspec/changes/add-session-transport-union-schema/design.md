@@ -1,88 +1,108 @@
 ## Context
 
-The current session schema assumes tmux as the only transport. ACP feasibility
-work showed we can support ACP as an alternative, but we need a stable and
-explicit schema shape first.
+We aligned on modeling target as a coder property. Sessions already reference
+coders, so target on coder gives better reuse and avoids repeated descriptors in
+bundle session entries.
 
-The coordinator requested a schema centered on `[[sessions]].[transport]` and
-explicit comparison against other TOML encodings before implementation.
+`TUI` is intentionally out-of-scope for this target enum because it likely
+represents a separate non-coder session category.
 
 ## Goals
 
-- Keep `[[sessions]]` as the canonical routing identity source.
-- Introduce a transport union that supports:
-  - `tmux` (current behavior)
-  - `acp` (future alternative)
-- Preserve straightforward migration from tmux-only bundles.
-- Keep the schema strict and machine-validatable.
+- Keep `[[sessions]]` as routing identity + coder association.
+- Model target class on `[[coders]]`.
+- Support coder target classes:
+  - `tmux`
+  - `acp`
+- Preserve clear raw-to-validated modeling for Serde and diagnostics.
 
 ## Non-Goals
 
-- Defining complete ACP runtime state machine behavior.
-- Implementing relay adapter logic.
-- Changing CLI/MCP API surfaces in this change.
+- TUI target/schema in this proposal.
+- Runtime adapter implementation details.
+- CLI/MCP API changes.
 
-## Decision: Tagged Per-Session Transport Descriptor
+## Decision: Direct Coder Target Tables
 
-Use a per-session tagged descriptor:
+Canonical one-of shape per coder:
 
-- `[sessions.transport]`
-  - `kind = "tmux" | "acp"`
-- Optional nested ACP descriptor:
-  - `[sessions.transport.acp]`
+- `[coders.tmux]`
+- `[coders.acp]`
 
-In `format-version = 2`, omitted `sessions.transport` defaults to tmux.
+Exactly one table SHALL be present for each `[[coders]]` entry.
 
 ### Rationale
 
-- Co-locates transport details with the session they affect.
-- Avoids indirection when resolving delivery targets.
-- Preserves stable `session.id` routing semantics across transport types.
-- Supports mixed bundles where some sessions are tmux and others ACP.
+- Reuse: multiple sessions can reference one coder target definition.
+- Ergonomics: avoids duplicating ACP/tmux descriptors on every session.
+- Validation clarity: enforce one-of on coders, then validate sessions against
+  coder target rules.
 
-## Alternatives Considered
+## Serde Modeling Pattern
 
-1. Top-level transport registry (`[[transports]]`) with per-session references.
+Use raw-to-validated conversion:
 
-- Pros: deduplicates repeated transport definitions.
-- Cons: cross-reference complexity, weaker local readability, harder errors.
+1. Deserialize `RawCoder` with optional target tables:
+   - `tmux: Option<RawTmuxTarget>`
+   - `acp: Option<RawAcpTarget>`
+2. Validate one-of cardinality (exactly one target table present).
+3. Impute to validated `Coder { target: Target }`.
+4. Deserialize `RawSession` with coder reference + optional `coder-session-id`.
+5. Validate session against referenced coder target constraints and impute
+   validated `Session` (non-optional linked/derived target semantics).
 
-2. Separate transport-specific session arrays (`[[tmux.sessions]]`,
-`[[acp.sessions]]`).
+This keeps deserialization permissive and validation explicit with strong
+errors.
 
-- Pros: explicit separation.
-- Cons: breaks existing `[[sessions]]` model and complicates migration.
+## Tmux Coder Descriptor Baseline
 
-3. Flat prefixed keys (`transport-kind`, `transport-command`, ...).
+For `[coders.tmux]`:
 
-- Pros: simpler initial parser changes.
-- Cons: poor extensibility and rapidly growing key surface.
+- required: `initial-command`
+- required: `resume-command`
+- optional: `prompt-regex`
+- optional: `prompt-inspect-lines`
+- optional: `prompt-idle-column`
 
-## ACP Descriptor Baseline
+## ACP Coder Descriptor Baseline
 
-For `kind = "acp"`:
+For `[coders.acp]`:
 
-- required: `transport` (`stdio` | `http`)
-- required: `session-mode` (`new` | `load`)
-- required-if: `session-id` when `session-mode = "load"`
-- for `transport = "stdio"`:
+- required: `channel` (`stdio` | `http`)
+- optional: `session-mode` (`new` | `load`, default `new`)
+- for `channel = "stdio"`:
   - required: `command`
-  - optional: `args`, `env[]`
-- for `transport = "http"`:
+  - optional: `args`
+  - optional: `env[]`
+- for `channel = "http"`:
   - required: `url`
   - optional: `headers[]`
 
-## Migration Strategy
+Session constraint:
 
-1. Preserve `format-version = 1` for legacy tmux bundles.
-2. Introduce `format-version = 2` for transport-aware bundles.
-3. In v2, default omitted transport to tmux for minimal migration friction.
-4. Keep validation fail-closed for unknown kinds and incomplete ACP
-   descriptors.
+- if referenced coder has `session-mode = "load"`, session SHALL provide
+  `coder-session-id`.
+
+## Alternatives Considered
+
+1. Session-level target tables (`[sessions.tmux]`, `[sessions.acp]`).
+
+- Pros: explicit per-session target config.
+- Cons: duplicates shared coder/transport config; weaker reuse.
+
+2. `target/class` discriminator table.
+
+- Pros: explicit discriminator field.
+- Cons: extra indirection and mismatch risk between class and nested tables.
+
+## Schema Version Strategy
+
+This proposal uses `format-version = 2` as a clean break for coder-target
+modeling. Earlier versions are validation errors under this contract.
 
 ## Risks / Trade-offs
 
-- Mixed-transport bundles add complexity to relay behavior and diagnostics.
-- ACP feature parity with tmux-specific behaviors (snapshot/quiescence) remains
-  future implementation risk.
-- Versioned schema support increases validation matrix size.
+- Clean break requires coordinated config migration.
+- Session-to-coder validation becomes more central and must produce clear
+  diagnostics.
+- ACP runtime parity work remains follow-up implementation.
