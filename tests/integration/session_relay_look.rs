@@ -80,6 +80,8 @@ format-version = 1
 
 [[coders]]
 id = "default"
+
+[coders.tmux]
 initial-command = "sh -lc 'exec sleep 45'"
 resume-command = "sh -lc 'exec sleep 45'"
 "#,

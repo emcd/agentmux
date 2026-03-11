@@ -33,11 +33,15 @@ format-version = 1
 
 [[coders]]
 id = "sender-coder"
+
+[coders.tmux]
 initial-command = "sh -lc 'exec sleep 3600'"
 resume-command = "sh -lc 'exec sleep 3600'"
 
 [[coders]]
 id = "human-coder"
+
+[coders.tmux]
 initial-command = "sh -lc 'exec sleep 3600'"
 resume-command = "sh -lc 'exec sleep 3600'"
 prompt-regex = "READY>"

@@ -92,7 +92,7 @@ fn write_bundle_configuration(
     for coder in coders {
         coders_toml.push_str(
             format!(
-                "\n[[coders]]\nid = \"{}\"\ninitial-command = \"{}\"\nresume-command = \"{}\"\n",
+                "\n[[coders]]\nid = \"{}\"\n[coders.tmux]\ninitial-command = \"{}\"\nresume-command = \"{}\"\n",
                 coder.id, coder.initial_command, coder.resume_command
             )
             .as_str(),

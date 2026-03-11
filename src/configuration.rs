@@ -71,6 +71,15 @@ struct RawCodersFile {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 struct RawCoder {
     id: String,
+    #[serde(default)]
+    tmux: Option<RawTmuxTarget>,
+    #[serde(default)]
+    acp: Option<RawAcpTarget>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct RawTmuxTarget {
     initial_command: String,
     resume_command: String,
     #[serde(default)]
@@ -79,6 +88,70 @@ struct RawCoder {
     prompt_inspect_lines: Option<usize>,
     #[serde(default)]
     prompt_idle_column: Option<usize>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct RawAcpTarget {
+    channel: AcpChannel,
+    #[serde(default)]
+    session_mode: Option<AcpSessionMode>,
+    #[serde(default)]
+    command: Option<String>,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    env: Vec<RawNameValueEntry>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    headers: Vec<RawNameValueEntry>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct RawNameValueEntry {
+    name: String,
+    value: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum AcpChannel {
+    Stdio,
+    Http,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum AcpSessionMode {
+    New,
+    Load,
+}
+
+#[derive(Clone, Debug)]
+struct Coder {
+    target: CoderTarget,
+}
+
+#[derive(Clone, Debug)]
+enum CoderTarget {
+    Tmux(TmuxTarget),
+    Acp(AcpTarget),
+}
+
+#[derive(Clone, Debug)]
+struct TmuxTarget {
+    initial_command: String,
+    resume_command: String,
+    prompt_regex: Option<String>,
+    prompt_inspect_lines: Option<usize>,
+    prompt_idle_column: Option<usize>,
+}
+
+#[derive(Clone, Debug)]
+struct AcpTarget {
+    session_mode: AcpSessionMode,
 }
 
 #[derive(Debug, Deserialize)]
@@ -414,20 +487,43 @@ fn validate_loaded_configuration(
             .as_deref()
             .map(normalize_field)
             .filter(|value| !value.is_empty());
-        let command_template = if coder_session_id.is_some() {
-            coder.resume_command.as_str()
-        } else {
-            coder.initial_command.as_str()
+        let (start_command, prompt_readiness) = match &coder.target {
+            CoderTarget::Tmux(target) => {
+                let command_template = if coder_session_id.is_some() {
+                    target.resume_command.as_str()
+                } else {
+                    target.initial_command.as_str()
+                };
+                let start_command = render_command_template(
+                    command_template,
+                    coder_session_id,
+                    bundle_path,
+                    session_id,
+                )?;
+                let prompt_readiness =
+                    prompt_readiness_from_tmux_target(target, coders_path, session_id)?;
+                (Some(start_command), prompt_readiness)
+            }
+            CoderTarget::Acp(target) => {
+                if matches!(target.session_mode, AcpSessionMode::Load) && coder_session_id.is_none()
+                {
+                    return Err(ConfigurationError::InvalidConfiguration {
+                        path: bundle_path.to_path_buf(),
+                        message: format!(
+                            "session '{}' references ACP load-mode coder '{}' and must set coder-session-id",
+                            session_id, coder_id
+                        ),
+                    });
+                }
+                (None, None)
+            }
         };
-        let start_command =
-            render_command_template(command_template, coder_session_id, bundle_path, session_id)?;
 
-        let prompt_readiness = prompt_readiness_from_coder(coder, coders_path, session_id)?;
         members.push(BundleMember {
             id: session_id.to_string(),
             name: session_name.map(ToString::to_string),
             working_directory: Some(session.directory.clone()),
-            start_command: Some(start_command),
+            start_command,
             prompt_readiness,
         });
     }
@@ -443,7 +539,7 @@ fn validate_loaded_configuration(
 fn validate_coders(
     coders: Vec<RawCoder>,
     coders_path: &Path,
-) -> Result<HashMap<String, RawCoder>, ConfigurationError> {
+) -> Result<HashMap<String, Coder>, ConfigurationError> {
     if coders.is_empty() {
         return Err(ConfigurationError::InvalidConfiguration {
             path: coders_path.to_path_buf(),
@@ -467,43 +563,32 @@ fn validate_coders(
             });
         }
 
-        if normalize_field(coder.initial_command.as_str()).is_empty() {
-            return Err(ConfigurationError::InvalidConfiguration {
-                path: coders_path.to_path_buf(),
-                message: format!("coder '{}' initial-command must be non-empty", coder_id),
-            });
-        }
-        if normalize_field(coder.resume_command.as_str()).is_empty() {
-            return Err(ConfigurationError::InvalidConfiguration {
-                path: coders_path.to_path_buf(),
-                message: format!("coder '{}' resume-command must be non-empty", coder_id),
-            });
-        }
-
-        if let Some(prompt_regex) = coder.prompt_regex.as_deref() {
-            if normalize_field(prompt_regex).is_empty() {
+        let target = match (coder.tmux, coder.acp) {
+            (Some(tmux), None) => {
+                CoderTarget::Tmux(validate_tmux_target(tmux, coders_path, coder_id)?)
+            }
+            (None, Some(acp)) => CoderTarget::Acp(validate_acp_target(acp, coders_path, coder_id)?),
+            (None, None) => {
                 return Err(ConfigurationError::InvalidConfiguration {
                     path: coders_path.to_path_buf(),
                     message: format!(
-                        "coder '{}' prompt-regex must be non-empty when set",
+                        "coder '{}' must define exactly one target table ([coders.tmux] or [coders.acp])",
                         coder_id
                     ),
                 });
             }
-            compile_prompt_regex(prompt_regex, coders_path, coder_id, "prompt-regex")?;
-        }
+            (Some(_), Some(_)) => {
+                return Err(ConfigurationError::InvalidConfiguration {
+                    path: coders_path.to_path_buf(),
+                    message: format!(
+                        "coder '{}' defines multiple target tables; expected exactly one",
+                        coder_id
+                    ),
+                });
+            }
+        };
 
-        if matches!(coder.prompt_inspect_lines, Some(0)) {
-            return Err(ConfigurationError::InvalidConfiguration {
-                path: coders_path.to_path_buf(),
-                message: format!(
-                    "coder '{}' prompt-inspect-lines must be greater than zero",
-                    coder_id
-                ),
-            });
-        }
-
-        unique.insert(coder_id.to_string(), coder);
+        unique.insert(coder_id.to_string(), Coder { target });
     }
 
     Ok(unique)
@@ -614,19 +699,177 @@ fn render_command_template(
     Ok(rendered)
 }
 
-fn prompt_readiness_from_coder(
-    coder: &RawCoder,
+fn validate_tmux_target(
+    target: RawTmuxTarget,
+    coders_path: &Path,
+    coder_id: &str,
+) -> Result<TmuxTarget, ConfigurationError> {
+    if normalize_field(target.initial_command.as_str()).is_empty() {
+        return Err(ConfigurationError::InvalidConfiguration {
+            path: coders_path.to_path_buf(),
+            message: format!(
+                "coder '{}' tmux initial-command must be non-empty",
+                coder_id
+            ),
+        });
+    }
+    if normalize_field(target.resume_command.as_str()).is_empty() {
+        return Err(ConfigurationError::InvalidConfiguration {
+            path: coders_path.to_path_buf(),
+            message: format!("coder '{}' tmux resume-command must be non-empty", coder_id),
+        });
+    }
+
+    if let Some(prompt_regex) = target.prompt_regex.as_deref() {
+        if normalize_field(prompt_regex).is_empty() {
+            return Err(ConfigurationError::InvalidConfiguration {
+                path: coders_path.to_path_buf(),
+                message: format!(
+                    "coder '{}' tmux prompt-regex must be non-empty when set",
+                    coder_id
+                ),
+            });
+        }
+        compile_prompt_regex(prompt_regex, coders_path, coder_id, "tmux prompt-regex")?;
+    }
+
+    if matches!(target.prompt_inspect_lines, Some(0)) {
+        return Err(ConfigurationError::InvalidConfiguration {
+            path: coders_path.to_path_buf(),
+            message: format!(
+                "coder '{}' tmux prompt-inspect-lines must be greater than zero",
+                coder_id
+            ),
+        });
+    }
+
+    Ok(TmuxTarget {
+        initial_command: target.initial_command,
+        resume_command: target.resume_command,
+        prompt_regex: target.prompt_regex,
+        prompt_inspect_lines: target.prompt_inspect_lines,
+        prompt_idle_column: target.prompt_idle_column,
+    })
+}
+
+fn validate_acp_target(
+    target: RawAcpTarget,
+    coders_path: &Path,
+    coder_id: &str,
+) -> Result<AcpTarget, ConfigurationError> {
+    let session_mode = target.session_mode.unwrap_or(AcpSessionMode::New);
+
+    match target.channel {
+        AcpChannel::Stdio => {
+            let Some(command) = target.command.as_deref() else {
+                return Err(ConfigurationError::InvalidConfiguration {
+                    path: coders_path.to_path_buf(),
+                    message: format!(
+                        "coder '{}' ACP stdio target requires non-empty command",
+                        coder_id
+                    ),
+                });
+            };
+            if normalize_field(command).is_empty() {
+                return Err(ConfigurationError::InvalidConfiguration {
+                    path: coders_path.to_path_buf(),
+                    message: format!(
+                        "coder '{}' ACP stdio target requires non-empty command",
+                        coder_id
+                    ),
+                });
+            }
+            if target.url.is_some() {
+                return Err(ConfigurationError::InvalidConfiguration {
+                    path: coders_path.to_path_buf(),
+                    message: format!("coder '{}' ACP stdio target must not set url", coder_id),
+                });
+            }
+            if !target.headers.is_empty() {
+                return Err(ConfigurationError::InvalidConfiguration {
+                    path: coders_path.to_path_buf(),
+                    message: format!("coder '{}' ACP stdio target must not set headers", coder_id),
+                });
+            }
+            validate_name_value_entries(&target.env, coders_path, coder_id, "env")?;
+        }
+        AcpChannel::Http => {
+            let Some(url) = target.url.as_deref() else {
+                return Err(ConfigurationError::InvalidConfiguration {
+                    path: coders_path.to_path_buf(),
+                    message: format!(
+                        "coder '{}' ACP http target requires non-empty url",
+                        coder_id
+                    ),
+                });
+            };
+            if normalize_field(url).is_empty() {
+                return Err(ConfigurationError::InvalidConfiguration {
+                    path: coders_path.to_path_buf(),
+                    message: format!(
+                        "coder '{}' ACP http target requires non-empty url",
+                        coder_id
+                    ),
+                });
+            }
+            if target.command.is_some() || !target.args.is_empty() || !target.env.is_empty() {
+                return Err(ConfigurationError::InvalidConfiguration {
+                    path: coders_path.to_path_buf(),
+                    message: format!(
+                        "coder '{}' ACP http target must not set stdio-only fields",
+                        coder_id
+                    ),
+                });
+            }
+            validate_name_value_entries(&target.headers, coders_path, coder_id, "headers")?;
+        }
+    }
+
+    Ok(AcpTarget { session_mode })
+}
+
+fn validate_name_value_entries(
+    entries: &[RawNameValueEntry],
+    path: &Path,
+    coder_id: &str,
+    field_name: &str,
+) -> Result<(), ConfigurationError> {
+    for (index, entry) in entries.iter().enumerate() {
+        if normalize_field(entry.name.as_str()).is_empty() {
+            return Err(ConfigurationError::InvalidConfiguration {
+                path: path.to_path_buf(),
+                message: format!(
+                    "coder '{}' {} entry {} has empty name",
+                    coder_id, field_name, index
+                ),
+            });
+        }
+        if normalize_field(entry.value.as_str()).is_empty() {
+            return Err(ConfigurationError::InvalidConfiguration {
+                path: path.to_path_buf(),
+                message: format!(
+                    "coder '{}' {} entry {} has empty value",
+                    coder_id, field_name, index
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn prompt_readiness_from_tmux_target(
+    target: &TmuxTarget,
     path: &Path,
     session_id: &str,
 ) -> Result<Option<PromptReadinessTemplate>, ConfigurationError> {
-    let Some(prompt_regex) = coder.prompt_regex.as_deref() else {
+    let Some(prompt_regex) = target.prompt_regex.as_deref() else {
         return Ok(None);
     };
     compile_prompt_regex(prompt_regex, path, session_id, "prompt-regex")?;
     Ok(Some(PromptReadinessTemplate {
         prompt_regex: prompt_regex.to_string(),
-        inspect_lines: coder.prompt_inspect_lines,
-        input_idle_cursor_column: coder.prompt_idle_column,
+        inspect_lines: target.prompt_inspect_lines,
+        input_idle_cursor_column: target.prompt_idle_column,
     }))
 }
 

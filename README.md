@@ -161,6 +161,8 @@ format-version = 1
 
 [[coders]]
 id = "codex"
+
+[coders.tmux]
 initial-command = "codex"
 resume-command = "codex resume {coder-session-id}"
 prompt-regex = "(?m)^›"

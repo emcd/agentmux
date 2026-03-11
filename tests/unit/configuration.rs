@@ -31,6 +31,8 @@ format-version = 1
 
 [[coders]]
 id = "codex"
+
+[coders.tmux]
 initial-command = "codex start"
 resume-command = "codex resume {coder-session-id}"
 prompt-regex = "^›"
@@ -39,6 +41,8 @@ prompt-idle-column = 3
 
 [[coders]]
 id = "shell"
+
+[coders.tmux]
 initial-command = "sh -lc 'exec sleep 45'"
 resume-command = "sh -lc 'exec sleep 45'"
 "#,
@@ -93,6 +97,8 @@ format-version = 1
 
 [[coders]]
 id = "shell"
+
+[coders.tmux]
 initial-command = "sh -lc 'exec sleep 45'"
 resume-command = "sh -lc 'exec sleep 45'"
 "#,
@@ -136,6 +142,8 @@ format-version = 1
 
 [[coders]]
 id = "shell"
+
+[coders.tmux]
 initial-command = "sh -lc 'exec sleep 45'"
 resume-command = "sh -lc 'exec sleep 45'"
 "#,
@@ -162,6 +170,8 @@ format-version = 1
 
 [[coders]]
 id = "shell"
+
+[coders.tmux]
 initial-command = "sh -lc 'exec sleep 45'"
 resume-command = "sh -lc 'exec sleep 45'"
 "#,
@@ -203,6 +213,8 @@ format-version = 1
 
 [[coders]]
 id = "shell"
+
+[coders.tmux]
 initial-command = "sh -lc 'exec sleep 45'"
 resume-command = "sh -lc 'exec sleep 45'"
 "#,
@@ -249,6 +261,8 @@ format-version = 1
 
 [[coders]]
 id = "shell"
+
+[coders.tmux]
 initial-command = "sh -lc 'exec sleep 45'"
 resume-command = "sh -lc 'exec sleep 45'"
 prompt-regex = "["
@@ -285,6 +299,8 @@ format-version = 1
 
 [[coders]]
 id = "shell"
+
+[coders.tmux]
 initial-command = "sh -lc 'exec sleep 45'"
 resume-command = "sh -lc 'exec sleep 45'"
 prompt-regex = "^ok$"
@@ -322,6 +338,8 @@ format-version = 1
 
 [[coders]]
 id = "shell"
+
+[coders.tmux]
 initial-command = "sh -lc 'exec sleep 45'"
 resume-command = "sh -lc 'exec sleep 45'"
 "#,
@@ -357,11 +375,15 @@ format-version = 1
 
 [[coders]]
 id = "dup"
+
+[coders.tmux]
 initial-command = "sh -lc 'exec sleep 45'"
 resume-command = "sh -lc 'exec sleep 45'"
 
 [[coders]]
 id = "dup"
+
+[coders.tmux]
 initial-command = "sh -lc 'exec sleep 45'"
 resume-command = "sh -lc 'exec sleep 45'"
 "#,
@@ -397,6 +419,8 @@ format-version = 1
 
 [[coders]]
 id = "shell"
+
+[coders.tmux]
 initial-command = "echo {unknown-token}"
 resume-command = "sh -lc 'exec sleep 45'"
 "#,
@@ -432,6 +456,8 @@ format-version = 1
 
 [[coders]]
 id = "shell"
+
+[coders.tmux]
 initial-command = "sh -lc 'exec sleep 45'"
 resume-command = "sh -lc 'exec sleep 45'"
 "#,
@@ -465,6 +491,8 @@ format-version = 1
 
 [[coders]]
 id = "shell"
+
+[coders.tmux]
 initial-command = "sh -lc 'exec sleep 45'"
 resume-command = "sh -lc 'exec sleep 45'"
 "#,
@@ -501,6 +529,8 @@ format-version = 1
 
 [[coders]]
 id = "shell"
+
+[coders.tmux]
 initial-command = "sh -lc 'exec sleep 45'"
 resume-command = "sh -lc 'exec sleep 45'"
 "#,
@@ -539,6 +569,8 @@ format-version = 1
 
 [[coders]]
 id = "shell"
+
+[coders.tmux]
 initial-command = "sh -lc 'exec sleep 45'"
 resume-command = "sh -lc 'exec sleep 45'"
 "#,
@@ -584,4 +616,241 @@ coder = "shell"
     assert_eq!(memberships[0].groups, vec!["dev".to_string()]);
     assert_eq!(memberships[1].bundle_name, "bravo");
     assert!(memberships[1].groups.is_empty());
+}
+
+#[test]
+fn rejects_missing_coder_target_descriptor() {
+    let temporary = TempDir::new().expect("temporary");
+    let root = write_config(
+        &temporary,
+        "alpha",
+        r#"
+format-version = 1
+
+[[coders]]
+id = "shell"
+"#,
+        &format!(
+            r#"
+format-version = 1
+
+[[sessions]]
+id = "a"
+name = "a"
+directory = "{}"
+coder = "shell"
+"#,
+            temporary.path().display()
+        ),
+    );
+
+    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    assert!(
+        err.to_string().contains("exactly one target table"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn rejects_multiple_coder_target_descriptors() {
+    let temporary = TempDir::new().expect("temporary");
+    let root = write_config(
+        &temporary,
+        "alpha",
+        r#"
+format-version = 1
+
+[[coders]]
+id = "shell"
+
+[coders.tmux]
+initial-command = "sh -lc 'exec sleep 45'"
+resume-command = "sh -lc 'exec sleep 45'"
+
+[coders.acp]
+channel = "stdio"
+command = "acp-shell"
+"#,
+        &format!(
+            r#"
+format-version = 1
+
+[[sessions]]
+id = "a"
+name = "a"
+directory = "{}"
+coder = "shell"
+"#,
+            temporary.path().display()
+        ),
+    );
+
+    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    assert!(
+        err.to_string().contains("multiple target tables"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn rejects_acp_stdio_without_command() {
+    let temporary = TempDir::new().expect("temporary");
+    let root = write_config(
+        &temporary,
+        "alpha",
+        r#"
+format-version = 1
+
+[[coders]]
+id = "acp"
+
+[coders.acp]
+channel = "stdio"
+"#,
+        &format!(
+            r#"
+format-version = 1
+
+[[sessions]]
+id = "a"
+name = "a"
+directory = "{}"
+coder = "acp"
+"#,
+            temporary.path().display()
+        ),
+    );
+
+    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    assert!(
+        err.to_string()
+            .contains("stdio target requires non-empty command"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn rejects_acp_load_mode_without_coder_session_id() {
+    let temporary = TempDir::new().expect("temporary");
+    let root = write_config(
+        &temporary,
+        "alpha",
+        r#"
+format-version = 1
+
+[[coders]]
+id = "acp"
+
+[coders.acp]
+channel = "stdio"
+session-mode = "load"
+command = "acp-shell"
+"#,
+        &format!(
+            r#"
+format-version = 1
+
+[[sessions]]
+id = "a"
+name = "a"
+directory = "{}"
+coder = "acp"
+"#,
+            temporary.path().display()
+        ),
+    );
+
+    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    assert!(
+        err.to_string().contains("must set coder-session-id"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn loads_mixed_tmux_and_acp_coder_bundle() {
+    let temporary = TempDir::new().expect("temporary");
+    let root = write_config(
+        &temporary,
+        "alpha",
+        r#"
+format-version = 1
+
+[[coders]]
+id = "tmux"
+
+[coders.tmux]
+initial-command = "sh -lc 'exec sleep 45'"
+resume-command = "sh -lc 'exec sleep 45'"
+
+[[coders]]
+id = "acp"
+
+[coders.acp]
+channel = "stdio"
+session-mode = "new"
+command = "acp-shell"
+"#,
+        &format!(
+            r#"
+format-version = 1
+
+[[sessions]]
+id = "a"
+name = "a"
+directory = "{}"
+coder = "tmux"
+
+[[sessions]]
+id = "b"
+name = "b"
+directory = "{}"
+coder = "acp"
+"#,
+            temporary.path().display(),
+            temporary.path().display()
+        ),
+    );
+
+    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    assert_eq!(loaded.members.len(), 2);
+    assert!(loaded.members[0].start_command.is_some());
+    assert!(loaded.members[1].start_command.is_none());
+}
+
+#[test]
+fn rejects_unsupported_format_version() {
+    let temporary = TempDir::new().expect("temporary");
+    let root = write_config(
+        &temporary,
+        "alpha",
+        r#"
+format-version = 3
+
+[[coders]]
+id = "shell"
+
+[coders.tmux]
+initial-command = "sh -lc 'exec sleep 45'"
+resume-command = "sh -lc 'exec sleep 45'"
+"#,
+        &format!(
+            r#"
+format-version = 1
+
+[[sessions]]
+id = "a"
+name = "a"
+directory = "{}"
+coder = "shell"
+"#,
+            temporary.path().display()
+        ),
+    );
+
+    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    assert!(
+        err.to_string().contains("unsupported format-version"),
+        "unexpected error: {err}"
+    );
 }

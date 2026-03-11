@@ -12,6 +12,8 @@ format-version = 1
 
 [[coders]]
 id = "shell"
+
+[coders.tmux]
 initial-command = "sh -lc 'exec sleep 45'"
 resume-command = "sh -lc 'exec sleep 45'"
 "#,
@@ -47,6 +49,8 @@ format-version = 1
 
 [[coders]]
 id = "shell"
+
+[coders.tmux]
 initial-command = "sh -lc 'exec sleep 45'"
 resume-command = "sh -lc 'exec sleep 45'"
 "#,
