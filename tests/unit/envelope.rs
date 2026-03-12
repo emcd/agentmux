@@ -33,21 +33,25 @@ fn sample_render_input() -> EnvelopeRenderInput {
 }
 
 #[test]
-fn envelope_starts_with_required_header_block() {
+fn envelope_starts_with_leading_boundary_marker() {
     let input = sample_render_input();
     let rendered = render_envelope(&input);
     let first_line = rendered
         .lines()
         .find(|line| !line.trim().is_empty())
         .expect("first non-empty line");
-    assert_eq!(first_line, "Message-Id: msg-1");
+    assert_eq!(first_line, "--agentmux-msg1");
 }
 
 #[test]
 fn envelope_contains_required_headers_and_optional_subject_is_not_required() {
     let rendered = render_envelope(&sample_render_input());
-    let header_lines = rendered
-        .lines()
+    let lines = rendered.lines().collect::<Vec<_>>();
+    assert_eq!(lines.first().copied(), Some("--agentmux-msg1"));
+    let header_lines = lines
+        .iter()
+        .skip(1)
+        .copied()
         .take_while(|line| !line.trim().is_empty())
         .collect::<Vec<_>>();
     let required_headers = ["Message-Id:", "Date:", "From:", "To:"];
@@ -124,6 +128,7 @@ hello
 #[test]
 fn parser_rejects_boundary_token_mismatch() {
     let malformed = "\
+--agentmux-different
 Message-Id: msg-1
 Date: 2026-03-05T00:00:00Z
 From: Alpha <session:alpha>
@@ -142,6 +147,7 @@ hello
 #[test]
 fn parser_rejects_missing_text_plain_body_part() {
     let malformed = "\
+--agentmux-msg1
 Message-Id: msg-1
 Date: 2026-03-05T00:00:00Z
 From: Alpha <session:alpha>
@@ -160,6 +166,7 @@ Content-Type: application/json
 #[test]
 fn parser_accepts_reserved_path_pointer_part_and_ignores_it_for_body_selection() {
     let envelope = "\
+--agentmux-msg1
 Message-Id: msg-1
 Date: 2026-03-05T00:00:00Z
 From: Alpha <session:alpha>

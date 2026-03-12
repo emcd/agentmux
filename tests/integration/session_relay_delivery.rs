@@ -1423,6 +1423,13 @@ async fn relay_sync_delivery_sends_submit_in_separate_tmux_command() {
         prompt_indexes.len() > 1,
         "expected chunked prompt send-keys commands for large payload, log={log:?}"
     );
+    let first_prompt_index = *prompt_indexes
+        .first()
+        .expect("expected at least one prompt command");
+    assert!(
+        send_keys_lines[first_prompt_index].contains("send-keys -l -t %1 -- --agentmux-"),
+        "expected first prompt chunk to begin with leading boundary fence, log={log:?}"
+    );
     let enter_index = send_keys_lines
         .iter()
         .position(|line| line.ends_with("send-keys -t %1 Enter"))

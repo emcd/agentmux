@@ -127,6 +127,7 @@ impl Error for EnvelopeParseError {}
 pub fn render_envelope(input: &EnvelopeRenderInput) -> String {
     let mut lines = Vec::new();
     let boundary = deterministic_boundary(&input.manifest.message_id);
+    lines.push(format!("--{boundary}"));
     lines.push(format!(
         "{REQUIRED_HEADER_MESSAGE_ID}: {}",
         input.manifest.message_id
@@ -179,22 +180,21 @@ pub fn render_envelope(input: &EnvelopeRenderInput) -> String {
 pub fn parse_envelope(text: &str) -> Result<ParsedEnvelope, EnvelopeParseError> {
     let lines = text.lines().collect::<Vec<_>>();
     let index = first_non_empty_line(&lines)
-        .ok_or_else(|| EnvelopeParseError::new("missing required header block"))?;
-    let (headers, body_start_index) = parse_header_block(&lines, index)?;
+        .ok_or_else(|| EnvelopeParseError::new("missing leading boundary marker"))?;
+    let (boundary, header_start_index) = parse_leading_boundary_marker(&lines, index)?;
+    let (headers, body_start_index) = parse_header_block(&lines, header_start_index)?;
     validate_required_headers(&headers)?;
     let message_id = headers
         .get(REQUIRED_HEADER_MESSAGE_ID)
         .cloned()
         .unwrap_or_default();
     let expected_boundary = deterministic_boundary(&message_id);
-    let (boundary, first_boundary_index) =
-        parse_boundary_from_first_marker(&lines, body_start_index)?;
     if boundary != expected_boundary {
         return Err(EnvelopeParseError::new(
             "MIME boundary token must match Message-Id-derived boundary",
         ));
     }
-    let (parts, had_closing_boundary) = parse_mime_parts(&lines, first_boundary_index, &boundary)?;
+    let (parts, had_closing_boundary) = parse_mime_parts(&lines, body_start_index, &boundary)?;
     if !had_closing_boundary {
         return Err(EnvelopeParseError::new(
             "missing MIME closing boundary terminator",
@@ -433,34 +433,29 @@ fn validate_required_headers(headers: &BTreeMap<String, String>) -> Result<(), E
     Ok(())
 }
 
-fn parse_boundary_from_first_marker(
+fn parse_leading_boundary_marker(
     lines: &[&str],
-    mut index: usize,
+    index: usize,
 ) -> Result<(String, usize), EnvelopeParseError> {
-    while index < lines.len() && lines[index].trim().is_empty() {
-        index += 1;
-    }
     let marker = lines
         .get(index)
         .map(|value| value.trim())
-        .ok_or_else(|| EnvelopeParseError::new("MIME body must start with boundary marker"))?;
+        .ok_or_else(|| EnvelopeParseError::new("missing leading boundary marker"))?;
     if !marker.starts_with("--") {
-        return Err(EnvelopeParseError::new(
-            "MIME body must start with boundary marker",
-        ));
+        return Err(EnvelopeParseError::new("missing leading boundary marker"));
     }
     if marker == "--" || marker.ends_with("--") {
         return Err(EnvelopeParseError::new(
-            "first MIME boundary marker must be opening boundary",
+            "leading boundary marker must be opening boundary",
         ));
     }
     let boundary = marker.trim_start_matches("--").trim();
     if boundary.is_empty() {
         return Err(EnvelopeParseError::new(
-            "MIME opening boundary token must be non-empty",
+            "leading boundary token must be non-empty",
         ));
     }
-    Ok((boundary.to_string(), index))
+    Ok((boundary.to_string(), index + 1))
 }
 
 fn parse_mime_parts(
