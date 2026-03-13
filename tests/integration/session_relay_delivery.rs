@@ -1320,6 +1320,68 @@ async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn relay_sigint_ignores_server_exited_unexpectedly_during_shutdown_cleanup() {
+    let temporary = TempDir::new().expect("temporary");
+    let bundle_name = "party";
+    let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
+    let state_root = temporary.path().join("state");
+    let fake_tmux_script = temporary.path().join("fake-tmux.sh");
+    let attempts_file = temporary.path().join("attempts.txt");
+    let log_file = temporary.path().join("fake-tmux.log");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
+
+    let relay_socket = state_root
+        .join("bundles")
+        .join(bundle_name)
+        .join("relay.sock");
+    let mut child = spawn_relay_with_fake_tmux_and_env(
+        bundle_name,
+        &config_root,
+        &state_root,
+        &inscriptions_root,
+        &fake_tmux_script,
+        &[(
+            "FAKE_TMUX_EMPTY_LIST_ERROR_MODE",
+            "server_exited_unexpectedly",
+        )],
+    );
+    wait_for_relay_socket(&relay_socket).await;
+
+    let pid = child.id().expect("relay pid");
+    let pid = i32::try_from(pid).expect("relay pid fits i32");
+    let kill_result = unsafe { libc::kill(pid, libc::SIGINT) };
+    assert_eq!(kill_result, 0, "failed to send SIGINT");
+
+    let wait_result = timeout(Duration::from_secs(3), child.wait()).await;
+    let status = match wait_result {
+        Ok(result) => result.expect("wait relay"),
+        Err(_) => {
+            child.start_kill().expect("kill relay after timeout");
+            panic!("timed out waiting for relay to exit after SIGINT");
+        }
+    };
+    assert!(
+        status.success(),
+        "relay should exit cleanly after SIGINT, status={status}"
+    );
+    assert!(
+        !relay_socket.exists(),
+        "relay socket should be removed during shutdown"
+    );
+
+    let log = fs::read_to_string(&log_file).expect("read fake tmux log");
+    assert!(
+        log.contains("kill-session -t =alpha"),
+        "shutdown should still prune owned session, log={log:?}"
+    );
+    assert!(
+        log.contains("kill-server"),
+        "shutdown should still attempt tmux server cleanup, log={log:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn relay_sync_delivery_sends_submit_in_separate_tmux_command() {
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
@@ -1560,7 +1622,12 @@ case "${{command_name}}" in
     ;;
   list-sessions)
     if [[ ! -s "${{SESSIONS_FILE}}" ]]; then
-      echo "no server running on /tmp/agentmux-fake" >&2
+      EMPTY_LIST_ERROR_MODE="${{FAKE_TMUX_EMPTY_LIST_ERROR_MODE:-no_server_running}}"
+      if [[ "${{EMPTY_LIST_ERROR_MODE}}" == "server_exited_unexpectedly" ]]; then
+        echo "server exited unexpectedly" >&2
+      else
+        echo "no server running on /tmp/agentmux-fake" >&2
+      fi
       exit 1
     fi
     format="${{args[2]-}}"

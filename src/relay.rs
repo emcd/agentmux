@@ -1160,6 +1160,10 @@ fn retry_delay_for_attempt(session_name: &str, attempt: usize) -> Duration {
 }
 
 fn is_transient_tmux_error(reason: &str) -> bool {
+    is_tmux_server_unavailable_error(reason)
+}
+
+fn is_tmux_server_unavailable_error(reason: &str) -> bool {
     let lowered = reason.to_ascii_lowercase();
     lowered.contains("no server running")
         || lowered.contains("failed to connect to server")
@@ -1192,9 +1196,9 @@ fn session_exists(tmux_socket: &Path, session_name: &str) -> Result<bool, String
 fn is_missing_session_error(reason: &str) -> bool {
     let lowered = reason.to_ascii_lowercase();
     lowered.contains("can't find session")
-        || lowered.contains("no server running")
         || lowered.contains("no such file or directory")
         || lowered.contains("error connecting")
+        || is_tmux_server_unavailable_error(reason)
 }
 
 fn prune_owned_session(tmux_socket: &Path, session_name: &str) -> Result<(), RelayError> {
@@ -1258,18 +1262,22 @@ fn cleanup_tmux_server_when_unowned(tmux_socket: &Path) -> Result<bool, RelayErr
     if !list_all_sessions(tmux_socket)?.is_empty() {
         return Ok(false);
     }
-    let output = run_tmux_command_capture(tmux_socket, &["kill-server"]).map_err(|reason| {
-        relay_error(
-            "internal_unexpected_failure",
-            "failed to clean up tmux socket",
-            Some(json!({"cause": reason})),
-        )
-    })?;
+    let output = match run_tmux_command_capture(tmux_socket, &["kill-server"]) {
+        Ok(output) => output,
+        Err(reason) if is_tmux_server_unavailable_error(reason.as_str()) => return Ok(false),
+        Err(reason) => {
+            return Err(relay_error(
+                "internal_unexpected_failure",
+                "failed to clean up tmux socket",
+                Some(json!({"cause": reason})),
+            ));
+        }
+    };
     if output.status.success() {
         return Ok(true);
     }
     let reason = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    if reason.to_ascii_lowercase().contains("no server running") {
+    if is_tmux_server_unavailable_error(reason.as_str()) {
         return Ok(false);
     }
     Err(relay_error(
