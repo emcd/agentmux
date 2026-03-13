@@ -16,11 +16,15 @@ surfaces as `look`, `send`, `do`, and future `find` expand.
   - `default = "<policy-id>"`
   - if omitted, runtime uses a built-in conservative default policy
 - Add session-level policy binding in bundle session definitions:
-  - `policy = "<policy-id>"`
+  - optional `policy = "<policy-id>"`
+  - resolution precedence:
+    1. session `policy` when present
+    2. top-level `default` preset when present
+    3. built-in conservative default policy
 - Lock fail-fast loading behavior:
   - missing/invalid `policies.toml` is a startup/runtime error
   - unknown `policy` reference in a session is a validation error
-  - no implicit authorization fallback in MVP
+  - no permissive implicit authorization fallback in MVP
 - Lock canonical control vocabulary and scopes:
   - `find`: `self` | `all:home` | `all:all`
   - `list`: `all:home` | `all:all`
@@ -28,6 +32,8 @@ surfaces as `look`, `send`, `do`, and future `find` expand.
   - `send`: `all:home` | `all:all`
   - `do`: map of `action_id -> (none | self | all:home | all:all)`
     - missing action entry defaults to `none`
+    - `all:home`/`all:all` are reserved and non-operative until non-self `do`
+      target selection is introduced
 - Lock authorization decision ownership:
   - relay is centralized policy evaluator
   - MCP/CLI are request validators/adapters only

@@ -40,7 +40,11 @@ precedence.
   - `description` (optional)
   - `[controls]` (required)
 - Each session binds policy by id in bundle config:
-  - `policy = "<policy-id>"`
+  - optional `policy = "<policy-id>"`
+- Resolution precedence for each session:
+  1. explicit session `policy` when present
+  2. top-level `default` preset when present
+  3. built-in conservative default policy
 - Missing/invalid policy artifact or unknown session policy id is fail-fast.
 
 ### Control Vocabulary and Scope Values
@@ -63,6 +67,8 @@ Interpretation:
 For `do` controls:
 
 - missing action-id entry defaults to `none`
+- `all:home` and `all:all` are reserved/non-operative for current self-target
+  `do` MVP behavior until non-self target selection is introduced
 
 ### Centralized Authorization Decisioning
 

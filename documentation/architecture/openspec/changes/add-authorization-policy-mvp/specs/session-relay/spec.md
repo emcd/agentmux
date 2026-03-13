@@ -43,9 +43,14 @@ Relay SHALL fail fast when this artifact is missing or invalid.
 
 ### Requirement: Session Policy Binding
 
-Each session definition SHALL bind to a policy preset id:
+Each session definition SHALL support optional binding to a policy preset id:
 
 - `policy = "<policy-id>"`
+
+If session `policy` is omitted, relay SHALL resolve policy by precedence:
+
+1. top-level `default` preset in `policies.toml` when present
+2. built-in conservative default policy
 
 Relay SHALL reject bundle configuration when a session references an unknown
 policy id.
@@ -56,6 +61,12 @@ policy id.
 - **AND** `policies.toml` has no matching `[[policies]].id`
 - **THEN** relay rejects configuration with a validation error
 
+#### Scenario: Resolve omitted session policy from top-level default
+
+- **WHEN** session omits explicit `policy`
+- **AND** `policies.toml` defines top-level `default`
+- **THEN** relay uses that default policy preset for the session
+
 ### Requirement: Authorization Control Vocabulary
 
 Relay SHALL evaluate authorization using canonical controls and scope values:
@@ -65,6 +76,12 @@ Relay SHALL evaluate authorization using canonical controls and scope values:
 - `look`: `self` | `all:home` | `all:all`
 - `send`: `all:home` | `all:all`
 - `do`: map `action_id -> (none | self | all:home | all:all)`
+
+For current self-target-only `do` MVP behavior:
+
+- `none` and `self` are operative
+- `all:home` and `all:all` are reserved/non-operative until non-self `do`
+  targeting is introduced
 
 #### Scenario: Evaluate look request using configured look scope
 
@@ -77,6 +94,13 @@ Relay SHALL evaluate authorization using canonical controls and scope values:
 - **WHEN** relay evaluates `do` authorization
 - **AND** requested action id is not present in `do` control map
 - **THEN** relay treats authorization scope as `none`
+
+#### Scenario: Treat do all-home/all-all scopes as reserved in current MVP
+
+- **WHEN** relay evaluates `do` authorization
+- **AND** action scope is `all:home` or `all:all`
+- **THEN** relay treats scope as reserved/non-operative for current MVP
+- **AND** non-self `do` execution remains unsupported by runtime contract
 
 ### Requirement: Centralized Authorization Decision Point
 

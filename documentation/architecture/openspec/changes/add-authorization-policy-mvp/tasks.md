@@ -7,6 +7,9 @@
       conservative built-in default fallback when absent.
 - [ ] 1.2 Add session-level policy binding (`policy = "<policy-id>"`) in
       bundle session schema.
+- [ ] 1.2a Implement session policy resolution precedence:
+      explicit session policy -> top-level default preset -> conservative
+      built-in default policy.
 - [ ] 1.3 Enforce fail-fast behavior for missing/invalid policy artifact and
       unknown session policy references.
 
@@ -17,6 +20,8 @@
       with scopes `self`, `all:home`, `all:all`.
 - [ ] 2.5 Implement `do` control semantics for `none` and missing-entry =>
       `none` default.
+- [ ] 2.5a Treat `do` scopes `all:home` and `all:all` as reserved/non-operative
+      while `do` remains self-target-only in MVP.
 - [ ] 2.2 Enforce validation-first ordering before authorization checks.
 - [ ] 2.3 Emit `authorization_forbidden` with locked minimum details schema.
 - [ ] 2.4 Enforce MVP posture locks:
