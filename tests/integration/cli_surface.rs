@@ -499,6 +499,24 @@ fn unified_host_help_output_includes_relay_and_mcp_modes() {
     );
 }
 
+#[test]
+fn tui_help_output_includes_usage_line() {
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args(["tui", "--help"])
+        .output()
+        .expect("run agentmux tui --help");
+    assert!(output.status.success(), "tui help should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Usage: agentmux tui"),
+        "unexpected tui help output: {stdout}"
+    );
+    assert!(
+        stdout.contains("--bundle NAME"),
+        "unexpected tui help output: {stdout}"
+    );
+}
+
 fn write_bundle_configuration(
     config_root: &Path,
     bundle_name: &str,

@@ -69,6 +69,7 @@ agentmux host relay <bundle-id>
 agentmux host mcp [--bundle NAME] [--session-name NAME]
 agentmux list [--bundle NAME] [--sender NAME] [--json]
 agentmux look <target-session> [--bundle NAME] [--lines N]
+agentmux tui [--bundle NAME] [--sender NAME] [--lines N]
 agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--bundle NAME] [--sender NAME] [--json]
 ```
 

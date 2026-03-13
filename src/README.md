@@ -19,9 +19,12 @@ This directory contains the implementation for the unified `agentmux` binary.
 - `mcp/`
   - MCP stdio server surface and relay forwarding.
   - See [src/mcp/README.md](mcp/README.md).
+- `tui/`
+  - Interactive terminal workbench that composes `list`/`send`/`look` relay
+    contracts for operator workflows.
 - `runtime/`
   - path resolution, startup locks, association discovery, inscriptions, and
-    starter template hydration.
+  starter template hydration.
   - See [src/runtime/README.md](runtime/README.md).
 - `lib.rs`
   - crate module exports and shared startup helpers.

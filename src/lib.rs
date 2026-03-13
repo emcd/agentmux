@@ -6,6 +6,7 @@ pub mod envelope;
 pub mod mcp;
 pub mod relay;
 pub mod runtime;
+pub mod tui;
 
 /// Returns a human-readable startup line for a binary.
 pub fn startup_line(binary: &str) -> String {

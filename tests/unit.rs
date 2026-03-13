@@ -12,3 +12,5 @@ mod runtime_inscriptions;
 mod runtime_paths;
 #[path = "unit/runtime_starter.rs"]
 mod runtime_starter;
+#[path = "unit/tui.rs"]
+mod tui;

@@ -86,6 +86,14 @@ struct LookArguments {
 }
 
 #[derive(Clone, Debug)]
+struct TuiArguments {
+    bundle_name: Option<String>,
+    sender_session: Option<String>,
+    lines: Option<u64>,
+    runtime: RuntimeArguments,
+}
+
+#[derive(Clone, Debug)]
 struct SendArguments {
     bundle_name: Option<String>,
     sender_session: Option<String>,
@@ -137,6 +145,7 @@ pub async fn run_agentmux(arguments: Vec<String>) -> Result<(), RuntimeError> {
         "host" => run_agentmux_host(&arguments[1..]).await,
         "list" => run_agentmux_list(&arguments[1..]),
         "look" => run_agentmux_look(&arguments[1..]),
+        "tui" => run_agentmux_tui(&arguments[1..]),
         "send" => run_agentmux_send(&arguments[1..]),
         unknown => Err(RuntimeError::InvalidArgument {
             argument: unknown.to_string(),
@@ -441,6 +450,42 @@ fn run_agentmux_look(arguments: &[String]) -> Result<(), RuntimeError> {
         })?
     );
     Ok(())
+}
+
+fn run_agentmux_tui(arguments: &[String]) -> Result<(), RuntimeError> {
+    if arguments
+        .iter()
+        .any(|value| value == "--help" || value == "-h")
+    {
+        print_tui_help();
+        return Ok(());
+    }
+    let parsed = parse_tui_arguments(arguments)?;
+    let current_directory = env::current_dir()
+        .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
+    let workspace = WorkspaceContext::discover(&current_directory)?;
+    let local_overrides = load_local_mcp_overrides(&workspace.workspace_root)?;
+    let association = resolve_association(
+        &McpAssociationCli {
+            bundle_name: parsed.bundle_name.clone(),
+            session_name: parsed.sender_session.clone(),
+        },
+        local_overrides.as_ref(),
+        &workspace,
+    )?;
+    let roots = resolve_roots(&parsed.runtime, &workspace, local_overrides.as_ref())?;
+    ensure_starter_configuration_layout(&roots.configuration_root)?;
+    let bundle = load_bundle_configuration(&roots.configuration_root, &association.bundle_name)
+        .map_err(map_bundle_load_error)?;
+    let sender_session =
+        resolve_sender_session(&bundle, &association.session_name, &current_directory)?;
+    let paths = BundleRuntimePaths::resolve(&roots.state_root, &association.bundle_name)?;
+    crate::tui::run(crate::tui::TuiLaunchOptions {
+        bundle_name: association.bundle_name,
+        sender_session,
+        relay_socket: paths.relay_socket,
+        look_lines: parsed.lines,
+    })
 }
 
 fn run_relay_host(arguments: RelayHostArguments) -> Result<(), RuntimeError> {
@@ -1128,6 +1173,42 @@ fn parse_look_arguments(arguments: &[String]) -> Result<LookArguments, RuntimeEr
     Ok(parsed)
 }
 
+fn parse_tui_arguments(arguments: &[String]) -> Result<TuiArguments, RuntimeError> {
+    let mut parsed = TuiArguments {
+        bundle_name: None,
+        sender_session: None,
+        lines: None,
+        runtime: RuntimeArguments::default(),
+    };
+    let mut index = 0usize;
+    while index < arguments.len() {
+        if parse_runtime_flag(arguments, &mut index, &mut parsed.runtime)? {
+            index += 1;
+            continue;
+        }
+        match arguments[index].as_str() {
+            "--bundle" | "--bundle-name" => {
+                parsed.bundle_name = Some(take_value(arguments, &mut index, "--bundle")?);
+            }
+            "--sender" | "--session-name" => {
+                parsed.sender_session = Some(take_value(arguments, &mut index, "--sender")?);
+            }
+            "--lines" => {
+                let value = take_value(arguments, &mut index, "--lines")?;
+                parsed.lines = Some(parse_look_lines(value.as_str())?);
+            }
+            unknown => {
+                return Err(RuntimeError::InvalidArgument {
+                    argument: unknown.to_string(),
+                    message: "unknown argument".to_string(),
+                });
+            }
+        }
+        index += 1;
+    }
+    Ok(parsed)
+}
+
 fn parse_look_lines(value: &str) -> Result<u64, RuntimeError> {
     let lines = value.parse::<u64>().map_err(|_| {
         RuntimeError::validation(
@@ -1391,7 +1472,7 @@ fn is_relay_unavailable_error(source: &std::io::Error) -> bool {
 
 fn print_agentmux_help() {
     println!(
-        "Usage: agentmux <command> [options]\n\nCommands:\n  host relay (<bundle-id> | --group GROUP) [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\n  host mcp [--bundle NAME] [--session-name NAME] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\n  list [--bundle NAME] [--sender NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\n  look <target-session> [--bundle NAME] [--lines N] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\n  send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--quiescence-timeout-ms MS] [--request-id ID] [--bundle NAME] [--sender NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux <command> [options]\n\nCommands:\n  host relay (<bundle-id> | --group GROUP) [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\n  host mcp [--bundle NAME] [--session-name NAME] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\n  list [--bundle NAME] [--sender NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\n  look <target-session> [--bundle NAME] [--lines N] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\n  tui [--bundle NAME] [--sender NAME] [--lines N] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\n  send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--quiescence-timeout-ms MS] [--request-id ID] [--bundle NAME] [--sender NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }
 
@@ -1420,6 +1501,12 @@ fn print_list_help() {
 fn print_look_help() {
     println!(
         "Usage: agentmux look <target-session> [--bundle NAME] [--lines N] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+    );
+}
+
+fn print_tui_help() {
+    println!(
+        "Usage: agentmux tui [--bundle NAME] [--sender NAME] [--lines N] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }
 
