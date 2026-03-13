@@ -15,9 +15,16 @@ than they need to be for daily multi-agent operations.
   - recipient discovery/selection,
   - compose-and-send,
   - look/inspect snapshot viewing,
-  - per-target delivery feedback.
-- Lock recipient-entry semantics to explicit `To`/`Cc` fields with deterministic
-  recipient identifiers and keyboard autocomplete behavior (`Tab`).
+  - delivery-events inspection with pending indicator.
+- Lock recipient-entry semantics to explicit `To` field with deterministic
+  recipient identifiers and context-sensitive keyboard completion behavior:
+  - `Tab` initiates and cycles in-place completion proposals in `To`,
+  - `@` prefix triggers immediate proposal updates as characters are typed,
+  - function keys are reserved for overlays (no completion action on `F4`).
+- Resolve focus/navigation conflict with conditional `Tab` behavior:
+  - in `To`, `Tab` completion has priority when recipient token content exists,
+  - otherwise `Tab` continues focus movement.
+- Lock TUI delivery behavior to async-only for MVP.
 - Define a forward-compatible target identifier grammar up front:
   - local: `<session-id>` (MVP accepted),
   - qualified: `<bundle-id>/<session-id>` (reserved for future cross-bundle use).

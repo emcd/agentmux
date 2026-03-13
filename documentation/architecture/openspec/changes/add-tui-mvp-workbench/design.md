@@ -25,17 +25,31 @@ without introducing new transport behavior in MVP.
 
 ## Decisions
 
-- Decision: MVP compose UX uses explicit recipient fields:
+- Decision: MVP compose UX uses a single explicit recipient field:
   - `To`
-  - `Cc`
   The canonical send target state is selected recipient IDs, not free-form text
   parsing.
 
-- Decision: recipient entry supports inline completion:
-  - `Tab` completes from known recipient identities in current bundle context.
+- Decision: `Tab` / `Shift+Tab` are reserved for focus navigation between
+  `To` and `Message` fields, with conditional `Tab` override in `To`
+  when completion is active.
+
+- Decision: recipient entry supports inline in-place completion (no popup menu):
+  - in `To`, `Tab` initiates/cycles completion proposals,
+  - if recipient token is empty, `Tab` retains focus-navigation behavior,
+  - if recipient token starts with `@`, proposals update immediately once at
+    least one character follows `@`.
+
+- Decision: function keys remain overlay-only affordances in MVP.
+  - completion behavior does not use `F4`.
 
 - Decision: recipient discovery supports an overlay picker opened from keyboard
   shortcut (default `F2`) to speed selection and reduce entry errors.
+
+- Decision: delivery mode selection is removed from MVP TUI surface.
+  - Send requests are always submitted with async delivery behavior.
+  - Events are surfaced via a dedicated overlay (default `F3`).
+  - Main status/header include a pending-delivery indicator.
 
 - Decision: target identifier grammar is forward-compatible from day one:
   - local identifier: `<session-id>`
@@ -55,10 +69,18 @@ without introducing new transport behavior in MVP.
 
 ## Risks / Trade-offs
 
-- Trade-off: explicit `To`/`Cc` model is more structured than free-form mention
+- Trade-off: explicit `To` model is more structured than free-form mention
   text, but it improves determinism and error handling.
 - Risk: users may expect `@mention` compose behavior immediately.
   Mitigation: preserve extension path after deterministic field UX is stable.
+- Risk: pending-delivery count is local-estimate only in MVP because completion
+  telemetry is not yet streamed back into TUI.
+  Mitigation: display events/pending as best-effort operational cues and track
+  richer event integration as follow-up.
+- Risk: conditional `Tab` behavior can be surprising if completion/focus rules
+  are not explicit.
+  Mitigation: document deterministic precedence and show key hints in compose
+  surface.
 
 ## Migration Plan
 
