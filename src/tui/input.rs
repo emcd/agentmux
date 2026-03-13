@@ -23,6 +23,9 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
     if state.picker_open {
         return handle_picker_key(state, key);
     }
+    if state.events_overlay_open {
+        return handle_events_overlay_key(state, key);
+    }
 
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
@@ -33,10 +36,7 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
             KeyCode::Char('s') => return state.send_message(),
             KeyCode::Char('l') => return state.look_target(),
             KeyCode::Char('r') => return state.refresh_recipients(),
-            KeyCode::Char('d') => {
-                state.toggle_delivery_mode();
-                return Ok(());
-            }
+            KeyCode::Char(' ') => state.autocomplete_active_recipient_field(),
             _ => {}
         }
     }
@@ -46,12 +46,17 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
             state.should_quit = true;
         }
         KeyCode::F(2) => {
-            state.open_picker();
+            if state.picker_open {
+                state.close_picker();
+            } else {
+                state.open_picker();
+            }
         }
-        KeyCode::BackTab => state.cycle_focus(),
+        KeyCode::F(3) => state.toggle_events_overlay(),
+        KeyCode::BackTab => state.cycle_focus_backward(),
         KeyCode::Tab => {
-            if matches!(state.focus, FocusField::To | FocusField::Cc) {
-                state.autocomplete_active_recipient_field();
+            if matches!(state.focus, FocusField::To | FocusField::Message) {
+                state.cycle_focus_forward();
             }
         }
         KeyCode::Enter => state.insert_newline_if_message(),
@@ -70,9 +75,25 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
 fn handle_picker_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
     match key.code {
         KeyCode::Esc | KeyCode::F(2) => state.close_picker(),
+        KeyCode::F(3) => {
+            state.close_picker();
+            state.toggle_events_overlay();
+        }
         KeyCode::Down => state.move_picker_selection(1),
         KeyCode::Up => state.move_picker_selection(-1),
         KeyCode::Enter => state.insert_picker_selection(),
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_events_overlay_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
+    match key.code {
+        KeyCode::Esc | KeyCode::F(3) => state.toggle_events_overlay(),
+        KeyCode::F(2) => {
+            state.toggle_events_overlay();
+            state.open_picker();
+        }
         _ => {}
     }
     Ok(())

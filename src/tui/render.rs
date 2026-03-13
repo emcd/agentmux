@@ -25,6 +25,9 @@ pub(crate) fn render(frame: &mut Frame, state: &mut AppState) {
     if state.picker_open {
         render_picker_overlay(frame, state);
     }
+    if state.events_overlay_open {
+        render_events_overlay(frame, state);
+    }
 }
 
 fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -40,8 +43,12 @@ fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(format!(
-            "  bundle={} sender={} mode={:?} focus={} selected={}",
-            state.bundle_name, state.sender_session, state.delivery_mode, focus, selected
+            "  bundle={} sender={} focus={} selected={} pending={}",
+            state.bundle_name,
+            state.sender_session,
+            focus,
+            selected,
+            state.pending_deliveries_count()
         )),
     ])];
     let paragraph = Paragraph::new(text).block(Block::default().borders(Borders::ALL));
@@ -55,24 +62,14 @@ fn render_main(frame: &mut Frame, area: Rect, state: &mut AppState) {
 fn render_right_panes(frame: &mut Frame, area: Rect, state: &AppState) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(11),
-            Constraint::Min(8),
-            Constraint::Length(5),
-        ])
+        .constraints([Constraint::Length(9), Constraint::Min(8)])
         .split(area);
     render_compose(frame, rows[0], state);
     render_snapshot(frame, rows[1], state);
-    render_delivery_feedback(frame, rows[2], state);
 }
 
 fn render_compose(frame: &mut Frame, area: Rect, state: &AppState) {
     let to_style = if state.focus == FocusField::To {
-        Style::default().fg(Color::Yellow)
-    } else {
-        Style::default()
-    };
-    let cc_style = if state.focus == FocusField::Cc {
         Style::default().fg(Color::Yellow)
     } else {
         Style::default()
@@ -87,10 +84,6 @@ fn render_compose(frame: &mut Frame, area: Rect, state: &AppState) {
         Line::from(vec![
             Span::styled("To: ", to_style.add_modifier(Modifier::BOLD)),
             Span::raw(state.to_field.as_str()),
-        ]),
-        Line::from(vec![
-            Span::styled("Cc: ", cc_style.add_modifier(Modifier::BOLD)),
-            Span::raw(state.cc_field.as_str()),
         ]),
         Line::from(""),
         Line::from(Span::styled(
@@ -112,7 +105,7 @@ fn render_compose(frame: &mut Frame, area: Rect, state: &AppState) {
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
         Block::default()
             .borders(Borders::ALL)
-            .title("Compose (Shift+Tab focus, Tab autocomplete, Ctrl+S send, Ctrl+D mode)"),
+            .title("Compose (Tab/Shift+Tab focus, Ctrl+Space autocomplete, Ctrl+S send)"),
     );
     frame.render_widget(paragraph, area);
 }
@@ -143,25 +136,6 @@ fn render_snapshot(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_widget(paragraph, area);
 }
 
-fn render_delivery_feedback(frame: &mut Frame, area: Rect, state: &AppState) {
-    let lines = if state.last_delivery_lines.is_empty() {
-        vec![Line::from("(no delivery feedback yet)")]
-    } else {
-        state
-            .last_delivery_lines
-            .iter()
-            .take(3)
-            .map(|line| Line::from(Span::raw(line.clone())))
-            .collect::<Vec<_>>()
-    };
-    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title("Delivery Feedback"),
-    );
-    frame.render_widget(paragraph, area);
-}
-
 fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
     let lines = state
         .status_history
@@ -172,7 +146,7 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
     let footer = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
         Block::default()
             .borders(Borders::ALL)
-            .title("Status (Ctrl+R refresh, Ctrl+L look, F2 picker, Esc/Ctrl+Q quit)"),
+            .title("Status (Ctrl+R refresh, Ctrl+L look, F2 picker, F3 events, Esc/Ctrl+Q quit)"),
     );
     frame.render_widget(footer, area);
 }
@@ -216,6 +190,27 @@ fn render_picker_overlay(frame: &mut Frame, state: &mut AppState) {
         )
         .highlight_style(Style::default().bg(Color::Blue).fg(Color::White));
     frame.render_stateful_widget(list, popup, &mut state.picker_state);
+}
+
+fn render_events_overlay(frame: &mut Frame, state: &AppState) {
+    let popup = centered_rect(80, 70, frame.area());
+    frame.render_widget(Clear, popup);
+    let lines = if state.event_history.is_empty() {
+        vec![Line::from("(no delivery events captured yet)")]
+    } else {
+        state
+            .event_history
+            .iter()
+            .take((popup.height.saturating_sub(2)) as usize)
+            .map(|line| Line::from(Span::raw(line.clone())))
+            .collect::<Vec<_>>()
+    };
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Events (Esc/F3 close)"),
+    );
+    frame.render_widget(paragraph, popup);
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {

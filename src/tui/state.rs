@@ -8,13 +8,14 @@ use ratatui::widgets::ListState;
 
 use crate::{
     relay::{
-        ChatDeliveryMode, ChatStatus, Recipient, RelayError, RelayRequest, RelayResponse,
-        request_relay,
+        ChatDeliveryMode, ChatOutcome, ChatResult, ChatStatus, Recipient, RelayError, RelayRequest,
+        RelayResponse, request_relay,
     },
     runtime::error::RuntimeError,
 };
 
 const MAX_STATUS_HISTORY: usize = 6;
+const MAX_EVENT_HISTORY: usize = 64;
 
 #[derive(Clone, Debug)]
 pub struct TuiLaunchOptions {
@@ -28,7 +29,6 @@ pub struct TuiLaunchOptions {
 pub(crate) enum FocusField {
     #[default]
     To,
-    Cc,
     Message,
 }
 
@@ -47,17 +47,17 @@ pub(crate) struct AppState {
     pub recipients: Vec<Recipient>,
     pub recipients_state: ListState,
     pub picker_open: bool,
+    pub events_overlay_open: bool,
     pub picker_state: ListState,
     pub focus: FocusField,
     pub to_field: String,
-    pub cc_field: String,
     pub message_field: String,
-    pub delivery_mode: ChatDeliveryMode,
     pub look_target: Option<String>,
     pub look_captured_at: Option<String>,
     pub look_snapshot_lines: Vec<String>,
     pub status_history: VecDeque<StatusEntry>,
-    pub last_delivery_lines: Vec<String>,
+    pub event_history: VecDeque<String>,
+    pending_delivery_ids: HashSet<String>,
     pub should_quit: bool,
 }
 
@@ -71,20 +71,20 @@ impl AppState {
             recipients: Vec::new(),
             recipients_state: ListState::default(),
             picker_open: false,
+            events_overlay_open: false,
             picker_state: ListState::default(),
             focus: FocusField::To,
             to_field: String::new(),
-            cc_field: String::new(),
             message_field: String::new(),
-            delivery_mode: ChatDeliveryMode::Async,
             look_target: None,
             look_captured_at: None,
             look_snapshot_lines: Vec::new(),
             status_history: VecDeque::from([StatusEntry {
                 code: None,
-                message: "Ready. Ctrl+S send, Ctrl+L look, F2 picker, Esc/Ctrl+Q quit.".to_string(),
+                message: "Ready. Tab/Shift+Tab focus, Ctrl+Space autocomplete, Ctrl+S send, Ctrl+L look, Esc/Ctrl+Q quit.".to_string(),
             }]),
-            last_delivery_lines: Vec::new(),
+            event_history: VecDeque::new(),
+            pending_delivery_ids: HashSet::new(),
             should_quit: false,
         }
     }
@@ -147,17 +147,6 @@ impl AppState {
         }
     }
 
-    pub fn toggle_delivery_mode(&mut self) {
-        self.delivery_mode = match self.delivery_mode {
-            ChatDeliveryMode::Async => ChatDeliveryMode::Sync,
-            ChatDeliveryMode::Sync => ChatDeliveryMode::Async,
-        };
-        self.push_status(
-            None,
-            format!("Delivery mode set to {:?}.", self.delivery_mode),
-        );
-    }
-
     pub fn move_picker_selection(&mut self, delta: isize) {
         if self.recipients.is_empty() {
             self.picker_state.select(None);
@@ -170,6 +159,7 @@ impl AppState {
 
     pub fn open_picker(&mut self) {
         self.picker_open = true;
+        self.events_overlay_open = false;
         if self.recipients.is_empty() {
             self.picker_state.select(None);
             return;
@@ -180,6 +170,13 @@ impl AppState {
 
     pub fn close_picker(&mut self) {
         self.picker_open = false;
+    }
+
+    pub fn toggle_events_overlay(&mut self) {
+        self.events_overlay_open = !self.events_overlay_open;
+        if self.events_overlay_open {
+            self.picker_open = false;
+        }
     }
 
     pub fn insert_picker_selection(&mut self) {
@@ -197,35 +194,34 @@ impl AppState {
             );
             return;
         };
+        let session_name = recipient.session_name.clone();
         match self.focus {
             FocusField::To => {
-                self.to_field =
-                    append_recipient_token(&self.to_field, recipient.session_name.as_str())
-            }
-            FocusField::Cc => {
-                self.cc_field =
-                    append_recipient_token(&self.cc_field, recipient.session_name.as_str())
+                self.to_field = append_recipient_token(&self.to_field, session_name.as_str())
             }
             FocusField::Message => {
                 self.push_status(
                     Some("validation_invalid_arguments".to_string()),
-                    "picker inserts recipients only in To/Cc fields",
+                    "picker inserts recipients only in To field",
                 );
                 return;
             }
         }
         self.recipients_state.select(Some(index));
         self.picker_open = false;
-        self.push_status(
-            None,
-            format!("Inserted recipient {}.", recipient.session_name),
-        );
+        self.push_status(None, format!("Inserted recipient {session_name}."));
     }
 
-    pub fn cycle_focus(&mut self) {
+    pub fn cycle_focus_forward(&mut self) {
         self.focus = match self.focus {
-            FocusField::To => FocusField::Cc,
-            FocusField::Cc => FocusField::Message,
+            FocusField::To => FocusField::Message,
+            FocusField::Message => FocusField::To,
+        };
+    }
+
+    pub fn cycle_focus_backward(&mut self) {
+        self.focus = match self.focus {
+            FocusField::To => FocusField::Message,
             FocusField::Message => FocusField::To,
         };
     }
@@ -233,7 +229,6 @@ impl AppState {
     pub fn insert_character(&mut self, character: char) {
         match self.focus {
             FocusField::To => self.to_field.push(character),
-            FocusField::Cc => self.cc_field.push(character),
             FocusField::Message => self.message_field.push(character),
         }
     }
@@ -248,9 +243,6 @@ impl AppState {
         match self.focus {
             FocusField::To => {
                 self.to_field.pop();
-            }
-            FocusField::Cc => {
-                self.cc_field.pop();
             }
             FocusField::Message => {
                 self.message_field.pop();
@@ -276,11 +268,6 @@ impl AppState {
                     self.to_field = next;
                 }
             }
-            FocusField::Cc => {
-                if let Some(next) = autocomplete_recipient_input(&self.cc_field, &candidates) {
-                    self.cc_field = next;
-                }
-            }
             FocusField::Message => {}
         }
     }
@@ -292,46 +279,28 @@ impl AppState {
                 "message body is required",
             ));
         }
-        let targets = merge_tui_targets(&self.to_field, &self.cc_field, &self.bundle_name)?;
+        let targets = merge_tui_targets(&self.to_field, &self.bundle_name)?;
         let response = self.request_relay(&RelayRequest::Chat {
             request_id: None,
             sender_session: self.sender_session.clone(),
             message: self.message_field.clone(),
             targets,
             broadcast: false,
-            delivery_mode: self.delivery_mode,
+            delivery_mode: ChatDeliveryMode::Async,
             quiet_window_ms: None,
             quiescence_timeout_ms: None,
         })?;
         match response {
             RelayResponse::Chat {
-                delivery_mode,
-                status,
-                results,
-                ..
+                status, results, ..
             } => {
-                self.last_delivery_lines = results
-                    .into_iter()
-                    .map(|result| {
-                        let outcome = serde_json::to_value(&result.outcome)
-                            .ok()
-                            .and_then(|value| value.as_str().map(ToString::to_string))
-                            .unwrap_or_else(|| format!("{:?}", result.outcome));
-                        if let Some(reason) = result.reason {
-                            format!(
-                                "target={} outcome={} reason={}",
-                                result.target_session, outcome, reason
-                            )
-                        } else {
-                            format!("target={} outcome={}", result.target_session, outcome)
-                        }
-                    })
-                    .collect::<Vec<_>>();
+                self.record_chat_events(&status, &results);
                 self.push_status(
                     None,
                     format!(
-                        "send completed mode={delivery_mode:?} status={}",
-                        render_chat_status(status)
+                        "send accepted status={} pending={}",
+                        render_chat_status(&status),
+                        self.pending_deliveries_count()
                     ),
                 );
                 Ok(())
@@ -348,14 +317,14 @@ impl AppState {
         let target = self
             .selected_recipient_id()
             .or_else(|| {
-                merge_tui_targets(&self.to_field, &self.cc_field, &self.bundle_name)
+                merge_tui_targets(&self.to_field, &self.bundle_name)
                     .ok()
                     .and_then(|targets| targets.first().cloned())
             })
             .ok_or_else(|| {
                 RuntimeError::validation(
                     "validation_unknown_target",
-                    "look requires a selected recipient or To/Cc target",
+                    "look requires a selected recipient or To target",
                 )
             })?;
 
@@ -390,9 +359,12 @@ impl AppState {
     pub fn active_recipient_field_name(&self) -> &'static str {
         match self.focus {
             FocusField::To => "To",
-            FocusField::Cc => "Cc",
             FocusField::Message => "Message",
         }
+    }
+
+    pub fn pending_deliveries_count(&self) -> usize {
+        self.pending_delivery_ids.len()
     }
 
     pub fn selected_recipient_id(&self) -> Option<String> {
@@ -421,9 +393,57 @@ impl AppState {
         request_relay(&self.relay_socket, request)
             .map_err(|source| map_relay_request_failure(&self.relay_socket, source))
     }
+
+    fn push_event(&mut self, event: impl Into<String>) {
+        self.event_history.push_front(event.into());
+        while self.event_history.len() > MAX_EVENT_HISTORY {
+            self.event_history.pop_back();
+        }
+    }
+
+    fn record_chat_events(&mut self, status: &ChatStatus, results: &[ChatResult]) {
+        let mut queued_count = 0usize;
+        for result in results {
+            match result.outcome {
+                ChatOutcome::Queued => {
+                    self.pending_delivery_ids.insert(result.message_id.clone());
+                    queued_count += 1;
+                }
+                _ => {
+                    self.pending_delivery_ids.remove(&result.message_id);
+                }
+            }
+        }
+
+        self.push_event(format!(
+            "send status={} targets={} queued={} pending={}",
+            render_chat_status(status),
+            results.len(),
+            queued_count,
+            self.pending_deliveries_count()
+        ));
+
+        for result in results {
+            let outcome = serde_json::to_value(&result.outcome)
+                .ok()
+                .and_then(|value| value.as_str().map(ToString::to_string))
+                .unwrap_or_else(|| format!("{:?}", result.outcome));
+            if let Some(reason) = result.reason.as_deref() {
+                self.push_event(format!(
+                    "target={} outcome={} message_id={} reason={}",
+                    result.target_session, outcome, result.message_id, reason
+                ));
+            } else {
+                self.push_event(format!(
+                    "target={} outcome={} message_id={}",
+                    result.target_session, outcome, result.message_id
+                ));
+            }
+        }
+    }
 }
 
-fn render_chat_status(status: ChatStatus) -> &'static str {
+fn render_chat_status(status: &ChatStatus) -> &'static str {
     match status {
         ChatStatus::Accepted => "accepted",
         ChatStatus::Success => "success",
@@ -481,32 +501,29 @@ pub fn parse_tui_target_identifier(
     Ok(candidate_session.to_string())
 }
 
-/// Merges To/Cc recipient fields into a deterministic target set.
+/// Merges the To recipient field into a deterministic target set.
 pub fn merge_tui_targets(
     to_field: &str,
-    cc_field: &str,
     associated_bundle: &str,
 ) -> Result<Vec<String>, RuntimeError> {
     let mut targets = Vec::<String>::new();
     let mut seen = HashSet::<String>::new();
 
-    for field_value in [to_field, cc_field] {
-        for token in field_value
-            .split(',')
-            .map(str::trim)
-            .filter(|token| !token.is_empty())
-        {
-            let normalized = parse_tui_target_identifier(token, associated_bundle)?;
-            if seen.insert(normalized.clone()) {
-                targets.push(normalized);
-            }
+    for token in to_field
+        .split(',')
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+    {
+        let normalized = parse_tui_target_identifier(token, associated_bundle)?;
+        if seen.insert(normalized.clone()) {
+            targets.push(normalized);
         }
     }
 
     if targets.is_empty() {
         return Err(RuntimeError::validation(
             "validation_empty_targets",
-            "provide at least one recipient in To or Cc",
+            "provide at least one recipient in To",
         ));
     }
 

@@ -23,15 +23,14 @@ fn rejects_cross_bundle_qualified_target_identifier() {
 }
 
 #[test]
-fn merges_to_and_cc_into_deterministic_targets() {
-    let targets =
-        merge_tui_targets("relay, mcp", "agentmux/mcp, tui", "agentmux").expect("targets");
+fn merges_to_field_into_deterministic_targets() {
+    let targets = merge_tui_targets("relay, mcp, agentmux/mcp, tui", "agentmux").expect("targets");
     assert_eq!(targets, vec!["relay", "mcp", "tui"]);
 }
 
 #[test]
 fn merge_rejects_empty_target_set() {
-    let error = merge_tui_targets("", "", "agentmux").expect_err("must fail");
+    let error = merge_tui_targets("", "agentmux").expect_err("must fail");
     assert!(error.to_string().contains("validation_empty_targets"));
 }
 
