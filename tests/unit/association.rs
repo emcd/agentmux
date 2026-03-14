@@ -55,10 +55,13 @@ fn bundle_with_sessions(sessions: &[&str]) -> BundleConfiguration {
                 id: (*session_name).to_string(),
                 name: None,
                 working_directory: None,
-                start_command: None,
-                prompt_readiness: None,
+                target: agentmux::configuration::TargetConfiguration::Tmux(
+                    agentmux::configuration::TmuxTargetConfiguration {
+                        start_command: "sh -lc 'true'".to_string(),
+                        prompt_readiness: None,
+                    },
+                ),
                 coder_session_id: None,
-                acp: None,
                 policy_id: None,
             })
             .collect(),
@@ -79,10 +82,13 @@ fn bundle_with_directories(
                     id: (*session_name).to_string(),
                     name: None,
                     working_directory: Some((*directory).to_path_buf()),
-                    start_command: None,
-                    prompt_readiness: None,
+                    target: agentmux::configuration::TargetConfiguration::Tmux(
+                        agentmux::configuration::TmuxTargetConfiguration {
+                            start_command: "sh -lc 'true'".to_string(),
+                            prompt_readiness: None,
+                        },
+                    ),
                     coder_session_id: None,
-                    acp: None,
                     policy_id: None,
                 },
             )

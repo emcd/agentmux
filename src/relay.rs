@@ -15,7 +15,9 @@ use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
 use crate::{
-    configuration::{BundleConfiguration, ConfigurationError, load_bundle_configuration},
+    configuration::{
+        BundleConfiguration, ConfigurationError, TargetConfiguration, load_bundle_configuration,
+    },
     envelope::{ENVELOPE_SCHEMA_VERSION, PromptBatchSettings},
     runtime::{inscriptions::emit_inscription, paths::BundleRuntimePaths},
 };
@@ -767,13 +769,13 @@ fn reconcile_loaded_bundle(
     let configured_sessions = bundle
         .members
         .iter()
-        .filter(|member| member.start_command.is_some())
+        .filter(|member| matches!(member.target, TargetConfiguration::Tmux(_)))
         .map(|member| member.id.clone())
         .collect::<HashSet<_>>();
     let mut missing = bundle
         .members
         .iter()
-        .filter(|member| member.start_command.is_some())
+        .filter(|member| matches!(member.target, TargetConfiguration::Tmux(_)))
         .filter_map(|member| match session_exists(tmux_socket, &member.id) {
             Ok(true) => None,
             Ok(false) => Some(Ok(member.clone())),
@@ -866,6 +868,13 @@ fn create_member_once(
     tmux_socket: &Path,
     member: &crate::configuration::BundleMember,
 ) -> Result<(), String> {
+    let start_command = match &member.target {
+        TargetConfiguration::Tmux(target) => target.start_command.as_str(),
+        TargetConfiguration::Acp(_) => {
+            return Err("cannot create tmux session for ACP target".to_string());
+        }
+    };
+
     let mut arguments = vec![
         "new-session".to_string(),
         "-d".to_string(),
@@ -876,9 +885,7 @@ fn create_member_once(
         arguments.push("-c".to_string());
         arguments.push(working_directory.display().to_string());
     }
-    if let Some(start_command) = member.start_command.as_ref() {
-        arguments.push(start_command.clone());
-    }
+    arguments.push(start_command.to_string());
     run_tmux_command(tmux_socket, &arguments)?;
     run_tmux_command(
         tmux_socket,

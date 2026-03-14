@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use time::format_description::well_known::Rfc3339;
 
 use crate::{
-    configuration::{AcpTargetConfiguration, PromptReadinessTemplate},
+    configuration::{AcpTargetConfiguration, PromptReadinessTemplate, TargetConfiguration},
     envelope::{
         AddressIdentity, EnvelopeRenderInput, ManifestPreamble, PromptBatchSettings,
         batch_envelopes, parse_tokenizer_profile, render_envelope,
@@ -271,81 +271,80 @@ pub(super) fn deliver_one_target(task: &AsyncDeliveryTask) -> Result<ChatResult,
     });
     let prompt_batches = batch_envelopes(&[envelope], batch_settings);
 
-    if let Some(acp) = target_member.acp.as_ref() {
-        return Ok(deliver_one_target_acp(
+    match &target_member.target {
+        TargetConfiguration::Acp(acp) => Ok(deliver_one_target_acp(
             target_member,
             acp,
             prompt_batches,
             target_session,
             message_id,
-        ));
-    }
-
-    match wait_for_quiescent_pane(
-        tmux_socket,
-        &target_session,
-        quiescence,
-        target_member.prompt_readiness.as_ref(),
-    ) {
-        Ok(pane_target) => {
-            let mut failed_reason = None::<String>;
-            for prompt in prompt_batches {
-                if let Err(reason) = inject_prompt(tmux_socket, &pane_target, &prompt) {
-                    failed_reason = Some(reason);
-                    break;
+        )),
+        TargetConfiguration::Tmux(tmux_target) => match wait_for_quiescent_pane(
+            tmux_socket,
+            &target_session,
+            quiescence,
+            tmux_target.prompt_readiness.as_ref(),
+        ) {
+            Ok(pane_target) => {
+                let mut failed_reason = None::<String>;
+                for prompt in prompt_batches {
+                    if let Err(reason) = inject_prompt(tmux_socket, &pane_target, &prompt) {
+                        failed_reason = Some(reason);
+                        break;
+                    }
+                }
+                match failed_reason {
+                    None => Ok(ChatResult {
+                        target_session,
+                        message_id,
+                        outcome: ChatOutcome::Delivered,
+                        reason: None,
+                    }),
+                    Some(reason) => Ok(ChatResult {
+                        target_session,
+                        message_id,
+                        outcome: ChatOutcome::Failed,
+                        reason: Some(reason),
+                    }),
                 }
             }
-            match failed_reason {
-                None => Ok(ChatResult {
+            Err(DeliveryWaitError::Timeout {
+                timeout,
+                readiness_mismatch,
+                mismatch_reason,
+            }) => {
+                let reason = if readiness_mismatch {
+                    let detail = mismatch_reason
+                        .map(|value| format!(": {value}"))
+                        .unwrap_or_default();
+                    format!(
+                        "prompt readiness did not match before timeout after {}ms{}",
+                        timeout.as_millis(),
+                        detail
+                    )
+                } else {
+                    format!("quiescence wait timed out after {}ms", timeout.as_millis())
+                };
+                Ok(ChatResult {
                     target_session,
                     message_id,
-                    outcome: ChatOutcome::Delivered,
-                    reason: None,
-                }),
-                Some(reason) => Ok(ChatResult {
-                    target_session,
-                    message_id,
-                    outcome: ChatOutcome::Failed,
+                    outcome: ChatOutcome::Timeout,
                     reason: Some(reason),
-                }),
+                })
             }
-        }
-        Err(DeliveryWaitError::Timeout {
-            timeout,
-            readiness_mismatch,
-            mismatch_reason,
-        }) => {
-            let reason = if readiness_mismatch {
-                let detail = mismatch_reason
-                    .map(|value| format!(": {value}"))
-                    .unwrap_or_default();
-                format!(
-                    "prompt readiness did not match before timeout after {}ms{}",
-                    timeout.as_millis(),
-                    detail
-                )
-            } else {
-                format!("quiescence wait timed out after {}ms", timeout.as_millis())
-            };
-            Ok(ChatResult {
+            Err(DeliveryWaitError::Failed { reason }) => Ok(ChatResult {
                 target_session,
                 message_id,
-                outcome: ChatOutcome::Timeout,
+                outcome: ChatOutcome::Failed,
                 reason: Some(reason),
-            })
-        }
-        Err(DeliveryWaitError::Failed { reason }) => Ok(ChatResult {
-            target_session,
-            message_id,
-            outcome: ChatOutcome::Failed,
-            reason: Some(reason),
-        }),
-        Err(DeliveryWaitError::Shutdown) => Ok(ChatResult {
-            target_session,
-            message_id,
-            outcome: ChatOutcome::DroppedOnShutdown,
-            reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
-        }),
+            }),
+            Err(DeliveryWaitError::Shutdown) => Ok(ChatResult {
+                target_session,
+                message_id,
+                outcome: ChatOutcome::DroppedOnShutdown,
+                reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
+            }),
+        },
     }
 }
 

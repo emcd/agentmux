@@ -27,17 +27,12 @@ pub struct BundleMember {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub working_directory: Option<PathBuf>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub start_command: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prompt_readiness: Option<PromptReadinessTemplate>,
+    pub target: TargetConfiguration,
     /// Optional persistent agent session handle sourced from
     /// `[[sessions]].coder-session-id` (not from `[[coders]]`).
     /// ACP delivery uses this to select `session/load` vs `session/new`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coder_session_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub acp: Option<AcpTargetConfiguration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_id: Option<String>,
 }
@@ -50,6 +45,22 @@ pub struct PromptReadinessTemplate {
     pub inspect_lines: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_idle_cursor_column: Option<usize>,
+}
+
+/// Validated runtime target configuration for one bundle member.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "transport", content = "config")]
+pub enum TargetConfiguration {
+    Tmux(TmuxTargetConfiguration),
+    Acp(AcpTargetConfiguration),
+}
+
+/// Tmux transport configuration for one bundle member.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct TmuxTargetConfiguration {
+    pub start_command: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_readiness: Option<PromptReadinessTemplate>,
 }
 
 /// ACP transport configuration for one bundle member.
@@ -506,7 +517,7 @@ fn validate_loaded_configuration(
             .map(normalize_field)
             .filter(|value| !value.is_empty())
             .map(ToString::to_string);
-        let (start_command, prompt_readiness, acp) = match &coder.target {
+        let target = match &coder.target {
             CoderTarget::Tmux(target) => {
                 let command_template = if coder_session_id.is_some() {
                     target.resume_command.as_str()
@@ -521,28 +532,25 @@ fn validate_loaded_configuration(
                 )?;
                 let prompt_readiness =
                     prompt_readiness_from_tmux_target(target, coders_path, session_id)?;
-                (Some(start_command), prompt_readiness, None)
+                TargetConfiguration::Tmux(TmuxTargetConfiguration {
+                    start_command,
+                    prompt_readiness,
+                })
             }
-            CoderTarget::Acp(target) => (
-                None,
-                None,
-                Some(AcpTargetConfiguration {
-                    channel: target.channel,
-                    command: target.command.clone(),
-                    url: target.url.clone(),
-                    headers: target.headers.clone(),
-                }),
-            ),
+            CoderTarget::Acp(target) => TargetConfiguration::Acp(AcpTargetConfiguration {
+                channel: target.channel,
+                command: target.command.clone(),
+                url: target.url.clone(),
+                headers: target.headers.clone(),
+            }),
         };
 
         members.push(BundleMember {
             id: session_id.to_string(),
             name: session_name.map(ToString::to_string),
             working_directory: Some(session.directory.clone()),
-            start_command,
-            prompt_readiness,
+            target,
             coder_session_id: coder_session_id.map(ToString::to_string),
-            acp,
             policy_id,
         });
     }

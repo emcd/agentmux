@@ -1,8 +1,8 @@
 use std::{fs, path::PathBuf};
 
 use agentmux::configuration::{
-    ConfigurationError, infer_sender_from_working_directory, load_bundle_configuration,
-    load_bundle_group_memberships,
+    ConfigurationError, TargetConfiguration, infer_sender_from_working_directory,
+    load_bundle_configuration, load_bundle_group_memberships,
 };
 use tempfile::TempDir;
 
@@ -74,12 +74,15 @@ coder = "shell"
     assert_eq!(loaded.members.len(), 2);
     assert_eq!(loaded.members[1].id, "session-b");
     assert_eq!(loaded.members[1].name.as_deref(), Some("Bravo"));
+    let TargetConfiguration::Tmux(member_a_target) = &loaded.members[0].target else {
+        panic!("expected tmux target for session-a");
+    };
     assert_eq!(
-        loaded.members[0].start_command.as_deref(),
-        Some("codex resume abc123")
+        member_a_target.start_command.as_str(),
+        "codex resume abc123"
     );
     assert_eq!(loaded.members[0].policy_id.as_deref(), Some("default"));
-    let readiness = loaded.members[0]
+    let readiness = member_a_target
         .prompt_readiness
         .as_ref()
         .expect("member a prompt_readiness");
@@ -764,7 +767,10 @@ coder = "acp"
     let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
     assert_eq!(loaded.members.len(), 1);
     assert_eq!(loaded.members[0].coder_session_id, None);
-    assert!(loaded.members[0].acp.is_some());
+    assert!(matches!(
+        loaded.members[0].target,
+        TargetConfiguration::Acp(_)
+    ));
 }
 
 #[test]
@@ -813,9 +819,14 @@ coder = "acp"
 
     let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
     assert_eq!(loaded.members.len(), 2);
-    assert!(loaded.members[0].start_command.is_some());
-    assert!(loaded.members[1].start_command.is_none());
-    assert!(loaded.members[1].acp.is_some());
+    assert!(matches!(
+        loaded.members[0].target,
+        TargetConfiguration::Tmux(_)
+    ));
+    assert!(matches!(
+        loaded.members[1].target,
+        TargetConfiguration::Acp(_)
+    ));
 }
 
 #[test]
