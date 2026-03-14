@@ -36,6 +36,7 @@ without introducing new transport behavior in MVP.
 
 - Decision: recipient entry supports inline in-place completion (no popup menu):
   - in `To`, `Tab` initiates/cycles completion proposals,
+  - in `To`, `Enter` accepts the active completion proposal,
   - if recipient token is empty, `Tab` retains focus-navigation behavior,
   - if recipient token starts with `@`, proposals update immediately once at
     least one character follows `@`.

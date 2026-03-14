@@ -19,6 +19,7 @@ than they need to be for daily multi-agent operations.
 - Lock recipient-entry semantics to explicit `To` field with deterministic
   recipient identifiers and context-sensitive keyboard completion behavior:
   - `Tab` initiates and cycles in-place completion proposals in `To`,
+  - `Enter` accepts the currently active completion proposal in `To`,
   - `@` prefix triggers immediate proposal updates as characters are typed,
   - function keys are reserved for overlays (no completion action on `F4`).
 - Resolve focus/navigation conflict with conditional `Tab` behavior:

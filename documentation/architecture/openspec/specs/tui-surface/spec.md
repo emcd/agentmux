@@ -1,5 +1,8 @@
-## ADDED Requirements
+# tui-surface Specification
 
+## Purpose
+TBD - created by archiving change add-tui-mvp-workbench. Update Purpose after archive.
+## Requirements
 ### Requirement: Initial TUI MVP Workflow Coverage
 
 The system SHALL define an initial TUI MVP that covers these operator
@@ -44,6 +47,9 @@ The TUI SHALL use context-sensitive `Tab` behavior in compose:
   and cycles in-place completion proposals,
 - when completion does not apply, `Tab` follows focus navigation behavior.
 
+The TUI SHALL support accepting an active recipient completion proposal from
+`To` via `Enter`.
+
 The TUI SHALL support `@`-prefixed completion trigger behavior in `To`:
 - once an `@` token has at least one character suffix, completion proposals
   update immediately without requiring an initial `Tab`.
@@ -71,6 +77,13 @@ SHALL NOT depend on `F4`.
 - **WHEN** focus is in `To`
 - **AND** active token starts with `@` and has one or more suffix characters
 - **THEN** completion proposals update immediately without requiring initial `Tab`.
+
+#### Scenario: Accept active completion with Enter in To
+
+- **WHEN** focus is in `To`
+- **AND** a completion proposal is active for the current recipient token
+- **AND** operator presses `Enter`
+- **THEN** the active completion proposal is accepted for that token.
 
 #### Scenario: Insert recipients from overlay picker
 
@@ -158,3 +171,4 @@ The initial TUI MVP SHALL exclude:
 - **WHEN** evaluating MVP compose behavior
 - **THEN** recipient entry remains explicit `To` with deterministic IDs
 - **AND** free-form mention parsing remains out of scope
+
