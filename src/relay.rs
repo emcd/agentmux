@@ -234,6 +234,58 @@ enum SendScope {
     AllAll,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AuthorizationScope {
+    None,
+    SelfOnly,
+    AllHome,
+    AllAll,
+}
+
+impl From<GeneralScope> for AuthorizationScope {
+    fn from(value: GeneralScope) -> Self {
+        match value {
+            GeneralScope::None => Self::None,
+            GeneralScope::SelfOnly => Self::SelfOnly,
+            GeneralScope::AllHome => Self::AllHome,
+            GeneralScope::AllAll => Self::AllAll,
+        }
+    }
+}
+
+impl From<ListScope> for AuthorizationScope {
+    fn from(value: ListScope) -> Self {
+        match value {
+            ListScope::AllHome => Self::AllHome,
+            ListScope::AllAll => Self::AllAll,
+        }
+    }
+}
+
+impl From<SendScope> for AuthorizationScope {
+    fn from(value: SendScope) -> Self {
+        match value {
+            SendScope::AllHome => Self::AllHome,
+            SendScope::AllAll => Self::AllAll,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScopeRequirement {
+    Any,
+    NonSelf,
+}
+
+struct AuthorizationDecisionContext<'a> {
+    capability: &'a str,
+    requester_session: &'a str,
+    bundle_name: &'a str,
+    reason: &'a str,
+    target_session: Option<&'a str>,
+    targets: Option<&'a [String]>,
+}
+
 #[derive(Clone, Debug)]
 struct PolicyControls {
     find: GeneralScope,
@@ -1038,9 +1090,18 @@ fn authorize_list(
     requester_session: &str,
 ) -> Result<(), RelayError> {
     let controls = controls_for_requester(authorization, bundle, requester_session)?;
-    match controls.list {
-        ListScope::AllHome | ListScope::AllAll => Ok(()),
-    }
+    authorize_scope(
+        controls.list.into(),
+        ScopeRequirement::Any,
+        AuthorizationDecisionContext {
+            capability: "list.read",
+            requester_session,
+            bundle_name: bundle.bundle_name.as_str(),
+            reason: "list policy scope does not allow recipient visibility",
+            target_session: None,
+            targets: None,
+        },
+    )
 }
 
 fn authorize_send(
@@ -1050,22 +1111,20 @@ fn authorize_send(
     target_sessions: &[String],
 ) -> Result<(), RelayError> {
     let controls = controls_for_requester(authorization, bundle, requester_session)?;
-    let cross_bundle_requested = target_sessions
-        .iter()
-        .any(|session_name| session_name.contains('/'));
-    if cross_bundle_requested && controls.send != SendScope::AllAll {
-        return Err(authorization_forbidden(
-            "send.deliver",
+    // MVP target resolution is same-bundle only; cross-bundle target selection
+    // is not part of the current runtime contract.
+    authorize_scope(
+        controls.send.into(),
+        ScopeRequirement::Any,
+        AuthorizationDecisionContext {
+            capability: "send.deliver",
             requester_session,
-            bundle.bundle_name.as_str(),
-            "send policy scope does not allow cross-bundle delivery",
-            None,
-            Some(target_sessions),
-            None,
-        ));
-    }
-    let _send_scope = controls.send;
-    Ok(())
+            bundle_name: bundle.bundle_name.as_str(),
+            reason: "send policy scope does not allow delivery",
+            target_session: None,
+            targets: Some(target_sessions),
+        },
+    )
 }
 
 fn authorize_look(
@@ -1078,17 +1137,48 @@ fn authorize_look(
         return Ok(());
     }
     let controls = controls_for_requester(authorization, bundle, requester_session)?;
-    match controls.look {
-        GeneralScope::AllHome | GeneralScope::AllAll => Ok(()),
-        GeneralScope::SelfOnly | GeneralScope::None => Err(authorization_forbidden(
-            "look.inspect",
+    authorize_scope(
+        controls.look.into(),
+        ScopeRequirement::NonSelf,
+        AuthorizationDecisionContext {
+            capability: "look.inspect",
             requester_session,
-            bundle.bundle_name.as_str(),
-            "look policy scope permits self-only inspection",
-            Some(target_session),
-            None,
-            None,
-        )),
+            bundle_name: bundle.bundle_name.as_str(),
+            reason: "look policy scope permits self-only inspection",
+            target_session: Some(target_session),
+            targets: None,
+        },
+    )
+}
+
+fn authorize_scope(
+    scope: AuthorizationScope,
+    requirement: ScopeRequirement,
+    context: AuthorizationDecisionContext<'_>,
+) -> Result<(), RelayError> {
+    if scope_allows_requirement(scope, requirement) {
+        return Ok(());
+    }
+    Err(authorization_forbidden(
+        context.capability,
+        context.requester_session,
+        context.bundle_name,
+        context.reason,
+        context.target_session,
+        context.targets,
+        None,
+    ))
+}
+
+fn scope_allows_requirement(scope: AuthorizationScope, requirement: ScopeRequirement) -> bool {
+    match requirement {
+        ScopeRequirement::Any => !matches!(scope, AuthorizationScope::None),
+        ScopeRequirement::NonSelf => {
+            matches!(
+                scope,
+                AuthorizationScope::AllHome | AuthorizationScope::AllAll
+            )
+        }
     }
 }
 

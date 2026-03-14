@@ -36,6 +36,17 @@
       - queued
       - delivered
       - timeout/failed
+- [ ] 1.8 Integrate authorization-policy controls for `do` modes:
+      - enforce capability mapping for `do.list`, `do.show`, `do.run`
+      - evaluate requester policy using shared scope semantics
+        (`none` | `self` | `all:home` | `all:all`)
+      - keep MVP self-target-only behavior for `do run`
+      - treat `all:home` / `all:all` as reserved non-operative for current
+        MVP run targeting contract
+- [ ] 1.9 Enforce missing `do` action control entry as `none` at runtime:
+      - if action id has no explicit `do` scope entry, deny `do run`
+      - return canonical `authorization_forbidden` details payload
+      - preserve validation-first precedence
 
 ## 2. Testing
 
@@ -57,6 +68,12 @@
       - forced async for self-run
       - rejecting target selector fields in MVP
       - canonical run acceptance payload fields
+- [ ] 2.4 Add authorization-focused `do` tests for:
+      - deny when `do.<action>` is missing (implicit `none`)
+      - deny when `do.<action> = none`
+      - allow when `do.<action> = self` for self-run mode
+      - reserved/non-operative handling for `all:home` / `all:all`
+      - canonical `authorization_forbidden` detail fields
 
 ## 3. Validation
 

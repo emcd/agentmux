@@ -7,9 +7,9 @@ fn parses_local_target_identifier() {
 }
 
 #[test]
-fn parses_same_bundle_qualified_target_identifier() {
-    let resolved = parse_tui_target_identifier("agentmux/relay", "agentmux").expect("target");
-    assert_eq!(resolved, "relay");
+fn rejects_slash_qualified_target_identifier() {
+    let error = parse_tui_target_identifier("agentmux/relay", "agentmux").expect_err("must reject");
+    assert!(error.to_string().contains("validation_unknown_target"));
 }
 
 #[test]
@@ -19,19 +19,15 @@ fn parses_at_prefixed_target_identifier() {
 }
 
 #[test]
-fn rejects_cross_bundle_qualified_target_identifier() {
-    let error = parse_tui_target_identifier("other/relay", "agentmux").expect_err("must reject");
-    assert!(
-        error
-            .to_string()
-            .contains("validation_cross_bundle_unsupported")
-    );
+fn merges_to_field_into_deterministic_targets() {
+    let targets = merge_tui_targets("relay, mcp, tui", "agentmux").expect("targets");
+    assert_eq!(targets, vec!["relay", "mcp", "tui"]);
 }
 
 #[test]
-fn merges_to_field_into_deterministic_targets() {
-    let targets = merge_tui_targets("relay, mcp, agentmux/mcp, tui", "agentmux").expect("targets");
-    assert_eq!(targets, vec!["relay", "mcp", "tui"]);
+fn merge_rejects_slash_qualified_target() {
+    let error = merge_tui_targets("relay, agentmux/mcp", "agentmux").expect_err("must fail");
+    assert!(error.to_string().contains("validation_unknown_target"));
 }
 
 #[test]

@@ -66,3 +66,6 @@ operations where synchronous waiting can deadlock.
 - Generic dynamic `agentmux help` subcommand/tool built on top of `do`
   show metadata.
 - Optional parameterized action payloads beyond simple prompt templates.
+- Reuse shared authorization scope evaluator from
+  `add-authorization-policy-mvp` for `do.list` / `do.show` / `do.run`
+  including implicit-missing-entry => `none` behavior.

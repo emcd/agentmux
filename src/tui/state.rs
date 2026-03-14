@@ -617,10 +617,9 @@ fn wrap_index(index: usize, delta: isize, len: usize) -> usize {
 ///
 /// Accepted forms:
 /// - local: `<session-id>`
-/// - qualified: `<bundle-id>/<session-id>` (same-bundle only in MVP)
 pub fn parse_tui_target_identifier(
     identifier: &str,
-    associated_bundle: &str,
+    _associated_bundle: &str,
 ) -> Result<String, RuntimeError> {
     let trimmed = identifier.trim().trim_start_matches('@');
     if trimmed.is_empty() {
@@ -629,29 +628,13 @@ pub fn parse_tui_target_identifier(
             "target identifier must be non-empty",
         ));
     }
-
-    let Some((candidate_bundle, candidate_session)) = trimmed.split_once('/') else {
-        return Ok(trimmed.to_string());
-    };
-
-    if candidate_bundle.is_empty()
-        || candidate_session.is_empty()
-        || candidate_session.contains('/')
-    {
+    if trimmed.contains('/') {
         return Err(RuntimeError::validation(
             "validation_unknown_target",
-            format!("target identifier '{trimmed}' is invalid"),
+            format!("target identifier '{trimmed}' is invalid; use session id only"),
         ));
     }
-
-    if candidate_bundle != associated_bundle {
-        return Err(RuntimeError::validation(
-            "validation_cross_bundle_unsupported",
-            "cross-bundle targets are unsupported in TUI MVP",
-        ));
-    }
-
-    Ok(candidate_session.to_string())
+    Ok(trimmed.to_string())
 }
 
 /// Merges the To recipient field into a deterministic target set.
