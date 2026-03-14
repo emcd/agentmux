@@ -42,19 +42,20 @@ Descriptor fields SHALL be:
   - optional `prompt-idle-column`
 - `[coders.acp]`:
   - required `channel` (`stdio` | `http`)
-  - optional `session-mode` (`new` | `load`, default `new`)
   - for `channel = "stdio"`:
     - required `command`
-    - optional `args` (`string[]`)
-    - optional `env` entries (`name`, `value`)
   - for `channel = "http"`:
     - required `url`
     - optional `headers` entries (`name`, `value`)
 
-Session constraints:
+ACP lifecycle selection constraints:
 
-- if referenced coder uses ACP with `session-mode = "load"`, session SHALL
-  provide `coder-session-id`.
+- if ACP-backed session includes `coder-session-id`, runtime SHALL call
+  `session/load` for that session.
+- if ACP-backed session omits `coder-session-id`, runtime SHALL call
+  `session/new` for that session.
+- if ACP `session/load` fails, runtime SHALL fail that session operation and
+  SHALL NOT silently fall back to ACP `session/new` in the same operation.
 
 Routing and delivery SHALL use session `id` values.
 Bundle identity SHALL be derived from bundle filename (`<bundle-id>.toml`).
@@ -105,11 +106,19 @@ Bundle identity SHALL be derived from bundle filename (`<bundle-id>.toml`).
 - **WHEN** a coder defines both `[coders.tmux]` and `[coders.acp]`
 - **THEN** the system rejects configuration with a validation error
 
-#### Scenario: Reject ACP load mode without session identity
+#### Scenario: Select ACP session load when session identity is present
 
-- **WHEN** a session references an ACP coder with `session-mode = "load"`
-- **AND** the session omits `coder-session-id`
-- **THEN** the system rejects configuration with a validation error
+- **WHEN** a session references an ACP coder
+- **AND** the session includes `coder-session-id`
+- **THEN** runtime selects ACP `session/load` for that session.
+
+#### Scenario: Fail fast when ACP session load fails
+
+- **WHEN** runtime selects ACP `session/load` for a session
+- **AND** the ACP `session/load` call returns an error
+- **THEN** runtime fails the session operation
+- **AND** runtime does not call ACP `session/new` as fallback in the same
+  operation.
 
 #### Scenario: Reject ACP stdio channel without command
 

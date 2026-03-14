@@ -19,6 +19,8 @@ represents a separate non-coder session category.
   - unique session IDs,
   - unique optional session names,
   - rejection of unknown coder references.
+- Define ACP lifecycle selection from session identity state (`coder-session-id`)
+  with fail-fast load behavior.
 
 ## Non-Goals
 
@@ -73,19 +75,20 @@ For `[coders.tmux]`:
 For `[coders.acp]`:
 
 - required: `channel` (`stdio` | `http`)
-- optional: `session-mode` (`new` | `load`, default `new`)
 - for `channel = "stdio"`:
-  - required: `command`
-  - optional: `args`
-  - optional: `env[]`
+  - required: `command` (string command template)
 - for `channel = "http"`:
   - required: `url`
   - optional: `headers[]`
 
-Session constraint:
+Session/routing constraints:
 
-- if referenced coder has `session-mode = "load"`, session SHALL provide
-  `coder-session-id`.
+- if session includes `coder-session-id`, ACP runtime SHALL use `session/load`.
+- if session omits `coder-session-id`, ACP runtime SHALL use `session/new`.
+- if ACP `session/load` fails, runtime SHALL fail fast and SHALL NOT silently
+  fall back to ACP `session/new` in the same operation.
+
+This keeps identity ownership explicit and prevents accidental context forks.
 
 ## Alternatives Considered
 
@@ -99,6 +102,12 @@ Session constraint:
 - Pros: explicit discriminator field.
 - Cons: extra indirection and mismatch risk between class and nested tables.
 
+3. ACP `session-mode` enum in config (`new` | `load`).
+
+- Pros: explicit operator control.
+- Cons: duplicates session identity signal already present via
+  `coder-session-id`; increases configuration drift risk.
+
 ## Schema Version Strategy
 
 This proposal uses `format-version = 2` as a clean break for coder-target
@@ -110,3 +119,5 @@ modeling. Earlier versions are validation errors under this contract.
 - Session-to-coder validation becomes more central and must produce clear
   diagnostics.
 - ACP runtime parity work remains follow-up implementation.
+- ACP `look` parity remains out of scope in this change and requires separate
+  contract work.
