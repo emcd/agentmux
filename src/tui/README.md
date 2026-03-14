@@ -7,7 +7,8 @@ This module provides the interactive `agentmux tui` workbench.
 - recipient discovery from relay `list` responses,
 - explicit `To` recipient field with deterministic target parsing,
 - async-only send behavior with local pending-delivery tracking,
-- recipient completion via `Ctrl+Space`,
+- recipient completion via context-sensitive `Tab` plus `Ctrl+Space`,
+- `@`-prefixed tokens trigger immediate completion proposals after one suffix character,
 - recipient picker overlay (`F2`),
 - delivery events overlay (`F3`),
 - send workflow via relay `chat` (`Ctrl+S`),
@@ -17,8 +18,10 @@ This module provides the interactive `agentmux tui` workbench.
 ## Keybindings
 
 - `Esc` / `Ctrl+Q`: quit
-- `Tab` / `Shift+Tab`: cycle field focus (`To` <-> `Message`)
-- `Ctrl+Space`: autocomplete recipient in `To`
+- `Tab`: in `To`, cycle/start completion when applicable; otherwise move focus
+- `Shift+Tab`: cycle field focus backward (`To` <-> `Message`)
+- `Ctrl+Space`: cycle/start completion in `To`
+- `Enter`: accept active completion proposal in `To`
 - `F2`: open/close recipient picker overlay
 - `F3`: open/close events overlay
 - `Up` / `Down`: move recipient selection in picker overlay

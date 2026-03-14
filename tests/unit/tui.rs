@@ -13,6 +13,12 @@ fn parses_same_bundle_qualified_target_identifier() {
 }
 
 #[test]
+fn parses_at_prefixed_target_identifier() {
+    let resolved = parse_tui_target_identifier("@relay", "agentmux").expect("target");
+    assert_eq!(resolved, "relay");
+}
+
+#[test]
 fn rejects_cross_bundle_qualified_target_identifier() {
     let error = parse_tui_target_identifier("other/relay", "agentmux").expect_err("must reject");
     assert!(
@@ -39,6 +45,13 @@ fn autocomplete_replaces_current_token_after_comma() {
     let candidates = vec!["relay".to_string(), "mcp".to_string(), "tui".to_string()];
     let completed = autocomplete_recipient_input("relay, tu", &candidates).expect("completion");
     assert_eq!(completed, "relay, tui");
+}
+
+#[test]
+fn autocomplete_strips_at_prefix_from_current_token() {
+    let candidates = vec!["relay".to_string(), "mcp".to_string(), "tui".to_string()];
+    let completed = autocomplete_recipient_input("@tu", &candidates).expect("completion");
+    assert_eq!(completed, "tui");
 }
 
 #[test]

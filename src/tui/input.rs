@@ -55,11 +55,19 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
         KeyCode::F(3) => state.toggle_events_overlay(),
         KeyCode::BackTab => state.cycle_focus_backward(),
         KeyCode::Tab => {
-            if matches!(state.focus, FocusField::To | FocusField::Message) {
+            if state.focus == FocusField::To {
+                if !state.handle_tab_in_to_field() {
+                    state.cycle_focus_forward();
+                }
+            } else if state.focus == FocusField::Message {
                 state.cycle_focus_forward();
             }
         }
-        KeyCode::Enter => state.insert_newline_if_message(),
+        KeyCode::Enter => {
+            if !state.accept_active_to_completion() {
+                state.insert_newline_if_message();
+            }
+        }
         KeyCode::Backspace => state.backspace(),
         KeyCode::Char(character)
             if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>

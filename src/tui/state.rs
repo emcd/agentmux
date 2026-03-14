@@ -18,6 +18,22 @@ const MAX_STATUS_HISTORY: usize = 6;
 const MAX_EVENT_HISTORY: usize = 64;
 
 #[derive(Clone, Debug)]
+struct ToCompletionState {
+    token_start: usize,
+    leading_ws: usize,
+    candidates: Vec<String>,
+    candidate_index: usize,
+}
+
+#[derive(Clone, Debug)]
+struct RecipientTokenContext {
+    token_start: usize,
+    leading_ws: usize,
+    query: String,
+    at_prefixed: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct TuiLaunchOptions {
     pub bundle_name: String,
     pub sender_session: String,
@@ -58,6 +74,8 @@ pub(crate) struct AppState {
     pub status_history: VecDeque<StatusEntry>,
     pub event_history: VecDeque<String>,
     pending_delivery_ids: HashSet<String>,
+    to_completion: Option<ToCompletionState>,
+    completion_locked_until_to_edit: bool,
     pub should_quit: bool,
 }
 
@@ -81,10 +99,12 @@ impl AppState {
             look_snapshot_lines: Vec::new(),
             status_history: VecDeque::from([StatusEntry {
                 code: None,
-                message: "Ready. Tab/Shift+Tab focus, Ctrl+Space autocomplete, Ctrl+S send, Ctrl+L look, Esc/Ctrl+Q quit.".to_string(),
+                message: "Ready. Tab complete/focus, Enter accept completion, Ctrl+Space cycle, Ctrl+S send, Ctrl+L look, Esc/Ctrl+Q quit.".to_string(),
             }]),
             event_history: VecDeque::new(),
             pending_delivery_ids: HashSet::new(),
+            to_completion: None,
+            completion_locked_until_to_edit: false,
             should_quit: false,
         }
     }
@@ -217,6 +237,7 @@ impl AppState {
             FocusField::To => FocusField::Message,
             FocusField::Message => FocusField::To,
         };
+        self.clear_to_completion();
     }
 
     pub fn cycle_focus_backward(&mut self) {
@@ -224,11 +245,16 @@ impl AppState {
             FocusField::To => FocusField::Message,
             FocusField::Message => FocusField::To,
         };
+        self.clear_to_completion();
     }
 
     pub fn insert_character(&mut self, character: char) {
         match self.focus {
-            FocusField::To => self.to_field.push(character),
+            FocusField::To => {
+                self.to_field.push(character);
+                self.on_to_field_edited();
+                self.maybe_autocomplete_at_prefixed_token();
+            }
             FocusField::Message => self.message_field.push(character),
         }
     }
@@ -243,6 +269,8 @@ impl AppState {
         match self.focus {
             FocusField::To => {
                 self.to_field.pop();
+                self.on_to_field_edited();
+                self.maybe_autocomplete_at_prefixed_token();
             }
             FocusField::Message => {
                 self.message_field.pop();
@@ -257,19 +285,144 @@ impl AppState {
     }
 
     pub fn autocomplete_active_recipient_field(&mut self) {
+        if self.focus != FocusField::To {
+            return;
+        }
+        let _ = self.cycle_or_start_to_completion();
+    }
+
+    pub fn handle_tab_in_to_field(&mut self) -> bool {
+        if self.completion_locked_until_to_edit {
+            return false;
+        }
+        self.cycle_or_start_to_completion()
+    }
+
+    pub fn accept_active_to_completion(&mut self) -> bool {
+        if self.focus != FocusField::To {
+            return false;
+        }
+        if self.to_completion.is_none() {
+            return false;
+        }
+        self.to_completion = None;
+        self.completion_locked_until_to_edit = true;
+        true
+    }
+
+    fn cycle_or_start_to_completion(&mut self) -> bool {
+        if self.focus != FocusField::To {
+            return false;
+        }
+
+        if let Some((token_start, leading_ws, candidate)) =
+            self.to_completion.as_mut().and_then(|state| {
+                if state.candidates.is_empty() {
+                    return None;
+                }
+                state.candidate_index = (state.candidate_index + 1) % state.candidates.len();
+                Some((
+                    state.token_start,
+                    state.leading_ws,
+                    state
+                        .candidates
+                        .get(state.candidate_index)
+                        .cloned()
+                        .unwrap_or_default(),
+                ))
+            })
+        {
+            self.apply_to_completion_candidate(token_start, leading_ws, &candidate);
+            return true;
+        }
+
+        let context = current_recipient_token_context(&self.to_field);
+        let Some(context) = context else {
+            return false;
+        };
+        if context.query.is_empty() {
+            return false;
+        }
+
         let candidates = self
             .recipients
             .iter()
             .map(|recipient| recipient.session_name.clone())
             .collect::<Vec<_>>();
-        match self.focus {
-            FocusField::To => {
-                if let Some(next) = autocomplete_recipient_input(&self.to_field, &candidates) {
-                    self.to_field = next;
-                }
-            }
-            FocusField::Message => {}
+        let matched = matching_recipient_candidates(&context.query, &candidates);
+        if matched.is_empty() {
+            return false;
         }
+
+        let candidate = matched.first().cloned().unwrap_or_default();
+        self.apply_to_completion_candidate(context.token_start, context.leading_ws, &candidate);
+        self.to_completion = Some(ToCompletionState {
+            token_start: context.token_start,
+            leading_ws: context.leading_ws,
+            candidates: matched,
+            candidate_index: 0,
+        });
+        true
+    }
+
+    fn on_to_field_edited(&mut self) {
+        self.to_completion = None;
+        self.completion_locked_until_to_edit = false;
+    }
+
+    fn maybe_autocomplete_at_prefixed_token(&mut self) {
+        if self.focus != FocusField::To {
+            return;
+        }
+        let Some(context) = current_recipient_token_context(&self.to_field) else {
+            return;
+        };
+        if !context.at_prefixed || context.query.is_empty() {
+            return;
+        }
+
+        let candidates = self
+            .recipients
+            .iter()
+            .map(|recipient| recipient.session_name.clone())
+            .collect::<Vec<_>>();
+        let matched = matching_recipient_candidates(&context.query, &candidates);
+        if matched.is_empty() {
+            return;
+        }
+        let candidate = matched.first().cloned().unwrap_or_default();
+        self.apply_to_completion_candidate(context.token_start, context.leading_ws, &candidate);
+        self.to_completion = Some(ToCompletionState {
+            token_start: context.token_start,
+            leading_ws: context.leading_ws,
+            candidates: matched,
+            candidate_index: 0,
+        });
+    }
+
+    fn apply_to_completion_candidate(
+        &mut self,
+        token_start: usize,
+        leading_ws: usize,
+        candidate: &str,
+    ) {
+        let token_slice = &self.to_field[token_start..];
+        let raw_token = token_slice
+            .split(',')
+            .next()
+            .map(str::trim_end)
+            .unwrap_or(token_slice);
+        let token_end = token_start + raw_token.len();
+
+        let mut next = String::from(&self.to_field[..token_start]);
+        next.push_str(&raw_token[..leading_ws.min(raw_token.len())]);
+        next.push_str(candidate);
+        next.push_str(&self.to_field[token_end..]);
+        self.to_field = next;
+    }
+
+    fn clear_to_completion(&mut self) {
+        self.to_completion = None;
     }
 
     pub fn send_message(&mut self) -> Result<(), RuntimeError> {
@@ -469,7 +622,7 @@ pub fn parse_tui_target_identifier(
     identifier: &str,
     associated_bundle: &str,
 ) -> Result<String, RuntimeError> {
-    let trimmed = identifier.trim();
+    let trimmed = identifier.trim().trim_start_matches('@');
     if trimmed.is_empty() {
         return Err(RuntimeError::validation(
             "validation_unknown_target",
@@ -532,6 +685,29 @@ pub fn merge_tui_targets(
 
 /// Completes the current recipient token from a list of candidate identities.
 pub fn autocomplete_recipient_input(field_value: &str, candidates: &[String]) -> Option<String> {
+    let context = current_recipient_token_context(field_value)?;
+    let selected = matching_recipient_candidates(&context.query, candidates)
+        .first()
+        .cloned()?;
+
+    let mut next = String::from(&field_value[..context.token_start]);
+    let token_slice = &field_value[context.token_start..];
+    next.push_str(&token_slice[..context.leading_ws]);
+    next.push_str(selected.as_str());
+    Some(next)
+}
+
+fn matching_recipient_candidates(query: &str, candidates: &[String]) -> Vec<String> {
+    let mut matched = candidates
+        .iter()
+        .filter(|candidate| query.is_empty() || candidate.starts_with(query))
+        .cloned()
+        .collect::<Vec<_>>();
+    matched.sort_unstable();
+    matched
+}
+
+fn current_recipient_token_context(field_value: &str) -> Option<RecipientTokenContext> {
     let token_start = field_value.rfind(',').map(|index| index + 1).unwrap_or(0);
     let token_slice = &field_value[token_start..];
     let leading_ws = token_slice
@@ -544,20 +720,23 @@ pub fn autocomplete_recipient_input(field_value: &str, candidates: &[String]) ->
             }
         })
         .unwrap_or(token_slice.len());
-    let prefix = token_slice[leading_ws..].trim();
+    let token_text = token_slice[leading_ws..].trim().to_string();
+    if token_text.is_empty() {
+        return None;
+    }
 
-    let mut candidate_values = candidates
-        .iter()
-        .map(|candidate| candidate.as_str())
-        .filter(|candidate| prefix.is_empty() || candidate.starts_with(prefix))
-        .collect::<Vec<_>>();
-    candidate_values.sort_unstable();
-    let selected = candidate_values.first().copied()?;
+    let (at_prefixed, query) = if let Some(rest) = token_text.strip_prefix('@') {
+        (true, rest.to_string())
+    } else {
+        (false, token_text.clone())
+    };
 
-    let mut next = String::from(&field_value[..token_start]);
-    next.push_str(&token_slice[..leading_ws]);
-    next.push_str(selected);
-    Some(next)
+    Some(RecipientTokenContext {
+        token_start,
+        leading_ws,
+        query,
+        at_prefixed,
+    })
 }
 
 pub(crate) fn append_recipient_token(field_value: &str, recipient: &str) -> String {

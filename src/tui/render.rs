@@ -102,11 +102,12 @@ fn render_compose(frame: &mut Frame, area: Rect, state: &AppState) {
         lines.push(Line::from("…"));
     }
 
-    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title("Compose (Tab/Shift+Tab focus, Ctrl+Space autocomplete, Ctrl+S send)"),
-    );
+    let paragraph =
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(Block::default().borders(Borders::ALL).title(
+            "Compose (Tab complete/focus, Enter accept completion, Ctrl+Space cycle, Ctrl+S send)",
+        ));
     frame.render_widget(paragraph, area);
 }
 
