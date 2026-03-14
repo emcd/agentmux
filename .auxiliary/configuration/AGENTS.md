@@ -134,15 +134,29 @@ Use `openspec/AGENTS.md` to learn:
   - `issues/`
   - `todos/`
   - `ideas/`
+
+### Handoff Notes
+
 - Use `coordination/<component>` as the active handoff lane for each owner
   (for example `coordination/relay`, `coordination/mcp`, `coordination/tui`).
 - Keep one rolling handoff note per component and update it in place instead of
   creating a new note for each checkpoint.
 - Use `coordination/general` for coordinator-wide state and cross-component
   snapshots.
+- Minimize handoff churn: prefer updates for meaningful lane-state changes and
+  pre-compaction checkpoints, not routine micro-status noise.
 - For cross-component notes, apply multiple `#component-*` tags.
 - Prefer pruning stale/superseded coordination checkpoints while preserving the
   current per-component handoff context.
+
+### OpenSpec Draft Notes
+
+- Keep handoff notes and OpenSpec drafts separate.
+- Write OpenSpec proposal drafts in fresh notes (new note ids).
+- Do not overwrite, compact, or repurpose rolling handoff notes for proposal
+  text.
+- Keep proposal review iteration in the draft note (or a new draft note when
+  scope changes materially), while handoff notes remain stable.
 
 ## Team Topology and Roles
 
