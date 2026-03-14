@@ -12,11 +12,11 @@
       - required `initial-command`
       - required `resume-command`
       - optional prompt-readiness keys
-- [ ] 1.5 Update ACP coder descriptor parsing/validation in `[coders.acp]`:
+- [x] 1.5 Update ACP coder descriptor parsing/validation in `[coders.acp]`:
       - `channel = "stdio" | "http"`
       - stdio requires `command` (string command template)
       - http requires `url`
-- [ ] 1.6 Remove ACP `session-mode` config dependency and validate lifecycle
+- [x] 1.6 Remove ACP `session-mode` config dependency and validate lifecycle
       selection by session identity state:
       - session with `coder-session-id` selects ACP `session/load`
       - session without `coder-session-id` selects ACP `session/new`
@@ -28,10 +28,10 @@
 
 ## 2. Runtime Follow-Up
 
-- [ ] 2.1 Introduce coder-target abstraction (`tmux`, `acp`) in runtime paths.
-- [ ] 2.2 Preserve existing tmux behavior under tmux coder target.
-- [ ] 2.3 Add ACP adapter spike for lifecycle and prompt-turn mapping.
-- [ ] 2.4 Implement ACP lifecycle selector and failure semantics:
+- [x] 2.1 Introduce coder-target abstraction (`tmux`, `acp`) in runtime paths.
+- [x] 2.2 Preserve existing tmux behavior under tmux coder target.
+- [x] 2.3 Add ACP adapter spike for lifecycle and prompt-turn mapping.
+- [x] 2.4 Implement ACP lifecycle selector and failure semantics:
       - `coder-session-id` present -> call `session/load`
       - `coder-session-id` absent -> call `session/new`
       - on load failure, fail fast and do not fallback to `session/new`
@@ -40,9 +40,9 @@
 
 - [x] 3.1 Add unit tests for coder target one-of validation.
 - [x] 3.2 Add tests for missing/multiple coder target tables.
-- [ ] 3.3 Add tests for ACP stdio string command requirements:
+- [x] 3.3 Add tests for ACP stdio string command requirements:
       - reject missing `command`
-- [ ] 3.4 Add tests for ACP lifecycle selection and load failure behavior:
+- [x] 3.4 Add tests for ACP lifecycle selection and load failure behavior:
       - with `coder-session-id` runtime chooses `session/load`
       - without `coder-session-id` runtime chooses `session/new`
       - load failure does not fallback to `session/new`

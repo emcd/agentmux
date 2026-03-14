@@ -732,7 +732,7 @@ coder = "acp"
 }
 
 #[test]
-fn rejects_acp_load_mode_without_coder_session_id() {
+fn allows_acp_session_without_coder_session_id() {
     let temporary = TempDir::new().expect("temporary");
     let root = write_config(
         &temporary,
@@ -745,7 +745,6 @@ id = "acp"
 
 [coders.acp]
 channel = "stdio"
-session-mode = "load"
 command = "acp-shell"
 "#,
         &format!(
@@ -762,11 +761,10 @@ coder = "acp"
         ),
     );
 
-    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
-    assert!(
-        err.to_string().contains("must set coder-session-id"),
-        "unexpected error: {err}"
-    );
+    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    assert_eq!(loaded.members.len(), 1);
+    assert_eq!(loaded.members[0].coder_session_id, None);
+    assert!(loaded.members[0].acp.is_some());
 }
 
 #[test]
@@ -790,7 +788,6 @@ id = "acp"
 
 [coders.acp]
 channel = "stdio"
-session-mode = "new"
 command = "acp-shell"
 "#,
         &format!(
@@ -818,6 +815,7 @@ coder = "acp"
     assert_eq!(loaded.members.len(), 2);
     assert!(loaded.members[0].start_command.is_some());
     assert!(loaded.members[1].start_command.is_none());
+    assert!(loaded.members[1].acp.is_some());
 }
 
 #[test]

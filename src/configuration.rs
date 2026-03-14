@@ -31,6 +31,13 @@ pub struct BundleMember {
     pub start_command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_readiness: Option<PromptReadinessTemplate>,
+    /// Optional persistent agent session handle sourced from
+    /// `[[sessions]].coder-session-id` (not from `[[coders]]`).
+    /// ACP delivery uses this to select `session/load` vs `session/new`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coder_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acp: Option<AcpTargetConfiguration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_id: Option<String>,
 }
@@ -43,6 +50,18 @@ pub struct PromptReadinessTemplate {
     pub inspect_lines: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_idle_cursor_column: Option<usize>,
+}
+
+/// ACP transport configuration for one bundle member.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct AcpTargetConfiguration {
+    pub channel: AcpChannel,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub headers: Vec<NameValueEntry>,
 }
 
 /// Configuration for one named bundle.
@@ -97,38 +116,25 @@ struct RawTmuxTarget {
 struct RawAcpTarget {
     channel: AcpChannel,
     #[serde(default)]
-    session_mode: Option<AcpSessionMode>,
-    #[serde(default)]
     command: Option<String>,
-    #[serde(default)]
-    args: Vec<String>,
-    #[serde(default)]
-    env: Vec<RawNameValueEntry>,
     #[serde(default)]
     url: Option<String>,
     #[serde(default)]
-    headers: Vec<RawNameValueEntry>,
+    headers: Vec<NameValueEntry>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
-struct RawNameValueEntry {
+pub struct NameValueEntry {
     name: String,
     value: String,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-enum AcpChannel {
+pub enum AcpChannel {
     Stdio,
     Http,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-enum AcpSessionMode {
-    New,
-    Load,
 }
 
 #[derive(Clone, Debug)]
@@ -153,7 +159,10 @@ struct TmuxTarget {
 
 #[derive(Clone, Debug)]
 struct AcpTarget {
-    session_mode: AcpSessionMode,
+    channel: AcpChannel,
+    command: Option<String>,
+    url: Option<String>,
+    headers: Vec<NameValueEntry>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -497,7 +506,7 @@ fn validate_loaded_configuration(
             .map(normalize_field)
             .filter(|value| !value.is_empty())
             .map(ToString::to_string);
-        let (start_command, prompt_readiness) = match &coder.target {
+        let (start_command, prompt_readiness, acp) = match &coder.target {
             CoderTarget::Tmux(target) => {
                 let command_template = if coder_session_id.is_some() {
                     target.resume_command.as_str()
@@ -512,21 +521,18 @@ fn validate_loaded_configuration(
                 )?;
                 let prompt_readiness =
                     prompt_readiness_from_tmux_target(target, coders_path, session_id)?;
-                (Some(start_command), prompt_readiness)
+                (Some(start_command), prompt_readiness, None)
             }
-            CoderTarget::Acp(target) => {
-                if matches!(target.session_mode, AcpSessionMode::Load) && coder_session_id.is_none()
-                {
-                    return Err(ConfigurationError::InvalidConfiguration {
-                        path: bundle_path.to_path_buf(),
-                        message: format!(
-                            "session '{}' references ACP load-mode coder '{}' and must set coder-session-id",
-                            session_id, coder_id
-                        ),
-                    });
-                }
-                (None, None)
-            }
+            CoderTarget::Acp(target) => (
+                None,
+                None,
+                Some(AcpTargetConfiguration {
+                    channel: target.channel,
+                    command: target.command.clone(),
+                    url: target.url.clone(),
+                    headers: target.headers.clone(),
+                }),
+            ),
         };
 
         members.push(BundleMember {
@@ -535,6 +541,8 @@ fn validate_loaded_configuration(
             working_directory: Some(session.directory.clone()),
             start_command,
             prompt_readiness,
+            coder_session_id: coder_session_id.map(ToString::to_string),
+            acp,
             policy_id,
         });
     }
@@ -768,8 +776,6 @@ fn validate_acp_target(
     coders_path: &Path,
     coder_id: &str,
 ) -> Result<AcpTarget, ConfigurationError> {
-    let session_mode = target.session_mode.unwrap_or(AcpSessionMode::New);
-
     match target.channel {
         AcpChannel::Stdio => {
             let Some(command) = target.command.as_deref() else {
@@ -802,7 +808,6 @@ fn validate_acp_target(
                     message: format!("coder '{}' ACP stdio target must not set headers", coder_id),
                 });
             }
-            validate_name_value_entries(&target.env, coders_path, coder_id, "env")?;
         }
         AcpChannel::Http => {
             let Some(url) = target.url.as_deref() else {
@@ -823,7 +828,7 @@ fn validate_acp_target(
                     ),
                 });
             }
-            if target.command.is_some() || !target.args.is_empty() || !target.env.is_empty() {
+            if target.command.is_some() {
                 return Err(ConfigurationError::InvalidConfiguration {
                     path: coders_path.to_path_buf(),
                     message: format!(
@@ -836,11 +841,16 @@ fn validate_acp_target(
         }
     }
 
-    Ok(AcpTarget { session_mode })
+    Ok(AcpTarget {
+        channel: target.channel,
+        command: target.command,
+        url: target.url,
+        headers: target.headers,
+    })
 }
 
 fn validate_name_value_entries(
-    entries: &[RawNameValueEntry],
+    entries: &[NameValueEntry],
     path: &Path,
     coder_id: &str,
     field_name: &str,

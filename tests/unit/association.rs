@@ -57,6 +57,8 @@ fn bundle_with_sessions(sessions: &[&str]) -> BundleConfiguration {
                 working_directory: None,
                 start_command: None,
                 prompt_readiness: None,
+                coder_session_id: None,
+                acp: None,
                 policy_id: None,
             })
             .collect(),
@@ -79,6 +81,8 @@ fn bundle_with_directories(
                     working_directory: Some((*directory).to_path_buf()),
                     start_command: None,
                     prompt_readiness: None,
+                    coder_session_id: None,
+                    acp: None,
                     policy_id: None,
                 },
             )

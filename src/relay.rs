@@ -767,11 +767,13 @@ fn reconcile_loaded_bundle(
     let configured_sessions = bundle
         .members
         .iter()
+        .filter(|member| member.start_command.is_some())
         .map(|member| member.id.clone())
         .collect::<HashSet<_>>();
     let mut missing = bundle
         .members
         .iter()
+        .filter(|member| member.start_command.is_some())
         .filter_map(|member| match session_exists(tmux_socket, &member.id) {
             Ok(true) => None,
             Ok(false) => Some(Ok(member.clone())),
