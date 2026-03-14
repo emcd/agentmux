@@ -56,6 +56,7 @@ name = "a"
 directory = "{}"
 coder = "codex"
 coder-session-id = "abc123"
+policy = "default"
 
 [[sessions]]
 id = "session-b"
@@ -77,6 +78,7 @@ coder = "shell"
         loaded.members[0].start_command.as_deref(),
         Some("codex resume abc123")
     );
+    assert_eq!(loaded.members[0].policy_id.as_deref(), Some("default"));
     let readiness = loaded.members[0]
         .prompt_readiness
         .as_ref()

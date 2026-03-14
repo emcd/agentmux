@@ -99,6 +99,23 @@ fn write_bundle_configuration(
         );
     }
     fs::write(config_root.join("coders.toml"), coders_toml).expect("write coders");
+    fs::write(
+        config_root.join("policies.toml"),
+        r#"
+format-version = 1
+default = "default"
+
+[[policies]]
+id = "default"
+
+[policies.controls]
+find = "self"
+list = "all:home"
+look = "self"
+send = "all:home"
+"#,
+    )
+    .expect("write policies");
 
     let mut bundle_toml = String::from("format-version = 1\n");
     for session in sessions {

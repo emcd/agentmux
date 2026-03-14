@@ -87,6 +87,23 @@ resume-command = "sh -lc 'exec sleep 45'"
 "#,
     )
     .expect("write coders file");
+    fs::write(
+        config_root.join("policies.toml"),
+        r#"
+format-version = 1
+default = "default"
+
+[[policies]]
+id = "default"
+
+[policies.controls]
+find = "self"
+list = "all:home"
+look = "all:home"
+send = "all:home"
+"#,
+    )
+    .expect("write policies file");
     let mut bundle_toml = String::from("format-version = 1\n");
     for session in sessions {
         bundle_toml.push_str(

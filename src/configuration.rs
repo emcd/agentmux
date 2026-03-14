@@ -31,6 +31,8 @@ pub struct BundleMember {
     pub start_command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_readiness: Option<PromptReadinessTemplate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_id: Option<String>,
 }
 
 /// Optional prompt-readiness template for one bundle member.
@@ -174,6 +176,8 @@ struct RawSession {
     coder: String,
     #[serde(default)]
     coder_session_id: Option<String>,
+    #[serde(default)]
+    policy: Option<String>,
 }
 
 /// Configuration load/validation failures.
@@ -487,6 +491,12 @@ fn validate_loaded_configuration(
             .as_deref()
             .map(normalize_field)
             .filter(|value| !value.is_empty());
+        let policy_id = session
+            .policy
+            .as_deref()
+            .map(normalize_field)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
         let (start_command, prompt_readiness) = match &coder.target {
             CoderTarget::Tmux(target) => {
                 let command_template = if coder_session_id.is_some() {
@@ -525,6 +535,7 @@ fn validate_loaded_configuration(
             working_directory: Some(session.directory.clone()),
             start_command,
             prompt_readiness,
+            policy_id,
         });
     }
 

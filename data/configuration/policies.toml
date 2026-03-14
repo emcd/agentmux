@@ -1,0 +1,13 @@
+# agentmux authorization policy presets
+format-version = 1
+default = "default"
+
+[[policies]]
+id = "default"
+description = "Conservative same-bundle policy."
+
+[policies.controls]
+find = "self"
+list = "all:home"
+look = "self"
+send = "all:home"

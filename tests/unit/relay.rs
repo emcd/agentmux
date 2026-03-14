@@ -19,6 +19,23 @@ resume-command = "sh -lc 'exec sleep 45'"
 "#,
     )
     .expect("write coders file");
+    std::fs::write(
+        root.join("policies.toml"),
+        r#"
+format-version = 1
+default = "default"
+
+[[policies]]
+id = "default"
+
+[policies.controls]
+find = "self"
+list = "all:home"
+look = "self"
+send = "all:home"
+"#,
+    )
+    .expect("write policies file");
     let body = r#"
 format-version = 1
 
@@ -56,6 +73,23 @@ resume-command = "sh -lc 'exec sleep 45'"
 "#,
     )
     .expect("write coders file");
+    std::fs::write(
+        root.join("policies.toml"),
+        r#"
+format-version = 1
+default = "default"
+
+[[policies]]
+id = "default"
+
+[policies.controls]
+find = "self"
+list = "all:home"
+look = "self"
+send = "all:home"
+"#,
+    )
+    .expect("write policies file");
     let body = r#"
 format-version = 1
 
@@ -66,6 +100,36 @@ directory = "/tmp"
 coder = "shell"
 "#;
     std::fs::write(bundles.join(format!("{name}.toml")), body).expect("write bundle file");
+    root
+}
+
+fn write_bundle_with_policy(
+    temporary: &TempDir,
+    name: &str,
+    bundle_body: &str,
+    policy_body: Option<&str>,
+) -> std::path::PathBuf {
+    let root = temporary.path().join("config");
+    let bundles = root.join("bundles");
+    std::fs::create_dir_all(&bundles).expect("create bundles directory");
+    std::fs::write(
+        root.join("coders.toml"),
+        r#"
+format-version = 1
+
+[[coders]]
+id = "shell"
+
+[coders.tmux]
+initial-command = "sh -lc 'exec sleep 45'"
+resume-command = "sh -lc 'exec sleep 45'"
+"#,
+    )
+    .expect("write coders file");
+    if let Some(policy_body) = policy_body {
+        std::fs::write(root.join("policies.toml"), policy_body).expect("write policies file");
+    }
+    std::fs::write(bundles.join(format!("{name}.toml")), bundle_body).expect("write bundle file");
     root
 }
 
@@ -355,4 +419,131 @@ fn look_rejects_unknown_target() {
     )
     .expect_err("look should fail");
     assert_eq!(response.code, "validation_unknown_target");
+}
+
+#[test]
+fn look_denies_same_bundle_non_self_target_under_default_self_scope() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    let tmux_socket = temporary.path().join("tmux.sock");
+    let response = handle_request(
+        RelayRequest::Look {
+            requester_session: "alpha".to_string(),
+            target_session: "bravo".to_string(),
+            lines: Some(3),
+            bundle_name: None,
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect_err("look should fail");
+    assert_eq!(response.code, "authorization_forbidden");
+    let details = response.details.expect("authorization details");
+    assert_eq!(details["capability"], "look.inspect");
+    assert_eq!(details["requester_session"], "alpha");
+    assert_eq!(details["bundle_name"], "party");
+    assert_eq!(details["target_session"], "bravo");
+}
+
+#[test]
+fn request_rejects_missing_policy_artifact() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle_with_policy(
+        &temporary,
+        "party",
+        r#"
+format-version = 1
+
+[[sessions]]
+id = "alpha"
+directory = "/tmp"
+coder = "shell"
+"#,
+        None,
+    );
+    let tmux_socket = temporary.path().join("tmux.sock");
+    let response = handle_request(
+        RelayRequest::List {
+            sender_session: Some("alpha".to_string()),
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect_err("request should fail");
+    assert_eq!(response.code, "validation_invalid_arguments");
+}
+
+#[test]
+fn request_rejects_invalid_policy_artifact() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle_with_policy(
+        &temporary,
+        "party",
+        r#"
+format-version = 1
+
+[[sessions]]
+id = "alpha"
+directory = "/tmp"
+coder = "shell"
+"#,
+        Some("not = [valid"),
+    );
+    let tmux_socket = temporary.path().join("tmux.sock");
+    let response = handle_request(
+        RelayRequest::List {
+            sender_session: Some("alpha".to_string()),
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect_err("request should fail");
+    assert_eq!(response.code, "validation_invalid_arguments");
+}
+
+#[test]
+fn request_rejects_unknown_session_policy_reference() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle_with_policy(
+        &temporary,
+        "party",
+        r#"
+format-version = 1
+
+[[sessions]]
+id = "alpha"
+directory = "/tmp"
+coder = "shell"
+policy = "missing"
+"#,
+        Some(
+            r#"
+format-version = 1
+default = "default"
+
+[[policies]]
+id = "default"
+
+[policies.controls]
+find = "self"
+list = "all:home"
+look = "self"
+send = "all:home"
+"#,
+        ),
+    );
+    let tmux_socket = temporary.path().join("tmux.sock");
+    let response = handle_request(
+        RelayRequest::List {
+            sender_session: Some("alpha".to_string()),
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect_err("request should fail");
+    assert_eq!(response.code, "validation_invalid_arguments");
 }

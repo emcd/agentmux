@@ -314,6 +314,23 @@ resume-command = "sh -lc 'exec sleep 45'"
 "#,
     )
     .expect("write coders config");
+    fs::write(
+        config_root.join("policies.toml"),
+        r#"
+format-version = 1
+default = "default"
+
+[[policies]]
+id = "default"
+
+[policies.controls]
+find = "self"
+list = "all:home"
+look = "self"
+send = "all:home"
+"#,
+    )
+    .expect("write policies config");
 
     let mut bundle = String::from("format-version = 1\n");
     for session in sessions {
@@ -742,6 +759,55 @@ async fn send_maps_unknown_sender_error_from_relay() {
     let response = harness.call_tool(2, "send", arguments).await;
 
     assert_eq!(error_code(&response), Some("validation_unknown_sender"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn send_maps_authorization_forbidden_error_from_relay() {
+    let runtime = TestRuntime::create();
+    let _relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("chat") => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "authorization_forbidden",
+                        "message": "request denied by authorization policy",
+                        "details": {
+                            "capability": "send.deliver",
+                            "requester_session": SENDER_SESSION,
+                            "bundle_name": BUNDLE_NAME,
+                            "reason": "send policy scope does not allow cross-bundle delivery",
+                            "targets": ["bravo"],
+                        },
+                    },
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let mut arguments = Map::new();
+    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments.insert(
+        "targets".to_string(),
+        Value::Array(vec![Value::String("bravo".to_string())]),
+    );
+    arguments.insert("broadcast".to_string(), Value::Bool(false));
+    let response = harness.call_tool(2, "send", arguments).await;
+
+    assert_eq!(error_code(&response), Some("authorization_forbidden"));
+    assert_eq!(
+        response["error"]["data"]["details"]["capability"],
+        "send.deliver"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

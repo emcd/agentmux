@@ -463,7 +463,7 @@ fn validate_look_request(params: &LookParams) -> Result<(), McpError> {
 }
 
 fn map_relay_error(error: RelayError) -> McpError {
-    if error.code.starts_with("validation_") {
+    if error.code.starts_with("validation_") || error.code == "authorization_forbidden" {
         return validation_tool_error(&error.code, &error.message, error.details);
     }
     internal_tool_error(&error.code, &error.message, error.details)

@@ -281,6 +281,23 @@ resume-command = "sh -lc 'exec sleep 45'"
 "#,
     )
     .expect("write coders config");
+    fs::write(
+        config_root.join("policies.toml"),
+        r#"
+format-version = 1
+default = "default"
+
+[[policies]]
+id = "default"
+
+[policies.controls]
+find = "self"
+list = "all:home"
+look = "self"
+send = "all:home"
+"#,
+    )
+    .expect("write policies config");
 
     let mut bundle = String::from("format-version = 1\n");
     for session in sessions {
@@ -318,6 +335,23 @@ resume-command = "sh -lc 'exec sleep 45'"
 "#,
     )
     .expect("write coders config");
+    fs::write(
+        config_root.join("policies.toml"),
+        r#"
+format-version = 1
+default = "default"
+
+[[policies]]
+id = "default"
+
+[policies.controls]
+find = "self"
+list = "all:home"
+look = "self"
+send = "all:home"
+"#,
+    )
+    .expect("write policies config");
 
     let mut bundle = String::from("format-version = 1\n");
     for (session, directory) in sessions {

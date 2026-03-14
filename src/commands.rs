@@ -219,15 +219,11 @@ fn run_agentmux_list(arguments: &[String]) -> Result<(), RuntimeError> {
     ensure_starter_configuration_layout(&roots.configuration_root)?;
     let bundle = load_bundle_configuration(&roots.configuration_root, &association.bundle_name)
         .map_err(map_bundle_load_error)?;
-    let sender_session = if parsed.sender_session.is_some() {
-        Some(resolve_sender_session(
-            &bundle,
-            &association.session_name,
-            &current_directory,
-        )?)
-    } else {
-        resolve_sender_session(&bundle, &association.session_name, &current_directory).ok()
-    };
+    let sender_session = Some(resolve_sender_session(
+        &bundle,
+        &association.session_name,
+        &current_directory,
+    )?);
     let paths = BundleRuntimePaths::resolve(&roots.state_root, &association.bundle_name)?;
     let response = request_relay(&paths.relay_socket, &RelayRequest::List { sender_session })
         .map_err(|source| map_relay_request_failure(&paths.relay_socket, source))?;
@@ -1424,7 +1420,7 @@ fn map_bundle_load_error(source: ConfigurationError) -> RuntimeError {
 }
 
 fn map_relay_error(error: RelayError) -> RuntimeError {
-    if error.code.starts_with("validation_") {
+    if error.code.starts_with("validation_") || error.code == "authorization_forbidden" {
         return RuntimeError::validation(error.code, error.message);
     }
     RuntimeError::io(

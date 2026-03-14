@@ -3,6 +3,7 @@
 use std::{
     collections::{HashMap, HashSet},
     ffi::OsStr,
+    fs,
     io::{self, BufRead, BufReader, Write},
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
@@ -50,6 +51,8 @@ const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delive
 const SEND_KEYS_CHUNK_BYTES: usize = 1024;
 const DEFAULT_LOOK_LINES: usize = 120;
 const MAX_LOOK_LINES: usize = 1000;
+const POLICIES_FILE: &str = "policies.toml";
+const POLICIES_FORMAT_VERSION: u32 = 1;
 
 /// Recipient metadata returned by `list`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -207,6 +210,82 @@ struct LookRequestContext {
 }
 
 #[derive(Clone, Debug)]
+struct AuthorizationContext {
+    controls_by_session: HashMap<String, PolicyControls>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GeneralScope {
+    None,
+    SelfOnly,
+    AllHome,
+    AllAll,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ListScope {
+    AllHome,
+    AllAll,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SendScope {
+    AllHome,
+    AllAll,
+}
+
+#[derive(Clone, Debug)]
+struct PolicyControls {
+    find: GeneralScope,
+    list: ListScope,
+    look: GeneralScope,
+    send: SendScope,
+    do_controls: HashMap<String, GeneralScope>,
+}
+
+impl PolicyControls {
+    fn conservative_default() -> Self {
+        Self {
+            find: GeneralScope::SelfOnly,
+            list: ListScope::AllHome,
+            look: GeneralScope::SelfOnly,
+            send: SendScope::AllHome,
+            do_controls: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct RawPoliciesFile {
+    format_version: u32,
+    #[serde(default)]
+    default: Option<String>,
+    #[serde(default)]
+    policies: Vec<RawPolicyPreset>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct RawPolicyPreset {
+    id: String,
+    #[serde(default, rename = "description")]
+    _description: Option<String>,
+    controls: RawPolicyControls,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct RawPolicyControls {
+    find: String,
+    list: String,
+    look: String,
+    send: String,
+    #[serde(default, rename = "do")]
+    do_controls: HashMap<String, String>,
+}
+
+#[derive(Clone, Debug)]
 struct AsyncDeliveryTask {
     bundle: BundleConfiguration,
     sender: crate::configuration::BundleMember,
@@ -274,8 +353,11 @@ pub fn handle_request(
     tmux_socket: &Path,
 ) -> Result<RelayResponse, RelayError> {
     let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
+    let authorization = load_authorization_context(configuration_root, &bundle)?;
     match request {
-        RelayRequest::List { sender_session } => Ok(handle_list(&bundle, sender_session)),
+        RelayRequest::List { sender_session } => {
+            handle_list(&bundle, &authorization, sender_session)
+        }
         RelayRequest::Chat {
             request_id,
             sender_session,
@@ -287,6 +369,7 @@ pub fn handle_request(
             quiescence_timeout_ms,
         } => handle_chat(
             &bundle,
+            &authorization,
             ChatRequestContext {
                 request_id,
                 sender_session,
@@ -306,6 +389,7 @@ pub fn handle_request(
             bundle_name: request_bundle_name,
         } => handle_look(
             &bundle,
+            &authorization,
             LookRequestContext {
                 requester_session,
                 target_session,
@@ -329,6 +413,7 @@ pub fn reconcile_bundle(
     tmux_socket: &Path,
 ) -> Result<ReconciliationReport, RelayError> {
     let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
+    let _authorization = load_authorization_context(configuration_root, &bundle)?;
     reconcile_loaded_bundle(&bundle, tmux_socket)
 }
 
@@ -349,11 +434,34 @@ pub fn shutdown_bundle_runtime(tmux_socket: &Path) -> Result<ShutdownReport, Rel
     Ok(report)
 }
 
-fn handle_list(bundle: &BundleConfiguration, sender_session: Option<String>) -> RelayResponse {
+fn handle_list(
+    bundle: &BundleConfiguration,
+    authorization: &AuthorizationContext,
+    sender_session: Option<String>,
+) -> Result<RelayResponse, RelayError> {
+    let sender_session = sender_session.ok_or_else(|| {
+        relay_error(
+            "validation_unknown_sender",
+            "sender_session is required for list authorization",
+            None,
+        )
+    })?;
+    let sender = bundle
+        .members
+        .iter()
+        .find(|member| member.id == sender_session)
+        .ok_or_else(|| {
+            relay_error(
+                "validation_unknown_sender",
+                "sender_session is not in bundle configuration",
+                Some(json!({"sender_session": sender_session})),
+            )
+        })?;
+    authorize_list(bundle, authorization, sender.id.as_str())?;
     let recipients = bundle
         .members
         .iter()
-        .filter(|member| Some(member.id.as_str()) != sender_session.as_deref())
+        .filter(|member| member.id != sender.id)
         .map(|member| Recipient {
             session_name: member.id.clone(),
             display_name: member.name.clone(),
@@ -375,16 +483,17 @@ fn handle_list(bundle: &BundleConfiguration, sender_session: Option<String>) -> 
             "relay.list.response",
             &json!({
                 "bundle_name": bundle_name,
-                "sender_session": sender_session,
+                "sender_session": sender.id,
                 "recipient_count": recipients.len(),
             }),
         );
     }
-    response
+    Ok(response)
 }
 
 fn handle_chat(
     bundle: &BundleConfiguration,
+    authorization: &AuthorizationContext,
     request: ChatRequestContext,
     tmux_socket: &Path,
 ) -> Result<RelayResponse, RelayError> {
@@ -464,6 +573,12 @@ fn handle_chat(
     } else {
         resolve_explicit_targets(bundle, &targets)?
     };
+    authorize_send(
+        bundle,
+        authorization,
+        sender.id.as_str(),
+        resolved_targets.as_slice(),
+    )?;
 
     let all_target_sessions = resolved_targets.clone();
     let batch_settings = prompt_batch_settings();
@@ -565,6 +680,7 @@ fn handle_chat(
 
 fn handle_look(
     bundle: &BundleConfiguration,
+    authorization: &AuthorizationContext,
     request: LookRequestContext,
     tmux_socket: &Path,
 ) -> Result<RelayResponse, RelayError> {
@@ -622,6 +738,12 @@ fn handle_look(
                 Some(json!({"target_session": target_session})),
             )
         })?;
+    authorize_look(
+        bundle,
+        authorization,
+        requester.id.as_str(),
+        target.id.as_str(),
+    )?;
 
     let pane_target =
         resolve_active_pane_target(tmux_socket, target.id.as_str()).map_err(|reason| {
@@ -672,6 +794,380 @@ fn handle_look(
         );
     }
     Ok(response)
+}
+
+fn load_authorization_context(
+    configuration_root: &Path,
+    bundle: &BundleConfiguration,
+) -> Result<AuthorizationContext, RelayError> {
+    let policies_path = configuration_root.join(POLICIES_FILE);
+    let policies_raw = fs::read_to_string(&policies_path).map_err(|source| {
+        relay_error(
+            "validation_invalid_arguments",
+            "failed to load authorization policy artifact",
+            Some(json!({
+                "path": policies_path.display().to_string(),
+                "cause": source.to_string(),
+            })),
+        )
+    })?;
+    let policies_file = toml::from_str::<RawPoliciesFile>(&policies_raw).map_err(|source| {
+        relay_error(
+            "validation_invalid_arguments",
+            "failed to parse authorization policy artifact",
+            Some(json!({
+                "path": policies_path.display().to_string(),
+                "cause": source.to_string(),
+            })),
+        )
+    })?;
+    if policies_file.format_version != POLICIES_FORMAT_VERSION {
+        return Err(relay_error(
+            "validation_invalid_arguments",
+            "authorization policy artifact has unsupported format-version",
+            Some(json!({
+                "path": policies_path.display().to_string(),
+                "format_version": policies_file.format_version,
+            })),
+        ));
+    }
+
+    let mut presets = HashMap::<String, PolicyControls>::new();
+    for policy in policies_file.policies {
+        let policy_id = normalize_policy_id(policy.id.as_str()).ok_or_else(|| {
+            relay_error(
+                "validation_invalid_arguments",
+                "policy id must be non-empty",
+                Some(json!({
+                    "path": policies_path.display().to_string(),
+                })),
+            )
+        })?;
+        if presets.contains_key(policy_id) {
+            return Err(relay_error(
+                "validation_invalid_arguments",
+                "authorization policy id must be unique",
+                Some(json!({
+                    "path": policies_path.display().to_string(),
+                    "policy_id": policy_id,
+                })),
+            ));
+        }
+        let controls = parse_policy_controls(policy.controls, policies_path.as_path(), policy_id)?;
+        presets.insert(policy_id.to_string(), controls);
+    }
+
+    let default_policy_id = policies_file
+        .default
+        .as_deref()
+        .and_then(normalize_policy_id)
+        .map(ToString::to_string);
+    if let Some(default_policy_id) = default_policy_id.as_deref()
+        && !presets.contains_key(default_policy_id)
+    {
+        return Err(relay_error(
+            "validation_invalid_arguments",
+            "authorization default policy references unknown policy id",
+            Some(json!({
+                "path": policies_path.display().to_string(),
+                "policy_id": default_policy_id,
+            })),
+        ));
+    }
+
+    let conservative_default = PolicyControls::conservative_default();
+    let mut controls_by_session = HashMap::with_capacity(bundle.members.len());
+    for member in &bundle.members {
+        let controls = resolve_session_policy_controls(
+            member,
+            &presets,
+            default_policy_id.as_deref(),
+            &conservative_default,
+            policies_path.as_path(),
+        )?;
+        controls_by_session.insert(member.id.clone(), controls.clone());
+    }
+    Ok(AuthorizationContext {
+        controls_by_session,
+    })
+}
+
+fn parse_policy_controls(
+    controls: RawPolicyControls,
+    policies_path: &Path,
+    policy_id: &str,
+) -> Result<PolicyControls, RelayError> {
+    let find = parse_general_scope(controls.find.as_str(), policies_path, policy_id, "find")?;
+    let list = parse_list_scope(controls.list.as_str(), policies_path, policy_id)?;
+    let look = parse_general_scope(controls.look.as_str(), policies_path, policy_id, "look")?;
+    let send = parse_send_scope(controls.send.as_str(), policies_path, policy_id)?;
+    let mut do_controls = HashMap::with_capacity(controls.do_controls.len());
+    for (action_id, scope_value) in controls.do_controls {
+        let action_id = action_id.trim();
+        if action_id.is_empty() {
+            return Err(relay_error(
+                "validation_invalid_arguments",
+                "do control action id must be non-empty",
+                Some(json!({
+                    "path": policies_path.display().to_string(),
+                    "policy_id": policy_id,
+                })),
+            ));
+        }
+        let scope = parse_general_scope(
+            scope_value.as_str(),
+            policies_path,
+            policy_id,
+            format!("do.{action_id}").as_str(),
+        )?;
+        do_controls.insert(action_id.to_string(), scope);
+    }
+    Ok(PolicyControls {
+        find,
+        list,
+        look,
+        send,
+        do_controls,
+    })
+}
+
+fn parse_general_scope(
+    raw: &str,
+    policies_path: &Path,
+    policy_id: &str,
+    control: &str,
+) -> Result<GeneralScope, RelayError> {
+    match raw.trim() {
+        "none" => Ok(GeneralScope::None),
+        "self" => Ok(GeneralScope::SelfOnly),
+        "all:home" => Ok(GeneralScope::AllHome),
+        "all:all" => Ok(GeneralScope::AllAll),
+        value => Err(relay_error(
+            "validation_invalid_arguments",
+            "authorization policy control uses unsupported scope value",
+            Some(json!({
+                "path": policies_path.display().to_string(),
+                "policy_id": policy_id,
+                "control": control,
+                "value": value,
+            })),
+        )),
+    }
+}
+
+fn parse_list_scope(
+    raw: &str,
+    policies_path: &Path,
+    policy_id: &str,
+) -> Result<ListScope, RelayError> {
+    match raw.trim() {
+        "all:home" => Ok(ListScope::AllHome),
+        "all:all" => Ok(ListScope::AllAll),
+        value => Err(relay_error(
+            "validation_invalid_arguments",
+            "authorization policy list control uses unsupported scope value",
+            Some(json!({
+                "path": policies_path.display().to_string(),
+                "policy_id": policy_id,
+                "control": "list",
+                "value": value,
+            })),
+        )),
+    }
+}
+
+fn parse_send_scope(
+    raw: &str,
+    policies_path: &Path,
+    policy_id: &str,
+) -> Result<SendScope, RelayError> {
+    match raw.trim() {
+        "all:home" => Ok(SendScope::AllHome),
+        "all:all" => Ok(SendScope::AllAll),
+        value => Err(relay_error(
+            "validation_invalid_arguments",
+            "authorization policy send control uses unsupported scope value",
+            Some(json!({
+                "path": policies_path.display().to_string(),
+                "policy_id": policy_id,
+                "control": "send",
+                "value": value,
+            })),
+        )),
+    }
+}
+
+fn resolve_session_policy_controls<'a>(
+    member: &crate::configuration::BundleMember,
+    presets: &'a HashMap<String, PolicyControls>,
+    default_policy_id: Option<&str>,
+    conservative_default: &'a PolicyControls,
+    policies_path: &Path,
+) -> Result<&'a PolicyControls, RelayError> {
+    if let Some(policy_id) = member.policy_id.as_deref().and_then(normalize_policy_id) {
+        return presets.get(policy_id).ok_or_else(|| {
+            relay_error(
+                "validation_invalid_arguments",
+                "session policy references unknown policy id",
+                Some(json!({
+                    "path": policies_path.display().to_string(),
+                    "session_id": member.id,
+                    "policy_id": policy_id,
+                })),
+            )
+        });
+    }
+    if let Some(default_policy_id) = default_policy_id {
+        return presets.get(default_policy_id).ok_or_else(|| {
+            relay_error(
+                "validation_invalid_arguments",
+                "authorization default policy references unknown policy id",
+                Some(json!({
+                    "path": policies_path.display().to_string(),
+                    "policy_id": default_policy_id,
+                })),
+            )
+        });
+    }
+    Ok(conservative_default)
+}
+
+fn authorize_list(
+    bundle: &BundleConfiguration,
+    authorization: &AuthorizationContext,
+    requester_session: &str,
+) -> Result<(), RelayError> {
+    let controls = controls_for_requester(authorization, bundle, requester_session)?;
+    match controls.list {
+        ListScope::AllHome | ListScope::AllAll => Ok(()),
+    }
+}
+
+fn authorize_send(
+    bundle: &BundleConfiguration,
+    authorization: &AuthorizationContext,
+    requester_session: &str,
+    target_sessions: &[String],
+) -> Result<(), RelayError> {
+    let controls = controls_for_requester(authorization, bundle, requester_session)?;
+    let cross_bundle_requested = target_sessions
+        .iter()
+        .any(|session_name| session_name.contains('/'));
+    if cross_bundle_requested && controls.send != SendScope::AllAll {
+        return Err(authorization_forbidden(
+            "send.deliver",
+            requester_session,
+            bundle.bundle_name.as_str(),
+            "send policy scope does not allow cross-bundle delivery",
+            None,
+            Some(target_sessions),
+            None,
+        ));
+    }
+    let _send_scope = controls.send;
+    Ok(())
+}
+
+fn authorize_look(
+    bundle: &BundleConfiguration,
+    authorization: &AuthorizationContext,
+    requester_session: &str,
+    target_session: &str,
+) -> Result<(), RelayError> {
+    if requester_session == target_session {
+        return Ok(());
+    }
+    let controls = controls_for_requester(authorization, bundle, requester_session)?;
+    match controls.look {
+        GeneralScope::AllHome | GeneralScope::AllAll => Ok(()),
+        GeneralScope::SelfOnly | GeneralScope::None => Err(authorization_forbidden(
+            "look.inspect",
+            requester_session,
+            bundle.bundle_name.as_str(),
+            "look policy scope permits self-only inspection",
+            Some(target_session),
+            None,
+            None,
+        )),
+    }
+}
+
+fn controls_for_requester<'a>(
+    authorization: &'a AuthorizationContext,
+    bundle: &BundleConfiguration,
+    requester_session: &str,
+) -> Result<&'a PolicyControls, RelayError> {
+    let controls = authorization
+        .controls_by_session
+        .get(requester_session)
+        .ok_or_else(|| {
+            relay_error(
+                "validation_unknown_sender",
+                "requester_session has no resolved policy controls",
+                Some(json!({
+                    "requester_session": requester_session,
+                    "bundle_name": bundle.bundle_name,
+                })),
+            )
+        })?;
+    let _ = controls.find;
+    let _ = controls.do_controls.len();
+    Ok(controls)
+}
+
+fn authorization_forbidden(
+    capability: &str,
+    requester_session: &str,
+    bundle_name: &str,
+    reason: &str,
+    target_session: Option<&str>,
+    targets: Option<&[String]>,
+    policy_rule_id: Option<&str>,
+) -> RelayError {
+    let mut details = json!({
+        "capability": capability,
+        "requester_session": requester_session,
+        "bundle_name": bundle_name,
+        "reason": reason,
+    });
+    if let Some(value) = target_session
+        && let Some(object) = details.as_object_mut()
+    {
+        object.insert(
+            "target_session".to_string(),
+            Value::String(value.to_string()),
+        );
+    }
+    if let Some(values) = targets
+        && !values.is_empty()
+        && let Some(object) = details.as_object_mut()
+    {
+        object.insert(
+            "targets".to_string(),
+            Value::Array(values.iter().cloned().map(Value::String).collect()),
+        );
+    }
+    if let Some(value) = policy_rule_id
+        && let Some(object) = details.as_object_mut()
+    {
+        object.insert(
+            "policy_rule_id".to_string(),
+            Value::String(value.to_string()),
+        );
+    }
+    relay_error(
+        "authorization_forbidden",
+        "request denied by authorization policy",
+        Some(details),
+    )
+}
+
+fn normalize_policy_id(value: &str) -> Option<&str> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    Some(value)
 }
 
 fn deliver_one_target(task: &AsyncDeliveryTask) -> Result<ChatResult, RelayError> {
