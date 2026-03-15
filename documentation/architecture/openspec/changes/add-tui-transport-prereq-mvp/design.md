@@ -1,59 +1,66 @@
 ## Context
 
 Current TUI behavior is send/look/list focused. The next milestone (history
-viewport) needs deterministic transport and identity contracts so inbound
-message display and delivery status updates are consistent across reconnects
-and error paths.
+viewport) needs deterministic TUI-side contracts for sender identity and status
+mapping. Relay stream protocol mechanics are intentionally split into an
+adjacent change.
 
 ## Goals
 
 - Lock one sender-resolution contract for `agentmux tui` startup.
-- Lock one structured relay->TUI event shape for history and delivery updates.
-- Preserve existing relay delivery semantics while mapping them into TUI-ready
-  statuses.
+- Lock CLI surface contract for `agentmux tui --sender` as precedence anchor.
+- Lock bare `agentmux` dispatch behavior (TTY => TUI, non-TTY => help + non-zero).
+- Lock TUI state mapping for delivery outcomes and reconnect behavior.
 - Keep MVP scope same-bundle and fail-fast.
 
 ## Non-Goals
 
 - Cross-bundle delivery/history implementation.
-- Backward-compat shim layers for alternate TUI event formats.
-- Durable relay event store in MVP.
+- Defining relay stream wire protocol in this change.
+- Defining relay polling API/cursor contracts in this change.
 
 ## Decisions
 
 - Decision: TUI sender identity resolution precedence is:
   1. CLI `--sender`
-  2. `tui.toml` sender default
-  3. runtime association fallback
-  4. explicit validation error when unresolved.
+  2. local testing override sender file
+     `.auxiliary/configuration/agentmux/overrides/tui.toml`
+     (debug/testing mode only)
+  3. normal config sender file `<config-root>/tui.toml`
+  4. runtime association fallback
+  5. explicit validation error when unresolved.
 
-- Decision: relay exposes a structured event retrieval flow for TUI with a
-  canonical event union for:
-  - `incoming_message`
-  - `delivery_outcome`
-
-- Decision: TUI maps transport states into one status vocabulary:
+- Decision: TUI delivery state vocabulary is fixed:
   - `accepted`: async enqueue accepted (from send ack)
   - `success`: terminal delivered outcome
   - `timeout`: terminal timeout outcome
   - `failed`: terminal failure outcome
+  - relay terminal `dropped_on_shutdown` maps to
+    `failed` with `reason_code=dropped_on_shutdown`.
 
 - Decision: reconnect/errors are explicit. No silent degrade behavior:
   - transport unavailability is surfaced as stable machine-readable errors,
   - same-bundle scope violations remain validation errors,
+  - reconnect starts fresh stream handling for MVP (no implicit local replay),
   - TUI does not silently switch bundle scope.
+
+- Decision: relay stream protocol and `hello` registration model are specified
+  in adjacent change `add-relay-stream-hello-transport-mvp`.
+
+- Decision: bare `agentmux` invocation dispatches by terminal context:
+  - interactive TTY with no subcommand starts TUI workflow,
+  - non-TTY with no subcommand prints help and exits non-zero.
 
 ## Risks / Trade-offs
 
-- Trade-off: adding relay event contract increases protocol surface before
-  history implementation, but prevents ad-hoc payload drift.
-- Risk: event stream backlog handling could become ambiguous.
-  Mitigation: define deterministic `since_event_id` + `limit` semantics.
+- Trade-off: splitting transport protocol into adjacent change increases
+  proposal count, but avoids mixing cross-cutting relay protocol decisions into
+  TUI-specific UX/state contracts.
 - Risk: sender precedence can confuse operators if undocumented.
   Mitigation: lock one precedence order in spec and CLI/TUI help text.
 
 ## Migration Plan
 
-1. Land this OpenSpec prerequisite change.
-2. Implement sender precedence and relay event plumbing.
-3. Implement `todos/tui/4` history viewport against locked contracts.
+1. Land this TUI-focused prerequisite change.
+2. Land adjacent relay stream/hello transport change.
+3. Implement `todos/tui/4` history viewport against both locked contracts.

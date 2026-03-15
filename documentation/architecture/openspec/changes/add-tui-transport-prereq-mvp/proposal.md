@@ -3,31 +3,36 @@
 ## Why
 
 Before implementing TUI chat history (`todos/tui/4`), we need explicit
-contracts for sender identity binding and relay-to-TUI delivery/update flow.
-Without that lock, history behavior can drift across CLI, relay, and TUI
-surfaces.
+TUI-facing contracts for sender identity resolution and history/delivery state
+presentation. Transport-stream mechanics are tracked in a dedicated adjacent
+change to keep this proposal focused.
 
 ## What Changes
 
-- Define TUI sender identity precedence for startup and runtime:
+- Define TUI sender identity precedence for startup/runtime:
   - CLI `--sender`
-  - `tui.toml` default sender
+  - local testing override sender file (debug/testing only)
+  - normal `<config-root>/tui.toml` sender
   - runtime association fallback
   - fail-fast when unresolved
-- Define a relay-level structured event flow for TUI consumption so inbound
-  messages and delivery outcomes share a canonical payload schema.
-- Lock ack/outcome mapping used by TUI state/history:
+- Define TUI delivery-state mapping used by history/status views:
   - `accepted`, `success`, `timeout`, `failed`
-- Define reconnect/error behavior as explicit fail-fast contracts.
+- Define reconnect/error semantics for TUI state handling.
 - Keep same-bundle-only scope lock for MVP transport/history behavior.
+- Lock bare `agentmux` startup dispatch:
+  - interactive TTY with no subcommand starts TUI
+  - non-TTY with no subcommand prints help and exits non-zero
+- Depend on adjacent transport contract change
+  `add-relay-stream-hello-transport-mvp` for long-lived relay stream details.
 
 ## Impact
 
 - Affected specs:
+  - `cli-surface`
   - `tui-surface`
-  - `session-relay`
   - `runtime-bootstrap`
 - Affected code (implementation follow-up, not in this proposal):
   - `src/tui/*`
-  - relay request/response/event plumbing
   - runtime config/association resolution for TUI startup
+  - TUI state mapping from relay push events (defined by adjacent relay
+    transport change)
