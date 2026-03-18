@@ -14,66 +14,26 @@ pub(super) struct AuthorizationContext {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum GeneralScope {
+enum PolicyScope {
     None,
     SelfOnly,
     AllHome,
     AllAll,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ListScope {
-    AllHome,
-    AllAll,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SendScope {
-    AllHome,
-    AllAll,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AuthorizationScope {
-    None,
-    SelfOnly,
-    AllHome,
-    AllAll,
-}
-
-impl From<GeneralScope> for AuthorizationScope {
-    fn from(value: GeneralScope) -> Self {
-        match value {
-            GeneralScope::None => Self::None,
-            GeneralScope::SelfOnly => Self::SelfOnly,
-            GeneralScope::AllHome => Self::AllHome,
-            GeneralScope::AllAll => Self::AllAll,
+impl PolicyScope {
+    fn rank(self) -> u8 {
+        match self {
+            Self::None => 0,
+            Self::SelfOnly => 1,
+            Self::AllHome => 2,
+            Self::AllAll => 3,
         }
     }
-}
 
-impl From<ListScope> for AuthorizationScope {
-    fn from(value: ListScope) -> Self {
-        match value {
-            ListScope::AllHome => Self::AllHome,
-            ListScope::AllAll => Self::AllAll,
-        }
+    fn allows(self, minimum: Self) -> bool {
+        self.rank() >= minimum.rank()
     }
-}
-
-impl From<SendScope> for AuthorizationScope {
-    fn from(value: SendScope) -> Self {
-        match value {
-            SendScope::AllHome => Self::AllHome,
-            SendScope::AllAll => Self::AllAll,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ScopeRequirement {
-    Any,
-    NonSelf,
 }
 
 struct AuthorizationDecisionContext<'a> {
@@ -87,20 +47,20 @@ struct AuthorizationDecisionContext<'a> {
 
 #[derive(Clone, Debug)]
 struct PolicyControls {
-    find: GeneralScope,
-    list: ListScope,
-    look: GeneralScope,
-    send: SendScope,
-    do_controls: HashMap<String, GeneralScope>,
+    find: PolicyScope,
+    list: PolicyScope,
+    look: PolicyScope,
+    send: PolicyScope,
+    do_controls: HashMap<String, PolicyScope>,
 }
 
 impl PolicyControls {
     fn conservative_default() -> Self {
         Self {
-            find: GeneralScope::SelfOnly,
-            list: ListScope::AllHome,
-            look: GeneralScope::SelfOnly,
-            send: SendScope::AllHome,
+            find: PolicyScope::SelfOnly,
+            list: PolicyScope::AllHome,
+            look: PolicyScope::SelfOnly,
+            send: PolicyScope::AllHome,
             do_controls: HashMap::new(),
         }
     }
@@ -237,10 +197,48 @@ fn parse_policy_controls(
     policies_path: &Path,
     policy_id: &str,
 ) -> Result<PolicyControls, RelayError> {
-    let find = parse_general_scope(controls.find.as_str(), policies_path, policy_id, "find")?;
-    let list = parse_list_scope(controls.list.as_str(), policies_path, policy_id)?;
-    let look = parse_general_scope(controls.look.as_str(), policies_path, policy_id, "look")?;
-    let send = parse_send_scope(controls.send.as_str(), policies_path, policy_id)?;
+    let find = parse_scope_for_control(
+        controls.find.as_str(),
+        policies_path,
+        policy_id,
+        "find",
+        &[
+            PolicyScope::None,
+            PolicyScope::SelfOnly,
+            PolicyScope::AllHome,
+            PolicyScope::AllAll,
+        ],
+        "authorization policy control uses unsupported scope value",
+    )?;
+    let list = parse_scope_for_control(
+        controls.list.as_str(),
+        policies_path,
+        policy_id,
+        "list",
+        &[PolicyScope::AllHome, PolicyScope::AllAll],
+        "authorization policy list control uses unsupported scope value",
+    )?;
+    let look = parse_scope_for_control(
+        controls.look.as_str(),
+        policies_path,
+        policy_id,
+        "look",
+        &[
+            PolicyScope::None,
+            PolicyScope::SelfOnly,
+            PolicyScope::AllHome,
+            PolicyScope::AllAll,
+        ],
+        "authorization policy control uses unsupported scope value",
+    )?;
+    let send = parse_scope_for_control(
+        controls.send.as_str(),
+        policies_path,
+        policy_id,
+        "send",
+        &[PolicyScope::AllHome, PolicyScope::AllAll],
+        "authorization policy send control uses unsupported scope value",
+    )?;
     let mut do_controls = HashMap::with_capacity(controls.do_controls.len());
     for (action_id, scope_value) in controls.do_controls {
         let action_id = action_id.trim();
@@ -254,11 +252,18 @@ fn parse_policy_controls(
                 })),
             ));
         }
-        let scope = parse_general_scope(
+        let scope = parse_scope_for_control(
             scope_value.as_str(),
             policies_path,
             policy_id,
             format!("do.{action_id}").as_str(),
+            &[
+                PolicyScope::None,
+                PolicyScope::SelfOnly,
+                PolicyScope::AllHome,
+                PolicyScope::AllAll,
+            ],
+            "authorization policy control uses unsupported scope value",
         )?;
         do_controls.insert(action_id.to_string(), scope);
     }
@@ -271,70 +276,46 @@ fn parse_policy_controls(
     })
 }
 
-fn parse_general_scope(
+fn parse_scope_for_control(
     raw: &str,
     policies_path: &Path,
     policy_id: &str,
     control: &str,
-) -> Result<GeneralScope, RelayError> {
-    match raw.trim() {
-        "none" => Ok(GeneralScope::None),
-        "self" => Ok(GeneralScope::SelfOnly),
-        "all:home" => Ok(GeneralScope::AllHome),
-        "all:all" => Ok(GeneralScope::AllAll),
-        value => Err(relay_error(
-            "validation_invalid_arguments",
-            "authorization policy control uses unsupported scope value",
-            Some(json!({
-                "path": policies_path.display().to_string(),
-                "policy_id": policy_id,
-                "control": control,
-                "value": value,
-            })),
-        )),
+    allowed: &[PolicyScope],
+    unsupported_message: &str,
+) -> Result<PolicyScope, RelayError> {
+    let value = raw.trim();
+    let parsed = match value {
+        "none" => PolicyScope::None,
+        "self" => PolicyScope::SelfOnly,
+        "all:home" => PolicyScope::AllHome,
+        "all:all" => PolicyScope::AllAll,
+        _ => {
+            return Err(relay_error(
+                "validation_invalid_arguments",
+                unsupported_message,
+                Some(json!({
+                    "path": policies_path.display().to_string(),
+                    "policy_id": policy_id,
+                    "control": control,
+                    "value": value,
+                })),
+            ));
+        }
+    };
+    if allowed.contains(&parsed) {
+        return Ok(parsed);
     }
-}
-
-fn parse_list_scope(
-    raw: &str,
-    policies_path: &Path,
-    policy_id: &str,
-) -> Result<ListScope, RelayError> {
-    match raw.trim() {
-        "all:home" => Ok(ListScope::AllHome),
-        "all:all" => Ok(ListScope::AllAll),
-        value => Err(relay_error(
-            "validation_invalid_arguments",
-            "authorization policy list control uses unsupported scope value",
-            Some(json!({
-                "path": policies_path.display().to_string(),
-                "policy_id": policy_id,
-                "control": "list",
-                "value": value,
-            })),
-        )),
-    }
-}
-
-fn parse_send_scope(
-    raw: &str,
-    policies_path: &Path,
-    policy_id: &str,
-) -> Result<SendScope, RelayError> {
-    match raw.trim() {
-        "all:home" => Ok(SendScope::AllHome),
-        "all:all" => Ok(SendScope::AllAll),
-        value => Err(relay_error(
-            "validation_invalid_arguments",
-            "authorization policy send control uses unsupported scope value",
-            Some(json!({
-                "path": policies_path.display().to_string(),
-                "policy_id": policy_id,
-                "control": "send",
-                "value": value,
-            })),
-        )),
-    }
+    Err(relay_error(
+        "validation_invalid_arguments",
+        unsupported_message,
+        Some(json!({
+            "path": policies_path.display().to_string(),
+            "policy_id": policy_id,
+            "control": control,
+            "value": value,
+        })),
+    ))
 }
 
 fn resolve_session_policy_controls<'a>(
@@ -379,8 +360,8 @@ pub(super) fn authorize_list(
 ) -> Result<(), RelayError> {
     let controls = controls_for_requester(authorization, bundle, requester_session)?;
     authorize_scope(
-        controls.list.into(),
-        ScopeRequirement::Any,
+        controls.list,
+        PolicyScope::SelfOnly,
         AuthorizationDecisionContext {
             capability: "list.read",
             requester_session,
@@ -402,8 +383,8 @@ pub(super) fn authorize_send(
     // MVP target resolution is same-bundle only; cross-bundle target selection
     // is not part of the current runtime contract.
     authorize_scope(
-        controls.send.into(),
-        ScopeRequirement::Any,
+        controls.send,
+        PolicyScope::SelfOnly,
         AuthorizationDecisionContext {
             capability: "send.deliver",
             requester_session,
@@ -426,8 +407,8 @@ pub(super) fn authorize_look(
     }
     let controls = controls_for_requester(authorization, bundle, requester_session)?;
     authorize_scope(
-        controls.look.into(),
-        ScopeRequirement::NonSelf,
+        controls.look,
+        PolicyScope::AllHome,
         AuthorizationDecisionContext {
             capability: "look.inspect",
             requester_session,
@@ -440,11 +421,11 @@ pub(super) fn authorize_look(
 }
 
 fn authorize_scope(
-    scope: AuthorizationScope,
-    requirement: ScopeRequirement,
+    scope: PolicyScope,
+    minimum_scope: PolicyScope,
     context: AuthorizationDecisionContext<'_>,
 ) -> Result<(), RelayError> {
-    if scope_allows_requirement(scope, requirement) {
+    if scope.allows(minimum_scope) {
         return Ok(());
     }
     Err(authorization_forbidden(
@@ -456,18 +437,6 @@ fn authorize_scope(
         context.targets,
         None,
     ))
-}
-
-fn scope_allows_requirement(scope: AuthorizationScope, requirement: ScopeRequirement) -> bool {
-    match requirement {
-        ScopeRequirement::Any => !matches!(scope, AuthorizationScope::None),
-        ScopeRequirement::NonSelf => {
-            matches!(
-                scope,
-                AuthorizationScope::AllHome | AuthorizationScope::AllAll
-            )
-        }
-    }
 }
 
 fn controls_for_requester<'a>(
