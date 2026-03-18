@@ -9,7 +9,7 @@ use ratatui::widgets::ListState;
 use crate::{
     relay::{
         ChatDeliveryMode, ChatOutcome, ChatResult, ChatStatus, Recipient, RelayError, RelayRequest,
-        RelayResponse, request_relay,
+        RelayResponse, RelayStreamClientClass, RelayStreamEvent, RelayStreamSession,
     },
     runtime::error::RuntimeError,
 };
@@ -59,6 +59,7 @@ pub(crate) struct AppState {
     pub bundle_name: String,
     pub sender_session: String,
     relay_socket: PathBuf,
+    relay_stream: RelayStreamSession,
     look_lines: Option<u64>,
     pub recipients: Vec<Recipient>,
     pub recipients_state: ListState,
@@ -81,11 +82,24 @@ pub(crate) struct AppState {
 
 impl AppState {
     pub fn new(options: TuiLaunchOptions) -> Self {
+        let TuiLaunchOptions {
+            bundle_name,
+            sender_session,
+            relay_socket,
+            look_lines,
+        } = options;
+        let relay_stream = RelayStreamSession::new(
+            relay_socket.clone(),
+            bundle_name.clone(),
+            sender_session.clone(),
+            RelayStreamClientClass::Ui,
+        );
         Self {
-            bundle_name: options.bundle_name,
-            sender_session: options.sender_session,
-            relay_socket: options.relay_socket,
-            look_lines: options.look_lines,
+            bundle_name,
+            sender_session,
+            relay_socket,
+            relay_stream,
+            look_lines,
             recipients: Vec::new(),
             recipients_state: ListState::default(),
             picker_open: false,
@@ -542,9 +556,14 @@ impl AppState {
         self.picker_state.select(Some(index));
     }
 
-    fn request_relay(&self, request: &RelayRequest) -> Result<RelayResponse, RuntimeError> {
-        request_relay(&self.relay_socket, request)
-            .map_err(|source| map_relay_request_failure(&self.relay_socket, source))
+    fn request_relay(&mut self, request: &RelayRequest) -> Result<RelayResponse, RuntimeError> {
+        match self.relay_stream.request_with_events(request) {
+            Ok((response, events)) => {
+                self.record_stream_events(&events);
+                Ok(response)
+            }
+            Err(source) => Err(map_relay_request_failure(&self.relay_socket, source)),
+        }
     }
 
     fn push_event(&mut self, event: impl Into<String>) {
@@ -591,6 +610,59 @@ impl AppState {
                     "target={} outcome={} message_id={}",
                     result.target_session, outcome, result.message_id
                 ));
+            }
+        }
+    }
+
+    fn record_stream_events(&mut self, events: &[RelayStreamEvent]) {
+        for event in events {
+            match event.event_type.as_str() {
+                "incoming_message" => {
+                    let sender_session = event
+                        .payload
+                        .get("sender_session")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("<unknown>");
+                    let message_id = event
+                        .payload
+                        .get("message_id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("<unknown>");
+                    self.push_event(format!(
+                        "incoming target={} sender={} message_id={}",
+                        event.target_session, sender_session, message_id
+                    ));
+                }
+                "delivery_outcome" => {
+                    let message_id = event
+                        .payload
+                        .get("message_id")
+                        .and_then(serde_json::Value::as_str);
+                    if let Some(message_id) = message_id {
+                        self.pending_delivery_ids.remove(message_id);
+                    }
+                    let outcome = event
+                        .payload
+                        .get("outcome")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("<unknown>");
+                    let reason_code = event
+                        .payload
+                        .get("reason_code")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("-");
+                    self.push_event(format!(
+                        "delivery target={} outcome={} reason_code={} pending={}",
+                        event.target_session,
+                        outcome,
+                        reason_code,
+                        self.pending_deliveries_count()
+                    ));
+                }
+                _ => self.push_event(format!(
+                    "stream event type={} target={}",
+                    event.event_type, event.target_session
+                )),
             }
         }
     }

@@ -107,6 +107,72 @@ pub struct RelayError {
     pub details: Option<Value>,
 }
 
+/// Relay stream endpoint class used for persistent client hello registration.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RelayStreamClientClass {
+    Agent,
+    Ui,
+}
+
+/// Relay-pushed stream event payload.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct RelayStreamEvent {
+    pub event_type: String,
+    pub bundle_name: String,
+    pub target_session: String,
+    pub created_at: String,
+    pub payload: Value,
+}
+
+#[derive(Debug)]
+pub struct RelayStreamSession {
+    socket_path: PathBuf,
+    bundle_name: String,
+    session_id: String,
+    client_class: RelayStreamClientClass,
+    connection: Option<RelayStreamConnection>,
+}
+
+#[derive(Debug)]
+struct RelayStreamConnection {
+    stream: UnixStream,
+    reader: BufReader<UnixStream>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "frame", rename_all = "snake_case")]
+enum StreamClientFrame<'a> {
+    Hello {
+        schema_version: &'a str,
+        bundle_name: &'a str,
+        session_id: &'a str,
+        client_class: RelayStreamClientClass,
+    },
+    Request {
+        request_id: &'a str,
+        request: &'a RelayRequest,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "frame", rename_all = "snake_case")]
+enum StreamServerFrame {
+    HelloAck {
+        schema_version: String,
+        bundle_name: String,
+        session_id: String,
+        client_class: RelayStreamClientClass,
+    },
+    Response {
+        request_id: Option<String>,
+        response: RelayResponse,
+    },
+    Event {
+        event: RelayStreamEvent,
+    },
+}
+
 /// Relay request protocol.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "operation", rename_all = "snake_case")]
@@ -346,6 +412,154 @@ pub fn handle_request(
     handlers::handle_request(request, &bundle, &authorization, tmux_socket)
 }
 
+impl RelayStreamSession {
+    /// Creates a persistent relay stream session descriptor.
+    #[must_use]
+    pub fn new(
+        socket_path: PathBuf,
+        bundle_name: String,
+        session_id: String,
+        client_class: RelayStreamClientClass,
+    ) -> Self {
+        Self {
+            socket_path,
+            bundle_name,
+            session_id,
+            client_class,
+            connection: None,
+        }
+    }
+
+    /// Sends one request over a persistent stream and returns response.
+    ///
+    /// Stream events received while waiting for response are discarded.
+    ///
+    /// # Errors
+    ///
+    /// Returns IO errors when relay transport or frame exchange fails.
+    pub fn request(&mut self, request: &RelayRequest) -> Result<RelayResponse, io::Error> {
+        let (response, _events) = self.request_with_events(request)?;
+        Ok(response)
+    }
+
+    /// Sends one request over a persistent stream and returns response + events.
+    ///
+    /// # Errors
+    ///
+    /// Returns IO errors when relay transport or frame exchange fails.
+    pub fn request_with_events(
+        &mut self,
+        request: &RelayRequest,
+    ) -> Result<(RelayResponse, Vec<RelayStreamEvent>), io::Error> {
+        self.ensure_connected()?;
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let result = {
+            let connection = self
+                .connection
+                .as_mut()
+                .ok_or_else(|| io::Error::other("relay stream connection is missing"))?;
+            send_stream_client_frame(
+                &mut connection.stream,
+                StreamClientFrame::Request {
+                    request_id: request_id.as_str(),
+                    request,
+                },
+            )?;
+            read_stream_response_frame(connection, request_id.as_str())
+        };
+        if let Ok(value) = result {
+            return Ok(value);
+        }
+        if is_retriable_stream_error(result.as_ref().err()) {
+            self.connection = None;
+            self.ensure_connected()?;
+            let connection = self
+                .connection
+                .as_mut()
+                .ok_or_else(|| io::Error::other("relay stream reconnection failed"))?;
+            send_stream_client_frame(
+                &mut connection.stream,
+                StreamClientFrame::Request {
+                    request_id: request_id.as_str(),
+                    request,
+                },
+            )?;
+            return read_stream_response_frame(connection, request_id.as_str());
+        }
+        result
+    }
+
+    fn ensure_connected(&mut self) -> Result<(), io::Error> {
+        if self.connection.is_some() {
+            return Ok(());
+        }
+        let mut stream = UnixStream::connect(&self.socket_path)?;
+        send_stream_client_frame(
+            &mut stream,
+            StreamClientFrame::Hello {
+                schema_version: SCHEMA_VERSION,
+                bundle_name: self.bundle_name.as_str(),
+                session_id: self.session_id.as_str(),
+                client_class: self.client_class,
+            },
+        )?;
+        let mut reader = BufReader::new(stream.try_clone()?);
+        loop {
+            let mut line = String::new();
+            let read = reader.read_line(&mut line)?;
+            if read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "relay stream closed before hello acknowledgement",
+                ));
+            }
+            let server_frame = parse_server_frame(line.trim_end())?;
+            match server_frame {
+                StreamServerFrame::HelloAck {
+                    schema_version,
+                    bundle_name,
+                    session_id,
+                    client_class,
+                } => {
+                    if schema_version != SCHEMA_VERSION {
+                        return Err(io::Error::other(format!(
+                            "relay hello acknowledgement schema version mismatch: expected {}, got {}",
+                            SCHEMA_VERSION, schema_version
+                        )));
+                    }
+                    if bundle_name != self.bundle_name || session_id != self.session_id {
+                        return Err(io::Error::other(
+                            "relay hello acknowledgement identity mismatch",
+                        ));
+                    }
+                    if client_class != self.client_class {
+                        return Err(io::Error::other(
+                            "relay hello acknowledgement class mismatch",
+                        ));
+                    }
+                    self.connection = Some(RelayStreamConnection { stream, reader });
+                    return Ok(());
+                }
+                StreamServerFrame::Response {
+                    response: RelayResponse::Error { error },
+                    ..
+                } => {
+                    return Err(io::Error::other(format!(
+                        "relay hello rejected [{}]: {}",
+                        error.code, error.message
+                    )));
+                }
+                StreamServerFrame::Response { response, .. } => {
+                    return Err(io::Error::other(format!(
+                        "unexpected relay hello response frame: {response:?}",
+                    )));
+                }
+                StreamServerFrame::Event { .. } => {}
+            }
+        }
+    }
+}
+
 /// Reconciles configured bundle sessions against tmux state.
 ///
 /// # Errors
@@ -382,6 +596,65 @@ fn write_response(stream: &mut UnixStream, response: &RelayResponse) -> Result<(
     stream.write_all(encoded.as_bytes())?;
     stream.write_all(b"\n")?;
     stream.flush()
+}
+
+fn send_stream_client_frame(
+    stream: &mut UnixStream,
+    frame: StreamClientFrame<'_>,
+) -> Result<(), io::Error> {
+    let encoded = serde_json::to_string(&frame).map_err(io::Error::other)?;
+    stream.write_all(encoded.as_bytes())?;
+    stream.write_all(b"\n")?;
+    stream.flush()
+}
+
+fn parse_server_frame(line: &str) -> Result<StreamServerFrame, io::Error> {
+    serde_json::from_str::<StreamServerFrame>(line).map_err(io::Error::other)
+}
+
+fn read_stream_response_frame(
+    connection: &mut RelayStreamConnection,
+    request_id: &str,
+) -> Result<(RelayResponse, Vec<RelayStreamEvent>), io::Error> {
+    let mut events = Vec::new();
+    loop {
+        let mut line = String::new();
+        let read = connection.reader.read_line(&mut line)?;
+        if read == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "relay stream closed while waiting for response",
+            ));
+        }
+        let parsed = parse_server_frame(line.trim_end())?;
+        match parsed {
+            StreamServerFrame::Event { event } => events.push(event),
+            StreamServerFrame::HelloAck { .. } => {}
+            StreamServerFrame::Response {
+                request_id: frame_request_id,
+                response,
+            } => {
+                if frame_request_id.as_deref() == Some(request_id) {
+                    return Ok((response, events));
+                }
+            }
+        }
+    }
+}
+
+fn is_retriable_stream_error(error: Option<&io::Error>) -> bool {
+    let Some(error) = error else {
+        return false;
+    };
+    matches!(
+        error.kind(),
+        io::ErrorKind::NotConnected
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::BrokenPipe
+            | io::ErrorKind::TimedOut
+            | io::ErrorKind::UnexpectedEof
+    )
 }
 
 fn dispatch_request(

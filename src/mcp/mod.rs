@@ -1,6 +1,9 @@
 //! MCP server surface for agentmux.
 
-use std::{path::Path, sync::Arc};
+use std::{
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 use anyhow::Result;
 use rmcp::{
@@ -15,7 +18,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::relay::{ChatDeliveryMode, RelayError, RelayRequest, RelayResponse, request_relay};
+use crate::relay::{
+    ChatDeliveryMode, RelayError, RelayRequest, RelayResponse, RelayStreamClientClass,
+    RelayStreamSession,
+};
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::paths::BundleRuntimePaths;
 
@@ -35,6 +41,7 @@ struct McpServer {
 #[derive(Debug)]
 struct McpState {
     configuration: McpConfiguration,
+    relay_stream: Mutex<Option<RelayStreamSession>>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -96,8 +103,19 @@ const MAX_LOOK_LINES: u64 = 1000;
 #[tool_router]
 impl McpServer {
     fn new(configuration: McpConfiguration) -> Self {
+        let relay_stream = configuration.sender_session.as_ref().map(|sender_session| {
+            RelayStreamSession::new(
+                configuration.bundle_paths.relay_socket.clone(),
+                configuration.bundle_paths.bundle_name.clone(),
+                sender_session.clone(),
+                RelayStreamClientClass::Agent,
+            )
+        });
         Self {
-            state: Arc::new(McpState { configuration }),
+            state: Arc::new(McpState {
+                configuration,
+                relay_stream: Mutex::new(relay_stream),
+            }),
             tool_router: Self::tool_router(),
         }
     }
@@ -107,19 +125,29 @@ impl McpServer {
         &self,
         Parameters(_params): Parameters<ListParams>,
     ) -> Result<CallToolResult, McpError> {
+        let sender_session = self
+            .state
+            .configuration
+            .sender_session
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| {
+                validation_tool_error(
+                    "validation_unknown_sender",
+                    "sender session is not configured for this MCP server",
+                    None,
+                )
+            })?;
         emit_inscription(
             "mcp.tool.list.request",
             &json!({
                 "bundle_name": self.state.configuration.bundle_paths.bundle_name,
-                "sender_session": self.state.configuration.sender_session.clone(),
+                "sender_session": sender_session,
             }),
         );
-        match request_relay(
-            &self.state.configuration.bundle_paths.relay_socket,
-            &RelayRequest::List {
-                sender_session: self.state.configuration.sender_session.clone(),
-            },
-        ) {
+        match self.request_relay(&RelayRequest::List {
+            sender_session: Some(sender_session),
+        }) {
             Ok(RelayResponse::List {
                 schema_version,
                 bundle_name,
@@ -216,10 +244,7 @@ impl McpServer {
             quiet_window_ms: None,
             quiescence_timeout_ms: params.quiescence_timeout_ms,
         };
-        match request_relay(
-            &self.state.configuration.bundle_paths.relay_socket,
-            &request,
-        ) {
+        match self.request_relay(&request) {
             Ok(RelayResponse::Chat {
                 schema_version,
                 bundle_name,
@@ -321,10 +346,7 @@ impl McpServer {
             lines: params.lines.map(|value| value as usize),
             bundle_name: params.bundle_name.clone(),
         };
-        match request_relay(
-            &self.state.configuration.bundle_paths.relay_socket,
-            &request,
-        ) {
+        match self.request_relay(&request) {
             Ok(RelayResponse::Look {
                 schema_version,
                 bundle_name,
@@ -385,6 +407,31 @@ impl McpServer {
                 ))
             }
         }
+    }
+
+    fn request_relay(&self, request: &RelayRequest) -> Result<RelayResponse, std::io::Error> {
+        let mut guard = self
+            .state
+            .relay_stream
+            .lock()
+            .map_err(|_| std::io::Error::other("failed to lock MCP relay stream session"))?;
+        let stream_session = guard.as_mut().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "sender session is not configured for MCP relay stream",
+            )
+        })?;
+        let (response, events) = stream_session.request_with_events(request)?;
+        if !events.is_empty() {
+            emit_inscription(
+                "mcp.tool.stream.events_ignored",
+                &json!({
+                    "bundle_name": self.state.configuration.bundle_paths.bundle_name,
+                    "count": events.len(),
+                }),
+            );
+        }
+        Ok(response)
     }
 }
 

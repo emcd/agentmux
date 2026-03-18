@@ -146,30 +146,73 @@ fn handle_connection(
     requests: &Arc<Mutex<Vec<Value>>>,
     responder: &RelayResponder,
 ) {
-    let mut line = String::new();
     let mut reader = BufReader::new(
         stream
             .try_clone()
             .expect("clone fake relay stream for reader"),
     );
-    let bytes = reader
-        .read_line(&mut line)
-        .expect("read fake relay request");
-    if bytes == 0 {
-        return;
+    loop {
+        let mut line = String::new();
+        let bytes = reader
+            .read_line(&mut line)
+            .expect("read fake relay request");
+        if bytes == 0 {
+            return;
+        }
+        let decoded: Value =
+            serde_json::from_str(line.trim_end()).expect("decode fake relay request");
+        if decoded.get("frame").and_then(Value::as_str) == Some("hello") {
+            let hello_ack = json!({
+                "frame": "hello_ack",
+                "schema_version": decoded["schema_version"],
+                "bundle_name": decoded["bundle_name"],
+                "session_id": decoded["session_id"],
+                "client_class": decoded["client_class"],
+            });
+            let text = serde_json::to_string(&hello_ack).expect("encode hello ack");
+            stream
+                .write_all(text.as_bytes())
+                .expect("write fake relay hello ack");
+            stream.write_all(b"\n").expect("write fake relay newline");
+            stream.flush().expect("flush fake relay hello ack");
+            continue;
+        }
+        if decoded.get("frame").and_then(Value::as_str) == Some("request") {
+            let request = decoded
+                .get("request")
+                .cloned()
+                .expect("stream request frame must include request");
+            requests
+                .lock()
+                .expect("fake relay requests lock")
+                .push(request.clone());
+            let response = responder(&request);
+            let framed = json!({
+                "frame": "response",
+                "request_id": decoded.get("request_id").cloned().unwrap_or(Value::Null),
+                "response": response,
+            });
+            let text = serde_json::to_string(&framed).expect("encode fake relay response");
+            stream
+                .write_all(text.as_bytes())
+                .expect("write fake relay response");
+            stream.write_all(b"\n").expect("write fake relay newline");
+            stream.flush().expect("flush fake relay response");
+            continue;
+        }
+
+        requests
+            .lock()
+            .expect("fake relay requests lock")
+            .push(decoded.clone());
+        let response = responder(&decoded);
+        let text = serde_json::to_string(&response).expect("encode fake relay response");
+        stream
+            .write_all(text.as_bytes())
+            .expect("write fake relay response");
+        stream.write_all(b"\n").expect("write fake relay newline");
+        stream.flush().expect("flush fake relay response");
     }
-    let request: Value = serde_json::from_str(line.trim_end()).expect("decode fake relay request");
-    requests
-        .lock()
-        .expect("fake relay requests lock")
-        .push(request.clone());
-    let response = responder(&request);
-    let text = serde_json::to_string(&response).expect("encode fake relay response");
-    stream
-        .write_all(text.as_bytes())
-        .expect("write fake relay response");
-    stream.write_all(b"\n").expect("write fake relay newline");
-    stream.flush().expect("flush fake relay response");
 }
 
 struct McpHarness {
