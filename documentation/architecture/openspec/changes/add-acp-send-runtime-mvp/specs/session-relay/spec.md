@@ -76,13 +76,38 @@ Required gates:
 - ACP `session/load` path requires advertised load-session capability
 - ACP prompt path requires prompt-session capability
 
-Capability-gating failures SHALL produce stable validation/runtime errors.
+Capability-gating failures SHALL use canonical error taxonomy:
+
+- ACP initialize failure SHALL return `runtime_acp_initialize_failed`
+- missing ACP capability for load/prompt SHALL return
+  `validation_missing_acp_capability`
+
+For `validation_missing_acp_capability`, error details SHALL include:
+
+- `target_session`
+- `required_capability` (`session/load` | `session/prompt`)
+- `reason`
 
 #### Scenario: Reject load path when load capability is missing
 
 - **WHEN** relay selects ACP `session/load`
 - **AND** initialized ACP capabilities do not advertise load-session support
-- **THEN** relay fails the target with a stable capability-missing error
+- **THEN** relay fails the target with `validation_missing_acp_capability`
+- **AND** error details include
+  `required_capability = "session/load"`
+
+#### Scenario: Reject prompt path when prompt capability is missing
+
+- **WHEN** relay attempts ACP prompt execution for target
+- **AND** initialized ACP capabilities do not advertise prompt-session support
+- **THEN** relay fails the target with `validation_missing_acp_capability`
+- **AND** error details include
+  `required_capability = "session/prompt"`
+
+#### Scenario: Surface initialize failure with canonical runtime code
+
+- **WHEN** relay cannot complete ACP initialize handshake
+- **THEN** relay fails target processing with `runtime_acp_initialize_failed`
 
 ### Requirement: ACP Transport Timeout Semantics
 
@@ -103,28 +128,33 @@ For ACP targets:
 ### Requirement: ACP Stop-Reason Outcome Mapping
 
 Relay SHALL map ACP prompt terminal states into canonical send outcomes with
-stable reason codes.
+stable reason-code behavior.
 
 Mapping SHALL include:
 
 - ACP terminal stop reasons (`end_turn`, `max_tokens`, `max_turn_requests`,
-  `refusal`) -> delivery outcome `delivered`
-- ACP terminal stop reason `cancelled` -> delivery outcome `failed`
+  `refusal`) -> delivery outcome `delivered` with `reason_code = null`
+- ACP terminal stop reason `cancelled` -> delivery outcome `failed` with
+  `reason_code = acp_stop_cancelled`
 - ACP dropped-on-shutdown behavior -> delivery outcome `failed` with
   `reason_code = dropped_on_shutdown`
-- ACP turn timeout -> delivery outcome `timeout`
+- ACP turn timeout -> delivery outcome `timeout` with
+  `reason_code = acp_turn_timeout`
 
 #### Scenario: Map successful ACP terminal stop reasons to delivered
 
 - **WHEN** ACP prompt turn completes with terminal stop reason `end_turn`
 - **THEN** relay reports target delivery outcome `delivered`
+- **AND** sets `reason_code = null`
 
 #### Scenario: Map cancelled to failed outcome
 
 - **WHEN** ACP prompt turn completes with stop reason `cancelled`
 - **THEN** relay reports target delivery outcome `failed`
+- **AND** sets `reason_code = acp_stop_cancelled`
 
 #### Scenario: Map ACP turn timeout to timeout outcome
 
 - **WHEN** ACP prompt turn does not complete before effective turn-wait timeout
 - **THEN** relay reports target delivery outcome `timeout`
+- **AND** sets `reason_code = acp_turn_timeout`
