@@ -21,6 +21,10 @@ use crate::{
     runtime::{inscriptions::emit_inscription, signals::shutdown_requested},
 };
 
+use super::stream::{
+    RelayClientClass, RelayStreamEvent, StreamEventSendOutcome, resolve_registered_client_class,
+    send_event_to_registered_ui,
+};
 use super::tmux::{
     capture_pane_snapshot, emit_delivery_diagnostic, inject_prompt, operator_interaction_active,
     resolve_active_pane_target, resolve_cursor_column, resolve_window_activity_marker,
@@ -38,6 +42,7 @@ const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;
 const ASYNC_SHUTDOWN_WAIT_POLL_MS: u64 = 25;
 const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delivery";
 const ACP_PROTOCOL_VERSION: u32 = 1;
+const UI_RECONNECT_POLL_INTERVAL_MS: u64 = 100;
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct QuiescenceOptions {
@@ -270,6 +275,29 @@ pub(super) fn deliver_one_target(task: &AsyncDeliveryTask) -> Result<ChatResult,
         body: message.to_string(),
     });
     let prompt_batches = batch_envelopes(&[envelope], batch_settings);
+    let resolved_client_class =
+        resolve_registered_client_class(bundle.bundle_name.as_str(), target_session.as_str())
+            .map_err(|source| {
+                super::relay_error(
+                    "internal_unexpected_failure",
+                    "failed to resolve relay stream endpoint class",
+                    Some(json!({
+                        "bundle_name": bundle.bundle_name,
+                        "target_session": target_session,
+                        "cause": source.to_string(),
+                    })),
+                )
+            })?;
+    if matches!(resolved_client_class, Some(RelayClientClass::Ui)) {
+        return Ok(deliver_one_target_ui(
+            task,
+            sender,
+            &cc_members,
+            target_session,
+            message_id,
+            message,
+        ));
+    }
 
     match &target_member.target {
         TargetConfiguration::Acp(acp) => Ok(deliver_one_target_acp(
@@ -346,6 +374,99 @@ pub(super) fn deliver_one_target(task: &AsyncDeliveryTask) -> Result<ChatResult,
             }),
         },
     }
+}
+
+fn deliver_one_target_ui(
+    task: &AsyncDeliveryTask,
+    sender: &crate::configuration::BundleMember,
+    cc_members: &[crate::configuration::BundleMember],
+    target_session: String,
+    message_id: String,
+    message: &str,
+) -> ChatResult {
+    let bundle_name = task.bundle.bundle_name.as_str();
+    let timeout = task.quiescence.quiescence_timeout;
+    let start = Instant::now();
+    loop {
+        if shutdown_requested() {
+            return ChatResult {
+                target_session,
+                message_id,
+                outcome: ChatOutcome::DroppedOnShutdown,
+                reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
+            };
+        }
+
+        let incoming_event = RelayStreamEvent {
+            event_type: "incoming_message".to_string(),
+            bundle_name: bundle_name.to_string(),
+            target_session: target_session.clone(),
+            created_at: timestamp_rfc3339(),
+            payload: json!({
+                "message_id": message_id.clone(),
+                "sender_session": sender.id.as_str(),
+                "body": message,
+                "cc_sessions": if cc_members.is_empty() {
+                    Value::Null
+                } else {
+                    json!(cc_members.iter().map(|member| member.id.clone()).collect::<Vec<_>>())
+                },
+            }),
+        };
+        match send_event_to_registered_ui(bundle_name, target_session.as_str(), &incoming_event) {
+            Ok(StreamEventSendOutcome::Delivered) => {
+                let outcome_event = RelayStreamEvent {
+                    event_type: "delivery_outcome".to_string(),
+                    bundle_name: bundle_name.to_string(),
+                    target_session: target_session.clone(),
+                    created_at: timestamp_rfc3339(),
+                    payload: json!({
+                        "message_id": message_id.clone(),
+                        "outcome": "success",
+                    }),
+                };
+                let _ = send_event_to_registered_ui(
+                    bundle_name,
+                    target_session.as_str(),
+                    &outcome_event,
+                );
+                return ChatResult {
+                    target_session,
+                    message_id,
+                    outcome: ChatOutcome::Delivered,
+                    reason: None,
+                };
+            }
+            Ok(StreamEventSendOutcome::NoUiEndpoint) | Ok(StreamEventSendOutcome::Disconnected) => {
+            }
+            Err(source) => {
+                return ChatResult {
+                    target_session,
+                    message_id,
+                    outcome: ChatOutcome::Failed,
+                    reason: Some(format!("failed to emit relay stream event: {}", source)),
+                };
+            }
+        }
+        if timeout.is_some_and(|value| start.elapsed() >= value) {
+            return ChatResult {
+                target_session,
+                message_id,
+                outcome: ChatOutcome::Timeout,
+                reason: Some(format!(
+                    "ui relay stream was disconnected for {}ms",
+                    start.elapsed().as_millis()
+                )),
+            };
+        }
+        thread::sleep(Duration::from_millis(UI_RECONNECT_POLL_INTERVAL_MS));
+    }
+}
+
+fn timestamp_rfc3339() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
 fn deliver_one_target_acp(

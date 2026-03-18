@@ -6,6 +6,8 @@ mod configuration;
 mod envelope;
 #[path = "unit/relay.rs"]
 mod relay;
+#[path = "unit/relay_stream.rs"]
+mod relay_stream;
 #[path = "unit/runtime_inscriptions.rs"]
 mod runtime_inscriptions;
 #[path = "unit/runtime_paths.rs"]

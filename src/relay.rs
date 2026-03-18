@@ -20,10 +20,16 @@ mod authorization;
 mod delivery;
 mod handlers;
 mod lifecycle;
+mod stream;
 mod tmux;
 
 use self::authorization::load_authorization_context;
 use self::delivery::QuiescenceOptions;
+use self::stream::{
+    HelloFrame, IncomingFrame, OutgoingFrame, RelayClientClass, StreamRegistration,
+    clone_stream_writer, parse_incoming_frame, register_stream, registration_is_current,
+    unregister_stream, write_stream_frame_to_writer,
+};
 
 const SCHEMA_VERSION: &str = ENVELOPE_SCHEMA_VERSION;
 const POLICIES_FILE: &str = "policies.toml";
@@ -203,31 +209,129 @@ pub fn serve_connection(
     configuration_root: &Path,
     bundle_paths: &BundleRuntimePaths,
 ) -> Result<(), io::Error> {
-    let request = match read_request(stream) {
-        Ok(value) => value,
-        Err(source) => {
-            let response = RelayResponse::Error {
-                error: relay_error(
-                    "validation_invalid_arguments",
-                    "failed to parse relay request",
-                    Some(json!({"cause": source.to_string()})),
-                ),
-            };
-            write_response(stream, &response)?;
-            return Ok(());
-        }
-    };
+    let writer = clone_stream_writer(stream)?;
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut line = String::new();
+    let mut registration = None::<StreamRegistration>;
 
-    let response = match handle_request(
-        request,
-        configuration_root,
-        &bundle_paths.bundle_name,
-        &bundle_paths.tmux_socket,
-    ) {
-        Ok(value) => value,
-        Err(error) => RelayResponse::Error { error },
-    };
-    write_response(stream, &response)
+    loop {
+        line.clear();
+        let read = reader.read_line(&mut line)?;
+        if read == 0 {
+            break;
+        }
+
+        let trimmed = line.trim_end();
+        let frame = match parse_incoming_frame(trimmed) {
+            Ok(frame) => frame,
+            Err(source) => {
+                let response = RelayResponse::Error {
+                    error: relay_error(
+                        "validation_invalid_arguments",
+                        "failed to parse relay request",
+                        Some(json!({"cause": source.to_string()})),
+                    ),
+                };
+                write_response(stream, &response)?;
+                break;
+            }
+        };
+
+        match frame {
+            IncomingFrame::LegacyRequest(request) => {
+                let response = dispatch_request(
+                    request,
+                    configuration_root,
+                    &bundle_paths.bundle_name,
+                    &bundle_paths.tmux_socket,
+                );
+                write_response(stream, &response)?;
+            }
+            IncomingFrame::Hello(hello) => {
+                let response = handle_hello_frame(configuration_root, bundle_paths, &hello);
+                match response {
+                    Ok(()) => {
+                        registration = Some(register_stream(&hello, writer.clone())?);
+                        write_stream_frame_to_writer(
+                            &writer,
+                            OutgoingFrame::HelloAck {
+                                schema_version: SCHEMA_VERSION,
+                                bundle_name: hello.bundle_name.as_str(),
+                                session_id: hello.session_id.as_str(),
+                                client_class: hello.client_class,
+                            },
+                        )?;
+                    }
+                    Err(error) => {
+                        write_stream_frame_to_writer(
+                            &writer,
+                            OutgoingFrame::Response {
+                                request_id: None,
+                                response: &RelayResponse::Error { error },
+                            },
+                        )?;
+                        break;
+                    }
+                }
+            }
+            IncomingFrame::Request {
+                request_id,
+                request,
+            } => {
+                let Some(active_registration) = registration.as_ref() else {
+                    let error = relay_error(
+                        "validation_missing_hello",
+                        "stream request requires hello registration",
+                        None,
+                    );
+                    write_stream_frame_to_writer(
+                        &writer,
+                        OutgoingFrame::Response {
+                            request_id: request_id.as_deref(),
+                            response: &RelayResponse::Error { error },
+                        },
+                    )?;
+                    continue;
+                };
+                if !registration_is_current(active_registration)? {
+                    let error = relay_error(
+                        "validation_stale_stream_binding",
+                        "stream binding has been replaced by a newer hello registration",
+                        Some(json!({
+                            "bundle_name": active_registration.bundle_name,
+                            "session_id": active_registration.session_id,
+                        })),
+                    );
+                    write_stream_frame_to_writer(
+                        &writer,
+                        OutgoingFrame::Response {
+                            request_id: request_id.as_deref(),
+                            response: &RelayResponse::Error { error },
+                        },
+                    )?;
+                    break;
+                }
+                let response = dispatch_request(
+                    request,
+                    configuration_root,
+                    &bundle_paths.bundle_name,
+                    &bundle_paths.tmux_socket,
+                );
+                write_stream_frame_to_writer(
+                    &writer,
+                    OutgoingFrame::Response {
+                        request_id: request_id.as_deref(),
+                        response: &response,
+                    },
+                )?;
+            }
+        }
+    }
+
+    if let Some(registration) = registration.as_ref() {
+        unregister_stream(registration)?;
+    }
+    Ok(())
 }
 
 /// Executes one relay request for a configured bundle.
@@ -273,24 +377,69 @@ pub fn wait_for_async_delivery_shutdown(timeout: Duration) -> usize {
     delivery::wait_for_async_delivery_shutdown(timeout)
 }
 
-fn read_request(stream: &UnixStream) -> Result<RelayRequest, io::Error> {
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    let read = reader.read_line(&mut line)?;
-    if read == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::UnexpectedEof,
-            "request line is empty",
-        ));
-    }
-    serde_json::from_str::<RelayRequest>(line.trim_end()).map_err(io::Error::other)
-}
-
 fn write_response(stream: &mut UnixStream, response: &RelayResponse) -> Result<(), io::Error> {
     let encoded = serde_json::to_string(response).map_err(io::Error::other)?;
     stream.write_all(encoded.as_bytes())?;
     stream.write_all(b"\n")?;
     stream.flush()
+}
+
+fn dispatch_request(
+    request: RelayRequest,
+    configuration_root: &Path,
+    bundle_name: &str,
+    tmux_socket: &Path,
+) -> RelayResponse {
+    match handle_request(request, configuration_root, bundle_name, tmux_socket) {
+        Ok(value) => value,
+        Err(error) => RelayResponse::Error { error },
+    }
+}
+
+fn handle_hello_frame(
+    configuration_root: &Path,
+    bundle_paths: &BundleRuntimePaths,
+    hello: &HelloFrame,
+) -> Result<(), RelayError> {
+    if hello.schema_version != SCHEMA_VERSION {
+        return Err(relay_error(
+            "validation_invalid_schema_version",
+            "hello schema_version is not supported",
+            Some(json!({
+                "schema_version": hello.schema_version,
+                "supported_schema_version": SCHEMA_VERSION,
+            })),
+        ));
+    }
+    if hello.bundle_name != bundle_paths.bundle_name {
+        return Err(relay_error(
+            "validation_cross_bundle_unsupported",
+            "hello bundle_name does not match associated bundle",
+            Some(json!({
+                "associated_bundle_name": bundle_paths.bundle_name,
+                "hello_bundle_name": hello.bundle_name,
+            })),
+        ));
+    }
+    let bundle = load_bundle_configuration(configuration_root, &bundle_paths.bundle_name)
+        .map_err(map_config)?;
+    if !bundle
+        .members
+        .iter()
+        .any(|member| member.id == hello.session_id)
+    {
+        return Err(relay_error(
+            "validation_unknown_sender",
+            "hello session_id is not configured in associated bundle",
+            Some(json!({
+                "bundle_name": bundle.bundle_name,
+                "session_id": hello.session_id,
+            })),
+        ));
+    }
+    match hello.client_class {
+        RelayClientClass::Agent | RelayClientClass::Ui => Ok(()),
+    }
 }
 
 pub(super) fn map_config(error: ConfigurationError) -> RelayError {
