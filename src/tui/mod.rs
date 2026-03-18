@@ -29,6 +29,8 @@ fn run_loop(terminal: &mut DefaultTerminal, options: TuiLaunchOptions) -> Result
     }
 
     while !state.should_quit {
+        state.poll_relay_events();
+
         terminal
             .draw(|frame| render::render(frame, &mut state))
             .map_err(|source| RuntimeError::io("render tui frame", source))?;

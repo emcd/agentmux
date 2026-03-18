@@ -75,6 +75,7 @@ pub(crate) struct AppState {
     pub status_history: VecDeque<StatusEntry>,
     pub event_history: VecDeque<String>,
     pending_delivery_ids: HashSet<String>,
+    relay_stream_poll_error_reported: bool,
     to_completion: Option<ToCompletionState>,
     completion_locked_until_to_edit: bool,
     pub should_quit: bool,
@@ -117,6 +118,7 @@ impl AppState {
             }]),
             event_history: VecDeque::new(),
             pending_delivery_ids: HashSet::new(),
+            relay_stream_poll_error_reported: false,
             to_completion: None,
             completion_locked_until_to_edit: false,
             should_quit: false,
@@ -171,6 +173,7 @@ impl AppState {
                         self.bundle_name
                     ),
                 );
+                self.relay_stream_poll_error_reported = false;
                 Ok(())
             }
             RelayResponse::Error { error } => Err(map_relay_error(error)),
@@ -470,6 +473,7 @@ impl AppState {
                         self.pending_deliveries_count()
                     ),
                 );
+                self.relay_stream_poll_error_reported = false;
                 Ok(())
             }
             RelayResponse::Error { error } => Err(map_relay_error(error)),
@@ -513,6 +517,7 @@ impl AppState {
                 self.look_captured_at = Some(captured_at);
                 self.look_snapshot_lines = snapshot_lines;
                 self.push_status(None, format!("look captured target={target_session}"));
+                self.relay_stream_poll_error_reported = false;
                 Ok(())
             }
             RelayResponse::Error { error } => Err(map_relay_error(error)),
@@ -539,6 +544,25 @@ impl AppState {
             .selected()
             .and_then(|index| self.recipients.get(index))
             .map(|recipient| recipient.session_name.clone())
+    }
+
+    pub fn poll_relay_events(&mut self) {
+        match self.relay_stream.poll_events() {
+            Ok(events) => {
+                if self.relay_stream_poll_error_reported {
+                    self.push_status(None, "relay stream reconnected");
+                }
+                self.relay_stream_poll_error_reported = false;
+                self.record_stream_events(&events);
+            }
+            Err(source) => {
+                if self.relay_stream_poll_error_reported {
+                    return;
+                }
+                self.relay_stream_poll_error_reported = true;
+                self.push_runtime_error(map_relay_request_failure(&self.relay_socket, source));
+            }
+        }
     }
 
     fn ensure_recipient_selection(&mut self) {

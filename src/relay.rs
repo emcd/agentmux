@@ -489,6 +489,30 @@ impl RelayStreamSession {
         result
     }
 
+    /// Polls pending relay stream events without sending a request.
+    ///
+    /// Non-event frames are ignored.
+    ///
+    /// # Errors
+    ///
+    /// Returns IO errors when the stream cannot be established or read.
+    pub fn poll_events(&mut self) -> Result<Vec<RelayStreamEvent>, io::Error> {
+        self.ensure_connected()?;
+        let result = {
+            let connection = self
+                .connection
+                .as_mut()
+                .ok_or_else(|| io::Error::other("relay stream connection is missing"))?;
+            poll_stream_events_nonblocking(connection)
+        };
+        if let Err(source) = &result
+            && is_retriable_stream_error(Some(source))
+        {
+            self.connection = None;
+        }
+        result
+    }
+
     fn ensure_connected(&mut self) -> Result<(), io::Error> {
         if self.connection.is_some() {
             return Ok(());
@@ -655,6 +679,37 @@ fn is_retriable_stream_error(error: Option<&io::Error>) -> bool {
             | io::ErrorKind::TimedOut
             | io::ErrorKind::UnexpectedEof
     )
+}
+
+fn poll_stream_events_nonblocking(
+    connection: &mut RelayStreamConnection,
+) -> Result<Vec<RelayStreamEvent>, io::Error> {
+    connection.stream.set_nonblocking(true)?;
+    let mut events = Vec::new();
+    let read_result = loop {
+        let mut line = String::new();
+        match connection.reader.read_line(&mut line) {
+            Ok(0) => {
+                break Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "relay stream closed while polling events",
+                ));
+            }
+            Ok(_) => {
+                let frame = parse_server_frame(line.trim_end())?;
+                if let StreamServerFrame::Event { event } = frame {
+                    events.push(event);
+                }
+            }
+            Err(source) if source.kind() == io::ErrorKind::WouldBlock => break Ok(()),
+            Err(source) if source.kind() == io::ErrorKind::Interrupted => continue,
+            Err(source) => break Err(source),
+        }
+    };
+    let reset = connection.stream.set_nonblocking(false);
+    read_result?;
+    reset?;
+    Ok(events)
 }
 
 fn dispatch_request(
