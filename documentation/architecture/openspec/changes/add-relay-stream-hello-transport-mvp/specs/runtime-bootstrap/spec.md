@@ -8,17 +8,25 @@ rather than per-request reconnect behavior.
 MCP and TUI clients SHALL perform `hello` registration on stream setup before
 sending relay request frames.
 
+`hello` registration in runtime clients SHALL use canonical routing identity:
+
+- associated runtime `bundle_name`
+- canonical `session_id`
+- `client_class`
+
 #### Scenario: MCP establishes persistent agent-class relay stream
 
 - **WHEN** MCP performs first relay-backed operation in runtime
 - **THEN** MCP establishes persistent relay stream
-- **AND** registers with `hello` using `client_class=agent`
+- **AND** registers with `hello` using associated `bundle_name`,
+  canonical `session_id`, and `client_class=agent`
 
 #### Scenario: TUI establishes persistent ui-class relay stream
 
 - **WHEN** TUI starts and relay connectivity is available
 - **THEN** TUI establishes persistent relay stream
-- **AND** registers with `hello` using `client_class=ui`
+- **AND** registers with `hello` using associated `bundle_name`,
+  canonical `session_id`, and `client_class=ui`
 
 ### Requirement: Stream Reconnect Behavior
 

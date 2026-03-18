@@ -27,13 +27,23 @@ Each client stream SHALL begin with `hello` registration frame containing:
 
 - `schema_version`
 - `bundle_name`
-- `session_name`
+- `session_id`
 - `client_class` (`agent` | `ui`)
 
-`hello` identity SHALL bind principal/session for that stream.
+`hello` identity SHALL bind principal/session for that stream using canonical
+tuple `(bundle_name, session_id)`.
 
-If a second stream registers the same `(bundle_name, session_name)`, relay
+`session_id` SHALL resolve to a configured bundle session id for the associated
+bundle. Display labels or aliases are non-authoritative for stream identity.
+
+If a second stream registers the same `(bundle_name, session_id)`, relay
 SHALL replace the prior live binding with latest successful hello.
+
+If `hello.bundle_name` does not match relay's associated bundle context, relay
+SHALL reject `hello` with `validation_cross_bundle_unsupported`.
+
+If `hello.session_id` is not a configured session id in the associated bundle,
+relay SHALL reject `hello` with `validation_unknown_sender`.
 
 #### Scenario: Register agent-class stream
 
@@ -50,6 +60,31 @@ SHALL replace the prior live binding with latest successful hello.
 - **WHEN** a new stream successfully `hello`-registers same identity
 - **THEN** relay invalidates prior live stream binding
 - **AND** uses latest stream as authoritative live endpoint
+
+#### Scenario: Reject hello for mismatched bundle context
+
+- **WHEN** a stream sends `hello` with `bundle_name` not matching associated
+  relay bundle context
+- **THEN** relay rejects with `validation_cross_bundle_unsupported`
+
+#### Scenario: Reject hello for unknown session id
+
+- **WHEN** a stream sends `hello` with `session_id` not configured in
+  associated bundle
+- **THEN** relay rejects with `validation_unknown_sender`
+
+### Requirement: Same-Bundle Stream Scope Enforcement
+
+Persistent stream routing in MVP SHALL remain same-bundle only.
+
+Relay SHALL reject cross-bundle stream/request attempts with
+`validation_cross_bundle_unsupported`.
+
+#### Scenario: Reject cross-bundle request frame
+
+- **WHEN** a registered stream submits request frame scoped to bundle that does
+  not match stream identity bundle
+- **THEN** relay rejects with `validation_cross_bundle_unsupported`
 
 ### Requirement: Static Recipient Routability
 
@@ -75,6 +110,13 @@ For disconnected `ui` recipients, relay SHALL keep pending delivery queued using
 existing relay async queue machinery and attempt delivery when same identity
 reconnects.
 
+Endpoint class resolution SHALL be deterministic with this precedence:
+
+1. active `hello` registration for target identity
+2. otherwise, target configured in bundle with no active registration defaults
+   to class `agent`
+3. otherwise, target is rejected as unknown
+
 #### Scenario: Deliver to agent recipient via prompt injection path
 
 - **WHEN** target recipient is class `agent`
@@ -92,6 +134,18 @@ reconnects.
 - **AND** recipient has no active registered stream
 - **THEN** relay keeps pending delivery queued
 - **AND** attempts delivery when same identity reconnects
+
+#### Scenario: Default unregistered configured recipient to agent class
+
+- **WHEN** target recipient is configured in bundle
+- **AND** target has no active registration
+- **THEN** relay resolves endpoint class as `agent`
+
+#### Scenario: Reject unregistered unknown recipient
+
+- **WHEN** target has no active registration
+- **AND** target is not configured in associated bundle
+- **THEN** relay rejects request with `validation_unknown_recipient`
 
 ### Requirement: Relay Stream Event Contract
 
