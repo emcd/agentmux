@@ -77,22 +77,24 @@ Use consistent tags for discoverability:
 - Prefer a folder taxonomy of `<issue-type>/<component>` (max depth 2) and avoid mixing top-level component folders with top-level issue-type folders.
 - Recommended top-level issue types are:
     - `todos/`
-    - `handoffs/`
     - `coordination/`
     - `decisions/` (optional for durable rationale notes)
 - Example component names include `engine`, `mcp`, `tui`, `web`, `handbook`, and `data-models`.
 - This project should define and document its specific component-folder conventions in the **Project Notes** section.
 - For cross-component work, prefer `coordination/general` and use multiple `#component-*` tags.
+- For per-component rolling handoffs, prefer `coordination/<component>` (single continuously updated note) instead of creating history chains under `handoffs/*`.
 - Keep notebook lifecycle hygiene:
     - prune completed todos quickly,
-    - keep only active/near-term handoffs,
+    - keep only active/near-term coordination checkpoints,
     - delete stale history-only notes with no owner or action.
 
 ### `nb` vs OpenSpec Rubric
 - Use **OpenSpec proposals** for cross-cutting changes, contract-shaping work, architecture shifts, or work that needs explicit design discussion.
 - Use **`nb` todos/notes** for scoped, self-contained implementation tasks where the path is straightforward.
+- When in doubt about whether work needs an OpenSpec proposal or only `nb` execution tracking, prefer OpenSpec first for design clarity.
 - For each active OpenSpec proposal, keep **exactly one** linked `nb` todo as the tracking anchor (with proposal reference), rather than duplicating full task trees in both systems.
-- When in doubt, prefer OpenSpec first for design clarity, then track execution updates in the linked `nb` todo.
+- For cross-worktree or multi-agent review, draft OpenSpec proposal text in an `nb` note first so collaborators can review without local file access barriers; after review, move the approved draft into `openspec/**` files for human review and commit.
+- Keep rolling handoff notes separate from OpenSpec draft/proposal text.
 ## Tests Development
 
 - Prefer tests under `tests/unit` and `tests/integration` over inline `#[cfg(test)]` modules in `src/**`, unless there is a strong locality reason to keep tests adjacent to implementation.
