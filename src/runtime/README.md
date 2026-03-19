@@ -12,6 +12,9 @@ shared by relay and MCP hosts.
 - `association.rs`
   - resolves bundle/session association for MCP + CLI workflows,
   - supports precedence: CLI flags > local overrides > auto-discovery.
+- `tui_sender.rs`
+  - resolves TUI sender precedence from CLI + sender config files + association
+    fallback.
 - `bootstrap.rs`
   - relay socket bind and runtime lock acquisition.
 - `inscriptions.rs`

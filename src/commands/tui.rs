@@ -5,11 +5,14 @@ use crate::{
     runtime::{
         association::{
             McpAssociationCli, WorkspaceContext, load_local_mcp_overrides, resolve_association,
-            resolve_sender_session,
         },
         error::RuntimeError,
         paths::BundleRuntimePaths,
         starter::ensure_starter_configuration_layout,
+        tui_sender::{
+            load_local_tui_override_sender, load_tui_configuration_sender,
+            resolve_tui_sender_session,
+        },
     },
 };
 
@@ -41,8 +44,16 @@ pub(super) fn run_agentmux_tui(arguments: &[String]) -> Result<(), RuntimeError>
     ensure_starter_configuration_layout(&roots.configuration_root)?;
     let bundle = load_bundle_configuration(&roots.configuration_root, &association.bundle_name)
         .map_err(shared::map_bundle_load_error)?;
-    let sender_session =
-        resolve_sender_session(&bundle, &association.session_name, &current_directory)?;
+    let override_sender = load_local_tui_override_sender(&workspace.workspace_root)?;
+    let configuration_sender = load_tui_configuration_sender(&roots.configuration_root)?;
+    let sender_session = resolve_tui_sender_session(
+        &bundle,
+        &current_directory,
+        &association.session_name,
+        parsed.sender_session.as_deref(),
+        override_sender.as_deref(),
+        configuration_sender.as_deref(),
+    )?;
     let paths = BundleRuntimePaths::resolve(&roots.state_root, &association.bundle_name)?;
     crate::tui::run(crate::tui::TuiLaunchOptions {
         bundle_name: association.bundle_name,

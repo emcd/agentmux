@@ -1,6 +1,6 @@
 //! Shared command execution for agentmux binaries.
 
-use std::path::PathBuf;
+use std::{io::IsTerminal, path::PathBuf};
 
 use crate::{relay::ChatDeliveryMode, runtime::error::RuntimeError};
 
@@ -102,8 +102,14 @@ pub(super) const MAX_LOOK_LINES: u64 = 1000;
 /// Runs the unified `agentmux` CLI entrypoint.
 pub async fn run_agentmux(arguments: Vec<String>) -> Result<(), RuntimeError> {
     if arguments.is_empty() {
+        if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+            return tui::run_agentmux_tui(&[]);
+        }
         print_agentmux_help();
-        return Ok(());
+        return Err(RuntimeError::validation(
+            "validation_missing_subcommand",
+            "no subcommand provided in non-interactive context",
+        ));
     }
 
     match arguments[0].as_str() {

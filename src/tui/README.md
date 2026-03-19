@@ -7,6 +7,13 @@ This module provides the interactive `agentmux tui` workbench.
 - recipient discovery from relay `list` responses,
 - explicit `To` recipient field with deterministic target parsing,
 - async-only send behavior with local pending-delivery tracking,
+- sender identity precedence:
+  - `--sender`
+  - `.auxiliary/configuration/agentmux/overrides/tui.toml` (debug/testing)
+  - `<config-root>/tui.toml`
+  - association fallback,
+- delivery outcome vocabulary mapping:
+  - `accepted`, `success`, `timeout`, `failed`,
 - recipient completion via context-sensitive `Tab` plus `Ctrl+Space`,
 - `@`-prefixed tokens trigger immediate completion proposals after one suffix character,
 - recipient picker overlay (`F2`),
@@ -14,6 +21,8 @@ This module provides the interactive `agentmux tui` workbench.
 - send workflow via relay `chat` (`Ctrl+S`),
 - look workflow via relay `look` (`Ctrl+L`),
 - stable error-code rendering for validation failures.
+- stream reconnect handling with explicit `relay_unavailable` status when
+  disconnected.
 
 ## Keybindings
 

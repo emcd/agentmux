@@ -598,12 +598,12 @@ impl AppState {
     }
 
     fn record_chat_events(&mut self, status: &ChatStatus, results: &[ChatResult]) {
-        let mut queued_count = 0usize;
+        let mut accepted_count = 0usize;
         for result in results {
             match result.outcome {
                 ChatOutcome::Queued => {
                     self.pending_delivery_ids.insert(result.message_id.clone());
-                    queued_count += 1;
+                    accepted_count += 1;
                 }
                 _ => {
                     self.pending_delivery_ids.remove(&result.message_id);
@@ -612,27 +612,31 @@ impl AppState {
         }
 
         self.push_event(format!(
-            "send status={} targets={} queued={} pending={}",
+            "send status={} targets={} accepted={} pending={}",
             render_chat_status(status),
             results.len(),
-            queued_count,
+            accepted_count,
             self.pending_deliveries_count()
         ));
 
         for result in results {
-            let outcome = serde_json::to_value(&result.outcome)
-                .ok()
-                .and_then(|value| value.as_str().map(ToString::to_string))
-                .unwrap_or_else(|| format!("{:?}", result.outcome));
+            let (outcome, reason_code) = map_chat_result_outcome(&result.outcome);
             if let Some(reason) = result.reason.as_deref() {
                 self.push_event(format!(
-                    "target={} outcome={} message_id={} reason={}",
-                    result.target_session, outcome, result.message_id, reason
+                    "target={} outcome={} reason_code={} message_id={} reason={}",
+                    result.target_session,
+                    outcome,
+                    reason_code.unwrap_or("-"),
+                    result.message_id,
+                    reason
                 ));
             } else {
                 self.push_event(format!(
-                    "target={} outcome={} message_id={}",
-                    result.target_session, outcome, result.message_id
+                    "target={} outcome={} reason_code={} message_id={}",
+                    result.target_session,
+                    outcome,
+                    reason_code.unwrap_or("-"),
+                    result.message_id
                 ));
             }
         }
@@ -665,21 +669,22 @@ impl AppState {
                     if let Some(message_id) = message_id {
                         self.pending_delivery_ids.remove(message_id);
                     }
-                    let outcome = event
+                    let relay_outcome = event
                         .payload
                         .get("outcome")
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or("<unknown>");
-                    let reason_code = event
+                    let relay_reason_code = event
                         .payload
                         .get("reason_code")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("-");
+                        .and_then(serde_json::Value::as_str);
+                    let (outcome, reason_code) =
+                        map_stream_outcome(relay_outcome, relay_reason_code);
                     self.push_event(format!(
                         "delivery target={} outcome={} reason_code={} pending={}",
                         event.target_session,
                         outcome,
-                        reason_code,
+                        reason_code.unwrap_or("-"),
                         self.pending_deliveries_count()
                     ));
                 }
@@ -698,6 +703,26 @@ fn render_chat_status(status: &ChatStatus) -> &'static str {
         ChatStatus::Success => "success",
         ChatStatus::Partial => "partial",
         ChatStatus::Failure => "failure",
+    }
+}
+
+fn map_chat_result_outcome(outcome: &ChatOutcome) -> (&'static str, Option<&'static str>) {
+    match outcome {
+        ChatOutcome::Queued => ("accepted", None),
+        ChatOutcome::Delivered => ("success", None),
+        ChatOutcome::Timeout => ("timeout", None),
+        ChatOutcome::DroppedOnShutdown => ("failed", Some("dropped_on_shutdown")),
+        ChatOutcome::Failed => ("failed", None),
+    }
+}
+
+fn map_stream_outcome<'a>(
+    outcome: &'a str,
+    reason_code: Option<&'a str>,
+) -> (&'a str, Option<&'a str>) {
+    match outcome {
+        "success" | "timeout" | "failed" => (outcome, reason_code),
+        _ => ("<unknown>", reason_code),
     }
 }
 

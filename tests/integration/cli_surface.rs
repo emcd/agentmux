@@ -574,6 +574,27 @@ fn tui_help_output_includes_usage_line() {
     );
 }
 
+#[test]
+fn bare_agentmux_without_tty_prints_help_and_fails() {
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .output()
+        .expect("run bare agentmux");
+    assert!(
+        !output.status.success(),
+        "bare command should fail without tty"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.contains("Usage: agentmux <command>"),
+        "unexpected stdout: {stdout}"
+    );
+    assert!(
+        stderr.contains("validation_missing_subcommand"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
 fn write_bundle_configuration(
     config_root: &Path,
     bundle_name: &str,

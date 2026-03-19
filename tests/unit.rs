@@ -18,3 +18,5 @@ mod runtime_paths;
 mod runtime_starter;
 #[path = "unit/tui.rs"]
 mod tui;
+#[path = "unit/tui_sender.rs"]
+mod tui_sender;

@@ -75,6 +75,11 @@ agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mod
 
 Use `--help` on each command for the full flag list.
 
+Bare `agentmux` dispatch behavior:
+
+- interactive TTY: starts `agentmux tui`
+- non-interactive context: prints help and exits non-zero
+
 Common runtime flags for all commands:
 
 - `--config-directory PATH`
@@ -136,6 +141,13 @@ Association resolution for `list`/`send` and MCP host startup:
   - bundle from Git common-dir owner name,
   - session from worktree top-level directory name.
 
+TUI sender identity resolution:
+
+- `--sender` flag
+- local debug/testing override sender file
+- `<config-root>/tui.toml` sender
+- association fallback
+
 ## Configuration
 
 Runtime roots by default:
@@ -149,6 +161,12 @@ Runtime roots by default:
 Bundle configuration file path:
 
 - `<config-root>/bundles/<bundle-name>.toml`
+
+Optional TUI sender defaults:
+
+- normal config file: `<config-root>/tui.toml`
+- local debug/testing override:
+  `.auxiliary/configuration/agentmux/overrides/tui.toml`
 
 Starter files are generated when missing:
 
