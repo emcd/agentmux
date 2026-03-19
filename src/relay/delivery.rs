@@ -1,6 +1,8 @@
 use std::{
     collections::HashMap,
-    io::{BufRead, BufReader, Write},
+    fs,
+    io::{Read, Write},
+    os::fd::AsRawFd,
     path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
     sync::{Mutex, OnceLock, mpsc},
@@ -9,6 +11,7 @@ use std::{
 };
 
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use time::format_description::well_known::Rfc3339;
 
@@ -41,8 +44,40 @@ const MAX_PROMPT_INSPECT_LINES: usize = 40;
 const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;
 const ASYNC_SHUTDOWN_WAIT_POLL_MS: u64 = 25;
 const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delivery";
+const DROPPED_ON_SHUTDOWN_REASON_CODE: &str = "dropped_on_shutdown";
 const ACP_PROTOCOL_VERSION: u32 = 1;
 const UI_RECONNECT_POLL_INTERVAL_MS: u64 = 100;
+const ACP_SESSION_STATE_SCHEMA_VERSION: u32 = 1;
+const ACP_SESSIONS_DIRECTORY: &str = "sessions";
+const ACP_SESSION_STATE_FILE: &str = "state.json";
+const ACP_REASON_CODE_TURN_TIMEOUT: &str = "acp_turn_timeout";
+const ACP_REASON_CODE_STOP_CANCELLED: &str = "acp_stop_cancelled";
+const ACP_ERROR_CODE_INITIALIZE_FAILED: &str = "runtime_acp_initialize_failed";
+const ACP_ERROR_CODE_MISSING_CAPABILITY: &str = "validation_missing_acp_capability";
+
+#[derive(Debug)]
+enum AcpRequestError {
+    Failed(String),
+    Timeout(Duration),
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct PersistedAcpSessionState {
+    schema_version: u32,
+    acp_session_id: String,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum AcpLifecycleSelection {
+    NewSession,
+    LoadSession,
+}
+
+#[derive(Clone, Debug)]
+struct AcpCapabilities {
+    load_session: bool,
+    prompt_session: bool,
+}
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct QuiescenceOptions {
@@ -108,6 +143,7 @@ struct AsyncDeliveryRegistry {
 }
 
 static ASYNC_DELIVERY_REGISTRY: OnceLock<AsyncDeliveryRegistry> = OnceLock::new();
+static ACP_SESSION_STATE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[derive(Debug)]
 enum DeliveryWaitError {
@@ -301,6 +337,7 @@ pub(super) fn deliver_one_target(task: &AsyncDeliveryTask) -> Result<ChatResult,
 
     match &target_member.target {
         TargetConfiguration::Acp(acp) => Ok(deliver_one_target_acp(
+            task,
             target_member,
             acp,
             prompt_batches,
@@ -326,13 +363,17 @@ pub(super) fn deliver_one_target(task: &AsyncDeliveryTask) -> Result<ChatResult,
                         target_session,
                         message_id,
                         outcome: ChatOutcome::Delivered,
+                        reason_code: None,
                         reason: None,
+                        details: None,
                     }),
                     Some(reason) => Ok(ChatResult {
                         target_session,
                         message_id,
                         outcome: ChatOutcome::Failed,
+                        reason_code: None,
                         reason: Some(reason),
+                        details: None,
                     }),
                 }
             }
@@ -357,20 +398,26 @@ pub(super) fn deliver_one_target(task: &AsyncDeliveryTask) -> Result<ChatResult,
                     target_session,
                     message_id,
                     outcome: ChatOutcome::Timeout,
+                    reason_code: None,
                     reason: Some(reason),
+                    details: None,
                 })
             }
             Err(DeliveryWaitError::Failed { reason }) => Ok(ChatResult {
                 target_session,
                 message_id,
                 outcome: ChatOutcome::Failed,
+                reason_code: None,
                 reason: Some(reason),
+                details: None,
             }),
             Err(DeliveryWaitError::Shutdown) => Ok(ChatResult {
                 target_session,
                 message_id,
                 outcome: ChatOutcome::DroppedOnShutdown,
+                reason_code: Some(DROPPED_ON_SHUTDOWN_REASON_CODE.to_string()),
                 reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
+                details: None,
             }),
         },
     }
@@ -393,7 +440,9 @@ fn deliver_one_target_ui(
                 target_session,
                 message_id,
                 outcome: ChatOutcome::DroppedOnShutdown,
+                reason_code: Some(DROPPED_ON_SHUTDOWN_REASON_CODE.to_string()),
                 reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
+                details: None,
             };
         }
 
@@ -434,7 +483,9 @@ fn deliver_one_target_ui(
                     target_session,
                     message_id,
                     outcome: ChatOutcome::Delivered,
+                    reason_code: None,
                     reason: None,
+                    details: None,
                 };
             }
             Ok(StreamEventSendOutcome::NoUiEndpoint) | Ok(StreamEventSendOutcome::Disconnected) => {
@@ -444,7 +495,9 @@ fn deliver_one_target_ui(
                     target_session,
                     message_id,
                     outcome: ChatOutcome::Failed,
+                    reason_code: None,
                     reason: Some(format!("failed to emit relay stream event: {}", source)),
+                    details: None,
                 };
             }
         }
@@ -453,10 +506,12 @@ fn deliver_one_target_ui(
                 target_session,
                 message_id,
                 outcome: ChatOutcome::Timeout,
+                reason_code: None,
                 reason: Some(format!(
                     "ui relay stream was disconnected for {}ms",
                     start.elapsed().as_millis()
                 )),
+                details: None,
             };
         }
         thread::sleep(Duration::from_millis(UI_RECONNECT_POLL_INTERVAL_MS));
@@ -469,7 +524,67 @@ fn timestamp_rfc3339() -> String {
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
+fn delivered_result(target_session: String, message_id: String) -> ChatResult {
+    ChatResult {
+        target_session,
+        message_id,
+        outcome: ChatOutcome::Delivered,
+        reason_code: None,
+        reason: None,
+        details: None,
+    }
+}
+
+fn failed_result(
+    target_session: String,
+    message_id: String,
+    reason: impl Into<String>,
+) -> ChatResult {
+    ChatResult {
+        target_session,
+        message_id,
+        outcome: ChatOutcome::Failed,
+        reason_code: None,
+        reason: Some(reason.into()),
+        details: None,
+    }
+}
+
+fn failed_result_with_code(
+    target_session: String,
+    message_id: String,
+    reason_code: &str,
+    reason: impl Into<String>,
+    details: Option<Value>,
+) -> ChatResult {
+    ChatResult {
+        target_session,
+        message_id,
+        outcome: ChatOutcome::Failed,
+        reason_code: Some(reason_code.to_string()),
+        reason: Some(reason.into()),
+        details,
+    }
+}
+
+fn timeout_result(
+    target_session: String,
+    message_id: String,
+    reason_code: Option<&str>,
+    reason: impl Into<String>,
+) -> ChatResult {
+    ChatResult {
+        target_session,
+        message_id,
+        outcome: ChatOutcome::Timeout,
+        reason_code: reason_code.map(ToString::to_string),
+        reason: Some(reason.into()),
+        details: None,
+    }
+}
+
 fn deliver_one_target_acp(
+    task: &AsyncDeliveryTask,
     target_member: &crate::configuration::BundleMember,
     acp: &AcpTargetConfiguration,
     prompt_batches: Vec<String>,
@@ -477,146 +592,307 @@ fn deliver_one_target_acp(
     message_id: String,
 ) -> ChatResult {
     let Some(working_directory) = target_member.working_directory.as_ref() else {
-        return ChatResult {
+        return failed_result(
             target_session,
             message_id,
-            outcome: ChatOutcome::Failed,
-            reason: Some("ACP target is missing working directory".to_string()),
-        };
+            "ACP target is missing working directory",
+        );
     };
 
     let mut client = match acp.channel {
         crate::configuration::AcpChannel::Stdio => {
             let Some(command) = acp.command.as_deref() else {
-                return ChatResult {
+                return failed_result(
                     target_session,
                     message_id,
-                    outcome: ChatOutcome::Failed,
-                    reason: Some("ACP stdio target requires command".to_string()),
-                };
+                    "ACP stdio target requires command",
+                );
             };
             match AcpStdioClient::spawn(command, working_directory) {
                 Ok(client) => client,
-                Err(reason) => {
-                    return ChatResult {
-                        target_session,
-                        message_id,
-                        outcome: ChatOutcome::Failed,
-                        reason: Some(reason),
-                    };
-                }
+                Err(reason) => return failed_result(target_session, message_id, reason),
             }
         }
         crate::configuration::AcpChannel::Http => {
-            return ChatResult {
+            return failed_result(
                 target_session,
                 message_id,
-                outcome: ChatOutcome::Failed,
-                reason: Some("ACP http transport is not implemented".to_string()),
-            };
+                "ACP http transport is not implemented",
+            );
         }
     };
 
     let initialize_result = match client.initialize() {
         Ok(value) => value,
         Err(reason) => {
-            return ChatResult {
+            return failed_result_with_code(
                 target_session,
                 message_id,
-                outcome: ChatOutcome::Failed,
-                reason: Some(reason),
-            };
+                ACP_ERROR_CODE_INITIALIZE_FAILED,
+                "ACP initialize failed",
+                Some(json!({
+                    "target_session": target_member.id,
+                    "reason": reason,
+                })),
+            );
         }
     };
-    let load_session_supported = initialize_result
-        .get("agentCapabilities")
-        .and_then(|value| value.get("loadSession"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
 
-    let session_id = if let Some(coder_session_id) = target_member.coder_session_id.as_deref() {
-        if !load_session_supported {
-            return ChatResult {
-                target_session,
-                message_id,
-                outcome: ChatOutcome::Failed,
-                reason: Some(
-                    "ACP load path selected by coder-session-id but agent does not advertise loadSession support"
-                        .to_string(),
-                ),
-            };
-        }
-        if let Err(reason) = client.load_session(coder_session_id, working_directory) {
-            return ChatResult {
-                target_session,
-                message_id,
-                outcome: ChatOutcome::Failed,
-                reason: Some(format!("ACP session/load failed: {reason}")),
-            };
-        }
-        coder_session_id.to_string()
+    let capabilities = AcpCapabilities {
+        load_session: initialize_result
+            .get("agentCapabilities")
+            .and_then(|value| value.get("loadSession"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        prompt_session: initialize_result
+            .get("agentCapabilities")
+            .and_then(|value| value.get("promptSession"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    };
+
+    let persisted_session_id = if target_member.coder_session_id.is_some() {
+        None
     } else {
-        match client.new_session(working_directory) {
+        match load_persisted_acp_session_id(task.tmux_socket.as_path(), target_member.id.as_str()) {
             Ok(value) => value,
             Err(reason) => {
-                return ChatResult {
+                return failed_result(
                     target_session,
                     message_id,
-                    outcome: ChatOutcome::Failed,
-                    reason: Some(format!("ACP session/new failed: {reason}")),
-                };
+                    format!("failed to load persisted ACP session id: {reason}"),
+                );
             }
         }
     };
 
-    for prompt in prompt_batches {
-        match client.prompt(session_id.as_str(), prompt.as_str()) {
-            Ok(stop_reason) => {
-                if stop_reason == "cancelled" {
-                    return ChatResult {
-                        target_session,
-                        message_id,
-                        outcome: ChatOutcome::Failed,
-                        reason: Some("ACP turn cancelled".to_string()),
-                    };
-                }
-                if !matches!(
-                    stop_reason.as_str(),
-                    "end_turn" | "max_tokens" | "max_turn_requests" | "refusal"
-                ) {
-                    return ChatResult {
-                        target_session,
-                        message_id,
-                        outcome: ChatOutcome::Failed,
-                        reason: Some(format!(
-                            "ACP returned unsupported stopReason '{stop_reason}'"
-                        )),
-                    };
-                }
-            }
-            Err(reason) => {
-                return ChatResult {
+    let (lifecycle, lifecycle_session_id) =
+        if let Some(configured) = target_member.coder_session_id.as_deref() {
+            (AcpLifecycleSelection::LoadSession, configured.to_string())
+        } else if let Some(persisted) = persisted_session_id {
+            (AcpLifecycleSelection::LoadSession, persisted)
+        } else {
+            (AcpLifecycleSelection::NewSession, String::new())
+        };
+
+    let session_id = match lifecycle {
+        AcpLifecycleSelection::LoadSession => {
+            if !capabilities.load_session {
+                return failed_result_with_code(
                     target_session,
                     message_id,
-                    outcome: ChatOutcome::Failed,
-                    reason: Some(format!("ACP session/prompt failed: {reason}")),
-                };
+                    ACP_ERROR_CODE_MISSING_CAPABILITY,
+                    "ACP agent does not advertise required load capability",
+                    Some(json!({
+                        "target_session": target_member.id,
+                        "required_capability": "session/load",
+                        "reason": "agentCapabilities.loadSession is false or missing",
+                    })),
+                );
+            }
+            if let Err(reason) =
+                client.load_session(lifecycle_session_id.as_str(), working_directory)
+            {
+                return failed_result(
+                    target_session,
+                    message_id,
+                    format!("ACP session/load failed: {reason}"),
+                );
+            }
+            lifecycle_session_id
+        }
+        AcpLifecycleSelection::NewSession => match client.new_session(working_directory) {
+            Ok(value) => {
+                if let Err(reason) = persist_acp_session_id(
+                    task.tmux_socket.as_path(),
+                    target_member.id.as_str(),
+                    value.as_str(),
+                ) {
+                    return failed_result(
+                        target_session,
+                        message_id,
+                        format!("failed to persist ACP session id: {reason}"),
+                    );
+                }
+                value
+            }
+            Err(reason) => {
+                return failed_result(
+                    target_session,
+                    message_id,
+                    format!("ACP session/new failed: {reason}"),
+                );
+            }
+        },
+    };
+
+    if !capabilities.prompt_session {
+        return failed_result_with_code(
+            target_session,
+            message_id,
+            ACP_ERROR_CODE_MISSING_CAPABILITY,
+            "ACP agent does not advertise required prompt capability",
+            Some(json!({
+                "target_session": target_member.id,
+                "required_capability": "session/prompt",
+                "reason": "agentCapabilities.promptSession is false or missing",
+            })),
+        );
+    }
+
+    let turn_timeout = task.quiescence.quiescence_timeout;
+    for prompt in prompt_batches {
+        match client.prompt(session_id.as_str(), prompt.as_str(), turn_timeout) {
+            Ok(stop_reason) => match stop_reason.as_str() {
+                "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" => {}
+                "cancelled" => {
+                    return failed_result_with_code(
+                        target_session,
+                        message_id,
+                        ACP_REASON_CODE_STOP_CANCELLED,
+                        "ACP turn completed with stopReason=cancelled",
+                        None,
+                    );
+                }
+                _ => {
+                    return failed_result(
+                        target_session,
+                        message_id,
+                        format!("ACP returned unsupported stopReason '{stop_reason}'"),
+                    );
+                }
+            },
+            Err(AcpRequestError::Timeout(timeout)) => {
+                return timeout_result(
+                    target_session,
+                    message_id,
+                    Some(ACP_REASON_CODE_TURN_TIMEOUT),
+                    format!(
+                        "ACP session/prompt timed out after {}ms",
+                        timeout.as_millis()
+                    ),
+                );
+            }
+            Err(AcpRequestError::Failed(reason)) => {
+                return failed_result(
+                    target_session,
+                    message_id,
+                    format!("ACP session/prompt failed: {reason}"),
+                );
             }
         }
     }
 
-    ChatResult {
-        target_session,
-        message_id,
-        outcome: ChatOutcome::Delivered,
-        reason: None,
+    delivered_result(target_session, message_id)
+}
+
+fn resolve_acp_session_state_path(
+    tmux_socket: &Path,
+    target_session: &str,
+) -> Result<PathBuf, String> {
+    let Some(runtime_directory) = tmux_socket.parent() else {
+        return Err("tmux socket path has no parent runtime directory".to_string());
+    };
+    Ok(runtime_directory
+        .join(ACP_SESSIONS_DIRECTORY)
+        .join(target_session)
+        .join(ACP_SESSION_STATE_FILE))
+}
+
+fn acp_session_state_lock() -> &'static Mutex<()> {
+    ACP_SESSION_STATE_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn load_persisted_acp_session_id(
+    tmux_socket: &Path,
+    target_session: &str,
+) -> Result<Option<String>, String> {
+    let path = resolve_acp_session_state_path(tmux_socket, target_session)?;
+    let _guard = acp_session_state_lock()
+        .lock()
+        .map_err(|_| "failed to lock ACP session state".to_string())?;
+    let state = load_persisted_acp_session_state(path.as_path())?;
+    Ok(state.map(|value| value.acp_session_id))
+}
+
+fn persist_acp_session_id(
+    tmux_socket: &Path,
+    target_session: &str,
+    session_id: &str,
+) -> Result<(), String> {
+    let path = resolve_acp_session_state_path(tmux_socket, target_session)?;
+    let _guard = acp_session_state_lock()
+        .lock()
+        .map_err(|_| "failed to lock ACP session state".to_string())?;
+    let state = PersistedAcpSessionState {
+        schema_version: ACP_SESSION_STATE_SCHEMA_VERSION,
+        acp_session_id: session_id.to_string(),
+    };
+    store_persisted_acp_session_state(path.as_path(), &state)
+}
+
+fn load_persisted_acp_session_state(
+    path: &Path,
+) -> Result<Option<PersistedAcpSessionState>, String> {
+    if !path.exists() {
+        return Ok(None);
     }
+    let raw = fs::read_to_string(path)
+        .map_err(|source| format!("read ACP session state {} failed: {source}", path.display()))?;
+    let state =
+        serde_json::from_str::<PersistedAcpSessionState>(raw.as_str()).map_err(|source| {
+            format!(
+                "parse ACP session state {} failed: {source}",
+                path.display()
+            )
+        })?;
+    if state.schema_version != ACP_SESSION_STATE_SCHEMA_VERSION {
+        return Err(format!(
+            "unsupported ACP session state schema_version '{}' in {}",
+            state.schema_version,
+            path.display()
+        ));
+    }
+    if state.acp_session_id.trim().is_empty() {
+        return Err(format!(
+            "invalid ACP session state {}: acp_session_id must be non-empty",
+            path.display()
+        ));
+    }
+    Ok(Some(state))
+}
+
+fn store_persisted_acp_session_state(
+    path: &Path,
+    state: &PersistedAcpSessionState,
+) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| {
+            format!(
+                "create ACP session state directory {} failed: {source}",
+                parent.display()
+            )
+        })?;
+    }
+    let encoded = serde_json::to_string_pretty(state).map_err(|source| {
+        format!(
+            "encode ACP session state {} failed: {source}",
+            path.display()
+        )
+    })?;
+    fs::write(path, encoded).map_err(|source| {
+        format!(
+            "write ACP session state {} failed: {source}",
+            path.display()
+        )
+    })
 }
 
 struct AcpStdioClient {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    stdout: ChildStdout,
+    read_buffer: Vec<u8>,
     next_id: u64,
 }
 
@@ -641,10 +917,12 @@ impl AcpStdioClient {
             .stdout
             .take()
             .ok_or_else(|| "ACP stdio child stdout unavailable".to_string())?;
+        set_nonblocking(stdout.as_raw_fd(), true)?;
         Ok(Self {
             child,
             stdin,
-            stdout: BufReader::new(stdout),
+            stdout,
+            read_buffer: Vec::new(),
             next_id: 1,
         })
     }
@@ -660,16 +938,31 @@ impl AcpStdioClient {
                     "title": "Agentmux Relay",
                 },
             }),
+            None,
         )
+        .map_err(|error| match error {
+            AcpRequestError::Failed(reason) => reason,
+            AcpRequestError::Timeout(timeout) => {
+                format!("ACP initialize timed out after {}ms", timeout.as_millis())
+            }
+        })
     }
 
     fn new_session(&mut self, working_directory: &Path) -> Result<String, String> {
-        let result = self.request(
-            "session/new",
-            json!({
-                "cwd": working_directory.display().to_string(),
-            }),
-        )?;
+        let result = self
+            .request(
+                "session/new",
+                json!({
+                    "cwd": working_directory.display().to_string(),
+                }),
+                None,
+            )
+            .map_err(|error| match error {
+                AcpRequestError::Failed(reason) => reason,
+                AcpRequestError::Timeout(timeout) => {
+                    format!("ACP session/new timed out after {}ms", timeout.as_millis())
+                }
+            })?;
         result
             .get("sessionId")
             .and_then(Value::as_str)
@@ -678,17 +971,30 @@ impl AcpStdioClient {
     }
 
     fn load_session(&mut self, session_id: &str, working_directory: &Path) -> Result<(), String> {
-        let _ = self.request(
-            "session/load",
-            json!({
-                "sessionId": session_id,
-                "cwd": working_directory.display().to_string(),
-            }),
-        )?;
+        let _ = self
+            .request(
+                "session/load",
+                json!({
+                    "sessionId": session_id,
+                    "cwd": working_directory.display().to_string(),
+                }),
+                None,
+            )
+            .map_err(|error| match error {
+                AcpRequestError::Failed(reason) => reason,
+                AcpRequestError::Timeout(timeout) => {
+                    format!("ACP session/load timed out after {}ms", timeout.as_millis())
+                }
+            })?;
         Ok(())
     }
 
-    fn prompt(&mut self, session_id: &str, prompt: &str) -> Result<String, String> {
+    fn prompt(
+        &mut self,
+        session_id: &str,
+        prompt: &str,
+        timeout: Option<Duration>,
+    ) -> Result<String, AcpRequestError> {
         let result = self.request(
             "session/prompt",
             json!({
@@ -700,15 +1006,25 @@ impl AcpStdioClient {
                     }
                 ],
             }),
+            timeout,
         )?;
         result
             .get("stopReason")
             .and_then(Value::as_str)
             .map(ToString::to_string)
-            .ok_or_else(|| "ACP session/prompt response missing result.stopReason".to_string())
+            .ok_or_else(|| {
+                AcpRequestError::Failed(
+                    "ACP session/prompt response missing result.stopReason".to_string(),
+                )
+            })
     }
 
-    fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+    fn request(
+        &mut self,
+        method: &str,
+        params: Value,
+        timeout: Option<Duration>,
+    ) -> Result<Value, AcpRequestError> {
         let request_id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
         let message = serde_json::to_string(&json!({
@@ -717,39 +1033,111 @@ impl AcpStdioClient {
             "method": method,
             "params": params,
         }))
-        .map_err(|source| format!("serialize ACP request failed: {source}"))?;
+        .map_err(|source| {
+            AcpRequestError::Failed(format!("serialize ACP request failed: {source}"))
+        })?;
         self.stdin
             .write_all(message.as_bytes())
             .and_then(|_| self.stdin.write_all(b"\n"))
             .and_then(|_| self.stdin.flush())
-            .map_err(|source| format!("write ACP request failed: {source}"))?;
+            .map_err(|source| {
+                AcpRequestError::Failed(format!("write ACP request failed: {source}"))
+            })?;
 
-        let mut line = String::new();
         loop {
-            line.clear();
-            let bytes = self
-                .stdout
-                .read_line(&mut line)
-                .map_err(|source| format!("read ACP response failed: {source}"))?;
-            if bytes == 0 {
-                let status = self.child.wait().ok().and_then(|value| value.code());
-                return Err(format!("ACP peer closed stdout (exit_code={status:?})"));
-            }
+            let line = self.read_response_line(timeout)?;
             let trimmed = line.trim();
             if trimmed.is_empty() {
                 continue;
             }
-            let decoded = serde_json::from_str::<Value>(trimmed)
-                .map_err(|source| format!("parse ACP response failed: {source}"))?;
+            let decoded = serde_json::from_str::<Value>(trimmed).map_err(|source| {
+                AcpRequestError::Failed(format!("parse ACP response failed: {source}"))
+            })?;
             if decoded.get("id") != Some(&json!(request_id)) {
                 continue;
             }
             if let Some(error) = decoded.get("error") {
-                return Err(error.to_string());
+                return Err(AcpRequestError::Failed(error.to_string()));
             }
             return Ok(decoded.get("result").cloned().unwrap_or(Value::Null));
         }
     }
+
+    fn read_response_line(&mut self, timeout: Option<Duration>) -> Result<String, AcpRequestError> {
+        let deadline = timeout.map(|value| Instant::now() + value);
+        let mut chunk = [0_u8; 4096];
+        loop {
+            if let Some(newline_index) = self.read_buffer.iter().position(|value| *value == b'\n') {
+                let mut line = self.read_buffer.drain(..=newline_index).collect::<Vec<_>>();
+                if matches!(line.last(), Some(b'\n')) {
+                    line.pop();
+                }
+                if matches!(line.last(), Some(b'\r')) {
+                    line.pop();
+                }
+                return String::from_utf8(line).map_err(|source| {
+                    AcpRequestError::Failed(format!("decode ACP response failed: {source}"))
+                });
+            }
+
+            match self.stdout.read(&mut chunk) {
+                Ok(0) => {
+                    let exit_code = self
+                        .child
+                        .try_wait()
+                        .ok()
+                        .flatten()
+                        .and_then(|status| status.code());
+                    return Err(AcpRequestError::Failed(format!(
+                        "ACP peer closed stdout (exit_code={exit_code:?})"
+                    )));
+                }
+                Ok(count) => self.read_buffer.extend_from_slice(&chunk[..count]),
+                Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
+                    if let Some(limit) = deadline
+                        && Instant::now() >= limit
+                    {
+                        return Err(AcpRequestError::Timeout(
+                            timeout.unwrap_or(Duration::from_millis(0)),
+                        ));
+                    }
+                    if let Ok(Some(status)) = self.child.try_wait() {
+                        return Err(AcpRequestError::Failed(format!(
+                            "ACP peer exited before response (exit_code={:?})",
+                            status.code()
+                        )));
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(source) if source.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(source) => {
+                    return Err(AcpRequestError::Failed(format!(
+                        "read ACP response failed: {source}"
+                    )));
+                }
+            }
+        }
+    }
+}
+
+fn set_nonblocking(file_descriptor: i32, enable: bool) -> Result<(), String> {
+    // SAFETY: `fcntl` is called with a live file descriptor owned by this
+    // process. The command and arguments follow libc contract.
+    let flags = unsafe { libc::fcntl(file_descriptor, libc::F_GETFL) };
+    if flags < 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    let updated_flags = if enable {
+        flags | libc::O_NONBLOCK
+    } else {
+        flags & !libc::O_NONBLOCK
+    };
+    // SAFETY: `fcntl` receives the same valid descriptor and bitflag payload.
+    let result = unsafe { libc::fcntl(file_descriptor, libc::F_SETFL, updated_flags) };
+    if result < 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(())
 }
 
 pub(super) fn aggregate_chat_status(results: &[ChatResult]) -> ChatStatus {
@@ -825,7 +1213,9 @@ fn spawn_async_delivery_worker(key: AsyncWorkerKey, receiver: mpsc::Receiver<Asy
                         "target_session": result.target_session,
                         "message_id": result.message_id,
                         "outcome": result.outcome,
+                        "reason_code": result.reason_code,
                         "reason": result.reason,
+                        "details": result.details,
                     }),
                 ),
                 Err(error) => emit_inscription(
@@ -863,6 +1253,7 @@ fn emit_async_shutdown_drop(task: &AsyncDeliveryTask) {
             "target_session": task.target_session,
             "message_id": task.message_id,
             "outcome": ChatOutcome::DroppedOnShutdown,
+            "reason_code": DROPPED_ON_SHUTDOWN_REASON_CODE,
             "reason": DROPPED_ON_SHUTDOWN_REASON,
         }),
     );

@@ -44,13 +44,17 @@ pub struct Recipient {
 }
 
 /// Per-target delivery result for one `chat` request.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct ChatResult {
     pub target_session: String,
     pub message_id: String,
     pub outcome: ChatOutcome,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<Value>,
 }
 
 /// Reconciliation results for one bundle lifecycle pass.

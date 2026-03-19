@@ -514,6 +514,60 @@ fn look_surfaces_authorization_forbidden_from_relay() {
 }
 
 #[test]
+fn look_surfaces_unsupported_transport_from_relay() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration(&config_root, "agentmux", Some(&["dev"]), &["tui", "bravo"]);
+    let workspace_root = temporary.path().join("workspace");
+    configure_local_mcp_override(&workspace_root, "agentmux", "tui");
+
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux").expect("bundle paths");
+    ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
+    let relay_thread = spawn_fake_relay_once(
+        &bundle_paths.relay_socket,
+        RelayResponse::Error {
+            error: RelayError {
+                code: "validation_unsupported_transport".to_string(),
+                message: "look is unsupported for ACP targets in MVP".to_string(),
+                details: Some(serde_json::json!({
+                    "target_session": "bravo",
+                    "transport": "acp",
+                })),
+            },
+        },
+        Arc::new(Mutex::new(Vec::<Value>::new())),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .current_dir(&workspace_root)
+        .args([
+            "look",
+            "bravo",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .output()
+        .expect("run agentmux look");
+    relay_thread.join().expect("join fake relay thread");
+
+    assert!(!output.status.success(), "command should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("validation_unsupported_transport"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
 fn look_rejects_invalid_lines_bounds() {
     let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
         .args(["look", "bravo", "--lines", "0"])

@@ -103,6 +103,60 @@ coder = "shell"
     root
 }
 
+fn write_acp_bundle(temporary: &TempDir, name: &str) -> std::path::PathBuf {
+    let root = temporary.path().join("config");
+    let bundles = root.join("bundles");
+    std::fs::create_dir_all(&bundles).expect("create bundles directory");
+    std::fs::write(
+        root.join("coders.toml"),
+        r#"
+format-version = 1
+
+[[coders]]
+id = "acp"
+
+[coders.acp]
+channel = "stdio"
+command = "sh -lc 'cat >/dev/null'"
+"#,
+    )
+    .expect("write coders file");
+    std::fs::write(
+        root.join("policies.toml"),
+        r#"
+format-version = 1
+default = "default"
+
+[[policies]]
+id = "default"
+
+[policies.controls]
+find = "self"
+list = "all:home"
+look = "self"
+send = "all:home"
+"#,
+    )
+    .expect("write policies file");
+    let body = r#"
+format-version = 1
+
+[[sessions]]
+id = "alpha"
+name = "Alpha"
+directory = "/tmp"
+coder = "acp"
+
+[[sessions]]
+id = "bravo"
+name = "Bravo"
+directory = "/tmp"
+coder = "acp"
+"#;
+    std::fs::write(bundles.join(format!("{name}.toml")), body).expect("write bundle file");
+    root
+}
+
 fn write_bundle_with_policy(
     temporary: &TempDir,
     name: &str,
@@ -419,6 +473,27 @@ fn look_rejects_unknown_target() {
     )
     .expect_err("look should fail");
     assert_eq!(response.code, "validation_unknown_target");
+}
+
+#[test]
+fn look_rejects_acp_targets_in_mvp() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_acp_bundle(&temporary, "party");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    let response = handle_request(
+        RelayRequest::Look {
+            requester_session: "alpha".to_string(),
+            target_session: "bravo".to_string(),
+            lines: Some(5),
+            bundle_name: None,
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect_err("look should fail");
+    assert_eq!(response.code, "validation_unsupported_transport");
 }
 
 #[test]

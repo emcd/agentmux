@@ -15,6 +15,7 @@ const FORMAT_VERSION: u32 = 1;
 const CODERS_FILE: &str = "coders.toml";
 const BUNDLES_DIRECTORY: &str = "bundles";
 const BUNDLE_EXTENSION: &str = "toml";
+const MAX_SESSION_ID_LENGTH: usize = 31;
 pub const RESERVED_GROUP_ALL: &str = "ALL";
 
 /// One configured bundle member.
@@ -467,6 +468,7 @@ fn validate_loaded_configuration(
                 message: "session id must be non-empty".to_string(),
             });
         }
+        validate_session_id(bundle_path, session_id)?;
         if !session_ids.insert(session_id.to_string()) {
             return Err(ConfigurationError::InvalidConfiguration {
                 path: bundle_path.to_path_buf(),
@@ -918,6 +920,46 @@ fn compile_prompt_regex(
 
 fn normalize_field(value: &str) -> &str {
     value.trim()
+}
+
+fn validate_session_id(path: &Path, session_id: &str) -> Result<(), ConfigurationError> {
+    let mut characters = session_id.chars();
+    let Some(first) = characters.next() else {
+        return Err(ConfigurationError::InvalidConfiguration {
+            path: path.to_path_buf(),
+            message: "session id must be non-empty".to_string(),
+        });
+    };
+    if !first.is_ascii_alphabetic() {
+        return Err(ConfigurationError::InvalidConfiguration {
+            path: path.to_path_buf(),
+            message: format!(
+                "session id '{}' must start with an ASCII alphabetic character",
+                session_id
+            ),
+        });
+    }
+    if !characters
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        return Err(ConfigurationError::InvalidConfiguration {
+            path: path.to_path_buf(),
+            message: format!(
+                "session id '{}' may only contain ASCII alphanumeric characters, '-' or '_'",
+                session_id
+            ),
+        });
+    }
+    if session_id.len() > MAX_SESSION_ID_LENGTH {
+        return Err(ConfigurationError::InvalidConfiguration {
+            path: path.to_path_buf(),
+            message: format!(
+                "session id '{}' exceeds max length {}",
+                session_id, MAX_SESSION_ID_LENGTH
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn canonicalize_best_effort(path: &Path) -> PathBuf {

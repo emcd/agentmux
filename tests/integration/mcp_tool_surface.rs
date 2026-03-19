@@ -1020,3 +1020,46 @@ async fn look_maps_cross_bundle_validation_error_from_relay() {
         Some("validation_cross_bundle_unsupported")
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn look_maps_unsupported_transport_error_from_relay() {
+    let runtime = TestRuntime::create();
+    let _relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("look") => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "validation_unsupported_transport",
+                        "message": "look is unsupported for ACP targets in MVP",
+                        "details": {
+                            "target_session": "bravo",
+                            "transport": "acp",
+                        },
+                    },
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let mut arguments = Map::new();
+    arguments.insert(
+        "target_session".to_string(),
+        Value::String("bravo".to_string()),
+    );
+    let response = harness.call_tool(2, "look", arguments).await;
+
+    assert_eq!(
+        error_code(&response),
+        Some("validation_unsupported_transport")
+    );
+}

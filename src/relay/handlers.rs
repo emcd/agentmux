@@ -272,7 +272,9 @@ fn handle_chat(
                     target_session,
                     message_id,
                     outcome: ChatOutcome::Queued,
+                    reason_code: None,
                     reason: None,
+                    details: None,
                 });
             }
             (ChatStatus::Accepted, results)
@@ -376,6 +378,19 @@ fn handle_look(
                 Some(json!({"target_session": target_session})),
             )
         })?;
+    if matches!(
+        &target.target,
+        crate::configuration::TargetConfiguration::Acp(_)
+    ) {
+        return Err(relay_error(
+            "validation_unsupported_transport",
+            "look is unsupported for ACP targets in MVP",
+            Some(json!({
+                "target_session": target.id,
+                "transport": "acp",
+            })),
+        ));
+    }
     authorize_look(
         bundle,
         authorization,
