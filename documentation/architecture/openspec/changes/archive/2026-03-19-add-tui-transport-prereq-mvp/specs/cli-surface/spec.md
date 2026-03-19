@@ -19,6 +19,8 @@ entrypoints.
 - **WHEN** an operator runs `agentmux tui`
 - **THEN** the system starts TUI workflow
 
+## ADDED Requirements
+
 ### Requirement: Bare Agentmux TUI Dispatch
 
 When invoked without a subcommand, `agentmux` SHALL dispatch based on terminal
@@ -39,8 +41,6 @@ context:
 - **AND** the process is not attached to an interactive TTY
 - **THEN** the system prints CLI help output
 - **AND** exits with a non-zero status code
-
-## ADDED Requirements
 
 ### Requirement: TUI Sender Override Precedence Hook
 
