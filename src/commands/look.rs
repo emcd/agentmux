@@ -1,0 +1,150 @@
+use std::env;
+
+use serde_json::json;
+
+use crate::{
+    configuration::load_bundle_configuration,
+    relay::{RelayRequest, RelayResponse, request_relay},
+    runtime::{
+        association::{
+            McpAssociationCli, WorkspaceContext, load_local_mcp_overrides, resolve_association,
+            resolve_sender_session,
+        },
+        error::RuntimeError,
+        paths::BundleRuntimePaths,
+        starter::ensure_starter_configuration_layout,
+    },
+};
+
+use super::{LookArguments, RuntimeArguments, shared};
+
+pub(super) fn run_agentmux_look(arguments: &[String]) -> Result<(), RuntimeError> {
+    if arguments
+        .iter()
+        .any(|value| value == "--help" || value == "-h")
+    {
+        print_look_help();
+        return Ok(());
+    }
+
+    let parsed = parse_look_arguments(arguments)?;
+    let current_directory = env::current_dir()
+        .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
+    let workspace = WorkspaceContext::discover(&current_directory)?;
+    let local_overrides = load_local_mcp_overrides(&workspace.workspace_root)?;
+    let associated = resolve_association(
+        &McpAssociationCli::default(),
+        local_overrides.as_ref(),
+        &workspace,
+    )?;
+    if let Some(requested_bundle_name) = parsed.bundle_name.as_ref()
+        && requested_bundle_name != &associated.bundle_name
+    {
+        return Err(RuntimeError::validation(
+            "validation_cross_bundle_unsupported",
+            "look is limited to the associated bundle in MVP".to_string(),
+        ));
+    }
+
+    let roots = shared::resolve_roots(&parsed.runtime, &workspace, local_overrides.as_ref())?;
+    ensure_starter_configuration_layout(&roots.configuration_root)?;
+    let bundle = load_bundle_configuration(&roots.configuration_root, &associated.bundle_name)
+        .map_err(shared::map_bundle_load_error)?;
+    let requester_session =
+        resolve_sender_session(&bundle, &associated.session_name, &current_directory)?;
+    let paths = BundleRuntimePaths::resolve(&roots.state_root, &associated.bundle_name)?;
+    let response = request_relay(
+        &paths.relay_socket,
+        &RelayRequest::Look {
+            requester_session,
+            target_session: parsed.target_session,
+            lines: parsed.lines.map(|value| value as usize),
+            bundle_name: parsed.bundle_name,
+        },
+    )
+    .map_err(|source| shared::map_relay_request_failure(&paths.relay_socket, source))?;
+    let payload = match response {
+        RelayResponse::Look {
+            schema_version,
+            bundle_name,
+            requester_session,
+            target_session,
+            captured_at,
+            snapshot_lines,
+        } => json!({
+            "schema_version": schema_version,
+            "bundle_name": bundle_name,
+            "requester_session": requester_session,
+            "target_session": target_session,
+            "captured_at": captured_at,
+            "snapshot_lines": snapshot_lines,
+        }),
+        RelayResponse::Error { error } => return Err(shared::map_relay_error(error)),
+        other => {
+            return Err(RuntimeError::validation(
+                "internal_unexpected_failure",
+                format!("relay returned unexpected response variant: {other:?}"),
+            ));
+        }
+    };
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&payload).map_err(|source| {
+            RuntimeError::io("encode look response json", std::io::Error::other(source))
+        })?
+    );
+    Ok(())
+}
+
+fn parse_look_arguments(arguments: &[String]) -> Result<LookArguments, RuntimeError> {
+    let mut parsed = LookArguments {
+        bundle_name: None,
+        target_session: String::new(),
+        lines: None,
+        runtime: RuntimeArguments::default(),
+    };
+    let mut target_session = None::<String>;
+    let mut index = 0usize;
+    while index < arguments.len() {
+        if shared::parse_runtime_flag(arguments, &mut index, &mut parsed.runtime)? {
+            index += 1;
+            continue;
+        }
+        match arguments[index].as_str() {
+            "--bundle" | "--bundle-name" => {
+                parsed.bundle_name = Some(shared::take_value(arguments, &mut index, "--bundle")?);
+            }
+            "--lines" => {
+                let value = shared::take_value(arguments, &mut index, "--lines")?;
+                parsed.lines = Some(shared::parse_look_lines(value.as_str())?);
+            }
+            value if !value.starts_with('-') => {
+                if target_session.is_some() {
+                    return Err(RuntimeError::InvalidArgument {
+                        argument: value.to_string(),
+                        message: "unknown argument".to_string(),
+                    });
+                }
+                target_session = Some(value.to_string());
+            }
+            unknown => {
+                return Err(RuntimeError::InvalidArgument {
+                    argument: unknown.to_string(),
+                    message: "unknown argument".to_string(),
+                });
+            }
+        }
+        index += 1;
+    }
+    parsed.target_session = target_session.ok_or_else(|| RuntimeError::InvalidArgument {
+        argument: "<target-session>".to_string(),
+        message: "missing value".to_string(),
+    })?;
+    Ok(parsed)
+}
+
+pub(super) fn print_look_help() {
+    println!(
+        "Usage: agentmux look <target-session> [--bundle NAME] [--lines N] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+    );
+}

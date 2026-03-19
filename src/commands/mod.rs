@@ -1,0 +1,130 @@
+//! Shared command execution for agentmux binaries.
+
+use std::path::PathBuf;
+
+use crate::{relay::ChatDeliveryMode, runtime::error::RuntimeError};
+
+mod host;
+mod list;
+mod look;
+mod send;
+mod shared;
+mod tui;
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct RuntimeArguments {
+    pub(super) configuration_root: Option<PathBuf>,
+    pub(super) state_root: Option<PathBuf>,
+    pub(super) inscriptions_root: Option<PathBuf>,
+    pub(super) repository_root: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct RelayHostArguments {
+    pub(super) selector: RelayHostSelector,
+    pub(super) runtime: RuntimeArguments,
+}
+
+#[derive(Clone, Debug)]
+pub(super) enum RelayHostSelector {
+    Bundle(String),
+    Group(String),
+}
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct McpHostArguments {
+    pub(super) bundle_name: Option<String>,
+    pub(super) session_name: Option<String>,
+    pub(super) runtime: RuntimeArguments,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct ListArguments {
+    pub(super) bundle_name: Option<String>,
+    pub(super) sender_session: Option<String>,
+    pub(super) output_json: bool,
+    pub(super) runtime: RuntimeArguments,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct LookArguments {
+    pub(super) bundle_name: Option<String>,
+    pub(super) target_session: String,
+    pub(super) lines: Option<u64>,
+    pub(super) runtime: RuntimeArguments,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct TuiArguments {
+    pub(super) bundle_name: Option<String>,
+    pub(super) sender_session: Option<String>,
+    pub(super) lines: Option<u64>,
+    pub(super) runtime: RuntimeArguments,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct SendArguments {
+    pub(super) bundle_name: Option<String>,
+    pub(super) sender_session: Option<String>,
+    pub(super) request_id: Option<String>,
+    pub(super) message: String,
+    pub(super) targets: Vec<String>,
+    pub(super) broadcast: bool,
+    pub(super) delivery_mode: ChatDeliveryMode,
+    pub(super) quiescence_timeout_ms: Option<u64>,
+    pub(super) output_json: bool,
+    pub(super) runtime: RuntimeArguments,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct RelayHostStartupBundle {
+    pub(super) bundle_name: String,
+    pub(super) outcome: String,
+    pub(super) reason_code: Option<String>,
+    pub(super) reason: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct RelayHostStartupSummary {
+    pub(super) schema_version: u32,
+    pub(super) host_mode: String,
+    pub(super) group_name: Option<String>,
+    pub(super) bundles: Vec<RelayHostStartupBundle>,
+    pub(super) hosted_bundle_count: usize,
+    pub(super) skipped_bundle_count: usize,
+    pub(super) failed_bundle_count: usize,
+    pub(super) hosted_any: bool,
+}
+
+pub(super) const MIN_LOOK_LINES: u64 = 1;
+pub(super) const MAX_LOOK_LINES: u64 = 1000;
+
+/// Runs the unified `agentmux` CLI entrypoint.
+pub async fn run_agentmux(arguments: Vec<String>) -> Result<(), RuntimeError> {
+    if arguments.is_empty() {
+        print_agentmux_help();
+        return Ok(());
+    }
+
+    match arguments[0].as_str() {
+        "--help" | "-h" => {
+            print_agentmux_help();
+            Ok(())
+        }
+        "host" => host::run_agentmux_host(&arguments[1..]).await,
+        "list" => list::run_agentmux_list(&arguments[1..]),
+        "look" => look::run_agentmux_look(&arguments[1..]),
+        "tui" => tui::run_agentmux_tui(&arguments[1..]),
+        "send" => send::run_agentmux_send(&arguments[1..]),
+        unknown => Err(RuntimeError::InvalidArgument {
+            argument: unknown.to_string(),
+            message: "unknown subcommand".to_string(),
+        }),
+    }
+}
+
+fn print_agentmux_help() {
+    println!(
+        "Usage: agentmux <command> [options]\\n\\nCommands:\\n  host relay (<bundle-id> | --group GROUP) [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\\n  host mcp [--bundle NAME] [--session-name NAME] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\\n  list [--bundle NAME] [--sender NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\\n  look <target-session> [--bundle NAME] [--lines N] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\\n  tui [--bundle NAME] [--sender NAME] [--lines N] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\\n  send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--quiescence-timeout-ms MS] [--request-id ID] [--bundle NAME] [--sender NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+    );
+}
