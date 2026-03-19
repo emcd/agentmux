@@ -29,7 +29,8 @@ MVP and SHALL NOT expose MCP tools that mutate bundle configuration.
 
 ### Requirement: Recipient Listing Contract
 
-`list` SHALL return potential recipient sessions from a configured bundle.
+`list` SHALL return potential recipient sessions from a configured bundle when
+authorized.
 
 Successful `list` responses SHALL include:
 
@@ -41,6 +42,9 @@ Each recipient entry SHALL include:
 
 - `session_name`
 - `display_name` (optional)
+
+If requester identity is valid and policy denies list access, MCP SHALL return
+`authorization_forbidden` and SHALL NOT return an empty successful list.
 
 #### Scenario: List recipients for known bundle
 
@@ -56,6 +60,13 @@ Each recipient entry SHALL include:
 
 - **WHEN** a recipient has configured display metadata
 - **THEN** `list` includes `display_name` for that recipient
+
+#### Scenario: Deny list request with authorization_forbidden
+
+- **WHEN** requester identity is valid
+- **AND** policy denies list visibility for requester
+- **THEN** MCP returns `authorization_forbidden`
+- **AND** does not return `recipients=[]` as success
 
 ### Requirement: Send Target Selection
 
@@ -75,6 +86,11 @@ If `delivery_mode` is omitted, the system SHALL default to `async`.
 
 - positive integer milliseconds
 - omitted means mode-aware defaults are applied by relay
+
+`send` authorization scope SHALL follow requester policy control:
+
+- `all:home`
+- `all:all`
 
 #### Scenario: Default to async delivery mode
 
@@ -136,6 +152,10 @@ If `delivery_mode` is omitted, the system SHALL default to `async`.
 
 `send` SHALL infer sender identity from the MCP server's configured session
 association and SHALL NOT require a sender identity in request payloads.
+
+Association/socket-driven requester identity SHALL be authoritative for
+principal identity.
+Caller-supplied sender-like payload fields SHALL NOT override that principal.
 
 #### Scenario: Infer sender session identity
 
@@ -207,6 +227,20 @@ Tool failures SHALL return a structured error object with:
 
 The system SHALL use stable machine-readable error codes.
 
+For `authorization_forbidden`, `details` SHALL include:
+
+- required:
+  - `capability`
+  - `requester_session`
+  - `bundle_name`
+  - `reason`
+- optional:
+  - `target_session`
+  - `targets`
+  - `policy_rule_id`
+
+Validation failures SHALL be returned before authorization denials.
+
 #### Scenario: Unknown bundle error
 
 - **WHEN** a caller references a bundle that does not exist
@@ -224,6 +258,12 @@ The system SHALL use stable machine-readable error codes.
 - **WHEN** `send` targets a configured recipient name shared by multiple sessions
 - **THEN** the tool returns error code `validation_ambiguous_recipient`
 - **AND** includes matching session identifiers in error details
+
+#### Scenario: Return canonical authorization denial schema
+
+- **WHEN** request is valid/resolved but denied by policy
+- **THEN** the tool returns `authorization_forbidden`
+- **AND** details include the required denial fields
 
 ### Requirement: MCP Schema Versioning
 
@@ -296,4 +336,34 @@ Successful `look` responses SHALL include:
 - **THEN** response includes canonical inspection payload fields
 - **AND** `snapshot_lines` is returned as an array of strings ordered
   oldest-to-newest
+
+### Requirement: MCP Authorization Adapter Boundary
+
+MCP SHALL remain a request validator/adapter and SHALL perform no independent
+authorization decisioning.
+Relay SHALL remain the centralized authorization decision point.
+
+#### Scenario: Propagate relay authorization denial unchanged
+
+- **WHEN** relay returns `authorization_forbidden`
+- **THEN** MCP returns the same code and details schema to caller
+- **AND** MCP does not synthesize a custom authorization decision
+
+### Requirement: MCP Control-to-Capability Mapping
+
+MCP tool operations SHALL map to these canonical capability labels for
+authorization outcomes:
+
+- `list` -> `list.read`
+- `send` -> `send.deliver`
+- `look` -> `look.inspect`
+- `do list` -> `do.list`
+- `do show` -> `do.show`
+- `do run` -> `do.run`
+- `find` -> `find.query`
+
+#### Scenario: Preserve look capability label in denial payload
+
+- **WHEN** `look` is denied by relay policy
+- **THEN** MCP denial details include `capability = "look.inspect"`
 
