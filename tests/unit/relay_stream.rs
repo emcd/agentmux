@@ -97,9 +97,10 @@ fn read_json(reader: &mut BufReader<UnixStream>) -> Value {
 #[test]
 fn stream_request_before_hello_is_rejected() {
     let temporary = TempDir::new().expect("temporary directory");
-    let configuration_root = write_bundle_configuration(&temporary, "party");
+    let bundle_name = "party_before_hello";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "party").expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let (mut client_stream, join_handle) =
         spawn_relay_connection(&configuration_root, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
@@ -129,9 +130,10 @@ fn stream_request_before_hello_is_rejected() {
 #[test]
 fn stream_hello_acknowledges_and_allows_request() {
     let temporary = TempDir::new().expect("temporary directory");
-    let configuration_root = write_bundle_configuration(&temporary, "party");
+    let bundle_name = "party_allow_request";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "party").expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let (mut client_stream, join_handle) =
         spawn_relay_connection(&configuration_root, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
@@ -142,14 +144,14 @@ fn stream_hello_acknowledges_and_allows_request() {
         json!({
             "frame": "hello",
             "schema_version": "1",
-            "bundle_name": "party",
+            "bundle_name": bundle_name,
             "session_id": "alpha",
             "client_class": "agent"
         }),
     );
     let hello_ack = read_json(&mut reader);
     assert_eq!(hello_ack["frame"], "hello_ack");
-    assert_eq!(hello_ack["bundle_name"], "party");
+    assert_eq!(hello_ack["bundle_name"], bundle_name);
     assert_eq!(hello_ack["session_id"], "alpha");
     assert_eq!(hello_ack["client_class"], "agent");
 
@@ -165,7 +167,7 @@ fn stream_hello_acknowledges_and_allows_request() {
     assert_eq!(response["frame"], "response");
     assert_eq!(response["request_id"], "req-1");
     assert_eq!(response["response"]["kind"], "list");
-    assert_eq!(response["response"]["bundle_name"], "party");
+    assert_eq!(response["response"]["bundle_name"], bundle_name);
 
     client_stream
         .shutdown(std::net::Shutdown::Both)
@@ -176,9 +178,10 @@ fn stream_hello_acknowledges_and_allows_request() {
 #[test]
 fn reconnecting_hello_replaces_prior_stream_identity_binding() {
     let temporary = TempDir::new().expect("temporary directory");
-    let configuration_root = write_bundle_configuration(&temporary, "party");
+    let bundle_name = "party_reconnect";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "party").expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
 
     let (mut first_client, first_handle) =
         spawn_relay_connection(&configuration_root, &bundle_paths);
@@ -193,7 +196,7 @@ fn reconnecting_hello_replaces_prior_stream_identity_binding() {
     let hello_frame = json!({
         "frame": "hello",
         "schema_version": "1",
-        "bundle_name": "party",
+        "bundle_name": bundle_name,
         "session_id": "alpha",
         "client_class": "agent"
     });

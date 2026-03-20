@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
 
-use super::state::{AppState, FocusField, StatusEntry};
+use super::state::{AppState, ChatHistoryDirection, FocusField, StatusEntry};
 
 pub(crate) fn render(frame: &mut Frame, state: &mut AppState) {
     let chunks = Layout::default()
@@ -56,16 +56,21 @@ fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
 }
 
 fn render_main(frame: &mut Frame, area: Rect, state: &mut AppState) {
-    render_right_panes(frame, area, state);
+    render_workbench_panes(frame, area, state);
 }
 
-fn render_right_panes(frame: &mut Frame, area: Rect, state: &AppState) {
+fn render_workbench_panes(frame: &mut Frame, area: Rect, state: &mut AppState) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(9), Constraint::Min(8)])
+        .constraints([
+            Constraint::Length(9),
+            Constraint::Length(9),
+            Constraint::Min(8),
+        ])
         .split(area);
     render_compose(frame, rows[0], state);
-    render_snapshot(frame, rows[1], state);
+    render_chat_history(frame, rows[1], state);
+    render_snapshot(frame, rows[2], state);
 }
 
 fn render_compose(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -111,6 +116,41 @@ fn render_compose(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_widget(paragraph, area);
 }
 
+fn render_chat_history(frame: &mut Frame, area: Rect, state: &mut AppState) {
+    let viewport_height = area.height.saturating_sub(2) as usize;
+    state.set_chat_history_viewport_height(viewport_height);
+
+    let lines = if state.chat_history.is_empty() {
+        vec![Line::from("(no chat messages yet)")]
+    } else {
+        state
+            .visible_chat_history_entries()
+            .iter()
+            .map(|entry| {
+                let marker = match entry.direction {
+                    ChatHistoryDirection::Outgoing => "out",
+                    ChatHistoryDirection::Incoming => "in ",
+                };
+                let metadata = entry
+                    .message_id
+                    .as_ref()
+                    .map(|message_id| format!(" [{}]", message_id))
+                    .unwrap_or_default();
+                Line::from(Span::raw(format!(
+                    "{marker} {}{}: {}",
+                    entry.peer_session, metadata, entry.body
+                )))
+            })
+            .collect::<Vec<_>>()
+    };
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Chat History (PgUp/PgDn)"),
+    );
+    frame.render_widget(paragraph, area);
+}
+
 fn render_snapshot(frame: &mut Frame, area: Rect, state: &AppState) {
     let title = match (&state.look_target, &state.look_captured_at) {
         (Some(target), Some(captured_at)) => {
@@ -147,7 +187,9 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
     let footer = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
         Block::default()
             .borders(Borders::ALL)
-            .title("Status (Ctrl+R refresh, Ctrl+L look, F2 picker, F3 events, Esc/Ctrl+Q quit)"),
+            .title(
+                "Status (Ctrl+R refresh, Ctrl+L look, F2 picker, F3 events, PgUp/PgDn history, Esc/Ctrl+Q quit)",
+            ),
     );
     frame.render_widget(footer, area);
 }

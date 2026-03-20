@@ -16,6 +16,8 @@ use crate::{
 
 const MAX_STATUS_HISTORY: usize = 6;
 const MAX_EVENT_HISTORY: usize = 64;
+const MAX_CHAT_HISTORY: usize = 256;
+const MAX_SEEN_STREAM_IDS: usize = 1024;
 
 #[derive(Clone, Debug)]
 struct ToCompletionState {
@@ -31,6 +33,20 @@ struct RecipientTokenContext {
     leading_ws: usize,
     query: String,
     at_prefixed: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum ChatHistoryDirection {
+    Outgoing,
+    Incoming,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ChatHistoryEntry {
+    pub direction: ChatHistoryDirection,
+    pub peer_session: String,
+    pub body: String,
+    pub message_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -74,7 +90,14 @@ pub(crate) struct AppState {
     pub look_snapshot_lines: Vec<String>,
     pub status_history: VecDeque<StatusEntry>,
     pub event_history: VecDeque<String>,
+    pub chat_history: VecDeque<ChatHistoryEntry>,
+    chat_history_scroll: usize,
+    chat_history_viewport_height: usize,
     pending_delivery_ids: HashSet<String>,
+    seen_incoming_message_ids: HashSet<String>,
+    seen_incoming_message_order: VecDeque<String>,
+    seen_delivery_outcome_ids: HashSet<String>,
+    seen_delivery_outcome_order: VecDeque<String>,
     relay_stream_poll_error_reported: bool,
     to_completion: Option<ToCompletionState>,
     completion_locked_until_to_edit: bool,
@@ -114,10 +137,17 @@ impl AppState {
             look_snapshot_lines: Vec::new(),
             status_history: VecDeque::from([StatusEntry {
                 code: None,
-                message: "Ready. Tab complete/focus, Enter accept completion, Ctrl+Space cycle, Ctrl+S send, Ctrl+L look, Esc/Ctrl+Q quit.".to_string(),
+                message: "Ready. Tab complete/focus, Enter accept completion, Ctrl+Space cycle, Ctrl+S send, Ctrl+L look, PgUp/PgDn history, Esc/Ctrl+Q quit.".to_string(),
             }]),
             event_history: VecDeque::new(),
+            chat_history: VecDeque::new(),
+            chat_history_scroll: 0,
+            chat_history_viewport_height: 10,
             pending_delivery_ids: HashSet::new(),
+            seen_incoming_message_ids: HashSet::new(),
+            seen_incoming_message_order: VecDeque::new(),
+            seen_delivery_outcome_ids: HashSet::new(),
+            seen_delivery_outcome_order: VecDeque::new(),
             relay_stream_poll_error_reported: false,
             to_completion: None,
             completion_locked_until_to_edit: false,
@@ -450,10 +480,11 @@ impl AppState {
             ));
         }
         let targets = merge_tui_targets(&self.to_field, &self.bundle_name)?;
+        let message_body = self.message_field.clone();
         let response = self.request_relay(&RelayRequest::Chat {
             request_id: None,
             sender_session: self.sender_session.clone(),
-            message: self.message_field.clone(),
+            message: message_body.clone(),
             targets,
             broadcast: false,
             delivery_mode: ChatDeliveryMode::Async,
@@ -464,6 +495,13 @@ impl AppState {
             RelayResponse::Chat {
                 status, results, ..
             } => {
+                let history_targets = results
+                    .iter()
+                    .map(|result| result.target_session.clone())
+                    .collect::<Vec<_>>();
+                if !history_targets.is_empty() {
+                    self.push_outgoing_chat_history(&history_targets, message_body.as_str());
+                }
                 self.record_chat_events(&status, &results);
                 self.push_status(
                     None,
@@ -535,6 +573,35 @@ impl AppState {
         }
     }
 
+    pub fn set_chat_history_viewport_height(&mut self, height: usize) {
+        self.chat_history_viewport_height = height.max(1);
+        self.clamp_chat_history_scroll();
+    }
+
+    pub fn scroll_chat_history_page_up(&mut self) {
+        let page = self.chat_history_viewport_height.max(1);
+        let max_scroll = self.max_chat_history_scroll();
+        self.chat_history_scroll = (self.chat_history_scroll + page).min(max_scroll);
+    }
+
+    pub fn scroll_chat_history_page_down(&mut self) {
+        let page = self.chat_history_viewport_height.max(1);
+        self.chat_history_scroll = self.chat_history_scroll.saturating_sub(page);
+    }
+
+    pub fn visible_chat_history_entries(&self) -> Vec<ChatHistoryEntry> {
+        let max_items = self.chat_history_viewport_height.max(1);
+        let mut visible = self
+            .chat_history
+            .iter()
+            .skip(self.chat_history_scroll)
+            .take(max_items)
+            .cloned()
+            .collect::<Vec<_>>();
+        visible.reverse();
+        visible
+    }
+
     pub fn pending_deliveries_count(&self) -> usize {
         self.pending_delivery_ids.len()
     }
@@ -597,6 +664,67 @@ impl AppState {
         }
     }
 
+    fn push_chat_history_entry(&mut self, entry: ChatHistoryEntry) {
+        self.chat_history.push_front(entry);
+        while self.chat_history.len() > MAX_CHAT_HISTORY {
+            self.chat_history.pop_back();
+        }
+        self.chat_history_scroll = 0;
+    }
+
+    fn push_outgoing_chat_history(&mut self, targets: &[String], body: &str) {
+        let peer_session = targets.join(", ");
+        self.push_chat_history_entry(ChatHistoryEntry {
+            direction: ChatHistoryDirection::Outgoing,
+            peer_session,
+            body: body.trim_end_matches('\n').to_string(),
+            message_id: None,
+        });
+    }
+
+    fn push_incoming_chat_history(
+        &mut self,
+        sender_session: &str,
+        body: &str,
+        message_id: Option<&str>,
+    ) {
+        self.push_chat_history_entry(ChatHistoryEntry {
+            direction: ChatHistoryDirection::Incoming,
+            peer_session: sender_session.to_string(),
+            body: body.to_string(),
+            message_id: message_id.map(ToString::to_string),
+        });
+    }
+
+    fn max_chat_history_scroll(&self) -> usize {
+        let visible = self.chat_history_viewport_height.max(1);
+        self.chat_history.len().saturating_sub(visible)
+    }
+
+    fn clamp_chat_history_scroll(&mut self) {
+        let max_scroll = self.max_chat_history_scroll();
+        self.chat_history_scroll = self.chat_history_scroll.min(max_scroll);
+    }
+
+    fn remember_seen_id(
+        seen: &mut HashSet<String>,
+        order: &mut VecDeque<String>,
+        key: impl Into<String>,
+    ) -> bool {
+        let key = key.into();
+        if seen.contains(&key) {
+            return false;
+        }
+        seen.insert(key.clone());
+        order.push_back(key);
+        while order.len() > MAX_SEEN_STREAM_IDS {
+            if let Some(evicted) = order.pop_front() {
+                seen.remove(evicted.as_str());
+            }
+        }
+        true
+    }
+
     fn record_chat_events(&mut self, status: &ChatStatus, results: &[ChatResult]) {
         let mut accepted_count = 0usize;
         for result in results {
@@ -656,6 +784,21 @@ impl AppState {
                         .get("message_id")
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or("<unknown>");
+                    let body = event
+                        .payload
+                        .get("body")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("");
+                    if message_id != "<unknown>"
+                        && !Self::remember_seen_id(
+                            &mut self.seen_incoming_message_ids,
+                            &mut self.seen_incoming_message_order,
+                            message_id,
+                        )
+                    {
+                        continue;
+                    }
+                    self.push_incoming_chat_history(sender_session, body, Some(message_id));
                     self.push_event(format!(
                         "incoming target={} sender={} message_id={}",
                         event.target_session, sender_session, message_id
@@ -666,9 +809,6 @@ impl AppState {
                         .payload
                         .get("message_id")
                         .and_then(serde_json::Value::as_str);
-                    if let Some(message_id) = message_id {
-                        self.pending_delivery_ids.remove(message_id);
-                    }
                     let relay_outcome = event
                         .payload
                         .get("outcome")
@@ -678,6 +818,23 @@ impl AppState {
                         .payload
                         .get("reason_code")
                         .and_then(serde_json::Value::as_str);
+                    if let Some(message_id) = message_id {
+                        self.pending_delivery_ids.remove(message_id);
+                    }
+                    let dedupe_key = format!(
+                        "{}:{}:{}:{}",
+                        event.target_session,
+                        message_id.unwrap_or("<unknown>"),
+                        relay_outcome,
+                        relay_reason_code.unwrap_or("-"),
+                    );
+                    if !Self::remember_seen_id(
+                        &mut self.seen_delivery_outcome_ids,
+                        &mut self.seen_delivery_outcome_order,
+                        dedupe_key,
+                    ) {
+                        continue;
+                    }
                     let (outcome, reason_code) =
                         map_stream_outcome(relay_outcome, relay_reason_code);
                     self.push_event(format!(
@@ -891,4 +1048,77 @@ fn is_relay_unavailable_error(source: &io::Error) -> bool {
             | io::ErrorKind::ConnectionAborted
             | io::ErrorKind::BrokenPipe
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use serde_json::json;
+
+    use super::{
+        AppState, ChatHistoryDirection, ChatHistoryEntry, RelayStreamEvent, TuiLaunchOptions,
+    };
+
+    fn make_state() -> AppState {
+        AppState::new(TuiLaunchOptions {
+            bundle_name: "agentmux".to_string(),
+            sender_session: "tui".to_string(),
+            relay_socket: PathBuf::from("/tmp/agentmux-test-relay.sock"),
+            look_lines: None,
+        })
+    }
+
+    #[test]
+    fn chat_history_viewport_pages_oldest_to_newest() {
+        let mut state = make_state();
+        for index in 0..6 {
+            state.push_chat_history_entry(ChatHistoryEntry {
+                direction: ChatHistoryDirection::Outgoing,
+                peer_session: "relay".to_string(),
+                body: format!("message-{index}"),
+                message_id: None,
+            });
+        }
+
+        state.set_chat_history_viewport_height(3);
+        let first_page = state.visible_chat_history_entries();
+        let first_bodies = first_page
+            .iter()
+            .map(|entry| entry.body.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(first_bodies, vec!["message-3", "message-4", "message-5"]);
+
+        state.scroll_chat_history_page_up();
+        let second_page = state.visible_chat_history_entries();
+        let second_bodies = second_page
+            .iter()
+            .map(|entry| entry.body.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(second_bodies, vec!["message-0", "message-1", "message-2"]);
+    }
+
+    #[test]
+    fn record_stream_events_deduplicates_incoming_message_ids() {
+        let mut state = make_state();
+        let duplicated = RelayStreamEvent {
+            event_type: "incoming_message".to_string(),
+            bundle_name: "agentmux".to_string(),
+            target_session: "tui".to_string(),
+            created_at: "2026-03-19T00:00:00Z".to_string(),
+            payload: json!({
+                "message_id": "msg-1",
+                "sender_session": "relay",
+                "body": "hello"
+            }),
+        };
+
+        state.record_stream_events(&[duplicated.clone(), duplicated]);
+        assert_eq!(state.chat_history.len(), 1);
+        assert_eq!(state.event_history.len(), 1);
+        assert_eq!(
+            state.chat_history.front().map(|entry| entry.body.as_str()),
+            Some("hello")
+        );
+    }
 }

@@ -471,24 +471,13 @@ impl RelayStreamSession {
             )?;
             read_stream_response_frame(connection, request_id.as_str())
         };
-        if let Ok(value) = result {
-            return Ok(value);
-        }
-        if is_retriable_stream_error(result.as_ref().err()) {
+        if let Err(source) = &result
+            && is_retriable_stream_error(Some(source))
+        {
+            // Preserve deterministic request semantics: if transport fails after a
+            // request is written, do not auto-replay side-effecting operations.
+            // Drop the connection so the next call performs a fresh hello/connect.
             self.connection = None;
-            self.ensure_connected()?;
-            let connection = self
-                .connection
-                .as_mut()
-                .ok_or_else(|| io::Error::other("relay stream reconnection failed"))?;
-            send_stream_client_frame(
-                &mut connection.stream,
-                StreamClientFrame::Request {
-                    request_id: request_id.as_str(),
-                    request,
-                },
-            )?;
-            return read_stream_response_frame(connection, request_id.as_str());
         }
         result
     }

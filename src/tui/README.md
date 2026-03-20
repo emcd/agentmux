@@ -18,6 +18,7 @@ This module provides the interactive `agentmux tui` workbench.
 - `@`-prefixed tokens trigger immediate completion proposals after one suffix character,
 - recipient picker overlay (`F2`),
 - delivery events overlay (`F3`),
+- chat history viewport with PgUp/PgDn navigation for sent/received messages,
 - send workflow via relay `chat` (`Ctrl+S`),
 - look workflow via relay `look` (`Ctrl+L`),
 - stable error-code rendering for validation failures.
@@ -33,6 +34,7 @@ This module provides the interactive `agentmux tui` workbench.
 - `Enter`: accept active completion proposal in `To`
 - `F2`: open/close recipient picker overlay
 - `F3`: open/close events overlay
+- `PgUp` / `PgDn`: page chat history viewport backward/forward
 - `Up` / `Down`: move recipient selection in picker overlay
 - `Ctrl+S`: send message
 - `Ctrl+L`: capture look snapshot

@@ -69,6 +69,8 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
             }
         }
         KeyCode::Backspace => state.backspace(),
+        KeyCode::PageUp => state.scroll_chat_history_page_up(),
+        KeyCode::PageDown => state.scroll_chat_history_page_down(),
         KeyCode::Char(character)
             if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
         {
