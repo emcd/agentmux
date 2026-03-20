@@ -50,6 +50,7 @@ const UI_RECONNECT_POLL_INTERVAL_MS: u64 = 100;
 const ACP_SESSION_STATE_SCHEMA_VERSION: u32 = 1;
 const ACP_SESSIONS_DIRECTORY: &str = "sessions";
 const ACP_SESSION_STATE_FILE: &str = "state.json";
+const ACP_LOOK_SNAPSHOT_MAX_LINES: usize = 1000;
 const ACP_REASON_CODE_TURN_TIMEOUT: &str = "acp_turn_timeout";
 const ACP_REASON_CODE_STOP_CANCELLED: &str = "acp_stop_cancelled";
 const ACP_ERROR_CODE_INITIALIZE_FAILED: &str = "runtime_acp_initialize_failed";
@@ -65,6 +66,8 @@ enum AcpRequestError {
 struct PersistedAcpSessionState {
     schema_version: u32,
     acp_session_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    snapshot_lines: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -651,10 +654,12 @@ fn deliver_one_target_acp(
             .unwrap_or(false),
     };
 
+    let runtime_socket_path = task.tmux_socket.as_path();
+
     let persisted_session_id = if target_member.coder_session_id.is_some() {
         None
     } else {
-        match load_persisted_acp_session_id(task.tmux_socket.as_path(), target_member.id.as_str()) {
+        match load_persisted_acp_session_id(runtime_socket_path, target_member.id.as_str()) {
             Ok(value) => value,
             Err(reason) => {
                 return failed_result(
@@ -702,20 +707,7 @@ fn deliver_one_target_acp(
             lifecycle_session_id
         }
         AcpLifecycleSelection::NewSession => match client.new_session(working_directory) {
-            Ok(value) => {
-                if let Err(reason) = persist_acp_session_id(
-                    task.tmux_socket.as_path(),
-                    target_member.id.as_str(),
-                    value.as_str(),
-                ) {
-                    return failed_result(
-                        target_session,
-                        message_id,
-                        format!("failed to persist ACP session id: {reason}"),
-                    );
-                }
-                value
-            }
+            Ok(value) => value,
             Err(reason) => {
                 return failed_result(
                     target_session,
@@ -725,6 +717,18 @@ fn deliver_one_target_acp(
             }
         },
     };
+
+    if let Err(reason) = persist_acp_session_id(
+        runtime_socket_path,
+        target_member.id.as_str(),
+        session_id.as_str(),
+    ) {
+        return failed_result(
+            target_session,
+            message_id,
+            format!("failed to persist ACP session id: {reason}"),
+        );
+    }
 
     if !capabilities.prompt_session {
         return failed_result_with_code(
@@ -742,7 +746,21 @@ fn deliver_one_target_acp(
 
     let turn_timeout = task.quiescence.quiescence_timeout;
     for prompt in prompt_batches {
-        match client.prompt(session_id.as_str(), prompt.as_str(), turn_timeout) {
+        let prompt_result = client.prompt(session_id.as_str(), prompt.as_str(), turn_timeout);
+        let prompt_snapshot_lines = client.take_snapshot_lines();
+        if let Err(reason) = persist_acp_snapshot_lines(
+            runtime_socket_path,
+            target_member.id.as_str(),
+            session_id.as_str(),
+            prompt_snapshot_lines.as_slice(),
+        ) {
+            return failed_result(
+                target_session,
+                message_id,
+                format!("failed to persist ACP look snapshot state: {reason}"),
+            );
+        }
+        match prompt_result {
             Ok(stop_reason) => match stop_reason.as_str() {
                 "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" => {}
                 "cancelled" => {
@@ -787,11 +805,13 @@ fn deliver_one_target_acp(
 }
 
 fn resolve_acp_session_state_path(
-    tmux_socket: &Path,
+    runtime_socket_path: &Path,
     target_session: &str,
 ) -> Result<PathBuf, String> {
-    let Some(runtime_directory) = tmux_socket.parent() else {
-        return Err("tmux socket path has no parent runtime directory".to_string());
+    // Runtime state is anchored at the bundle runtime directory that contains
+    // the socket path (`<state-root>/bundles/<bundle>`).
+    let Some(runtime_directory) = runtime_socket_path.parent() else {
+        return Err("runtime socket path has no parent runtime directory".to_string());
     };
     Ok(runtime_directory
         .join(ACP_SESSIONS_DIRECTORY)
@@ -804,10 +824,10 @@ fn acp_session_state_lock() -> &'static Mutex<()> {
 }
 
 fn load_persisted_acp_session_id(
-    tmux_socket: &Path,
+    runtime_socket_path: &Path,
     target_session: &str,
 ) -> Result<Option<String>, String> {
-    let path = resolve_acp_session_state_path(tmux_socket, target_session)?;
+    let path = resolve_acp_session_state_path(runtime_socket_path, target_session)?;
     let _guard = acp_session_state_lock()
         .lock()
         .map_err(|_| "failed to lock ACP session state".to_string())?;
@@ -815,20 +835,66 @@ fn load_persisted_acp_session_id(
     Ok(state.map(|value| value.acp_session_id))
 }
 
-fn persist_acp_session_id(
-    tmux_socket: &Path,
+pub(super) fn load_acp_snapshot_lines_for_look(
+    runtime_socket_path: &Path,
     target_session: &str,
-    session_id: &str,
-) -> Result<(), String> {
-    let path = resolve_acp_session_state_path(tmux_socket, target_session)?;
+    requested_lines: usize,
+) -> Result<Vec<String>, String> {
+    let path = resolve_acp_session_state_path(runtime_socket_path, target_session)?;
     let _guard = acp_session_state_lock()
         .lock()
         .map_err(|_| "failed to lock ACP session state".to_string())?;
-    let state = PersistedAcpSessionState {
-        schema_version: ACP_SESSION_STATE_SCHEMA_VERSION,
-        acp_session_id: session_id.to_string(),
+    let state = load_persisted_acp_session_state(path.as_path())?;
+    let Some(state) = state else {
+        return Ok(Vec::new());
     };
+    let count = state.snapshot_lines.len();
+    if requested_lines >= count {
+        return Ok(state.snapshot_lines);
+    }
+    Ok(state.snapshot_lines[count - requested_lines..].to_vec())
+}
+
+fn persist_acp_session_id(
+    runtime_socket_path: &Path,
+    target_session: &str,
+    session_id: &str,
+) -> Result<(), String> {
+    persist_acp_snapshot_lines(runtime_socket_path, target_session, session_id, &[])
+}
+
+fn persist_acp_snapshot_lines(
+    runtime_socket_path: &Path,
+    target_session: &str,
+    session_id: &str,
+    snapshot_lines: &[String],
+) -> Result<(), String> {
+    let path = resolve_acp_session_state_path(runtime_socket_path, target_session)?;
+    let _guard = acp_session_state_lock()
+        .lock()
+        .map_err(|_| "failed to lock ACP session state".to_string())?;
+    let mut state =
+        load_persisted_acp_session_state(path.as_path())?.unwrap_or(PersistedAcpSessionState {
+            schema_version: ACP_SESSION_STATE_SCHEMA_VERSION,
+            acp_session_id: session_id.to_string(),
+            snapshot_lines: Vec::new(),
+        });
+    state.schema_version = ACP_SESSION_STATE_SCHEMA_VERSION;
+    state.acp_session_id = session_id.to_string();
+    append_snapshot_lines(
+        &mut state.snapshot_lines,
+        snapshot_lines,
+        ACP_LOOK_SNAPSHOT_MAX_LINES,
+    );
     store_persisted_acp_session_state(path.as_path(), &state)
+}
+
+fn append_snapshot_lines(storage: &mut Vec<String>, appended: &[String], max_lines: usize) {
+    storage.extend(appended.iter().cloned());
+    if storage.len() > max_lines {
+        let overflow = storage.len() - max_lines;
+        storage.drain(0..overflow);
+    }
 }
 
 fn load_persisted_acp_session_state(
@@ -894,6 +960,7 @@ struct AcpStdioClient {
     stdout: ChildStdout,
     read_buffer: Vec<u8>,
     next_id: u64,
+    snapshot_line_buffer: Vec<String>,
 }
 
 impl AcpStdioClient {
@@ -924,6 +991,7 @@ impl AcpStdioClient {
             stdout,
             read_buffer: Vec::new(),
             next_id: 1,
+            snapshot_line_buffer: Vec::new(),
         })
     }
 
@@ -938,6 +1006,7 @@ impl AcpStdioClient {
                     "title": "Agentmux Relay",
                 },
             }),
+            None,
             None,
         )
         .map_err(|error| match error {
@@ -955,6 +1024,7 @@ impl AcpStdioClient {
                 json!({
                     "cwd": working_directory.display().to_string(),
                 }),
+                None,
                 None,
             )
             .map_err(|error| match error {
@@ -978,6 +1048,7 @@ impl AcpStdioClient {
                     "sessionId": session_id,
                     "cwd": working_directory.display().to_string(),
                 }),
+                None,
                 None,
             )
             .map_err(|error| match error {
@@ -1007,6 +1078,7 @@ impl AcpStdioClient {
                 ],
             }),
             timeout,
+            Some(session_id),
         )?;
         result
             .get("stopReason")
@@ -1019,11 +1091,16 @@ impl AcpStdioClient {
             })
     }
 
+    fn take_snapshot_lines(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.snapshot_line_buffer)
+    }
+
     fn request(
         &mut self,
         method: &str,
         params: Value,
         timeout: Option<Duration>,
+        prompt_session_id: Option<&str>,
     ) -> Result<Value, AcpRequestError> {
         let request_id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
@@ -1054,6 +1131,7 @@ impl AcpStdioClient {
                 AcpRequestError::Failed(format!("parse ACP response failed: {source}"))
             })?;
             if decoded.get("id") != Some(&json!(request_id)) {
+                self.capture_update_snapshot_lines(&decoded, prompt_session_id);
                 continue;
             }
             if let Some(error) = decoded.get("error") {
@@ -1061,6 +1139,20 @@ impl AcpStdioClient {
             }
             return Ok(decoded.get("result").cloned().unwrap_or(Value::Null));
         }
+    }
+
+    fn capture_update_snapshot_lines(&mut self, value: &Value, session_id: Option<&str>) {
+        if value.get("method").and_then(Value::as_str) != Some("session/update") {
+            return;
+        }
+        let params = value.get("params").unwrap_or(&Value::Null);
+        if let Some(expected_session_id) = session_id
+            && let Some(observed_session_id) = params.get("sessionId").and_then(Value::as_str)
+            && observed_session_id != expected_session_id
+        {
+            return;
+        }
+        collect_text_lines_from_value(params, &mut self.snapshot_line_buffer);
     }
 
     fn read_response_line(&mut self, timeout: Option<Duration>) -> Result<String, AcpRequestError> {
@@ -1116,6 +1208,34 @@ impl AcpStdioClient {
                     )));
                 }
             }
+        }
+    }
+}
+
+fn collect_text_lines_from_value(value: &Value, output: &mut Vec<String>) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                collect_text_lines_from_value(value, output);
+            }
+        }
+        Value::Object(values) => {
+            if let Some(text) = values.get("text").and_then(Value::as_str) {
+                append_text_lines(text, output);
+            }
+            for value in values.values() {
+                collect_text_lines_from_value(value, output);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn append_text_lines(text: &str, output: &mut Vec<String>) {
+    for line in text.split('\n') {
+        let normalized = line.trim_end_matches('\r');
+        if !normalized.is_empty() {
+            output.push(normalized.to_string());
         }
     }
 }

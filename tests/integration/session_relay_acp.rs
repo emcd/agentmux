@@ -18,6 +18,7 @@ struct AcpStubOptions {
     prompt_capability: bool,
     stop_reason: String,
     prompt_delay_sec: u64,
+    update_count: usize,
     configured_session_id: Option<String>,
 }
 
@@ -30,6 +31,7 @@ impl Default for AcpStubOptions {
             prompt_capability: true,
             stop_reason: "end_turn".to_string(),
             prompt_delay_sec: 0,
+            update_count: 0,
             configured_session_id: None,
         }
     }
@@ -46,6 +48,7 @@ load_capability="${LOAD_CAPABILITY:-true}"
 prompt_capability="${PROMPT_CAPABILITY:-true}"
 stop_reason="${STOP_REASON:-end_turn}"
 prompt_delay_sec="${PROMPT_DELAY_SEC:-0}"
+update_count="${UPDATE_COUNT:-0}"
 new_session_id="${NEW_SESSION_ID:-sess-generated}"
 
 while IFS= read -r line; do
@@ -74,6 +77,16 @@ while IFS= read -r line; do
       printf '{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"%s"}}\n' "$id" "$new_session_id"
       ;;
     *'"method":"session/prompt"'*)
+      prompt_session_id=$(printf '%s\n' "$line" | sed -n 's/.*"sessionId":"\([^"]*\)".*/\1/p')
+      if [ -z "$prompt_session_id" ]; then
+        prompt_session_id="$new_session_id"
+      fi
+      count=1
+      while [ "$count" -le "$update_count" ]; do
+        printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"%s","update":[{"type":"text","text":"ACP-LINE-%s"}]}}\n' \
+          "$prompt_session_id" "$count"
+        count=$((count + 1))
+      done
       if [ "$prompt_delay_sec" != "0" ]; then
         sleep "$prompt_delay_sec"
       fi
@@ -101,7 +114,7 @@ fn write_configuration(root: &Path, options: &AcpStubOptions) -> (PathBuf, PathB
     let log_path = root.join("acp_requests.log");
     write_acp_stub(&script_path);
     let command = format!(
-        "ACP_LOG_FILE={} FAIL_INITIALIZE={} FAIL_LOAD={} LOAD_CAPABILITY={} PROMPT_CAPABILITY={} STOP_REASON={} PROMPT_DELAY_SEC={} NEW_SESSION_ID=sess-generated {}",
+        "ACP_LOG_FILE={} FAIL_INITIALIZE={} FAIL_LOAD={} LOAD_CAPABILITY={} PROMPT_CAPABILITY={} STOP_REASON={} PROMPT_DELAY_SEC={} UPDATE_COUNT={} NEW_SESSION_ID=sess-generated {}",
         log_path.display(),
         if options.fail_initialize { "1" } else { "0" },
         if options.fail_load { "1" } else { "0" },
@@ -109,6 +122,7 @@ fn write_configuration(root: &Path, options: &AcpStubOptions) -> (PathBuf, PathB
         as_json_boolean(options.prompt_capability),
         options.stop_reason,
         options.prompt_delay_sec,
+        options.update_count,
         script_path.display(),
     );
 
@@ -190,6 +204,27 @@ fn dispatch_send(
         tmux_socket,
     )
     .expect("relay request should parse")
+}
+
+fn dispatch_look(
+    config_root: &Path,
+    tmux_socket: &Path,
+    requester_session: &str,
+    target_session: &str,
+    lines: Option<usize>,
+) -> RelayResponse {
+    handle_request(
+        RelayRequest::Look {
+            requester_session: requester_session.to_string(),
+            target_session: target_session.to_string(),
+            lines,
+            bundle_name: None,
+        },
+        config_root,
+        "party",
+        tmux_socket,
+    )
+    .expect("relay look should parse")
 }
 
 fn chat_result(response: RelayResponse) -> (ChatStatus, agentmux::relay::ChatResult) {
@@ -442,6 +477,92 @@ fn acp_successful_terminal_stop_reason_has_no_reason_code() {
     assert_eq!(result.reason_code, None);
     assert_eq!(result.reason, None);
     assert_eq!(result.details, None);
+}
+
+#[test]
+fn acp_look_returns_oldest_to_newest_session_update_lines() {
+    let temporary = TempDir::new().expect("temporary");
+    let options = AcpStubOptions {
+        update_count: 3,
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let tmux_socket = temporary.path().join("tmux.sock");
+    let response = dispatch_send(&config_root, &tmux_socket, Some(1_000));
+    let (status, result) = chat_result(response);
+    assert_eq!(status, ChatStatus::Success);
+    assert_eq!(result.outcome, ChatOutcome::Delivered);
+
+    let look = dispatch_look(&config_root, &tmux_socket, "bravo", "bravo", Some(3));
+    let RelayResponse::Look { snapshot_lines, .. } = look else {
+        panic!("expected look response");
+    };
+    assert_eq!(
+        snapshot_lines,
+        vec!["ACP-LINE-1", "ACP-LINE-2", "ACP-LINE-3"]
+    );
+}
+
+#[test]
+fn acp_look_enforces_bounded_retention_and_tail_selection() {
+    let temporary = TempDir::new().expect("temporary");
+    let options = AcpStubOptions {
+        update_count: 1_105,
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let tmux_socket = temporary.path().join("tmux.sock");
+    let response = dispatch_send(&config_root, &tmux_socket, Some(2_000));
+    let (status, result) = chat_result(response);
+    assert_eq!(status, ChatStatus::Success);
+    assert_eq!(result.outcome, ChatOutcome::Delivered);
+
+    let look = dispatch_look(&config_root, &tmux_socket, "bravo", "bravo", Some(1_000));
+    let RelayResponse::Look { snapshot_lines, .. } = look else {
+        panic!("expected look response");
+    };
+    assert_eq!(snapshot_lines.len(), 1_000);
+    assert_eq!(
+        snapshot_lines.first().map(String::as_str),
+        Some("ACP-LINE-106")
+    );
+    assert_eq!(
+        snapshot_lines.last().map(String::as_str),
+        Some("ACP-LINE-1105")
+    );
+
+    let tail = dispatch_look(&config_root, &tmux_socket, "bravo", "bravo", Some(5));
+    let RelayResponse::Look {
+        snapshot_lines: tail_lines,
+        ..
+    } = tail
+    else {
+        panic!("expected look response");
+    };
+    assert_eq!(
+        tail_lines,
+        vec![
+            "ACP-LINE-1101".to_string(),
+            "ACP-LINE-1102".to_string(),
+            "ACP-LINE-1103".to_string(),
+            "ACP-LINE-1104".to_string(),
+            "ACP-LINE-1105".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn acp_look_returns_empty_snapshot_when_no_updates_exist() {
+    let temporary = TempDir::new().expect("temporary");
+    let options = AcpStubOptions::default();
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    let look = dispatch_look(&config_root, &tmux_socket, "bravo", "bravo", Some(5));
+    let RelayResponse::Look { snapshot_lines, .. } = look else {
+        panic!("expected look response");
+    };
+    assert!(snapshot_lines.is_empty());
 }
 
 #[test]

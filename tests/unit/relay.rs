@@ -476,14 +476,14 @@ fn look_rejects_unknown_target() {
 }
 
 #[test]
-fn look_rejects_acp_targets_in_mvp() {
+fn look_returns_empty_snapshot_for_acp_target_without_recorded_updates() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_acp_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
 
     let response = handle_request(
         RelayRequest::Look {
-            requester_session: "alpha".to_string(),
+            requester_session: "bravo".to_string(),
             target_session: "bravo".to_string(),
             lines: Some(5),
             bundle_name: None,
@@ -492,8 +492,11 @@ fn look_rejects_acp_targets_in_mvp() {
         "party",
         &tmux_socket,
     )
-    .expect_err("look should fail");
-    assert_eq!(response.code, "validation_unsupported_transport");
+    .expect("look should succeed");
+    let RelayResponse::Look { snapshot_lines, .. } = response else {
+        panic!("expected look response");
+    };
+    assert!(snapshot_lines.is_empty());
 }
 
 #[test]

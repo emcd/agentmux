@@ -9,7 +9,7 @@ use crate::{configuration::BundleConfiguration, runtime::inscriptions::emit_insc
 use super::authorization::{AuthorizationContext, authorize_list, authorize_look, authorize_send};
 use super::delivery::{
     QuiescenceOptions, aggregate_chat_status, deliver_one_target, enqueue_async_delivery,
-    prompt_batch_settings,
+    load_acp_snapshot_lines_for_look, prompt_batch_settings,
 };
 use super::lifecycle::{reconcile_loaded_bundle_for_lifecycle, shutdown_bundle_runtime};
 use super::tmux::{capture_pane_tail_lines, resolve_active_pane_target};
@@ -447,19 +447,6 @@ fn handle_look(
                 Some(json!({"target_session": target_session})),
             )
         })?;
-    if matches!(
-        &target.target,
-        crate::configuration::TargetConfiguration::Acp(_)
-    ) {
-        return Err(relay_error(
-            "validation_unsupported_transport",
-            "look is unsupported for ACP targets in MVP",
-            Some(json!({
-                "target_session": target.id,
-                "transport": "acp",
-            })),
-        ));
-    }
     authorize_look(
         bundle,
         authorization,
@@ -467,24 +454,41 @@ fn handle_look(
         target.id.as_str(),
     )?;
 
-    let pane_target =
-        resolve_active_pane_target(tmux_socket, target.id.as_str()).map_err(|reason| {
+    let snapshot_lines = match &target.target {
+        crate::configuration::TargetConfiguration::Tmux(_) => {
+            let pane_target =
+                resolve_active_pane_target(tmux_socket, target.id.as_str()).map_err(|reason| {
+                    relay_error(
+                        "internal_unexpected_failure",
+                        "failed to resolve active pane for look target",
+                        Some(json!({"target_session": target.id, "cause": reason})),
+                    )
+                })?;
+            capture_pane_tail_lines(tmux_socket, pane_target.as_str(), requested_lines).map_err(
+                |reason| {
+                    relay_error(
+                        "internal_unexpected_failure",
+                        "failed to capture look snapshot",
+                        Some(json!({"target_session": target.id, "cause": reason})),
+                    )
+                },
+            )?
+        }
+        crate::configuration::TargetConfiguration::Acp(_) => load_acp_snapshot_lines_for_look(
+            // ACP look state is runtime-scoped; the runtime directory is resolved
+            // from the socket path anchor.
+            tmux_socket,
+            target.id.as_str(),
+            requested_lines,
+        )
+        .map_err(|reason| {
             relay_error(
                 "internal_unexpected_failure",
-                "failed to resolve active pane for look target",
+                "failed to load ACP look snapshot",
                 Some(json!({"target_session": target.id, "cause": reason})),
             )
-        })?;
-    let snapshot_lines =
-        capture_pane_tail_lines(tmux_socket, pane_target.as_str(), requested_lines).map_err(
-            |reason| {
-                relay_error(
-                    "internal_unexpected_failure",
-                    "failed to capture look snapshot",
-                    Some(json!({"target_session": target.id, "cause": reason})),
-                )
-            },
-        )?;
+        })?,
+    };
     let captured_at = time::OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
