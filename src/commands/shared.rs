@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    configuration::ConfigurationError,
+    configuration::{BundleGroupMembership, ConfigurationError, RESERVED_GROUP_ALL},
     relay::{ChatDeliveryMode, RelayError},
     runtime::{
         association::{McpAssociationOverrides, WorkspaceContext},
@@ -199,7 +199,7 @@ pub(super) fn map_relay_request_failure(
         return RuntimeError::validation(
             "relay_unavailable",
             format!(
-                "relay is unavailable at {}; start host relay with matching bundle and state-directory",
+                "relay is unavailable at {}; start agentmux host relay with matching state-directory",
                 socket_path.display()
             ),
         );
@@ -239,4 +239,68 @@ fn is_relay_unavailable_error(source: &std::io::Error) -> bool {
             | std::io::ErrorKind::ConnectionAborted
             | std::io::ErrorKind::BrokenPipe
     )
+}
+
+pub(super) fn validate_group_selector_name(group_name: &str) -> Result<(), RuntimeError> {
+    if group_name == RESERVED_GROUP_ALL {
+        return Ok(());
+    }
+    if is_custom_group_name(group_name) {
+        return Ok(());
+    }
+    if is_reserved_group_name(group_name) {
+        return Err(RuntimeError::validation(
+            "validation_invalid_group_name",
+            format!(
+                "group '{}' is reserved; only '{}' is currently supported",
+                group_name, RESERVED_GROUP_ALL
+            ),
+        ));
+    }
+    Err(RuntimeError::validation(
+        "validation_invalid_group_name",
+        format!(
+            "group '{}' must be lowercase (custom) or '{}'",
+            group_name, RESERVED_GROUP_ALL
+        ),
+    ))
+}
+
+pub(super) fn resolve_group_bundles(
+    memberships: Vec<BundleGroupMembership>,
+    group_name: &str,
+) -> Result<Vec<String>, RuntimeError> {
+    if group_name == RESERVED_GROUP_ALL {
+        return Ok(memberships
+            .into_iter()
+            .map(|membership| membership.bundle_name)
+            .collect::<Vec<_>>());
+    }
+    let selected = memberships
+        .into_iter()
+        .filter(|membership| membership.groups.iter().any(|group| group == group_name))
+        .map(|membership| membership.bundle_name)
+        .collect::<Vec<_>>();
+    if selected.is_empty() {
+        return Err(RuntimeError::validation(
+            "validation_unknown_group",
+            format!("group '{}' is not configured", group_name),
+        ));
+    }
+    Ok(selected)
+}
+
+fn is_reserved_group_name(group_name: &str) -> bool {
+    group_name.chars().all(|character| {
+        character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
+    })
+}
+
+fn is_custom_group_name(group_name: &str) -> bool {
+    group_name.chars().all(|character| {
+        character.is_ascii_lowercase()
+            || character.is_ascii_digit()
+            || character == '_'
+            || character == '-'
+    })
 }

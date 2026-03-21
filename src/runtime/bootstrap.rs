@@ -9,7 +9,6 @@ use std::{
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
@@ -120,36 +119,6 @@ where
             })
         }
     }
-}
-
-/// Spawns the relay process using the unified host relay subcommand.
-///
-/// # Errors
-///
-/// Returns `RuntimeError::RelaySpawnFailure` when spawning fails.
-pub fn spawn_relay_process(
-    relay_program: &Path,
-    paths: &BundleRuntimePaths,
-    configuration_root: &Path,
-) -> Result<Child, RuntimeError> {
-    let mut command = Command::new(relay_program);
-    command
-        .arg("host")
-        .arg("relay")
-        .arg(&paths.bundle_name)
-        .arg("--config-directory")
-        .arg(configuration_root)
-        .arg("--state-directory")
-        .arg(&paths.state_root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    command
-        .spawn()
-        .map_err(|source| RuntimeError::RelaySpawnFailure {
-            command: relay_program.to_path_buf(),
-            source,
-        })
 }
 
 /// Acquires the process lock used by the relay runtime loop.
@@ -380,7 +349,7 @@ mod tests {
         let err = bootstrap_relay(&paths, options, || Ok(())).expect_err("bootstrap should fail");
         assert!(
             err.to_string()
-                .contains("start agentmux host relay <bundle-id> with matching --state-directory"),
+                .contains("start agentmux host relay with matching --state-directory"),
             "unexpected error: {err}"
         );
     }

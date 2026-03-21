@@ -696,6 +696,7 @@ resume-command = "sh -lc 'exec sleep 45'"
         format!(
             r#"
 format-version = 1
+autostart = true
 groups = ["dev"]
 
 [[sessions]]
@@ -728,8 +729,10 @@ coder = "shell"
     let memberships = load_bundle_group_memberships(&root).expect("load memberships");
     assert_eq!(memberships.len(), 2);
     assert_eq!(memberships[0].bundle_name, "alpha");
+    assert!(memberships[0].autostart);
     assert_eq!(memberships[0].groups, vec!["dev".to_string()]);
     assert_eq!(memberships[1].bundle_name, "bravo");
+    assert!(!memberships[1].autostart);
     assert!(memberships[1].groups.is_empty());
 }
 

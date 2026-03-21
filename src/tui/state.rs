@@ -1029,7 +1029,7 @@ fn map_relay_request_failure(socket_path: &std::path::Path, source: io::Error) -
         return RuntimeError::validation(
             "relay_unavailable",
             format!(
-                "relay is unavailable at {}; start host relay with matching bundle and state-directory",
+                "relay is unavailable at {}; start agentmux host relay with matching state-directory",
                 socket_path.display()
             ),
         );

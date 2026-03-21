@@ -7,8 +7,9 @@ tool surface for LLM clients.
 ## Architecture At A Glance
 
 - Relay host:
-  - Command: `agentmux host relay <bundle-id>`
-  - Responsibility: reconcile bundle sessions and route envelopes to tmux panes.
+  - Command: `agentmux host relay [--no-autostart]`
+  - Responsibility: start one relay process that serves configured bundles and route
+    envelopes to tmux panes.
 - MCP host:
   - Command: `agentmux host mcp`
   - Responsibility: expose MCP tools (`list`, `send`) and forward requests to relay.
@@ -34,13 +35,20 @@ cargo install agentmux
 1. Start relay for your bundle:
 
 ```bash
-agentmux host relay myproject
+agentmux host relay
 ```
 
-Optional: start relay host for a bundle group:
+Optional: start relay processes without autostarting bundle runtimes:
 
 ```bash
-agentmux host relay --group ALL
+agentmux host relay --no-autostart
+```
+
+Use lifecycle commands for explicit bundle transitions:
+
+```bash
+agentmux up myproject
+agentmux down myproject
 ```
 
 2. Start MCP host:
@@ -65,8 +73,10 @@ agentmux host mcp
 ## CLI Surface
 
 ```text
-agentmux host relay <bundle-id>
+agentmux host relay [--no-autostart]
 agentmux host mcp [--bundle NAME] [--session-name NAME]
+agentmux up (<bundle-id> | --group GROUP)
+agentmux down (<bundle-id> | --group GROUP)
 agentmux list [--bundle NAME] [--sender NAME] [--json]
 agentmux look <target-session> [--bundle NAME] [--lines N]
 agentmux tui [--bundle NAME] [--sender NAME] [--lines N]
@@ -131,7 +141,7 @@ Example `.mcp.json` snippet:
 Typical topology:
 
 - one shared bundle id (for example `agentmux`),
-- one relay host process for that bundle,
+- one relay host process serving all configured bundle sockets (started by `agentmux host relay`),
 - one MCP host per worktree/session identity (`master`, `relay`, `mcp`, `tui`).
 
 Association resolution for `list`/`send` and MCP host startup:

@@ -47,6 +47,13 @@ pub(super) fn shutdown_bundle_runtime(tmux_socket: &Path) -> Result<ShutdownRepo
     Ok(report)
 }
 
+pub(super) fn reconcile_loaded_bundle_for_lifecycle(
+    bundle: &BundleConfiguration,
+    tmux_socket: &Path,
+) -> Result<ReconciliationReport, RelayError> {
+    reconcile_loaded_bundle(bundle, tmux_socket)
+}
+
 fn reconcile_loaded_bundle(
     bundle: &BundleConfiguration,
     tmux_socket: &Path,

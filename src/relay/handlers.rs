@@ -11,11 +11,12 @@ use super::delivery::{
     QuiescenceOptions, aggregate_chat_status, deliver_one_target, enqueue_async_delivery,
     prompt_batch_settings,
 };
+use super::lifecycle::{reconcile_loaded_bundle_for_lifecycle, shutdown_bundle_runtime};
 use super::tmux::{capture_pane_tail_lines, resolve_active_pane_target};
 use super::{
     AsyncDeliveryTask, ChatDeliveryMode, ChatOutcome, ChatRequestContext, ChatResult, ChatStatus,
-    LookRequestContext, Recipient, RelayError, RelayRequest, RelayResponse, SCHEMA_VERSION,
-    relay_error,
+    LifecycleBundleResult, LookRequestContext, Recipient, RelayError, RelayRequest, RelayResponse,
+    SCHEMA_VERSION, relay_error,
 };
 
 const DEFAULT_LOOK_LINES: usize = 120;
@@ -28,6 +29,8 @@ pub(super) fn handle_request(
     tmux_socket: &Path,
 ) -> Result<RelayResponse, RelayError> {
     match request {
+        RelayRequest::Up => handle_lifecycle_up(bundle, tmux_socket),
+        RelayRequest::Down => handle_lifecycle_down(bundle, tmux_socket),
         RelayRequest::List { sender_session } => handle_list(bundle, authorization, sender_session),
         RelayRequest::Chat {
             request_id,
@@ -70,6 +73,72 @@ pub(super) fn handle_request(
             tmux_socket,
         ),
     }
+}
+
+fn handle_lifecycle_up(
+    bundle: &BundleConfiguration,
+    tmux_socket: &Path,
+) -> Result<RelayResponse, RelayError> {
+    let report = reconcile_loaded_bundle_for_lifecycle(bundle, tmux_socket)?;
+    let changed = report.bootstrap_session.is_some()
+        || !report.created_sessions.is_empty()
+        || !report.pruned_sessions.is_empty();
+    let bundle_result = if changed {
+        LifecycleBundleResult {
+            bundle_name: bundle.bundle_name.clone(),
+            outcome: "hosted".to_string(),
+            reason_code: None,
+            reason: None,
+        }
+    } else {
+        LifecycleBundleResult {
+            bundle_name: bundle.bundle_name.clone(),
+            outcome: "skipped".to_string(),
+            reason_code: Some("already_hosted".to_string()),
+            reason: Some("bundle runtime is already hosted".to_string()),
+        }
+    };
+    Ok(RelayResponse::Lifecycle {
+        schema_version: SCHEMA_VERSION.to_string(),
+        action: "up".to_string(),
+        bundles: vec![bundle_result],
+        changed_bundle_count: usize::from(changed),
+        skipped_bundle_count: usize::from(!changed),
+        failed_bundle_count: 0,
+        changed_any: changed,
+    })
+}
+
+fn handle_lifecycle_down(
+    bundle: &BundleConfiguration,
+    tmux_socket: &Path,
+) -> Result<RelayResponse, RelayError> {
+    let report = shutdown_bundle_runtime(tmux_socket)?;
+    let changed = !report.pruned_sessions.is_empty() || report.killed_tmux_server;
+    let bundle_result = if changed {
+        LifecycleBundleResult {
+            bundle_name: bundle.bundle_name.clone(),
+            outcome: "unhosted".to_string(),
+            reason_code: None,
+            reason: None,
+        }
+    } else {
+        LifecycleBundleResult {
+            bundle_name: bundle.bundle_name.clone(),
+            outcome: "skipped".to_string(),
+            reason_code: Some("already_unhosted".to_string()),
+            reason: Some("bundle runtime is already unhosted".to_string()),
+        }
+    };
+    Ok(RelayResponse::Lifecycle {
+        schema_version: SCHEMA_VERSION.to_string(),
+        action: "down".to_string(),
+        bundles: vec![bundle_result],
+        changed_bundle_count: usize::from(changed),
+        skipped_bundle_count: usize::from(!changed),
+        failed_bundle_count: 0,
+        changed_any: changed,
+    })
 }
 
 fn handle_list(

@@ -1,6 +1,7 @@
 # Example bundle definition.
 # Copy this file to bundles/<bundle-id>.toml and customize sessions.
 format-version = 1
+# autostart = true
 
 # [[sessions]]
 # id = "agent-a"

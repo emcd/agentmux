@@ -11,37 +11,34 @@ use std::{
 };
 
 use agentmux::relay::{RelayError, RelayResponse};
-use agentmux::runtime::{
-    bootstrap::acquire_relay_runtime_lock,
-    paths::{BundleRuntimePaths, ensure_bundle_runtime_directory},
-};
+use agentmux::runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory};
 use serde_json::Value;
 use tempfile::TempDir;
 
 #[test]
-fn host_relay_requires_selector_argument() {
+fn host_relay_rejects_positional_bundle_selector() {
     let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
-        .args(["host", "relay"])
+        .args(["host", "relay", "alpha"])
         .output()
         .expect("run agentmux host relay");
     assert!(!output.status.success(), "command should fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("invalid argument <bundle-id>|--group: missing selector"),
+        stderr.contains("validation_invalid_arguments"),
         "unexpected stderr: {stderr}"
     );
 }
 
 #[test]
-fn host_relay_rejects_conflicting_bundle_and_group_selectors() {
+fn host_relay_rejects_group_selector_flag() {
     let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
-        .args(["host", "relay", "alpha", "--group", "dev"])
+        .args(["host", "relay", "--group", "dev"])
         .output()
-        .expect("run agentmux host relay with conflicting selectors");
+        .expect("run agentmux host relay with group selector");
     assert!(!output.status.success(), "command should fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("validation_conflicting_selectors"),
+        stderr.contains("--group") && stderr.contains("unknown argument"),
         "unexpected stderr: {stderr}"
     );
 }
@@ -61,21 +58,7 @@ fn host_relay_rejects_all_flag_in_group_mvp() {
 }
 
 #[test]
-fn host_relay_rejects_invalid_uppercase_group_name() {
-    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
-        .args(["host", "relay", "--group", "DEV"])
-        .output()
-        .expect("run agentmux host relay --group DEV");
-    assert!(!output.status.success(), "command should fail");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("validation_invalid_group_name"),
-        "unexpected stderr: {stderr}"
-    );
-}
-
-#[test]
-fn host_relay_rejects_unknown_custom_group() {
+fn host_relay_default_mode_starts_autostart_bundles() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = temporary.path().join("config");
     let state_root = temporary.path().join("state");
@@ -83,188 +66,20 @@ fn host_relay_rejects_unknown_custom_group() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration(&config_root, "alpha", Some(&["dev"]), &["a"]);
-
-    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
-        .args([
-            "host",
-            "relay",
-            "--group",
-            "nightly",
-            "--config-directory",
-            &config_root.to_string_lossy(),
-            "--state-directory",
-            &state_root.to_string_lossy(),
-            "--inscriptions-directory",
-            &inscriptions_root.to_string_lossy(),
-        ])
-        .output()
-        .expect("run agentmux host relay --group nightly");
-
-    assert!(!output.status.success(), "command should fail");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("validation_unknown_group"),
-        "unexpected stderr: {stderr}"
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        Some(&["dev"]),
+        &["a"],
+        Some(true),
     );
-}
-
-#[test]
-fn host_relay_group_mode_reports_partial_lock_held_summary() {
-    let temporary = TempDir::new().expect("temporary");
-    let config_root = temporary.path().join("config");
-    let state_root = temporary.path().join("state");
-    let inscriptions_root = temporary.path().join("inscriptions");
-    fs::create_dir_all(&config_root).expect("create config root");
-    fs::create_dir_all(&state_root).expect("create state root");
-    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration(&config_root, "alpha", Some(&["dev"]), &["a"]);
-    write_bundle_configuration(&config_root, "bravo", Some(&["dev"]), &["b"]);
-
-    let bravo_paths = BundleRuntimePaths::resolve(&state_root, "bravo").expect("bravo paths");
-    ensure_bundle_runtime_directory(&bravo_paths).expect("ensure bravo runtime directory");
-    let _bravo_lock = acquire_relay_runtime_lock(&bravo_paths).expect("acquire bravo lock");
-
-    let fake_tmux = temporary.path().join("fake-tmux.sh");
-    write_fake_tmux_script(&fake_tmux);
-
-    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
-        .args([
-            "host",
-            "relay",
-            "--group",
-            "dev",
-            "--config-directory",
-            &config_root.to_string_lossy(),
-            "--state-directory",
-            &state_root.to_string_lossy(),
-            "--inscriptions-directory",
-            &inscriptions_root.to_string_lossy(),
-        ])
-        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
-        .output()
-        .expect("run agentmux host relay --group dev");
-
-    assert!(output.status.success(), "command should succeed");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("mode=bundle_group group=dev hosted=1 skipped=1 failed=0 hosted_any=true"),
-        "unexpected stdout: {stdout}"
+    write_bundle_configuration_with_options(
+        &config_root,
+        "bravo",
+        Some(&["dev"]),
+        &["b"],
+        Some(false),
     );
-    assert!(
-        stdout.contains("bundle=bravo outcome=skipped reason_code=lock_held"),
-        "unexpected stdout: {stdout}"
-    );
-
-    shutdown_relay_if_present(&state_root, "alpha");
-}
-
-#[test]
-fn host_relay_group_mode_returns_non_zero_when_zero_hosted() {
-    let temporary = TempDir::new().expect("temporary");
-    let config_root = temporary.path().join("config");
-    let state_root = temporary.path().join("state");
-    let inscriptions_root = temporary.path().join("inscriptions");
-    fs::create_dir_all(&config_root).expect("create config root");
-    fs::create_dir_all(&state_root).expect("create state root");
-    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration(&config_root, "alpha", Some(&["dev"]), &["a"]);
-
-    let alpha_paths = BundleRuntimePaths::resolve(&state_root, "alpha").expect("alpha paths");
-    ensure_bundle_runtime_directory(&alpha_paths).expect("ensure alpha runtime directory");
-    let _alpha_lock = acquire_relay_runtime_lock(&alpha_paths).expect("acquire alpha lock");
-
-    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
-        .args([
-            "host",
-            "relay",
-            "--group",
-            "dev",
-            "--config-directory",
-            &config_root.to_string_lossy(),
-            "--state-directory",
-            &state_root.to_string_lossy(),
-            "--inscriptions-directory",
-            &inscriptions_root.to_string_lossy(),
-        ])
-        .output()
-        .expect("run agentmux host relay --group dev");
-
-    assert!(!output.status.success(), "command should fail");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stdout.contains("mode=bundle_group group=dev hosted=0 skipped=1 failed=0 hosted_any=false"),
-        "unexpected stdout: {stdout}"
-    );
-    assert!(
-        stderr.contains("validation_no_hosted_bundles"),
-        "unexpected stderr: {stderr}"
-    );
-}
-
-#[test]
-fn host_relay_group_all_selects_all_configured_bundles() {
-    let temporary = TempDir::new().expect("temporary");
-    let config_root = temporary.path().join("config");
-    let state_root = temporary.path().join("state");
-    let inscriptions_root = temporary.path().join("inscriptions");
-    fs::create_dir_all(&config_root).expect("create config root");
-    fs::create_dir_all(&state_root).expect("create state root");
-    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration(&config_root, "alpha", Some(&["dev"]), &["a"]);
-    write_bundle_configuration(&config_root, "bravo", Some(&["ops"]), &["b"]);
-
-    let alpha_paths = BundleRuntimePaths::resolve(&state_root, "alpha").expect("alpha paths");
-    let bravo_paths = BundleRuntimePaths::resolve(&state_root, "bravo").expect("bravo paths");
-    ensure_bundle_runtime_directory(&alpha_paths).expect("ensure alpha runtime directory");
-    ensure_bundle_runtime_directory(&bravo_paths).expect("ensure bravo runtime directory");
-    let _alpha_lock = acquire_relay_runtime_lock(&alpha_paths).expect("acquire alpha lock");
-    let _bravo_lock = acquire_relay_runtime_lock(&bravo_paths).expect("acquire bravo lock");
-
-    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
-        .args([
-            "host",
-            "relay",
-            "--group",
-            "ALL",
-            "--config-directory",
-            &config_root.to_string_lossy(),
-            "--state-directory",
-            &state_root.to_string_lossy(),
-            "--inscriptions-directory",
-            &inscriptions_root.to_string_lossy(),
-        ])
-        .output()
-        .expect("run agentmux host relay --group ALL");
-
-    assert!(!output.status.success(), "command should fail");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("mode=bundle_group group=ALL hosted=0 skipped=2 failed=0 hosted_any=false"),
-        "unexpected stdout: {stdout}"
-    );
-    assert!(
-        stdout.contains("bundle=alpha outcome=skipped reason_code=lock_held"),
-        "unexpected stdout: {stdout}"
-    );
-    assert!(
-        stdout.contains("bundle=bravo outcome=skipped reason_code=lock_held"),
-        "unexpected stdout: {stdout}"
-    );
-}
-
-#[test]
-fn host_relay_single_bundle_summary_json_omits_group_name() {
-    let temporary = TempDir::new().expect("temporary");
-    let config_root = temporary.path().join("config");
-    let state_root = temporary.path().join("state");
-    let inscriptions_root = temporary.path().join("inscriptions");
-    fs::create_dir_all(&config_root).expect("create config root");
-    fs::create_dir_all(&state_root).expect("create state root");
-    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration(&config_root, "alpha", Some(&["dev"]), &["a"]);
-
     let fake_tmux = temporary.path().join("fake-tmux.sh");
     write_fake_tmux_script(&fake_tmux);
 
@@ -272,7 +87,6 @@ fn host_relay_single_bundle_summary_json_omits_group_name() {
         .args([
             "host",
             "relay",
-            "alpha",
             "--config-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
@@ -284,19 +98,307 @@ fn host_relay_single_bundle_summary_json_omits_group_name() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn agentmux host relay alpha");
-
-    let relay_socket = state_root.join("bundles").join("alpha").join("relay.sock");
-    wait_for_relay_socket(&relay_socket);
-    thread::sleep(Duration::from_millis(100));
+        .expect("spawn agentmux host relay");
+    wait_for_relay_socket(&state_root, "alpha");
     shutdown_relay_if_present(&state_root, "alpha");
+    let output = child
+        .wait_with_output()
+        .expect("wait for agentmux host relay");
 
-    let output = child.wait_with_output().expect("wait for relay process");
+    assert!(output.status.success(), "command should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        output.status.success(),
-        "relay should exit cleanly, stderr={}",
-        String::from_utf8_lossy(&output.stderr)
+        stdout.contains("mode=autostart hosted=1 skipped=1 failed=0 hosted_any=true"),
+        "unexpected stdout: {stdout}"
     );
+    assert!(
+        stdout.contains("bundle=alpha outcome=hosted"),
+        "unexpected stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("bundle=bravo outcome=skipped reason_code=process_only"),
+        "unexpected stdout: {stdout}"
+    );
+}
+
+#[test]
+fn host_relay_no_autostart_mode_reports_process_only_summary() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        Some(&["dev"]),
+        &["a"],
+        Some(true),
+    );
+
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "--no-autostart",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay --no-autostart");
+    wait_for_relay_socket(&state_root, "alpha");
+    shutdown_relay_if_present(&state_root, "alpha");
+    let output = child
+        .wait_with_output()
+        .expect("wait for agentmux host relay --no-autostart");
+
+    assert!(output.status.success(), "command should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("mode=process_only hosted=0 skipped=1 failed=0 hosted_any=false"),
+        "unexpected stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("bundle=alpha outcome=skipped reason_code=process_only"),
+        "unexpected stdout: {stdout}"
+    );
+}
+
+#[test]
+fn up_requires_selector_argument() {
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args(["up"])
+        .output()
+        .expect("run agentmux up");
+    assert!(!output.status.success(), "command should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("invalid argument <bundle-id>|--group: missing selector"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
+fn down_rejects_conflicting_bundle_and_group_selectors() {
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args(["down", "alpha", "--group", "dev"])
+        .output()
+        .expect("run agentmux down with conflicting selectors");
+    assert!(!output.status.success(), "command should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("validation_conflicting_selectors"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
+fn up_and_down_report_idempotent_transitions() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(false));
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let host_child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "--no-autostart",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay --no-autostart");
+    wait_for_relay_socket(&state_root, "alpha");
+
+    let first_up = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "up",
+            "alpha",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .output()
+        .expect("run first up");
+    assert!(first_up.status.success(), "first up should succeed");
+    let first_up_json = parse_summary_json_line(&first_up.stdout);
+    assert_eq!(first_up_json["action"], "up");
+    assert_eq!(first_up_json["changed_any"], true);
+    assert_eq!(first_up_json["bundles"][0]["outcome"], "hosted");
+
+    let second_up = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "up",
+            "alpha",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .output()
+        .expect("run second up");
+    assert!(second_up.status.success(), "second up should succeed");
+    let second_up_json = parse_summary_json_line(&second_up.stdout);
+    assert_eq!(second_up_json["changed_any"], false);
+    assert_eq!(second_up_json["bundles"][0]["outcome"], "skipped");
+    assert_eq!(
+        second_up_json["bundles"][0]["reason_code"],
+        "already_hosted"
+    );
+
+    let first_down = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "down",
+            "alpha",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .output()
+        .expect("run first down");
+    assert!(first_down.status.success(), "first down should succeed");
+    let first_down_json = parse_summary_json_line(&first_down.stdout);
+    assert_eq!(first_down_json["action"], "down");
+    assert_eq!(first_down_json["bundles"][0]["outcome"], "unhosted");
+
+    let second_down = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "down",
+            "alpha",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .output()
+        .expect("run second down");
+    assert!(second_down.status.success(), "second down should succeed");
+    let second_down_json = parse_summary_json_line(&second_down.stdout);
+    assert_eq!(second_down_json["bundles"][0]["outcome"], "skipped");
+    assert_eq!(
+        second_down_json["bundles"][0]["reason_code"],
+        "already_unhosted"
+    );
+
+    shutdown_relay_if_present(&state_root, "alpha");
+    let host_output = host_child.wait_with_output().expect("wait for relay host");
+    assert!(host_output.status.success(), "host should succeed");
+}
+
+#[test]
+fn down_reports_relay_unavailable_when_relay_is_not_running() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(false));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "down",
+            "alpha",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .output()
+        .expect("run down without relay");
+    assert!(!output.status.success(), "command should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("relay_unavailable"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
+fn host_relay_summary_json_omits_group_name() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        Some(&["dev"]),
+        &["a"],
+        Some(true),
+    );
+
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay");
+    wait_for_relay_socket(&state_root, "alpha");
+    shutdown_relay_if_present(&state_root, "alpha");
+    let output = child
+        .wait_with_output()
+        .expect("wait for agentmux host relay");
+    assert!(output.status.success(), "command should succeed");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let summary_line = stdout
         .lines()
@@ -309,7 +411,7 @@ fn host_relay_single_bundle_summary_json_omits_group_name() {
             .get("host_mode")
             .and_then(Value::as_str)
             .unwrap_or_default(),
-        "single_bundle"
+        "autostart"
     );
     assert!(
         !payload_object.contains_key("group_name"),
@@ -594,7 +696,11 @@ fn unified_host_help_output_includes_relay_and_mcp_modes() {
         "unexpected relay help output: {relay_stdout}"
     );
     assert!(
-        relay_stdout.contains("--group GROUP"),
+        !relay_stdout.contains("--group GROUP"),
+        "unexpected relay help output: {relay_stdout}"
+    );
+    assert!(
+        relay_stdout.contains("--no-autostart"),
         "unexpected relay help output: {relay_stdout}"
     );
 
@@ -655,6 +761,16 @@ fn write_bundle_configuration(
     groups: Option<&[&str]>,
     sessions: &[&str],
 ) {
+    write_bundle_configuration_with_options(config_root, bundle_name, groups, sessions, None);
+}
+
+fn write_bundle_configuration_with_options(
+    config_root: &Path,
+    bundle_name: &str,
+    groups: Option<&[&str]>,
+    sessions: &[&str],
+    autostart: Option<bool>,
+) {
     fs::create_dir_all(config_root.join("bundles")).expect("create bundles directory");
     fs::write(
         config_root.join("coders.toml"),
@@ -688,6 +804,9 @@ send = "all:home"
     )
     .expect("write policies config");
     let mut bundle = String::from("format-version = 1\n");
+    if let Some(autostart) = autostart {
+        bundle.push_str(format!("autostart = {autostart}\n").as_str());
+    }
     if let Some(groups) = groups {
         let encoded = groups
             .iter()
@@ -712,6 +831,15 @@ send = "all:home"
         bundle,
     )
     .expect("write bundle config");
+}
+
+fn parse_summary_json_line(stdout: &[u8]) -> Value {
+    let text = String::from_utf8_lossy(stdout);
+    let line = text
+        .lines()
+        .find(|line| line.trim_start().starts_with('{'))
+        .expect("find summary json line");
+    serde_json::from_str(line).expect("parse summary json")
 }
 
 fn write_fake_tmux_script(path: &Path) {
@@ -778,6 +906,10 @@ case "${{command_name}}" in
     mv "${{OWNED_FILE}}.tmp" "${{OWNED_FILE}}"
     ;;
   kill-server)
+    if [[ ! -s "${{SESSIONS_FILE}}" ]]; then
+      echo "no server running on /tmp/agentmux-fake" >&2
+      exit 1
+    fi
     : > "${{SESSIONS_FILE}}"
     : > "${{OWNED_FILE}}"
     ;;
@@ -812,17 +944,18 @@ fn shutdown_relay_if_present(state_root: &Path, bundle_name: &str) {
     }
 }
 
-fn wait_for_relay_socket(socket_path: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(3);
+fn wait_for_relay_socket(state_root: &Path, bundle_name: &str) {
+    let paths = BundleRuntimePaths::resolve(state_root, bundle_name).expect("bundle paths");
+    let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
-        if socket_path.exists() {
+        if paths.relay_socket.exists() {
             return;
         }
         thread::sleep(Duration::from_millis(20));
     }
     panic!(
         "timed out waiting for relay socket {}",
-        socket_path.display()
+        paths.relay_socket.display()
     );
 }
 

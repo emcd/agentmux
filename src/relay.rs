@@ -129,6 +129,17 @@ pub struct RelayStreamEvent {
     pub payload: Value,
 }
 
+/// Per-bundle lifecycle transition result for `up`/`down`.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct LifecycleBundleResult {
+    pub bundle_name: String,
+    pub outcome: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 #[derive(Debug)]
 pub struct RelayStreamSession {
     socket_path: PathBuf,
@@ -181,6 +192,8 @@ enum StreamServerFrame {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum RelayRequest {
+    Up,
+    Down,
     List {
         sender_session: Option<String>,
     },
@@ -211,6 +224,15 @@ pub enum RelayRequest {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RelayResponse {
+    Lifecycle {
+        schema_version: String,
+        action: String,
+        bundles: Vec<LifecycleBundleResult>,
+        changed_bundle_count: usize,
+        skipped_bundle_count: usize,
+        failed_bundle_count: usize,
+        changed_any: bool,
+    },
     List {
         schema_version: String,
         bundle_name: String,

@@ -172,7 +172,7 @@ send = "all:home"
     )
     .expect("write policies config");
 
-    let mut bundle_toml = String::from("format-version = 1\n");
+    let mut bundle_toml = String::from("format-version = 1\nautostart = true\n");
     for session in sessions {
         bundle_toml.push_str(format!("\n[[sessions]]\nid = \"{}\"\n", session.id).as_str());
         if let Some(name) = session.name.as_deref() {
@@ -373,7 +373,7 @@ pub(crate) fn spawn_relay_with_fake_tmux(
 }
 
 pub(crate) fn spawn_relay_with_fake_tmux_and_env(
-    bundle_name: &str,
+    _bundle_name: &str,
     config_root: &Path,
     state_root: &Path,
     inscriptions_root: &Path,
@@ -384,7 +384,6 @@ pub(crate) fn spawn_relay_with_fake_tmux_and_env(
     command
         .arg("host")
         .arg("relay")
-        .arg(bundle_name)
         .arg("--config-directory")
         .arg(config_root)
         .arg("--state-directory")

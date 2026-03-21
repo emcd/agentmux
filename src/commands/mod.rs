@@ -4,12 +4,15 @@ use std::{io::IsTerminal, path::PathBuf};
 
 use crate::{relay::ChatDeliveryMode, runtime::error::RuntimeError};
 
+mod down;
 mod host;
+mod lifecycle;
 mod list;
 mod look;
 mod send;
 mod shared;
 mod tui;
+mod up;
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct RuntimeArguments {
@@ -21,14 +24,27 @@ pub(super) struct RuntimeArguments {
 
 #[derive(Clone, Debug)]
 pub(super) struct RelayHostArguments {
-    pub(super) selector: RelayHostSelector,
+    pub(super) no_autostart: bool,
     pub(super) runtime: RuntimeArguments,
 }
 
 #[derive(Clone, Debug)]
-pub(super) enum RelayHostSelector {
+pub(super) enum LifecycleAction {
+    Up,
+    Down,
+}
+
+#[derive(Clone, Debug)]
+pub(super) enum LifecycleSelector {
     Bundle(String),
     Group(String),
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct LifecycleArguments {
+    pub(super) action: LifecycleAction,
+    pub(super) selector: LifecycleSelector,
+    pub(super) runtime: RuntimeArguments,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -88,12 +104,30 @@ pub(super) struct RelayHostStartupBundle {
 pub(super) struct RelayHostStartupSummary {
     pub(super) schema_version: u32,
     pub(super) host_mode: String,
-    pub(super) group_name: Option<String>,
     pub(super) bundles: Vec<RelayHostStartupBundle>,
     pub(super) hosted_bundle_count: usize,
     pub(super) skipped_bundle_count: usize,
     pub(super) failed_bundle_count: usize,
     pub(super) hosted_any: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct LifecycleTransitionBundle {
+    pub(super) bundle_name: String,
+    pub(super) outcome: String,
+    pub(super) reason_code: Option<String>,
+    pub(super) reason: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct LifecycleTransitionSummary {
+    pub(super) schema_version: u32,
+    pub(super) action: String,
+    pub(super) bundles: Vec<LifecycleTransitionBundle>,
+    pub(super) changed_bundle_count: usize,
+    pub(super) skipped_bundle_count: usize,
+    pub(super) failed_bundle_count: usize,
+    pub(super) changed_any: bool,
 }
 
 pub(super) const MIN_LOOK_LINES: u64 = 1;
@@ -118,6 +152,8 @@ pub async fn run_agentmux(arguments: Vec<String>) -> Result<(), RuntimeError> {
             Ok(())
         }
         "host" => host::run_agentmux_host(&arguments[1..]).await,
+        "up" => up::run_agentmux_up(&arguments[1..]),
+        "down" => down::run_agentmux_down(&arguments[1..]),
         "list" => list::run_agentmux_list(&arguments[1..]),
         "look" => look::run_agentmux_look(&arguments[1..]),
         "tui" => tui::run_agentmux_tui(&arguments[1..]),
@@ -131,6 +167,6 @@ pub async fn run_agentmux(arguments: Vec<String>) -> Result<(), RuntimeError> {
 
 fn print_agentmux_help() {
     println!(
-        "Usage: agentmux <command> [options]\\n\\nCommands:\\n  host relay (<bundle-id> | --group GROUP) [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\\n  host mcp [--bundle NAME] [--session-name NAME] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\\n  list [--bundle NAME] [--sender NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\\n  look <target-session> [--bundle NAME] [--lines N] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\\n  tui [--bundle NAME] [--sender NAME] [--lines N] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\\n  send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--quiescence-timeout-ms MS] [--request-id ID] [--bundle NAME] [--sender NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux <command> [options]\\n\\nCommands:\\n  host relay [--no-autostart] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\\n  host mcp [--bundle NAME] [--session-name NAME] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\\n  up (<bundle-id> | --group GROUP) [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\\n  down (<bundle-id> | --group GROUP) [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\\n  list [--bundle NAME] [--sender NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\\n  look <target-session> [--bundle NAME] [--lines N] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\\n  tui [--bundle NAME] [--sender NAME] [--lines N] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\\n  send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--quiescence-timeout-ms MS] [--request-id ID] [--bundle NAME] [--sender NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }

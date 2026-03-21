@@ -81,6 +81,7 @@ pub struct AcpTargetConfiguration {
 pub struct BundleConfiguration {
     pub schema_version: String,
     pub bundle_name: String,
+    pub autostart: bool,
     pub groups: Vec<String>,
     pub members: Vec<BundleMember>,
 }
@@ -89,6 +90,7 @@ pub struct BundleConfiguration {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BundleGroupMembership {
     pub bundle_name: String,
+    pub autostart: bool,
     pub groups: Vec<String>,
 }
 
@@ -181,6 +183,8 @@ struct AcpTarget {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 struct RawBundleFile {
     format_version: u32,
+    #[serde(default)]
+    autostart: bool,
     #[serde(default)]
     groups: Vec<String>,
     #[serde(default)]
@@ -349,6 +353,7 @@ pub fn load_bundle_group_memberships(
         let groups = validate_bundle_groups(&bundle_file.groups, &bundle_path)?;
         memberships.push(BundleGroupMembership {
             bundle_name,
+            autostart: bundle_file.autostart,
             groups,
         });
     }
@@ -560,6 +565,7 @@ fn validate_loaded_configuration(
     Ok(BundleConfiguration {
         schema_version: FORMAT_VERSION.to_string(),
         bundle_name: expected_bundle_name.to_string(),
+        autostart: bundle_file.autostart,
         groups,
         members,
     })
