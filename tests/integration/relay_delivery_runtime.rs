@@ -1,10 +1,13 @@
 use std::{
     fs,
+    io::{BufRead, BufReader},
+    os::unix::net::UnixStream,
     time::{Duration, Instant},
 };
 
 use agentmux::relay::{
-    ChatDeliveryMode, ChatOutcome, ChatStatus, RelayRequest, RelayResponse, request_relay,
+    ChatDeliveryMode, ChatOutcome, ChatStatus, RelayRequest, RelayResponse, RelayStreamClientClass,
+    RelayStreamSession, request_relay,
 };
 use tempfile::TempDir;
 use tokio::time::{sleep, timeout};
@@ -221,6 +224,145 @@ async fn relay_sigint_ignores_server_exited_unexpectedly_during_shutdown_cleanup
         log.contains("kill-server"),
         "shutdown should still attempt tmux server cleanup, log={log:?}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn relay_accepts_new_connections_while_registered_stream_stays_open() {
+    let temporary = TempDir::new().expect("temporary");
+    let bundle_name = "party";
+    let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
+    let state_root = temporary.path().join("state");
+    let fake_tmux_script = temporary.path().join("fake-tmux.sh");
+    let attempts_file = temporary.path().join("attempts.txt");
+    let log_file = temporary.path().join("fake-tmux.log");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
+
+    let relay_socket = state_root
+        .join("bundles")
+        .join(bundle_name)
+        .join("relay.sock");
+    let mut child = spawn_relay_with_fake_tmux(
+        bundle_name,
+        &config_root,
+        &state_root,
+        &inscriptions_root,
+        &fake_tmux_script,
+    );
+    wait_for_relay_socket(&relay_socket).await;
+
+    let mut stream_session = RelayStreamSession::new(
+        relay_socket.clone(),
+        bundle_name.to_string(),
+        "alpha".to_string(),
+        RelayStreamClientClass::Agent,
+    );
+    let stream_list_response = stream_session
+        .request(&RelayRequest::List {
+            sender_session: Some("alpha".to_string()),
+        })
+        .expect("list request on persistent stream");
+    let RelayResponse::List { .. } = stream_list_response else {
+        panic!("expected list response on persistent stream");
+    };
+
+    let relay_socket_for_second_request = relay_socket.clone();
+    let second_list_response = timeout(
+        Duration::from_millis(800),
+        tokio::task::spawn_blocking(move || {
+            request_relay(
+                &relay_socket_for_second_request,
+                &RelayRequest::List {
+                    sender_session: Some("alpha".to_string()),
+                },
+            )
+        }),
+    )
+    .await
+    .expect("timed out waiting for second list response")
+    .expect("join second list request task")
+    .expect("second list request");
+    let RelayResponse::List { .. } = second_list_response else {
+        panic!("expected list response for second request");
+    };
+
+    drop(stream_session);
+    child.start_kill().expect("kill relay");
+    let _ = child.wait().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn relay_rejects_connections_when_worker_queue_is_full() {
+    let temporary = TempDir::new().expect("temporary");
+    let bundle_name = "party";
+    let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
+    let state_root = temporary.path().join("state");
+    let fake_tmux_script = temporary.path().join("fake-tmux.sh");
+    let attempts_file = temporary.path().join("attempts.txt");
+    let log_file = temporary.path().join("fake-tmux.log");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
+
+    let relay_socket = state_root
+        .join("bundles")
+        .join(bundle_name)
+        .join("relay.sock");
+    let mut child = spawn_relay_with_fake_tmux_and_env(
+        bundle_name,
+        &config_root,
+        &state_root,
+        &inscriptions_root,
+        &fake_tmux_script,
+        &[
+            ("AGENTMUX_RELAY_CONNECTION_WORKERS", "1"),
+            ("AGENTMUX_RELAY_CONNECTION_QUEUE_CAPACITY", "1"),
+        ],
+    );
+    wait_for_relay_socket(&relay_socket).await;
+
+    let mut stream_session = RelayStreamSession::new(
+        relay_socket.clone(),
+        bundle_name.to_string(),
+        "alpha".to_string(),
+        RelayStreamClientClass::Agent,
+    );
+    let first_response = stream_session
+        .request(&RelayRequest::List {
+            sender_session: Some("alpha".to_string()),
+        })
+        .expect("first stream list request");
+    let RelayResponse::List { .. } = first_response else {
+        panic!("expected list response from first stream");
+    };
+
+    let queued_stream = UnixStream::connect(&relay_socket).expect("connect queued stream");
+    let rejected_stream = UnixStream::connect(&relay_socket).expect("connect rejected stream");
+    let rejected_line = timeout(
+        Duration::from_millis(800),
+        tokio::task::spawn_blocking(move || {
+            let mut rejected_reader = BufReader::new(rejected_stream);
+            let mut line = String::new();
+            rejected_reader
+                .read_line(&mut line)
+                .expect("read overload response");
+            line
+        }),
+    )
+    .await
+    .expect("timed out waiting for overload response")
+    .expect("join overload response task");
+    let rejected_response: RelayResponse =
+        serde_json::from_str(rejected_line.trim_end()).expect("decode overload response");
+    let RelayResponse::Error { error } = rejected_response else {
+        panic!("expected overload error response");
+    };
+    assert_eq!(error.code, "runtime_connection_queue_full");
+    assert_eq!(error.message, "relay connection worker pool queue is full");
+
+    drop(queued_stream);
+    drop(stream_session);
+    child.start_kill().expect("kill relay");
+    let _ = child.wait().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

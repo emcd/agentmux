@@ -1,5 +1,7 @@
 use std::{
     env,
+    io::Write,
+    net::Shutdown,
     os::unix::net::{UnixListener, UnixStream},
     path::Path,
     sync::{
@@ -62,6 +64,22 @@ struct RelayListenerWorker {
     paths: BundleRuntimePaths,
     join_handle: thread::JoinHandle<()>,
 }
+
+#[derive(Debug)]
+struct RelayConnectionWorker {
+    sender: mpsc::SyncSender<UnixStream>,
+    join_handle: thread::JoinHandle<()>,
+}
+
+enum RelayConnectionDispatchOutcome {
+    Queued,
+    QueueFull(UnixStream),
+    WorkersUnavailable(UnixStream),
+}
+
+const RELAY_CONNECTION_WORKER_MIN: usize = 2;
+const RELAY_CONNECTION_WORKER_MAX: usize = 8;
+const RELAY_CONNECTION_QUEUE_CAPACITY: usize = 64;
 
 pub(super) async fn run_agentmux_host(arguments: &[String]) -> Result<(), RuntimeError> {
     if arguments.is_empty() {
@@ -283,25 +301,38 @@ fn run_relay_listener_worker(
     stop_requested: Arc<AtomicBool>,
     error_sender: mpsc::Sender<RuntimeError>,
 ) {
+    let mut connection_workers = spawn_relay_connection_worker_pool(
+        configuration_root.clone(),
+        hosted_bundle.paths.clone(),
+        Arc::clone(&stop_requested),
+    );
+    let mut next_worker_index = 0usize;
     while !shutdown_requested() && !stop_requested.load(Ordering::SeqCst) {
         match hosted_bundle.listener.accept() {
-            Ok((mut stream, _)) => {
+            Ok((stream, _)) => {
                 if shutdown_requested() || stop_requested.load(Ordering::SeqCst) {
                     break;
                 }
-                if let Err(source) = crate::relay::serve_connection(
-                    &mut stream,
-                    &configuration_root,
-                    &hosted_bundle.paths,
+                match dispatch_connection_to_worker_pool(
+                    &connection_workers,
+                    &mut next_worker_index,
+                    stream,
                 ) {
-                    emit_inscription(
-                        "relay.request_failed",
-                        &json!({
-                            "bundle_name": hosted_bundle.paths.bundle_name,
-                            "error": source.to_string(),
-                        }),
-                    );
-                    eprintln!("agentmux host relay: request handling failed: {source}");
+                    RelayConnectionDispatchOutcome::Queued => {}
+                    RelayConnectionDispatchOutcome::QueueFull(stream) => {
+                        reject_overloaded_connection(&hosted_bundle.paths, stream);
+                    }
+                    RelayConnectionDispatchOutcome::WorkersUnavailable(stream) => {
+                        let _ = stream.shutdown(Shutdown::Both);
+                        let _ = error_sender.send(RuntimeError::validation(
+                            "internal_unexpected_failure",
+                            format!(
+                                "relay connection workers unavailable for bundle {}",
+                                hosted_bundle.paths.bundle_name
+                            ),
+                        ));
+                        break;
+                    }
                 }
             }
             Err(source) if source.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -317,6 +348,166 @@ fn run_relay_listener_worker(
             }
         }
     }
+    for worker in connection_workers.drain(..) {
+        if worker.join_handle.join().is_err() {
+            let _ = error_sender.send(RuntimeError::validation(
+                "internal_unexpected_failure",
+                format!(
+                    "relay connection worker panicked for bundle {}",
+                    hosted_bundle.paths.bundle_name
+                ),
+            ));
+            break;
+        }
+    }
+}
+
+fn relay_connection_worker_count() -> usize {
+    if let Some(override_count) = parse_env_positive_usize("AGENTMUX_RELAY_CONNECTION_WORKERS") {
+        return override_count;
+    }
+    thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(RELAY_CONNECTION_WORKER_MIN)
+        .clamp(RELAY_CONNECTION_WORKER_MIN, RELAY_CONNECTION_WORKER_MAX)
+}
+
+fn relay_connection_queue_capacity() -> usize {
+    parse_env_positive_usize("AGENTMUX_RELAY_CONNECTION_QUEUE_CAPACITY")
+        .unwrap_or(RELAY_CONNECTION_QUEUE_CAPACITY)
+}
+
+fn parse_env_positive_usize(name: &str) -> Option<usize> {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+}
+
+fn spawn_relay_connection_worker_pool(
+    configuration_root: std::path::PathBuf,
+    bundle_paths: BundleRuntimePaths,
+    stop_requested: Arc<AtomicBool>,
+) -> Vec<RelayConnectionWorker> {
+    let worker_count = relay_connection_worker_count();
+    (0..worker_count)
+        .map(|_| {
+            spawn_relay_connection_worker(
+                configuration_root.clone(),
+                bundle_paths.clone(),
+                Arc::clone(&stop_requested),
+            )
+        })
+        .collect::<Vec<_>>()
+}
+
+fn spawn_relay_connection_worker(
+    configuration_root: std::path::PathBuf,
+    bundle_paths: BundleRuntimePaths,
+    stop_requested: Arc<AtomicBool>,
+) -> RelayConnectionWorker {
+    let (sender, receiver) = mpsc::sync_channel::<UnixStream>(relay_connection_queue_capacity());
+    let join_handle = thread::spawn(move || {
+        run_relay_connection_worker(configuration_root, bundle_paths, stop_requested, receiver);
+    });
+    RelayConnectionWorker {
+        sender,
+        join_handle,
+    }
+}
+
+fn run_relay_connection_worker(
+    configuration_root: std::path::PathBuf,
+    bundle_paths: BundleRuntimePaths,
+    stop_requested: Arc<AtomicBool>,
+    receiver: mpsc::Receiver<UnixStream>,
+) {
+    loop {
+        if shutdown_requested() || stop_requested.load(Ordering::SeqCst) {
+            break;
+        }
+        match receiver.recv_timeout(Duration::from_millis(100)) {
+            Ok(mut stream) => {
+                if let Err(source) =
+                    crate::relay::serve_connection(&mut stream, &configuration_root, &bundle_paths)
+                {
+                    emit_inscription(
+                        "relay.request_failed",
+                        &json!({
+                            "bundle_name": bundle_paths.bundle_name,
+                            "error": source.to_string(),
+                        }),
+                    );
+                    eprintln!("agentmux host relay: request handling failed: {source}");
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+}
+
+fn dispatch_connection_to_worker_pool(
+    connection_workers: &[RelayConnectionWorker],
+    next_worker_index: &mut usize,
+    mut stream: UnixStream,
+) -> RelayConnectionDispatchOutcome {
+    if connection_workers.is_empty() {
+        return RelayConnectionDispatchOutcome::WorkersUnavailable(stream);
+    }
+    let worker_count = connection_workers.len();
+    let mut saw_queue_full = false;
+    let mut saw_disconnected = false;
+    for offset in 0..worker_count {
+        let worker_index = (*next_worker_index + offset) % worker_count;
+        match connection_workers[worker_index].sender.try_send(stream) {
+            Ok(()) => {
+                *next_worker_index = (worker_index + 1) % worker_count;
+                return RelayConnectionDispatchOutcome::Queued;
+            }
+            Err(mpsc::TrySendError::Full(returned_stream)) => {
+                saw_queue_full = true;
+                stream = returned_stream;
+            }
+            Err(mpsc::TrySendError::Disconnected(returned_stream)) => {
+                saw_disconnected = true;
+                stream = returned_stream;
+            }
+        }
+    }
+    if saw_queue_full {
+        return RelayConnectionDispatchOutcome::QueueFull(stream);
+    }
+    if saw_disconnected {
+        return RelayConnectionDispatchOutcome::WorkersUnavailable(stream);
+    }
+    RelayConnectionDispatchOutcome::WorkersUnavailable(stream)
+}
+
+fn reject_overloaded_connection(bundle_paths: &BundleRuntimePaths, mut stream: UnixStream) {
+    emit_inscription(
+        "relay.connection.rejected",
+        &json!({
+            "bundle_name": bundle_paths.bundle_name,
+            "reason_code": "runtime_connection_queue_full",
+            "reason": "connection worker pool queue is full",
+        }),
+    );
+    let response = crate::relay::RelayResponse::Error {
+        error: crate::relay::RelayError {
+            code: "runtime_connection_queue_full".to_string(),
+            message: "relay connection worker pool queue is full".to_string(),
+            details: Some(json!({
+                "bundle_name": bundle_paths.bundle_name,
+            })),
+        },
+    };
+    if let Ok(mut encoded) = serde_json::to_vec(&response) {
+        encoded.push(b'\n');
+        let _ = stream.write_all(&encoded);
+        let _ = stream.flush();
+    }
+    let _ = stream.shutdown(Shutdown::Both);
 }
 
 fn wake_listener(socket_path: &Path) {
