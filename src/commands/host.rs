@@ -1,4 +1,15 @@
-use std::{env, os::unix::net::UnixListener, thread, time::Duration};
+use std::{
+    env,
+    os::unix::net::{UnixListener, UnixStream},
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    thread,
+    time::Duration,
+};
 
 use serde_json::{Map, Value, json};
 
@@ -44,6 +55,12 @@ struct HostedRelayBundle {
     paths: BundleRuntimePaths,
     listener: UnixListener,
     _runtime_lock: RelayRuntimeLock,
+}
+
+#[derive(Debug)]
+struct RelayListenerWorker {
+    paths: BundleRuntimePaths,
+    join_handle: thread::JoinHandle<()>,
 }
 
 pub(super) async fn run_agentmux_host(arguments: &[String]) -> Result<(), RuntimeError> {
@@ -167,69 +184,68 @@ fn run_relay_host_no_selector(
     emit_inscription("relay.startup.summary", &startup_summary_payload(&summary));
     render_startup_summary(&summary);
 
+    let stop_requested = Arc::new(AtomicBool::new(false));
+    let (error_sender, error_receiver) = mpsc::channel::<RuntimeError>();
+    let mut workers = hosted_bundles
+        .into_iter()
+        .map(|hosted_bundle| {
+            spawn_relay_listener_worker(
+                roots.configuration_root.clone(),
+                hosted_bundle,
+                Arc::clone(&stop_requested),
+                error_sender.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    drop(error_sender);
+
     let mut accept_error = None::<RuntimeError>;
-    while !shutdown_requested() {
-        let mut accepted_request = false;
-        'bundle_accept: for hosted_bundle in &hosted_bundles {
-            loop {
-                match hosted_bundle.listener.accept() {
-                    Ok((mut stream, _)) => {
-                        accepted_request = true;
-                        if let Err(source) = crate::relay::serve_connection(
-                            &mut stream,
-                            &roots.configuration_root,
-                            &hosted_bundle.paths,
-                        ) {
-                            emit_inscription(
-                                "relay.request_failed",
-                                &json!({
-                                    "bundle_name": hosted_bundle.paths.bundle_name,
-                                    "error": source.to_string(),
-                                }),
-                            );
-                            eprintln!("agentmux host relay: request handling failed: {source}");
-                        }
-                    }
-                    Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => break,
-                    Err(source) if source.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(source) => {
-                        accept_error = Some(RuntimeError::io(
-                            format!(
-                                "accept relay socket connection for bundle {}",
-                                hosted_bundle.paths.bundle_name
-                            ),
-                            source,
-                        ));
-                        break 'bundle_accept;
-                    }
-                }
+    while !shutdown_requested() && !stop_requested.load(Ordering::SeqCst) {
+        match error_receiver.recv_timeout(Duration::from_millis(100)) {
+            Ok(source) => {
+                stop_requested.store(true, Ordering::SeqCst);
+                accept_error = Some(source);
+                break;
             }
-        }
-        if accept_error.is_some() {
-            break;
-        }
-        if !accepted_request {
-            thread::sleep(Duration::from_millis(50));
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
 
     if shutdown_requested() {
         emit_inscription("relay.shutdown.signal", &json!({"signal": "termination"}));
     }
+    stop_requested.store(true, Ordering::SeqCst);
+    for worker in &workers {
+        wake_listener(worker.paths.relay_socket.as_path());
+    }
+    let mut cleanup_paths = Vec::<BundleRuntimePaths>::with_capacity(workers.len());
+    for worker in workers.drain(..) {
+        cleanup_paths.push(worker.paths.clone());
+        if worker.join_handle.join().is_err() && accept_error.is_none() {
+            accept_error = Some(RuntimeError::validation(
+                "internal_unexpected_failure",
+                format!(
+                    "relay listener worker panicked for bundle {}",
+                    worker.paths.bundle_name
+                ),
+            ));
+        }
+    }
+
     let async_workers_remaining = if shutdown_requested() {
         wait_for_async_delivery_shutdown(Duration::from_millis(1_500))
     } else {
         0
     };
-    while let Some(hosted_bundle) = hosted_bundles.pop() {
-        drop(hosted_bundle.listener);
-        shared::remove_relay_socket_file(&hosted_bundle.paths.relay_socket)?;
-        let shutdown = shutdown_bundle_runtime(&hosted_bundle.paths.tmux_socket)
-            .map_err(shared::map_reconcile_error)?;
+    for paths in cleanup_paths {
+        shared::remove_relay_socket_file(&paths.relay_socket)?;
+        let shutdown =
+            shutdown_bundle_runtime(&paths.tmux_socket).map_err(shared::map_reconcile_error)?;
         emit_inscription(
             "relay.shutdown.complete",
             &json!({
-                "bundle_name": hosted_bundle.paths.bundle_name,
+                "bundle_name": paths.bundle_name,
                 "pruned_count": shutdown.pruned_sessions.len(),
                 "killed_tmux_server": shutdown.killed_tmux_server,
                 "pruned_sessions": shutdown.pruned_sessions,
@@ -241,6 +257,70 @@ fn run_relay_host_no_selector(
         return Err(error);
     }
     Ok(())
+}
+
+fn spawn_relay_listener_worker(
+    configuration_root: std::path::PathBuf,
+    hosted_bundle: HostedRelayBundle,
+    stop_requested: Arc<AtomicBool>,
+    error_sender: mpsc::Sender<RuntimeError>,
+) -> RelayListenerWorker {
+    let paths = hosted_bundle.paths.clone();
+    let join_handle = thread::spawn(move || {
+        run_relay_listener_worker(
+            configuration_root,
+            hosted_bundle,
+            stop_requested,
+            error_sender,
+        );
+    });
+    RelayListenerWorker { paths, join_handle }
+}
+
+fn run_relay_listener_worker(
+    configuration_root: std::path::PathBuf,
+    hosted_bundle: HostedRelayBundle,
+    stop_requested: Arc<AtomicBool>,
+    error_sender: mpsc::Sender<RuntimeError>,
+) {
+    while !shutdown_requested() && !stop_requested.load(Ordering::SeqCst) {
+        match hosted_bundle.listener.accept() {
+            Ok((mut stream, _)) => {
+                if shutdown_requested() || stop_requested.load(Ordering::SeqCst) {
+                    break;
+                }
+                if let Err(source) = crate::relay::serve_connection(
+                    &mut stream,
+                    &configuration_root,
+                    &hosted_bundle.paths,
+                ) {
+                    emit_inscription(
+                        "relay.request_failed",
+                        &json!({
+                            "bundle_name": hosted_bundle.paths.bundle_name,
+                            "error": source.to_string(),
+                        }),
+                    );
+                    eprintln!("agentmux host relay: request handling failed: {source}");
+                }
+            }
+            Err(source) if source.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(source) => {
+                let _ = error_sender.send(RuntimeError::io(
+                    format!(
+                        "accept relay socket connection for bundle {}",
+                        hosted_bundle.paths.bundle_name
+                    ),
+                    source,
+                ));
+                break;
+            }
+        }
+    }
+}
+
+fn wake_listener(socket_path: &Path) {
+    let _ = UnixStream::connect(socket_path);
 }
 
 fn host_selected_bundle(
@@ -317,15 +397,6 @@ fn host_selected_bundle(
         Ok(listener) => listener,
         Err(source) => return (failed_startup_bundle(bundle_name, source), None),
     };
-    if let Err(source) = listener.set_nonblocking(true) {
-        return (
-            failed_startup_bundle(
-                bundle_name,
-                RuntimeError::io("set relay socket listener nonblocking", source),
-            ),
-            None,
-        );
-    }
     let startup_bundle = match startup_mode {
         RelayHostStartupMode::Autostart => hosted_startup_bundle(bundle_name),
         RelayHostStartupMode::ProcessOnly => skipped_startup_bundle(
