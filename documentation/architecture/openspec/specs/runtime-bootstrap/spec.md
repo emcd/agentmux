@@ -312,8 +312,12 @@ Per-bundle `bundles/<bundle-name>.json` files SHALL NOT be required.
 
 ### Requirement: Bundle Group Resolution
 
-Relay host group selection SHALL resolve membership from bundle-local
-configuration under:
+Bundle group selector resolution SHALL apply to bundle lifecycle commands:
+
+- `agentmux up --group <GROUP>`
+- `agentmux down --group <GROUP>`
+
+Group membership SHALL resolve from bundle-local configuration under:
 
 - `<config-root>/bundles/<bundle-id>.toml`
 
@@ -327,14 +331,14 @@ Group naming rules:
 - custom group names are lowercase
 - MVP reserved group `ALL` is implicit and selects all configured bundles
 
-#### Scenario: Resolve custom group from bundle-local groups
+#### Scenario: Resolve custom group for bundle lifecycle command
 
-- **WHEN** an operator invokes `agentmux host relay --group dev`
+- **WHEN** an operator invokes `agentmux up --group dev`
 - **THEN** the system selects bundles whose `groups` include `dev`
 
 #### Scenario: Resolve ALL as implicit group
 
-- **WHEN** an operator invokes `agentmux host relay --group ALL`
+- **WHEN** an operator invokes `agentmux down --group ALL`
 - **THEN** the system selects all configured bundles
 - **AND** does not require explicit `ALL` membership in bundle files
 
@@ -346,66 +350,20 @@ Group naming rules:
 
 #### Scenario: Reject unknown custom group
 
-- **WHEN** an operator invokes `agentmux host relay --group nightly`
+- **WHEN** an operator invokes `agentmux up --group nightly`
 - **AND** no configured bundle contains group `nightly`
 - **THEN** the system rejects invocation with `validation_unknown_group`
 
 #### Scenario: Reject invalid custom uppercase group name
 
-- **WHEN** an operator invokes `agentmux host relay --group DEV`
+- **WHEN** an operator invokes `agentmux down --group DEV`
 - **AND** `DEV` is not a reserved system group
 - **THEN** the system rejects invocation with `validation_invalid_group_name`
 
-### Requirement: Relay Group Startup Outcome Semantics
-
-In `--group` mode, runtime startup SHALL use partial-host semantics across
-selected bundles.
-
-Per selected bundle, startup SHALL report one outcome:
-
-- `hosted`
-- `skipped`
-- `failed`
-
-Per selected bundle, startup SHALL also report:
-
-- `reason_code` (nullable)
-- `reason` (nullable human text)
-
-Startup summary output in group mode SHALL include aggregate fields:
-
-- `hosted_bundle_count`
-- `skipped_bundle_count`
-- `failed_bundle_count`
-- `hosted_any` (boolean)
-
-Process exit status in group mode SHALL be non-zero only when zero bundles are
-successfully hosted.
-
-#### Scenario: Continue hosting when one selected bundle lock is held
-
-- **WHEN** at least one selected bundle is hostable
-- **AND** one or more selected bundles are lock-held
-- **THEN** the system hosts available bundles
-- **AND** reports lock-held bundles as `skipped`
-- **AND** sets `reason_code=lock_held` for those bundles
-
-#### Scenario: Return non-zero when zero bundles host
-
-- **WHEN** `agentmux host relay --group dev` completes startup with zero
-  `hosted` bundles (`hosted_bundle_count == 0`)
-- **THEN** process startup returns non-zero exit status
-
-#### Scenario: Return success when at least one selected bundle hosts
-
-- **WHEN** `agentmux host relay --group dev` completes startup with one or more
-  `hosted` bundles
-- **THEN** process startup returns success exit status
-
 ### Requirement: Relay Group Trust Boundary
 
-Relay group hosting SHALL remain within the existing local runtime trust
-boundary:
+Bundle lifecycle group operations SHALL remain within the existing local runtime
+trust boundary:
 
 - same-user ownership checks for runtime artifacts,
 - same-host local socket assumptions,
@@ -413,8 +371,8 @@ boundary:
 
 #### Scenario: Enforce existing ownership checks for group-selected bundles
 
-- **WHEN** `agentmux host relay --group dev` initializes runtime artifacts for
-  selected bundles
+- **WHEN** `agentmux up --group dev` initializes runtime artifacts for selected
+  bundles
 - **THEN** ownership and permission checks remain enforced per bundle
 - **AND** foreign-owned runtime artifacts are rejected
 
@@ -550,4 +508,82 @@ configuration.
 - **WHEN** repository ignore rules are evaluated
 - **THEN** `.auxiliary/configuration/agentmux/overrides/tui.toml` is covered by
   the existing ignored overrides path
+
+### Requirement: Bundle Autostart Eligibility Field
+
+Per-bundle TOML configuration SHALL support optional top-level:
+
+- `autostart` (boolean)
+
+If omitted, `autostart` SHALL default to `false`.
+
+`autostart` SHALL only affect no-selector `agentmux host relay` autostart mode.
+
+#### Scenario: Treat omitted autostart as false
+
+- **WHEN** bundle file omits `autostart`
+- **THEN** runtime resolves `autostart=false` for that bundle
+
+#### Scenario: Resolve explicit autostart true
+
+- **WHEN** bundle file sets `autostart = true`
+- **THEN** runtime marks bundle as eligible for host autostart mode
+
+### Requirement: Host Relay No-Selector Autostart Resolution
+
+When operator runs `agentmux host relay` with no selector mode, runtime SHALL:
+
+1. start relay process,
+2. select bundles with `autostart=true`,
+3. attempt hosting selected bundles using existing per-bundle host semantics.
+
+When operator runs `agentmux host relay --no-autostart`, runtime SHALL start
+relay process and SHALL skip bundle hosting selection.
+
+No-selector mode success SHALL be based on relay process startup success and
+SHALL NOT fail solely because zero bundles were selected/hosted.
+
+#### Scenario: Start relay and host eligible bundles in no-selector mode
+
+- **WHEN** operator runs `agentmux host relay`
+- **THEN** runtime starts relay process
+- **AND** selects bundles where `autostart=true`
+- **AND** attempts hosting those bundles
+
+#### Scenario: Start relay without bundle hosting in no-autostart mode
+
+- **WHEN** operator runs `agentmux host relay --no-autostart`
+- **THEN** runtime starts relay process
+- **AND** does not perform bundle hosting selection
+
+#### Scenario: Return success for no-selector mode with zero eligible bundles
+
+- **WHEN** operator runs `agentmux host relay`
+- **AND** no configured bundles have `autostart=true`
+- **THEN** runtime returns successful process startup
+
+### Requirement: Bundle Lifecycle Selector Resolution for Up and Down
+
+`agentmux up` and `agentmux down` selector resolution SHALL follow existing
+bundle/group selector semantics:
+
+- positional `<bundle-id>` selects one configured bundle
+- `--group <GROUP>` selects bundles by group membership (`ALL` implicit)
+
+Unknown selectors SHALL return existing validation errors:
+
+- `validation_unknown_bundle`
+- `validation_unknown_group`
+- `validation_invalid_group_name`
+
+#### Scenario: Resolve up selector by bundle id
+
+- **WHEN** operator runs `agentmux up relay`
+- **THEN** runtime resolves one configured bundle named `relay`
+
+#### Scenario: Reject down selector for unknown custom group
+
+- **WHEN** operator runs `agentmux down --group nightly`
+- **AND** no configured bundle declares group `nightly`
+- **THEN** runtime returns `validation_unknown_group`
 
