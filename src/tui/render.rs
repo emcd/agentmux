@@ -14,7 +14,7 @@ pub(crate) fn render(frame: &mut Frame, state: &mut AppState) {
         .constraints([
             Constraint::Length(3),
             Constraint::Min(12),
-            Constraint::Length(7),
+            Constraint::Length(3),
         ])
         .split(frame.area());
 
@@ -22,11 +22,17 @@ pub(crate) fn render(frame: &mut Frame, state: &mut AppState) {
     render_main(frame, chunks[1], state);
     render_footer(frame, chunks[2], state);
 
+    if state.help_overlay_open {
+        render_help_overlay(frame);
+    }
     if state.picker_open {
         render_picker_overlay(frame, state);
     }
     if state.events_overlay_open {
         render_events_overlay(frame, state);
+    }
+    if state.look_overlay_open {
+        render_look_overlay(frame, state);
     }
 }
 
@@ -62,15 +68,10 @@ fn render_main(frame: &mut Frame, area: Rect, state: &mut AppState) {
 fn render_workbench_panes(frame: &mut Frame, area: Rect, state: &mut AppState) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(9),
-            Constraint::Length(9),
-            Constraint::Min(8),
-        ])
+        .constraints([Constraint::Min(12), Constraint::Length(9)])
         .split(area);
-    render_compose(frame, rows[0], state);
-    render_chat_history(frame, rows[1], state);
-    render_snapshot(frame, rows[2], state);
+    render_chat_history(frame, rows[0], state);
+    render_compose(frame, rows[1], state);
 }
 
 fn render_compose(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -107,12 +108,9 @@ fn render_compose(frame: &mut Frame, area: Rect, state: &AppState) {
         lines.push(Line::from("…"));
     }
 
-    let paragraph =
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .block(Block::default().borders(Borders::ALL).title(
-            "Compose (Tab complete/focus, Enter accept completion, Ctrl+Space cycle, Ctrl+S send)",
-        ));
+    let paragraph = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .block(Block::default().borders(Borders::ALL).title("Compose"));
     frame.render_widget(paragraph, area);
 }
 
@@ -143,15 +141,15 @@ fn render_chat_history(frame: &mut Frame, area: Rect, state: &mut AppState) {
             })
             .collect::<Vec<_>>()
     };
-    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title("Chat History (PgUp/PgDn)"),
-    );
+    let paragraph = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .block(Block::default().borders(Borders::ALL).title("Chat History"));
     frame.render_widget(paragraph, area);
 }
 
-fn render_snapshot(frame: &mut Frame, area: Rect, state: &AppState) {
+fn render_look_overlay(frame: &mut Frame, state: &AppState) {
+    let popup = centered_rect(90, 80, frame.area());
+    frame.render_widget(Clear, popup);
     let title = match (&state.look_target, &state.look_captured_at) {
         (Some(target), Some(captured_at)) => {
             format!(
@@ -160,7 +158,7 @@ fn render_snapshot(frame: &mut Frame, area: Rect, state: &AppState) {
             )
         }
         (Some(target), None) => format!("Look Snapshot target={}", target),
-        _ => "Look Snapshot (Ctrl+L)".to_string(),
+        _ => "Look Snapshot".to_string(),
     };
     let lines = if state.look_snapshot_lines.is_empty() {
         vec![Line::from("(no snapshot captured)")]
@@ -174,23 +172,18 @@ fn render_snapshot(frame: &mut Frame, area: Rect, state: &AppState) {
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
         .block(Block::default().borders(Borders::ALL).title(title));
-    frame.render_widget(paragraph, area);
+    frame.render_widget(paragraph, popup);
 }
 
 fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
-    let lines = state
+    let line = state
         .status_history
-        .iter()
-        .take(4)
+        .front()
         .map(render_status_line)
-        .collect::<Vec<_>>();
-    let footer = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(
-                "Status (Ctrl+R refresh, Ctrl+L look, F2 picker, F3 events, PgUp/PgDn history, Esc/Ctrl+Q quit)",
-            ),
-    );
+        .unwrap_or_else(|| Line::from("Ready."));
+    let footer = Paragraph::new(vec![line])
+        .wrap(Wrap { trim: false })
+        .block(Block::default().borders(Borders::ALL).title("Status"));
     frame.render_widget(footer, area);
 }
 
@@ -229,7 +222,7 @@ fn render_picker_overlay(frame: &mut Frame, state: &mut AppState) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Recipient Picker (Enter insert, Esc close)"),
+                .title("Recipient Picker"),
         )
         .highlight_style(Style::default().bg(Color::Blue).fg(Color::White));
     frame.render_stateful_widget(list, popup, &mut state.picker_state);
@@ -248,11 +241,31 @@ fn render_events_overlay(frame: &mut Frame, state: &AppState) {
             .map(|line| Line::from(Span::raw(line.clone())))
             .collect::<Vec<_>>()
     };
-    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title("Events (Esc/F3 close)"),
-    );
+    let paragraph = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .block(Block::default().borders(Borders::ALL).title("Events"));
+    frame.render_widget(paragraph, popup);
+}
+
+fn render_help_overlay(frame: &mut Frame) {
+    let popup = centered_rect(72, 70, frame.area());
+    frame.render_widget(Clear, popup);
+    let lines = vec![
+        Line::from("F1: Toggle help"),
+        Line::from("F2: Toggle recipient picker"),
+        Line::from("F3: Toggle events"),
+        Line::from("F4: Capture look snapshot (selected recipient or first To target)"),
+        Line::from("Ctrl+R: Refresh recipients"),
+        Line::from("Ctrl+S: Send message"),
+        Line::from("Tab: Recipient completion in To, otherwise focus next"),
+        Line::from("Shift+Tab: Focus previous"),
+        Line::from("Enter: Accept completion in To / newline in Message"),
+        Line::from("PgUp/PgDn: Scroll chat history"),
+        Line::from("Esc or Ctrl+Q: Quit"),
+    ];
+    let paragraph = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .block(Block::default().borders(Borders::ALL).title("Help"));
     frame.render_widget(paragraph, popup);
 }
 

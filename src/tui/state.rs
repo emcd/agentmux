@@ -81,6 +81,8 @@ pub(crate) struct AppState {
     pub recipients_state: ListState,
     pub picker_open: bool,
     pub events_overlay_open: bool,
+    pub look_overlay_open: bool,
+    pub help_overlay_open: bool,
     pub picker_state: ListState,
     pub focus: FocusField,
     pub to_field: String,
@@ -128,6 +130,8 @@ impl AppState {
             recipients_state: ListState::default(),
             picker_open: false,
             events_overlay_open: false,
+            look_overlay_open: false,
+            help_overlay_open: false,
             picker_state: ListState::default(),
             focus: FocusField::To,
             to_field: String::new(),
@@ -137,7 +141,7 @@ impl AppState {
             look_snapshot_lines: Vec::new(),
             status_history: VecDeque::from([StatusEntry {
                 code: None,
-                message: "Ready. Tab complete/focus, Enter accept completion, Ctrl+Space cycle, Ctrl+S send, Ctrl+L look, PgUp/PgDn history, Esc/Ctrl+Q quit.".to_string(),
+                message: "Ready. Press F1 for help.".to_string(),
             }]),
             event_history: VecDeque::new(),
             chat_history: VecDeque::new(),
@@ -227,6 +231,8 @@ impl AppState {
     pub fn open_picker(&mut self) {
         self.picker_open = true;
         self.events_overlay_open = false;
+        self.look_overlay_open = false;
+        self.help_overlay_open = false;
         if self.recipients.is_empty() {
             self.picker_state.select(None);
             return;
@@ -243,6 +249,33 @@ impl AppState {
         self.events_overlay_open = !self.events_overlay_open;
         if self.events_overlay_open {
             self.picker_open = false;
+            self.look_overlay_open = false;
+            self.help_overlay_open = false;
+        }
+    }
+
+    pub fn toggle_look_overlay(&mut self) {
+        self.look_overlay_open = !self.look_overlay_open;
+        if self.look_overlay_open {
+            self.picker_open = false;
+            self.events_overlay_open = false;
+            self.help_overlay_open = false;
+        }
+    }
+
+    pub fn open_look_overlay(&mut self) {
+        self.look_overlay_open = true;
+        self.picker_open = false;
+        self.events_overlay_open = false;
+        self.help_overlay_open = false;
+    }
+
+    pub fn toggle_help_overlay(&mut self) {
+        self.help_overlay_open = !self.help_overlay_open;
+        if self.help_overlay_open {
+            self.picker_open = false;
+            self.events_overlay_open = false;
+            self.look_overlay_open = false;
         }
     }
 
@@ -523,19 +556,11 @@ impl AppState {
     }
 
     pub fn look_target(&mut self) -> Result<(), RuntimeError> {
-        let target = self
-            .selected_recipient_id()
-            .or_else(|| {
-                merge_tui_targets(&self.to_field, &self.bundle_name)
-                    .ok()
-                    .and_then(|targets| targets.first().cloned())
-            })
-            .ok_or_else(|| {
-                RuntimeError::validation(
-                    "validation_unknown_target",
-                    "look requires a selected recipient or To target",
-                )
-            })?;
+        let target = resolve_tui_look_target(
+            self.selected_recipient_id(),
+            &self.to_field,
+            &self.bundle_name,
+        )?;
 
         let response = self.request_relay(&RelayRequest::Look {
             requester_session: self.sender_session.clone(),
@@ -554,6 +579,7 @@ impl AppState {
                 self.look_target = Some(target_session.clone());
                 self.look_captured_at = Some(captured_at);
                 self.look_snapshot_lines = snapshot_lines;
+                self.open_look_overlay();
                 self.push_status(None, format!("look captured target={target_session}"));
                 self.relay_stream_poll_error_reported = false;
                 Ok(())
@@ -942,6 +968,38 @@ pub fn merge_tui_targets(
     }
 
     Ok(targets)
+}
+
+/// Resolves the look target using TUI operator precedence.
+///
+/// Precedence:
+/// 1. currently selected recipient identity from recipient list/picker
+/// 2. first parsed recipient in the `To` field
+pub fn resolve_tui_look_target(
+    selected_recipient: Option<String>,
+    to_field: &str,
+    associated_bundle: &str,
+) -> Result<String, RuntimeError> {
+    if let Some(selected_recipient) = selected_recipient {
+        return Ok(selected_recipient);
+    }
+
+    let targets = merge_tui_targets(to_field, associated_bundle).map_err(|error| match error {
+        RuntimeError::Validation { code, .. } if code == "validation_empty_targets" => {
+            RuntimeError::validation(
+                "validation_unknown_target",
+                "look requires a selected recipient or To target",
+            )
+        }
+        other => other,
+    })?;
+
+    targets.into_iter().next().ok_or_else(|| {
+        RuntimeError::validation(
+            "validation_unknown_target",
+            "look requires a selected recipient or To target",
+        )
+    })
 }
 
 /// Completes the current recipient token from a list of candidate identities.

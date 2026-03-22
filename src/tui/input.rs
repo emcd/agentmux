@@ -20,11 +20,22 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
         return Ok(());
     }
 
+    if key.code == KeyCode::F(1) {
+        state.toggle_help_overlay();
+        return Ok(());
+    }
+
     if state.picker_open {
         return handle_picker_key(state, key);
     }
     if state.events_overlay_open {
         return handle_events_overlay_key(state, key);
+    }
+    if state.look_overlay_open {
+        return handle_look_overlay_key(state, key);
+    }
+    if state.help_overlay_open {
+        return handle_help_overlay_key(state, key);
     }
 
     if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -34,7 +45,6 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
                 return Ok(());
             }
             KeyCode::Char('s') => return state.send_message(),
-            KeyCode::Char('l') => return state.look_target(),
             KeyCode::Char('r') => return state.refresh_recipients(),
             KeyCode::Char(' ') => state.autocomplete_active_recipient_field(),
             _ => {}
@@ -53,6 +63,7 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
             }
         }
         KeyCode::F(3) => state.toggle_events_overlay(),
+        KeyCode::F(4) => return state.look_target(),
         KeyCode::BackTab => state.cycle_focus_backward(),
         KeyCode::Tab => {
             if state.focus == FocusField::To {
@@ -103,6 +114,46 @@ fn handle_events_overlay_key(state: &mut AppState, key: KeyEvent) -> Result<(), 
         KeyCode::F(2) => {
             state.toggle_events_overlay();
             state.open_picker();
+        }
+        KeyCode::F(4) => {
+            state.toggle_events_overlay();
+            return state.look_target();
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_look_overlay_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
+    match key.code {
+        KeyCode::Esc | KeyCode::F(4) => state.toggle_look_overlay(),
+        KeyCode::F(2) => {
+            state.toggle_look_overlay();
+            state.open_picker();
+        }
+        KeyCode::F(3) => {
+            state.toggle_look_overlay();
+            state.toggle_events_overlay();
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_help_overlay_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
+    match key.code {
+        KeyCode::Esc | KeyCode::F(1) => state.toggle_help_overlay(),
+        KeyCode::F(2) => {
+            state.toggle_help_overlay();
+            state.open_picker();
+        }
+        KeyCode::F(3) => {
+            state.toggle_help_overlay();
+            state.toggle_events_overlay();
+        }
+        KeyCode::F(4) => {
+            state.toggle_help_overlay();
+            return state.look_target();
         }
         _ => {}
     }

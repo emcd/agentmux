@@ -13,6 +13,7 @@ use crate::runtime::error::RuntimeError;
 
 pub use state::{
     TuiLaunchOptions, autocomplete_recipient_input, merge_tui_targets, parse_tui_target_identifier,
+    resolve_tui_look_target,
 };
 
 pub fn run(options: TuiLaunchOptions) -> Result<(), RuntimeError> {
