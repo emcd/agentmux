@@ -19,8 +19,8 @@ use super::{
     SCHEMA_VERSION, relay_error,
 };
 
-const DEFAULT_LOOK_LINES: usize = 120;
-const MAX_LOOK_LINES: usize = 1000;
+const LOOK_LINES_DEFAULT: usize = 120;
+const LOOK_LINES_MAX: usize = 1000;
 
 pub(super) fn handle_request(
     request: RelayRequest,
@@ -412,15 +412,15 @@ fn handle_look(
         ));
     }
 
-    let requested_lines = lines.unwrap_or(DEFAULT_LOOK_LINES);
-    if !(1..=MAX_LOOK_LINES).contains(&requested_lines) {
+    let requested_lines = lines.unwrap_or(LOOK_LINES_DEFAULT);
+    if !(1..=LOOK_LINES_MAX).contains(&requested_lines) {
         return Err(relay_error(
             "validation_invalid_lines",
             "lines must be between 1 and 1000",
             Some(json!({
                 "lines": requested_lines,
                 "min": 1,
-                "max": MAX_LOOK_LINES,
+                "max": LOOK_LINES_MAX,
             })),
         ));
     }

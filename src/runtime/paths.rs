@@ -9,9 +9,9 @@ use std::{
 use super::error::RuntimeError;
 
 const APPLICATION_DIRECTORY: &str = "agentmux";
-const DEFAULT_CONFIGURATION_DIRECTORY: &str = ".config";
-const DEFAULT_STATE_DIRECTORY: &str = ".local/state";
-const DEFAULT_INSCRIPTIONS_DIRECTORY: &str = "inscriptions";
+const CONFIGURATION_DIRECTORY_DEFAULT: &str = ".config";
+const STATE_DIRECTORY_DEFAULT: &str = ".local/state";
+const INSCRIPTIONS_DIRECTORY_DEFAULT: &str = "inscriptions";
 const BUNDLES_DIRECTORY: &str = "bundles";
 const RELAY_SOCKET_FILE: &str = "relay.sock";
 const TMUX_SOCKET_FILE: &str = "tmux.sock";
@@ -175,7 +175,7 @@ fn resolve_inscriptions_root(overrides: &RuntimeRootOverrides, state_root: &Path
     {
         return debug_repository_inscriptions_root(repository_root);
     }
-    state_root.join(DEFAULT_INSCRIPTIONS_DIRECTORY)
+    state_root.join(INSCRIPTIONS_DIRECTORY_DEFAULT)
 }
 
 fn resolve_home_directory() -> Result<PathBuf, RuntimeError> {
@@ -255,7 +255,7 @@ fn configuration_root_from_sources(
         return path.join(APPLICATION_DIRECTORY);
     }
     home_directory
-        .join(DEFAULT_CONFIGURATION_DIRECTORY)
+        .join(CONFIGURATION_DIRECTORY_DEFAULT)
         .join(APPLICATION_DIRECTORY)
 }
 
@@ -264,6 +264,6 @@ fn state_root_from_sources(xdg_state_home: Option<&Path>, home_directory: &Path)
         return path.join(APPLICATION_DIRECTORY);
     }
     home_directory
-        .join(DEFAULT_STATE_DIRECTORY)
+        .join(STATE_DIRECTORY_DEFAULT)
         .join(APPLICATION_DIRECTORY)
 }

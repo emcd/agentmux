@@ -6,7 +6,7 @@ use crate::runtime::inscriptions::emit_inscription;
 
 const DELIVERY_DIAGNOSTICS_ENVVAR: &str = "AGENTMUX_RELAY_DELIVERY_DIAGNOSTICS";
 const SEND_KEYS_CHUNK_BYTES: usize = 1024;
-const MAX_LOOK_LINES: usize = 1000;
+const LOOK_LINES_MAX: usize = 1000;
 
 pub(super) fn resolve_active_pane_target(
     tmux_socket: &Path,
@@ -157,7 +157,7 @@ pub(super) fn capture_pane_tail_lines(
     pane_target: &str,
     requested_lines: usize,
 ) -> Result<Vec<String>, String> {
-    let start = format!("-{MAX_LOOK_LINES}");
+    let start = format!("-{LOOK_LINES_MAX}");
     let output = run_tmux_command(
         tmux_socket,
         &[
@@ -271,9 +271,9 @@ fn tmux_program() -> String {
 }
 
 pub(super) fn sanitize_diagnostic_text(text: &str) -> String {
-    const MAX_CHARS: usize = 512;
-    let mut clipped = text.chars().take(MAX_CHARS).collect::<String>();
-    if text.chars().count() > MAX_CHARS {
+    const CHARS_MAX: usize = 512;
+    let mut clipped = text.chars().take(CHARS_MAX).collect::<String>();
+    if text.chars().count() > CHARS_MAX {
         clipped.push_str("...");
     }
     clipped

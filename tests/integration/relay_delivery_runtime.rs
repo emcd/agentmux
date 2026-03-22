@@ -50,7 +50,7 @@ async fn relay_startup_retries_transient_tmux_create_failures() {
     let _ = child.wait().await;
 
     assert!(
-        stdout.contains("agentmux host relay listening"),
+        stdout.contains("\"host_mode\":\"autostart\""),
         "relay should report successful startup, stdout={stdout:?}"
     );
     let attempts = fs::read_to_string(&attempts_file)

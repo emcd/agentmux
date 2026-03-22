@@ -15,7 +15,7 @@ const FORMAT_VERSION: u32 = 1;
 const CODERS_FILE: &str = "coders.toml";
 const BUNDLES_DIRECTORY: &str = "bundles";
 const BUNDLE_EXTENSION: &str = "toml";
-const MAX_SESSION_ID_LENGTH: usize = 31;
+const SESSION_ID_LENGTH_MAX: usize = 31;
 pub const RESERVED_GROUP_ALL: &str = "ALL";
 
 /// One configured bundle member.
@@ -956,12 +956,12 @@ fn validate_session_id(path: &Path, session_id: &str) -> Result<(), Configuratio
             ),
         });
     }
-    if session_id.len() > MAX_SESSION_ID_LENGTH {
+    if session_id.len() > SESSION_ID_LENGTH_MAX {
         return Err(ConfigurationError::InvalidConfiguration {
             path: path.to_path_buf(),
             message: format!(
                 "session id '{}' exceeds max length {}",
-                session_id, MAX_SESSION_ID_LENGTH
+                session_id, SESSION_ID_LENGTH_MAX
             ),
         });
     }

@@ -35,12 +35,12 @@ use super::tmux::{
 };
 use super::{AsyncDeliveryTask, ChatOutcome, ChatResult, ChatStatus, RelayError, SCHEMA_VERSION};
 
-const DEFAULT_QUIET_WINDOW_MS: u64 = 750;
-const DEFAULT_QUIESCENCE_TIMEOUT_MS: u64 = 30_000;
-const MAX_PROMPT_TOKENS_ENVVAR: &str = "AGENTMUX_MAX_PROMPT_TOKENS";
+const QUIET_WINDOW_MS_DEFAULT: u64 = 750;
+const QUIESCENCE_TIMEOUT_MS_DEFAULT: u64 = 30_000;
+const PROMPT_TOKENS_MAX_ENVVAR: &str = "AGENTMUX_MAX_PROMPT_TOKENS";
 const TOKENIZER_PROFILE_ENVVAR: &str = "AGENTMUX_TOKENIZER_PROFILE";
-const DEFAULT_PROMPT_INSPECT_LINES: usize = 3;
-const MAX_PROMPT_INSPECT_LINES: usize = 40;
+const PROMPT_INSPECT_LINES_DEFAULT: usize = 3;
+const PROMPT_INSPECT_LINES_MAX: usize = 40;
 const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;
 const ASYNC_SHUTDOWN_WAIT_POLL_MS: u64 = 25;
 const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delivery";
@@ -91,8 +91,8 @@ pub(super) struct QuiescenceOptions {
 impl Default for QuiescenceOptions {
     fn default() -> Self {
         Self {
-            quiet_window: Duration::from_millis(DEFAULT_QUIET_WINDOW_MS),
-            quiescence_timeout: Some(Duration::from_millis(DEFAULT_QUIESCENCE_TIMEOUT_MS)),
+            quiet_window: Duration::from_millis(QUIET_WINDOW_MS_DEFAULT),
+            quiescence_timeout: Some(Duration::from_millis(QUIESCENCE_TIMEOUT_MS_DEFAULT)),
         }
     }
 }
@@ -106,12 +106,12 @@ impl QuiescenceOptions {
             quiet_window: Duration::from_millis(
                 quiet_window_ms
                     .filter(|value| *value > 0)
-                    .unwrap_or(DEFAULT_QUIET_WINDOW_MS),
+                    .unwrap_or(QUIET_WINDOW_MS_DEFAULT),
             ),
             quiescence_timeout: Some(Duration::from_millis(
                 quiescence_timeout_ms
                     .filter(|value| *value > 0)
-                    .unwrap_or(DEFAULT_QUIESCENCE_TIMEOUT_MS),
+                    .unwrap_or(QUIESCENCE_TIMEOUT_MS_DEFAULT),
             )),
         }
     }
@@ -124,7 +124,7 @@ impl QuiescenceOptions {
             quiet_window: Duration::from_millis(
                 quiet_window_ms
                     .filter(|value| *value > 0)
-                    .unwrap_or(DEFAULT_QUIET_WINDOW_MS),
+                    .unwrap_or(QUIET_WINDOW_MS_DEFAULT),
             ),
             quiescence_timeout: quiescence_timeout_ms
                 .filter(|value| *value > 0)
@@ -1275,7 +1275,7 @@ pub(super) fn aggregate_chat_status(results: &[ChatResult]) -> ChatStatus {
 }
 
 pub(super) fn prompt_batch_settings() -> PromptBatchSettings {
-    let max_prompt_tokens = std::env::var(MAX_PROMPT_TOKENS_ENVVAR)
+    let max_prompt_tokens = std::env::var(PROMPT_TOKENS_MAX_ENVVAR)
         .ok()
         .and_then(|value| value.trim().parse::<usize>().ok())
         .filter(|value| *value > 0)
@@ -1501,8 +1501,8 @@ fn build_prompt_readiness_matcher(
         .map_err(|source| format!("invalid prompt_readiness.prompt_regex: {source}"))?;
     let inspect_lines = template
         .inspect_lines
-        .unwrap_or(DEFAULT_PROMPT_INSPECT_LINES)
-        .clamp(1, MAX_PROMPT_INSPECT_LINES);
+        .unwrap_or(PROMPT_INSPECT_LINES_DEFAULT)
+        .clamp(1, PROMPT_INSPECT_LINES_MAX);
 
     Ok(Some(PromptReadinessMatcher {
         prompt_regex,

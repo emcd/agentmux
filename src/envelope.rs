@@ -11,7 +11,7 @@ use serde_json::Value;
 
 pub const ENVELOPE_SCHEMA_VERSION: &str = "1";
 pub const RESERVED_PATH_POINTER_CONTENT_TYPE: &str = "application/vnd.agentmux.path-pointer+json";
-pub const DEFAULT_MAX_PROMPT_TOKENS: usize = 4096;
+pub const PROMPT_TOKENS_MAX_DEFAULT: usize = 4096;
 
 const REQUIRED_HEADER_MESSAGE_ID: &str = "Message-Id";
 const REQUIRED_HEADER_DATE: &str = "Date";
@@ -95,7 +95,7 @@ pub struct PromptBatchSettings {
 impl Default for PromptBatchSettings {
     fn default() -> Self {
         Self {
-            max_prompt_tokens: DEFAULT_MAX_PROMPT_TOKENS,
+            max_prompt_tokens: PROMPT_TOKENS_MAX_DEFAULT,
             tokenizer_profile: TokenizerProfile::default(),
         }
     }

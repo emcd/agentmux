@@ -106,19 +106,32 @@ fn host_relay_default_mode_starts_autostart_bundles() {
         .expect("wait for agentmux host relay");
 
     assert!(output.status.success(), "command should succeed");
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let summary_json = parse_summary_json_line(&output.stdout);
+    let bundles = summary_json["bundles"]
+        .as_array()
+        .expect("startup summary bundles");
+    let alpha = bundles
+        .iter()
+        .find(|bundle| bundle["bundle_name"] == "alpha")
+        .expect("alpha startup summary");
+    let bravo = bundles
+        .iter()
+        .find(|bundle| bundle["bundle_name"] == "bravo")
+        .expect("bravo startup summary");
     assert!(
-        stdout.contains("mode=autostart hosted=1 skipped=1 failed=0 hosted_any=true"),
-        "unexpected stdout: {stdout}"
+        summary_json["host_mode"] == "autostart",
+        "unexpected summary: {summary_json}"
     );
     assert!(
-        stdout.contains("bundle=alpha outcome=hosted"),
-        "unexpected stdout: {stdout}"
+        summary_json["hosted_bundle_count"] == 1
+            && summary_json["skipped_bundle_count"] == 1
+            && summary_json["failed_bundle_count"] == 0
+            && summary_json["hosted_any"] == true,
+        "unexpected summary: {summary_json}"
     );
-    assert!(
-        stdout.contains("bundle=bravo outcome=skipped reason_code=process_only"),
-        "unexpected stdout: {stdout}"
-    );
+    assert_eq!(alpha["outcome"], "hosted");
+    assert_eq!(bravo["outcome"], "skipped");
+    assert_eq!(bravo["reason_code"], "process_only");
 }
 
 #[test]
@@ -165,15 +178,27 @@ fn host_relay_no_autostart_mode_reports_process_only_summary() {
         .expect("wait for agentmux host relay --no-autostart");
 
     assert!(output.status.success(), "command should succeed");
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let summary_json = parse_summary_json_line(&output.stdout);
+    let bundles = summary_json["bundles"]
+        .as_array()
+        .expect("startup summary bundles");
+    let alpha = bundles
+        .iter()
+        .find(|bundle| bundle["bundle_name"] == "alpha")
+        .expect("alpha startup summary");
     assert!(
-        stdout.contains("mode=process_only hosted=0 skipped=1 failed=0 hosted_any=false"),
-        "unexpected stdout: {stdout}"
+        summary_json["host_mode"] == "process_only",
+        "unexpected summary: {summary_json}"
     );
     assert!(
-        stdout.contains("bundle=alpha outcome=skipped reason_code=process_only"),
-        "unexpected stdout: {stdout}"
+        summary_json["hosted_bundle_count"] == 0
+            && summary_json["skipped_bundle_count"] == 1
+            && summary_json["failed_bundle_count"] == 0
+            && summary_json["hosted_any"] == false,
+        "unexpected summary: {summary_json}"
     );
+    assert_eq!(alpha["outcome"], "skipped");
+    assert_eq!(alpha["reason_code"], "process_only");
 }
 
 #[test]

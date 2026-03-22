@@ -209,13 +209,6 @@ fn run_relay_host_no_selector(
     }
 
     let _signal_handlers = install_shutdown_signal_handlers()?;
-    for hosted_bundle in &hosted_bundles {
-        println!(
-            "agentmux host relay listening bundle={} socket={}",
-            hosted_bundle.paths.bundle_name,
-            hosted_bundle.paths.relay_socket.display(),
-        );
-    }
     emit_inscription("relay.startup.summary", &startup_summary_payload(&summary));
     render_startup_summary(&summary);
 
@@ -489,7 +482,6 @@ fn run_relay_connection_worker(
                             "error": source.to_string(),
                         }),
                     );
-                    eprintln!("agentmux host relay: request handling failed: {source}");
                 }
                 metrics.active_connections.fetch_sub(1, Ordering::SeqCst);
             }
@@ -732,34 +724,14 @@ fn startup_summary_payload(summary: &RelayHostStartupSummary) -> Value {
 fn render_startup_summary(summary: &RelayHostStartupSummary) {
     match serde_json::to_string(&startup_summary_payload(summary)) {
         Ok(encoded) => println!("{encoded}"),
-        Err(source) => {
-            eprintln!("agentmux host relay: failed to encode startup summary json: {source}");
-        }
-    }
-    println!(
-        "agentmux host relay summary mode={} hosted={} skipped={} failed={} hosted_any={}",
-        summary.host_mode,
-        summary.hosted_bundle_count,
-        summary.skipped_bundle_count,
-        summary.failed_bundle_count,
-        summary.hosted_any,
-    );
-    for bundle in &summary.bundles {
-        match (bundle.reason_code.as_deref(), bundle.reason.as_deref()) {
-            (Some(reason_code), Some(reason)) => {
-                println!(
-                    "bundle={} outcome={} reason_code={} reason={}",
-                    bundle.bundle_name, bundle.outcome, reason_code, reason
-                );
-            }
-            (Some(reason_code), None) => {
-                println!(
-                    "bundle={} outcome={} reason_code={}",
-                    bundle.bundle_name, bundle.outcome, reason_code
-                );
-            }
-            _ => println!("bundle={} outcome={}", bundle.bundle_name, bundle.outcome),
-        }
+        Err(source) => emit_inscription(
+            "relay.startup.summary.encode_failed",
+            &json!({
+                "error": source.to_string(),
+                "host_mode": summary.host_mode,
+                "bundle_count": summary.bundles.len(),
+            }),
+        ),
     }
 }
 
