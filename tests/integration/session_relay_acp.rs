@@ -293,7 +293,7 @@ fn acp_send_selects_session_new_without_coder_session_id() {
 }
 
 #[test]
-fn acp_initialize_request_uses_protocol_version_object_and_client_version() {
+fn acp_initialize_request_uses_protocol_version_integer_and_client_version() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions::default();
     let (config_root, log_path) = write_configuration(temporary.path(), &options);
@@ -310,8 +310,7 @@ fn acp_initialize_request_uses_protocol_version_object_and_client_version() {
     let initialize = request_by_method(requests.as_slice(), "initialize");
     let params = initialize.get("params").expect("initialize params object");
 
-    assert_eq!(params["protocolVersion"]["major"], 1);
-    assert_eq!(params["protocolVersion"]["minor"], 0);
+    assert_eq!(params["protocolVersion"], 1);
     assert_eq!(params["clientInfo"]["name"], "agentmux-relay");
     assert!(
         params["clientInfo"]["version"]

@@ -45,8 +45,7 @@ const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;
 const ASYNC_SHUTDOWN_WAIT_POLL_MS: u64 = 25;
 const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delivery";
 const DROPPED_ON_SHUTDOWN_REASON_CODE: &str = "dropped_on_shutdown";
-const ACP_PROTOCOL_VERSION_MAJOR: u32 = 1;
-const ACP_PROTOCOL_VERSION_MINOR: u32 = 0;
+const ACP_PROTOCOL_VERSION: u32 = 1;
 const ACP_CLIENT_NAME: &str = "agentmux-relay";
 const ACP_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const UI_RECONNECT_POLL_INTERVAL_MS: u64 = 100;
@@ -1010,10 +1009,7 @@ impl AcpStdioClient {
         self.request(
             "initialize",
             json!({
-                "protocolVersion": {
-                    "major": ACP_PROTOCOL_VERSION_MAJOR,
-                    "minor": ACP_PROTOCOL_VERSION_MINOR,
-                },
+                "protocolVersion": ACP_PROTOCOL_VERSION,
                 "clientCapabilities": {
                     "fs": {
                         "readTextFile": false,
