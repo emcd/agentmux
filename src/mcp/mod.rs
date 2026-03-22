@@ -97,8 +97,8 @@ impl From<SendDeliveryModeParam> for ChatDeliveryMode {
     }
 }
 
-const MIN_LOOK_LINES: u64 = 1;
-const MAX_LOOK_LINES: u64 = 1000;
+const LOOK_LINES_MIN: u64 = 1;
+const LOOK_LINES_MAX: u64 = 1000;
 
 #[tool_router]
 impl McpServer {
@@ -494,15 +494,15 @@ fn validate_look_request(params: &LookParams) -> Result<(), McpError> {
     }
 
     if let Some(lines) = params.lines
-        && !(MIN_LOOK_LINES..=MAX_LOOK_LINES).contains(&lines)
+        && !(LOOK_LINES_MIN..=LOOK_LINES_MAX).contains(&lines)
     {
         return Err(validation_tool_error(
             "validation_invalid_lines",
             "lines must be between 1 and 1000",
             Some(json!({
                 "lines": lines,
-                "min": MIN_LOOK_LINES,
-                "max": MAX_LOOK_LINES,
+                "min": LOOK_LINES_MIN,
+                "max": LOOK_LINES_MAX,
             })),
         ));
     }
