@@ -71,6 +71,23 @@ struct RelayConnectionWorker {
     join_handle: thread::JoinHandle<()>,
 }
 
+#[derive(Debug)]
+struct RelayConnectionPoolMetrics {
+    queued_connections: std::sync::atomic::AtomicUsize,
+    active_connections: std::sync::atomic::AtomicUsize,
+    rejected_connections: std::sync::atomic::AtomicUsize,
+}
+
+impl RelayConnectionPoolMetrics {
+    fn new() -> Self {
+        Self {
+            queued_connections: std::sync::atomic::AtomicUsize::new(0),
+            active_connections: std::sync::atomic::AtomicUsize::new(0),
+            rejected_connections: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+}
+
 enum RelayConnectionDispatchOutcome {
     Queued,
     QueueFull(UnixStream),
@@ -301,10 +318,12 @@ fn run_relay_listener_worker(
     stop_requested: Arc<AtomicBool>,
     error_sender: mpsc::Sender<RuntimeError>,
 ) {
+    let metrics = Arc::new(RelayConnectionPoolMetrics::new());
     let mut connection_workers = spawn_relay_connection_worker_pool(
         configuration_root.clone(),
         hosted_bundle.paths.clone(),
         Arc::clone(&stop_requested),
+        Arc::clone(&metrics),
     );
     let mut next_worker_index = 0usize;
     while !shutdown_requested() && !stop_requested.load(Ordering::SeqCst) {
@@ -317,10 +336,11 @@ fn run_relay_listener_worker(
                     &connection_workers,
                     &mut next_worker_index,
                     stream,
+                    &metrics,
                 ) {
                     RelayConnectionDispatchOutcome::Queued => {}
                     RelayConnectionDispatchOutcome::QueueFull(stream) => {
-                        reject_overloaded_connection(&hosted_bundle.paths, stream);
+                        reject_overloaded_connection(&hosted_bundle.paths, stream, &metrics);
                     }
                     RelayConnectionDispatchOutcome::WorkersUnavailable(stream) => {
                         let _ = stream.shutdown(Shutdown::Both);
@@ -347,6 +367,25 @@ fn run_relay_listener_worker(
                 break;
             }
         }
+    }
+    if shutdown_requested() || stop_requested.load(Ordering::SeqCst) {
+        emit_inscription(
+            "relay.shutdown.connection_workers_detached",
+            &json!({
+                "bundle_name": hosted_bundle.paths.bundle_name,
+                "connection_worker_count": connection_workers.len(),
+                "queued_connections": metrics
+                    .queued_connections
+                    .load(Ordering::SeqCst),
+                "active_connections": metrics
+                    .active_connections
+                    .load(Ordering::SeqCst),
+                "rejected_connections": metrics
+                    .rejected_connections
+                    .load(Ordering::SeqCst),
+            }),
+        );
+        return;
     }
     for worker in connection_workers.drain(..) {
         if worker.join_handle.join().is_err() {
@@ -388,6 +427,7 @@ fn spawn_relay_connection_worker_pool(
     configuration_root: std::path::PathBuf,
     bundle_paths: BundleRuntimePaths,
     stop_requested: Arc<AtomicBool>,
+    metrics: Arc<RelayConnectionPoolMetrics>,
 ) -> Vec<RelayConnectionWorker> {
     let worker_count = relay_connection_worker_count();
     (0..worker_count)
@@ -396,6 +436,7 @@ fn spawn_relay_connection_worker_pool(
                 configuration_root.clone(),
                 bundle_paths.clone(),
                 Arc::clone(&stop_requested),
+                Arc::clone(&metrics),
             )
         })
         .collect::<Vec<_>>()
@@ -405,10 +446,17 @@ fn spawn_relay_connection_worker(
     configuration_root: std::path::PathBuf,
     bundle_paths: BundleRuntimePaths,
     stop_requested: Arc<AtomicBool>,
+    metrics: Arc<RelayConnectionPoolMetrics>,
 ) -> RelayConnectionWorker {
     let (sender, receiver) = mpsc::sync_channel::<UnixStream>(relay_connection_queue_capacity());
     let join_handle = thread::spawn(move || {
-        run_relay_connection_worker(configuration_root, bundle_paths, stop_requested, receiver);
+        run_relay_connection_worker(
+            configuration_root,
+            bundle_paths,
+            stop_requested,
+            receiver,
+            metrics,
+        );
     });
     RelayConnectionWorker {
         sender,
@@ -421,6 +469,7 @@ fn run_relay_connection_worker(
     bundle_paths: BundleRuntimePaths,
     stop_requested: Arc<AtomicBool>,
     receiver: mpsc::Receiver<UnixStream>,
+    metrics: Arc<RelayConnectionPoolMetrics>,
 ) {
     loop {
         if shutdown_requested() || stop_requested.load(Ordering::SeqCst) {
@@ -428,6 +477,8 @@ fn run_relay_connection_worker(
         }
         match receiver.recv_timeout(Duration::from_millis(100)) {
             Ok(mut stream) => {
+                metrics.queued_connections.fetch_sub(1, Ordering::SeqCst);
+                metrics.active_connections.fetch_add(1, Ordering::SeqCst);
                 if let Err(source) =
                     crate::relay::serve_connection(&mut stream, &configuration_root, &bundle_paths)
                 {
@@ -440,6 +491,7 @@ fn run_relay_connection_worker(
                     );
                     eprintln!("agentmux host relay: request handling failed: {source}");
                 }
+                metrics.active_connections.fetch_sub(1, Ordering::SeqCst);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -451,6 +503,7 @@ fn dispatch_connection_to_worker_pool(
     connection_workers: &[RelayConnectionWorker],
     next_worker_index: &mut usize,
     mut stream: UnixStream,
+    metrics: &RelayConnectionPoolMetrics,
 ) -> RelayConnectionDispatchOutcome {
     if connection_workers.is_empty() {
         return RelayConnectionDispatchOutcome::WorkersUnavailable(stream);
@@ -462,6 +515,7 @@ fn dispatch_connection_to_worker_pool(
         let worker_index = (*next_worker_index + offset) % worker_count;
         match connection_workers[worker_index].sender.try_send(stream) {
             Ok(()) => {
+                metrics.queued_connections.fetch_add(1, Ordering::SeqCst);
                 *next_worker_index = (worker_index + 1) % worker_count;
                 return RelayConnectionDispatchOutcome::Queued;
             }
@@ -484,7 +538,12 @@ fn dispatch_connection_to_worker_pool(
     RelayConnectionDispatchOutcome::WorkersUnavailable(stream)
 }
 
-fn reject_overloaded_connection(bundle_paths: &BundleRuntimePaths, mut stream: UnixStream) {
+fn reject_overloaded_connection(
+    bundle_paths: &BundleRuntimePaths,
+    mut stream: UnixStream,
+    metrics: &RelayConnectionPoolMetrics,
+) {
+    metrics.rejected_connections.fetch_add(1, Ordering::SeqCst);
     emit_inscription(
         "relay.connection.rejected",
         &json!({

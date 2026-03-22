@@ -227,6 +227,71 @@ async fn relay_sigint_ignores_server_exited_unexpectedly_during_shutdown_cleanup
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn relay_sigint_exits_with_active_stream_connection() {
+    let temporary = TempDir::new().expect("temporary");
+    let bundle_name = "party";
+    let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
+    let state_root = temporary.path().join("state");
+    let fake_tmux_script = temporary.path().join("fake-tmux.sh");
+    let attempts_file = temporary.path().join("attempts.txt");
+    let log_file = temporary.path().join("fake-tmux.log");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
+
+    let relay_socket = state_root
+        .join("bundles")
+        .join(bundle_name)
+        .join("relay.sock");
+    let mut child = spawn_relay_with_fake_tmux(
+        bundle_name,
+        &config_root,
+        &state_root,
+        &inscriptions_root,
+        &fake_tmux_script,
+    );
+    wait_for_relay_socket(&relay_socket).await;
+
+    let mut stream_session = RelayStreamSession::new(
+        relay_socket.clone(),
+        bundle_name.to_string(),
+        "alpha".to_string(),
+        RelayStreamClientClass::Agent,
+    );
+    let stream_list_response = stream_session
+        .request(&RelayRequest::List {
+            sender_session: Some("alpha".to_string()),
+        })
+        .expect("list request on persistent stream");
+    let RelayResponse::List { .. } = stream_list_response else {
+        panic!("expected list response on persistent stream");
+    };
+
+    let pid = child.id().expect("relay pid");
+    let pid = i32::try_from(pid).expect("relay pid fits i32");
+    let kill_result = unsafe { libc::kill(pid, libc::SIGINT) };
+    assert_eq!(kill_result, 0, "failed to send SIGINT");
+
+    let wait_result = timeout(Duration::from_secs(3), child.wait()).await;
+    let status = match wait_result {
+        Ok(result) => result.expect("wait relay"),
+        Err(_) => {
+            child.start_kill().expect("kill relay after timeout");
+            panic!("timed out waiting for relay to exit after SIGINT");
+        }
+    };
+    assert!(
+        status.success(),
+        "relay should exit cleanly after SIGINT, status={status}"
+    );
+    assert!(
+        !relay_socket.exists(),
+        "relay socket should be removed during shutdown"
+    );
+
+    drop(stream_session);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn relay_accepts_new_connections_while_registered_stream_stays_open() {
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
