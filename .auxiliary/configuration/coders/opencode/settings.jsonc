@@ -71,6 +71,22 @@
         "--no-commit-signing"
       ],
       "enabled": true
+    },
+    "agentmux": {
+      "type": "local",
+      "command": [
+        "reloaderoo",
+        "--",
+        "cargo",
+        "run",
+        "--bin",
+        "agentmux",
+        "--",
+        "host",
+        "mcp"
+      ],
+      "enabled": true,
+      "timeout": 900000
     }
   },
 
