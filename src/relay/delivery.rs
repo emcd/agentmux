@@ -45,7 +45,10 @@ const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;
 const ASYNC_SHUTDOWN_WAIT_POLL_MS: u64 = 25;
 const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delivery";
 const DROPPED_ON_SHUTDOWN_REASON_CODE: &str = "dropped_on_shutdown";
-const ACP_PROTOCOL_VERSION: u32 = 1;
+const ACP_PROTOCOL_VERSION_MAJOR: u32 = 1;
+const ACP_PROTOCOL_VERSION_MINOR: u32 = 0;
+const ACP_CLIENT_NAME: &str = "agentmux-relay";
+const ACP_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const UI_RECONNECT_POLL_INTERVAL_MS: u64 = 100;
 const ACP_SESSION_STATE_SCHEMA_VERSION: u32 = 1;
 const ACP_SESSIONS_DIRECTORY: &str = "sessions";
@@ -649,8 +652,16 @@ fn deliver_one_target_acp(
             .unwrap_or(false),
         prompt_session: initialize_result
             .get("agentCapabilities")
-            .and_then(|value| value.get("promptSession"))
-            .and_then(Value::as_bool)
+            .map(|value| {
+                value
+                    .get("promptSession")
+                    .and_then(Value::as_bool)
+                    .unwrap_or_else(|| {
+                        value
+                            .get("promptCapabilities")
+                            .is_some_and(serde_json::Value::is_object)
+                    })
+            })
             .unwrap_or(false),
     };
 
@@ -999,11 +1010,20 @@ impl AcpStdioClient {
         self.request(
             "initialize",
             json!({
-                "protocolVersion": ACP_PROTOCOL_VERSION,
-                "clientCapabilities": {},
+                "protocolVersion": {
+                    "major": ACP_PROTOCOL_VERSION_MAJOR,
+                    "minor": ACP_PROTOCOL_VERSION_MINOR,
+                },
+                "clientCapabilities": {
+                    "fs": {
+                        "readTextFile": false,
+                        "writeTextFile": false,
+                    },
+                    "terminal": false,
+                },
                 "clientInfo": {
-                    "name": "agentmux-relay",
-                    "title": "Agentmux Relay",
+                    "name": ACP_CLIENT_NAME,
+                    "version": ACP_CLIENT_VERSION,
                 },
             }),
             None,
@@ -1023,6 +1043,7 @@ impl AcpStdioClient {
                 "session/new",
                 json!({
                     "cwd": working_directory.display().to_string(),
+                    "mcpServers": [],
                 }),
                 None,
                 None,
@@ -1047,6 +1068,7 @@ impl AcpStdioClient {
                 json!({
                     "sessionId": session_id,
                     "cwd": working_directory.display().to_string(),
+                    "mcpServers": [],
                 }),
                 None,
                 None,

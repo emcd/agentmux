@@ -227,6 +227,22 @@ fn dispatch_look(
     .expect("relay look should parse")
 }
 
+fn read_request_log(path: &Path) -> Vec<Value> {
+    fs::read_to_string(path)
+        .expect("read ACP request log")
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str::<Value>(line).expect("parse ACP request JSON line"))
+        .collect()
+}
+
+fn request_by_method<'a>(requests: &'a [Value], method: &str) -> &'a Value {
+    requests
+        .iter()
+        .find(|request| request.get("method").and_then(Value::as_str) == Some(method))
+        .unwrap_or_else(|| panic!("missing ACP request for method '{method}'"))
+}
+
 fn chat_result(response: RelayResponse) -> (ChatStatus, agentmux::relay::ChatResult) {
     let RelayResponse::Chat {
         status, results, ..
@@ -274,6 +290,81 @@ fn acp_send_selects_session_new_without_coder_session_id() {
     let log = fs::read_to_string(log_path).expect("read ACP log");
     assert!(log.contains("\"method\":\"session/new\""), "log={log}");
     assert!(!log.contains("\"method\":\"session/load\""), "log={log}");
+}
+
+#[test]
+fn acp_initialize_request_uses_protocol_version_object_and_client_version() {
+    let temporary = TempDir::new().expect("temporary");
+    let options = AcpStubOptions::default();
+    let (config_root, log_path) = write_configuration(temporary.path(), &options);
+    let response = dispatch_send(
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+        Some(1_000),
+    );
+    let (status, result) = chat_result(response);
+    assert_eq!(status, ChatStatus::Success);
+    assert_eq!(result.outcome, ChatOutcome::Delivered);
+
+    let requests = read_request_log(log_path.as_path());
+    let initialize = request_by_method(requests.as_slice(), "initialize");
+    let params = initialize.get("params").expect("initialize params object");
+
+    assert_eq!(params["protocolVersion"]["major"], 1);
+    assert_eq!(params["protocolVersion"]["minor"], 0);
+    assert_eq!(params["clientInfo"]["name"], "agentmux-relay");
+    assert!(
+        params["clientInfo"]["version"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert!(params["clientInfo"].get("title").is_none());
+    assert_eq!(params["clientCapabilities"]["terminal"], false);
+    assert_eq!(params["clientCapabilities"]["fs"]["readTextFile"], false);
+    assert_eq!(params["clientCapabilities"]["fs"]["writeTextFile"], false);
+}
+
+#[test]
+fn acp_session_setup_requests_include_mcp_servers_array() {
+    let temporary = TempDir::new().expect("temporary");
+    let options = AcpStubOptions::default();
+    let (config_root, log_path) = write_configuration(temporary.path(), &options);
+    let response = dispatch_send(
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+        Some(1_000),
+    );
+    let (status, result) = chat_result(response);
+    assert_eq!(status, ChatStatus::Success);
+    assert_eq!(result.outcome, ChatOutcome::Delivered);
+
+    let requests = read_request_log(log_path.as_path());
+    let session_new = request_by_method(requests.as_slice(), "session/new");
+    assert_eq!(
+        session_new["params"]["mcpServers"],
+        Value::Array(Vec::new())
+    );
+
+    let options = AcpStubOptions {
+        configured_session_id: Some("sess-configured".to_string()),
+        ..AcpStubOptions::default()
+    };
+    let (config_root, log_path) = write_configuration(temporary.path(), &options);
+    let response = dispatch_send(
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+        Some(1_000),
+    );
+    let (status, result) = chat_result(response);
+    assert_eq!(status, ChatStatus::Success);
+    assert_eq!(result.outcome, ChatOutcome::Delivered);
+
+    let requests = read_request_log(log_path.as_path());
+    let session_load = request_by_method(requests.as_slice(), "session/load");
+    assert_eq!(
+        session_load["params"]["mcpServers"],
+        Value::Array(Vec::new())
+    );
 }
 
 #[test]
