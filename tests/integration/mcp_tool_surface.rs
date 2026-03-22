@@ -546,6 +546,46 @@ async fn list_reports_relay_unavailable_when_relay_is_not_running() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_maps_authorization_forbidden_error_from_relay() {
+    let runtime = TestRuntime::create();
+    let _relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("list") => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "authorization_forbidden",
+                        "message": "request denied by authorization policy",
+                        "details": {
+                            "capability": "list.read",
+                            "requester_session": SENDER_SESSION,
+                            "bundle_name": BUNDLE_NAME,
+                            "reason": "list visibility denied by policy",
+                        },
+                    },
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+    let response = harness.call_tool(2, "list", Map::new()).await;
+
+    assert_eq!(error_code(&response), Some("authorization_forbidden"));
+    assert_eq!(
+        response["error"]["data"]["details"]["capability"],
+        "list.read"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn send_rejects_conflicting_targets_before_relay_request() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
@@ -854,6 +894,51 @@ async fn send_maps_authorization_forbidden_error_from_relay() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn send_preserves_reserved_capability_label_from_relay_denial() {
+    let runtime = TestRuntime::create();
+    let _relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("chat") => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "authorization_forbidden",
+                        "message": "request denied by authorization policy",
+                        "details": {
+                            "capability": "do.run",
+                            "requester_session": SENDER_SESSION,
+                            "bundle_name": BUNDLE_NAME,
+                            "reason": "capability currently disallowed",
+                        },
+                    },
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let mut arguments = Map::new();
+    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments.insert(
+        "targets".to_string(),
+        Value::Array(vec![Value::String("bravo".to_string())]),
+    );
+    arguments.insert("broadcast".to_string(), Value::Bool(false));
+    let response = harness.call_tool(2, "send", arguments).await;
+
+    assert_eq!(error_code(&response), Some("authorization_forbidden"));
+    assert_eq!(response["error"]["data"]["details"]["capability"], "do.run");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn look_returns_snapshot_payload_and_forwards_request_shape() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
@@ -972,6 +1057,53 @@ async fn look_maps_validation_errors_from_relay() {
     let response = harness.call_tool(2, "look", arguments).await;
 
     assert_eq!(error_code(&response), Some("validation_unknown_target"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn look_maps_authorization_forbidden_error_from_relay() {
+    let runtime = TestRuntime::create();
+    let _relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("look") => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "authorization_forbidden",
+                        "message": "request denied by authorization policy",
+                        "details": {
+                            "capability": "look.inspect",
+                            "requester_session": SENDER_SESSION,
+                            "bundle_name": BUNDLE_NAME,
+                            "target_session": "bravo",
+                            "reason": "look is restricted by policy",
+                        },
+                    },
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let mut arguments = Map::new();
+    arguments.insert(
+        "target_session".to_string(),
+        Value::String("bravo".to_string()),
+    );
+    let response = harness.call_tool(2, "look", arguments).await;
+
+    assert_eq!(error_code(&response), Some("authorization_forbidden"));
+    assert_eq!(
+        response["error"]["data"]["details"]["capability"],
+        "look.inspect"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
