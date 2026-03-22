@@ -147,6 +147,8 @@ Typical topology:
 Association resolution for `list`/`send` and MCP host startup:
 
 - CLI flags have highest precedence (`--bundle`, `--sender` / `--session-name`).
+- explicit CLI `--sender` values must match a configured bundle session; invalid
+  values fail fast with `validation_unknown_sender` (no silent remap/fallback).
 - Auto-discovery fallback:
   - bundle from Git common-dir owner name,
   - session from worktree top-level directory name.

@@ -11,7 +11,7 @@ use crate::{
     runtime::{
         association::{
             McpAssociationCli, WorkspaceContext, load_local_mcp_overrides, resolve_association,
-            resolve_sender_session,
+            resolve_sender_session, validate_sender_session,
         },
         error::RuntimeError,
         paths::BundleRuntimePaths,
@@ -48,8 +48,11 @@ pub(super) fn run_agentmux_send(arguments: &[String]) -> Result<(), RuntimeError
     ensure_starter_configuration_layout(&roots.configuration_root)?;
     let bundle = load_bundle_configuration(&roots.configuration_root, &association.bundle_name)
         .map_err(shared::map_bundle_load_error)?;
-    let sender_session =
-        resolve_sender_session(&bundle, &association.session_name, &current_directory)?;
+    let sender_session = if let Some(explicit_sender) = parsed.sender_session.as_deref() {
+        validate_sender_session(&bundle, explicit_sender)?
+    } else {
+        resolve_sender_session(&bundle, &association.session_name, &current_directory)?
+    };
     let paths = BundleRuntimePaths::resolve(&roots.state_root, &association.bundle_name)?;
     let response = request_relay(
         &paths.relay_socket,

@@ -459,6 +459,147 @@ fn send_rejects_conflicting_flag_and_piped_message_sources() {
 }
 
 #[test]
+fn send_preserves_valid_explicit_sender_in_relay_request() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration(
+        &config_root,
+        "agentmux",
+        Some(&["dev"]),
+        &["alpha", "bravo"],
+    );
+
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux").expect("bundle paths");
+    ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
+    let request_log = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let relay_thread = spawn_fake_relay_once(
+        &bundle_paths.relay_socket,
+        RelayResponse::Chat {
+            schema_version: "1".to_string(),
+            bundle_name: "agentmux".to_string(),
+            request_id: None,
+            sender_session: "alpha".to_string(),
+            sender_display_name: Some("Alpha".to_string()),
+            delivery_mode: agentmux::relay::ChatDeliveryMode::Async,
+            status: agentmux::relay::ChatStatus::Accepted,
+            results: vec![agentmux::relay::ChatResult {
+                target_session: "bravo".to_string(),
+                message_id: "msg-1".to_string(),
+                outcome: agentmux::relay::ChatOutcome::Queued,
+                reason_code: None,
+                reason: None,
+                details: None,
+            }],
+        },
+        Arc::clone(&request_log),
+    );
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "send",
+            "--bundle",
+            "agentmux",
+            "--sender",
+            "alpha",
+            "--target",
+            "bravo",
+            "--json",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux send");
+    {
+        let stdin = child.stdin.as_mut().expect("open child stdin");
+        stdin.write_all(b"hello").expect("write piped input");
+    }
+    let output = child.wait_with_output().expect("wait for child");
+    relay_thread.join().expect("join fake relay thread");
+
+    assert!(output.status.success(), "command should succeed");
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("decode send json payload");
+    assert_eq!(payload["sender_session"], "alpha");
+
+    let requests = request_log.lock().expect("request log lock");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0]["operation"], "chat");
+    assert_eq!(requests[0]["sender_session"], "alpha");
+}
+
+#[test]
+fn send_rejects_unknown_explicit_sender_without_fallback() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    let workspace_root = temporary.path().join("workspace");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    fs::create_dir_all(&workspace_root).expect("create workspace root");
+    write_bundle_configuration_with_member_directories(
+        &config_root,
+        "agentmux",
+        Some(&["dev"]),
+        &[
+            ("alpha", workspace_root.as_path()),
+            ("bravo", Path::new("/tmp")),
+        ],
+    );
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .current_dir(&workspace_root)
+        .args([
+            "send",
+            "--bundle",
+            "agentmux",
+            "--sender",
+            "ghost",
+            "--target",
+            "bravo",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux send with unknown sender");
+    {
+        let stdin = child.stdin.as_mut().expect("open child stdin");
+        stdin.write_all(b"hello").expect("write piped input");
+    }
+    let output = child.wait_with_output().expect("wait for child");
+
+    assert!(!output.status.success(), "command should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("validation_unknown_sender"),
+        "unexpected stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("relay_unavailable"),
+        "explicit sender should fail before relay transport fallback: {stderr}"
+    );
+}
+
+#[test]
 fn look_returns_canonical_json_payload() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = temporary.path().join("config");
@@ -819,6 +960,72 @@ send = "all:home"
         bundle.push_str(
             format!(
                 "\n[[sessions]]\nid = \"{name}\"\nname = \"{name}\"\ndirectory = \"/tmp\"\ncoder = \"default\"\n",
+                name = session
+            )
+            .as_str(),
+        );
+    }
+    fs::write(
+        config_root
+            .join("bundles")
+            .join(format!("{bundle_name}.toml")),
+        bundle,
+    )
+    .expect("write bundle config");
+}
+
+fn write_bundle_configuration_with_member_directories(
+    config_root: &Path,
+    bundle_name: &str,
+    groups: Option<&[&str]>,
+    members: &[(&str, &Path)],
+) {
+    fs::create_dir_all(config_root.join("bundles")).expect("create bundles directory");
+    fs::write(
+        config_root.join("coders.toml"),
+        r#"
+format-version = 1
+
+[[coders]]
+id = "default"
+
+[coders.tmux]
+initial-command = "sh -lc 'exec sleep 45'"
+resume-command = "sh -lc 'exec sleep 45'"
+"#,
+    )
+    .expect("write coders config");
+    fs::write(
+        config_root.join("policies.toml"),
+        r#"
+format-version = 1
+default = "default"
+
+[[policies]]
+id = "default"
+
+[policies.controls]
+find = "self"
+list = "all:home"
+look = "self"
+send = "all:home"
+"#,
+    )
+    .expect("write policies config");
+    let mut bundle = String::from("format-version = 1\n");
+    if let Some(groups) = groups {
+        let encoded = groups
+            .iter()
+            .map(|group| format!("\"{group}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        bundle.push_str(format!("groups = [{encoded}]\n").as_str());
+    }
+    for (session, directory) in members {
+        bundle.push_str(
+            format!(
+                "\n[[sessions]]\nid = \"{name}\"\nname = \"{name}\"\ndirectory = \"{}\"\ncoder = \"default\"\n",
+                directory.display(),
                 name = session
             )
             .as_str(),
