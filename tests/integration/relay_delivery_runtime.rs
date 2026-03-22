@@ -101,6 +101,7 @@ async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
             delivery_mode: ChatDeliveryMode::Async,
             quiet_window_ms: None,
             quiescence_timeout_ms: None,
+            acp_turn_timeout_ms: None,
         },
     )
     .expect("queue async request");
@@ -467,6 +468,7 @@ async fn relay_sync_delivery_sends_submit_in_separate_tmux_command() {
             delivery_mode: ChatDeliveryMode::Sync,
             quiet_window_ms: Some(50),
             quiescence_timeout_ms: Some(2_000),
+            acp_turn_timeout_ms: None,
         },
     )
     .expect("chat request should succeed");
@@ -612,6 +614,7 @@ async fn relay_async_delivery_does_not_inject_while_pane_in_mode() {
             delivery_mode: ChatDeliveryMode::Async,
             quiet_window_ms: Some(50),
             quiescence_timeout_ms: Some(250),
+            acp_turn_timeout_ms: None,
         },
     )
     .expect("chat request should complete");

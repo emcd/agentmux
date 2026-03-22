@@ -523,6 +523,7 @@ impl AppState {
             delivery_mode: ChatDeliveryMode::Async,
             quiet_window_ms: None,
             quiescence_timeout_ms: None,
+            acp_turn_timeout_ms: None,
         })?;
         match response {
             RelayResponse::Chat {

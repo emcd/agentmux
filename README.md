@@ -121,7 +121,8 @@ Delivery behavior:
 
 - `delivery_mode=async` (default): accept immediately and queue background delivery.
 - `delivery_mode=sync`: block until per-target outcomes are known.
-- `quiescence_timeout_ms` optionally bounds prompt-readiness waiting.
+- `quiescence_timeout_ms` optionally bounds tmux prompt-readiness waiting.
+- `acp_turn_timeout_ms` optionally bounds ACP turn-wait behavior.
 
 Example `.mcp.json` snippet:
 

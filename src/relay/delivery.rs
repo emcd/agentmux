@@ -37,6 +37,7 @@ use super::{AsyncDeliveryTask, ChatOutcome, ChatResult, ChatStatus, RelayError, 
 
 const QUIET_WINDOW_MS_DEFAULT: u64 = 750;
 const QUIESCENCE_TIMEOUT_MS_DEFAULT: u64 = 30_000;
+const ACP_TURN_TIMEOUT_MS_DEFAULT: u64 = 120_000;
 const PROMPT_TOKENS_MAX_ENVVAR: &str = "AGENTMUX_MAX_PROMPT_TOKENS";
 const TOKENIZER_PROFILE_ENVVAR: &str = "AGENTMUX_TOKENIZER_PROFILE";
 const PROMPT_INSPECT_LINES_DEFAULT: usize = 3;
@@ -88,6 +89,7 @@ struct AcpCapabilities {
 pub(super) struct QuiescenceOptions {
     quiet_window: Duration,
     quiescence_timeout: Option<Duration>,
+    acp_turn_timeout_override: Option<Duration>,
 }
 
 impl Default for QuiescenceOptions {
@@ -95,6 +97,7 @@ impl Default for QuiescenceOptions {
         Self {
             quiet_window: Duration::from_millis(QUIET_WINDOW_MS_DEFAULT),
             quiescence_timeout: Some(Duration::from_millis(QUIESCENCE_TIMEOUT_MS_DEFAULT)),
+            acp_turn_timeout_override: None,
         }
     }
 }
@@ -103,6 +106,7 @@ impl QuiescenceOptions {
     pub(super) fn for_sync(
         quiet_window_ms: Option<u64>,
         quiescence_timeout_ms: Option<u64>,
+        acp_turn_timeout_ms: Option<u64>,
     ) -> Self {
         Self {
             quiet_window: Duration::from_millis(
@@ -115,12 +119,16 @@ impl QuiescenceOptions {
                     .filter(|value| *value > 0)
                     .unwrap_or(QUIESCENCE_TIMEOUT_MS_DEFAULT),
             )),
+            acp_turn_timeout_override: acp_turn_timeout_ms
+                .filter(|value| *value > 0)
+                .map(Duration::from_millis),
         }
     }
 
     pub(super) fn for_async(
         quiet_window_ms: Option<u64>,
         quiescence_timeout_ms: Option<u64>,
+        acp_turn_timeout_ms: Option<u64>,
     ) -> Self {
         Self {
             quiet_window: Duration::from_millis(
@@ -131,7 +139,16 @@ impl QuiescenceOptions {
             quiescence_timeout: quiescence_timeout_ms
                 .filter(|value| *value > 0)
                 .map(Duration::from_millis),
+            acp_turn_timeout_override: acp_turn_timeout_ms
+                .filter(|value| *value > 0)
+                .map(Duration::from_millis),
         }
+    }
+
+    fn acp_turn_timeout(&self, acp: &AcpTargetConfiguration) -> Duration {
+        self.acp_turn_timeout_override
+            .or_else(|| acp.turn_timeout_ms.map(Duration::from_millis))
+            .unwrap_or_else(|| Duration::from_millis(ACP_TURN_TIMEOUT_MS_DEFAULT))
     }
 }
 
@@ -754,7 +771,7 @@ fn deliver_one_target_acp(
         );
     }
 
-    let turn_timeout = task.quiescence.quiescence_timeout;
+    let turn_timeout = Some(task.quiescence.acp_turn_timeout(acp));
     for prompt in prompt_batches {
         let prompt_result = client.prompt(session_id.as_str(), prompt.as_str(), turn_timeout);
         let prompt_snapshot_lines = client.take_snapshot_lines();

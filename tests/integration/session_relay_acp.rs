@@ -20,6 +20,7 @@ struct AcpStubOptions {
     prompt_delay_sec: u64,
     update_count: usize,
     configured_session_id: Option<String>,
+    coder_turn_timeout_ms: Option<u64>,
 }
 
 impl Default for AcpStubOptions {
@@ -33,6 +34,7 @@ impl Default for AcpStubOptions {
             prompt_delay_sec: 0,
             update_count: 0,
             configured_session_id: None,
+            coder_turn_timeout_ms: None,
         }
     }
 }
@@ -127,6 +129,10 @@ fn write_configuration(root: &Path, options: &AcpStubOptions) -> (PathBuf, PathB
     );
 
     let escaped_command = command.replace('\\', "\\\\").replace('"', "\\\"");
+    let coder_timeout_line = options
+        .coder_turn_timeout_ms
+        .map(|value| format!("turn-timeout-ms = {value}\n"))
+        .unwrap_or_default();
     let coders = format!(
         r#"format-version = 1
 
@@ -136,6 +142,7 @@ id = "acp"
 [coders.acp]
 channel = "stdio"
 command = "{escaped_command}"
+{coder_timeout_line}
 "#
     );
     fs::write(config_root.join("coders.toml"), coders).expect("write coders");
@@ -186,7 +193,7 @@ coder = "acp"
 fn dispatch_send(
     config_root: &Path,
     tmux_socket: &Path,
-    quiescence_timeout_ms: Option<u64>,
+    acp_turn_timeout_ms: Option<u64>,
 ) -> RelayResponse {
     handle_request(
         RelayRequest::Chat {
@@ -197,7 +204,8 @@ fn dispatch_send(
             broadcast: false,
             delivery_mode: ChatDeliveryMode::Sync,
             quiet_window_ms: Some(50),
-            quiescence_timeout_ms,
+            quiescence_timeout_ms: None,
+            acp_turn_timeout_ms,
         },
         config_root,
         "party",
@@ -541,6 +549,38 @@ fn acp_turn_timeout_maps_to_timeout_outcome_and_reason_code() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions {
         prompt_delay_sec: 1,
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"), Some(100));
+    let (status, result) = chat_result(response);
+    assert_eq!(status, ChatStatus::Failure);
+    assert_eq!(result.outcome, ChatOutcome::Timeout);
+    assert_eq!(result.reason_code.as_deref(), Some("acp_turn_timeout"));
+}
+
+#[test]
+fn acp_turn_timeout_uses_coder_default_when_request_override_is_absent() {
+    let temporary = TempDir::new().expect("temporary");
+    let options = AcpStubOptions {
+        prompt_delay_sec: 1,
+        coder_turn_timeout_ms: Some(120),
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"), None);
+    let (status, result) = chat_result(response);
+    assert_eq!(status, ChatStatus::Failure);
+    assert_eq!(result.outcome, ChatOutcome::Timeout);
+    assert_eq!(result.reason_code.as_deref(), Some("acp_turn_timeout"));
+}
+
+#[test]
+fn acp_turn_timeout_request_override_takes_precedence_over_coder_default() {
+    let temporary = TempDir::new().expect("temporary");
+    let options = AcpStubOptions {
+        prompt_delay_sec: 1,
+        coder_turn_timeout_ms: Some(5_000),
         ..AcpStubOptions::default()
     };
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);

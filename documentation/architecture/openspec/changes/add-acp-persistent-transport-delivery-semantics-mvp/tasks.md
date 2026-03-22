@@ -1,6 +1,6 @@
 ## 1. Implementation
 
-- [ ] 1.1 Add ACP timeout contract fields and validation:
+- [x] 1.1 Add ACP timeout contract fields and validation:
       - relay request field `acp_turn_timeout_ms`
       - coder default field `[coders.acp] turn-timeout-ms`
       - precedence: request > coder default > system default
@@ -25,14 +25,14 @@
       - route authorization decision through relay policy only
       - map permission failures/timeouts to canonical runtime codes
       - preserve canonical `authorization_forbidden` details minimum
-- [ ] 1.6 Update CLI `send` surface to include ACP timeout override flag and
+- [x] 1.6 Update CLI `send` surface to include ACP timeout override flag and
       transport-specific validation behavior.
-- [ ] 1.7 Update MCP `send` surface to include ACP timeout override field and
+- [x] 1.7 Update MCP `send` surface to include ACP timeout override field and
       transport-specific validation behavior.
 
 ## 2. Testing
 
-- [ ] 2.1 Unit tests for timeout precedence and field-validation failures.
+- [x] 2.1 Unit tests for timeout precedence and field-validation failures.
 - [ ] 2.2 Integration tests for sync ACP first-activity acknowledgment semantics.
 - [ ] 2.3 Integration tests for ACP worker readiness-state transitions
       (`available` <-> `busy` and failure to `unavailable`).
@@ -44,6 +44,6 @@
 
 ## 3. Validation
 
-- [ ] 3.1 Run `openspec validate add-acp-persistent-transport-delivery-semantics-mvp --strict`.
-- [ ] 3.2 Run `cargo check --all-targets --all-features`.
-- [ ] 3.3 Run ACP-focused integration suite for send/relay/MCP transport behavior.
+- [x] 3.1 Run `openspec validate add-acp-persistent-transport-delivery-semantics-mvp --strict`.
+- [x] 3.2 Run `cargo check --all-targets --all-features`.
+- [x] 3.3 Run ACP-focused integration suite for send/relay/MCP transport behavior.

@@ -224,6 +224,7 @@ fn chat_rejects_unknown_target() {
             delivery_mode: ChatDeliveryMode::Sync,
             quiet_window_ms: None,
             quiescence_timeout_ms: None,
+            acp_turn_timeout_ms: None,
         },
         &config_root,
         "party",
@@ -248,6 +249,7 @@ fn chat_accepts_target_by_recipient_name() {
             delivery_mode: ChatDeliveryMode::Sync,
             quiet_window_ms: Some(1),
             quiescence_timeout_ms: Some(1),
+            acp_turn_timeout_ms: None,
         },
         &config_root,
         "party",
@@ -277,6 +279,7 @@ fn chat_broadcast_excludes_sender_session() {
             delivery_mode: ChatDeliveryMode::Sync,
             quiet_window_ms: Some(1),
             quiescence_timeout_ms: Some(1),
+            acp_turn_timeout_ms: None,
         },
         &config_root,
         "party",
@@ -306,6 +309,7 @@ fn chat_async_returns_accepted_and_queued_outcome() {
             delivery_mode: ChatDeliveryMode::Async,
             quiet_window_ms: Some(1),
             quiescence_timeout_ms: Some(1),
+            acp_turn_timeout_ms: None,
         },
         &config_root,
         "party",
@@ -340,6 +344,7 @@ fn chat_rejects_zero_timeout_override() {
             delivery_mode: ChatDeliveryMode::Sync,
             quiet_window_ms: Some(1),
             quiescence_timeout_ms: Some(0),
+            acp_turn_timeout_ms: None,
         },
         &config_root,
         "party",
@@ -365,6 +370,7 @@ fn chat_broadcast_with_only_sender_returns_empty_results() {
             delivery_mode: ChatDeliveryMode::Sync,
             quiet_window_ms: Some(1),
             quiescence_timeout_ms: Some(1),
+            acp_turn_timeout_ms: None,
         },
         &config_root,
         "party",
@@ -393,6 +399,7 @@ fn chat_broadcast_with_only_sender_returns_empty_results() {
             delivery_mode: ChatDeliveryMode::Async,
             quiet_window_ms: Some(1),
             quiescence_timeout_ms: Some(1),
+            acp_turn_timeout_ms: None,
         },
         &config_root,
         "party",
@@ -410,6 +417,87 @@ fn chat_broadcast_with_only_sender_returns_empty_results() {
     };
     assert_eq!(async_status, agentmux::relay::ChatStatus::Accepted);
     assert!(async_results.is_empty());
+}
+
+#[test]
+fn chat_rejects_quiescence_timeout_for_acp_target() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_acp_bundle(&temporary, "party");
+    let tmux_socket = temporary.path().join("tmux.sock");
+    let response = handle_request(
+        RelayRequest::Chat {
+            request_id: None,
+            sender_session: "alpha".to_string(),
+            message: "hello".to_string(),
+            targets: vec!["bravo".to_string()],
+            broadcast: false,
+            delivery_mode: ChatDeliveryMode::Sync,
+            quiet_window_ms: Some(1),
+            quiescence_timeout_ms: Some(100),
+            acp_turn_timeout_ms: None,
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect_err("chat should fail");
+    assert_eq!(
+        response.code,
+        "validation_invalid_timeout_field_for_transport"
+    );
+}
+
+#[test]
+fn chat_rejects_acp_turn_timeout_for_tmux_target() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    let tmux_socket = temporary.path().join("tmux.sock");
+    let response = handle_request(
+        RelayRequest::Chat {
+            request_id: None,
+            sender_session: "alpha".to_string(),
+            message: "hello".to_string(),
+            targets: vec!["bravo".to_string()],
+            broadcast: false,
+            delivery_mode: ChatDeliveryMode::Sync,
+            quiet_window_ms: Some(1),
+            quiescence_timeout_ms: None,
+            acp_turn_timeout_ms: Some(100),
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect_err("chat should fail");
+    assert_eq!(
+        response.code,
+        "validation_invalid_timeout_field_for_transport"
+    );
+}
+
+#[test]
+fn chat_rejects_conflicting_timeout_fields() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    let tmux_socket = temporary.path().join("tmux.sock");
+    let response = handle_request(
+        RelayRequest::Chat {
+            request_id: None,
+            sender_session: "alpha".to_string(),
+            message: "hello".to_string(),
+            targets: vec!["bravo".to_string()],
+            broadcast: false,
+            delivery_mode: ChatDeliveryMode::Sync,
+            quiet_window_ms: Some(1),
+            quiescence_timeout_ms: Some(100),
+            acp_turn_timeout_ms: Some(200),
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect_err("chat should fail");
+    assert_eq!(response.code, "validation_conflicting_timeout_fields");
 }
 
 #[test]

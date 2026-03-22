@@ -209,6 +209,8 @@ pub enum RelayRequest {
         quiet_window_ms: Option<u64>,
         #[serde(default)]
         quiescence_timeout_ms: Option<u64>,
+        #[serde(default)]
+        acp_turn_timeout_ms: Option<u64>,
     },
     Look {
         requester_session: String,
@@ -272,6 +274,7 @@ pub(super) struct ChatRequestContext {
     delivery_mode: ChatDeliveryMode,
     quiet_window_ms: Option<u64>,
     quiescence_timeout_ms: Option<u64>,
+    acp_turn_timeout_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug)]

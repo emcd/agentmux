@@ -88,7 +88,12 @@ pub(super) fn parse_delivery_mode(value: &str) -> Result<ChatDeliveryMode, Runti
     }
 }
 
-pub(super) fn parse_positive_u64(value: &str, flag: &str) -> Result<u64, RuntimeError> {
+pub(super) fn parse_positive_u64(
+    value: &str,
+    flag: &str,
+    zero_code: &str,
+    zero_message: &str,
+) -> Result<u64, RuntimeError> {
     let parsed = value
         .parse::<u64>()
         .map_err(|_| RuntimeError::InvalidArgument {
@@ -97,8 +102,8 @@ pub(super) fn parse_positive_u64(value: &str, flag: &str) -> Result<u64, Runtime
         })?;
     if parsed == 0 {
         return Err(RuntimeError::validation(
-            "validation_invalid_quiescence_timeout",
-            "quiescence timeout override must be greater than zero milliseconds".to_string(),
+            zero_code,
+            zero_message.to_string(),
         ));
     }
     Ok(parsed)

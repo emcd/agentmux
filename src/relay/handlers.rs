@@ -41,6 +41,7 @@ pub(super) fn handle_request(
             delivery_mode,
             quiet_window_ms,
             quiescence_timeout_ms,
+            acp_turn_timeout_ms,
         } => handle_chat(
             bundle,
             authorization,
@@ -53,6 +54,7 @@ pub(super) fn handle_request(
                 delivery_mode,
                 quiet_window_ms,
                 quiescence_timeout_ms,
+                acp_turn_timeout_ms,
             },
             tmux_socket,
         ),
@@ -213,6 +215,7 @@ fn handle_chat(
         delivery_mode,
         quiet_window_ms,
         quiescence_timeout_ms,
+        acp_turn_timeout_ms,
     } = request;
 
     if message.trim().is_empty() {
@@ -240,6 +243,20 @@ fn handle_chat(
         return Err(relay_error(
             "validation_invalid_quiescence_timeout",
             "quiescence timeout override must be greater than zero milliseconds",
+            None,
+        ));
+    }
+    if matches!(acp_turn_timeout_ms, Some(0)) {
+        return Err(relay_error(
+            "validation_invalid_acp_turn_timeout",
+            "ACP turn timeout override must be greater than zero milliseconds",
+            None,
+        ));
+    }
+    if quiescence_timeout_ms.is_some() && acp_turn_timeout_ms.is_some() {
+        return Err(relay_error(
+            "validation_conflicting_timeout_fields",
+            "quiescence_timeout_ms and acp_turn_timeout_ms are mutually exclusive",
             None,
         ));
     }
@@ -280,6 +297,48 @@ fn handle_chat(
     } else {
         resolve_explicit_targets(bundle, &targets)?
     };
+
+    let mut has_tmux_target = false;
+    let mut has_acp_target = false;
+    for target_session in &resolved_targets {
+        let target_member = bundle
+            .members
+            .iter()
+            .find(|member| member.id == *target_session)
+            .ok_or_else(|| {
+                relay_error(
+                    "internal_unexpected_failure",
+                    "resolved target member is missing from bundle configuration",
+                    Some(json!({"target_session": target_session})),
+                )
+            })?;
+        match &target_member.target {
+            crate::configuration::TargetConfiguration::Tmux(_) => has_tmux_target = true,
+            crate::configuration::TargetConfiguration::Acp(_) => has_acp_target = true,
+        }
+    }
+
+    if quiescence_timeout_ms.is_some() && has_acp_target {
+        return Err(relay_error(
+            "validation_invalid_timeout_field_for_transport",
+            "quiescence_timeout_ms is not valid for ACP targets",
+            Some(json!({
+                "field": "quiescence_timeout_ms",
+                "transport": "acp",
+            })),
+        ));
+    }
+
+    if acp_turn_timeout_ms.is_some() && has_tmux_target {
+        return Err(relay_error(
+            "validation_invalid_timeout_field_for_transport",
+            "acp_turn_timeout_ms is not valid for tmux targets",
+            Some(json!({
+                "field": "acp_turn_timeout_ms",
+                "transport": "tmux",
+            })),
+        ));
+    }
     authorize_send(
         bundle,
         authorization,
@@ -291,7 +350,11 @@ fn handle_chat(
     let batch_settings = prompt_batch_settings();
     let (status, results) = match delivery_mode {
         ChatDeliveryMode::Sync => {
-            let quiescence = QuiescenceOptions::for_sync(quiet_window_ms, quiescence_timeout_ms);
+            let quiescence = QuiescenceOptions::for_sync(
+                quiet_window_ms,
+                quiescence_timeout_ms,
+                acp_turn_timeout_ms,
+            );
             let mut results = Vec::with_capacity(resolved_targets.len());
             for target_session in resolved_targets {
                 let message_id = Uuid::new_v4().to_string();
@@ -312,7 +375,11 @@ fn handle_chat(
             (aggregate_chat_status(&results), results)
         }
         ChatDeliveryMode::Async => {
-            let quiescence = QuiescenceOptions::for_async(quiet_window_ms, quiescence_timeout_ms);
+            let quiescence = QuiescenceOptions::for_async(
+                quiet_window_ms,
+                quiescence_timeout_ms,
+                acp_turn_timeout_ms,
+            );
             let mut results = Vec::with_capacity(resolved_targets.len());
             for target_session in resolved_targets {
                 let message_id = Uuid::new_v4().to_string();

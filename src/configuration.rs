@@ -72,6 +72,8 @@ pub struct AcpTargetConfiguration {
     pub command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_timeout_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub headers: Vec<NameValueEntry>,
 }
@@ -134,6 +136,8 @@ struct RawAcpTarget {
     #[serde(default)]
     url: Option<String>,
     #[serde(default)]
+    turn_timeout_ms: Option<u64>,
+    #[serde(default)]
     headers: Vec<NameValueEntry>,
 }
 
@@ -176,6 +180,7 @@ struct AcpTarget {
     channel: AcpChannel,
     command: Option<String>,
     url: Option<String>,
+    turn_timeout_ms: Option<u64>,
     headers: Vec<NameValueEntry>,
 }
 
@@ -548,6 +553,7 @@ fn validate_loaded_configuration(
                 channel: target.channel,
                 command: target.command.clone(),
                 url: target.url.clone(),
+                turn_timeout_ms: target.turn_timeout_ms,
                 headers: target.headers.clone(),
             }),
         };
@@ -792,6 +798,16 @@ fn validate_acp_target(
     coders_path: &Path,
     coder_id: &str,
 ) -> Result<AcpTarget, ConfigurationError> {
+    if matches!(target.turn_timeout_ms, Some(0)) {
+        return Err(ConfigurationError::InvalidConfiguration {
+            path: coders_path.to_path_buf(),
+            message: format!(
+                "coder '{}' ACP turn-timeout-ms must be greater than zero",
+                coder_id
+            ),
+        });
+    }
+
     match target.channel {
         AcpChannel::Stdio => {
             let Some(command) = target.command.as_deref() else {
@@ -861,6 +877,7 @@ fn validate_acp_target(
         channel: target.channel,
         command: target.command,
         url: target.url,
+        turn_timeout_ms: target.turn_timeout_ms,
         headers: target.headers,
     })
 }

@@ -66,6 +66,9 @@ struct SendParams {
     /// Optional quiescence timeout override in milliseconds.
     #[serde(default)]
     quiescence_timeout_ms: Option<u64>,
+    /// Optional ACP turn timeout override in milliseconds.
+    #[serde(default)]
+    acp_turn_timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -217,6 +220,7 @@ impl McpServer {
                 "broadcast": params.broadcast,
                 "delivery_mode": params.delivery_mode,
                 "quiescence_timeout_ms": params.quiescence_timeout_ms,
+                "acp_turn_timeout_ms": params.acp_turn_timeout_ms,
                 "message_length": params.message.len(),
             }),
         );
@@ -243,6 +247,7 @@ impl McpServer {
             delivery_mode: params.delivery_mode.into(),
             quiet_window_ms: None,
             quiescence_timeout_ms: params.quiescence_timeout_ms,
+            acp_turn_timeout_ms: params.acp_turn_timeout_ms,
         };
         match self.request_relay(&request) {
             Ok(RelayResponse::Chat {
@@ -478,6 +483,20 @@ fn validate_send_request(params: &SendParams) -> Result<(), McpError> {
         return Err(validation_tool_error(
             "validation_invalid_quiescence_timeout",
             "quiescence_timeout_ms must be greater than zero milliseconds",
+            None,
+        ));
+    }
+    if matches!(params.acp_turn_timeout_ms, Some(0)) {
+        return Err(validation_tool_error(
+            "validation_invalid_acp_turn_timeout",
+            "acp_turn_timeout_ms must be greater than zero milliseconds",
+            None,
+        ));
+    }
+    if params.quiescence_timeout_ms.is_some() && params.acp_turn_timeout_ms.is_some() {
+        return Err(validation_tool_error(
+            "validation_conflicting_timeout_fields",
+            "quiescence_timeout_ms and acp_turn_timeout_ms are mutually exclusive",
             None,
         ));
     }

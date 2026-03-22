@@ -848,6 +848,45 @@ coder = "acp"
 }
 
 #[test]
+fn rejects_acp_turn_timeout_ms_zero() {
+    let temporary = TempDir::new().expect("temporary");
+    let root = write_config(
+        &temporary,
+        "alpha",
+        r#"
+format-version = 1
+
+[[coders]]
+id = "acp"
+
+[coders.acp]
+channel = "stdio"
+command = "acp-shell"
+turn-timeout-ms = 0
+"#,
+        &format!(
+            r#"
+format-version = 1
+
+[[sessions]]
+id = "a"
+name = "a"
+directory = "{}"
+coder = "acp"
+"#,
+            temporary.path().display()
+        ),
+    );
+
+    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    assert!(
+        err.to_string()
+            .contains("ACP turn-timeout-ms must be greater than zero"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn allows_acp_session_without_coder_session_id() {
     let temporary = TempDir::new().expect("temporary");
     let root = write_config(
@@ -884,6 +923,45 @@ coder = "acp"
         loaded.members[0].target,
         TargetConfiguration::Acp(_)
     ));
+}
+
+#[test]
+fn loads_acp_turn_timeout_ms() {
+    let temporary = TempDir::new().expect("temporary");
+    let root = write_config(
+        &temporary,
+        "alpha",
+        r#"
+format-version = 1
+
+[[coders]]
+id = "acp"
+
+[coders.acp]
+channel = "stdio"
+command = "acp-shell"
+turn-timeout-ms = 3210
+"#,
+        &format!(
+            r#"
+format-version = 1
+
+[[sessions]]
+id = "a"
+name = "a"
+directory = "{}"
+coder = "acp"
+"#,
+            temporary.path().display()
+        ),
+    );
+
+    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    assert_eq!(loaded.members.len(), 1);
+    let TargetConfiguration::Acp(acp) = &loaded.members[0].target else {
+        panic!("expected ACP target");
+    };
+    assert_eq!(acp.turn_timeout_ms, Some(3210));
 }
 
 #[test]

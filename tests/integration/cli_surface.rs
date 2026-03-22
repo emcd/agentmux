@@ -484,6 +484,61 @@ fn send_rejects_conflicting_flag_and_piped_message_sources() {
 }
 
 #[test]
+fn send_rejects_conflicting_timeout_flags() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "send",
+            "--target",
+            "bravo",
+            "--quiescence-timeout-ms",
+            "1000",
+            "--acp-turn-timeout-ms",
+            "2000",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux send with conflicting timeout flags");
+    {
+        let stdin = child.stdin.as_mut().expect("open child stdin");
+        stdin
+            .write_all(b"hello from stdin")
+            .expect("write piped input");
+    }
+    let output = child.wait_with_output().expect("wait for child");
+    assert!(!output.status.success(), "command should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("validation_conflicting_timeout_fields"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
+fn send_rejects_invalid_acp_turn_timeout_flag() {
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "send",
+            "--target",
+            "bravo",
+            "--message",
+            "hello",
+            "--acp-turn-timeout-ms",
+            "0",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .expect("run agentmux send with invalid ACP timeout");
+    assert!(!output.status.success(), "command should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("validation_invalid_acp_turn_timeout"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
 fn send_preserves_valid_explicit_sender_in_relay_request() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = temporary.path().join("config");
