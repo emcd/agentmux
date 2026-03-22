@@ -130,8 +130,8 @@ pub(super) struct LifecycleTransitionSummary {
     pub(super) changed_any: bool,
 }
 
-pub(super) const MIN_LOOK_LINES: u64 = 1;
-pub(super) const MAX_LOOK_LINES: u64 = 1000;
+pub(super) const LOOK_LINES_MINIMUM: u64 = 1;
+pub(super) const LOOK_LINES_MAXIMUM: u64 = 1000;
 
 /// Runs the unified `agentmux` CLI entrypoint.
 pub async fn run_agentmux(arguments: Vec<String>) -> Result<(), RuntimeError> {

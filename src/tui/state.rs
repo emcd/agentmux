@@ -14,10 +14,10 @@ use crate::{
     runtime::error::RuntimeError,
 };
 
-const MAX_STATUS_HISTORY: usize = 6;
-const MAX_EVENT_HISTORY: usize = 64;
-const MAX_CHAT_HISTORY: usize = 256;
-const MAX_SEEN_STREAM_IDS: usize = 1024;
+const STATUS_HISTORY_MAXIMUM: usize = 6;
+const EVENT_HISTORY_MAXIMUM: usize = 64;
+const CHAT_HISTORY_MAXIMUM: usize = 256;
+const SEEN_STREAM_IDS_MAXIMUM: usize = 1024;
 
 #[derive(Clone, Debug)]
 struct ToCompletionState {
@@ -164,7 +164,7 @@ impl AppState {
             code,
             message: message.into(),
         });
-        while self.status_history.len() > MAX_STATUS_HISTORY {
+        while self.status_history.len() > STATUS_HISTORY_MAXIMUM {
             self.status_history.pop_back();
         }
     }
@@ -685,14 +685,14 @@ impl AppState {
 
     fn push_event(&mut self, event: impl Into<String>) {
         self.event_history.push_front(event.into());
-        while self.event_history.len() > MAX_EVENT_HISTORY {
+        while self.event_history.len() > EVENT_HISTORY_MAXIMUM {
             self.event_history.pop_back();
         }
     }
 
     fn push_chat_history_entry(&mut self, entry: ChatHistoryEntry) {
         self.chat_history.push_front(entry);
-        while self.chat_history.len() > MAX_CHAT_HISTORY {
+        while self.chat_history.len() > CHAT_HISTORY_MAXIMUM {
             self.chat_history.pop_back();
         }
         self.chat_history_scroll = 0;
@@ -743,7 +743,7 @@ impl AppState {
         }
         seen.insert(key.clone());
         order.push_back(key);
-        while order.len() > MAX_SEEN_STREAM_IDS {
+        while order.len() > SEEN_STREAM_IDS_MAXIMUM {
             if let Some(evicted) = order.pop_front() {
                 seen.remove(evicted.as_str());
             }

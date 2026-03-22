@@ -13,7 +13,7 @@ use crate::{
     },
 };
 
-use super::{MAX_LOOK_LINES, MIN_LOOK_LINES, RuntimeArguments};
+use super::{LOOK_LINES_MAXIMUM, LOOK_LINES_MINIMUM, RuntimeArguments};
 
 pub(super) fn parse_runtime_flag(
     arguments: &[String],
@@ -111,7 +111,7 @@ pub(super) fn parse_look_lines(value: &str) -> Result<u64, RuntimeError> {
             "lines must be between 1 and 1000".to_string(),
         )
     })?;
-    if !(MIN_LOOK_LINES..=MAX_LOOK_LINES).contains(&lines) {
+    if !(LOOK_LINES_MINIMUM..=LOOK_LINES_MAXIMUM).contains(&lines) {
         return Err(RuntimeError::validation(
             "validation_invalid_lines",
             "lines must be between 1 and 1000".to_string(),
