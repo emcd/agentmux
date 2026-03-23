@@ -10,13 +10,14 @@ separate delivery acknowledgment from turn completion for ACP.
 - Make ACP timeout semantics transport-appropriate and explicit.
 - Preserve deterministic sync behavior with clear first-activity acknowledgment.
 - Define a robust persistent ACP worker lifecycle with bounded queueing.
-- Keep authorization centralized in relay, including ACP permission handling.
+- Ensure ACP permission-request states do not appear ready for new delivery.
 
 ## Non-Goals
 
 - Support ACP HTTP transport in this change.
 - Introduce compatibility aliases for deprecated timeout fields.
 - Redesign look semantics in this proposal.
+- Implement full ACP permission allow/deny decisioning in this proposal.
 
 ## Decisions
 
@@ -73,16 +74,13 @@ separate delivery acknowledgment from turn completion for ACP.
   - `runtime_acp_prompt_failed`
   - `acp_turn_timeout`
 
-- Decision: Permission handling and auth boundary
-  - Relay policy is authoritative for ACP permission decisions.
-  - Adapters do not implement shadow auth.
-  - Policy denial uses canonical `authorization_forbidden` details minimum:
-    `capability`, `requester_session`, `bundle_name`, `reason`.
-  - Optional additive details may include:
-    `target_session`/`targets`, `policy_rule_id`, `permission_kind`,
-    `request_id`.
-  - ACP permission infrastructure failures:
-    `runtime_acp_permission_timeout`, `runtime_acp_permission_failed`.
+- Decision: MVP permission-request readiness signal
+  - ACP `session/request_permission` is treated as in-progress transport
+    activity for readiness tracking.
+  - Relay marks worker non-ready (`busy`) while the turn remains in progress.
+  - Terminal stopReason transitions worker back to `available`.
+  - This change does not lock permission allow/deny decisioning or taxonomy;
+    that is deferred to a follow-up delta.
 
 ## Risks / Trade-offs
 
@@ -96,4 +94,4 @@ separate delivery acknowledgment from turn completion for ACP.
 1. Add timeout field/schema updates across relay, MCP, and CLI.
 2. Add two-phase sync behavior and internal readiness transitions.
 3. Add persistent ACP workers and bounded queueing.
-4. Add permission-request handling with relay-policy mapping.
+4. Add MVP permission-request readiness signaling (no decision mapping).

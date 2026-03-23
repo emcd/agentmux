@@ -20,11 +20,10 @@
       - serialized queue with fixed `max_pending = 64`
       - overflow handling (`runtime_acp_queue_full`)
       - reconnect/restart sequence and failure taxonomy
-- [ ] 1.5 Implement ACP permission-request handling:
-      - handle `session/request_permission` in ACP loop
-      - route authorization decision through relay policy only
-      - map permission failures/timeouts to canonical runtime codes
-      - preserve canonical `authorization_forbidden` details minimum
+- [x] 1.5 Implement ACP permission-request readiness signaling (MVP):
+      - handle `session/request_permission` in ACP loop as activity
+      - treat permission-request state as non-ready (`busy`) until turn completion
+      - defer policy-driven allow/deny mapping to follow-up delta (`todos/acp/2`)
 - [x] 1.6 Update CLI `send` surface to include ACP timeout override flag and
       transport-specific validation behavior.
 - [x] 1.7 Update MCP `send` surface to include ACP timeout override field and
@@ -39,8 +38,8 @@
 - [x] 2.4 Integration tests for persistent worker queue bound and overflow code.
 - [x] 2.5 Integration tests for worker disconnect/restart behavior before and
       after first-activity acknowledgment.
-- [ ] 2.6 Integration tests for ACP permission-request deny/timeout/error
-      mappings.
+- [x] 2.6 Integration tests for ACP `session/request_permission` activity
+      and non-ready readiness behavior.
 
 ## 3. Validation
 

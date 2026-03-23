@@ -1484,7 +1484,8 @@ impl AcpStdioClient {
                 AcpRequestError::Failed(format!("parse ACP response failed: {source}"))
             })?;
             if decoded.get("id") != Some(&json!(request_id)) {
-                if self.capture_update_snapshot_lines(&decoded, prompt_session_id)
+                if (self.capture_update_snapshot_lines(&decoded, prompt_session_id)
+                    || self.observe_permission_request_activity(&decoded, prompt_session_id))
                     && !first_activity_observed
                 {
                     first_activity_observed = true;
@@ -1525,6 +1526,20 @@ impl AcpStdioClient {
             return false;
         }
         collect_text_lines_from_value(params, &mut self.snapshot_line_buffer);
+        true
+    }
+
+    fn observe_permission_request_activity(&self, value: &Value, session_id: Option<&str>) -> bool {
+        if value.get("method").and_then(Value::as_str) != Some("session/request_permission") {
+            return false;
+        }
+        let params = value.get("params").unwrap_or(&Value::Null);
+        if let Some(expected_session_id) = session_id
+            && let Some(observed_session_id) = params.get("sessionId").and_then(Value::as_str)
+            && observed_session_id != expected_session_id
+        {
+            return false;
+        }
         true
     }
 

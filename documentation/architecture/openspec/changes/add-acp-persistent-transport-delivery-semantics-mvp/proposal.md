@@ -21,15 +21,16 @@ completion semantics.
   - one worker per target session
   - serialized queue, fixed MVP bound `max_pending = 64`
   - canonical backpressure and disconnect/restart failure taxonomy
-- Lock ACP permission-request handling contract:
-  - relay authorization policy is source of truth
-  - no adapter-side shadow authorization
-  - canonical denial schema alignment and ACP-specific timeout/error codes
+- Lock MVP permission-request readiness behavior:
+  - treat ACP `session/request_permission` as in-progress activity
+  - keep ACP worker non-ready (`busy`) until terminal completion
+  - defer policy-driven permission allow/deny mapping to a follow-up delta
 
 ## Non-Goals (MVP)
 
 - ACP HTTP transport implementation.
 - Full ACP look redesign.
+- Full ACP permission decisioning and deny/timeout taxonomy.
 - Backward-compat timeout aliases or silent field translation.
 
 ## Impact

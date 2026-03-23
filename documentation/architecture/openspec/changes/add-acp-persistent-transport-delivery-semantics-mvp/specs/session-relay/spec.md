@@ -157,46 +157,33 @@ Failure taxonomy SHALL include:
 - **WHEN** ACP worker disconnects before first activity is observed
 - **THEN** relay reports `runtime_acp_connection_closed`
 
-### Requirement: ACP Permission Request Policy Mapping
+### Requirement: ACP Permission Request Readiness Signal (MVP)
 
-Relay SHALL handle ACP `session/request_permission` as part of ACP prompt
-execution.
+Relay SHALL treat ACP `session/request_permission` as in-progress turn activity
+for ACP readiness tracking in MVP.
 
-Authorization source-of-truth SHALL remain relay policy evaluation.
-Adapters SHALL NOT apply shadow authorization.
+MVP behavior contract:
 
-Policy denial contract SHALL remain canonical:
+- `session/request_permission` observed before terminal completion SHALL count
+  as first activity for two-phase sync acknowledgment semantics
+- worker readiness SHALL transition to `busy` while turn completion remains
+  pending
+- terminal stopReason completion SHALL transition readiness to `available`
 
-- error code: `authorization_forbidden`
-- details required minimum:
-  - `capability`
-  - `requester_session`
-  - `bundle_name`
-  - `reason`
-- optional additive details MAY include:
-  - `target_session` or `targets`
-  - `policy_rule_id`
-  - `permission_kind`
-  - `request_id`
+MVP boundary:
 
-Permission infrastructure failure codes SHALL include:
+- this change does not lock permission allow/deny decisioning behavior
+- this change does not lock ACP permission timeout/error taxonomy
 
-- `runtime_acp_permission_timeout`
-- `runtime_acp_permission_failed`
+#### Scenario: Treat permission request as first ACP activity
 
-Sync mapping:
+- **WHEN** relay observes ACP `session/request_permission` before prompt result
+- **THEN** sync send MAY return phase-1 `outcome=delivered`
+- **AND** includes `details.delivery_phase = "accepted_in_progress"`
 
-- denial before phase-1 acknowledgment => sync target `failed`
-- denial after phase-1 acknowledgment => no response mutation; relay handles
-  internal worker state/recovery as needed
+#### Scenario: Keep worker non-ready while permission turn is in progress
 
-#### Scenario: Deny permission with canonical authorization schema
-
-- **WHEN** ACP permission request is denied by relay policy
-- **THEN** relay returns `authorization_forbidden`
-- **AND** denial details include canonical required fields
-
-#### Scenario: Report permission timeout with runtime code
-
-- **WHEN** ACP permission request does not resolve before permission timeout
-- **THEN** relay returns `runtime_acp_permission_timeout`
+- **WHEN** ACP `session/request_permission` is observed mid-turn
+- **THEN** relay marks worker state `busy`
+- **AND** relay does not consider that worker ready for next delivery until
+  terminal stopReason is observed

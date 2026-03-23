@@ -23,6 +23,7 @@ struct AcpStubOptions {
     stop_reason: String,
     prompt_delay_sec: u64,
     update_count: usize,
+    request_permission_on_prompt: bool,
     disconnect_on_prompt: Option<String>,
     configured_session_id: Option<String>,
     coder_turn_timeout_ms: Option<u64>,
@@ -40,6 +41,7 @@ impl Default for AcpStubOptions {
             stop_reason: "end_turn".to_string(),
             prompt_delay_sec: 0,
             update_count: 0,
+            request_permission_on_prompt: false,
             disconnect_on_prompt: None,
             configured_session_id: None,
             coder_turn_timeout_ms: None,
@@ -63,6 +65,7 @@ prompt_delay_sec="${PROMPT_DELAY_SEC:-0}"
 update_count="${UPDATE_COUNT:-0}"
 new_session_id="${NEW_SESSION_ID:-sess-generated}"
 disconnect_on_prompt="${DISCONNECT_ON_PROMPT:-none}"
+request_permission_on_prompt="${REQUEST_PERMISSION_ON_PROMPT:-0}"
 
 while IFS= read -r line; do
   printf '%s\n' "$line" >> "$log_file"
@@ -105,6 +108,10 @@ while IFS= read -r line; do
       if [ -z "$prompt_session_id" ]; then
         prompt_session_id="$new_session_id"
       fi
+      if [ "$request_permission_on_prompt" = "1" ]; then
+        printf '{"jsonrpc":"2.0","method":"session/request_permission","params":{"sessionId":"%s","kind":"exec","description":"need permission"}}\n' \
+          "$prompt_session_id"
+      fi
       count=1
       while [ "$count" -le "$update_count" ]; do
         printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"%s","update":[{"type":"text","text":"ACP-LINE-%s"}]}}\n' \
@@ -141,13 +148,18 @@ fn write_configuration(root: &Path, options: &AcpStubOptions) -> (PathBuf, PathB
     let log_path = root.join("acp_requests.log");
     write_acp_stub(&script_path);
     let command = format!(
-        "ACP_LOG_FILE={} FAIL_INITIALIZE={} FAIL_LOAD={} FAIL_NEW={} FAIL_PROMPT={} DISCONNECT_ON_PROMPT={} LOAD_CAPABILITY={} PROMPT_CAPABILITY={} STOP_REASON={} PROMPT_DELAY_SEC={} UPDATE_COUNT={} NEW_SESSION_ID=sess-generated {}",
+        "ACP_LOG_FILE={} FAIL_INITIALIZE={} FAIL_LOAD={} FAIL_NEW={} FAIL_PROMPT={} DISCONNECT_ON_PROMPT={} REQUEST_PERMISSION_ON_PROMPT={} LOAD_CAPABILITY={} PROMPT_CAPABILITY={} STOP_REASON={} PROMPT_DELAY_SEC={} UPDATE_COUNT={} NEW_SESSION_ID=sess-generated {}",
         log_path.display(),
         if options.fail_initialize { "1" } else { "0" },
         if options.fail_load { "1" } else { "0" },
         if options.fail_new { "1" } else { "0" },
         if options.fail_prompt { "1" } else { "0" },
         options.disconnect_on_prompt.as_deref().unwrap_or("none"),
+        if options.request_permission_on_prompt {
+            "1"
+        } else {
+            "0"
+        },
         as_json_boolean(options.load_capability),
         as_json_boolean(options.prompt_capability),
         options.stop_reason,
@@ -931,6 +943,54 @@ fn acp_worker_state_transitions_busy_then_available() {
     let (status, result) = chat_result(response);
     assert_eq!(status, ChatStatus::Success);
     assert_eq!(result.outcome, ChatOutcome::Delivered);
+    assert_eq!(
+        read_worker_state(temporary.path(), "bravo").as_deref(),
+        Some("available")
+    );
+}
+
+#[test]
+fn acp_request_permission_marks_worker_busy_until_completion() {
+    let temporary = TempDir::new().expect("temporary");
+    let options = AcpStubOptions {
+        prompt_delay_sec: 1,
+        request_permission_on_prompt: true,
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    let config_root_for_thread = config_root.clone();
+    let tmux_socket_for_thread = tmux_socket.clone();
+    let handle = thread::spawn(move || {
+        dispatch_send(&config_root_for_thread, &tmux_socket_for_thread, Some(100))
+    });
+
+    let deadline = Instant::now() + Duration::from_millis(800);
+    let mut observed_busy = false;
+    while Instant::now() < deadline {
+        if read_worker_state(temporary.path(), "bravo").as_deref() == Some("busy") {
+            observed_busy = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        observed_busy,
+        "expected worker_state=busy while ACP requested permission"
+    );
+
+    let response = handle.join().expect("join send thread");
+    let (status, result) = chat_result(response);
+    assert_eq!(status, ChatStatus::Success);
+    assert_eq!(result.outcome, ChatOutcome::Delivered);
+    assert_eq!(
+        result
+            .details
+            .as_ref()
+            .and_then(|value| value.get("delivery_phase")),
+        Some(&Value::String("accepted_in_progress".to_string()))
+    );
     assert_eq!(
         read_worker_state(temporary.path(), "bravo").as_deref(),
         Some("available")
