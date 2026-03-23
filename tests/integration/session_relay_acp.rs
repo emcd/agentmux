@@ -23,6 +23,7 @@ struct AcpStubOptions {
     stop_reason: String,
     prompt_delay_sec: u64,
     update_count: usize,
+    disconnect_on_prompt: Option<String>,
     configured_session_id: Option<String>,
     coder_turn_timeout_ms: Option<u64>,
 }
@@ -39,6 +40,7 @@ impl Default for AcpStubOptions {
             stop_reason: "end_turn".to_string(),
             prompt_delay_sec: 0,
             update_count: 0,
+            disconnect_on_prompt: None,
             configured_session_id: None,
             coder_turn_timeout_ms: None,
         }
@@ -60,6 +62,7 @@ stop_reason="${STOP_REASON:-end_turn}"
 prompt_delay_sec="${PROMPT_DELAY_SEC:-0}"
 update_count="${UPDATE_COUNT:-0}"
 new_session_id="${NEW_SESSION_ID:-sess-generated}"
+disconnect_on_prompt="${DISCONNECT_ON_PROMPT:-none}"
 
 while IFS= read -r line; do
   printf '%s\n' "$line" >> "$log_file"
@@ -95,6 +98,9 @@ while IFS= read -r line; do
         printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32003,"message":"prompt failed"}}\n' "$id"
         continue
       fi
+      if [ "$disconnect_on_prompt" = "before_activity" ]; then
+        exit 0
+      fi
       prompt_session_id=$(printf '%s\n' "$line" | sed -n 's/.*"sessionId":"\([^"]*\)".*/\1/p')
       if [ -z "$prompt_session_id" ]; then
         prompt_session_id="$new_session_id"
@@ -105,6 +111,9 @@ while IFS= read -r line; do
           "$prompt_session_id" "$count"
         count=$((count + 1))
       done
+      if [ "$disconnect_on_prompt" = "after_activity" ]; then
+        exit 0
+      fi
       if [ "$prompt_delay_sec" != "0" ]; then
         sleep "$prompt_delay_sec"
       fi
@@ -132,12 +141,13 @@ fn write_configuration(root: &Path, options: &AcpStubOptions) -> (PathBuf, PathB
     let log_path = root.join("acp_requests.log");
     write_acp_stub(&script_path);
     let command = format!(
-        "ACP_LOG_FILE={} FAIL_INITIALIZE={} FAIL_LOAD={} FAIL_NEW={} FAIL_PROMPT={} LOAD_CAPABILITY={} PROMPT_CAPABILITY={} STOP_REASON={} PROMPT_DELAY_SEC={} UPDATE_COUNT={} NEW_SESSION_ID=sess-generated {}",
+        "ACP_LOG_FILE={} FAIL_INITIALIZE={} FAIL_LOAD={} FAIL_NEW={} FAIL_PROMPT={} DISCONNECT_ON_PROMPT={} LOAD_CAPABILITY={} PROMPT_CAPABILITY={} STOP_REASON={} PROMPT_DELAY_SEC={} UPDATE_COUNT={} NEW_SESSION_ID=sess-generated {}",
         log_path.display(),
         if options.fail_initialize { "1" } else { "0" },
         if options.fail_load { "1" } else { "0" },
         if options.fail_new { "1" } else { "0" },
         if options.fail_prompt { "1" } else { "0" },
+        options.disconnect_on_prompt.as_deref().unwrap_or("none"),
         as_json_boolean(options.load_capability),
         as_json_boolean(options.prompt_capability),
         options.stop_reason,
@@ -627,6 +637,145 @@ fn acp_prompt_failure_returns_runtime_stage_code() {
     assert_eq!(
         result.reason_code.as_deref(),
         Some("runtime_acp_prompt_failed")
+    );
+}
+
+#[test]
+fn acp_disconnect_before_first_activity_returns_connection_closed_code() {
+    let temporary = TempDir::new().expect("temporary");
+    let options = AcpStubOptions {
+        disconnect_on_prompt: Some("before_activity".to_string()),
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let response = dispatch_send(
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+        Some(1_000),
+    );
+    let (status, result) = chat_result(response);
+    assert_eq!(status, ChatStatus::Failure);
+    assert_eq!(result.outcome, ChatOutcome::Failed);
+    assert_eq!(
+        result.reason_code.as_deref(),
+        Some("runtime_acp_connection_closed")
+    );
+    assert_eq!(
+        read_worker_state(temporary.path(), "bravo").as_deref(),
+        Some("unavailable")
+    );
+}
+
+#[test]
+fn acp_disconnect_after_first_activity_preserves_accepted_response() {
+    let temporary = TempDir::new().expect("temporary");
+    let options = AcpStubOptions {
+        disconnect_on_prompt: Some("after_activity".to_string()),
+        update_count: 1,
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let response = dispatch_send(
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+        Some(1_000),
+    );
+    let (status, result) = chat_result(response);
+    assert_eq!(status, ChatStatus::Success);
+    assert_eq!(result.outcome, ChatOutcome::Delivered);
+    assert_eq!(result.reason_code, None);
+    assert_eq!(
+        result
+            .details
+            .as_ref()
+            .and_then(|value| value.get("delivery_phase")),
+        Some(&Value::String("accepted_in_progress".to_string()))
+    );
+    assert_eq!(
+        read_worker_state(temporary.path(), "bravo").as_deref(),
+        Some("unavailable")
+    );
+}
+
+#[test]
+fn acp_next_send_recovers_after_connection_closed_failure() {
+    let temporary = TempDir::new().expect("temporary");
+    let failing = AcpStubOptions {
+        disconnect_on_prompt: Some("before_activity".to_string()),
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &failing);
+    let first = dispatch_send(
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+        Some(1_000),
+    );
+    let (first_status, first_result) = chat_result(first);
+    assert_eq!(first_status, ChatStatus::Failure);
+    assert_eq!(first_result.outcome, ChatOutcome::Failed);
+    assert_eq!(
+        first_result.reason_code.as_deref(),
+        Some("runtime_acp_connection_closed")
+    );
+
+    let recovered = AcpStubOptions::default();
+    let (config_root, _log_path) = write_configuration(temporary.path(), &recovered);
+    let second = dispatch_send(
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+        Some(1_000),
+    );
+    let (second_status, second_result) = chat_result(second);
+    assert_eq!(second_status, ChatStatus::Success);
+    assert_eq!(second_result.outcome, ChatOutcome::Delivered);
+    assert_eq!(
+        read_worker_state(temporary.path(), "bravo").as_deref(),
+        Some("available")
+    );
+}
+
+#[test]
+fn acp_next_send_recovers_after_post_accept_disconnect() {
+    let temporary = TempDir::new().expect("temporary");
+    let failing = AcpStubOptions {
+        disconnect_on_prompt: Some("after_activity".to_string()),
+        update_count: 1,
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &failing);
+    let first = dispatch_send(
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+        Some(1_000),
+    );
+    let (first_status, first_result) = chat_result(first);
+    assert_eq!(first_status, ChatStatus::Success);
+    assert_eq!(first_result.outcome, ChatOutcome::Delivered);
+    assert_eq!(
+        first_result
+            .details
+            .as_ref()
+            .and_then(|value| value.get("delivery_phase")),
+        Some(&Value::String("accepted_in_progress".to_string()))
+    );
+    assert_eq!(
+        read_worker_state(temporary.path(), "bravo").as_deref(),
+        Some("unavailable")
+    );
+
+    let recovered = AcpStubOptions::default();
+    let (config_root, _log_path) = write_configuration(temporary.path(), &recovered);
+    let second = dispatch_send(
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+        Some(1_000),
+    );
+    let (second_status, second_result) = chat_result(second);
+    assert_eq!(second_status, ChatStatus::Success);
+    assert_eq!(second_result.outcome, ChatOutcome::Delivered);
+    assert_eq!(
+        read_worker_state(temporary.path(), "bravo").as_deref(),
+        Some("available")
     );
 }
 

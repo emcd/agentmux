@@ -65,6 +65,7 @@ const ACP_ERROR_CODE_INITIALIZE_FAILED: &str = "runtime_acp_initialize_failed";
 const ACP_ERROR_CODE_SESSION_LOAD_FAILED: &str = "runtime_acp_session_load_failed";
 const ACP_ERROR_CODE_SESSION_NEW_FAILED: &str = "runtime_acp_session_new_failed";
 const ACP_ERROR_CODE_PROMPT_FAILED: &str = "runtime_acp_prompt_failed";
+const ACP_ERROR_CODE_CONNECTION_CLOSED: &str = "runtime_acp_connection_closed";
 const ACP_ERROR_CODE_MISSING_CAPABILITY: &str = "validation_missing_acp_capability";
 const ACP_ERROR_CODE_QUEUE_FULL: &str = "runtime_acp_queue_full";
 const ACP_MAX_PENDING: usize = 64;
@@ -73,6 +74,10 @@ const ACP_MAX_PENDING: usize = 64;
 enum AcpRequestError {
     Failed(String),
     Timeout(Duration),
+    ConnectionClosed {
+        reason: String,
+        first_activity_observed: bool,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1026,6 +1031,31 @@ fn deliver_one_target_acp(
                     ),
                 );
             }
+            Err(AcpRequestError::ConnectionClosed {
+                reason,
+                first_activity_observed: observed,
+            }) => {
+                first_activity_observed |= observed;
+                let _ = persist_acp_worker_state(
+                    runtime_socket_path,
+                    target_member.id.as_str(),
+                    Some(session_id.as_str()),
+                    AcpWorkerReadinessState::Unavailable,
+                );
+                if first_activity_observed {
+                    return delivered_in_progress_result(target_session, message_id);
+                }
+                return failed_result_with_code(
+                    target_session,
+                    message_id,
+                    ACP_ERROR_CODE_CONNECTION_CLOSED,
+                    "ACP connection closed before first activity",
+                    Some(json!({
+                        "target_session": target_member.id,
+                        "reason": reason,
+                    })),
+                );
+            }
             Err(AcpRequestError::Failed(reason)) => {
                 let _ = persist_acp_worker_state(
                     runtime_socket_path,
@@ -1306,6 +1336,7 @@ impl AcpStdioClient {
             AcpRequestError::Timeout(timeout) => {
                 format!("ACP initialize timed out after {}ms", timeout.as_millis())
             }
+            AcpRequestError::ConnectionClosed { reason, .. } => reason,
         })
     }
 
@@ -1328,6 +1359,7 @@ impl AcpStdioClient {
                 AcpRequestError::Timeout(timeout) => {
                     format!("ACP session/new timed out after {}ms", timeout.as_millis())
                 }
+                AcpRequestError::ConnectionClosed { reason, .. } => reason,
             })?;
         result
             .get("sessionId")
@@ -1356,6 +1388,7 @@ impl AcpStdioClient {
                 AcpRequestError::Timeout(timeout) => {
                     format!("ACP session/load timed out after {}ms", timeout.as_millis())
                 }
+                AcpRequestError::ConnectionClosed { reason, .. } => reason,
             })?;
         Ok(())
     }
@@ -1433,7 +1466,16 @@ impl AcpStdioClient {
         let mut first_activity_observed = false;
         let mut read_timeout = timeout;
         loop {
-            let line = self.read_response_line(read_timeout)?;
+            let line = match self.read_response_line(read_timeout) {
+                Ok(line) => line,
+                Err(AcpRequestError::Failed(reason)) => {
+                    return Err(AcpRequestError::ConnectionClosed {
+                        reason,
+                        first_activity_observed,
+                    });
+                }
+                Err(error) => return Err(error),
+            };
             let trimmed = line.trim();
             if trimmed.is_empty() {
                 continue;

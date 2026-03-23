@@ -37,7 +37,7 @@
 - [x] 2.3 Integration tests for ACP worker readiness-state transitions
       (`available` <-> `busy` and failure to `unavailable`).
 - [x] 2.4 Integration tests for persistent worker queue bound and overflow code.
-- [ ] 2.5 Integration tests for worker disconnect/restart behavior before and
+- [x] 2.5 Integration tests for worker disconnect/restart behavior before and
       after first-activity acknowledgment.
 - [ ] 2.6 Integration tests for ACP permission-request deny/timeout/error
       mappings.
