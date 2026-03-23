@@ -5,7 +5,11 @@ use std::{
     os::fd::AsRawFd,
     path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
-    sync::{Mutex, OnceLock, mpsc},
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -62,6 +66,8 @@ const ACP_ERROR_CODE_SESSION_LOAD_FAILED: &str = "runtime_acp_session_load_faile
 const ACP_ERROR_CODE_SESSION_NEW_FAILED: &str = "runtime_acp_session_new_failed";
 const ACP_ERROR_CODE_PROMPT_FAILED: &str = "runtime_acp_prompt_failed";
 const ACP_ERROR_CODE_MISSING_CAPABILITY: &str = "validation_missing_acp_capability";
+const ACP_ERROR_CODE_QUEUE_FULL: &str = "runtime_acp_queue_full";
+const ACP_MAX_PENDING: usize = 64;
 
 #[derive(Debug)]
 enum AcpRequestError {
@@ -191,7 +197,13 @@ struct AsyncWorkerKey {
 
 #[derive(Default)]
 struct AsyncDeliveryRegistry {
-    workers: Mutex<HashMap<AsyncWorkerKey, mpsc::Sender<AsyncDeliveryTask>>>,
+    workers: Mutex<HashMap<AsyncWorkerKey, AsyncWorkerEntry>>,
+}
+
+struct AsyncWorkerEntry {
+    sender: mpsc::Sender<AsyncDeliveryTask>,
+    pending: std::sync::Arc<AtomicUsize>,
+    bounded_acp_queue: bool,
 }
 
 static ASYNC_DELIVERY_REGISTRY: OnceLock<AsyncDeliveryRegistry> = OnceLock::new();
@@ -242,6 +254,7 @@ pub(super) fn wait_for_async_delivery_shutdown(timeout: Duration) -> usize {
 }
 
 pub(super) fn enqueue_async_delivery(task: AsyncDeliveryTask) -> Result<(), RelayError> {
+    let bounded_acp_queue = task_uses_acp_transport(&task)?;
     let key = AsyncWorkerKey {
         tmux_socket: task.tmux_socket.clone(),
         bundle_name: task.bundle.bundle_name.clone(),
@@ -256,24 +269,106 @@ pub(super) fn enqueue_async_delivery(task: AsyncDeliveryTask) -> Result<(), Rela
         )
     })?;
 
-    if let Some(sender) = workers.get(&key) {
-        if sender.send(task.clone()).is_ok() {
+    if let Some(worker) = workers.get(&key) {
+        if worker.bounded_acp_queue && !reserve_acp_pending_slot(worker.pending.as_ref()) {
+            return Err(super::relay_error(
+                ACP_ERROR_CODE_QUEUE_FULL,
+                "ACP worker queue is full",
+                Some(json!({
+                    "target_session": task.target_session,
+                    "max_pending": ACP_MAX_PENDING,
+                })),
+            ));
+        }
+        if worker.sender.send(task.clone()).is_ok() {
             return Ok(());
+        }
+        if worker.bounded_acp_queue {
+            release_pending_slot(worker.pending.as_ref());
         }
         workers.remove(&key);
     }
 
     let (sender, receiver) = mpsc::channel::<AsyncDeliveryTask>();
+    let pending = std::sync::Arc::new(AtomicUsize::new(0));
+    if bounded_acp_queue && !reserve_acp_pending_slot(pending.as_ref()) {
+        return Err(super::relay_error(
+            ACP_ERROR_CODE_QUEUE_FULL,
+            "ACP worker queue is full",
+            Some(json!({
+                "target_session": task.target_session,
+                "max_pending": ACP_MAX_PENDING,
+            })),
+        ));
+    }
     sender.send(task).map_err(|source| {
+        if bounded_acp_queue {
+            release_pending_slot(pending.as_ref());
+        }
         super::relay_error(
             "internal_unexpected_failure",
             "failed to enqueue async delivery task",
             Some(json!({"cause": source.to_string()})),
         )
     })?;
-    spawn_async_delivery_worker(key.clone(), receiver);
-    workers.insert(key, sender);
+    spawn_async_delivery_worker(key.clone(), receiver, pending.clone());
+    workers.insert(
+        key,
+        AsyncWorkerEntry {
+            sender,
+            pending,
+            bounded_acp_queue,
+        },
+    );
     Ok(())
+}
+
+fn task_uses_acp_transport(task: &AsyncDeliveryTask) -> Result<bool, RelayError> {
+    task.bundle
+        .members
+        .iter()
+        .find(|member| member.id == task.target_session)
+        .map(|member| matches!(member.target, TargetConfiguration::Acp(_)))
+        .ok_or_else(|| {
+            super::relay_error(
+                "internal_unexpected_failure",
+                "resolved target member is missing from bundle configuration",
+                Some(json!({"target_session": task.target_session})),
+            )
+        })
+}
+
+fn reserve_acp_pending_slot(pending: &AtomicUsize) -> bool {
+    let mut current = pending.load(Ordering::Relaxed);
+    loop {
+        if current >= ACP_MAX_PENDING {
+            return false;
+        }
+        match pending.compare_exchange_weak(
+            current,
+            current + 1,
+            Ordering::AcqRel,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return true,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+fn release_pending_slot(pending: &AtomicUsize) {
+    let mut current = pending.load(Ordering::Relaxed);
+    while current > 0 {
+        match pending.compare_exchange_weak(
+            current,
+            current - 1,
+            Ordering::AcqRel,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(observed) => current = observed,
+        }
+    }
 }
 
 pub(super) fn deliver_one_target(task: &AsyncDeliveryTask) -> Result<ChatResult, RelayError> {
@@ -1539,11 +1634,15 @@ fn async_worker_count() -> usize {
         .unwrap_or(0)
 }
 
-fn spawn_async_delivery_worker(key: AsyncWorkerKey, receiver: mpsc::Receiver<AsyncDeliveryTask>) {
+fn spawn_async_delivery_worker(
+    key: AsyncWorkerKey,
+    receiver: mpsc::Receiver<AsyncDeliveryTask>,
+    pending: std::sync::Arc<AtomicUsize>,
+) {
     thread::spawn(move || {
         loop {
             if shutdown_requested() {
-                drop_pending_async_tasks_on_shutdown(&receiver);
+                drop_pending_async_tasks_on_shutdown(&receiver, pending.as_ref());
                 break;
             }
             let received =
@@ -1555,7 +1654,8 @@ fn spawn_async_delivery_worker(key: AsyncWorkerKey, receiver: mpsc::Receiver<Asy
             };
             if shutdown_requested() {
                 emit_async_shutdown_drop(&task);
-                drop_pending_async_tasks_on_shutdown(&receiver);
+                release_pending_slot(pending.as_ref());
+                drop_pending_async_tasks_on_shutdown(&receiver, pending.as_ref());
                 break;
             }
 
@@ -1587,6 +1687,7 @@ fn spawn_async_delivery_worker(key: AsyncWorkerKey, receiver: mpsc::Receiver<Asy
                     }),
                 ),
             }
+            release_pending_slot(pending.as_ref());
         }
         if let Ok(mut workers) = async_delivery_registry().workers.lock() {
             workers.remove(&key);
@@ -1594,9 +1695,13 @@ fn spawn_async_delivery_worker(key: AsyncWorkerKey, receiver: mpsc::Receiver<Asy
     });
 }
 
-fn drop_pending_async_tasks_on_shutdown(receiver: &mpsc::Receiver<AsyncDeliveryTask>) {
+fn drop_pending_async_tasks_on_shutdown(
+    receiver: &mpsc::Receiver<AsyncDeliveryTask>,
+    pending: &AtomicUsize,
+) {
     while let Ok(task) = receiver.try_recv() {
         emit_async_shutdown_drop(&task);
+        release_pending_slot(pending);
     }
 }
 

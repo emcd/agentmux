@@ -213,6 +213,30 @@ fn dispatch_send(
     tmux_socket: &Path,
     acp_turn_timeout_ms: Option<u64>,
 ) -> RelayResponse {
+    dispatch_send_with_mode(
+        config_root,
+        tmux_socket,
+        acp_turn_timeout_ms,
+        ChatDeliveryMode::Sync,
+    )
+}
+
+fn dispatch_send_with_mode(
+    config_root: &Path,
+    tmux_socket: &Path,
+    acp_turn_timeout_ms: Option<u64>,
+    delivery_mode: ChatDeliveryMode,
+) -> RelayResponse {
+    dispatch_send_with_mode_result(config_root, tmux_socket, acp_turn_timeout_ms, delivery_mode)
+        .expect("relay request should parse")
+}
+
+fn dispatch_send_with_mode_result(
+    config_root: &Path,
+    tmux_socket: &Path,
+    acp_turn_timeout_ms: Option<u64>,
+    delivery_mode: ChatDeliveryMode,
+) -> Result<RelayResponse, agentmux::relay::RelayError> {
     handle_request(
         RelayRequest::Chat {
             request_id: Some("req-acp".to_string()),
@@ -220,7 +244,7 @@ fn dispatch_send(
             message: "status?".to_string(),
             targets: vec!["bravo".to_string()],
             broadcast: false,
-            delivery_mode: ChatDeliveryMode::Sync,
+            delivery_mode,
             quiet_window_ms: Some(50),
             quiescence_timeout_ms: None,
             acp_turn_timeout_ms,
@@ -229,7 +253,6 @@ fn dispatch_send(
         "party",
         tmux_socket,
     )
-    .expect("relay request should parse")
 }
 
 fn dispatch_look(
@@ -789,6 +812,51 @@ fn acp_worker_state_transitions_to_unavailable_on_prompt_failure() {
         read_worker_state(temporary.path(), "bravo").as_deref(),
         Some("unavailable")
     );
+}
+
+#[test]
+fn acp_async_queue_overflow_returns_runtime_queue_full() {
+    let temporary = TempDir::new().expect("temporary");
+    let options = AcpStubOptions {
+        prompt_delay_sec: 1,
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    let mut overflow_response = None::<RelayResponse>;
+    for _ in 0..70 {
+        let response = dispatch_send_with_mode_result(
+            &config_root,
+            &tmux_socket,
+            Some(2_000),
+            ChatDeliveryMode::Async,
+        );
+        match response {
+            Ok(response) => {
+                if let RelayResponse::Error { error } = &response
+                    && error.code == "runtime_acp_queue_full"
+                {
+                    overflow_response = Some(response);
+                    break;
+                }
+            }
+            Err(error) => {
+                if error.code == "runtime_acp_queue_full" {
+                    overflow_response = Some(RelayResponse::Error { error });
+                    break;
+                }
+            }
+        }
+    }
+
+    let Some(RelayResponse::Error { error }) = overflow_response else {
+        panic!("expected at least one runtime_acp_queue_full overflow response");
+    };
+    assert_eq!(error.code, "runtime_acp_queue_full");
+    let details = error.details.expect("overflow details");
+    assert_eq!(details["target_session"], "bravo");
+    assert_eq!(details["max_pending"], 64);
 }
 
 #[test]
