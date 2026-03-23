@@ -56,6 +56,7 @@ const ACP_SESSION_STATE_FILE: &str = "state.json";
 const ACP_LOOK_SNAPSHOT_MAX_LINES: usize = 1000;
 const ACP_REASON_CODE_TURN_TIMEOUT: &str = "acp_turn_timeout";
 const ACP_REASON_CODE_STOP_CANCELLED: &str = "acp_stop_cancelled";
+const ACP_DELIVERY_PHASE_ACCEPTED_IN_PROGRESS: &str = "accepted_in_progress";
 const ACP_ERROR_CODE_INITIALIZE_FAILED: &str = "runtime_acp_initialize_failed";
 const ACP_ERROR_CODE_MISSING_CAPABILITY: &str = "validation_missing_acp_capability";
 
@@ -83,6 +84,18 @@ enum AcpLifecycleSelection {
 struct AcpCapabilities {
     load_session: bool,
     prompt_session: bool,
+}
+
+#[derive(Debug)]
+struct AcpPromptCompletion {
+    stop_reason: String,
+    first_activity_observed: bool,
+}
+
+#[derive(Debug)]
+struct AcpRequestResult {
+    result: Value,
+    first_activity_observed: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -557,6 +570,19 @@ fn delivered_result(target_session: String, message_id: String) -> ChatResult {
     }
 }
 
+fn delivered_in_progress_result(target_session: String, message_id: String) -> ChatResult {
+    ChatResult {
+        target_session,
+        message_id,
+        outcome: ChatOutcome::Delivered,
+        reason_code: None,
+        reason: None,
+        details: Some(json!({
+            "delivery_phase": ACP_DELIVERY_PHASE_ACCEPTED_IN_PROGRESS,
+        })),
+    }
+}
+
 fn failed_result(
     target_session: String,
     message_id: String,
@@ -772,6 +798,7 @@ fn deliver_one_target_acp(
     }
 
     let turn_timeout = Some(task.quiescence.acp_turn_timeout(acp));
+    let mut first_activity_observed = false;
     for prompt in prompt_batches {
         let prompt_result = client.prompt(session_id.as_str(), prompt.as_str(), turn_timeout);
         let prompt_snapshot_lines = client.take_snapshot_lines();
@@ -788,25 +815,31 @@ fn deliver_one_target_acp(
             );
         }
         match prompt_result {
-            Ok(stop_reason) => match stop_reason.as_str() {
-                "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" => {}
-                "cancelled" => {
-                    return failed_result_with_code(
-                        target_session,
-                        message_id,
-                        ACP_REASON_CODE_STOP_CANCELLED,
-                        "ACP turn completed with stopReason=cancelled",
-                        None,
-                    );
+            Ok(prompt_completion) => {
+                first_activity_observed |= prompt_completion.first_activity_observed;
+                match prompt_completion.stop_reason.as_str() {
+                    "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" => {}
+                    "cancelled" => {
+                        return failed_result_with_code(
+                            target_session,
+                            message_id,
+                            ACP_REASON_CODE_STOP_CANCELLED,
+                            "ACP turn completed with stopReason=cancelled",
+                            None,
+                        );
+                    }
+                    _ => {
+                        return failed_result(
+                            target_session,
+                            message_id,
+                            format!(
+                                "ACP returned unsupported stopReason '{}'",
+                                prompt_completion.stop_reason
+                            ),
+                        );
+                    }
                 }
-                _ => {
-                    return failed_result(
-                        target_session,
-                        message_id,
-                        format!("ACP returned unsupported stopReason '{stop_reason}'"),
-                    );
-                }
-            },
+            }
             Err(AcpRequestError::Timeout(timeout)) => {
                 return timeout_result(
                     target_session,
@@ -828,7 +861,11 @@ fn deliver_one_target_acp(
         }
     }
 
-    delivered_result(target_session, message_id)
+    if first_activity_observed {
+        delivered_in_progress_result(target_session, message_id)
+    } else {
+        delivered_result(target_session, message_id)
+    }
 }
 
 fn resolve_acp_session_state_path(
@@ -1041,7 +1078,9 @@ impl AcpStdioClient {
             }),
             None,
             None,
+            false,
         )
+        .map(|value| value.result)
         .map_err(|error| match error {
             AcpRequestError::Failed(reason) => reason,
             AcpRequestError::Timeout(timeout) => {
@@ -1060,7 +1099,9 @@ impl AcpStdioClient {
                 }),
                 None,
                 None,
+                false,
             )
+            .map(|value| value.result)
             .map_err(|error| match error {
                 AcpRequestError::Failed(reason) => reason,
                 AcpRequestError::Timeout(timeout) => {
@@ -1085,7 +1126,9 @@ impl AcpStdioClient {
                 }),
                 None,
                 None,
+                false,
             )
+            .map(|value| value.result)
             .map_err(|error| match error {
                 AcpRequestError::Failed(reason) => reason,
                 AcpRequestError::Timeout(timeout) => {
@@ -1100,7 +1143,7 @@ impl AcpStdioClient {
         session_id: &str,
         prompt: &str,
         timeout: Option<Duration>,
-    ) -> Result<String, AcpRequestError> {
+    ) -> Result<AcpPromptCompletion, AcpRequestError> {
         let result = self.request(
             "session/prompt",
             json!({
@@ -1114,11 +1157,16 @@ impl AcpStdioClient {
             }),
             timeout,
             Some(session_id),
+            true,
         )?;
         result
+            .result
             .get("stopReason")
             .and_then(Value::as_str)
-            .map(ToString::to_string)
+            .map(|stop_reason| AcpPromptCompletion {
+                stop_reason: stop_reason.to_string(),
+                first_activity_observed: result.first_activity_observed,
+            })
             .ok_or_else(|| {
                 AcpRequestError::Failed(
                     "ACP session/prompt response missing result.stopReason".to_string(),
@@ -1136,7 +1184,8 @@ impl AcpStdioClient {
         params: Value,
         timeout: Option<Duration>,
         prompt_session_id: Option<&str>,
-    ) -> Result<Value, AcpRequestError> {
+        response_counts_as_activity: bool,
+    ) -> Result<AcpRequestResult, AcpRequestError> {
         let request_id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
         let message = serde_json::to_string(&json!({
@@ -1156,8 +1205,10 @@ impl AcpStdioClient {
                 AcpRequestError::Failed(format!("write ACP request failed: {source}"))
             })?;
 
+        let mut first_activity_observed = false;
+        let mut read_timeout = timeout;
         loop {
-            let line = self.read_response_line(timeout)?;
+            let line = self.read_response_line(read_timeout)?;
             let trimmed = line.trim();
             if trimmed.is_empty() {
                 continue;
@@ -1166,28 +1217,40 @@ impl AcpStdioClient {
                 AcpRequestError::Failed(format!("parse ACP response failed: {source}"))
             })?;
             if decoded.get("id") != Some(&json!(request_id)) {
-                self.capture_update_snapshot_lines(&decoded, prompt_session_id);
+                if self.capture_update_snapshot_lines(&decoded, prompt_session_id) {
+                    first_activity_observed = true;
+                    // First activity means the envelope is accepted; timeout now
+                    // applies to pre-accept only in the two-phase sync model.
+                    read_timeout = None;
+                }
                 continue;
             }
             if let Some(error) = decoded.get("error") {
                 return Err(AcpRequestError::Failed(error.to_string()));
             }
-            return Ok(decoded.get("result").cloned().unwrap_or(Value::Null));
+            if response_counts_as_activity {
+                first_activity_observed = true;
+            }
+            return Ok(AcpRequestResult {
+                result: decoded.get("result").cloned().unwrap_or(Value::Null),
+                first_activity_observed,
+            });
         }
     }
 
-    fn capture_update_snapshot_lines(&mut self, value: &Value, session_id: Option<&str>) {
+    fn capture_update_snapshot_lines(&mut self, value: &Value, session_id: Option<&str>) -> bool {
         if value.get("method").and_then(Value::as_str) != Some("session/update") {
-            return;
+            return false;
         }
         let params = value.get("params").unwrap_or(&Value::Null);
         if let Some(expected_session_id) = session_id
             && let Some(observed_session_id) = params.get("sessionId").and_then(Value::as_str)
             && observed_session_id != expected_session_id
         {
-            return;
+            return false;
         }
         collect_text_lines_from_value(params, &mut self.snapshot_line_buffer);
+        true
     }
 
     fn read_response_line(&mut self, timeout: Option<Duration>) -> Result<String, AcpRequestError> {

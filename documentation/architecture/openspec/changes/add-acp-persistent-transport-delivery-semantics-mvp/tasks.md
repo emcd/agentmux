@@ -6,7 +6,7 @@
       - precedence: request > coder default > system default
       - reject transport-incompatible timeout fields with canonical codes
       - reject conflicting timeout fields (`validation_conflicting_timeout_fields`)
-- [ ] 1.2 Implement two-phase ACP sync send semantics:
+- [x] 1.2 Implement two-phase ACP sync send semantics:
       - mark early success on first ACP activity
       - return `details.delivery_phase = accepted_in_progress`
       - preserve existing status aggregation behavior
@@ -33,7 +33,7 @@
 ## 2. Testing
 
 - [x] 2.1 Unit tests for timeout precedence and field-validation failures.
-- [ ] 2.2 Integration tests for sync ACP first-activity acknowledgment semantics.
+- [x] 2.2 Integration tests for sync ACP first-activity acknowledgment semantics.
 - [ ] 2.3 Integration tests for ACP worker readiness-state transitions
       (`available` <-> `busy` and failure to `unavailable`).
 - [ ] 2.4 Integration tests for persistent worker queue bound and overflow code.

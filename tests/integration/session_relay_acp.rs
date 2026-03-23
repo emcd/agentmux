@@ -592,7 +592,7 @@ fn acp_turn_timeout_request_override_takes_precedence_over_coder_default() {
 }
 
 #[test]
-fn acp_successful_terminal_stop_reason_has_no_reason_code() {
+fn acp_successful_terminal_stop_reason_marks_accepted_in_progress_phase() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions::default();
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
@@ -606,7 +606,36 @@ fn acp_successful_terminal_stop_reason_has_no_reason_code() {
     assert_eq!(result.outcome, ChatOutcome::Delivered);
     assert_eq!(result.reason_code, None);
     assert_eq!(result.reason, None);
-    assert_eq!(result.details, None);
+    assert_eq!(
+        result
+            .details
+            .as_ref()
+            .and_then(|value| value.get("delivery_phase")),
+        Some(&Value::String("accepted_in_progress".to_string()))
+    );
+}
+
+#[test]
+fn acp_first_activity_acceptance_prevents_late_turn_timeout_failure() {
+    let temporary = TempDir::new().expect("temporary");
+    let options = AcpStubOptions {
+        prompt_delay_sec: 1,
+        update_count: 1,
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"), Some(100));
+    let (status, result) = chat_result(response);
+    assert_eq!(status, ChatStatus::Success);
+    assert_eq!(result.outcome, ChatOutcome::Delivered);
+    assert_eq!(result.reason_code, None);
+    assert_eq!(
+        result
+            .details
+            .as_ref()
+            .and_then(|value| value.get("delivery_phase")),
+        Some(&Value::String("accepted_in_progress".to_string()))
+    );
 }
 
 #[test]
