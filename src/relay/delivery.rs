@@ -58,6 +58,9 @@ const ACP_REASON_CODE_TURN_TIMEOUT: &str = "acp_turn_timeout";
 const ACP_REASON_CODE_STOP_CANCELLED: &str = "acp_stop_cancelled";
 const ACP_DELIVERY_PHASE_ACCEPTED_IN_PROGRESS: &str = "accepted_in_progress";
 const ACP_ERROR_CODE_INITIALIZE_FAILED: &str = "runtime_acp_initialize_failed";
+const ACP_ERROR_CODE_SESSION_LOAD_FAILED: &str = "runtime_acp_session_load_failed";
+const ACP_ERROR_CODE_SESSION_NEW_FAILED: &str = "runtime_acp_session_new_failed";
+const ACP_ERROR_CODE_PROMPT_FAILED: &str = "runtime_acp_prompt_failed";
 const ACP_ERROR_CODE_MISSING_CAPABILITY: &str = "validation_missing_acp_capability";
 
 #[derive(Debug)]
@@ -751,10 +754,16 @@ fn deliver_one_target_acp(
             if let Err(reason) =
                 client.load_session(lifecycle_session_id.as_str(), working_directory)
             {
-                return failed_result(
+                return failed_result_with_code(
                     target_session,
                     message_id,
-                    format!("ACP session/load failed: {reason}"),
+                    ACP_ERROR_CODE_SESSION_LOAD_FAILED,
+                    "ACP session/load failed",
+                    Some(json!({
+                        "target_session": target_member.id,
+                        "session_id": lifecycle_session_id,
+                        "reason": reason,
+                    })),
                 );
             }
             lifecycle_session_id
@@ -762,10 +771,15 @@ fn deliver_one_target_acp(
         AcpLifecycleSelection::NewSession => match client.new_session(working_directory) {
             Ok(value) => value,
             Err(reason) => {
-                return failed_result(
+                return failed_result_with_code(
                     target_session,
                     message_id,
-                    format!("ACP session/new failed: {reason}"),
+                    ACP_ERROR_CODE_SESSION_NEW_FAILED,
+                    "ACP session/new failed",
+                    Some(json!({
+                        "target_session": target_member.id,
+                        "reason": reason,
+                    })),
                 );
             }
         },
@@ -852,10 +866,15 @@ fn deliver_one_target_acp(
                 );
             }
             Err(AcpRequestError::Failed(reason)) => {
-                return failed_result(
+                return failed_result_with_code(
                     target_session,
                     message_id,
-                    format!("ACP session/prompt failed: {reason}"),
+                    ACP_ERROR_CODE_PROMPT_FAILED,
+                    "ACP session/prompt failed",
+                    Some(json!({
+                        "target_session": target_member.id,
+                        "reason": reason,
+                    })),
                 );
             }
         }

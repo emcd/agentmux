@@ -14,6 +14,8 @@ use tempfile::TempDir;
 struct AcpStubOptions {
     fail_initialize: bool,
     fail_load: bool,
+    fail_new: bool,
+    fail_prompt: bool,
     load_capability: bool,
     prompt_capability: bool,
     stop_reason: String,
@@ -28,6 +30,8 @@ impl Default for AcpStubOptions {
         Self {
             fail_initialize: false,
             fail_load: false,
+            fail_new: false,
+            fail_prompt: false,
             load_capability: true,
             prompt_capability: true,
             stop_reason: "end_turn".to_string(),
@@ -46,6 +50,8 @@ set -eu
 log_file="${ACP_LOG_FILE:?}"
 fail_initialize="${FAIL_INITIALIZE:-0}"
 fail_load="${FAIL_LOAD:-0}"
+fail_new="${FAIL_NEW:-0}"
+fail_prompt="${FAIL_PROMPT:-0}"
 load_capability="${LOAD_CAPABILITY:-true}"
 prompt_capability="${PROMPT_CAPABILITY:-true}"
 stop_reason="${STOP_REASON:-end_turn}"
@@ -76,9 +82,17 @@ while IFS= read -r line; do
       fi
       ;;
     *'"method":"session/new"'*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"%s"}}\n' "$id" "$new_session_id"
+      if [ "$fail_new" = "1" ]; then
+        printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32002,"message":"new failed"}}\n' "$id"
+      else
+        printf '{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"%s"}}\n' "$id" "$new_session_id"
+      fi
       ;;
     *'"method":"session/prompt"'*)
+      if [ "$fail_prompt" = "1" ]; then
+        printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32003,"message":"prompt failed"}}\n' "$id"
+        continue
+      fi
       prompt_session_id=$(printf '%s\n' "$line" | sed -n 's/.*"sessionId":"\([^"]*\)".*/\1/p')
       if [ -z "$prompt_session_id" ]; then
         prompt_session_id="$new_session_id"
@@ -116,10 +130,12 @@ fn write_configuration(root: &Path, options: &AcpStubOptions) -> (PathBuf, PathB
     let log_path = root.join("acp_requests.log");
     write_acp_stub(&script_path);
     let command = format!(
-        "ACP_LOG_FILE={} FAIL_INITIALIZE={} FAIL_LOAD={} LOAD_CAPABILITY={} PROMPT_CAPABILITY={} STOP_REASON={} PROMPT_DELAY_SEC={} UPDATE_COUNT={} NEW_SESSION_ID=sess-generated {}",
+        "ACP_LOG_FILE={} FAIL_INITIALIZE={} FAIL_LOAD={} FAIL_NEW={} FAIL_PROMPT={} LOAD_CAPABILITY={} PROMPT_CAPABILITY={} STOP_REASON={} PROMPT_DELAY_SEC={} UPDATE_COUNT={} NEW_SESSION_ID=sess-generated {}",
         log_path.display(),
         if options.fail_initialize { "1" } else { "0" },
         if options.fail_load { "1" } else { "0" },
+        if options.fail_new { "1" } else { "0" },
+        if options.fail_prompt { "1" } else { "0" },
         as_json_boolean(options.load_capability),
         as_json_boolean(options.prompt_capability),
         options.stop_reason,
@@ -441,9 +457,35 @@ fn acp_load_failure_does_not_fallback_to_session_new() {
     let (status, result) = chat_result(response);
     assert_eq!(status, ChatStatus::Failure);
     assert_eq!(result.outcome, ChatOutcome::Failed);
+    assert_eq!(
+        result.reason_code.as_deref(),
+        Some("runtime_acp_session_load_failed")
+    );
     let log = fs::read_to_string(log_path).expect("read ACP log");
     assert!(log.contains("\"method\":\"session/load\""), "log={log}");
     assert!(!log.contains("\"method\":\"session/new\""), "log={log}");
+}
+
+#[test]
+fn acp_new_failure_returns_runtime_stage_code() {
+    let temporary = TempDir::new().expect("temporary");
+    let options = AcpStubOptions {
+        fail_new: true,
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let response = dispatch_send(
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+        Some(1_000),
+    );
+    let (status, result) = chat_result(response);
+    assert_eq!(status, ChatStatus::Failure);
+    assert_eq!(result.outcome, ChatOutcome::Failed);
+    assert_eq!(
+        result.reason_code.as_deref(),
+        Some("runtime_acp_session_new_failed")
+    );
 }
 
 #[test]
@@ -523,6 +565,28 @@ fn acp_initialize_failure_returns_canonical_runtime_code() {
     );
     let details = result.details.expect("initialize details");
     assert_eq!(details["target_session"], "bravo");
+}
+
+#[test]
+fn acp_prompt_failure_returns_runtime_stage_code() {
+    let temporary = TempDir::new().expect("temporary");
+    let options = AcpStubOptions {
+        fail_prompt: true,
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let response = dispatch_send(
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+        Some(1_000),
+    );
+    let (status, result) = chat_result(response);
+    assert_eq!(status, ChatStatus::Failure);
+    assert_eq!(result.outcome, ChatOutcome::Failed);
+    assert_eq!(
+        result.reason_code.as_deref(),
+        Some("runtime_acp_prompt_failed")
+    );
 }
 
 #[test]
