@@ -73,8 +73,22 @@ enum AcpRequestError {
 struct PersistedAcpSessionState {
     schema_version: u32,
     acp_session_id: String,
+    #[serde(default = "default_acp_worker_readiness_state")]
+    worker_state: AcpWorkerReadinessState,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     snapshot_lines: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum AcpWorkerReadinessState {
+    Available,
+    Busy,
+    Unavailable,
+}
+
+fn default_acp_worker_readiness_state() -> AcpWorkerReadinessState {
+    AcpWorkerReadinessState::Available
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -649,6 +663,7 @@ fn deliver_one_target_acp(
             "ACP target is missing working directory",
         );
     };
+    let runtime_socket_path = task.tmux_socket.as_path();
 
     let mut client = match acp.channel {
         crate::configuration::AcpChannel::Stdio => {
@@ -676,6 +691,12 @@ fn deliver_one_target_acp(
     let initialize_result = match client.initialize() {
         Ok(value) => value,
         Err(reason) => {
+            let _ = persist_acp_worker_state(
+                runtime_socket_path,
+                target_member.id.as_str(),
+                None,
+                AcpWorkerReadinessState::Unavailable,
+            );
             return failed_result_with_code(
                 target_session,
                 message_id,
@@ -709,8 +730,6 @@ fn deliver_one_target_acp(
             })
             .unwrap_or(false),
     };
-
-    let runtime_socket_path = task.tmux_socket.as_path();
 
     let persisted_session_id = if target_member.coder_session_id.is_some() {
         None
@@ -754,6 +773,12 @@ fn deliver_one_target_acp(
             if let Err(reason) =
                 client.load_session(lifecycle_session_id.as_str(), working_directory)
             {
+                let _ = persist_acp_worker_state(
+                    runtime_socket_path,
+                    target_member.id.as_str(),
+                    Some(lifecycle_session_id.as_str()),
+                    AcpWorkerReadinessState::Unavailable,
+                );
                 return failed_result_with_code(
                     target_session,
                     message_id,
@@ -771,6 +796,12 @@ fn deliver_one_target_acp(
         AcpLifecycleSelection::NewSession => match client.new_session(working_directory) {
             Ok(value) => value,
             Err(reason) => {
+                let _ = persist_acp_worker_state(
+                    runtime_socket_path,
+                    target_member.id.as_str(),
+                    None,
+                    AcpWorkerReadinessState::Unavailable,
+                );
                 return failed_result_with_code(
                     target_session,
                     message_id,
@@ -814,7 +845,24 @@ fn deliver_one_target_acp(
     let turn_timeout = Some(task.quiescence.acp_turn_timeout(acp));
     let mut first_activity_observed = false;
     for prompt in prompt_batches {
-        let prompt_result = client.prompt(session_id.as_str(), prompt.as_str(), turn_timeout);
+        let mut on_first_activity = || {
+            if first_activity_observed {
+                return;
+            }
+            first_activity_observed = true;
+            let _ = persist_acp_worker_state(
+                runtime_socket_path,
+                target_member.id.as_str(),
+                Some(session_id.as_str()),
+                AcpWorkerReadinessState::Busy,
+            );
+        };
+        let prompt_result = client.prompt(
+            session_id.as_str(),
+            prompt.as_str(),
+            turn_timeout,
+            Some(&mut on_first_activity),
+        );
         let prompt_snapshot_lines = client.take_snapshot_lines();
         if let Err(reason) = persist_acp_snapshot_lines(
             runtime_socket_path,
@@ -831,6 +879,18 @@ fn deliver_one_target_acp(
         match prompt_result {
             Ok(prompt_completion) => {
                 first_activity_observed |= prompt_completion.first_activity_observed;
+                if let Err(reason) = persist_acp_worker_state(
+                    runtime_socket_path,
+                    target_member.id.as_str(),
+                    Some(session_id.as_str()),
+                    AcpWorkerReadinessState::Available,
+                ) {
+                    return failed_result(
+                        target_session,
+                        message_id,
+                        format!("failed to persist ACP worker state: {reason}"),
+                    );
+                }
                 match prompt_completion.stop_reason.as_str() {
                     "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" => {}
                     "cancelled" => {
@@ -855,6 +915,12 @@ fn deliver_one_target_acp(
                 }
             }
             Err(AcpRequestError::Timeout(timeout)) => {
+                let _ = persist_acp_worker_state(
+                    runtime_socket_path,
+                    target_member.id.as_str(),
+                    Some(session_id.as_str()),
+                    AcpWorkerReadinessState::Unavailable,
+                );
                 return timeout_result(
                     target_session,
                     message_id,
@@ -866,6 +932,12 @@ fn deliver_one_target_acp(
                 );
             }
             Err(AcpRequestError::Failed(reason)) => {
+                let _ = persist_acp_worker_state(
+                    runtime_socket_path,
+                    target_member.id.as_str(),
+                    Some(session_id.as_str()),
+                    AcpWorkerReadinessState::Unavailable,
+                );
                 return failed_result_with_code(
                     target_session,
                     message_id,
@@ -946,6 +1018,38 @@ fn persist_acp_session_id(
     persist_acp_snapshot_lines(runtime_socket_path, target_session, session_id, &[])
 }
 
+fn persist_acp_worker_state(
+    runtime_socket_path: &Path,
+    target_session: &str,
+    session_id: Option<&str>,
+    worker_state: AcpWorkerReadinessState,
+) -> Result<(), String> {
+    let path = resolve_acp_session_state_path(runtime_socket_path, target_session)?;
+    let _guard = acp_session_state_lock()
+        .lock()
+        .map_err(|_| "failed to lock ACP session state".to_string())?;
+    let mut state = match load_persisted_acp_session_state(path.as_path())? {
+        Some(value) => value,
+        None => {
+            let Some(session_id) = session_id else {
+                return Ok(());
+            };
+            PersistedAcpSessionState {
+                schema_version: ACP_SESSION_STATE_SCHEMA_VERSION,
+                acp_session_id: session_id.to_string(),
+                worker_state: AcpWorkerReadinessState::Available,
+                snapshot_lines: Vec::new(),
+            }
+        }
+    };
+    if let Some(session_id) = session_id {
+        state.acp_session_id = session_id.to_string();
+    }
+    state.schema_version = ACP_SESSION_STATE_SCHEMA_VERSION;
+    state.worker_state = worker_state;
+    store_persisted_acp_session_state(path.as_path(), &state)
+}
+
 fn persist_acp_snapshot_lines(
     runtime_socket_path: &Path,
     target_session: &str,
@@ -960,6 +1064,7 @@ fn persist_acp_snapshot_lines(
         load_persisted_acp_session_state(path.as_path())?.unwrap_or(PersistedAcpSessionState {
             schema_version: ACP_SESSION_STATE_SCHEMA_VERSION,
             acp_session_id: session_id.to_string(),
+            worker_state: AcpWorkerReadinessState::Available,
             snapshot_lines: Vec::new(),
         });
     state.schema_version = ACP_SESSION_STATE_SCHEMA_VERSION;
@@ -1098,6 +1203,7 @@ impl AcpStdioClient {
             None,
             None,
             false,
+            None,
         )
         .map(|value| value.result)
         .map_err(|error| match error {
@@ -1119,6 +1225,7 @@ impl AcpStdioClient {
                 None,
                 None,
                 false,
+                None,
             )
             .map(|value| value.result)
             .map_err(|error| match error {
@@ -1146,6 +1253,7 @@ impl AcpStdioClient {
                 None,
                 None,
                 false,
+                None,
             )
             .map(|value| value.result)
             .map_err(|error| match error {
@@ -1162,6 +1270,7 @@ impl AcpStdioClient {
         session_id: &str,
         prompt: &str,
         timeout: Option<Duration>,
+        on_first_activity: Option<&mut dyn FnMut()>,
     ) -> Result<AcpPromptCompletion, AcpRequestError> {
         let result = self.request(
             "session/prompt",
@@ -1177,6 +1286,7 @@ impl AcpStdioClient {
             timeout,
             Some(session_id),
             true,
+            on_first_activity,
         )?;
         result
             .result
@@ -1204,6 +1314,7 @@ impl AcpStdioClient {
         timeout: Option<Duration>,
         prompt_session_id: Option<&str>,
         response_counts_as_activity: bool,
+        mut on_first_activity: Option<&mut dyn FnMut()>,
     ) -> Result<AcpRequestResult, AcpRequestError> {
         let request_id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
@@ -1236,19 +1347,27 @@ impl AcpStdioClient {
                 AcpRequestError::Failed(format!("parse ACP response failed: {source}"))
             })?;
             if decoded.get("id") != Some(&json!(request_id)) {
-                if self.capture_update_snapshot_lines(&decoded, prompt_session_id) {
+                if self.capture_update_snapshot_lines(&decoded, prompt_session_id)
+                    && !first_activity_observed
+                {
                     first_activity_observed = true;
                     // First activity means the envelope is accepted; timeout now
                     // applies to pre-accept only in the two-phase sync model.
                     read_timeout = None;
+                    if let Some(callback) = on_first_activity.as_deref_mut() {
+                        callback();
+                    }
                 }
                 continue;
             }
             if let Some(error) = decoded.get("error") {
                 return Err(AcpRequestError::Failed(error.to_string()));
             }
-            if response_counts_as_activity {
+            if response_counts_as_activity && !first_activity_observed {
                 first_activity_observed = true;
+                if let Some(callback) = on_first_activity.as_deref_mut() {
+                    callback();
+                }
             }
             return Ok(AcpRequestResult {
                 result: decoded.get("result").cloned().unwrap_or(Value::Null),

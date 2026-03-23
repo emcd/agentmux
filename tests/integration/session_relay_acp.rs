@@ -2,6 +2,8 @@ use std::{
     fs,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
+    thread,
+    time::{Duration, Instant},
 };
 
 use agentmux::relay::{
@@ -267,6 +269,26 @@ fn request_by_method<'a>(requests: &'a [Value], method: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("missing ACP request for method '{method}'"))
 }
 
+fn persisted_state_path(root: &Path, target_session: &str) -> PathBuf {
+    root.join("sessions")
+        .join(target_session)
+        .join("state.json")
+}
+
+fn read_worker_state(root: &Path, target_session: &str) -> Option<String> {
+    let path = persisted_state_path(root, target_session);
+    if !path.exists() {
+        return None;
+    }
+    let value: Value =
+        serde_json::from_str(fs::read_to_string(path).expect("read state json").as_str())
+            .expect("parse state json");
+    value
+        .get("worker_state")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+}
+
 fn chat_result(response: RelayResponse) -> (ChatStatus, agentmux::relay::ChatResult) {
     let RelayResponse::Chat {
         status, results, ..
@@ -292,11 +314,7 @@ fn acp_send_selects_session_new_without_coder_session_id() {
     assert_eq!(status, ChatStatus::Success);
     assert_eq!(result.outcome, ChatOutcome::Delivered);
 
-    let state_path = temporary
-        .path()
-        .join("sessions")
-        .join("bravo")
-        .join("state.json");
+    let state_path = persisted_state_path(temporary.path(), "bravo");
     assert!(
         state_path.is_file(),
         "missing state file: {}",
@@ -699,6 +717,77 @@ fn acp_first_activity_acceptance_prevents_late_turn_timeout_failure() {
             .as_ref()
             .and_then(|value| value.get("delivery_phase")),
         Some(&Value::String("accepted_in_progress".to_string()))
+    );
+}
+
+#[test]
+fn acp_worker_state_transitions_busy_then_available() {
+    let temporary = TempDir::new().expect("temporary");
+    let options = AcpStubOptions {
+        prompt_delay_sec: 1,
+        update_count: 1,
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    let config_root_for_thread = config_root.clone();
+    let tmux_socket_for_thread = tmux_socket.clone();
+    let handle = thread::spawn(move || {
+        dispatch_send(
+            &config_root_for_thread,
+            &tmux_socket_for_thread,
+            Some(2_000),
+        )
+    });
+
+    let deadline = Instant::now() + Duration::from_millis(800);
+    let mut observed_busy = false;
+    while Instant::now() < deadline {
+        if read_worker_state(temporary.path(), "bravo").as_deref() == Some("busy") {
+            observed_busy = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        observed_busy,
+        "expected worker_state=busy before completion"
+    );
+
+    let response = handle.join().expect("join send thread");
+    let (status, result) = chat_result(response);
+    assert_eq!(status, ChatStatus::Success);
+    assert_eq!(result.outcome, ChatOutcome::Delivered);
+    assert_eq!(
+        read_worker_state(temporary.path(), "bravo").as_deref(),
+        Some("available")
+    );
+}
+
+#[test]
+fn acp_worker_state_transitions_to_unavailable_on_prompt_failure() {
+    let temporary = TempDir::new().expect("temporary");
+    let options = AcpStubOptions {
+        fail_prompt: true,
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let response = dispatch_send(
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+        Some(1_000),
+    );
+    let (status, result) = chat_result(response);
+    assert_eq!(status, ChatStatus::Failure);
+    assert_eq!(result.outcome, ChatOutcome::Failed);
+    assert_eq!(
+        result.reason_code.as_deref(),
+        Some("runtime_acp_prompt_failed")
+    );
+    assert_eq!(
+        read_worker_state(temporary.path(), "bravo").as_deref(),
+        Some("unavailable")
     );
 }
 

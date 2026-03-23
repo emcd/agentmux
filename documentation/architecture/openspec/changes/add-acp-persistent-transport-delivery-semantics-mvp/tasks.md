@@ -10,7 +10,7 @@
       - mark early success on first ACP activity
       - return `details.delivery_phase = accepted_in_progress`
       - preserve existing status aggregation behavior
-- [ ] 1.3 Implement internal ACP readiness-state transitions:
+- [x] 1.3 Implement internal ACP readiness-state transitions:
       - set worker `busy` when first ACP activity is observed
       - set worker `available` when terminal stopReason is observed
       - set worker `unavailable` on disconnect/error requiring restart
@@ -34,7 +34,7 @@
 
 - [x] 2.1 Unit tests for timeout precedence and field-validation failures.
 - [x] 2.2 Integration tests for sync ACP first-activity acknowledgment semantics.
-- [ ] 2.3 Integration tests for ACP worker readiness-state transitions
+- [x] 2.3 Integration tests for ACP worker readiness-state transitions
       (`available` <-> `busy` and failure to `unavailable`).
 - [ ] 2.4 Integration tests for persistent worker queue bound and overflow code.
 - [ ] 2.5 Integration tests for worker disconnect/restart behavior before and
