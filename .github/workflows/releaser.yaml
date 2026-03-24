@@ -1,0 +1,331 @@
+name: release
+
+on:
+  push:
+    tags: ['v[0-9]+.*']
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: 'Skip actual publishing (test build only)'
+        required: false
+        type: boolean
+        default: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+
+  initialize:
+    uses: ./.github/workflows/core--initializer.yaml
+
+  test:
+    needs: [initialize]
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(needs.initialize.outputs.platforms) }}
+        exclude: ${{ fromJSON(needs.initialize.outputs.matrix-exclusions) }}
+    runs-on: ${{ matrix.platform }}
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check Formatting
+        if: matrix.platform == 'ubuntu-latest'
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        if: matrix.platform == 'ubuntu-latest'
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Test
+        run: cargo test --release
+
+  build-binaries:
+    needs: [initialize, test]
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(needs.initialize.outputs.platforms) }}
+        exclude: ${{ fromJSON(needs.initialize.outputs.matrix-exclusions) }}
+    runs-on: ${{ matrix.platform }}
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Release Binary
+        run: cargo build --release
+
+      - name: Determine Binary Name
+        id: binary
+        shell: bash
+        run: |
+          target="${{ fromJSON(needs.initialize.outputs.rust-targets)[matrix.platform] }}"
+          if [[ "${{ matrix.platform }}" == "windows-latest" ]]; then
+            binary_name="agentmux-${target}.exe"
+            cp target/release/agentmux.exe "${binary_name}"
+          else
+            binary_name="agentmux-${target}"
+            cp target/release/agentmux "${binary_name}"
+          fi
+          echo "name=${binary_name}" >>${GITHUB_OUTPUT}
+
+      - name: Upload Binary Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.platform }}
+          path: ${{ steps.binary.outputs.name }}
+
+  # build-mcpb:
+  #   needs: [initialize, build-binaries]
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       platform: ${{ fromJSON(needs.initialize.outputs.platforms) }}
+  #       exclude: ${{ fromJSON(needs.initialize.outputs.matrix-exclusions) }}
+  #   runs-on: ${{ matrix.platform }}
+  #   steps:
+  #
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
+  #
+  #     - name: Download Binary Artifact
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: binary-${{ matrix.platform }}
+  #         path: artifacts
+  #
+  #     - name: Install Node.js
+  #       uses: actions/setup-node@v4
+  #       with:
+  #         node-version: '20'
+  #
+  #     - name: Install MCPB CLI
+  #       run: npm install --global @anthropic-ai/mcpb
+  #
+  #     - name: Build MCPB Bundle
+  #       id: mcpb
+  #       shell: bash
+  #       run: |
+  #         set -eu
+  #         target="${{ fromJSON(needs.initialize.outputs.rust-targets)[matrix.platform] }}"
+  #         if [[ "${GITHUB_REF_NAME}" == v* ]]; then
+  #           version="${GITHUB_REF_NAME#v}"
+  #         else
+  #           version="$(sed -n 's/^version = \"\\(.*\\)\"/\\1/p' Cargo.toml)"
+  #         fi
+  #         manifest_version="0.4"
+  #         bundle_dir="mcpb-bundle"
+  #         mkdir -p "${bundle_dir}/server"
+  #         if [[ "${{ matrix.platform }}" == "windows-latest" ]]; then
+  #           source_binary="artifacts/agentmux-${target}.exe"
+  #           binary_name="agentmux.exe"
+  #         else
+  #           source_binary="artifacts/agentmux-${target}"
+  #           binary_name="agentmux"
+  #         fi
+  #         cp "${source_binary}" "${bundle_dir}/server/${binary_name}"
+  #         cat >"${bundle_dir}/manifest.json" <<EOF
+  #         {
+  #           "manifest_version": "${manifest_version}",
+  #           "name": "agentmux",
+  #           "display_name": "agentmux",
+  #           "version": "${version}",
+  #           "description": "agentmux multi-agent coordination runtime",
+  #           "author": {
+  #             "name": "emcd"
+  #           },
+  #           "server": {
+  #             "type": "binary",
+  #             "entry_point": "server/${binary_name}",
+  #             "mcp_config": {
+  #               "command": "\${__dirname}/server/${binary_name}",
+  #               "args": [],
+  #               "env": {}
+  #             }
+  #           },
+  #           "license": "Apache-2.0"
+  #         }
+  #         EOF
+  #         bundle_file="agentmux-${version}-${target}.mcpb"
+  #         mcpb validate "${bundle_dir}/manifest.json"
+  #         mcpb pack "${bundle_dir}" "${bundle_file}"
+  #         echo "file=${bundle_file}" >>${GITHUB_OUTPUT}
+  #
+  #     - name: Upload MCPB Artifact
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: mcpb-${{ matrix.platform }}
+  #         path: ${{ steps.mcpb.outputs.file }}
+
+  publish-crates-io:
+    if: ${{ !inputs.dry-run && startsWith(github.ref, 'refs/tags/') }}
+    needs: [test]
+    runs-on: ubuntu-latest
+    environment: crates-io
+    permissions:
+      id-token: write
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Authenticate with crates.io
+        uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish
+
+  publish-github:
+    if: ${{ !inputs.dry-run && startsWith(github.ref, 'refs/tags/') }}
+    needs: [initialize, build-binaries]
+    runs-on: ubuntu-latest
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download All Binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: binary-*
+          merge-multiple: true
+
+      - name: Generate Checksums
+        working-directory: artifacts
+        run: |
+          shopt -s nullglob
+          sha256sum agentmux-* >SHA256SUMS.txt
+
+      - name: Attest Build Provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            artifacts/SHA256SUMS.txt
+            artifacts/agentmux-*
+
+      - name: Create Release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          gh release create '${{ github.ref_name }}' \
+            --repo '${{ github.repository }}' \
+            --generate-notes
+
+      - name: Upload Release Artifacts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload '${{ github.ref_name }}' \
+            artifacts/* \
+            --repo '${{ github.repository }}'
+
+  # publish-mcp-registry:
+  #   if: ${{ !inputs.dry-run && startsWith(github.ref, 'refs/tags/') }}
+  #   needs: [initialize, build-binaries, publish-github]
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     id-token: write
+  #   steps:
+  #
+  #     - name: Download MCPB Bundles
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         path: artifacts
+  #         pattern: mcpb-*
+  #         merge-multiple: true
+  #
+  #     - name: Generate server.json
+  #       shell: python
+  #       env:
+  #         REF_NAME: ${{ github.ref_name }}
+  #         REPOSITORY: ${{ github.repository }}
+  #         OWNER: ${{ github.repository_owner }}
+  #       run: |
+  #         import glob
+  #         import hashlib
+  #         import json
+  #         import os
+  #         import sys
+  #
+  #         files = sorted(glob.glob("artifacts/*.mcpb"))
+  #         if not files:
+  #             sys.exit("No MCPB artifacts found.")
+  #
+  #         repo = os.environ["REPOSITORY"]
+  #         ref = os.environ["REF_NAME"]
+  #         owner = os.environ["OWNER"]
+  #         version = ref[1:] if ref.startswith("v") else ref
+  #
+  #         packages = []
+  #         for path in files:
+  #             filename = os.path.basename(path)
+  #             with open(path, "rb") as handle:
+  #                 sha256 = hashlib.sha256(handle.read()).hexdigest()
+  #             packages.append(
+  #                 {
+  #                     "registryType": "mcpb",
+  #                     "identifier": (
+  #                         f"https://github.com/{repo}/releases/download/"
+  #                         f"{ref}/{filename}"
+  #                     ),
+  #                     "fileSha256": sha256,
+  #                     "transport": {"type": "stdio"},
+  #                 }
+  #             )
+  #
+  #         server = {
+  #             "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  #             "name": f"io.github.{owner}/agentmux",
+  #             "title": "agentmux",
+  #             "description": (
+  #                 "agentmux multi-agent coordination runtime"
+  #             ),
+  #             "repository": {"url": f"https://github.com/{repo}", "source": "github"},
+  #             "version": version,
+  #             "packages": packages,
+  #         }
+  #
+  #         with open("server.json", "w", encoding="utf-8") as handle:
+  #             json.dump(server, handle, indent=2)
+  #             handle.write("\n")
+  #
+  #     - name: Install MCP Publisher
+  #       run: |
+  #         set -eu
+  #         mkdir -p "${HOME}/.local/bin"
+  #         curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" \
+  #           | tar xz mcp-publisher
+  #         mv mcp-publisher "${HOME}/.local/bin/"
+  #         echo "${HOME}/.local/bin" >>${GITHUB_PATH}
+  #
+  #     - name: Authenticate with Registry
+  #       run: mcp-publisher login github-oidc
+  #
+  #     - name: Publish to MCP Registry
+  #       run: mcp-publisher publish server.json
