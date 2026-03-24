@@ -114,6 +114,11 @@ struct AcpCapabilities {
     prompt_session: bool,
 }
 
+struct PersistentAcpWorkerRuntime {
+    client: AcpStdioClient,
+    session_id: String,
+}
+
 #[derive(Debug)]
 struct AcpPromptCompletion {
     stop_reason: String,
@@ -259,6 +264,23 @@ pub(super) fn wait_for_async_delivery_shutdown(timeout: Duration) -> usize {
 }
 
 pub(super) fn enqueue_async_delivery(task: AsyncDeliveryTask) -> Result<(), RelayError> {
+    enqueue_delivery_task(task)
+}
+
+pub(super) fn enqueue_sync_delivery(mut task: AsyncDeliveryTask) -> Result<ChatResult, RelayError> {
+    let (sender, receiver) = mpsc::channel::<Result<ChatResult, RelayError>>();
+    task.completion_sender = Some(sender);
+    enqueue_delivery_task(task)?;
+    receiver.recv().map_err(|source| {
+        super::relay_error(
+            "internal_unexpected_failure",
+            "failed to receive sync delivery result from worker",
+            Some(json!({"cause": source.to_string()})),
+        )
+    })?
+}
+
+fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
     let bounded_acp_queue = task_uses_acp_transport(&task)?;
     let key = AsyncWorkerKey {
         tmux_socket: task.tmux_socket.clone(),
@@ -273,6 +295,7 @@ pub(super) fn enqueue_async_delivery(task: AsyncDeliveryTask) -> Result<(), Rela
             None,
         )
     })?;
+    let mut task = task;
 
     if let Some(worker) = workers.get(&key) {
         if worker.bounded_acp_queue && !reserve_acp_pending_slot(worker.pending.as_ref()) {
@@ -285,8 +308,11 @@ pub(super) fn enqueue_async_delivery(task: AsyncDeliveryTask) -> Result<(), Rela
                 })),
             ));
         }
-        if worker.sender.send(task.clone()).is_ok() {
-            return Ok(());
+        match worker.sender.send(task) {
+            Ok(()) => return Ok(()),
+            Err(mpsc::SendError(returned)) => {
+                task = returned;
+            }
         }
         if worker.bounded_acp_queue {
             release_pending_slot(worker.pending.as_ref());
@@ -377,6 +403,14 @@ fn release_pending_slot(pending: &AtomicUsize) {
 }
 
 pub(super) fn deliver_one_target(task: &AsyncDeliveryTask) -> Result<ChatResult, RelayError> {
+    let mut acp_runtime = None;
+    deliver_one_target_with_worker_state(task, &mut acp_runtime)
+}
+
+fn deliver_one_target_with_worker_state(
+    task: &AsyncDeliveryTask,
+    acp_runtime: &mut Option<PersistentAcpWorkerRuntime>,
+) -> Result<ChatResult, RelayError> {
     let bundle = &task.bundle;
     let sender = &task.sender;
     let all_target_sessions = &task.all_target_sessions;
@@ -495,6 +529,7 @@ pub(super) fn deliver_one_target(task: &AsyncDeliveryTask) -> Result<ChatResult,
             prompt_batches,
             target_session,
             message_id,
+            acp_runtime,
         )),
         TargetConfiguration::Tmux(tmux_target) => match wait_for_quiescent_pane(
             tmux_socket,
@@ -755,6 +790,7 @@ fn deliver_one_target_acp(
     prompt_batches: Vec<String>,
     target_session: String,
     message_id: String,
+    acp_runtime: &mut Option<PersistentAcpWorkerRuntime>,
 ) -> ChatResult {
     let Some(working_directory) = target_member.working_directory.as_ref() else {
         return failed_result(
@@ -765,186 +801,32 @@ fn deliver_one_target_acp(
     };
     let runtime_socket_path = task.tmux_socket.as_path();
 
-    let mut client = match acp.channel {
-        crate::configuration::AcpChannel::Stdio => {
-            let Some(command) = acp.command.as_deref() else {
-                return failed_result(
-                    target_session,
-                    message_id,
-                    "ACP stdio target requires command",
-                );
-            };
-            match AcpStdioClient::spawn(command, working_directory) {
-                Ok(client) => client,
-                Err(reason) => return failed_result(target_session, message_id, reason),
-            }
+    if acp_runtime.is_none() {
+        match initialize_persistent_acp_worker_runtime(
+            target_member,
+            acp,
+            working_directory,
+            runtime_socket_path,
+            target_session.as_str(),
+            message_id.as_str(),
+        ) {
+            Ok(runtime) => *acp_runtime = Some(runtime),
+            Err(result) => return *result,
         }
-        crate::configuration::AcpChannel::Http => {
-            return failed_result(
-                target_session,
-                message_id,
-                "ACP http transport is not implemented",
-            );
-        }
-    };
+    }
 
-    let initialize_result = match client.initialize() {
-        Ok(value) => value,
-        Err(reason) => {
-            let _ = persist_acp_worker_state(
-                runtime_socket_path,
-                target_member.id.as_str(),
-                None,
-                AcpWorkerReadinessState::Unavailable,
-            );
-            return failed_result_with_code(
-                target_session,
-                message_id,
-                ACP_ERROR_CODE_INITIALIZE_FAILED,
-                "ACP initialize failed",
-                Some(json!({
-                    "target_session": target_member.id,
-                    "reason": reason,
-                })),
-            );
-        }
-    };
-
-    let capabilities = AcpCapabilities {
-        load_session: initialize_result
-            .get("agentCapabilities")
-            .and_then(|value| value.get("loadSession"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        prompt_session: initialize_result
-            .get("agentCapabilities")
-            .map(|value| {
-                value
-                    .get("promptSession")
-                    .and_then(Value::as_bool)
-                    .unwrap_or_else(|| {
-                        value
-                            .get("promptCapabilities")
-                            .is_some_and(serde_json::Value::is_object)
-                    })
-            })
-            .unwrap_or(false),
-    };
-
-    let persisted_session_id = if target_member.coder_session_id.is_some() {
-        None
-    } else {
-        match load_persisted_acp_session_id(runtime_socket_path, target_member.id.as_str()) {
-            Ok(value) => value,
-            Err(reason) => {
-                return failed_result(
-                    target_session,
-                    message_id,
-                    format!("failed to load persisted ACP session id: {reason}"),
-                );
-            }
-        }
-    };
-
-    let (lifecycle, lifecycle_session_id) =
-        if let Some(configured) = target_member.coder_session_id.as_deref() {
-            (AcpLifecycleSelection::LoadSession, configured.to_string())
-        } else if let Some(persisted) = persisted_session_id {
-            (AcpLifecycleSelection::LoadSession, persisted)
-        } else {
-            (AcpLifecycleSelection::NewSession, String::new())
-        };
-
-    let session_id = match lifecycle {
-        AcpLifecycleSelection::LoadSession => {
-            if !capabilities.load_session {
-                return failed_result_with_code(
-                    target_session,
-                    message_id,
-                    ACP_ERROR_CODE_MISSING_CAPABILITY,
-                    "ACP agent does not advertise required load capability",
-                    Some(json!({
-                        "target_session": target_member.id,
-                        "required_capability": "session/load",
-                        "reason": "agentCapabilities.loadSession is false or missing",
-                    })),
-                );
-            }
-            if let Err(reason) =
-                client.load_session(lifecycle_session_id.as_str(), working_directory)
-            {
-                let _ = persist_acp_worker_state(
-                    runtime_socket_path,
-                    target_member.id.as_str(),
-                    Some(lifecycle_session_id.as_str()),
-                    AcpWorkerReadinessState::Unavailable,
-                );
-                return failed_result_with_code(
-                    target_session,
-                    message_id,
-                    ACP_ERROR_CODE_SESSION_LOAD_FAILED,
-                    "ACP session/load failed",
-                    Some(json!({
-                        "target_session": target_member.id,
-                        "session_id": lifecycle_session_id,
-                        "reason": reason,
-                    })),
-                );
-            }
-            lifecycle_session_id
-        }
-        AcpLifecycleSelection::NewSession => match client.new_session(working_directory) {
-            Ok(value) => value,
-            Err(reason) => {
-                let _ = persist_acp_worker_state(
-                    runtime_socket_path,
-                    target_member.id.as_str(),
-                    None,
-                    AcpWorkerReadinessState::Unavailable,
-                );
-                return failed_result_with_code(
-                    target_session,
-                    message_id,
-                    ACP_ERROR_CODE_SESSION_NEW_FAILED,
-                    "ACP session/new failed",
-                    Some(json!({
-                        "target_session": target_member.id,
-                        "reason": reason,
-                    })),
-                );
-            }
-        },
-    };
-
-    if let Err(reason) = persist_acp_session_id(
-        runtime_socket_path,
-        target_member.id.as_str(),
-        session_id.as_str(),
-    ) {
+    let Some(runtime) = acp_runtime.as_mut() else {
         return failed_result(
             target_session,
             message_id,
-            format!("failed to persist ACP session id: {reason}"),
+            "ACP worker runtime was not initialized",
         );
-    }
-
-    if !capabilities.prompt_session {
-        return failed_result_with_code(
-            target_session,
-            message_id,
-            ACP_ERROR_CODE_MISSING_CAPABILITY,
-            "ACP agent does not advertise required prompt capability",
-            Some(json!({
-                "target_session": target_member.id,
-                "required_capability": "session/prompt",
-                "reason": "agentCapabilities.promptSession is false or missing",
-            })),
-        );
-    }
+    };
 
     let turn_timeout = Some(task.quiescence.acp_turn_timeout(acp));
     let mut first_activity_observed = false;
     for prompt in prompt_batches {
+        let session_id = runtime.session_id.clone();
         let mut on_first_activity = || {
             if first_activity_observed {
                 return;
@@ -957,13 +839,13 @@ fn deliver_one_target_acp(
                 AcpWorkerReadinessState::Busy,
             );
         };
-        let prompt_result = client.prompt(
+        let prompt_result = runtime.client.prompt(
             session_id.as_str(),
             prompt.as_str(),
             turn_timeout,
             Some(&mut on_first_activity),
         );
-        let prompt_snapshot_lines = client.take_snapshot_lines();
+        let prompt_snapshot_lines = runtime.client.take_snapshot_lines();
         if let Err(reason) = persist_acp_snapshot_lines(
             runtime_socket_path,
             target_member.id.as_str(),
@@ -1003,6 +885,7 @@ fn deliver_one_target_acp(
                         );
                     }
                     _ => {
+                        *acp_runtime = None;
                         return failed_result(
                             target_session,
                             message_id,
@@ -1021,6 +904,7 @@ fn deliver_one_target_acp(
                     Some(session_id.as_str()),
                     AcpWorkerReadinessState::Unavailable,
                 );
+                *acp_runtime = None;
                 return timeout_result(
                     target_session,
                     message_id,
@@ -1042,6 +926,7 @@ fn deliver_one_target_acp(
                     Some(session_id.as_str()),
                     AcpWorkerReadinessState::Unavailable,
                 );
+                *acp_runtime = None;
                 if first_activity_observed {
                     return delivered_in_progress_result(target_session, message_id);
                 }
@@ -1063,6 +948,7 @@ fn deliver_one_target_acp(
                     Some(session_id.as_str()),
                     AcpWorkerReadinessState::Unavailable,
                 );
+                *acp_runtime = None;
                 return failed_result_with_code(
                     target_session,
                     message_id,
@@ -1082,6 +968,196 @@ fn deliver_one_target_acp(
     } else {
         delivered_result(target_session, message_id)
     }
+}
+
+fn initialize_persistent_acp_worker_runtime(
+    target_member: &crate::configuration::BundleMember,
+    acp: &AcpTargetConfiguration,
+    working_directory: &Path,
+    runtime_socket_path: &Path,
+    target_session: &str,
+    message_id: &str,
+) -> Result<PersistentAcpWorkerRuntime, Box<ChatResult>> {
+    let mut client = match acp.channel {
+        crate::configuration::AcpChannel::Stdio => {
+            let Some(command) = acp.command.as_deref() else {
+                return Err(Box::new(failed_result(
+                    target_session.to_string(),
+                    message_id.to_string(),
+                    "ACP stdio target requires command",
+                )));
+            };
+            AcpStdioClient::spawn(command, working_directory).map_err(|reason| {
+                Box::new(failed_result(
+                    target_session.to_string(),
+                    message_id.to_string(),
+                    reason,
+                ))
+            })?
+        }
+        crate::configuration::AcpChannel::Http => {
+            return Err(Box::new(failed_result(
+                target_session.to_string(),
+                message_id.to_string(),
+                "ACP http transport is not implemented",
+            )));
+        }
+    };
+
+    let initialize_result = match client.initialize() {
+        Ok(value) => value,
+        Err(reason) => {
+            let _ = persist_acp_worker_state(
+                runtime_socket_path,
+                target_member.id.as_str(),
+                None,
+                AcpWorkerReadinessState::Unavailable,
+            );
+            return Err(Box::new(failed_result_with_code(
+                target_session.to_string(),
+                message_id.to_string(),
+                ACP_ERROR_CODE_INITIALIZE_FAILED,
+                "ACP initialize failed",
+                Some(json!({
+                    "target_session": target_member.id,
+                    "reason": reason,
+                })),
+            )));
+        }
+    };
+
+    let capabilities = AcpCapabilities {
+        load_session: initialize_result
+            .get("agentCapabilities")
+            .and_then(|value| value.get("loadSession"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        prompt_session: initialize_result
+            .get("agentCapabilities")
+            .map(|value| {
+                value
+                    .get("promptSession")
+                    .and_then(Value::as_bool)
+                    .unwrap_or_else(|| {
+                        value
+                            .get("promptCapabilities")
+                            .is_some_and(serde_json::Value::is_object)
+                    })
+            })
+            .unwrap_or(false),
+    };
+
+    let persisted_session_id = if target_member.coder_session_id.is_some() {
+        None
+    } else {
+        load_persisted_acp_session_id(runtime_socket_path, target_member.id.as_str()).map_err(
+            |reason| {
+                Box::new(failed_result(
+                    target_session.to_string(),
+                    message_id.to_string(),
+                    format!("failed to load persisted ACP session id: {reason}"),
+                ))
+            },
+        )?
+    };
+
+    let (lifecycle, lifecycle_session_id) =
+        if let Some(configured) = target_member.coder_session_id.as_deref() {
+            (AcpLifecycleSelection::LoadSession, configured.to_string())
+        } else if let Some(persisted) = persisted_session_id {
+            (AcpLifecycleSelection::LoadSession, persisted)
+        } else {
+            (AcpLifecycleSelection::NewSession, String::new())
+        };
+
+    let session_id = match lifecycle {
+        AcpLifecycleSelection::LoadSession => {
+            if !capabilities.load_session {
+                return Err(Box::new(failed_result_with_code(
+                    target_session.to_string(),
+                    message_id.to_string(),
+                    ACP_ERROR_CODE_MISSING_CAPABILITY,
+                    "ACP agent does not advertise required load capability",
+                    Some(json!({
+                        "target_session": target_member.id,
+                        "required_capability": "session/load",
+                        "reason": "agentCapabilities.loadSession is false or missing",
+                    })),
+                )));
+            }
+            if let Err(reason) =
+                client.load_session(lifecycle_session_id.as_str(), working_directory)
+            {
+                let _ = persist_acp_worker_state(
+                    runtime_socket_path,
+                    target_member.id.as_str(),
+                    Some(lifecycle_session_id.as_str()),
+                    AcpWorkerReadinessState::Unavailable,
+                );
+                return Err(Box::new(failed_result_with_code(
+                    target_session.to_string(),
+                    message_id.to_string(),
+                    ACP_ERROR_CODE_SESSION_LOAD_FAILED,
+                    "ACP session/load failed",
+                    Some(json!({
+                        "target_session": target_member.id,
+                        "session_id": lifecycle_session_id,
+                        "reason": reason,
+                    })),
+                )));
+            }
+            lifecycle_session_id
+        }
+        AcpLifecycleSelection::NewSession => match client.new_session(working_directory) {
+            Ok(value) => value,
+            Err(reason) => {
+                let _ = persist_acp_worker_state(
+                    runtime_socket_path,
+                    target_member.id.as_str(),
+                    None,
+                    AcpWorkerReadinessState::Unavailable,
+                );
+                return Err(Box::new(failed_result_with_code(
+                    target_session.to_string(),
+                    message_id.to_string(),
+                    ACP_ERROR_CODE_SESSION_NEW_FAILED,
+                    "ACP session/new failed",
+                    Some(json!({
+                        "target_session": target_member.id,
+                        "reason": reason,
+                    })),
+                )));
+            }
+        },
+    };
+
+    if let Err(reason) = persist_acp_session_id(
+        runtime_socket_path,
+        target_member.id.as_str(),
+        session_id.as_str(),
+    ) {
+        return Err(Box::new(failed_result(
+            target_session.to_string(),
+            message_id.to_string(),
+            format!("failed to persist ACP session id: {reason}"),
+        )));
+    }
+
+    if !capabilities.prompt_session {
+        return Err(Box::new(failed_result_with_code(
+            target_session.to_string(),
+            message_id.to_string(),
+            ACP_ERROR_CODE_MISSING_CAPABILITY,
+            "ACP agent does not advertise required prompt capability",
+            Some(json!({
+                "target_session": target_member.id,
+                "required_capability": "session/prompt",
+                "reason": "agentCapabilities.promptSession is false or missing",
+            })),
+        )));
+    }
+
+    Ok(PersistentAcpWorkerRuntime { client, session_id })
 }
 
 fn resolve_acp_session_state_path(
@@ -1697,6 +1773,7 @@ fn spawn_async_delivery_worker(
     pending: std::sync::Arc<AtomicUsize>,
 ) {
     thread::spawn(move || {
+        let mut acp_runtime = None::<PersistentAcpWorkerRuntime>;
         loop {
             if shutdown_requested() {
                 drop_pending_async_tasks_on_shutdown(&receiver, pending.as_ref());
@@ -1710,40 +1787,14 @@ fn spawn_async_delivery_worker(
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             };
             if shutdown_requested() {
-                emit_async_shutdown_drop(&task);
+                complete_task_on_shutdown(&task);
                 release_pending_slot(pending.as_ref());
                 drop_pending_async_tasks_on_shutdown(&receiver, pending.as_ref());
                 break;
             }
 
-            let outcome = deliver_one_target(&task);
-            match outcome {
-                Ok(result) => emit_inscription(
-                    "relay.chat.async.completed",
-                    &json!({
-                        "bundle_name": task.bundle.bundle_name,
-                        "sender_session": task.sender.id,
-                        "target_session": result.target_session,
-                        "message_id": result.message_id,
-                        "outcome": result.outcome,
-                        "reason_code": result.reason_code,
-                        "reason": result.reason,
-                        "details": result.details,
-                    }),
-                ),
-                Err(error) => emit_inscription(
-                    "relay.chat.async.completed",
-                    &json!({
-                        "bundle_name": task.bundle.bundle_name,
-                        "sender_session": task.sender.id,
-                        "target_session": task.target_session,
-                        "message_id": task.message_id,
-                        "outcome": ChatOutcome::Failed,
-                        "reason": error.message,
-                        "error_code": error.code,
-                    }),
-                ),
-            }
+            let outcome = deliver_one_target_with_worker_state(&task, &mut acp_runtime);
+            complete_task_outcome(&task, outcome);
             release_pending_slot(pending.as_ref());
         }
         if let Ok(mut workers) = async_delivery_registry().workers.lock() {
@@ -1757,24 +1808,57 @@ fn drop_pending_async_tasks_on_shutdown(
     pending: &AtomicUsize,
 ) {
     while let Ok(task) = receiver.try_recv() {
-        emit_async_shutdown_drop(&task);
+        complete_task_on_shutdown(&task);
         release_pending_slot(pending);
     }
 }
 
-fn emit_async_shutdown_drop(task: &AsyncDeliveryTask) {
-    emit_inscription(
-        "relay.chat.async.completed",
-        &json!({
-            "bundle_name": task.bundle.bundle_name,
-            "sender_session": task.sender.id,
-            "target_session": task.target_session,
-            "message_id": task.message_id,
-            "outcome": ChatOutcome::DroppedOnShutdown,
-            "reason_code": DROPPED_ON_SHUTDOWN_REASON_CODE,
-            "reason": DROPPED_ON_SHUTDOWN_REASON,
+fn complete_task_on_shutdown(task: &AsyncDeliveryTask) {
+    complete_task_outcome(
+        task,
+        Ok(ChatResult {
+            target_session: task.target_session.clone(),
+            message_id: task.message_id.clone(),
+            outcome: ChatOutcome::DroppedOnShutdown,
+            reason_code: Some(DROPPED_ON_SHUTDOWN_REASON_CODE.to_string()),
+            reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
+            details: None,
         }),
     );
+}
+
+fn complete_task_outcome(task: &AsyncDeliveryTask, outcome: Result<ChatResult, RelayError>) {
+    if let Some(sender) = task.completion_sender.as_ref() {
+        let _ = sender.send(outcome);
+        return;
+    }
+    match outcome {
+        Ok(result) => emit_inscription(
+            "relay.chat.async.completed",
+            &json!({
+                "bundle_name": task.bundle.bundle_name,
+                "sender_session": task.sender.id,
+                "target_session": result.target_session,
+                "message_id": result.message_id,
+                "outcome": result.outcome,
+                "reason_code": result.reason_code,
+                "reason": result.reason,
+                "details": result.details,
+            }),
+        ),
+        Err(error) => emit_inscription(
+            "relay.chat.async.completed",
+            &json!({
+                "bundle_name": task.bundle.bundle_name,
+                "sender_session": task.sender.id,
+                "target_session": task.target_session,
+                "message_id": task.message_id,
+                "outcome": ChatOutcome::Failed,
+                "reason": error.message,
+                "error_code": error.code,
+            }),
+        ),
+    }
 }
 
 fn wait_for_quiescent_pane(

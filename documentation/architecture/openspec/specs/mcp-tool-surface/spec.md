@@ -82,71 +82,41 @@ If requester identity is valid and policy denies list access, MCP SHALL return
 
 If `delivery_mode` is omitted, the system SHALL default to `async`.
 
-`send` SHALL additionally support optional `quiescence_timeout_ms`:
+`send` timeout override fields SHALL be transport-specific:
 
-- positive integer milliseconds
-- omitted means mode-aware defaults are applied by relay
+- `quiescence_timeout_ms` (positive integer milliseconds) for tmux targets
+- `acp_turn_timeout_ms` (positive integer milliseconds) for ACP targets
+
+`send` SHALL reject conflicting timeout overrides in one request with
+`validation_conflicting_timeout_fields`.
+
+Transport-incompatible timeout overrides SHALL fail fast with
+`validation_invalid_timeout_field_for_transport`.
 
 `send` authorization scope SHALL follow requester policy control:
 
 - `all:home`
 - `all:all`
 
-#### Scenario: Default to async delivery mode
+#### Scenario: Reject conflicting timeout override fields
 
-- **WHEN** a caller invokes `send` without specifying `delivery_mode`
-- **THEN** the system processes the request using `delivery_mode=async`
+- **WHEN** a caller provides `quiescence_timeout_ms` and
+  `acp_turn_timeout_ms` in one request
+- **THEN** the system rejects with `validation_conflicting_timeout_fields`
 
-#### Scenario: Preserve blocking semantics for explicit sync callers
+#### Scenario: Reject tmux timeout field on ACP send target
 
-- **WHEN** a caller invokes `send` with `delivery_mode=sync`
-- **THEN** the system returns completion-style outcomes for the request
-- **AND** does not downgrade that request to async acceptance semantics
+- **WHEN** request resolves target transport as ACP
+- **AND** caller provides `quiescence_timeout_ms`
+- **THEN** the system rejects with
+  `validation_invalid_timeout_field_for_transport`
 
-#### Scenario: Reject unknown delivery mode value
+#### Scenario: Reject ACP timeout field on tmux send target
 
-- **WHEN** a caller provides a `delivery_mode` value outside `async` or `sync`
-- **THEN** the system rejects the request with
-  `validation_invalid_delivery_mode`
-
-#### Scenario: Reject invalid quiescence timeout value
-
-- **WHEN** a caller provides `quiescence_timeout_ms` as zero or non-integer
-- **THEN** the system rejects the request with
-  `validation_invalid_quiescence_timeout`
-
-#### Scenario: Send to explicit subset
-
-- **WHEN** a caller provides `targets` with one or more bundle members
-- **THEN** the system attempts delivery only to those targets
-
-#### Scenario: Single target via list mode
-
-- **WHEN** a caller provides one recipient identifier in `targets`
-- **THEN** the system treats the request as a valid single-recipient delivery
-
-#### Scenario: Resolve explicit target by configured recipient name
-
-- **WHEN** a caller provides a configured recipient name in `targets`
-- **THEN** the system resolves that target to one configured session
-- **AND** attempts delivery to that resolved session
-
-#### Scenario: Reject conflicting target modes
-
-- **WHEN** a caller provides `targets` and `broadcast=true` in one request
-- **THEN** the system rejects the request with
-  `validation_conflicting_targets`
-
-#### Scenario: Reject empty targets list
-
-- **WHEN** a caller provides `targets` as an empty list
-- **THEN** the system rejects the request with `validation_empty_targets`
-
-#### Scenario: Allow broadcast with zero effective recipients
-
-- **WHEN** a caller requests `broadcast=true`
-- **AND** sender exclusion yields zero effective target sessions
-- **THEN** the system treats the request as valid (not a validation error)
+- **WHEN** request resolves target transport as tmux
+- **AND** caller provides `acp_turn_timeout_ms`
+- **THEN** the system rejects with
+  `validation_invalid_timeout_field_for_transport`
 
 ### Requirement: Sender Identity Inference
 
@@ -385,4 +355,22 @@ MCP SHALL NOT synthesize ACP-specific adapter payloads for look results.
 
 - **WHEN** relay returns successful ACP look payload with `snapshot_lines = []`
 - **THEN** MCP propagates `snapshot_lines = []` unchanged
+
+### Requirement: MCP ACP Sync Delivery-Phase Passthrough
+
+For sync `send` targeting ACP transport, MCP SHALL propagate relay-authored
+phase-1 acknowledgment details without adapter mutation.
+
+When relay marks early delivery acknowledgment, MCP response SHALL preserve:
+
+- `outcome = delivered`
+- `details.delivery_phase = "accepted_in_progress"`
+- unchanged `message_id` for request tracing
+
+#### Scenario: Preserve early delivery-phase marker in MCP sync response
+
+- **WHEN** relay returns sync ACP result with
+  `details.delivery_phase = "accepted_in_progress"`
+- **THEN** MCP returns the same result fields unchanged
+- **AND** retains the same `message_id` in response payload
 

@@ -314,6 +314,13 @@ fn request_by_method<'a>(requests: &'a [Value], method: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("missing ACP request for method '{method}'"))
 }
 
+fn request_count_by_method(requests: &[Value], method: &str) -> usize {
+    requests
+        .iter()
+        .filter(|request| request.get("method").and_then(Value::as_str) == Some(method))
+        .count()
+}
+
 fn persisted_state_path(root: &Path, target_session: &str) -> PathBuf {
     root.join("sessions")
         .join(target_session)
@@ -380,6 +387,28 @@ fn acp_send_selects_session_new_without_coder_session_id() {
 }
 
 #[test]
+fn acp_sync_send_reuses_persistent_worker_across_requests() {
+    let temporary = TempDir::new().expect("temporary");
+    let options = AcpStubOptions::default();
+    let (config_root, log_path) = write_configuration(temporary.path(), &options);
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    let first = dispatch_send(&config_root, &tmux_socket, Some(1_000));
+    let second = dispatch_send(&config_root, &tmux_socket, Some(1_000));
+    let (first_status, first_result) = chat_result(first);
+    let (second_status, second_result) = chat_result(second);
+    assert_eq!(first_status, ChatStatus::Success);
+    assert_eq!(first_result.outcome, ChatOutcome::Delivered);
+    assert_eq!(second_status, ChatStatus::Success);
+    assert_eq!(second_result.outcome, ChatOutcome::Delivered);
+
+    let requests = read_request_log(log_path.as_path());
+    assert_eq!(request_count_by_method(&requests, "initialize"), 1);
+    assert_eq!(request_count_by_method(&requests, "session/new"), 1);
+    assert_eq!(request_count_by_method(&requests, "session/prompt"), 2);
+}
+
+#[test]
 fn acp_initialize_request_uses_protocol_version_integer_and_client_version() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions::default();
@@ -431,14 +460,15 @@ fn acp_session_setup_requests_include_mcp_servers_array() {
         Value::Array(Vec::new())
     );
 
+    let second_temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions {
         configured_session_id: Some("sess-configured".to_string()),
         ..AcpStubOptions::default()
     };
-    let (config_root, log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, log_path) = write_configuration(second_temporary.path(), &options);
     let response = dispatch_send(
         &config_root,
-        &temporary.path().join("tmux.sock"),
+        &second_temporary.path().join("tmux.sock"),
         Some(1_000),
     );
     let (status, result) = chat_result(response);
@@ -456,7 +486,11 @@ fn acp_session_setup_requests_include_mcp_servers_array() {
 #[test]
 fn acp_send_uses_persisted_session_id_when_config_id_is_absent() {
     let temporary = TempDir::new().expect("temporary");
-    let options = AcpStubOptions::default();
+    let options = AcpStubOptions {
+        disconnect_on_prompt: Some("after_activity".to_string()),
+        update_count: 1,
+        ..AcpStubOptions::default()
+    };
     let (config_root, log_path) = write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 

@@ -9,7 +9,7 @@ use crate::{configuration::BundleConfiguration, runtime::inscriptions::emit_insc
 use super::authorization::{AuthorizationContext, authorize_list, authorize_look, authorize_send};
 use super::delivery::{
     QuiescenceOptions, aggregate_chat_status, deliver_one_target, enqueue_async_delivery,
-    load_acp_snapshot_lines_for_look, prompt_batch_settings,
+    enqueue_sync_delivery, load_acp_snapshot_lines_for_look, prompt_batch_settings,
 };
 use super::lifecycle::{reconcile_loaded_bundle_for_lifecycle, shutdown_bundle_runtime};
 use super::tmux::{capture_pane_tail_lines, resolve_active_pane_target};
@@ -368,8 +368,27 @@ fn handle_chat(
                     quiescence,
                     batch_settings,
                     tmux_socket: tmux_socket.to_path_buf(),
+                    completion_sender: None,
                 };
-                let result = deliver_one_target(&task)?;
+                let target_member = bundle
+                    .members
+                    .iter()
+                    .find(|member| member.id == task.target_session)
+                    .ok_or_else(|| {
+                        relay_error(
+                            "internal_unexpected_failure",
+                            "resolved target member is missing from bundle configuration",
+                            Some(json!({"target_session": task.target_session})),
+                        )
+                    })?;
+                let result = match &target_member.target {
+                    crate::configuration::TargetConfiguration::Acp(_) => {
+                        enqueue_sync_delivery(task)?
+                    }
+                    crate::configuration::TargetConfiguration::Tmux(_) => {
+                        deliver_one_target(&task)?
+                    }
+                };
                 results.push(result);
             }
             (aggregate_chat_status(&results), results)
@@ -393,6 +412,7 @@ fn handle_chat(
                     quiescence,
                     batch_settings,
                     tmux_socket: tmux_socket.to_path_buf(),
+                    completion_sender: None,
                 };
                 enqueue_async_delivery(task)?;
                 emit_inscription(

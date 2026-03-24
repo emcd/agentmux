@@ -296,6 +296,7 @@ pub(super) struct AsyncDeliveryTask {
     quiescence: QuiescenceOptions,
     batch_settings: PromptBatchSettings,
     tmux_socket: PathBuf,
+    completion_sender: Option<std::sync::mpsc::Sender<Result<ChatResult, RelayError>>>,
 }
 
 /// Handles one relay socket request/response exchange on a connected stream.

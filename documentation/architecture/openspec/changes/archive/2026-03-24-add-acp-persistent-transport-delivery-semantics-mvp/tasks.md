@@ -15,11 +15,12 @@
       - set worker `available` when terminal stopReason is observed
       - set worker `unavailable` on disconnect/error requiring restart
       - keep sender-facing `send` response contract unchanged
-- [ ] 1.4 Implement persistent ACP worker lifecycle:
+- [x] 1.4 Implement persistent ACP worker lifecycle:
       - one worker per target session
       - serialized queue with fixed `max_pending = 64`
       - overflow handling (`runtime_acp_queue_full`)
       - reconnect/restart sequence and failure taxonomy
+      - shared worker path for ACP sync + async sends
 - [x] 1.5 Implement ACP permission-request readiness signaling (MVP):
       - handle `session/request_permission` in ACP loop as activity
       - treat permission-request state as non-ready (`busy`) until turn completion
