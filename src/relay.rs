@@ -18,12 +18,15 @@ use crate::{
 
 mod acp_client;
 mod acp_state;
+mod async_worker;
 mod authorization;
 mod delivery;
 mod handlers;
 mod lifecycle;
+mod quiescence;
 mod stream;
 mod tmux;
+mod ui_delivery;
 
 pub(super) const ACP_PROTOCOL_VERSION: u32 = 1;
 

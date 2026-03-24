@@ -1,21 +1,10 @@
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-    sync::{
-        Mutex, OnceLock,
-        atomic::{AtomicUsize, Ordering},
-        mpsc,
-    },
-    thread,
-    time::{Duration, Instant},
-};
+use std::{path::Path, sync::mpsc, thread, time::Duration};
 
-use regex::Regex;
 use serde_json::{Value, json};
 use time::format_description::well_known::Rfc3339;
 
 use crate::{
-    configuration::{AcpTargetConfiguration, PromptReadinessTemplate, TargetConfiguration},
+    configuration::{AcpTargetConfiguration, TargetConfiguration},
     envelope::{
         AddressIdentity, EnvelopeRenderInput, ManifestPreamble, PromptBatchSettings,
         batch_envelopes, parse_tokenizer_profile, render_envelope,
@@ -29,30 +18,20 @@ use super::acp_state::{
     AcpWorkerReadinessState, load_persisted_acp_session_id, persist_acp_session_id,
     persist_acp_snapshot_lines, persist_acp_worker_state,
 };
+use super::async_worker;
+use super::quiescence::wait_for_quiescent_pane;
+pub(super) use super::quiescence::{DeliveryWaitError, QuiescenceOptions};
+use super::ui_delivery::deliver_one_target_ui;
 
-use super::stream::{
-    RelayClientClass, RelayStreamEvent, StreamEventSendOutcome, resolve_registered_client_class,
-    send_event_to_registered_ui,
-};
-use super::tmux::{
-    capture_pane_snapshot, emit_delivery_diagnostic, inject_prompt, operator_interaction_active,
-    resolve_active_pane_target, resolve_cursor_column, resolve_window_activity_marker,
-    sanitize_diagnostic_text,
-};
+use super::stream::{RelayClientClass, resolve_registered_client_class};
+use super::tmux::inject_prompt;
 use super::{AsyncDeliveryTask, ChatOutcome, ChatResult, ChatStatus, RelayError, SCHEMA_VERSION};
 
-const QUIET_WINDOW_MS_DEFAULT: u64 = 750;
-const QUIESCENCE_TIMEOUT_MS_DEFAULT: u64 = 30_000;
-const ACP_TURN_TIMEOUT_MS_DEFAULT: u64 = 120_000;
 const PROMPT_TOKENS_MAX_ENVVAR: &str = "AGENTMUX_MAX_PROMPT_TOKENS";
 const TOKENIZER_PROFILE_ENVVAR: &str = "AGENTMUX_TOKENIZER_PROFILE";
-const PROMPT_INSPECT_LINES_DEFAULT: usize = 3;
-const PROMPT_INSPECT_LINES_MAX: usize = 40;
 const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;
-const ASYNC_SHUTDOWN_WAIT_POLL_MS: u64 = 25;
 const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delivery";
 const DROPPED_ON_SHUTDOWN_REASON_CODE: &str = "dropped_on_shutdown";
-const UI_RECONNECT_POLL_INTERVAL_MS: u64 = 100;
 const ACP_REASON_CODE_TURN_TIMEOUT: &str = "acp_turn_timeout";
 const ACP_REASON_CODE_STOP_CANCELLED: &str = "acp_stop_cancelled";
 const ACP_DELIVERY_PHASE_ACCEPTED_IN_PROGRESS: &str = "accepted_in_progress";
@@ -62,8 +41,6 @@ const ACP_ERROR_CODE_SESSION_NEW_FAILED: &str = "runtime_acp_session_new_failed"
 const ACP_ERROR_CODE_PROMPT_FAILED: &str = "runtime_acp_prompt_failed";
 const ACP_ERROR_CODE_CONNECTION_CLOSED: &str = "runtime_acp_connection_closed";
 const ACP_ERROR_CODE_MISSING_CAPABILITY: &str = "validation_missing_acp_capability";
-const ACP_ERROR_CODE_QUEUE_FULL: &str = "runtime_acp_queue_full";
-const ACP_MAX_PENDING: usize = 64;
 
 #[derive(Clone, Copy, Debug)]
 enum AcpLifecycleSelection {
@@ -82,135 +59,8 @@ struct PersistentAcpWorkerRuntime {
     session_id: String,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(super) struct QuiescenceOptions {
-    quiet_window: Duration,
-    quiescence_timeout: Option<Duration>,
-    acp_turn_timeout_override: Option<Duration>,
-}
-
-impl Default for QuiescenceOptions {
-    fn default() -> Self {
-        Self {
-            quiet_window: Duration::from_millis(QUIET_WINDOW_MS_DEFAULT),
-            quiescence_timeout: Some(Duration::from_millis(QUIESCENCE_TIMEOUT_MS_DEFAULT)),
-            acp_turn_timeout_override: None,
-        }
-    }
-}
-
-impl QuiescenceOptions {
-    pub(super) fn for_sync(
-        quiet_window_ms: Option<u64>,
-        quiescence_timeout_ms: Option<u64>,
-        acp_turn_timeout_ms: Option<u64>,
-    ) -> Self {
-        Self {
-            quiet_window: Duration::from_millis(
-                quiet_window_ms
-                    .filter(|value| *value > 0)
-                    .unwrap_or(QUIET_WINDOW_MS_DEFAULT),
-            ),
-            quiescence_timeout: Some(Duration::from_millis(
-                quiescence_timeout_ms
-                    .filter(|value| *value > 0)
-                    .unwrap_or(QUIESCENCE_TIMEOUT_MS_DEFAULT),
-            )),
-            acp_turn_timeout_override: acp_turn_timeout_ms
-                .filter(|value| *value > 0)
-                .map(Duration::from_millis),
-        }
-    }
-
-    pub(super) fn for_async(
-        quiet_window_ms: Option<u64>,
-        quiescence_timeout_ms: Option<u64>,
-        acp_turn_timeout_ms: Option<u64>,
-    ) -> Self {
-        Self {
-            quiet_window: Duration::from_millis(
-                quiet_window_ms
-                    .filter(|value| *value > 0)
-                    .unwrap_or(QUIET_WINDOW_MS_DEFAULT),
-            ),
-            quiescence_timeout: quiescence_timeout_ms
-                .filter(|value| *value > 0)
-                .map(Duration::from_millis),
-            acp_turn_timeout_override: acp_turn_timeout_ms
-                .filter(|value| *value > 0)
-                .map(Duration::from_millis),
-        }
-    }
-
-    fn acp_turn_timeout(&self, acp: &AcpTargetConfiguration) -> Duration {
-        self.acp_turn_timeout_override
-            .or_else(|| acp.turn_timeout_ms.map(Duration::from_millis))
-            .unwrap_or_else(|| Duration::from_millis(ACP_TURN_TIMEOUT_MS_DEFAULT))
-    }
-}
-
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-struct AsyncWorkerKey {
-    tmux_socket: PathBuf,
-    bundle_name: String,
-    target_session: String,
-}
-
-#[derive(Default)]
-struct AsyncDeliveryRegistry {
-    workers: Mutex<HashMap<AsyncWorkerKey, AsyncWorkerEntry>>,
-}
-
-struct AsyncWorkerEntry {
-    sender: mpsc::Sender<AsyncDeliveryTask>,
-    pending: std::sync::Arc<AtomicUsize>,
-    bounded_acp_queue: bool,
-}
-
-static ASYNC_DELIVERY_REGISTRY: OnceLock<AsyncDeliveryRegistry> = OnceLock::new();
-
-#[derive(Debug)]
-enum DeliveryWaitError {
-    Timeout {
-        timeout: Duration,
-        readiness_mismatch: bool,
-        mismatch_reason: Option<String>,
-    },
-    Failed {
-        reason: String,
-    },
-    Shutdown,
-}
-
-#[derive(Debug)]
-struct PromptReadinessMatcher {
-    prompt_regex: Regex,
-    inspect_lines: usize,
-    input_idle_cursor_column: Option<usize>,
-}
-
-#[derive(Debug, Default)]
-struct PromptReadinessEvaluation {
-    ready: bool,
-    mismatch_reason: Option<String>,
-    inspected_block: Option<String>,
-    regex_matched: Option<bool>,
-    expected_cursor_column: Option<usize>,
-    observed_cursor_column: Option<usize>,
-}
-
 pub(super) fn wait_for_async_delivery_shutdown(timeout: Duration) -> usize {
-    if !shutdown_requested() {
-        return 0;
-    }
-    let deadline = Instant::now() + timeout;
-    loop {
-        let remaining = async_worker_count();
-        if remaining == 0 || Instant::now() >= deadline {
-            return remaining;
-        }
-        thread::sleep(Duration::from_millis(ASYNC_SHUTDOWN_WAIT_POLL_MS));
-    }
+    async_worker::wait_for_async_delivery_shutdown(timeout)
 }
 
 pub(super) fn enqueue_async_delivery(task: AsyncDeliveryTask) -> Result<(), RelayError> {
@@ -231,123 +81,40 @@ pub(super) fn enqueue_sync_delivery(mut task: AsyncDeliveryTask) -> Result<ChatR
 }
 
 fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
-    let bounded_acp_queue = task_uses_acp_transport(&task)?;
-    let key = AsyncWorkerKey {
+    let bounded_acp_queue = async_worker::task_uses_acp_transport(&task)?;
+    let key = async_worker::AsyncWorkerKey {
         tmux_socket: task.tmux_socket.clone(),
         bundle_name: task.bundle.bundle_name.clone(),
         target_session: task.target_session.clone(),
     };
-    let registry = async_delivery_registry();
-    let mut workers = registry.workers.lock().map_err(|_| {
-        super::relay_error(
-            "internal_unexpected_failure",
-            "failed to lock async delivery registry",
-            None,
-        )
-    })?;
-    let mut task = task;
-
-    if let Some(worker) = workers.get(&key) {
-        if worker.bounded_acp_queue && !reserve_acp_pending_slot(worker.pending.as_ref()) {
-            return Err(super::relay_error(
-                ACP_ERROR_CODE_QUEUE_FULL,
-                "ACP worker queue is full",
-                Some(json!({
-                    "target_session": task.target_session,
-                    "max_pending": ACP_MAX_PENDING,
-                })),
-            ));
-        }
-        match worker.sender.send(task) {
-            Ok(()) => return Ok(()),
-            Err(mpsc::SendError(returned)) => {
-                task = returned;
+    match async_worker::try_existing_worker(&key, task)? {
+        None => Ok(()),
+        Some(task) => {
+            let (sender, receiver) = mpsc::channel::<AsyncDeliveryTask>();
+            let pending = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            if bounded_acp_queue && !async_worker::reserve_acp_pending_slot(pending.as_ref()) {
+                return Err(super::relay_error(
+                    "runtime_acp_queue_full",
+                    "ACP worker queue is full",
+                    Some(json!({
+                        "target_session": task.target_session,
+                        "max_pending": 64,
+                    })),
+                ));
             }
-        }
-        if worker.bounded_acp_queue {
-            release_pending_slot(worker.pending.as_ref());
-        }
-        workers.remove(&key);
-    }
-
-    let (sender, receiver) = mpsc::channel::<AsyncDeliveryTask>();
-    let pending = std::sync::Arc::new(AtomicUsize::new(0));
-    if bounded_acp_queue && !reserve_acp_pending_slot(pending.as_ref()) {
-        return Err(super::relay_error(
-            ACP_ERROR_CODE_QUEUE_FULL,
-            "ACP worker queue is full",
-            Some(json!({
-                "target_session": task.target_session,
-                "max_pending": ACP_MAX_PENDING,
-            })),
-        ));
-    }
-    sender.send(task).map_err(|source| {
-        if bounded_acp_queue {
-            release_pending_slot(pending.as_ref());
-        }
-        super::relay_error(
-            "internal_unexpected_failure",
-            "failed to enqueue async delivery task",
-            Some(json!({"cause": source.to_string()})),
-        )
-    })?;
-    spawn_async_delivery_worker(key.clone(), receiver, pending.clone());
-    workers.insert(
-        key,
-        AsyncWorkerEntry {
-            sender,
-            pending,
-            bounded_acp_queue,
-        },
-    );
-    Ok(())
-}
-
-fn task_uses_acp_transport(task: &AsyncDeliveryTask) -> Result<bool, RelayError> {
-    task.bundle
-        .members
-        .iter()
-        .find(|member| member.id == task.target_session)
-        .map(|member| matches!(member.target, TargetConfiguration::Acp(_)))
-        .ok_or_else(|| {
-            super::relay_error(
-                "internal_unexpected_failure",
-                "resolved target member is missing from bundle configuration",
-                Some(json!({"target_session": task.target_session})),
-            )
-        })
-}
-
-fn reserve_acp_pending_slot(pending: &AtomicUsize) -> bool {
-    let mut current = pending.load(Ordering::Relaxed);
-    loop {
-        if current >= ACP_MAX_PENDING {
-            return false;
-        }
-        match pending.compare_exchange_weak(
-            current,
-            current + 1,
-            Ordering::AcqRel,
-            Ordering::Relaxed,
-        ) {
-            Ok(_) => return true,
-            Err(observed) => current = observed,
-        }
-    }
-}
-
-fn release_pending_slot(pending: &AtomicUsize) {
-    let mut current = pending.load(Ordering::Relaxed);
-    while current > 0 {
-        match pending.compare_exchange_weak(
-            current,
-            current - 1,
-            Ordering::AcqRel,
-            Ordering::Relaxed,
-        ) {
-            Ok(_) => break,
-            Err(observed) => current = observed,
+            sender.send(task).map_err(|source| {
+                if bounded_acp_queue {
+                    async_worker::release_pending_slot(pending.as_ref());
+                }
+                super::relay_error(
+                    "internal_unexpected_failure",
+                    "failed to enqueue async delivery task",
+                    Some(json!({"cause": source.to_string()})),
+                )
+            })?;
+            spawn_async_delivery_worker(key.clone(), receiver, pending.clone());
+            async_worker::register_worker(key, sender, pending, bounded_acp_queue);
+            Ok(())
         }
     }
 }
@@ -558,107 +325,6 @@ fn deliver_one_target_with_worker_state(
             }),
         },
     }
-}
-
-fn deliver_one_target_ui(
-    task: &AsyncDeliveryTask,
-    sender: &crate::configuration::BundleMember,
-    cc_members: &[crate::configuration::BundleMember],
-    target_session: String,
-    message_id: String,
-    message: &str,
-) -> ChatResult {
-    let bundle_name = task.bundle.bundle_name.as_str();
-    let timeout = task.quiescence.quiescence_timeout;
-    let start = Instant::now();
-    loop {
-        if shutdown_requested() {
-            return ChatResult {
-                target_session,
-                message_id,
-                outcome: ChatOutcome::DroppedOnShutdown,
-                reason_code: Some(DROPPED_ON_SHUTDOWN_REASON_CODE.to_string()),
-                reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
-                details: None,
-            };
-        }
-
-        let incoming_event = RelayStreamEvent {
-            event_type: "incoming_message".to_string(),
-            bundle_name: bundle_name.to_string(),
-            target_session: target_session.clone(),
-            created_at: timestamp_rfc3339(),
-            payload: json!({
-                "message_id": message_id.clone(),
-                "sender_session": sender.id.as_str(),
-                "body": message,
-                "cc_sessions": if cc_members.is_empty() {
-                    Value::Null
-                } else {
-                    json!(cc_members.iter().map(|member| member.id.clone()).collect::<Vec<_>>())
-                },
-            }),
-        };
-        match send_event_to_registered_ui(bundle_name, target_session.as_str(), &incoming_event) {
-            Ok(StreamEventSendOutcome::Delivered) => {
-                let outcome_event = RelayStreamEvent {
-                    event_type: "delivery_outcome".to_string(),
-                    bundle_name: bundle_name.to_string(),
-                    target_session: target_session.clone(),
-                    created_at: timestamp_rfc3339(),
-                    payload: json!({
-                        "message_id": message_id.clone(),
-                        "outcome": "success",
-                    }),
-                };
-                let _ = send_event_to_registered_ui(
-                    bundle_name,
-                    target_session.as_str(),
-                    &outcome_event,
-                );
-                return ChatResult {
-                    target_session,
-                    message_id,
-                    outcome: ChatOutcome::Delivered,
-                    reason_code: None,
-                    reason: None,
-                    details: None,
-                };
-            }
-            Ok(StreamEventSendOutcome::NoUiEndpoint) | Ok(StreamEventSendOutcome::Disconnected) => {
-            }
-            Err(source) => {
-                return ChatResult {
-                    target_session,
-                    message_id,
-                    outcome: ChatOutcome::Failed,
-                    reason_code: None,
-                    reason: Some(format!("failed to emit relay stream event: {}", source)),
-                    details: None,
-                };
-            }
-        }
-        if timeout.is_some_and(|value| start.elapsed() >= value) {
-            return ChatResult {
-                target_session,
-                message_id,
-                outcome: ChatOutcome::Timeout,
-                reason_code: None,
-                reason: Some(format!(
-                    "ui relay stream was disconnected for {}ms",
-                    start.elapsed().as_millis()
-                )),
-                details: None,
-            };
-        }
-        thread::sleep(Duration::from_millis(UI_RECONNECT_POLL_INTERVAL_MS));
-    }
-}
-
-fn timestamp_rfc3339() -> String {
-    time::OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
 fn delivered_result(target_session: String, message_id: String) -> ChatResult {
@@ -1141,28 +807,16 @@ pub(super) fn prompt_batch_settings() -> PromptBatchSettings {
     }
 }
 
-fn async_delivery_registry() -> &'static AsyncDeliveryRegistry {
-    ASYNC_DELIVERY_REGISTRY.get_or_init(AsyncDeliveryRegistry::default)
-}
-
-fn async_worker_count() -> usize {
-    async_delivery_registry()
-        .workers
-        .lock()
-        .map(|workers| workers.len())
-        .unwrap_or(0)
-}
-
 fn spawn_async_delivery_worker(
-    key: AsyncWorkerKey,
+    key: async_worker::AsyncWorkerKey,
     receiver: mpsc::Receiver<AsyncDeliveryTask>,
-    pending: std::sync::Arc<AtomicUsize>,
+    pending: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 ) {
     thread::spawn(move || {
         let mut acp_runtime = None::<PersistentAcpWorkerRuntime>;
         loop {
             if shutdown_requested() {
-                drop_pending_async_tasks_on_shutdown(&receiver, pending.as_ref());
+                async_worker::drop_pending_async_tasks_on_shutdown(&receiver, pending.as_ref());
                 break;
             }
             let received =
@@ -1173,283 +827,16 @@ fn spawn_async_delivery_worker(
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             };
             if shutdown_requested() {
-                complete_task_on_shutdown(&task);
-                release_pending_slot(pending.as_ref());
-                drop_pending_async_tasks_on_shutdown(&receiver, pending.as_ref());
+                async_worker::complete_task_on_shutdown(&task);
+                async_worker::release_pending_slot(pending.as_ref());
+                async_worker::drop_pending_async_tasks_on_shutdown(&receiver, pending.as_ref());
                 break;
             }
 
             let outcome = deliver_one_target_with_worker_state(&task, &mut acp_runtime);
-            complete_task_outcome(&task, outcome);
-            release_pending_slot(pending.as_ref());
+            async_worker::complete_task_outcome(&task, outcome);
+            async_worker::release_pending_slot(pending.as_ref());
         }
-        if let Ok(mut workers) = async_delivery_registry().workers.lock() {
-            workers.remove(&key);
-        }
+        async_worker::unregister_worker(&key);
     });
-}
-
-fn drop_pending_async_tasks_on_shutdown(
-    receiver: &mpsc::Receiver<AsyncDeliveryTask>,
-    pending: &AtomicUsize,
-) {
-    while let Ok(task) = receiver.try_recv() {
-        complete_task_on_shutdown(&task);
-        release_pending_slot(pending);
-    }
-}
-
-fn complete_task_on_shutdown(task: &AsyncDeliveryTask) {
-    complete_task_outcome(
-        task,
-        Ok(ChatResult {
-            target_session: task.target_session.clone(),
-            message_id: task.message_id.clone(),
-            outcome: ChatOutcome::DroppedOnShutdown,
-            reason_code: Some(DROPPED_ON_SHUTDOWN_REASON_CODE.to_string()),
-            reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
-            details: None,
-        }),
-    );
-}
-
-fn complete_task_outcome(task: &AsyncDeliveryTask, outcome: Result<ChatResult, RelayError>) {
-    if let Some(sender) = task.completion_sender.as_ref() {
-        let _ = sender.send(outcome);
-        return;
-    }
-    match outcome {
-        Ok(result) => emit_inscription(
-            "relay.chat.async.completed",
-            &json!({
-                "bundle_name": task.bundle.bundle_name,
-                "sender_session": task.sender.id,
-                "target_session": result.target_session,
-                "message_id": result.message_id,
-                "outcome": result.outcome,
-                "reason_code": result.reason_code,
-                "reason": result.reason,
-                "details": result.details,
-            }),
-        ),
-        Err(error) => emit_inscription(
-            "relay.chat.async.completed",
-            &json!({
-                "bundle_name": task.bundle.bundle_name,
-                "sender_session": task.sender.id,
-                "target_session": task.target_session,
-                "message_id": task.message_id,
-                "outcome": ChatOutcome::Failed,
-                "reason": error.message,
-                "error_code": error.code,
-            }),
-        ),
-    }
-}
-
-fn wait_for_quiescent_pane(
-    tmux_socket: &Path,
-    target_session: &str,
-    options: QuiescenceOptions,
-    prompt_readiness: Option<&PromptReadinessTemplate>,
-) -> Result<String, DeliveryWaitError> {
-    let readiness = build_prompt_readiness_matcher(prompt_readiness)
-        .map_err(|reason| DeliveryWaitError::Failed { reason })?;
-    let deadline = options
-        .quiescence_timeout
-        .map(|timeout| Instant::now() + timeout);
-    let mut readiness_mismatch = false;
-    let mut mismatch_reason = None::<String>;
-    loop {
-        if shutdown_requested() {
-            return Err(DeliveryWaitError::Shutdown);
-        }
-        let pane_before = resolve_active_pane_target(tmux_socket, target_session)
-            .map_err(|reason| DeliveryWaitError::Failed { reason })?;
-        let snapshot_before = capture_pane_snapshot(tmux_socket, &pane_before)
-            .map_err(|reason| DeliveryWaitError::Failed { reason })?;
-        let activity_before = resolve_window_activity_marker(tmux_socket, &pane_before)
-            .map_err(|reason| DeliveryWaitError::Failed { reason })?;
-
-        thread::sleep(options.quiet_window);
-        if shutdown_requested() {
-            return Err(DeliveryWaitError::Shutdown);
-        }
-
-        let pane_after = resolve_active_pane_target(tmux_socket, target_session)
-            .map_err(|reason| DeliveryWaitError::Failed { reason })?;
-        let snapshot_after = capture_pane_snapshot(tmux_socket, &pane_after)
-            .map_err(|reason| DeliveryWaitError::Failed { reason })?;
-        let activity_after = resolve_window_activity_marker(tmux_socket, &pane_after)
-            .map_err(|reason| DeliveryWaitError::Failed { reason })?;
-        let pane_is_quiescent = pane_before == pane_after
-            && snapshot_before == snapshot_after
-            && match (activity_before.as_ref(), activity_after.as_ref()) {
-                (Some(before), Some(after)) => before == after,
-                _ => true,
-            };
-        if pane_is_quiescent {
-            if let Some(reason) =
-                operator_interaction_active(tmux_socket, target_session, pane_after.as_str())
-                    .map_err(|reason| DeliveryWaitError::Failed { reason })?
-            {
-                emit_delivery_diagnostic(
-                    "delivery_operator_interaction",
-                    &json!({
-                        "target_session": target_session,
-                        "pane_target": pane_after,
-                        "reason": reason,
-                    }),
-                );
-                continue;
-            }
-            let evaluation = match prompt_readiness_matches(
-                tmux_socket,
-                pane_after.as_str(),
-                snapshot_after.as_str(),
-                readiness.as_ref(),
-            ) {
-                Ok(evaluation) => evaluation,
-                Err(reason) => return Err(DeliveryWaitError::Failed { reason }),
-            };
-            if evaluation.ready {
-                emit_delivery_diagnostic(
-                    "delivery_ready",
-                    &json!({
-                        "target_session": target_session,
-                        "pane_target": pane_after,
-                    }),
-                );
-                return Ok(pane_after);
-            }
-            readiness_mismatch = true;
-            mismatch_reason = evaluation.mismatch_reason.clone();
-            emit_delivery_diagnostic(
-                "delivery_prompt_mismatch",
-                &json!({
-                    "target_session": target_session,
-                    "pane_target": pane_after,
-                    "mismatch_reason": evaluation.mismatch_reason,
-                    "regex_matched": evaluation.regex_matched,
-                    "inspected_block": evaluation.inspected_block,
-                    "expected_cursor_column": evaluation.expected_cursor_column,
-                    "observed_cursor_column": evaluation.observed_cursor_column,
-                }),
-            );
-        }
-
-        if deadline.is_some_and(|value| Instant::now() >= value) {
-            let timeout = options.quiescence_timeout.unwrap_or_default();
-            emit_delivery_diagnostic(
-                "quiescence_timeout",
-                &json!({
-                    "target_session": target_session,
-                    "quiescence_timeout_ms": timeout.as_millis(),
-                    "readiness_mismatch": readiness_mismatch,
-                    "mismatch_reason": mismatch_reason,
-                }),
-            );
-            return Err(DeliveryWaitError::Timeout {
-                timeout,
-                readiness_mismatch,
-                mismatch_reason,
-            });
-        }
-    }
-}
-
-fn build_prompt_readiness_matcher(
-    template: Option<&PromptReadinessTemplate>,
-) -> Result<Option<PromptReadinessMatcher>, String> {
-    let Some(template) = template else {
-        return Ok(None);
-    };
-
-    let prompt_regex = Regex::new(template.prompt_regex.as_str())
-        .map_err(|source| format!("invalid prompt_readiness.prompt_regex: {source}"))?;
-    let inspect_lines = template
-        .inspect_lines
-        .unwrap_or(PROMPT_INSPECT_LINES_DEFAULT)
-        .clamp(1, PROMPT_INSPECT_LINES_MAX);
-
-    Ok(Some(PromptReadinessMatcher {
-        prompt_regex,
-        inspect_lines,
-        input_idle_cursor_column: template.input_idle_cursor_column,
-    }))
-}
-
-fn prompt_readiness_matches(
-    tmux_socket: &Path,
-    pane_target: &str,
-    snapshot: &str,
-    matcher: Option<&PromptReadinessMatcher>,
-) -> Result<PromptReadinessEvaluation, String> {
-    let Some(matcher) = matcher else {
-        return Ok(PromptReadinessEvaluation {
-            ready: true,
-            ..PromptReadinessEvaluation::default()
-        });
-    };
-
-    let inspected = snapshot
-        .lines()
-        .rev()
-        .skip_while(|line| line.trim().is_empty())
-        .take(matcher.inspect_lines)
-        .collect::<Vec<_>>();
-    if inspected.is_empty() {
-        return Ok(PromptReadinessEvaluation {
-            mismatch_reason: Some(
-                "inspected pane tail was empty after trimming trailing blank lines".to_string(),
-            ),
-            regex_matched: Some(false),
-            expected_cursor_column: matcher.input_idle_cursor_column,
-            ..PromptReadinessEvaluation::default()
-        });
-    }
-    let mut ordered = inspected;
-    ordered.reverse();
-    let block = ordered.join("\n");
-    if !matcher.prompt_regex.is_match(block.as_str()) {
-        return Ok(PromptReadinessEvaluation {
-            mismatch_reason: Some("prompt regex did not match inspected pane tail".to_string()),
-            inspected_block: Some(sanitize_diagnostic_text(&block)),
-            regex_matched: Some(false),
-            expected_cursor_column: matcher.input_idle_cursor_column,
-            ..PromptReadinessEvaluation::default()
-        });
-    }
-
-    let Some(expected_cursor_column) = matcher.input_idle_cursor_column else {
-        return Ok(PromptReadinessEvaluation {
-            ready: true,
-            inspected_block: Some(sanitize_diagnostic_text(&block)),
-            regex_matched: Some(true),
-            ..PromptReadinessEvaluation::default()
-        });
-    };
-    let cursor_column = resolve_cursor_column(tmux_socket, pane_target)?;
-    if cursor_column != expected_cursor_column {
-        return Ok(PromptReadinessEvaluation {
-            mismatch_reason: Some(format!(
-                "cursor column {} did not match required {}",
-                cursor_column, expected_cursor_column
-            )),
-            inspected_block: Some(sanitize_diagnostic_text(&block)),
-            regex_matched: Some(true),
-            expected_cursor_column: Some(expected_cursor_column),
-            observed_cursor_column: Some(cursor_column),
-            ..PromptReadinessEvaluation::default()
-        });
-    }
-
-    Ok(PromptReadinessEvaluation {
-        ready: true,
-        inspected_block: Some(sanitize_diagnostic_text(&block)),
-        regex_matched: Some(true),
-        expected_cursor_column: Some(expected_cursor_column),
-        observed_cursor_column: Some(cursor_column),
-        ..PromptReadinessEvaluation::default()
-    })
 }
