@@ -1,3 +1,9 @@
+mod acp_client;
+mod acp_state;
+mod async_worker;
+mod quiescence;
+mod ui_delivery;
+
 use std::{path::Path, sync::mpsc, thread, time::Duration};
 
 use serde_json::{Value, json};
@@ -12,16 +18,15 @@ use crate::{
     runtime::{inscriptions::emit_inscription, signals::shutdown_requested},
 };
 
-use super::acp_client::{AcpRequestError, AcpStdioClient};
-pub(super) use super::acp_state::load_acp_snapshot_lines_for_look;
-use super::acp_state::{
+use self::acp_client::{AcpRequestError, AcpStdioClient};
+pub(in crate::relay) use self::acp_state::load_acp_snapshot_lines_for_look;
+use self::acp_state::{
     AcpWorkerReadinessState, load_persisted_acp_session_id, persist_acp_session_id,
     persist_acp_snapshot_lines, persist_acp_worker_state,
 };
-use super::async_worker;
-use super::quiescence::wait_for_quiescent_pane;
-pub(super) use super::quiescence::{DeliveryWaitError, QuiescenceOptions};
-use super::ui_delivery::deliver_one_target_ui;
+use self::quiescence::wait_for_quiescent_pane;
+pub(in crate::relay) use self::quiescence::{DeliveryWaitError, QuiescenceOptions};
+use self::ui_delivery::deliver_one_target_ui;
 
 use super::stream::{RelayClientClass, resolve_registered_client_class};
 use super::tmux::inject_prompt;

@@ -9,7 +9,7 @@ use std::{
 
 use serde_json::{Value, json};
 
-use super::ACP_PROTOCOL_VERSION;
+use super::super::ACP_PROTOCOL_VERSION;
 
 const ACP_CLIENT_NAME: &str = "agentmux-relay";
 const ACP_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -14,7 +14,7 @@ use serde_json::json;
 use crate::configuration::TargetConfiguration;
 use crate::runtime::{inscriptions::emit_inscription, signals::shutdown_requested};
 
-use super::{AsyncDeliveryTask, ChatOutcome, ChatResult, RelayError};
+use super::super::{AsyncDeliveryTask, ChatOutcome, ChatResult, RelayError};
 
 use std::path::PathBuf;
 
@@ -76,7 +76,7 @@ pub(super) fn try_existing_worker(
 ) -> Result<Option<AsyncDeliveryTask>, RelayError> {
     let registry = async_delivery_registry();
     let mut workers = registry.workers.lock().map_err(|_| {
-        super::relay_error(
+        super::super::relay_error(
             "internal_unexpected_failure",
             "failed to lock async delivery registry",
             None,
@@ -85,7 +85,7 @@ pub(super) fn try_existing_worker(
 
     if let Some(worker) = workers.get(key) {
         if worker.bounded_acp_queue && !reserve_acp_pending_slot(worker.pending.as_ref()) {
-            return Err(super::relay_error(
+            return Err(super::super::relay_error(
                 ACP_ERROR_CODE_QUEUE_FULL,
                 "ACP worker queue is full",
                 Some(json!({
@@ -139,7 +139,7 @@ pub(super) fn task_uses_acp_transport(task: &AsyncDeliveryTask) -> Result<bool, 
         .find(|member| member.id == task.target_session)
         .map(|member| matches!(member.target, TargetConfiguration::Acp(_)))
         .ok_or_else(|| {
-            super::relay_error(
+            super::super::relay_error(
                 "internal_unexpected_failure",
                 "resolved target member is missing from bundle configuration",
                 Some(json!({"target_session": task.target_session})),

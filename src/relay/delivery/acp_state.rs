@@ -65,7 +65,7 @@ pub(super) fn load_persisted_acp_session_id(
     Ok(state.map(|value| value.acp_session_id))
 }
 
-pub(super) fn load_acp_snapshot_lines_for_look(
+pub(in crate::relay) fn load_acp_snapshot_lines_for_look(
     runtime_socket_path: &Path,
     target_session: &str,
     requested_lines: usize,

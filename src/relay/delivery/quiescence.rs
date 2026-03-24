@@ -10,7 +10,7 @@ use serde_json::json;
 use crate::configuration::PromptReadinessTemplate;
 use crate::runtime::signals::shutdown_requested;
 
-use super::tmux::{
+use super::super::tmux::{
     capture_pane_snapshot, emit_delivery_diagnostic, operator_interaction_active,
     resolve_active_pane_target, resolve_cursor_column, resolve_window_activity_marker,
     sanitize_diagnostic_text,
@@ -23,7 +23,7 @@ const PROMPT_INSPECT_LINES_DEFAULT: usize = 3;
 const PROMPT_INSPECT_LINES_MAX: usize = 40;
 
 #[derive(Clone, Copy, Debug)]
-pub(super) struct QuiescenceOptions {
+pub(in crate::relay) struct QuiescenceOptions {
     pub quiet_window: Duration,
     pub quiescence_timeout: Option<Duration>,
     pub acp_turn_timeout_override: Option<Duration>,
@@ -40,7 +40,7 @@ impl Default for QuiescenceOptions {
 }
 
 impl QuiescenceOptions {
-    pub(super) fn for_sync(
+    pub(in crate::relay) fn for_sync(
         quiet_window_ms: Option<u64>,
         quiescence_timeout_ms: Option<u64>,
         acp_turn_timeout_ms: Option<u64>,
@@ -62,7 +62,7 @@ impl QuiescenceOptions {
         }
     }
 
-    pub(super) fn for_async(
+    pub(in crate::relay) fn for_async(
         quiet_window_ms: Option<u64>,
         quiescence_timeout_ms: Option<u64>,
         acp_turn_timeout_ms: Option<u64>,
@@ -93,7 +93,7 @@ impl QuiescenceOptions {
 }
 
 #[derive(Debug)]
-pub(super) enum DeliveryWaitError {
+pub(in crate::relay) enum DeliveryWaitError {
     Timeout {
         timeout: Duration,
         readiness_mismatch: bool,
