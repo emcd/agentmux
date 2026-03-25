@@ -1,7 +1,7 @@
 #[path = "integration/cli_surface.rs"]
 mod cli_surface;
-#[path = "integration/mcp_tool_surface.rs"]
-mod mcp_tool_surface;
+#[path = "integration/mcp/mod.rs"]
+mod mcp;
 #[path = "integration/runtime_bootstrap.rs"]
 mod runtime_bootstrap;
 #[path = "integration/session_relay_acp.rs"]
