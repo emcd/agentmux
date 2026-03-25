@@ -14,7 +14,7 @@ use super::results::{
     timeout_result,
 };
 
-use super::{AsyncDeliveryTask, ChatResult};
+use super::super::{AsyncDeliveryTask, ChatResult};
 
 pub(super) const ACP_REASON_CODE_TURN_TIMEOUT: &str = "acp_turn_timeout";
 pub(super) const ACP_REASON_CODE_STOP_CANCELLED: &str = "acp_stop_cancelled";

@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-use super::{ChatOutcome, ChatResult};
+use super::super::{ChatOutcome, ChatResult};
 
 pub(super) const ACP_DELIVERY_PHASE_ACCEPTED_IN_PROGRESS: &str = "accepted_in_progress";
 
