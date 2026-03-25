@@ -3,6 +3,7 @@
 mod input;
 mod render;
 mod state;
+mod target;
 
 use std::time::Duration;
 
@@ -11,8 +12,9 @@ use ratatui::DefaultTerminal;
 
 use crate::runtime::error::RuntimeError;
 
-pub use state::{
-    TuiLaunchOptions, autocomplete_recipient_input, merge_tui_targets, parse_tui_target_identifier,
+pub use state::TuiLaunchOptions;
+pub use target::{
+    autocomplete_recipient_input, merge_tui_targets, parse_tui_target_identifier,
     resolve_tui_look_target,
 };
 
