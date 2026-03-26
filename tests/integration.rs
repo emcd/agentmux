@@ -1,5 +1,5 @@
-#[path = "integration/cli_surface.rs"]
-mod cli_surface;
+#[path = "integration/cli/mod.rs"]
+mod cli;
 #[path = "integration/mcp/mod.rs"]
 mod mcp;
 #[path = "integration/runtime_bootstrap.rs"]
