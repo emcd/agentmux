@@ -21,6 +21,7 @@ pub(crate) fn render(frame: &mut Frame, state: &mut AppState) {
     render_header(frame, chunks[0], state);
     render_main(frame, chunks[1], state);
     render_footer(frame, chunks[2], state);
+    render_compose_cursor(frame, chunks[1], state);
 
     if state.help_overlay_open {
         render_help_overlay(frame);
@@ -63,6 +64,78 @@ fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
 
 fn render_main(frame: &mut Frame, area: Rect, state: &mut AppState) {
     render_workbench_panes(frame, area, state);
+}
+
+fn render_compose_cursor(frame: &mut Frame, area: Rect, state: &AppState) {
+    if state.help_overlay_open
+        || state.picker_open
+        || state.events_overlay_open
+        || state.look_overlay_open
+    {
+        return;
+    }
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(12), Constraint::Length(9)])
+        .split(area);
+    let Some((x, y)) = compose_cursor_position(rows[1], state) else {
+        return;
+    };
+    frame.set_cursor_position((x, y));
+}
+
+fn compose_cursor_position(area: Rect, state: &AppState) -> Option<(u16, u16)> {
+    if area.width < 3 || area.height < 3 {
+        return None;
+    }
+    let inner_left = area.x.saturating_add(1);
+    let inner_top = area.y.saturating_add(1);
+    let inner_right = area.x.saturating_add(area.width).saturating_sub(2);
+    let inner_bottom = area.y.saturating_add(area.height).saturating_sub(2);
+    let inner_width = area.width.saturating_sub(2);
+    if inner_width == 0 {
+        return None;
+    }
+
+    let (raw_x, raw_y) = match state.focus {
+        FocusField::To => {
+            let prefix_width = "To: ".chars().count() as u16;
+            let field_width = inner_width.saturating_sub(prefix_width);
+            let cursor_column = visible_cursor_column(state.to_field.as_str(), field_width);
+            (
+                inner_left
+                    .saturating_add(prefix_width)
+                    .saturating_add(cursor_column),
+                inner_top,
+            )
+        }
+        FocusField::Message => {
+            let lines = state.message_field.lines().collect::<Vec<_>>();
+            let (line_index, line_text) = if lines.is_empty() {
+                (0usize, "")
+            } else {
+                let index = lines.len().saturating_sub(1).min(3);
+                (index, lines[index])
+            };
+            let cursor_column = visible_cursor_column(line_text, inner_width);
+            (
+                inner_left.saturating_add(cursor_column),
+                inner_top
+                    .saturating_add(3)
+                    .saturating_add(line_index as u16),
+            )
+        }
+    };
+
+    Some((raw_x.min(inner_right), raw_y.min(inner_bottom)))
+}
+
+fn visible_cursor_column(value: &str, width: u16) -> u16 {
+    if width == 0 {
+        return 0;
+    }
+    let value_width = value.chars().count() as u16;
+    value_width.min(width.saturating_sub(1))
 }
 
 fn render_workbench_panes(frame: &mut Frame, area: Rect, state: &mut AppState) {
