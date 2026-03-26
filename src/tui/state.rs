@@ -76,6 +76,8 @@ pub(crate) struct AppState {
     pub focus: FocusField,
     pub to_field: String,
     pub message_field: String,
+    message_cursor_index: usize,
+    message_cursor_preferred_column: Option<usize>,
     pub look_target: Option<String>,
     pub look_captured_at: Option<String>,
     pub look_snapshot_lines: Vec<String>,
@@ -91,7 +93,6 @@ pub(crate) struct AppState {
     seen_delivery_outcome_order: VecDeque<String>,
     relay_stream_poll_error_reported: bool,
     to_completion: Option<ToCompletionState>,
-    completion_locked_until_to_edit: bool,
     pub should_quit: bool,
 }
 
@@ -125,6 +126,8 @@ impl AppState {
             focus: FocusField::To,
             to_field: String::new(),
             message_field: String::new(),
+            message_cursor_index: 0,
+            message_cursor_preferred_column: None,
             look_target: None,
             look_captured_at: None,
             look_snapshot_lines: Vec::new(),
@@ -143,7 +146,6 @@ impl AppState {
             seen_delivery_outcome_order: VecDeque::new(),
             relay_stream_poll_error_reported: false,
             to_completion: None,
-            completion_locked_until_to_edit: false,
             should_quit: false,
         }
     }
@@ -307,6 +309,7 @@ impl AppState {
             FocusField::Message => FocusField::To,
         };
         self.clear_to_completion();
+        self.message_cursor_preferred_column = None;
     }
 
     pub fn cycle_focus_backward(&mut self) {
@@ -315,6 +318,7 @@ impl AppState {
             FocusField::Message => FocusField::To,
         };
         self.clear_to_completion();
+        self.message_cursor_preferred_column = None;
     }
 
     pub fn insert_character(&mut self, character: char) {
@@ -324,7 +328,7 @@ impl AppState {
                 self.on_to_field_edited();
                 self.maybe_autocomplete_at_prefixed_token();
             }
-            FocusField::Message => self.message_field.push(character),
+            FocusField::Message => self.insert_character_in_message(character),
         }
     }
 
@@ -342,14 +346,14 @@ impl AppState {
                 self.maybe_autocomplete_at_prefixed_token();
             }
             FocusField::Message => {
-                self.message_field.pop();
+                self.backspace_message();
             }
         }
     }
 
     pub fn insert_newline_if_message(&mut self) {
         if self.focus == FocusField::Message {
-            self.message_field.push('\n');
+            self.insert_character_in_message('\n');
         }
     }
 
@@ -357,14 +361,7 @@ impl AppState {
         if self.focus != FocusField::To {
             return;
         }
-        let _ = self.cycle_or_start_to_completion();
-    }
-
-    pub fn handle_tab_in_to_field(&mut self) -> bool {
-        if self.completion_locked_until_to_edit {
-            return false;
-        }
-        self.cycle_or_start_to_completion()
+        let _ = self.start_to_completion();
     }
 
     pub fn accept_active_to_completion(&mut self) -> bool {
@@ -375,36 +372,59 @@ impl AppState {
             return false;
         }
         self.to_completion = None;
-        self.completion_locked_until_to_edit = true;
         true
     }
 
-    fn cycle_or_start_to_completion(&mut self) -> bool {
+    pub fn move_to_completion_selection(&mut self, delta: isize) -> bool {
         if self.focus != FocusField::To {
             return false;
         }
-
         if let Some((token_start, leading_ws, candidate)) =
-            self.to_completion.as_mut().and_then(|state| {
-                if state.candidates.is_empty() {
+            self.to_completion.as_mut().and_then(|completion_state| {
+                if completion_state.candidates.is_empty() {
                     return None;
                 }
-                state.candidate_index = (state.candidate_index + 1) % state.candidates.len();
+                completion_state.candidate_index = wrap_index(
+                    completion_state.candidate_index,
+                    delta,
+                    completion_state.candidates.len(),
+                );
                 Some((
-                    state.token_start,
-                    state.leading_ws,
-                    state
+                    completion_state.token_start,
+                    completion_state.leading_ws,
+                    completion_state
                         .candidates
-                        .get(state.candidate_index)
+                        .get(completion_state.candidate_index)
                         .cloned()
                         .unwrap_or_default(),
                 ))
             })
         {
-            self.apply_to_completion_candidate(token_start, leading_ws, &candidate);
+            self.apply_to_completion_candidate(token_start, leading_ws, candidate.as_str());
             return true;
         }
+        false
+    }
 
+    pub fn move_message_cursor_up(&mut self) {
+        if self.focus != FocusField::Message {
+            return;
+        }
+        self.move_message_cursor_vertical(-1);
+    }
+
+    pub fn move_message_cursor_down(&mut self) {
+        if self.focus != FocusField::Message {
+            return;
+        }
+        self.move_message_cursor_vertical(1);
+    }
+
+    pub fn message_cursor_line_and_column(&self) -> (usize, usize) {
+        line_and_column_for_index(self.message_field.as_str(), self.message_cursor_index)
+    }
+
+    fn start_to_completion(&mut self) -> bool {
         let context = current_recipient_token_context(&self.to_field);
         let Some(context) = context else {
             return false;
@@ -436,7 +456,6 @@ impl AppState {
 
     fn on_to_field_edited(&mut self) {
         self.to_completion = None;
-        self.completion_locked_until_to_edit = false;
     }
 
     fn maybe_autocomplete_at_prefixed_token(&mut self) {
@@ -494,6 +513,59 @@ impl AppState {
         self.to_completion = None;
     }
 
+    fn clear_compose_fields(&mut self) {
+        self.to_field.clear();
+        self.message_field.clear();
+        self.message_cursor_index = 0;
+        self.message_cursor_preferred_column = None;
+        self.clear_to_completion();
+    }
+
+    fn insert_character_in_message(&mut self, character: char) {
+        self.message_field
+            .insert(self.message_cursor_index, character);
+        self.message_cursor_index += character.len_utf8();
+        self.message_cursor_preferred_column = None;
+    }
+
+    fn backspace_message(&mut self) {
+        if self.message_cursor_index == 0 {
+            return;
+        }
+        let next_cursor =
+            previous_char_boundary(self.message_field.as_str(), self.message_cursor_index);
+        self.message_field
+            .replace_range(next_cursor..self.message_cursor_index, "");
+        self.message_cursor_index = next_cursor;
+        self.message_cursor_preferred_column = None;
+    }
+
+    fn move_message_cursor_vertical(&mut self, delta: isize) {
+        let line_ranges = line_ranges(self.message_field.as_str());
+        if line_ranges.is_empty() {
+            return;
+        }
+        let (current_line, current_column) =
+            line_and_column_for_index(self.message_field.as_str(), self.message_cursor_index);
+        let target_line = if delta.is_negative() {
+            current_line.saturating_sub(delta.unsigned_abs())
+        } else {
+            (current_line + delta as usize).min(line_ranges.len().saturating_sub(1))
+        };
+        if target_line == current_line {
+            return;
+        }
+        let preferred_column = self
+            .message_cursor_preferred_column
+            .unwrap_or(current_column);
+        self.message_cursor_index = cursor_index_for_line_column(
+            self.message_field.as_str(),
+            line_ranges[target_line],
+            preferred_column,
+        );
+        self.message_cursor_preferred_column = Some(preferred_column);
+    }
+
     pub fn send_message(&mut self) -> Result<(), RuntimeError> {
         if self.message_field.trim().is_empty() {
             return Err(RuntimeError::validation(
@@ -534,6 +606,7 @@ impl AppState {
                         self.pending_deliveries_count()
                     ),
                 );
+                self.clear_compose_fields();
                 self.relay_stream_poll_error_reported = false;
                 Ok(())
             }
@@ -603,6 +676,19 @@ impl AppState {
     pub fn scroll_chat_history_page_down(&mut self) {
         let page = self.chat_history_viewport_height.max(1);
         self.chat_history_scroll = self.chat_history_scroll.saturating_sub(page);
+    }
+
+    pub fn scroll_chat_history_up(&mut self) {
+        let max_scroll = self.max_chat_history_scroll();
+        self.chat_history_scroll = (self.chat_history_scroll + 1).min(max_scroll);
+    }
+
+    pub fn scroll_chat_history_down(&mut self) {
+        self.chat_history_scroll = self.chat_history_scroll.saturating_sub(1);
+    }
+
+    pub fn snap_chat_history_to_latest(&mut self) {
+        self.chat_history_scroll = 0;
     }
 
     pub fn visible_chat_history_entries(&self) -> Vec<ChatHistoryEntry> {
@@ -905,6 +991,59 @@ fn wrap_index(index: usize, delta: isize, len: usize) -> usize {
     }
     let len = len as isize;
     ((index as isize + delta).rem_euclid(len)) as usize
+}
+
+fn previous_char_boundary(value: &str, cursor_index: usize) -> usize {
+    value[..cursor_index]
+        .char_indices()
+        .next_back()
+        .map(|(index, _)| index)
+        .unwrap_or(0)
+}
+
+fn line_ranges(value: &str) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::<(usize, usize)>::new();
+    let mut line_start = 0usize;
+    for (index, character) in value.char_indices() {
+        if character == '\n' {
+            ranges.push((line_start, index));
+            line_start = index + character.len_utf8();
+        }
+    }
+    ranges.push((line_start, value.len()));
+    ranges
+}
+
+fn line_and_column_for_index(value: &str, cursor_index: usize) -> (usize, usize) {
+    let ranges = line_ranges(value);
+    for (line_index, (line_start, line_end)) in ranges.iter().enumerate() {
+        if cursor_index <= *line_end || line_index + 1 == ranges.len() {
+            let column_end = cursor_index.min(*line_end);
+            let column = value[*line_start..column_end].chars().count();
+            return (line_index, column);
+        }
+    }
+    (0, 0)
+}
+
+fn cursor_index_for_line_column(
+    value: &str,
+    line_range: (usize, usize),
+    target_column: usize,
+) -> usize {
+    let (line_start, line_end) = line_range;
+    let line_slice = &value[line_start..line_end];
+    let line_len = line_slice.chars().count();
+    let clamped_column = target_column.min(line_len);
+    if clamped_column == line_len {
+        return line_end;
+    }
+    line_start
+        + line_slice
+            .char_indices()
+            .nth(clamped_column)
+            .map(|(index, _)| index)
+            .unwrap_or(0)
 }
 
 fn map_relay_error(error: RelayError) -> RuntimeError {

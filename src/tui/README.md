@@ -14,14 +14,14 @@ This module provides the interactive `agentmux tui` workbench.
   - association fallback,
 - delivery outcome vocabulary mapping:
   - `accepted`, `success`, `timeout`, `failed`,
-- recipient completion via context-sensitive `Tab` plus `Ctrl+Space`,
+- recipient completion via `@` token triggers plus `Ctrl+Space`,
 - `@`-prefixed tokens trigger immediate completion proposals after one suffix character,
 - recipient picker overlay (`F2`),
 - delivery events overlay (`F3`),
 - look snapshot overlay (`F4`),
 - help overlay (`F1`),
 - chat history viewport with PgUp/PgDn navigation for sent/received messages,
-- send workflow via relay `chat` (`Ctrl+S`),
+- send workflow via relay `chat` (`Enter` in `Message`),
 - look workflow via relay `look` (`F4`),
 - stable error-code rendering for validation failures.
 - stream reconnect handling with explicit `relay_unavailable` status when
@@ -31,14 +31,21 @@ This module provides the interactive `agentmux tui` workbench.
 
 - `Ctrl+C`: quit
 - `F1`: open/close help overlay
-- `Tab`: in `To`, cycle/start completion when applicable; otherwise move focus
+- `Tab`: focus next field (`To` <-> `Message`)
 - `Shift+Tab`: cycle field focus backward (`To` <-> `Message`)
-- `Ctrl+Space`: cycle/start completion in `To`
-- `Enter`: accept active completion proposal in `To`
+- `Ctrl+Space`: trigger completion in `To`
+- `Up` / `Down` in `To`: navigate active completion candidate
+- `Up` / `Down` in `Message`: move cursor between message lines
+- `Enter`:
+  - in `To`, accept active completion proposal
+  - in `Message`, send message
+- `Ctrl+J`: insert newline in `Message`
+- `Esc` in `Message`: snap chat history viewport to latest
 - `F2`: open/close recipient picker overlay
 - `F3`: open/close events overlay
 - `F4`: capture look snapshot for selected recipient (or first `To` recipient) and open overlay
 - `PgUp` / `PgDn`: page chat history viewport backward/forward
 - `Up` / `Down`: move recipient selection in picker overlay
-- `Ctrl+S`: send message
 - `Ctrl+R`: refresh recipients
+- mouse wheel: scroll chat history
+- successful send clears `To` and `Message` fields

@@ -110,14 +110,8 @@ fn compose_cursor_position(area: Rect, state: &AppState) -> Option<(u16, u16)> {
             )
         }
         FocusField::Message => {
-            let lines = state.message_field.lines().collect::<Vec<_>>();
-            let (line_index, line_text) = if lines.is_empty() {
-                (0usize, "")
-            } else {
-                let index = lines.len().saturating_sub(1).min(3);
-                (index, lines[index])
-            };
-            let cursor_column = visible_cursor_column(line_text, inner_width);
+            let (line_index, column_index) = state.message_cursor_line_and_column();
+            let cursor_column = visible_cursor_column_count(column_index, inner_width);
             (
                 inner_left.saturating_add(cursor_column),
                 inner_top
@@ -136,6 +130,13 @@ fn visible_cursor_column(value: &str, width: u16) -> u16 {
     }
     let value_width = value.chars().count() as u16;
     value_width.min(width.saturating_sub(1))
+}
+
+fn visible_cursor_column_count(count: usize, width: u16) -> u16 {
+    if width == 0 {
+        return 0;
+    }
+    (count as u16).min(width.saturating_sub(1))
 }
 
 fn render_workbench_panes(frame: &mut Frame, area: Rect, state: &mut AppState) {
@@ -329,11 +330,15 @@ fn render_help_overlay(frame: &mut Frame) {
         Line::from("F3: Toggle events"),
         Line::from("F4: Capture look snapshot (selected recipient or first To target)"),
         Line::from("Ctrl+R: Refresh recipients"),
-        Line::from("Ctrl+S: Send message"),
-        Line::from("Tab: Recipient completion in To, otherwise focus next"),
-        Line::from("Shift+Tab: Focus previous"),
-        Line::from("Enter: Accept completion in To / newline in Message"),
+        Line::from("Tab / Shift+Tab: Focus next/previous"),
+        Line::from("Ctrl+Space: Trigger recipient completion in To"),
+        Line::from("Up/Down in To: Navigate active completion"),
+        Line::from("Up/Down in Message: Move cursor between lines"),
+        Line::from("Enter: Accept completion in To / send in Message"),
+        Line::from("Ctrl+J: Insert newline in Message"),
+        Line::from("Esc in Message: Snap history to latest"),
         Line::from("PgUp/PgDn: Scroll chat history"),
+        Line::from("Mouse wheel: Scroll chat history"),
         Line::from("Ctrl+C: Quit"),
     ];
     let paragraph = Paragraph::new(lines)

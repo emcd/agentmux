@@ -1,4 +1,4 @@
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind};
 
 use crate::runtime::error::RuntimeError;
 
@@ -7,6 +7,14 @@ use super::state::{AppState, FocusField};
 pub(crate) fn handle_event(state: &mut AppState, event: Event) -> Result<(), RuntimeError> {
     match event {
         Event::Key(key) => handle_key(state, key),
+        Event::Mouse(mouse) => {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => state.scroll_chat_history_up(),
+                MouseEventKind::ScrollDown => state.scroll_chat_history_down(),
+                _ => {}
+            }
+            Ok(())
+        }
         Event::Paste(text) => {
             state.insert_text(text.as_str());
             Ok(())
@@ -44,7 +52,10 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
                 state.should_quit = true;
                 return Ok(());
             }
-            KeyCode::Char('s') => return state.send_message(),
+            KeyCode::Char('j') => {
+                state.insert_newline_if_message();
+                return Ok(());
+            }
             KeyCode::Char('r') => return state.refresh_recipients(),
             KeyCode::Char(' ') => state.autocomplete_active_recipient_field(),
             _ => {}
@@ -62,18 +73,31 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
         KeyCode::F(3) => state.toggle_events_overlay(),
         KeyCode::F(4) => return state.look_target(),
         KeyCode::BackTab => state.cycle_focus_backward(),
-        KeyCode::Tab => {
+        KeyCode::Tab => state.cycle_focus_forward(),
+        KeyCode::Enter => {
             if state.focus == FocusField::To {
-                if !state.handle_tab_in_to_field() {
-                    state.cycle_focus_forward();
-                }
+                state.accept_active_to_completion();
             } else if state.focus == FocusField::Message {
-                state.cycle_focus_forward();
+                return state.send_message();
             }
         }
-        KeyCode::Enter => {
-            if !state.accept_active_to_completion() {
-                state.insert_newline_if_message();
+        KeyCode::Esc => {
+            if state.focus == FocusField::Message {
+                state.snap_chat_history_to_latest();
+            }
+        }
+        KeyCode::Up => {
+            if state.focus == FocusField::To {
+                state.move_to_completion_selection(-1);
+            } else if state.focus == FocusField::Message {
+                state.move_message_cursor_up();
+            }
+        }
+        KeyCode::Down => {
+            if state.focus == FocusField::To {
+                state.move_to_completion_selection(1);
+            } else if state.focus == FocusField::Message {
+                state.move_message_cursor_down();
             }
         }
         KeyCode::Backspace => state.backspace(),

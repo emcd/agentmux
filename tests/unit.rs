@@ -20,3 +20,5 @@ mod runtime_starter;
 mod tui;
 #[path = "unit/tui_sender.rs"]
 mod tui_sender;
+#[path = "unit/tui_workbench.rs"]
+mod tui_workbench;

@@ -4,6 +4,7 @@ mod input;
 mod render;
 mod state;
 mod target;
+pub mod workbench;
 
 use std::time::Duration;
 
