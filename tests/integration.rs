@@ -1,11 +1,11 @@
+#[path = "integration/acp/mod.rs"]
+mod acp;
 #[path = "integration/cli/mod.rs"]
 mod cli;
 #[path = "integration/mcp/mod.rs"]
 mod mcp;
 #[path = "integration/runtime_bootstrap.rs"]
 mod runtime_bootstrap;
-#[path = "integration/session_relay_acp.rs"]
-mod session_relay_acp;
 #[path = "integration/session_relay_delivery.rs"]
 mod session_relay_delivery;
 #[path = "integration/session_relay_look.rs"]
