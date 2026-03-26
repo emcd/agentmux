@@ -29,7 +29,7 @@ This module provides the interactive `agentmux tui` workbench.
 
 ## Keybindings
 
-- `Esc` / `Ctrl+Q`: quit
+- `Ctrl+C`: quit
 - `F1`: open/close help overlay
 - `Tab`: in `To`, cycle/start completion when applicable; otherwise move focus
 - `Shift+Tab`: cycle field focus backward (`To` <-> `Message`)

@@ -40,7 +40,7 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
 
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
-            KeyCode::Char('q') => {
+            KeyCode::Char('c') => {
                 state.should_quit = true;
                 return Ok(());
             }
@@ -52,9 +52,6 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
     }
 
     match key.code {
-        KeyCode::Esc => {
-            state.should_quit = true;
-        }
         KeyCode::F(2) => {
             if state.picker_open {
                 state.close_picker();

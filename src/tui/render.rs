@@ -334,7 +334,7 @@ fn render_help_overlay(frame: &mut Frame) {
         Line::from("Shift+Tab: Focus previous"),
         Line::from("Enter: Accept completion in To / newline in Message"),
         Line::from("PgUp/PgDn: Scroll chat history"),
-        Line::from("Esc or Ctrl+Q: Quit"),
+        Line::from("Ctrl+C: Quit"),
     ];
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
