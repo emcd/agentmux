@@ -655,13 +655,6 @@ impl AppState {
         }
     }
 
-    pub fn active_recipient_field_name(&self) -> &'static str {
-        match self.focus {
-            FocusField::To => "To",
-            FocusField::Message => "Message",
-        }
-    }
-
     pub fn set_chat_history_viewport_height(&mut self, height: usize) {
         self.chat_history_viewport_height = height.max(1);
         self.clamp_chat_history_scroll();

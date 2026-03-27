@@ -38,23 +38,17 @@ pub(crate) fn render(frame: &mut Frame, state: &mut AppState) {
 }
 
 fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
-    let focus = state.active_recipient_field_name();
-    let selected = state
-        .selected_recipient_id()
-        .unwrap_or_else(|| "-".to_string());
     let text = vec![Line::from(vec![
         Span::styled(
-            "agentmux tui",
+            "Agentmux",
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(format!(
-            "  bundle={} sender={} focus={} selected={} pending={}",
+            "  Bundle: {}  Sender: {}  Pending Deliveries: {}",
             state.bundle_name,
             state.sender_session,
-            focus,
-            selected,
             state.pending_deliveries_count()
         )),
     ])];
