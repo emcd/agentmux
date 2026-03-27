@@ -48,9 +48,14 @@ fn acp_worker_state_transitions_busy_then_available() {
     let (status, result) = chat_result(response);
     assert_eq!(status, ChatStatus::Success);
     assert_eq!(result.outcome, ChatOutcome::Delivered);
-    assert_eq!(
-        read_worker_state(temporary.path(), "bravo").as_deref(),
-        Some("available")
+    assert!(
+        wait_for_worker_state(
+            temporary.path(),
+            "bravo",
+            "available",
+            Duration::from_secs(2)
+        ),
+        "worker_state did not converge to available"
     );
 }
 
@@ -96,9 +101,14 @@ fn acp_request_permission_marks_worker_busy_until_completion() {
             .and_then(|value| value.get("delivery_phase")),
         Some(&Value::String("accepted_in_progress".to_string()))
     );
-    assert_eq!(
-        read_worker_state(temporary.path(), "bravo").as_deref(),
-        Some("available")
+    assert!(
+        wait_for_worker_state(
+            temporary.path(),
+            "bravo",
+            "available",
+            Duration::from_secs(2)
+        ),
+        "worker_state did not converge to available"
     );
 }
 
@@ -116,16 +126,40 @@ fn acp_worker_state_transitions_to_unavailable_on_prompt_failure() {
         Some(1_000),
     );
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Failure);
-    assert_eq!(result.outcome, ChatOutcome::Failed);
+    assert_eq!(status, ChatStatus::Success);
+    assert_eq!(result.outcome, ChatOutcome::Delivered);
     assert_eq!(
-        result.reason_code.as_deref(),
-        Some("runtime_acp_prompt_failed")
+        result
+            .details
+            .as_ref()
+            .and_then(|value| value.get("delivery_phase")),
+        Some(&Value::String("accepted_in_progress".to_string()))
     );
-    assert_eq!(
-        read_worker_state(temporary.path(), "bravo").as_deref(),
-        Some("unavailable")
+    assert!(
+        wait_for_worker_state(
+            temporary.path(),
+            "bravo",
+            "unavailable",
+            Duration::from_secs(2)
+        ),
+        "worker_state did not converge to unavailable"
     );
+}
+
+fn wait_for_worker_state(
+    root: &std::path::Path,
+    target_session: &str,
+    expected: &str,
+    timeout: Duration,
+) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if read_worker_state(root, target_session).as_deref() == Some(expected) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    false
 }
 
 #[test]

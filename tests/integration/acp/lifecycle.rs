@@ -1,4 +1,7 @@
-use std::fs;
+use std::{
+    fs, thread,
+    time::{Duration, Instant},
+};
 
 use agentmux::relay::{ChatOutcome, ChatStatus};
 use serde_json::Value;
@@ -319,7 +322,7 @@ fn acp_initialize_failure_returns_canonical_runtime_code() {
 }
 
 #[test]
-fn acp_prompt_failure_returns_runtime_stage_code() {
+fn acp_prompt_failure_does_not_block_sync_dispatch_ack() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions {
         fail_prompt: true,
@@ -332,16 +335,19 @@ fn acp_prompt_failure_returns_runtime_stage_code() {
         Some(1_000),
     );
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Failure);
-    assert_eq!(result.outcome, ChatOutcome::Failed);
+    assert_eq!(status, ChatStatus::Success);
+    assert_eq!(result.outcome, ChatOutcome::Delivered);
     assert_eq!(
-        result.reason_code.as_deref(),
-        Some("runtime_acp_prompt_failed")
+        result
+            .details
+            .as_ref()
+            .and_then(|value| value.get("delivery_phase")),
+        Some(&Value::String("accepted_in_progress".to_string()))
     );
 }
 
 #[test]
-fn acp_disconnect_before_first_activity_returns_connection_closed_code() {
+fn acp_disconnect_before_first_activity_does_not_block_sync_dispatch_ack() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions {
         disconnect_on_prompt: Some("before_activity".to_string()),
@@ -354,15 +360,23 @@ fn acp_disconnect_before_first_activity_returns_connection_closed_code() {
         Some(1_000),
     );
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Failure);
-    assert_eq!(result.outcome, ChatOutcome::Failed);
+    assert_eq!(status, ChatStatus::Success);
+    assert_eq!(result.outcome, ChatOutcome::Delivered);
     assert_eq!(
-        result.reason_code.as_deref(),
-        Some("runtime_acp_connection_closed")
+        result
+            .details
+            .as_ref()
+            .and_then(|value| value.get("delivery_phase")),
+        Some(&Value::String("accepted_in_progress".to_string()))
     );
-    assert_eq!(
-        read_worker_state(temporary.path(), "bravo").as_deref(),
-        Some("unavailable")
+    assert!(
+        wait_for_worker_state(
+            temporary.path(),
+            "bravo",
+            "unavailable",
+            Duration::from_secs(1)
+        ),
+        "worker_state did not converge to unavailable"
     );
 }
 
@@ -391,8 +405,29 @@ fn acp_disconnect_after_first_activity_preserves_accepted_response() {
             .and_then(|value| value.get("delivery_phase")),
         Some(&Value::String("accepted_in_progress".to_string()))
     );
-    assert_eq!(
-        read_worker_state(temporary.path(), "bravo").as_deref(),
-        Some("unavailable")
+    assert!(
+        wait_for_worker_state(
+            temporary.path(),
+            "bravo",
+            "unavailable",
+            Duration::from_secs(1)
+        ),
+        "worker_state did not converge to unavailable"
     );
+}
+
+fn wait_for_worker_state(
+    root: &std::path::Path,
+    target_session: &str,
+    expected: &str,
+    timeout: Duration,
+) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if read_worker_state(root, target_session).as_deref() == Some(expected) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    false
 }

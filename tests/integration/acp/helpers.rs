@@ -328,9 +328,14 @@ pub(super) fn read_worker_state(root: &Path, target_session: &str) -> Option<Str
     if !path.exists() {
         return None;
     }
-    let value: Value =
-        serde_json::from_str(fs::read_to_string(path).expect("read state json").as_str())
-            .expect("parse state json");
+    let raw = match fs::read_to_string(path) {
+        Ok(value) => value,
+        Err(_) => return None,
+    };
+    let value: Value = match serde_json::from_str(raw.as_str()) {
+        Ok(value) => value,
+        Err(_) => return None,
+    };
     value
         .get("worker_state")
         .and_then(Value::as_str)

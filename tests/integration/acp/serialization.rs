@@ -5,7 +5,7 @@ use tempfile::TempDir;
 use super::helpers::*;
 
 #[test]
-fn acp_result_serialization_preserves_optional_reason_fields() {
+fn acp_result_serialization_preserves_dispatch_phase_details() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions {
         stop_reason: "cancelled".to_string(),
@@ -25,5 +25,10 @@ fn acp_result_serialization_preserves_optional_reason_fields() {
         panic!("expected array");
     };
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0]["reason_code"], "acp_stop_cancelled");
+    assert_eq!(results[0]["reason_code"], Value::Null);
+    assert_eq!(results[0]["reason"], Value::Null);
+    assert_eq!(
+        results[0]["details"]["delivery_phase"],
+        Value::String("accepted_in_progress".to_string())
+    );
 }

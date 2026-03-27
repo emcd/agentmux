@@ -171,7 +171,7 @@ impl AcpStdioClient {
         session_id: &str,
         prompt: &str,
         timeout: Option<Duration>,
-        on_first_activity: Option<&mut dyn FnMut()>,
+        on_dispatched: Option<&mut dyn FnMut()>,
     ) -> Result<AcpPromptCompletion, AcpRequestError> {
         let result = self.request(
             "session/prompt",
@@ -187,7 +187,7 @@ impl AcpStdioClient {
             timeout,
             Some(session_id),
             true,
-            on_first_activity,
+            on_dispatched,
         )?;
         result
             .result
@@ -215,7 +215,7 @@ impl AcpStdioClient {
         timeout: Option<Duration>,
         prompt_session_id: Option<&str>,
         response_counts_as_activity: bool,
-        mut on_first_activity: Option<&mut dyn FnMut()>,
+        mut on_dispatched: Option<&mut dyn FnMut()>,
     ) -> Result<AcpRequestResult, AcpRequestError> {
         let request_id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
@@ -235,6 +235,9 @@ impl AcpStdioClient {
             .map_err(|source| {
                 AcpRequestError::Failed(format!("write ACP request failed: {source}"))
             })?;
+        if let Some(callback) = on_dispatched.as_mut() {
+            callback();
+        }
 
         let mut first_activity_observed = false;
         let mut read_timeout = timeout;
@@ -263,9 +266,6 @@ impl AcpStdioClient {
                 {
                     first_activity_observed = true;
                     read_timeout = None;
-                    if let Some(callback) = on_first_activity.as_deref_mut() {
-                        callback();
-                    }
                 }
                 continue;
             }
@@ -274,9 +274,6 @@ impl AcpStdioClient {
             }
             if response_counts_as_activity && !first_activity_observed {
                 first_activity_observed = true;
-                if let Some(callback) = on_first_activity.as_deref_mut() {
-                    callback();
-                }
             }
             return Ok(AcpRequestResult {
                 result: decoded.get("result").cloned().unwrap_or(Value::Null),

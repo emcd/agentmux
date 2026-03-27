@@ -84,25 +84,39 @@ pub(super) fn deliver_one_target_acp(
 
     let turn_timeout = Some(task.quiescence.acp_turn_timeout(acp));
     let mut first_activity_observed = false;
+    let completion_sender = task.completion_sender.clone();
+    let mut sync_completion_sent = false;
     for prompt in prompt_batches {
         let session_id = runtime.session_id.clone();
-        let mut on_first_activity = || {
-            if first_activity_observed {
+        let target_session_for_dispatch = target_session.clone();
+        let message_id_for_dispatch = message_id.clone();
+        let mut on_dispatched = || {
+            if !first_activity_observed {
+                first_activity_observed = true;
+                let _ = persist_acp_worker_state(
+                    runtime_socket_path,
+                    target_member.id.as_str(),
+                    Some(session_id.as_str()),
+                    AcpWorkerReadinessState::Busy,
+                );
+            }
+            if sync_completion_sent {
                 return;
             }
-            first_activity_observed = true;
-            let _ = persist_acp_worker_state(
-                runtime_socket_path,
-                target_member.id.as_str(),
-                Some(session_id.as_str()),
-                AcpWorkerReadinessState::Busy,
-            );
+            let Some(sender) = completion_sender.as_ref() else {
+                return;
+            };
+            sync_completion_sent = true;
+            let _ = sender.send(Ok(delivered_in_progress_result(
+                target_session_for_dispatch.clone(),
+                message_id_for_dispatch.clone(),
+            )));
         };
         let prompt_result = runtime.client.prompt(
             session_id.as_str(),
             prompt.as_str(),
             turn_timeout,
-            Some(&mut on_first_activity),
+            Some(&mut on_dispatched),
         );
         let prompt_snapshot_lines = runtime.client.take_snapshot_lines();
         if let Err(reason) = persist_acp_snapshot_lines(

@@ -1,4 +1,8 @@
 use agentmux::relay::{ChatOutcome, ChatStatus, RelayResponse};
+use std::{
+    thread,
+    time::{Duration, Instant},
+};
 use tempfile::TempDir;
 
 use super::helpers::*;
@@ -17,7 +21,14 @@ fn acp_look_returns_oldest_to_newest_session_update_lines() {
     assert_eq!(status, ChatStatus::Success);
     assert_eq!(result.outcome, ChatOutcome::Delivered);
 
-    let look = dispatch_look(&config_root, &tmux_socket, "bravo", "bravo", Some(3));
+    let look = wait_for_look(
+        &config_root,
+        &tmux_socket,
+        "bravo",
+        "bravo",
+        Some(3),
+        |lines| lines.len() == 3,
+    );
     let RelayResponse::Look { snapshot_lines, .. } = look else {
         panic!("expected look response");
     };
@@ -41,7 +52,14 @@ fn acp_look_enforces_bounded_retention_and_tail_selection() {
     assert_eq!(status, ChatStatus::Success);
     assert_eq!(result.outcome, ChatOutcome::Delivered);
 
-    let look = dispatch_look(&config_root, &tmux_socket, "bravo", "bravo", Some(1_000));
+    let look = wait_for_look(
+        &config_root,
+        &tmux_socket,
+        "bravo",
+        "bravo",
+        Some(1_000),
+        |lines| lines.len() == 1_000,
+    );
     let RelayResponse::Look { snapshot_lines, .. } = look else {
         panic!("expected look response");
     };
@@ -87,4 +105,31 @@ fn acp_look_returns_empty_snapshot_when_no_updates_exist() {
         panic!("expected look response");
     };
     assert!(snapshot_lines.is_empty());
+}
+
+fn wait_for_look(
+    config_root: &std::path::Path,
+    tmux_socket: &std::path::Path,
+    requester_session: &str,
+    target_session: &str,
+    lines: Option<usize>,
+    condition: impl Fn(&[String]) -> bool,
+) -> RelayResponse {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let look = dispatch_look(
+            config_root,
+            tmux_socket,
+            requester_session,
+            target_session,
+            lines,
+        );
+        let RelayResponse::Look { snapshot_lines, .. } = &look else {
+            panic!("expected look response");
+        };
+        if condition(snapshot_lines) || Instant::now() >= deadline {
+            return look;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
 }
