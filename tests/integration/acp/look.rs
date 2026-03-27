@@ -58,7 +58,11 @@ fn acp_look_enforces_bounded_retention_and_tail_selection() {
         "bravo",
         "bravo",
         Some(1_000),
-        |lines| lines.len() == 1_000,
+        |lines| {
+            lines.len() == 1_000
+                && lines.first().map(String::as_str) == Some("ACP-LINE-106")
+                && lines.last().map(String::as_str) == Some("ACP-LINE-1105")
+        },
     );
     let RelayResponse::Look { snapshot_lines, .. } = look else {
         panic!("expected look response");

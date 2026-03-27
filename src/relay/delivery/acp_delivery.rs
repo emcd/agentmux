@@ -112,25 +112,24 @@ pub(super) fn deliver_one_target_acp(
                 message_id_for_dispatch.clone(),
             )));
         };
+        let mut on_snapshot_lines = |snapshot_lines: &[String]| -> Result<(), String> {
+            persist_acp_snapshot_lines(
+                runtime_socket_path,
+                target_member.id.as_str(),
+                session_id.as_str(),
+                snapshot_lines,
+            )
+        };
         let prompt_result = runtime.client.prompt(
             session_id.as_str(),
             prompt.as_str(),
             turn_timeout,
             Some(&mut on_dispatched),
+            Some(&mut on_snapshot_lines),
         );
-        let prompt_snapshot_lines = runtime.client.take_snapshot_lines();
-        if let Err(reason) = persist_acp_snapshot_lines(
-            runtime_socket_path,
-            target_member.id.as_str(),
-            session_id.as_str(),
-            prompt_snapshot_lines.as_slice(),
-        ) {
-            return failed_result(
-                target_session,
-                message_id,
-                format!("failed to persist ACP look snapshot state: {reason}"),
-            );
-        }
+        // Drop any in-memory buffered lines now that updates are persisted
+        // incrementally while observed.
+        let _ = runtime.client.take_snapshot_lines();
         match prompt_result {
             Ok(prompt_completion) => {
                 first_activity_observed |= prompt_completion.first_activity_observed;

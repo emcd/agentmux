@@ -16,6 +16,16 @@ const ACP_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const ACP_LOAD_POST_RESPONSE_DRAIN_TIMEOUT: Duration = Duration::from_millis(200);
 const ACP_PROMPT_POST_RESPONSE_DRAIN_TIMEOUT: Duration = Duration::from_millis(50);
 
+type DispatchObserver<'a> = &'a mut dyn FnMut();
+type SnapshotObserver<'a> = &'a mut dyn FnMut(&[String]) -> Result<(), String>;
+
+struct RequestObservers<'a> {
+    prompt_session_id: Option<String>,
+    post_response_drain_timeout: Option<Duration>,
+    on_dispatched: Option<DispatchObserver<'a>>,
+    on_snapshot_lines: Option<SnapshotObserver<'a>>,
+}
+
 #[derive(Debug)]
 pub(super) enum AcpRequestError {
     Failed(String),
@@ -97,9 +107,12 @@ impl AcpStdioClient {
                 },
             }),
             None,
-            None,
-            None,
-            None,
+            RequestObservers {
+                prompt_session_id: None,
+                post_response_drain_timeout: None,
+                on_dispatched: None,
+                on_snapshot_lines: None,
+            },
         )
         .map(|value| value.result)
         .map_err(|error| match error {
@@ -120,9 +133,12 @@ impl AcpStdioClient {
                     "mcpServers": [],
                 }),
                 None,
-                None,
-                Some(ACP_LOAD_POST_RESPONSE_DRAIN_TIMEOUT),
-                None,
+                RequestObservers {
+                    prompt_session_id: None,
+                    post_response_drain_timeout: Some(ACP_LOAD_POST_RESPONSE_DRAIN_TIMEOUT),
+                    on_dispatched: None,
+                    on_snapshot_lines: None,
+                },
             )
             .map(|value| value.result)
             .map_err(|error| match error {
@@ -153,9 +169,12 @@ impl AcpStdioClient {
                     "mcpServers": [],
                 }),
                 None,
-                None,
-                Some(ACP_LOAD_POST_RESPONSE_DRAIN_TIMEOUT),
-                None,
+                RequestObservers {
+                    prompt_session_id: None,
+                    post_response_drain_timeout: Some(ACP_LOAD_POST_RESPONSE_DRAIN_TIMEOUT),
+                    on_dispatched: None,
+                    on_snapshot_lines: None,
+                },
             )
             .map(|value| value.result)
             .map_err(|error| match error {
@@ -168,12 +187,13 @@ impl AcpStdioClient {
         Ok(())
     }
 
-    pub(super) fn prompt(
+    pub(super) fn prompt<'a>(
         &mut self,
         session_id: &str,
         prompt: &str,
         timeout: Option<Duration>,
-        on_dispatched: Option<&mut dyn FnMut()>,
+        on_dispatched: Option<DispatchObserver<'a>>,
+        on_snapshot_lines: Option<SnapshotObserver<'a>>,
     ) -> Result<AcpPromptCompletion, AcpRequestError> {
         let result = self.request(
             "session/prompt",
@@ -187,9 +207,12 @@ impl AcpStdioClient {
                 ],
             }),
             timeout,
-            Some(session_id),
-            Some(ACP_PROMPT_POST_RESPONSE_DRAIN_TIMEOUT),
-            on_dispatched,
+            RequestObservers {
+                prompt_session_id: Some(session_id.to_string()),
+                post_response_drain_timeout: Some(ACP_PROMPT_POST_RESPONSE_DRAIN_TIMEOUT),
+                on_dispatched,
+                on_snapshot_lines,
+            },
         )?;
         result
             .result
@@ -215,9 +238,7 @@ impl AcpStdioClient {
         method: &str,
         params: Value,
         timeout: Option<Duration>,
-        prompt_session_id: Option<&str>,
-        post_response_drain_timeout: Option<Duration>,
-        mut on_dispatched: Option<&mut dyn FnMut()>,
+        mut observers: RequestObservers<'_>,
     ) -> Result<AcpRequestResult, AcpRequestError> {
         let request_id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
@@ -237,7 +258,7 @@ impl AcpStdioClient {
             .map_err(|source| {
                 AcpRequestError::Failed(format!("write ACP request failed: {source}"))
             })?;
-        if let Some(callback) = on_dispatched.as_mut() {
+        if let Some(callback) = observers.on_dispatched.as_mut() {
             callback();
         }
 
@@ -262,8 +283,16 @@ impl AcpStdioClient {
                 AcpRequestError::Failed(format!("parse ACP response failed: {source}"))
             })?;
             if decoded.get("id") != Some(&json!(request_id)) {
-                if (self.capture_update_snapshot_lines(&decoded, prompt_session_id)
-                    || self.observe_permission_request_activity(&decoded, prompt_session_id))
+                let observed_update = self.capture_update_snapshot_lines(
+                    &decoded,
+                    observers.prompt_session_id.as_deref(),
+                    &mut observers.on_snapshot_lines,
+                )?;
+                if (observed_update
+                    || self.observe_permission_request_activity(
+                        &decoded,
+                        observers.prompt_session_id.as_deref(),
+                    ))
                     && !first_activity_observed
                 {
                     first_activity_observed = true;
@@ -274,11 +303,15 @@ impl AcpStdioClient {
             if let Some(error) = decoded.get("error") {
                 return Err(AcpRequestError::Failed(error.to_string()));
             }
-            if prompt_session_id.is_some() && !first_activity_observed {
+            if observers.prompt_session_id.is_some() && !first_activity_observed {
                 first_activity_observed = true;
             }
-            if let Some(drain_timeout) = post_response_drain_timeout
-                && self.drain_post_response_notifications(prompt_session_id, drain_timeout)
+            if let Some(drain_timeout) = observers.post_response_drain_timeout
+                && self.drain_post_response_notifications(
+                    observers.prompt_session_id.as_deref(),
+                    drain_timeout,
+                    &mut observers.on_snapshot_lines,
+                )?
             {
                 first_activity_observed = true;
             }
@@ -293,7 +326,8 @@ impl AcpStdioClient {
         &mut self,
         session_id: Option<&str>,
         timeout: Duration,
-    ) -> bool {
+        on_snapshot_lines: &mut Option<SnapshotObserver<'_>>,
+    ) -> Result<bool, AcpRequestError> {
         let mut observed = false;
         while let Ok(line) = self.read_response_line(Some(timeout)) {
             let trimmed = line.trim();
@@ -304,28 +338,42 @@ impl AcpStdioClient {
                 Ok(value) => value,
                 Err(_) => continue,
             };
-            if self.capture_update_snapshot_lines(&decoded, session_id)
+            if self.capture_update_snapshot_lines(&decoded, session_id, on_snapshot_lines)?
                 || self.observe_permission_request_activity(&decoded, session_id)
             {
                 observed = true;
             }
         }
-        observed
+        Ok(observed)
     }
 
-    fn capture_update_snapshot_lines(&mut self, value: &Value, session_id: Option<&str>) -> bool {
+    fn capture_update_snapshot_lines(
+        &mut self,
+        value: &Value,
+        session_id: Option<&str>,
+        on_snapshot_lines: &mut Option<SnapshotObserver<'_>>,
+    ) -> Result<bool, AcpRequestError> {
         if value.get("method").and_then(Value::as_str) != Some("session/update") {
-            return false;
+            return Ok(false);
         }
         let params = value.get("params").unwrap_or(&Value::Null);
         if let Some(expected_session_id) = session_id
             && let Some(observed_session_id) = params.get("sessionId").and_then(Value::as_str)
             && observed_session_id != expected_session_id
         {
-            return false;
+            return Ok(false);
         }
-        collect_text_lines_from_value(params, &mut self.snapshot_line_buffer);
-        true
+        let mut captured_lines = Vec::new();
+        collect_text_lines_from_value(params, &mut captured_lines);
+        if captured_lines.is_empty() {
+            return Ok(true);
+        }
+        self.snapshot_line_buffer
+            .extend(captured_lines.iter().cloned());
+        if let Some(callback) = on_snapshot_lines.as_mut() {
+            callback(captured_lines.as_slice()).map_err(AcpRequestError::Failed)?;
+        }
+        Ok(true)
     }
 
     fn observe_permission_request_activity(&self, value: &Value, session_id: Option<&str>) -> bool {
