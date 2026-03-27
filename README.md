@@ -70,6 +70,44 @@ agentmux host mcp
 }
 ```
 
+## Auto Start On Login
+
+### Systemd (--user)
+
+If you run `agentmux` as a user service, add:
+
+`~/.config/systemd/user/agentmux-relay.service`
+
+```ini
+[Unit]
+Description=agentmux relay host
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env agentmux host relay
+Restart=on-failure
+RestartSec=2
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=default.target
+```
+
+Enable and start the service:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now agentmux-relay.service
+systemctl --user status agentmux-relay.service
+```
+
+Follow relay logs:
+
+```bash
+journalctl --user -u agentmux-relay.service -f
+```
+
 ## CLI Surface
 
 ```text
