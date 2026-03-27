@@ -1,5 +1,7 @@
 # agentmux coder definitions
 format-version = 1
+# Sample default authorization scopes are defined in
+# `data/configuration/policies.toml` (`look = "all:home"`).
 
 [[coders]]
 id = "claude"

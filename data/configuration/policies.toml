@@ -9,5 +9,5 @@ description = "Conservative same-bundle policy."
 [policies.controls]
 find = "self"
 list = "all:home"
-look = "self"
+look = "all:home"
 send = "all:home"

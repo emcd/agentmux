@@ -59,7 +59,7 @@ impl PolicyControls {
         Self {
             find: PolicyScope::SelfOnly,
             list: PolicyScope::AllHome,
-            look: PolicyScope::SelfOnly,
+            look: PolicyScope::AllHome,
             send: PolicyScope::AllHome,
             do_controls: HashMap::new(),
         }
