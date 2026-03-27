@@ -24,7 +24,7 @@ pub(crate) fn render(frame: &mut Frame, state: &mut AppState) {
     render_compose_cursor(frame, chunks[1], state);
 
     if state.help_overlay_open {
-        render_help_overlay(frame);
+        render_help_overlay(frame, state);
     }
     if state.picker_open {
         render_picker_overlay(frame, state);
@@ -321,7 +321,7 @@ fn render_events_overlay(frame: &mut Frame, state: &AppState) {
     frame.render_widget(paragraph, popup);
 }
 
-fn render_help_overlay(frame: &mut Frame) {
+fn render_help_overlay(frame: &mut Frame, _state: &AppState) {
     let popup = centered_rect(72, 70, frame.area());
     frame.render_widget(Clear, popup);
     let lines = vec![

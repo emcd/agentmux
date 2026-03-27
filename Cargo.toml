@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.97"
-crossterm = "0.29.0"
+crossterm = "0.28.1"
 libc = "0.2.171"
 ratatui = "0.29.0"
 rmcp = { version = "1.1.0", features = ["transport-io"] }

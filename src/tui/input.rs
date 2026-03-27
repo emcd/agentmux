@@ -74,7 +74,7 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
         KeyCode::F(4) => return state.look_target(),
         KeyCode::BackTab => state.cycle_focus_backward(),
         KeyCode::Tab => state.cycle_focus_forward(),
-        KeyCode::Enter => {
+        KeyCode::Enter if key.modifiers.is_empty() => {
             if state.focus == FocusField::To {
                 state.accept_active_to_completion();
             } else if state.focus == FocusField::Message {
