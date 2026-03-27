@@ -108,6 +108,20 @@ Follow relay logs:
 journalctl --user -u agentmux-relay.service -f
 ```
 
+If coder CLIs are installed via tools like Mise/Asdf/NVM or a custom npm
+prefix, set explicit environment in the unit so relay autostart can find
+`codex`/`claude`/`opencode` consistently:
+
+```ini
+[Service]
+Environment=PATH=/path/to/node/bin:/path/to/cargo/bin:/path/to/npm-prefix/bin:/usr/local/bin:/usr/bin:/bin
+Environment=CODEX_HOME=/path/to/codex/home
+Environment=CLAUDE_CONFIG_DIR=/path/to/claude/config
+```
+
+After environment changes, run `systemctl --user daemon-reload` and restart the
+service.
+
 ## CLI Surface
 
 ```text
