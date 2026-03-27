@@ -13,6 +13,8 @@ use super::super::ACP_PROTOCOL_VERSION;
 
 const ACP_CLIENT_NAME: &str = "agentmux-relay";
 const ACP_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+const ACP_LOAD_POST_RESPONSE_DRAIN_TIMEOUT: Duration = Duration::from_millis(200);
+const ACP_PROMPT_POST_RESPONSE_DRAIN_TIMEOUT: Duration = Duration::from_millis(50);
 
 #[derive(Debug)]
 pub(super) enum AcpRequestError {
@@ -96,7 +98,7 @@ impl AcpStdioClient {
             }),
             None,
             None,
-            false,
+            None,
             None,
         )
         .map(|value| value.result)
@@ -119,7 +121,7 @@ impl AcpStdioClient {
                 }),
                 None,
                 None,
-                false,
+                Some(ACP_LOAD_POST_RESPONSE_DRAIN_TIMEOUT),
                 None,
             )
             .map(|value| value.result)
@@ -152,7 +154,7 @@ impl AcpStdioClient {
                 }),
                 None,
                 None,
-                false,
+                Some(ACP_LOAD_POST_RESPONSE_DRAIN_TIMEOUT),
                 None,
             )
             .map(|value| value.result)
@@ -186,7 +188,7 @@ impl AcpStdioClient {
             }),
             timeout,
             Some(session_id),
-            true,
+            Some(ACP_PROMPT_POST_RESPONSE_DRAIN_TIMEOUT),
             on_dispatched,
         )?;
         result
@@ -214,7 +216,7 @@ impl AcpStdioClient {
         params: Value,
         timeout: Option<Duration>,
         prompt_session_id: Option<&str>,
-        response_counts_as_activity: bool,
+        post_response_drain_timeout: Option<Duration>,
         mut on_dispatched: Option<&mut dyn FnMut()>,
     ) -> Result<AcpRequestResult, AcpRequestError> {
         let request_id = self.next_id;
@@ -272,7 +274,12 @@ impl AcpStdioClient {
             if let Some(error) = decoded.get("error") {
                 return Err(AcpRequestError::Failed(error.to_string()));
             }
-            if response_counts_as_activity && !first_activity_observed {
+            if prompt_session_id.is_some() && !first_activity_observed {
+                first_activity_observed = true;
+            }
+            if let Some(drain_timeout) = post_response_drain_timeout
+                && self.drain_post_response_notifications(prompt_session_id, drain_timeout)
+            {
                 first_activity_observed = true;
             }
             return Ok(AcpRequestResult {
@@ -280,6 +287,30 @@ impl AcpStdioClient {
                 first_activity_observed,
             });
         }
+    }
+
+    fn drain_post_response_notifications(
+        &mut self,
+        session_id: Option<&str>,
+        timeout: Duration,
+    ) -> bool {
+        let mut observed = false;
+        while let Ok(line) = self.read_response_line(Some(timeout)) {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let decoded = match serde_json::from_str::<Value>(trimmed) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            if self.capture_update_snapshot_lines(&decoded, session_id)
+                || self.observe_permission_request_activity(&decoded, session_id)
+            {
+                observed = true;
+            }
+        }
+        observed
     }
 
     fn capture_update_snapshot_lines(&mut self, value: &Value, session_id: Option<&str>) -> bool {

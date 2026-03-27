@@ -107,6 +107,39 @@ fn acp_look_returns_empty_snapshot_when_no_updates_exist() {
     assert!(snapshot_lines.is_empty());
 }
 
+#[test]
+fn acp_look_captures_updates_emitted_after_prompt_response() {
+    let temporary = TempDir::new().expect("temporary");
+    let options = AcpStubOptions {
+        update_count: 3,
+        update_after_response: true,
+        update_delay_ms: 20,
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let tmux_socket = temporary.path().join("tmux.sock");
+    let response = dispatch_send(&config_root, &tmux_socket, Some(1_000));
+    let (status, result) = chat_result(response);
+    assert_eq!(status, ChatStatus::Success);
+    assert_eq!(result.outcome, ChatOutcome::Delivered);
+
+    let look = wait_for_look(
+        &config_root,
+        &tmux_socket,
+        "bravo",
+        "bravo",
+        Some(3),
+        |lines| lines.len() == 3,
+    );
+    let RelayResponse::Look { snapshot_lines, .. } = look else {
+        panic!("expected look response");
+    };
+    assert_eq!(
+        snapshot_lines,
+        vec!["ACP-LINE-1", "ACP-LINE-2", "ACP-LINE-3"]
+    );
+}
+
 fn wait_for_look(
     config_root: &std::path::Path,
     tmux_socket: &std::path::Path,

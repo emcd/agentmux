@@ -19,6 +19,8 @@ pub(super) struct AcpStubOptions {
     pub(super) stop_reason: String,
     pub(super) prompt_delay_sec: u64,
     pub(super) update_count: usize,
+    pub(super) update_after_response: bool,
+    pub(super) update_delay_ms: u64,
     pub(super) request_permission_on_prompt: bool,
     pub(super) disconnect_on_prompt: Option<String>,
     pub(super) configured_session_id: Option<String>,
@@ -37,6 +39,8 @@ impl Default for AcpStubOptions {
             stop_reason: "end_turn".to_string(),
             prompt_delay_sec: 0,
             update_count: 0,
+            update_after_response: false,
+            update_delay_ms: 0,
             request_permission_on_prompt: false,
             disconnect_on_prompt: None,
             configured_session_id: None,
@@ -59,6 +63,8 @@ prompt_capability="${PROMPT_CAPABILITY:-true}"
 stop_reason="${STOP_REASON:-end_turn}"
 prompt_delay_sec="${PROMPT_DELAY_SEC:-0}"
 update_count="${UPDATE_COUNT:-0}"
+update_after_response="${UPDATE_AFTER_RESPONSE:-0}"
+update_delay_ms="${UPDATE_DELAY_MS:-0}"
 new_session_id="${NEW_SESSION_ID:-sess-generated}"
 disconnect_on_prompt="${DISCONNECT_ON_PROMPT:-none}"
 request_permission_on_prompt="${REQUEST_PERMISSION_ON_PROMPT:-0}"
@@ -108,12 +114,17 @@ while IFS= read -r line; do
         printf '{"jsonrpc":"2.0","method":"session/request_permission","params":{"sessionId":"%s","kind":"exec","description":"need permission"}}\n' \
           "$prompt_session_id"
       fi
-      count=1
-      while [ "$count" -le "$update_count" ]; do
-        printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"%s","update":[{"type":"text","text":"ACP-LINE-%s"}]}}\n' \
-          "$prompt_session_id" "$count"
-        count=$((count + 1))
-      done
+      emit_updates() {
+        count=1
+        while [ "$count" -le "$update_count" ]; do
+          printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"%s","update":[{"type":"text","text":"ACP-LINE-%s"}]}}\n' \
+            "$prompt_session_id" "$count"
+          count=$((count + 1))
+        done
+      }
+      if [ "$update_after_response" != "1" ]; then
+        emit_updates
+      fi
       if [ "$disconnect_on_prompt" = "after_activity" ]; then
         exit 0
       fi
@@ -121,6 +132,13 @@ while IFS= read -r line; do
         sleep "$prompt_delay_sec"
       fi
       printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"%s"}}\n' "$id" "$stop_reason"
+      if [ "$update_after_response" = "1" ]; then
+        if [ "$update_delay_ms" != "0" ]; then
+          delay_sec=$(awk -v ms="$update_delay_ms" 'BEGIN { printf "%.3f", ms / 1000 }')
+          sleep "$delay_sec"
+        fi
+        emit_updates
+      fi
       ;;
   esac
 done
@@ -144,7 +162,7 @@ pub(super) fn write_configuration(root: &Path, options: &AcpStubOptions) -> (Pat
     let log_path = root.join("acp_requests.log");
     write_acp_stub(&script_path);
     let command = format!(
-        "ACP_LOG_FILE={} FAIL_INITIALIZE={} FAIL_LOAD={} FAIL_NEW={} FAIL_PROMPT={} DISCONNECT_ON_PROMPT={} REQUEST_PERMISSION_ON_PROMPT={} LOAD_CAPABILITY={} PROMPT_CAPABILITY={} STOP_REASON={} PROMPT_DELAY_SEC={} UPDATE_COUNT={} NEW_SESSION_ID=sess-generated {}",
+        "ACP_LOG_FILE={} FAIL_INITIALIZE={} FAIL_LOAD={} FAIL_NEW={} FAIL_PROMPT={} DISCONNECT_ON_PROMPT={} REQUEST_PERMISSION_ON_PROMPT={} LOAD_CAPABILITY={} PROMPT_CAPABILITY={} STOP_REASON={} PROMPT_DELAY_SEC={} UPDATE_COUNT={} UPDATE_AFTER_RESPONSE={} UPDATE_DELAY_MS={} NEW_SESSION_ID=sess-generated {}",
         log_path.display(),
         if options.fail_initialize { "1" } else { "0" },
         if options.fail_load { "1" } else { "0" },
@@ -161,6 +179,12 @@ pub(super) fn write_configuration(root: &Path, options: &AcpStubOptions) -> (Pat
         options.stop_reason,
         options.prompt_delay_sec,
         options.update_count,
+        if options.update_after_response {
+            "1"
+        } else {
+            "0"
+        },
+        options.update_delay_ms,
         script_path.display(),
     );
 
