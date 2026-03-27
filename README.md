@@ -12,7 +12,7 @@ tool surface for LLM clients.
     envelopes to tmux panes.
 - MCP host:
   - Command: `agentmux host mcp`
-  - Responsibility: expose MCP tools (`list`, `send`) and forward requests to relay.
+  - Responsibility: expose MCP tools (`list`, `look`, `send`) and forward requests to relay.
 - Operator CLI:
   - Commands: `agentmux list`, `agentmux look`, `agentmux send`
   - Responsibility: direct local inspection of recipients and message delivery.
@@ -123,6 +123,8 @@ Delivery behavior:
 - `delivery_mode=sync`: block until per-target outcomes are known.
 - `quiescence_timeout_ms` optionally bounds tmux prompt-readiness waiting.
 - `acp_turn_timeout_ms` optionally bounds ACP turn-wait behavior.
+- For ACP sync sends, success means first activity was observed. Terminal completion
+  is correlated out-of-band by `message_id`.
 
 Example `.mcp.json` snippet:
 
@@ -185,6 +187,7 @@ Starter files are generated when missing:
 
 - `<config-root>/coders.toml`
 - `<config-root>/bundles/example.toml`
+- `<config-root>/policies.toml`
 
 ### Example `coders.toml`
 
@@ -239,6 +242,14 @@ Inscriptions:
 
 - relay log: `<inscriptions-root>/bundles/<bundle-name>/relay.log`
 - MCP log: `<inscriptions-root>/bundles/<bundle-name>/sessions/<session-name>/mcp.log`
+
+## Troubleshooting
+
+| Symptom | Likely Cause | Quick Check |
+|---|---|---|
+| `relay_unavailable` from CLI/MCP | Relay host is not running for selected bundle | Start relay: `agentmux host relay` |
+| `authorization_forbidden` on `look` | Policy scope disallows non-self inspection | Check `<config-root>/policies.toml` `look` control |
+| Sync ACP send reports timeout | First ACP activity not observed before timeout budget | Retry with async mode for coordination flow; inspect relay log by `message_id` |
 
 ## Development
 
