@@ -52,7 +52,7 @@ fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
             state.pending_deliveries_count()
         )),
     ])];
-    let paragraph = Paragraph::new(text).block(Block::default().borders(Borders::ALL));
+    let paragraph = Paragraph::new(text).block(main_pane_block());
     frame.render_widget(paragraph, area);
 }
 
@@ -72,24 +72,28 @@ fn render_compose_cursor(frame: &mut Frame, area: Rect, state: &AppState) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(12), Constraint::Length(9)])
         .split(area);
-    let Some((x, y)) = compose_cursor_position(rows[1], state) else {
+    let compose_inner = main_pane_titled_block("Compose").inner(rows[1]);
+    let Some((x, y)) = compose_cursor_position(compose_inner, state) else {
         return;
     };
     frame.set_cursor_position((x, y));
 }
 
-fn compose_cursor_position(area: Rect, state: &AppState) -> Option<(u16, u16)> {
-    if area.width < 3 || area.height < 3 {
+fn compose_cursor_position(inner_area: Rect, state: &AppState) -> Option<(u16, u16)> {
+    if inner_area.width == 0 || inner_area.height < 3 {
         return None;
     }
-    let inner_left = area.x.saturating_add(1);
-    let inner_top = area.y.saturating_add(1);
-    let inner_right = area.x.saturating_add(area.width).saturating_sub(2);
-    let inner_bottom = area.y.saturating_add(area.height).saturating_sub(2);
-    let inner_width = area.width.saturating_sub(2);
-    if inner_width == 0 {
-        return None;
-    }
+    let inner_left = inner_area.x;
+    let inner_top = inner_area.y;
+    let inner_right = inner_area
+        .x
+        .saturating_add(inner_area.width)
+        .saturating_sub(1);
+    let inner_bottom = inner_area
+        .y
+        .saturating_add(inner_area.height)
+        .saturating_sub(1);
+    let inner_width = inner_area.width;
 
     let (raw_x, raw_y) = match state.focus {
         FocusField::To => {
@@ -178,12 +182,12 @@ fn render_compose(frame: &mut Frame, area: Rect, state: &AppState) {
 
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
-        .block(Block::default().borders(Borders::ALL).title("Compose"));
+        .block(main_pane_titled_block("Compose"));
     frame.render_widget(paragraph, area);
 }
 
 fn render_chat_history(frame: &mut Frame, area: Rect, state: &mut AppState) {
-    let viewport_height = area.height.saturating_sub(2) as usize;
+    let viewport_height = main_pane_titled_block("Chat History").inner(area).height as usize;
     state.set_chat_history_viewport_height(viewport_height);
 
     let lines = if state.chat_history.is_empty() {
@@ -211,7 +215,7 @@ fn render_chat_history(frame: &mut Frame, area: Rect, state: &mut AppState) {
     };
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
-        .block(Block::default().borders(Borders::ALL).title("Chat History"));
+        .block(main_pane_titled_block("Chat History"));
     frame.render_widget(paragraph, area);
 }
 
@@ -251,7 +255,7 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
         .unwrap_or_else(|| Line::from("Ready."));
     let footer = Paragraph::new(vec![line])
         .wrap(Wrap { trim: false })
-        .block(Block::default().borders(Borders::ALL).title("Status"));
+        .block(main_pane_titled_block("Status"));
     frame.render_widget(footer, area);
 }
 
@@ -361,4 +365,12 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(vertical[1])[1]
+}
+
+fn main_pane_block() -> Block<'static> {
+    Block::default().borders(Borders::TOP | Borders::BOTTOM)
+}
+
+fn main_pane_titled_block(title: &'static str) -> Block<'static> {
+    main_pane_block().title(title)
 }
