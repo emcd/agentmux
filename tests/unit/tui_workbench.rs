@@ -219,3 +219,15 @@ fn picker_look_uses_selected_recipient_target() {
         other => panic!("unexpected result: {other:?}"),
     }
 }
+
+#[test]
+fn ctrl_c_quits_even_when_picker_overlay_is_open() {
+    let mut state = make_state();
+    state
+        .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
+        .expect("f2 should open picker");
+    state
+        .dispatch_event(key_event(KeyCode::Char('c'), KeyModifiers::CONTROL))
+        .expect("ctrl+c should be handled globally");
+    assert!(state.should_quit());
+}

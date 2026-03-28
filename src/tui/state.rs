@@ -1057,6 +1057,15 @@ fn map_relay_error(error: RelayError) -> RuntimeError {
 }
 
 fn map_relay_request_failure(socket_path: &std::path::Path, source: io::Error) -> RuntimeError {
+    if is_relay_timeout_error(&source) {
+        return RuntimeError::validation(
+            "relay_timeout",
+            format!(
+                "relay timed out at {}; relay may be saturated or unresponsive",
+                socket_path.display()
+            ),
+        );
+    }
     if is_relay_unavailable_error(&source) {
         return RuntimeError::validation(
             "relay_unavailable",
@@ -1070,6 +1079,10 @@ fn map_relay_request_failure(socket_path: &std::path::Path, source: io::Error) -
         format!("relay request failed for {}", socket_path.display()),
         source,
     )
+}
+
+fn is_relay_timeout_error(source: &io::Error) -> bool {
+    matches!(source.kind(), io::ErrorKind::TimedOut)
 }
 
 fn is_relay_unavailable_error(source: &io::Error) -> bool {

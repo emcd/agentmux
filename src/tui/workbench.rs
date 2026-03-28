@@ -94,4 +94,8 @@ impl Workbench {
             .map(|entry| entry.body)
             .collect::<Vec<_>>()
     }
+
+    pub fn should_quit(&self) -> bool {
+        self.state.should_quit
+    }
 }

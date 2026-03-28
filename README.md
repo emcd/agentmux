@@ -300,6 +300,7 @@ Inscriptions:
 | Symptom | Likely Cause | Quick Check |
 |---|---|---|
 | `relay_unavailable` from CLI/MCP | Relay host is not running for selected bundle | Start relay: `agentmux host relay` |
+| `relay_timeout` from CLI/MCP/TUI | Relay is running but request did not complete before timeout (often saturation/stuck workers) | Check relay health/logs and active stream clients; retry after relay restart |
 | `authorization_forbidden` on `look` | Policy scope disallows non-self inspection | Check `<config-root>/policies.toml` `look` control |
 | Sync ACP send reports timeout | First ACP activity not observed before timeout budget | Retry with async mode for coordination flow; inspect relay log by `message_id` |
 

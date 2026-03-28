@@ -41,8 +41,8 @@ This module provides the interactive `agentmux tui` workbench.
 - send workflow via relay `chat` (`Enter` in `Message`),
 - look workflow via relay `look` (`l` in recipient picker),
 - stable rendering for validation/runtime error codes,
-- stream reconnect handling with explicit `relay_unavailable` status when
-  disconnected.
+- stream reconnect handling with explicit `relay_unavailable` (not reachable)
+  and `relay_timeout` (reachable but unresponsive/saturated) status.
 
 ## Keybindings
 

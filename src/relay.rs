@@ -4,7 +4,7 @@ use std::{
     io::{self, BufRead, BufReader, Write},
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use serde::{Deserialize, Serialize};
@@ -36,6 +36,9 @@ use self::stream::{
 const SCHEMA_VERSION: &str = ENVELOPE_SCHEMA_VERSION;
 const POLICIES_FILE: &str = "policies.toml";
 const POLICIES_FORMAT_VERSION: u32 = 1;
+const RELAY_STREAM_HELLO_ACK_TIMEOUT: Duration = Duration::from_secs(2);
+const RELAY_STREAM_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
+const RELAY_STREAM_READ_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Recipient metadata returned by `list`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -561,9 +564,23 @@ impl RelayStreamSession {
             },
         )?;
         let mut reader = BufReader::new(stream.try_clone()?);
+        stream.set_read_timeout(Some(RELAY_STREAM_HELLO_ACK_TIMEOUT))?;
         loop {
             let mut line = String::new();
-            let read = reader.read_line(&mut line)?;
+            let read = match reader.read_line(&mut line) {
+                Ok(read) => read,
+                Err(source) if source.kind() == io::ErrorKind::Interrupted => continue,
+                Err(source)
+                    if source.kind() == io::ErrorKind::TimedOut
+                        || source.kind() == io::ErrorKind::WouldBlock =>
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "relay hello acknowledgement timed out",
+                    ));
+                }
+                Err(source) => return Err(source),
+            };
             if read == 0 {
                 return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
@@ -594,6 +611,7 @@ impl RelayStreamSession {
                             "relay hello acknowledgement class mismatch",
                         ));
                     }
+                    stream.set_read_timeout(None)?;
                     self.connection = Some(RelayStreamConnection { stream, reader });
                     return Ok(());
                 }
@@ -673,12 +691,32 @@ fn read_stream_response_frame(
     connection: &mut RelayStreamConnection,
     request_id: &str,
 ) -> Result<(RelayResponse, Vec<RelayStreamEvent>), io::Error> {
+    connection
+        .stream
+        .set_read_timeout(Some(RELAY_STREAM_READ_POLL_INTERVAL))?;
+    let deadline = Instant::now() + RELAY_STREAM_RESPONSE_TIMEOUT;
     let mut events = Vec::new();
-    loop {
+    let result = loop {
+        if Instant::now() >= deadline {
+            break Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "relay stream response timed out",
+            ));
+        }
         let mut line = String::new();
-        let read = connection.reader.read_line(&mut line)?;
+        let read = match connection.reader.read_line(&mut line) {
+            Ok(read) => read,
+            Err(source) if source.kind() == io::ErrorKind::Interrupted => continue,
+            Err(source)
+                if source.kind() == io::ErrorKind::TimedOut
+                    || source.kind() == io::ErrorKind::WouldBlock =>
+            {
+                continue;
+            }
+            Err(source) => break Err(source),
+        };
         if read == 0 {
-            return Err(io::Error::new(
+            break Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "relay stream closed while waiting for response",
             ));
@@ -692,11 +730,18 @@ fn read_stream_response_frame(
                 response,
             } => {
                 if frame_request_id.as_deref() == Some(request_id) {
-                    return Ok((response, events));
+                    break Ok((response, events));
                 }
             }
         }
+    };
+    let reset = connection.stream.set_read_timeout(None);
+    if let Err(source) = reset
+        && result.is_ok()
+    {
+        return Err(source);
     }
+    result
 }
 
 fn is_retriable_stream_error(error: Option<&io::Error>) -> bool {

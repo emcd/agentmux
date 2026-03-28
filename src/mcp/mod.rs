@@ -536,6 +536,17 @@ fn map_relay_error(error: RelayError) -> McpError {
 }
 
 fn map_relay_request_failure(socket_path: &Path, source: std::io::Error) -> McpError {
+    if is_relay_timeout_error(&source) {
+        return internal_tool_error(
+            "relay_timeout",
+            "relay timed out; relay may be saturated or unresponsive",
+            Some(json!({
+                "relay_socket": socket_path,
+                "io_error_kind": format!("{:?}", source.kind()),
+                "cause": source.to_string(),
+            })),
+        );
+    }
     if is_relay_unavailable_error(&source) {
         return internal_tool_error(
             "relay_unavailable",
@@ -559,6 +570,10 @@ fn map_relay_request_failure(socket_path: &Path, source: std::io::Error) -> McpE
     )
 }
 
+fn is_relay_timeout_error(source: &std::io::Error) -> bool {
+    matches!(source.kind(), std::io::ErrorKind::TimedOut)
+}
+
 fn is_relay_unavailable_error(source: &std::io::Error) -> bool {
     matches!(
         source.kind(),
@@ -567,7 +582,6 @@ fn is_relay_unavailable_error(source: &std::io::Error) -> bool {
             | std::io::ErrorKind::ConnectionAborted
             | std::io::ErrorKind::ConnectionReset
             | std::io::ErrorKind::BrokenPipe
-            | std::io::ErrorKind::TimedOut
             | std::io::ErrorKind::UnexpectedEof
     )
 }

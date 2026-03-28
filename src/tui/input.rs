@@ -28,6 +28,11 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
         return Ok(());
     }
 
+    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+        state.should_quit = true;
+        return Ok(());
+    }
+
     if key.code == KeyCode::F(1) {
         state.toggle_help_overlay();
         return Ok(());
@@ -48,10 +53,6 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
 
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
-            KeyCode::Char('c') => {
-                state.should_quit = true;
-                return Ok(());
-            }
             KeyCode::Char('j') => {
                 state.insert_newline_if_message();
                 return Ok(());

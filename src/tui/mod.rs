@@ -11,16 +11,27 @@ use std::time::Duration;
 use crossterm::event::{self, Event};
 use ratatui::DefaultTerminal;
 
-use crate::runtime::error::RuntimeError;
+use crate::runtime::{
+    error::RuntimeError,
+    signals::{install_shutdown_signal_handlers, shutdown_requested},
+};
 
 pub use state::TuiLaunchOptions;
 pub use target::{autocomplete_recipient_input, merge_tui_targets, parse_tui_target_identifier};
 
+struct TerminalRestoreGuard;
+
+impl Drop for TerminalRestoreGuard {
+    fn drop(&mut self) {
+        ratatui::restore();
+    }
+}
+
 pub fn run(options: TuiLaunchOptions) -> Result<(), RuntimeError> {
     let mut terminal = ratatui::init();
-    let result = run_loop(&mut terminal, options);
-    ratatui::restore();
-    result
+    let _restore_guard = TerminalRestoreGuard;
+    let _signal_handlers = install_shutdown_signal_handlers()?;
+    run_loop(&mut terminal, options)
 }
 
 fn run_loop(terminal: &mut DefaultTerminal, options: TuiLaunchOptions) -> Result<(), RuntimeError> {
@@ -29,7 +40,7 @@ fn run_loop(terminal: &mut DefaultTerminal, options: TuiLaunchOptions) -> Result
         state.push_runtime_error(error);
     }
 
-    while !state.should_quit {
+    while !state.should_quit && !shutdown_requested() {
         state.poll_relay_events();
 
         terminal

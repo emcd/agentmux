@@ -200,6 +200,15 @@ pub(super) fn map_relay_request_failure(
     socket_path: &Path,
     source: std::io::Error,
 ) -> RuntimeError {
+    if is_relay_timeout_error(&source) {
+        return RuntimeError::validation(
+            "relay_timeout",
+            format!(
+                "relay timed out at {}; relay may be saturated or unresponsive",
+                socket_path.display()
+            ),
+        );
+    }
     if is_relay_unavailable_error(&source) {
         return RuntimeError::validation(
             "relay_unavailable",
@@ -236,6 +245,10 @@ pub(super) fn runtime_error_reason(source: &RuntimeError) -> (String, String) {
     }
 }
 
+fn is_relay_timeout_error(source: &std::io::Error) -> bool {
+    matches!(source.kind(), std::io::ErrorKind::TimedOut)
+}
+
 fn is_relay_unavailable_error(source: &std::io::Error) -> bool {
     matches!(
         source.kind(),
@@ -243,6 +256,7 @@ fn is_relay_unavailable_error(source: &std::io::Error) -> bool {
             | std::io::ErrorKind::NotFound
             | std::io::ErrorKind::ConnectionAborted
             | std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::UnexpectedEof
     )
 }
 
