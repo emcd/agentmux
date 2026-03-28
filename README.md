@@ -303,6 +303,19 @@ Inscriptions:
 | `authorization_forbidden` on `look` | Policy scope disallows non-self inspection | Check `<config-root>/policies.toml` `look` control |
 | Sync ACP send reports timeout | First ACP activity not observed before timeout budget | Retry with async mode for coordination flow; inspect relay log by `message_id` |
 
+## Planned Features
+
+- Bundle/session `about` surfaces with human-readable descriptions for operators
+  and agents.
+- Mailbox-style message retrieval (`fetch`) and optional hold/quiet delivery
+  mode to reduce coordination noise.
+- Direct raw-write command support for CLI/TUI so users and agents can interact
+  with coder sessions without dropping to tmux.
+- Config include/pointer support so centrally hosted configs can reference
+  project-local bundle definitions.
+- Profile-based sender selection for CLI/TUI workflows.
+- Additional autostart examples beyond systemd (for example launchd/OpenRC/Windows service patterns).
+
 ## Development
 
 For local source development, install a Rust toolchain.
