@@ -4,6 +4,17 @@
 It provides one CLI (`agentmux`) with host + operator subcommands and one MCP
 tool surface for LLM clients.
 
+## Disclaimer
+
+This project is **not affiliated with** [agentmux.app](https://agentmux.app/)
+in any way.
+
+## Documentation
+
+- Usage guides: [documentation/usage/README.md](documentation/usage/README.md)
+- TUI guide: [documentation/usage/tui.md](documentation/usage/tui.md)
+- Tool comparisons: [documentation/comparisons.md](documentation/comparisons.md)
+
 ## Architecture At A Glance
 
 - Relay host:
@@ -335,6 +346,8 @@ Source map:
 - [src/bin/README.md](src/bin/README.md)
 - [src/runtime/README.md](src/runtime/README.md)
 - [src/mcp/README.md](src/mcp/README.md)
+- [documentation/usage/README.md](documentation/usage/README.md)
+- [documentation/comparisons.md](documentation/comparisons.md)
 - `documentation/architecture/openspec/specs/`
 
 ## License

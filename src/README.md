@@ -3,6 +3,7 @@
 This directory contains the runtime implementation for the `agentmux` binary.
 The intended reader is a developer or coding agent changing contracts,
 transport behavior, or CLI/MCP/TUI workflows.
+End-user workflows are documented under `documentation/usage/`.
 
 ## Architecture Layers
 
