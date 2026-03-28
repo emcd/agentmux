@@ -16,7 +16,7 @@ use crate::{
 
 use super::target::{
     ToCompletionState, append_recipient_token, current_recipient_token_context,
-    matching_recipient_candidates, merge_tui_targets, resolve_tui_look_target,
+    matching_recipient_candidates, merge_tui_targets,
 };
 
 const STATUS_HISTORY_MAXIMUM: usize = 6;
@@ -71,6 +71,7 @@ pub(crate) struct AppState {
     pub picker_open: bool,
     pub events_overlay_open: bool,
     pub look_overlay_open: bool,
+    look_overlay_restore_picker_on_close: bool,
     pub help_overlay_open: bool,
     pub picker_state: ListState,
     pub focus: FocusField,
@@ -121,6 +122,7 @@ impl AppState {
             picker_open: false,
             events_overlay_open: false,
             look_overlay_open: false,
+            look_overlay_restore_picker_on_close: false,
             help_overlay_open: false,
             picker_state: ListState::default(),
             focus: FocusField::To,
@@ -223,6 +225,7 @@ impl AppState {
         self.picker_open = true;
         self.events_overlay_open = false;
         self.look_overlay_open = false;
+        self.look_overlay_restore_picker_on_close = false;
         self.help_overlay_open = false;
         if self.recipients.is_empty() {
             self.picker_state.select(None);
@@ -241,24 +244,26 @@ impl AppState {
         if self.events_overlay_open {
             self.picker_open = false;
             self.look_overlay_open = false;
-            self.help_overlay_open = false;
-        }
-    }
-
-    pub fn toggle_look_overlay(&mut self) {
-        self.look_overlay_open = !self.look_overlay_open;
-        if self.look_overlay_open {
-            self.picker_open = false;
-            self.events_overlay_open = false;
+            self.look_overlay_restore_picker_on_close = false;
             self.help_overlay_open = false;
         }
     }
 
     pub fn open_look_overlay(&mut self) {
+        self.look_overlay_restore_picker_on_close = self.picker_open;
         self.look_overlay_open = true;
         self.picker_open = false;
         self.events_overlay_open = false;
         self.help_overlay_open = false;
+    }
+
+    pub fn close_look_overlay(&mut self) {
+        self.look_overlay_open = false;
+        let restore_picker = self.look_overlay_restore_picker_on_close;
+        self.look_overlay_restore_picker_on_close = false;
+        if restore_picker {
+            self.open_picker();
+        }
     }
 
     pub fn toggle_help_overlay(&mut self) {
@@ -267,6 +272,7 @@ impl AppState {
             self.picker_open = false;
             self.events_overlay_open = false;
             self.look_overlay_open = false;
+            self.look_overlay_restore_picker_on_close = false;
         }
     }
 
@@ -618,12 +624,13 @@ impl AppState {
         }
     }
 
-    pub fn look_target(&mut self) -> Result<(), RuntimeError> {
-        let target = resolve_tui_look_target(
-            self.selected_recipient_id(),
-            &self.to_field,
-            &self.bundle_name,
-        )?;
+    pub fn look_picker_target(&mut self) -> Result<(), RuntimeError> {
+        let target = self.selected_picker_recipient_id().ok_or_else(|| {
+            RuntimeError::validation(
+                "validation_unknown_target",
+                "look requires a selected recipient in picker",
+            )
+        })?;
 
         let response = self.request_relay(&RelayRequest::Look {
             requester_session: self.sender_session.clone(),
@@ -701,8 +708,8 @@ impl AppState {
         self.pending_delivery_ids.len()
     }
 
-    pub fn selected_recipient_id(&self) -> Option<String> {
-        self.recipients_state
+    fn selected_picker_recipient_id(&self) -> Option<String> {
+        self.picker_state
             .selected()
             .and_then(|index| self.recipients.get(index))
             .map(|recipient| recipient.session_name.clone())
@@ -1145,5 +1152,37 @@ mod tests {
             state.chat_history.front().map(|entry| entry.body.as_str()),
             Some("hello")
         );
+    }
+
+    #[test]
+    fn closing_look_overlay_restores_picker_when_opened_from_picker() {
+        let mut state = make_state();
+        state.recipients = vec![crate::relay::Recipient {
+            session_name: "master".to_string(),
+            display_name: None,
+        }];
+        state.recipients_state.select(Some(0));
+        state.open_picker();
+        assert!(state.picker_open);
+        state.open_look_overlay();
+        assert!(state.look_overlay_open);
+        assert!(!state.picker_open);
+
+        state.close_look_overlay();
+        assert!(!state.look_overlay_open);
+        assert!(state.picker_open);
+    }
+
+    #[test]
+    fn closing_look_overlay_without_picker_context_does_not_open_picker() {
+        let mut state = make_state();
+        assert!(!state.picker_open);
+        state.open_look_overlay();
+        assert!(state.look_overlay_open);
+        assert!(!state.picker_open);
+
+        state.close_look_overlay();
+        assert!(!state.look_overlay_open);
+        assert!(!state.picker_open);
     }
 }

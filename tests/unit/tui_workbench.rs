@@ -178,3 +178,44 @@ fn message_cursor_moves_vertically_without_history_recall() {
         .expect("down should be handled");
     assert_eq!(state.message_cursor_line_and_column(), (1, 2));
 }
+
+#[test]
+fn f4_is_not_bound_on_main_workbench_surface() {
+    let mut state = make_state();
+    state.insert_text("master");
+    state
+        .dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE))
+        .expect("f4 should be ignored on main surface");
+    assert_eq!(state.to_field(), "master");
+}
+
+#[test]
+fn picker_look_requires_selected_recipient() {
+    let mut state = make_state();
+    state
+        .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
+        .expect("f2 should open picker");
+    let result = state.dispatch_event(key_event(KeyCode::Char('l'), KeyModifiers::NONE));
+    match result {
+        Err(RuntimeError::Validation { code, .. }) => {
+            assert_eq!(code, "validation_unknown_target")
+        }
+        other => panic!("unexpected result: {other:?}"),
+    }
+}
+
+#[test]
+fn picker_look_uses_selected_recipient_target() {
+    let mut state = make_state();
+    state.set_recipients(&["master"]);
+    state
+        .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
+        .expect("f2 should open picker");
+    let result = state.dispatch_event(key_event(KeyCode::Char('l'), KeyModifiers::NONE));
+    match result {
+        Err(RuntimeError::Validation { code, .. }) => {
+            assert_eq!(code, "relay_unavailable")
+        }
+        other => panic!("unexpected result: {other:?}"),
+    }
+}

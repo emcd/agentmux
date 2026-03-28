@@ -71,7 +71,6 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
             }
         }
         KeyCode::F(3) => state.toggle_events_overlay(),
-        KeyCode::F(4) => return state.look_target(),
         KeyCode::BackTab => state.cycle_focus_backward(),
         KeyCode::Tab => state.cycle_focus_forward(),
         KeyCode::Enter if key.modifiers.is_empty() => {
@@ -124,6 +123,12 @@ fn handle_picker_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeE
         KeyCode::Down => state.move_picker_selection(1),
         KeyCode::Up => state.move_picker_selection(-1),
         KeyCode::Enter => state.insert_picker_selection(),
+        KeyCode::Char(character)
+            if (character == 'l' || character == 'L')
+                && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
+        {
+            return state.look_picker_target();
+        }
         _ => {}
     }
     Ok(())
@@ -136,10 +141,6 @@ fn handle_events_overlay_key(state: &mut AppState, key: KeyEvent) -> Result<(), 
             state.toggle_events_overlay();
             state.open_picker();
         }
-        KeyCode::F(4) => {
-            state.toggle_events_overlay();
-            return state.look_target();
-        }
         _ => {}
     }
     Ok(())
@@ -147,13 +148,13 @@ fn handle_events_overlay_key(state: &mut AppState, key: KeyEvent) -> Result<(), 
 
 fn handle_look_overlay_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
     match key.code {
-        KeyCode::Esc | KeyCode::F(4) => state.toggle_look_overlay(),
+        KeyCode::Esc => state.close_look_overlay(),
         KeyCode::F(2) => {
-            state.toggle_look_overlay();
+            state.close_look_overlay();
             state.open_picker();
         }
         KeyCode::F(3) => {
-            state.toggle_look_overlay();
+            state.close_look_overlay();
             state.toggle_events_overlay();
         }
         _ => {}
@@ -171,10 +172,6 @@ fn handle_help_overlay_key(state: &mut AppState, key: KeyEvent) -> Result<(), Ru
         KeyCode::F(3) => {
             state.toggle_help_overlay();
             state.toggle_events_overlay();
-        }
-        KeyCode::F(4) => {
-            state.toggle_help_overlay();
-            return state.look_target();
         }
         _ => {}
     }

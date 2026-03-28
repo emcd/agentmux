@@ -1,7 +1,4 @@
-use agentmux::tui::{
-    autocomplete_recipient_input, merge_tui_targets, parse_tui_target_identifier,
-    resolve_tui_look_target,
-};
+use agentmux::tui::{autocomplete_recipient_input, merge_tui_targets, parse_tui_target_identifier};
 
 #[test]
 fn parses_local_target_identifier() {
@@ -58,24 +55,4 @@ fn autocomplete_returns_none_when_no_match_exists() {
     let candidates = vec!["relay".to_string(), "mcp".to_string()];
     let completed = autocomplete_recipient_input("x", &candidates);
     assert_eq!(completed, None);
-}
-
-#[test]
-fn look_target_prefers_selected_recipient() {
-    let resolved = resolve_tui_look_target(Some("mcp".to_string()), "relay, tui", "agentmux")
-        .expect("look target");
-    assert_eq!(resolved, "mcp");
-}
-
-#[test]
-fn look_target_falls_back_to_first_to_recipient() {
-    let resolved =
-        resolve_tui_look_target(None, "relay, tui", "agentmux").expect("look target from to");
-    assert_eq!(resolved, "relay");
-}
-
-#[test]
-fn look_target_requires_selection_or_to_recipient() {
-    let error = resolve_tui_look_target(None, "", "agentmux").expect_err("must fail");
-    assert!(error.to_string().contains("validation_unknown_target"));
 }

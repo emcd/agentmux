@@ -30,14 +30,19 @@ This module provides the interactive `agentmux tui` workbench.
   - association fallback,
 - delivery outcome vocabulary:
   - `accepted`, `success`, `timeout`, `failed`,
-- recipient completion:
-  - `@` token triggers immediate proposals after one suffix character,
-  - manual trigger via `Ctrl+Space`,
+- recipient completion via `@` token triggers plus `Ctrl+Space`,
+- `@`-prefixed tokens trigger immediate completion proposals after one suffix character,
 - overlays:
-  - help (`F1`), recipient picker (`F2`), events (`F3`), look (`F4`),
-- chat history viewport with PgUp/PgDn paging,
+  - help (`F1`),
+  - recipient picker (`F2`),
+  - delivery events (`F3`),
+  - look snapshot (opened from picker context action),
+- chat history viewport with PgUp/PgDn navigation for sent/received messages,
+- send workflow via relay `chat` (`Enter` in `Message`),
+- look workflow via relay `look` (`l` in recipient picker),
 - stable rendering for validation/runtime error codes,
-- stream reconnect handling with `relay_unavailable` status when disconnected.
+- stream reconnect handling with explicit `relay_unavailable` status when
+  disconnected.
 
 ## Keybindings
 
@@ -55,7 +60,8 @@ This module provides the interactive `agentmux tui` workbench.
 - `Esc` in `Message`: snap chat history viewport to latest
 - `F2`: open/close recipient picker overlay
 - `F3`: open/close events overlay
-- `F4`: capture look snapshot for selected recipient (or first `To` recipient) and open overlay
+- `l` in picker overlay: capture look snapshot for selected recipient and open overlay
+- `Esc` in look overlay: close look and return to picker context
 - `PgUp` / `PgDn`: page chat history viewport backward/forward
 - `Up` / `Down`: move recipient selection in picker overlay
 - `Ctrl+R`: refresh recipients

@@ -18,7 +18,7 @@ pub(super) struct RecipientTokenContext {
     pub at_prefixed: bool,
 }
 
-/// Parses one recipient identifier for TUI send/look workflows.
+/// Parses one recipient identifier for TUI target workflows.
 ///
 /// Accepted forms:
 /// - local: `<session-id>`
@@ -69,38 +69,6 @@ pub fn merge_tui_targets(
     }
 
     Ok(targets)
-}
-
-/// Resolves the look target using TUI operator precedence.
-///
-/// Precedence:
-/// 1. currently selected recipient identity from recipient list/picker
-/// 2. first parsed recipient in the `To` field
-pub fn resolve_tui_look_target(
-    selected_recipient: Option<String>,
-    to_field: &str,
-    associated_bundle: &str,
-) -> Result<String, RuntimeError> {
-    if let Some(selected_recipient) = selected_recipient {
-        return Ok(selected_recipient);
-    }
-
-    let targets = merge_tui_targets(to_field, associated_bundle).map_err(|error| match error {
-        RuntimeError::Validation { code, .. } if code == "validation_empty_targets" => {
-            RuntimeError::validation(
-                "validation_unknown_target",
-                "look requires a selected recipient or To target",
-            )
-        }
-        other => other,
-    })?;
-
-    targets.into_iter().next().ok_or_else(|| {
-        RuntimeError::validation(
-            "validation_unknown_target",
-            "look requires a selected recipient or To target",
-        )
-    })
 }
 
 /// Completes the current recipient token from a list of candidate identities.
