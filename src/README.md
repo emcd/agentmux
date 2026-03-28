@@ -1,53 +1,43 @@
 # Source Layout
 
-This directory contains the implementation for the unified `agentmux` binary.
+This directory contains the runtime implementation for the `agentmux` binary.
+The intended reader is a developer or coding agent changing contracts,
+transport behavior, or CLI/MCP/TUI workflows.
 
-## Module Map
+## Architecture Layers
 
 - `bin/`
-  - binary entrypoints.
+  - Entrypoints that invoke shared command execution.
   - See [src/bin/README.md](bin/README.md).
-- `commands.rs`
-  - CLI parsing and command execution for `host relay`, `host mcp`, `up`,
-    `down`, `list`, `look`, and `send`.
+- `commands/`
+  - CLI surface parsing, validation, and command dispatch (`host`, `up`, `down`,
+    `list`, `look`, `send`, `tui`).
+  - See [src/commands/README.md](commands/README.md).
+- `runtime/`
+  - Runtime-root resolution, bootstrap locks/socket binding, startup template
+    hydration, inscriptions, and signal wiring.
+  - See [src/runtime/README.md](runtime/README.md).
 - `configuration.rs`
-  - bundle/coder TOML loading and sender resolution helpers.
-- `envelope.rs`
-  - relay envelope rendering + batching primitives.
-- `relay.rs`
-  - relay request/response contract and tmux delivery engine.
+  - Bundle/coder/policy parsing and validation, plus session identity helpers.
+- `relay.rs` + `relay/`
+  - Relay IPC contracts, authorization checks, lifecycle actions, delivery
+    engine, and stream registration/event routing.
+  - See [src/relay/README.md](relay/README.md).
 - `mcp/`
-  - MCP stdio server surface and relay forwarding.
+  - MCP server handlers that validate MCP payloads and forward relay requests.
   - See [src/mcp/README.md](mcp/README.md).
 - `tui/`
-  - Interactive terminal workbench that composes `list`/`send`/`look` relay
-    contracts for operator workflows.
-- `runtime/`
-  - path resolution, startup locks, association discovery, inscriptions, and
-  starter template hydration.
-  - See [src/runtime/README.md](runtime/README.md).
+  - Interactive workbench state/input/render loop on top of relay contracts.
+  - See [src/tui/README.md](tui/README.md).
+- `envelope.rs`
+  - Envelope rendering and batching primitives used by delivery paths.
 - `lib.rs`
-  - crate module exports and shared startup helpers.
+  - Crate exports and shared startup banner helper.
 
-## Starter Template Embedding
+## Cross-Cutting Invariants
 
-Starter configuration templates are version-controlled and embedded via
-`include_str!`:
-
-- coders template: `data/configuration/coders.toml`
-- bundle template: `data/configuration/bundle.toml`
-
-Runtime startup writes these templates only when target files are missing.
-
-## Delivery Notes
-
-Relay `chat` currently supports `delivery_mode=async` and `delivery_mode=sync`.
-
-Current async queue semantics:
-
-- in-memory only (non-durable),
-- FIFO ordering per target session,
-- no dedupe/coalescing,
-- no hard queue cap in MVP.
-
-Pending async entries are lost if relay exits or restarts.
+- Relay is the authorization decision point; CLI/MCP/TUI perform request-shape
+  validation and pass relay denial details through.
+- Runtime starter files are hydrated only when absent from config root.
+- Delivery supports `async` and `sync`; ACP sync acknowledges at dispatch/first
+  activity boundaries and correlates completion by `message_id`.

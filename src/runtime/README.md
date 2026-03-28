@@ -20,8 +20,10 @@ shared by relay and MCP hosts.
 - `inscriptions.rs`
   - process/bundle inscription path setup and event emission helpers.
 - `starter.rs`
-  - hydrates starter config files (`coders.toml`, `bundles/example.toml`) when
-    missing.
+  - hydrates starter config files when missing:
+    - `<config-root>/coders.toml`
+    - `<config-root>/policies.toml`
+    - `<config-root>/bundles/example.toml`
 - `signals.rs`
   - process signal wiring and shutdown state checks.
 - `error.rs`
@@ -40,3 +42,20 @@ Supported keys:
 - `bundle_name`
 - `session_name`
 - `config_root`
+
+## TUI Sender Override File
+
+Per-worktree TUI sender overrides are loaded from:
+
+- `.auxiliary/configuration/agentmux/overrides/tui.toml`
+
+Supported key:
+
+- `sender`
+
+## Bootstrap Notes
+
+- `bootstrap.rs` uses spawn-lock and runtime-lock files to avoid duplicate relay
+  startup and to clean stale sockets safely.
+- Relay startup can be disabled at call sites (`BootstrapOptions`) for
+  process-only or diagnostics scenarios.

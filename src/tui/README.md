@@ -2,30 +2,42 @@
 
 This module provides the interactive `agentmux tui` workbench.
 
-## Current MVP Scope
+## Module Map
+
+- `mod.rs`
+  - top-level run loop and terminal lifecycle.
+- `state.rs`
+  - app state model, relay stream client, recipient cache, event/chat history,
+    pending delivery tracking, and error/status surfaces.
+- `input.rs`
+  - key handling and command intent updates.
+- `render.rs`
+  - pane rendering, overlays, and key help text.
+- `target.rs`
+  - recipient parsing/autocomplete and look-target resolution helpers.
+- `workbench.rs`
+  - launch option plumbing from CLI command layer.
+
+## Current MVP Behavior
 
 - recipient discovery from relay `list` responses,
 - explicit `To` recipient field with deterministic target parsing,
-- async-only send behavior with local pending-delivery tracking,
+- async send workflow with local pending tracking and terminal outcome updates,
 - sender identity precedence:
   - `--sender`
   - `.auxiliary/configuration/agentmux/overrides/tui.toml` (debug/testing)
   - `<config-root>/tui.toml`
   - association fallback,
-- delivery outcome vocabulary mapping:
+- delivery outcome vocabulary:
   - `accepted`, `success`, `timeout`, `failed`,
-- recipient completion via `@` token triggers plus `Ctrl+Space`,
-- `@`-prefixed tokens trigger immediate completion proposals after one suffix character,
-- recipient picker overlay (`F2`),
-- delivery events overlay (`F3`),
-- look snapshot overlay (`F4`),
-- help overlay (`F1`),
-- chat history viewport with PgUp/PgDn navigation for sent/received messages,
-- send workflow via relay `chat` (`Enter` in `Message`),
-- look workflow via relay `look` (`F4`),
-- stable error-code rendering for validation failures.
-- stream reconnect handling with explicit `relay_unavailable` status when
-  disconnected.
+- recipient completion:
+  - `@` token triggers immediate proposals after one suffix character,
+  - manual trigger via `Ctrl+Space`,
+- overlays:
+  - help (`F1`), recipient picker (`F2`), events (`F3`), look (`F4`),
+- chat history viewport with PgUp/PgDn paging,
+- stable rendering for validation/runtime error codes,
+- stream reconnect handling with `relay_unavailable` status when disconnected.
 
 ## Keybindings
 
@@ -49,3 +61,11 @@ This module provides the interactive `agentmux tui` workbench.
 - `Ctrl+R`: refresh recipients
 - mouse wheel: scroll chat history
 - successful send clears `To` and `Message` fields
+
+## Stream and State Notes
+
+- TUI connects as relay stream client class `ui`.
+- Stream event dedupe is keyed by stable identifiers in app state to avoid
+  duplicate status/event lines after reconnect.
+- `accepted` is process-local; terminal outcomes come from relay completion
+  results/events.
