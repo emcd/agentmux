@@ -179,8 +179,15 @@ fn run_relay_host_no_selector(
         } else {
             RelayHostStartupMode::Autostart
         };
-        let (outcome, hosted_bundle) =
+        let (mut outcome, hosted_bundle) =
             host_selected_bundle(roots, membership.bundle_name.as_str(), startup_mode);
+        if no_autostart {
+            outcome = skipped_startup_bundle(
+                membership.bundle_name.as_str(),
+                "process_only",
+                "relay started without bundle autostart".to_string(),
+            );
+        }
         outcomes.push(outcome);
         if let Some(hosted_bundle) = hosted_bundle {
             hosted_bundles.push(hosted_bundle);
@@ -196,6 +203,11 @@ fn run_relay_host_no_selector(
         outcomes,
     );
     if hosted_bundles.is_empty() {
+        if no_autostart {
+            emit_inscription("relay.startup.summary", &startup_summary_payload(&summary));
+            render_startup_summary(&summary);
+            return Ok(());
+        }
         if summary.failed_bundle_count > 0 {
             return Err(RuntimeError::validation(
                 "runtime_startup_failed",

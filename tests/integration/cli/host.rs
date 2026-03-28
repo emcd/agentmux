@@ -192,3 +192,71 @@ fn host_relay_no_autostart_mode_reports_process_only_summary() {
     assert_eq!(alpha["outcome"], "skipped");
     assert_eq!(alpha["reason_code"], "process_only");
 }
+
+#[test]
+fn host_relay_no_autostart_does_not_report_failed_bundle_starts_when_listener_setup_fails() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        Some(&["dev"]),
+        &["a"],
+        Some(true),
+    );
+    fs::create_dir_all(state_root.join("bundles").join("alpha").join("relay.sock"))
+        .expect("create blocking relay socket directory");
+
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "--no-autostart",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .output()
+        .expect("run agentmux host relay --no-autostart");
+
+    assert!(output.status.success(), "command should succeed");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("runtime_startup_failed"),
+        "unexpected stderr: {stderr}"
+    );
+
+    let summary_json = parse_summary_json_line(&output.stdout);
+    let bundles = summary_json["bundles"]
+        .as_array()
+        .expect("startup summary bundles");
+    let alpha = bundles
+        .iter()
+        .find(|bundle| bundle["bundle_name"] == "alpha")
+        .expect("alpha startup summary");
+    assert!(
+        summary_json["host_mode"] == "process_only",
+        "unexpected summary: {summary_json}"
+    );
+    assert!(
+        summary_json["hosted_bundle_count"] == 0
+            && summary_json["skipped_bundle_count"] == 1
+            && summary_json["failed_bundle_count"] == 0
+            && summary_json["hosted_any"] == false,
+        "unexpected summary: {summary_json}"
+    );
+    assert_eq!(alpha["outcome"], "skipped");
+    assert_eq!(alpha["reason_code"], "process_only");
+}
