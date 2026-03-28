@@ -29,6 +29,15 @@ pub(super) fn deliver_one_target_ui(
     let start = Instant::now();
     loop {
         if shutdown_requested() {
+            let _ = emit_delivery_outcome_event(
+                bundle_name,
+                target_session.as_str(),
+                message_id.as_str(),
+                "failed",
+                Some("failed"),
+                Some(DROPPED_ON_SHUTDOWN_REASON_CODE),
+                Some(DROPPED_ON_SHUTDOWN_REASON),
+            );
             return ChatResult {
                 target_session,
                 message_id,
@@ -55,22 +64,55 @@ pub(super) fn deliver_one_target_ui(
                 },
             }),
         };
+        let routed_outcome = emit_delivery_outcome_event(
+            bundle_name,
+            target_session.as_str(),
+            message_id.as_str(),
+            "routed",
+            None,
+            None,
+            None,
+        );
+        match routed_outcome {
+            Ok(StreamEventSendOutcome::Delivered) => {}
+            Ok(StreamEventSendOutcome::NoUiEndpoint) | Ok(StreamEventSendOutcome::Disconnected) => {
+                if timeout.is_some_and(|value| start.elapsed() >= value) {
+                    return ChatResult {
+                        target_session,
+                        message_id,
+                        outcome: ChatOutcome::Timeout,
+                        reason_code: None,
+                        reason: Some(format!(
+                            "ui relay stream was disconnected for {}ms",
+                            start.elapsed().as_millis()
+                        )),
+                        details: None,
+                    };
+                }
+                thread::sleep(Duration::from_millis(UI_RECONNECT_POLL_INTERVAL_MS));
+                continue;
+            }
+            Err(source) => {
+                return ChatResult {
+                    target_session,
+                    message_id,
+                    outcome: ChatOutcome::Failed,
+                    reason_code: None,
+                    reason: Some(format!("failed to emit relay stream event: {}", source)),
+                    details: None,
+                };
+            }
+        }
         match send_event_to_registered_ui(bundle_name, target_session.as_str(), &incoming_event) {
             Ok(StreamEventSendOutcome::Delivered) => {
-                let outcome_event = RelayStreamEvent {
-                    event_type: "delivery_outcome".to_string(),
-                    bundle_name: bundle_name.to_string(),
-                    target_session: target_session.clone(),
-                    created_at: timestamp_rfc3339(),
-                    payload: json!({
-                        "message_id": message_id.clone(),
-                        "outcome": "success",
-                    }),
-                };
-                let _ = send_event_to_registered_ui(
+                let _ = emit_delivery_outcome_event(
                     bundle_name,
                     target_session.as_str(),
-                    &outcome_event,
+                    message_id.as_str(),
+                    "delivered",
+                    Some("success"),
+                    None,
+                    None,
                 );
                 return ChatResult {
                     target_session,
@@ -109,6 +151,43 @@ pub(super) fn deliver_one_target_ui(
         }
         thread::sleep(Duration::from_millis(UI_RECONNECT_POLL_INTERVAL_MS));
     }
+}
+
+fn emit_delivery_outcome_event(
+    bundle_name: &str,
+    target_session: &str,
+    message_id: &str,
+    phase: &str,
+    outcome: Option<&str>,
+    reason_code: Option<&str>,
+    reason: Option<&str>,
+) -> Result<StreamEventSendOutcome, std::io::Error> {
+    let mut payload = serde_json::Map::new();
+    payload.insert(
+        "message_id".to_string(),
+        Value::String(message_id.to_string()),
+    );
+    payload.insert("phase".to_string(), Value::String(phase.to_string()));
+    payload.insert(
+        "outcome".to_string(),
+        outcome
+            .map(|value| Value::String(value.to_string()))
+            .unwrap_or(Value::Null),
+    );
+    if let Some(value) = reason_code {
+        payload.insert("reason_code".to_string(), Value::String(value.to_string()));
+    }
+    if let Some(value) = reason {
+        payload.insert("reason".to_string(), Value::String(value.to_string()));
+    }
+    let event = RelayStreamEvent {
+        event_type: "delivery_outcome".to_string(),
+        bundle_name: bundle_name.to_string(),
+        target_session: target_session.to_string(),
+        created_at: timestamp_rfc3339(),
+        payload: Value::Object(payload),
+    };
+    send_event_to_registered_ui(bundle_name, target_session, &event)
 }
 
 fn timestamp_rfc3339() -> String {

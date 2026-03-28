@@ -151,9 +151,14 @@ fn relay_chat_routes_to_connected_ui_stream_with_event_frames() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].outcome, ChatOutcome::Delivered);
 
-    let incoming_event = read_json(&mut reader);
-    assert_eq!(incoming_event["frame"], "event");
-    assert_eq!(incoming_event["event"]["event_type"], "incoming_message");
+    let first_event = read_json(&mut reader);
+    let second_event = read_json(&mut reader);
+    let third_event = read_json(&mut reader);
+    let events = [&first_event, &second_event, &third_event];
+    let incoming_event = events
+        .iter()
+        .find(|value| value["event"]["event_type"] == "incoming_message")
+        .expect("incoming event");
     assert_eq!(incoming_event["event"]["bundle_name"], bundle_name);
     assert_eq!(incoming_event["event"]["target_session"], "bravo");
     assert_eq!(
@@ -161,10 +166,31 @@ fn relay_chat_routes_to_connected_ui_stream_with_event_frames() {
         "alpha"
     );
 
-    let outcome_event = read_json(&mut reader);
-    assert_eq!(outcome_event["frame"], "event");
-    assert_eq!(outcome_event["event"]["event_type"], "delivery_outcome");
-    assert_eq!(outcome_event["event"]["payload"]["outcome"], "success");
+    let routed_event = events
+        .iter()
+        .find(|value| {
+            value["event"]["event_type"] == "delivery_outcome"
+                && value["event"]["payload"]["phase"] == "routed"
+        })
+        .expect("routed delivery outcome");
+    assert!(routed_event["event"]["payload"]["outcome"].is_null());
+    assert_eq!(
+        routed_event["event"]["payload"]["message_id"],
+        results[0].message_id
+    );
+
+    let delivered_event = events
+        .iter()
+        .find(|value| {
+            value["event"]["event_type"] == "delivery_outcome"
+                && value["event"]["payload"]["phase"] == "delivered"
+        })
+        .expect("delivered outcome");
+    assert_eq!(delivered_event["event"]["payload"]["outcome"], "success");
+    assert_eq!(
+        delivered_event["event"]["payload"]["message_id"],
+        results[0].message_id
+    );
 
     ui_client
         .shutdown(std::net::Shutdown::Both)
@@ -208,12 +234,13 @@ fn relay_chat_waits_for_ui_reconnect_before_delivery() {
             hello_payload(reconnect_bundle.as_str(), "bravo"),
         );
         let ack = read_json(&mut reconnect_reader);
-        let incoming = read_json(&mut reconnect_reader);
-        let outcome = read_json(&mut reconnect_reader);
+        let first_event = read_json(&mut reconnect_reader);
+        let second_event = read_json(&mut reconnect_reader);
+        let third_event = read_json(&mut reconnect_reader);
         reconnect_client
             .shutdown(std::net::Shutdown::Both)
             .expect("shutdown reconnect stream");
-        (ack, incoming, outcome)
+        (ack, first_event, second_event, third_event)
     });
 
     let start = Instant::now();
@@ -245,9 +272,23 @@ fn relay_chat_waits_for_ui_reconnect_before_delivery() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].outcome, ChatOutcome::Delivered);
 
-    let (ack, incoming, outcome) = reconnect_thread.join().expect("join reconnect thread");
+    let (ack, first_event, second_event, third_event) =
+        reconnect_thread.join().expect("join reconnect thread");
+    let events = [&first_event, &second_event, &third_event];
     assert_eq!(ack["frame"], "hello_ack");
-    assert_eq!(incoming["event"]["event_type"], "incoming_message");
-    assert_eq!(outcome["event"]["event_type"], "delivery_outcome");
+    assert!(
+        events
+            .iter()
+            .any(|value| value["event"]["event_type"] == "incoming_message")
+    );
+    assert!(events.iter().any(|value| {
+        value["event"]["event_type"] == "delivery_outcome"
+            && value["event"]["payload"]["phase"] == "routed"
+    }));
+    assert!(events.iter().any(|value| {
+        value["event"]["event_type"] == "delivery_outcome"
+            && value["event"]["payload"]["phase"] == "delivered"
+            && value["event"]["payload"]["outcome"] == "success"
+    }));
     reconnect_handle.join().expect("join reconnect server");
 }

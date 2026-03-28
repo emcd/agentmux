@@ -4,6 +4,7 @@ use std::{
     io::{self, BufRead, BufReader, Write},
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
+    thread,
     time::{Duration, Instant},
 };
 
@@ -28,9 +29,9 @@ pub(super) const ACP_PROTOCOL_VERSION: u32 = 1;
 use self::authorization::load_authorization_context;
 use self::delivery::QuiescenceOptions;
 use self::stream::{
-    HelloFrame, IncomingFrame, OutgoingFrame, RelayClientClass, StreamRegistration,
-    clone_stream_writer, parse_incoming_frame, register_stream, registration_is_current,
-    unregister_stream, write_stream_frame_to_writer,
+    HelloFrame, IncomingFrame, OutgoingFrame, RegisterStreamOutcome, RelayClientClass,
+    StreamRegistration, clone_stream_writer, parse_incoming_frame, register_stream,
+    registration_is_current, unregister_stream, write_stream_frame_to_writer,
 };
 
 const SCHEMA_VERSION: &str = ENVELOPE_SCHEMA_VERSION;
@@ -39,6 +40,8 @@ const POLICIES_FORMAT_VERSION: u32 = 1;
 const RELAY_STREAM_HELLO_ACK_TIMEOUT: Duration = Duration::from_secs(2);
 const RELAY_STREAM_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 const RELAY_STREAM_READ_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const HELLO_CONFLICT_RETRY_INTERVAL_MS: u64 = 50;
+const HELLO_CONFLICT_RETRY_TIMEOUT_MS: u64 = 1_000;
 
 /// Recipient metadata returned by `list`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -364,7 +367,49 @@ pub fn serve_connection(
                 match response {
                     Ok(()) => {
                         stream.set_read_timeout(None)?;
-                        registration = Some(register_stream(&hello, writer.clone())?);
+                        match register_stream(&hello, writer.clone())? {
+                            RegisterStreamOutcome::Registered(value) => {
+                                registration = Some(value);
+                            }
+                            RegisterStreamOutcome::IdentityClaimConflict {
+                                existing_connection_id,
+                            } => {
+                                let mut details = serde_json::Map::new();
+                                details.insert(
+                                    "bundle_name".to_string(),
+                                    Value::String(hello.bundle_name.clone()),
+                                );
+                                details.insert(
+                                    "session_id".to_string(),
+                                    Value::String(hello.session_id.clone()),
+                                );
+                                details.insert(
+                                    "reason".to_string(),
+                                    Value::String(
+                                        "existing identity owner is still live".to_string(),
+                                    ),
+                                );
+                                if let Some(value) = existing_connection_id {
+                                    details.insert(
+                                        "existing_connection_id".to_string(),
+                                        Value::String(value),
+                                    );
+                                }
+                                let error = relay_error(
+                                    "runtime_identity_claim_conflict",
+                                    "stream identity is already claimed by a live connection",
+                                    Some(Value::Object(details)),
+                                );
+                                write_stream_frame_to_writer(
+                                    &writer,
+                                    OutgoingFrame::Response {
+                                        request_id: None,
+                                        response: &RelayResponse::Error { error },
+                                    },
+                                )?;
+                                break;
+                            }
+                        }
                         write_stream_frame_to_writer(
                             &writer,
                             OutgoingFrame::HelloAck {
@@ -553,7 +598,26 @@ impl RelayStreamSession {
         if self.connection.is_some() {
             return Ok(());
         }
-        let mut stream = UnixStream::connect(&self.socket_path)?;
+        let deadline = Instant::now() + Duration::from_millis(HELLO_CONFLICT_RETRY_TIMEOUT_MS);
+        loop {
+            match self.try_connect_once() {
+                Ok(connection) => {
+                    self.connection = Some(connection);
+                    return Ok(());
+                }
+                Err(ConnectAttemptError::IdentityClaimConflict { message }) => {
+                    if Instant::now() >= deadline {
+                        return Err(io::Error::other(message));
+                    }
+                    thread::sleep(Duration::from_millis(HELLO_CONFLICT_RETRY_INTERVAL_MS));
+                }
+                Err(ConnectAttemptError::Io(source)) => return Err(source),
+            }
+        }
+    }
+
+    fn try_connect_once(&self) -> Result<RelayStreamConnection, ConnectAttemptError> {
+        let mut stream = UnixStream::connect(&self.socket_path).map_err(ConnectAttemptError::Io)?;
         send_stream_client_frame(
             &mut stream,
             StreamClientFrame::Hello {
@@ -562,9 +626,12 @@ impl RelayStreamSession {
                 session_id: self.session_id.as_str(),
                 client_class: self.client_class,
             },
-        )?;
-        let mut reader = BufReader::new(stream.try_clone()?);
-        stream.set_read_timeout(Some(RELAY_STREAM_HELLO_ACK_TIMEOUT))?;
+        )
+        .map_err(ConnectAttemptError::Io)?;
+        let mut reader = BufReader::new(stream.try_clone().map_err(ConnectAttemptError::Io)?);
+        stream
+            .set_read_timeout(Some(RELAY_STREAM_HELLO_ACK_TIMEOUT))
+            .map_err(ConnectAttemptError::Io)?;
         loop {
             let mut line = String::new();
             let read = match reader.read_line(&mut line) {
@@ -574,20 +641,21 @@ impl RelayStreamSession {
                     if source.kind() == io::ErrorKind::TimedOut
                         || source.kind() == io::ErrorKind::WouldBlock =>
                 {
-                    return Err(io::Error::new(
+                    return Err(ConnectAttemptError::Io(io::Error::new(
                         io::ErrorKind::TimedOut,
                         "relay hello acknowledgement timed out",
-                    ));
+                    )));
                 }
-                Err(source) => return Err(source),
+                Err(source) => return Err(ConnectAttemptError::Io(source)),
             };
             if read == 0 {
-                return Err(io::Error::new(
+                return Err(ConnectAttemptError::Io(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     "relay stream closed before hello acknowledgement",
-                ));
+                )));
             }
-            let server_frame = parse_server_frame(line.trim_end())?;
+            let server_frame =
+                parse_server_frame(line.trim_end()).map_err(ConnectAttemptError::Io)?;
             match server_frame {
                 StreamServerFrame::HelloAck {
                     schema_version,
@@ -596,43 +664,51 @@ impl RelayStreamSession {
                     client_class,
                 } => {
                     if schema_version != SCHEMA_VERSION {
-                        return Err(io::Error::other(format!(
+                        return Err(ConnectAttemptError::Io(io::Error::other(format!(
                             "relay hello acknowledgement schema version mismatch: expected {}, got {}",
                             SCHEMA_VERSION, schema_version
-                        )));
+                        ))));
                     }
                     if bundle_name != self.bundle_name || session_id != self.session_id {
-                        return Err(io::Error::other(
+                        return Err(ConnectAttemptError::Io(io::Error::other(
                             "relay hello acknowledgement identity mismatch",
-                        ));
+                        )));
                     }
                     if client_class != self.client_class {
-                        return Err(io::Error::other(
+                        return Err(ConnectAttemptError::Io(io::Error::other(
                             "relay hello acknowledgement class mismatch",
-                        ));
+                        )));
                     }
-                    stream.set_read_timeout(None)?;
-                    self.connection = Some(RelayStreamConnection { stream, reader });
-                    return Ok(());
+                    stream
+                        .set_read_timeout(None)
+                        .map_err(ConnectAttemptError::Io)?;
+                    return Ok(RelayStreamConnection { stream, reader });
                 }
                 StreamServerFrame::Response {
                     response: RelayResponse::Error { error },
                     ..
                 } => {
-                    return Err(io::Error::other(format!(
-                        "relay hello rejected [{}]: {}",
-                        error.code, error.message
-                    )));
+                    let message =
+                        format!("relay hello rejected [{}]: {}", error.code, error.message);
+                    if error.code == "runtime_identity_claim_conflict" {
+                        return Err(ConnectAttemptError::IdentityClaimConflict { message });
+                    }
+                    return Err(ConnectAttemptError::Io(io::Error::other(message)));
                 }
                 StreamServerFrame::Response { response, .. } => {
-                    return Err(io::Error::other(format!(
+                    return Err(ConnectAttemptError::Io(io::Error::other(format!(
                         "unexpected relay hello response frame: {response:?}",
-                    )));
+                    ))));
                 }
                 StreamServerFrame::Event { .. } => {}
             }
         }
     }
+}
+
+enum ConnectAttemptError {
+    Io(io::Error),
+    IdentityClaimConflict { message: String },
 }
 
 /// Reconciles configured bundle sessions against tmux state.

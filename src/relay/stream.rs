@@ -146,17 +146,25 @@ pub(super) fn clone_stream_writer(stream: &UnixStream) -> Result<SharedStreamWri
 pub(super) fn register_stream(
     hello: &HelloFrame,
     writer: SharedStreamWriter,
-) -> Result<StreamRegistration, io::Error> {
+) -> Result<RegisterStreamOutcome, io::Error> {
     let registry = stream_registry();
     let mut entries = registry
         .entries
         .lock()
         .map_err(|_| io::Error::other("failed to lock stream registry"))?;
-    let stream_id = Uuid::new_v4().to_string();
     let key = IdentityKey {
         bundle_name: hello.bundle_name.clone(),
         session_id: hello.session_id.clone(),
     };
+    if let Some(entry) = entries.get(&key)
+        && entry.stream_id.is_some()
+        && entry.writer.is_some()
+    {
+        return Ok(RegisterStreamOutcome::IdentityClaimConflict {
+            existing_connection_id: entry.stream_id.clone(),
+        });
+    }
+    let stream_id = Uuid::new_v4().to_string();
     entries.insert(
         key,
         RegistryEntry {
@@ -165,11 +173,19 @@ pub(super) fn register_stream(
             writer: Some(writer),
         },
     );
-    Ok(StreamRegistration {
+    Ok(RegisterStreamOutcome::Registered(StreamRegistration {
         bundle_name: hello.bundle_name.clone(),
         session_id: hello.session_id.clone(),
         stream_id,
-    })
+    }))
+}
+
+#[derive(Clone, Debug)]
+pub(super) enum RegisterStreamOutcome {
+    Registered(StreamRegistration),
+    IdentityClaimConflict {
+        existing_connection_id: Option<String>,
+    },
 }
 
 pub(super) fn registration_is_current(

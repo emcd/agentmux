@@ -195,3 +195,82 @@ fn stream_client_does_not_auto_retry_request_after_disconnect() {
     }
     server.join().expect("join server");
 }
+
+#[test]
+fn stream_client_retries_hello_after_identity_claim_conflict() {
+    let (_temporary, socket_path) =
+        temporary_socket_path("relay-stream-client-hello-conflict-retry");
+    let listener = UnixListener::bind(&socket_path).expect("bind unix listener");
+    let server = thread::spawn(move || {
+        let (mut conflict_stream, _) = listener.accept().expect("accept conflict client");
+        let mut conflict_reader = BufReader::new(conflict_stream.try_clone().expect("clone"));
+        let hello_payload = read_json_line(&mut conflict_reader);
+        assert_eq!(hello_payload["frame"], "hello");
+        write_json_line(
+            &mut conflict_stream,
+            &json!({
+                "frame": "response",
+                "response": {
+                    "kind": "error",
+                    "error": {
+                        "code": "runtime_identity_claim_conflict",
+                        "message": "stream identity is already claimed by a live connection"
+                    }
+                }
+            }),
+        );
+        conflict_stream
+            .shutdown(std::net::Shutdown::Both)
+            .expect("shutdown conflict stream");
+
+        let (mut stream, _) = listener.accept().expect("accept retry client");
+        let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+        assert_and_ack_hello(&mut reader, &mut stream, "party", "alpha", "ui");
+
+        let request = read_json_line(&mut reader);
+        assert_eq!(request["frame"], "request");
+        assert_eq!(request["request"]["operation"], "list");
+        let request_id = request["request_id"]
+            .as_str()
+            .map(ToOwned::to_owned)
+            .expect("request id");
+        write_json_line(
+            &mut stream,
+            &json!({
+                "frame": "response",
+                "request_id": request_id,
+                "response": {
+                    "kind": "list",
+                    "schema_version": "1",
+                    "bundle_name": "party",
+                    "recipients": [],
+                }
+            }),
+        );
+    });
+
+    let mut session = RelayStreamSession::new(
+        socket_path,
+        "party".to_string(),
+        "alpha".to_string(),
+        RelayStreamClientClass::Ui,
+    );
+    let (response, events) = session
+        .request_with_events(&agentmux::relay::RelayRequest::List {
+            sender_session: Some("alpha".to_string()),
+        })
+        .expect("retry after hello conflict should succeed");
+    assert!(events.is_empty());
+    match response {
+        agentmux::relay::RelayResponse::List {
+            bundle_name,
+            recipients,
+            ..
+        } => {
+            assert_eq!(bundle_name, "party");
+            assert!(recipients.is_empty());
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+    server.join().expect("join server");
+}

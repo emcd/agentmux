@@ -911,23 +911,29 @@ impl AppState {
                         .payload
                         .get("message_id")
                         .and_then(serde_json::Value::as_str);
+                    let relay_phase = event
+                        .payload
+                        .get("phase")
+                        .and_then(serde_json::Value::as_str);
                     let relay_outcome = event
                         .payload
                         .get("outcome")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("<unknown>");
+                        .and_then(serde_json::Value::as_str);
                     let relay_reason_code = event
                         .payload
                         .get("reason_code")
                         .and_then(serde_json::Value::as_str);
-                    if let Some(message_id) = message_id {
+                    if let Some(message_id) = message_id
+                        && relay_phase != Some("routed")
+                    {
                         self.pending_delivery_ids.remove(message_id);
                     }
                     let dedupe_key = format!(
-                        "{}:{}:{}:{}",
+                        "{}:{}:{}:{}:{}",
                         event.target_session,
                         message_id.unwrap_or("<unknown>"),
-                        relay_outcome,
+                        relay_phase.unwrap_or("-"),
+                        relay_outcome.unwrap_or("<null>"),
                         relay_reason_code.unwrap_or("-"),
                     );
                     if !Self::remember_seen_id(
@@ -935,6 +941,14 @@ impl AppState {
                         &mut self.seen_delivery_outcome_order,
                         dedupe_key,
                     ) {
+                        continue;
+                    }
+                    if relay_phase == Some("routed") {
+                        self.push_event(format!(
+                            "delivery target={} phase=routed pending={}",
+                            event.target_session,
+                            self.pending_deliveries_count()
+                        ));
                         continue;
                     }
                     let (outcome, reason_code) =
@@ -976,9 +990,10 @@ fn map_chat_result_outcome(outcome: &ChatOutcome) -> (&'static str, Option<&'sta
 }
 
 fn map_stream_outcome<'a>(
-    outcome: &'a str,
+    outcome: Option<&'a str>,
     reason_code: Option<&'a str>,
 ) -> (&'a str, Option<&'a str>) {
+    let outcome = outcome.unwrap_or("<unknown>");
     match outcome {
         "success" | "timeout" | "failed" => (outcome, reason_code),
         _ => ("<unknown>", reason_code),

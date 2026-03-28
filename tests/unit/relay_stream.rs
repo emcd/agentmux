@@ -176,7 +176,7 @@ fn stream_hello_acknowledges_and_allows_request() {
 }
 
 #[test]
-fn reconnecting_hello_replaces_prior_stream_identity_binding() {
+fn duplicate_live_hello_claim_is_rejected_with_identity_conflict() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_reconnect";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
@@ -206,8 +206,25 @@ fn reconnecting_hello_replaces_prior_stream_identity_binding() {
     assert_eq!(first_ack["frame"], "hello_ack");
 
     send_json(&mut second_client, hello_frame);
-    let second_ack = read_json(&mut second_reader);
-    assert_eq!(second_ack["frame"], "hello_ack");
+    let second_response = read_json(&mut second_reader);
+    assert_eq!(second_response["frame"], "response");
+    assert_eq!(second_response["response"]["kind"], "error");
+    assert_eq!(
+        second_response["response"]["error"]["code"],
+        "runtime_identity_claim_conflict"
+    );
+    assert_eq!(
+        second_response["response"]["error"]["details"]["bundle_name"],
+        bundle_name
+    );
+    assert_eq!(
+        second_response["response"]["error"]["details"]["session_id"],
+        "alpha"
+    );
+    assert_eq!(
+        second_response["response"]["error"]["details"]["reason"],
+        "existing identity owner is still live"
+    );
 
     send_json(
         &mut first_client,
@@ -216,13 +233,9 @@ fn reconnecting_hello_replaces_prior_stream_identity_binding() {
             "request": {"operation": "list", "sender_session": "alpha"}
         }),
     );
-    let stale_response = read_json(&mut first_reader);
-    assert_eq!(stale_response["frame"], "response");
-    assert_eq!(stale_response["response"]["kind"], "error");
-    assert_eq!(
-        stale_response["response"]["error"]["code"],
-        "validation_stale_stream_binding"
-    );
+    let first_response = read_json(&mut first_reader);
+    assert_eq!(first_response["frame"], "response");
+    assert_eq!(first_response["response"]["kind"], "list");
 
     first_client
         .shutdown(std::net::Shutdown::Both)
@@ -231,5 +244,58 @@ fn reconnecting_hello_replaces_prior_stream_identity_binding() {
         .shutdown(std::net::Shutdown::Both)
         .expect("shutdown second client");
     first_handle.join().expect("join first relay thread");
+    second_handle.join().expect("join second relay thread");
+}
+
+#[test]
+fn hello_claim_is_accepted_after_prior_owner_disconnects() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "party_reconnect_after_disconnect";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+
+    let (mut first_client, first_handle) =
+        spawn_relay_connection(&configuration_root, &bundle_paths);
+    let first_read_stream = first_client.try_clone().expect("clone first stream");
+    let mut first_reader = BufReader::new(first_read_stream);
+
+    send_json(
+        &mut first_client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "bundle_name": bundle_name,
+            "session_id": "alpha",
+            "client_class": "agent"
+        }),
+    );
+    let first_ack = read_json(&mut first_reader);
+    assert_eq!(first_ack["frame"], "hello_ack");
+    first_client
+        .shutdown(std::net::Shutdown::Both)
+        .expect("shutdown first client");
+    first_handle.join().expect("join first relay thread");
+
+    let (mut second_client, second_handle) =
+        spawn_relay_connection(&configuration_root, &bundle_paths);
+    let second_read_stream = second_client.try_clone().expect("clone second stream");
+    let mut second_reader = BufReader::new(second_read_stream);
+    send_json(
+        &mut second_client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "bundle_name": bundle_name,
+            "session_id": "alpha",
+            "client_class": "agent"
+        }),
+    );
+    let second_ack = read_json(&mut second_reader);
+    assert_eq!(second_ack["frame"], "hello_ack");
+
+    second_client
+        .shutdown(std::net::Shutdown::Both)
+        .expect("shutdown second client");
     second_handle.join().expect("join second relay thread");
 }
