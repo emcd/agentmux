@@ -314,7 +314,18 @@ pub fn serve_connection(
 
     loop {
         line.clear();
-        let read = reader.read_line(&mut line)?;
+        let read = match reader.read_line(&mut line) {
+            Ok(read) => read,
+            Err(source)
+                if matches!(
+                    source.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) && registration.is_none() =>
+            {
+                break;
+            }
+            Err(source) => return Err(source),
+        };
         if read == 0 {
             break;
         }
@@ -349,6 +360,7 @@ pub fn serve_connection(
                 let response = handle_hello_frame(configuration_root, bundle_paths, &hello);
                 match response {
                     Ok(()) => {
+                        stream.set_read_timeout(None)?;
                         registration = Some(register_stream(&hello, writer.clone())?);
                         write_stream_frame_to_writer(
                             &writer,

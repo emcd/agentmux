@@ -97,6 +97,7 @@ enum RelayConnectionDispatchOutcome {
 const RELAY_CONNECTION_WORKER_MIN: usize = 2;
 const RELAY_CONNECTION_WORKER_MAX: usize = 8;
 const RELAY_CONNECTION_QUEUE_CAPACITY: usize = 64;
+const RELAY_PRE_HELLO_IDLE_TIMEOUT_MS: u64 = 2_000;
 
 pub(super) async fn run_agentmux_host(arguments: &[String]) -> Result<(), RuntimeError> {
     if arguments.is_empty() {
@@ -421,6 +422,13 @@ fn relay_connection_queue_capacity() -> usize {
         .unwrap_or(RELAY_CONNECTION_QUEUE_CAPACITY)
 }
 
+fn relay_pre_hello_idle_timeout() -> Duration {
+    let timeout_ms = parse_env_positive_usize("AGENTMUX_RELAY_PRE_HELLO_IDLE_TIMEOUT_MS")
+        .and_then(|value| u64::try_from(value).ok())
+        .unwrap_or(RELAY_PRE_HELLO_IDLE_TIMEOUT_MS);
+    Duration::from_millis(timeout_ms)
+}
+
 fn parse_env_positive_usize(name: &str) -> Option<usize> {
     env::var(name)
         .ok()
@@ -484,6 +492,17 @@ fn run_relay_connection_worker(
             Ok(mut stream) => {
                 metrics.queued_connections.fetch_sub(1, Ordering::SeqCst);
                 metrics.active_connections.fetch_add(1, Ordering::SeqCst);
+                if let Err(source) = stream.set_read_timeout(Some(relay_pre_hello_idle_timeout())) {
+                    emit_inscription(
+                        "relay.request_failed",
+                        &json!({
+                            "bundle_name": bundle_paths.bundle_name,
+                            "error": format!("failed to set pre-hello idle timeout: {source}"),
+                        }),
+                    );
+                    metrics.active_connections.fetch_sub(1, Ordering::SeqCst);
+                    continue;
+                }
                 if let Err(source) =
                     crate::relay::serve_connection(&mut stream, &configuration_root, &bundle_paths)
                 {

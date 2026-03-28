@@ -432,6 +432,66 @@ async fn relay_rejects_connections_when_worker_queue_is_full() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn relay_reaps_pre_hello_idle_connections_and_recovers_worker_capacity() {
+    let temporary = TempDir::new().expect("temporary");
+    let bundle_name = "party";
+    let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
+    let state_root = temporary.path().join("state");
+    let fake_tmux_script = temporary.path().join("fake-tmux.sh");
+    let attempts_file = temporary.path().join("attempts.txt");
+    let log_file = temporary.path().join("fake-tmux.log");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
+
+    let relay_socket = state_root
+        .join("bundles")
+        .join(bundle_name)
+        .join("relay.sock");
+    let mut child = spawn_relay_with_fake_tmux_and_env(
+        bundle_name,
+        &config_root,
+        &state_root,
+        &inscriptions_root,
+        &fake_tmux_script,
+        &[
+            ("AGENTMUX_RELAY_CONNECTION_WORKERS", "1"),
+            ("AGENTMUX_RELAY_CONNECTION_QUEUE_CAPACITY", "1"),
+            ("AGENTMUX_RELAY_PRE_HELLO_IDLE_TIMEOUT_MS", "150"),
+        ],
+    );
+    wait_for_relay_socket(&relay_socket).await;
+
+    let idle_active = UnixStream::connect(&relay_socket).expect("connect idle active stream");
+    let idle_queued = UnixStream::connect(&relay_socket).expect("connect idle queued stream");
+    sleep(Duration::from_millis(500)).await;
+
+    let relay_socket_for_retry = relay_socket.clone();
+    let recovered_response = timeout(
+        Duration::from_millis(800),
+        tokio::task::spawn_blocking(move || {
+            request_relay(
+                &relay_socket_for_retry,
+                &RelayRequest::List {
+                    sender_session: Some("alpha".to_string()),
+                },
+            )
+        }),
+    )
+    .await
+    .expect("timed out waiting for recovered list response")
+    .expect("join recovered list request task")
+    .expect("recovered list request");
+    let RelayResponse::List { .. } = recovered_response else {
+        panic!("expected list response after stale connection reap");
+    };
+
+    drop(idle_active);
+    drop(idle_queued);
+    child.start_kill().expect("kill relay");
+    let _ = child.wait().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn relay_sync_delivery_sends_submit_in_separate_tmux_command() {
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
