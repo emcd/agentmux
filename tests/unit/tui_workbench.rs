@@ -140,23 +140,19 @@ fn completion_navigation_stops_after_accept_until_retriggered() {
     state
         .dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE))
         .expect("enter should accept completion");
+    assert_eq!(state.to_field(), "master, ");
     state
         .dispatch_event(key_event(KeyCode::Down, KeyModifiers::NONE))
         .expect("down should be handled");
-    assert_eq!(state.to_field(), "master");
-    for _ in 0..5 {
-        state
-            .dispatch_event(key_event(KeyCode::Backspace, KeyModifiers::NONE))
-            .expect("backspace should be handled");
-    }
-    assert_eq!(state.to_field(), "m");
+    assert_eq!(state.to_field(), "master, ");
+    state.insert_text("m");
     state
         .dispatch_event(key_event(KeyCode::Char(' '), KeyModifiers::CONTROL))
         .expect("ctrl+space should retrigger completion mode");
     state
         .dispatch_event(key_event(KeyCode::Down, KeyModifiers::NONE))
         .expect("down should cycle in active completion mode");
-    assert_eq!(state.to_field(), "mcp");
+    assert_eq!(state.to_field(), "master, mcp");
 }
 
 #[test]

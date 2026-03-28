@@ -54,7 +54,7 @@ This module provides the interactive `agentmux tui` workbench.
 - `Up` / `Down` in `To`: navigate active completion candidate
 - `Up` / `Down` in `Message`: move cursor between message lines
 - `Enter`:
-  - in `To`, accept active completion proposal
+  - in `To`, accept active completion proposal and commit delimiter (`, `)
   - in `Message`, send message
 - `Ctrl+J`: insert newline in `Message`
 - `Esc` in `Message`: snap chat history viewport to latest

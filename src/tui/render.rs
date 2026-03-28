@@ -323,23 +323,52 @@ fn render_help_overlay(frame: &mut Frame, _state: &AppState) {
     let popup = centered_rect(72, 70, frame.area());
     frame.render_widget(Clear, popup);
     let lines = vec![
+        Line::from(Span::styled(
+            "Main Screen",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
         Line::from("F1: Toggle help"),
-        Line::from("F2: Toggle recipient picker"),
-        Line::from("F3: Toggle events"),
-        Line::from("Picker: Enter inserts recipient into To"),
-        Line::from("Picker: l captures look snapshot for selected recipient"),
+        Line::from("F2: Open recipient picker"),
+        Line::from("F3: Open events"),
         Line::from("Ctrl+R: Refresh recipients"),
         Line::from("Tab / Shift+Tab: Focus next/previous"),
         Line::from("Ctrl+Space: Trigger recipient completion in To"),
         Line::from("Up/Down in To: Navigate active completion"),
         Line::from("Up/Down in Message: Move cursor between lines"),
-        Line::from("Enter: Accept completion in To / send in Message"),
+        Line::from("Enter: Accept completion in To (adds ', ') / send in Message"),
         Line::from("Ctrl+J: Insert newline in Message"),
-        Line::from("Esc in overlays: Close (Look returns to Picker context)"),
         Line::from("Esc in Message: Snap history to latest"),
         Line::from("PgUp/PgDn: Scroll chat history"),
         Line::from("Mouse wheel: Scroll chat history"),
-        Line::from("Ctrl+C: Quit"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Session Picker",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from("Enter: Choose selected recipient into To"),
+        Line::from("l: Capture look snapshot for selected recipient"),
+        Line::from("Esc / F2: Close picker"),
+        Line::from("Up/Down: Move picker selection"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Look Overlay",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from("Esc: Close look and return to picker"),
+        Line::from("F2: Open picker"),
+        Line::from("F3: Open events"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Overlays",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from("Esc closes active overlay"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "General",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from("Ctrl+C: Quit from anywhere"),
     ];
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })

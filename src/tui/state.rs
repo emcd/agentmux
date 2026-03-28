@@ -374,9 +374,10 @@ impl AppState {
         if self.focus != FocusField::To {
             return false;
         }
-        if self.to_completion.is_none() {
+        let Some(completion_state) = self.to_completion.as_ref() else {
             return false;
-        }
+        };
+        self.commit_completed_to_token(completion_state.token_start);
         self.to_completion = None;
         true
     }
@@ -513,6 +514,33 @@ impl AppState {
         next.push_str(candidate);
         next.push_str(&self.to_field[token_end..]);
         self.to_field = next;
+    }
+
+    fn commit_completed_to_token(&mut self, token_start: usize) {
+        let Some(token_slice) = self.to_field.get(token_start..) else {
+            return;
+        };
+        let raw_token = token_slice
+            .split(',')
+            .next()
+            .map(str::trim_end)
+            .unwrap_or(token_slice);
+        let token_end = token_start + raw_token.len();
+        let Some(trailing) = self.to_field.get(token_end..) else {
+            return;
+        };
+
+        if trailing.is_empty() {
+            self.to_field.push_str(", ");
+            return;
+        }
+
+        if trailing.starts_with(',') {
+            return;
+        }
+
+        self.to_field.insert(token_end, ',');
+        self.to_field.insert(token_end + 1, ' ');
     }
 
     fn clear_to_completion(&mut self) {
