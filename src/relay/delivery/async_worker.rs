@@ -10,10 +10,12 @@ use std::{
 };
 
 use serde_json::json;
+use time::format_description::well_known::Rfc3339;
 
 use crate::configuration::TargetConfiguration;
 use crate::runtime::{inscriptions::emit_inscription, signals::shutdown_requested};
 
+use super::super::stream::{RelayStreamEvent, send_event_to_registered_ui};
 use super::super::{AsyncDeliveryTask, ChatOutcome, ChatResult, RelayError};
 
 use std::path::PathBuf;
@@ -208,30 +210,109 @@ pub(super) fn complete_task_outcome(
         return;
     }
     match outcome {
-        Ok(result) => emit_inscription(
-            "relay.chat.async.completed",
-            &json!({
-                "bundle_name": task.bundle.bundle_name,
-                "sender_session": task.sender.id,
-                "target_session": result.target_session,
-                "message_id": result.message_id,
-                "outcome": result.outcome,
-                "reason_code": result.reason_code,
-                "reason": result.reason,
-                "details": result.details,
-            }),
-        ),
-        Err(error) => emit_inscription(
-            "relay.chat.async.completed",
-            &json!({
-                "bundle_name": task.bundle.bundle_name,
-                "sender_session": task.sender.id,
-                "target_session": task.target_session,
-                "message_id": task.message_id,
-                "outcome": ChatOutcome::Failed,
-                "reason": error.message,
-                "error_code": error.code,
-            }),
-        ),
+        Ok(result) => {
+            emit_sender_delivery_outcome_event(
+                task,
+                result.target_session.as_str(),
+                result.message_id.as_str(),
+                result.outcome.clone(),
+                result.reason_code.as_deref(),
+                result.reason.as_deref(),
+            );
+            emit_inscription(
+                "relay.chat.async.completed",
+                &json!({
+                    "bundle_name": task.bundle.bundle_name,
+                    "sender_session": task.sender.id,
+                    "target_session": result.target_session,
+                    "message_id": result.message_id,
+                    "outcome": result.outcome,
+                    "reason_code": result.reason_code,
+                    "reason": result.reason,
+                    "details": result.details,
+                }),
+            );
+        }
+        Err(error) => {
+            emit_sender_delivery_outcome_event(
+                task,
+                task.target_session.as_str(),
+                task.message_id.as_str(),
+                ChatOutcome::Failed,
+                Some(error.code.as_str()),
+                Some(error.message.as_str()),
+            );
+            emit_inscription(
+                "relay.chat.async.completed",
+                &json!({
+                    "bundle_name": task.bundle.bundle_name,
+                    "sender_session": task.sender.id,
+                    "target_session": task.target_session,
+                    "message_id": task.message_id,
+                    "outcome": ChatOutcome::Failed,
+                    "reason": error.message,
+                    "error_code": error.code,
+                }),
+            );
+        }
     }
+}
+
+fn emit_sender_delivery_outcome_event(
+    task: &AsyncDeliveryTask,
+    target_session: &str,
+    message_id: &str,
+    terminal_outcome: ChatOutcome,
+    reason_code: Option<&str>,
+    reason: Option<&str>,
+) {
+    let (phase, outcome) = match terminal_outcome {
+        ChatOutcome::Delivered => ("delivered", Some("success")),
+        ChatOutcome::Timeout => ("failed", Some("timeout")),
+        ChatOutcome::DroppedOnShutdown => ("failed", Some("failed")),
+        ChatOutcome::Failed => ("failed", Some("failed")),
+        ChatOutcome::Queued => ("routed", None),
+    };
+    let mut payload = serde_json::Map::new();
+    payload.insert(
+        "message_id".to_string(),
+        serde_json::Value::String(message_id.to_string()),
+    );
+    payload.insert(
+        "phase".to_string(),
+        serde_json::Value::String(phase.to_string()),
+    );
+    payload.insert(
+        "outcome".to_string(),
+        outcome
+            .map(|value| serde_json::Value::String(value.to_string()))
+            .unwrap_or(serde_json::Value::Null),
+    );
+    if let Some(value) = reason_code {
+        payload.insert(
+            "reason_code".to_string(),
+            serde_json::Value::String(value.to_string()),
+        );
+    }
+    if let Some(value) = reason {
+        payload.insert(
+            "reason".to_string(),
+            serde_json::Value::String(value.to_string()),
+        );
+    }
+
+    let event = RelayStreamEvent {
+        event_type: "delivery_outcome".to_string(),
+        bundle_name: task.bundle.bundle_name.clone(),
+        target_session: target_session.to_string(),
+        created_at: time::OffsetDateTime::now_utc()
+            .format(&Rfc3339)
+            .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string()),
+        payload: serde_json::Value::Object(payload),
+    };
+    let _ = send_event_to_registered_ui(
+        task.bundle.bundle_name.as_str(),
+        task.sender.id.as_str(),
+        &event,
+    );
 }

@@ -1,5 +1,5 @@
 use std::{
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, ErrorKind, Write},
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
     thread,
@@ -8,7 +8,7 @@ use std::{
 
 use agentmux::{
     relay::{
-        ChatDeliveryMode, ChatOutcome, RelayRequest, RelayResponse, handle_request,
+        ChatDeliveryMode, ChatOutcome, ChatStatus, RelayRequest, RelayResponse, handle_request,
         serve_connection,
     },
     runtime::paths::BundleRuntimePaths,
@@ -112,6 +112,20 @@ fn read_json(reader: &mut BufReader<UnixStream>) -> Value {
     let read = reader.read_line(&mut line).expect("read payload");
     assert!(read > 0, "expected payload");
     serde_json::from_str::<Value>(line.trim_end()).expect("decode payload")
+}
+
+fn read_json_with_timeout(reader: &mut BufReader<UnixStream>) -> Option<Value> {
+    let mut line = String::new();
+    match reader.read_line(&mut line) {
+        Ok(read) => {
+            if read == 0 {
+                return None;
+            }
+            Some(serde_json::from_str::<Value>(line.trim_end()).expect("decode payload"))
+        }
+        Err(source) if matches!(source.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => None,
+        Err(source) => panic!("read payload: {source}"),
+    }
 }
 
 fn hello_payload(bundle_name: &str, session_id: &str) -> Value {
@@ -303,4 +317,87 @@ fn relay_chat_waits_for_ui_reconnect_before_delivery() {
             && value["event"]["payload"]["outcome"] == "success"
     }));
     reconnect_handle.join().expect("join reconnect server");
+}
+
+#[test]
+fn relay_async_chat_emits_terminal_delivery_outcome_to_sender_ui_stream() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = format!("party-{}", Uuid::new_v4().simple());
+    let configuration_root = write_bundle_configuration(&temporary, &bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths =
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+
+    let (mut sender_client, sender_handle) = spawn_relay_stream(&configuration_root, &bundle_paths);
+    let sender_read_stream = sender_client.try_clone().expect("clone sender stream");
+    sender_read_stream
+        .set_read_timeout(Some(Duration::from_millis(100)))
+        .expect("set sender read timeout");
+    let mut sender_reader = BufReader::new(sender_read_stream);
+    send_json(
+        &mut sender_client,
+        hello_payload(bundle_name.as_str(), "bravo"),
+    );
+    let sender_ack = read_json(&mut sender_reader);
+    assert_eq!(sender_ack["frame"], "hello_ack");
+
+    let response = handle_request(
+        RelayRequest::Chat {
+            request_id: Some("req-async-sender".to_string()),
+            sender_session: "bravo".to_string(),
+            message: "verify sender completion stream".to_string(),
+            targets: vec!["alpha".to_string()],
+            broadcast: false,
+            delivery_mode: ChatDeliveryMode::Async,
+            quiet_window_ms: None,
+            quiescence_timeout_ms: Some(500),
+            acp_turn_timeout_ms: None,
+        },
+        &configuration_root,
+        bundle_name.as_str(),
+        &bundle_paths.tmux_socket,
+    )
+    .expect("chat response");
+    let RelayResponse::Chat {
+        status, results, ..
+    } = response
+    else {
+        panic!("expected chat response");
+    };
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].outcome, ChatOutcome::Queued);
+    let expected_message_id = results[0].message_id.clone();
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut observed_sender_outcome = None::<Value>;
+    while Instant::now() < deadline {
+        if let Some(frame) = read_json_with_timeout(&mut sender_reader)
+            && frame["frame"] == "event"
+            && frame["event"]["event_type"] == "delivery_outcome"
+            && frame["event"]["payload"]["message_id"] == expected_message_id
+        {
+            let phase = frame["event"]["payload"]["phase"]
+                .as_str()
+                .unwrap_or_default();
+            let outcome = frame["event"]["payload"]["outcome"]
+                .as_str()
+                .unwrap_or_default();
+            if (phase == "delivered" && outcome == "success")
+                || (phase == "failed" && (outcome == "timeout" || outcome == "failed"))
+            {
+                observed_sender_outcome = Some(frame);
+                break;
+            }
+        }
+    }
+    assert!(
+        observed_sender_outcome.is_some(),
+        "expected sender stream to receive terminal delivery_outcome for queued async message"
+    );
+
+    sender_client
+        .shutdown(std::net::Shutdown::Both)
+        .expect("shutdown sender stream");
+    sender_handle.join().expect("join sender relay stream");
 }

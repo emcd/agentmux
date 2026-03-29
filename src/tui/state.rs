@@ -88,6 +88,8 @@ pub(crate) struct AppState {
     chat_history_scroll: usize,
     chat_history_viewport_height: usize,
     pending_delivery_ids: HashSet<String>,
+    terminal_delivery_message_ids: HashSet<String>,
+    terminal_delivery_message_order: VecDeque<String>,
     seen_incoming_message_ids: HashSet<String>,
     seen_incoming_message_order: VecDeque<String>,
     seen_delivery_outcome_ids: HashSet<String>,
@@ -142,6 +144,8 @@ impl AppState {
             chat_history_scroll: 0,
             chat_history_viewport_height: 10,
             pending_delivery_ids: HashSet::new(),
+            terminal_delivery_message_ids: HashSet::new(),
+            terminal_delivery_message_order: VecDeque::new(),
             seen_incoming_message_ids: HashSet::new(),
             seen_incoming_message_order: VecDeque::new(),
             seen_delivery_outcome_ids: HashSet::new(),
@@ -860,6 +864,12 @@ impl AppState {
         for result in results {
             match result.outcome {
                 ChatOutcome::Queued => {
+                    if self
+                        .terminal_delivery_message_ids
+                        .contains(result.message_id.as_str())
+                    {
+                        continue;
+                    }
                     self.pending_delivery_ids.insert(result.message_id.clone());
                     accepted_count += 1;
                 }
@@ -955,6 +965,15 @@ impl AppState {
                         && relay_phase != Some("routed")
                     {
                         self.pending_delivery_ids.remove(message_id);
+                    }
+                    if let Some(message_id) = message_id
+                        && matches!(relay_outcome, Some("success" | "timeout" | "failed"))
+                    {
+                        let _ = Self::remember_seen_id(
+                            &mut self.terminal_delivery_message_ids,
+                            &mut self.terminal_delivery_message_order,
+                            message_id,
+                        );
                     }
                     let dedupe_key = format!(
                         "{}:{}:{}:{}:{}",
@@ -1144,6 +1163,8 @@ mod tests {
 
     use serde_json::json;
 
+    use crate::relay::{ChatOutcome, ChatResult, ChatStatus};
+
     use super::{
         AppState, ChatHistoryDirection, ChatHistoryEntry, RelayStreamEvent, TuiLaunchOptions,
     };
@@ -1240,5 +1261,65 @@ mod tests {
         state.close_look_overlay();
         assert!(!state.look_overlay_open);
         assert!(!state.picker_open);
+    }
+
+    #[test]
+    fn terminal_delivery_outcome_removes_pending_message() {
+        let mut state = make_state();
+        state.record_chat_events(
+            &ChatStatus::Accepted,
+            &[ChatResult {
+                target_session: "user".to_string(),
+                message_id: "msg-1".to_string(),
+                outcome: ChatOutcome::Queued,
+                reason_code: None,
+                reason: None,
+                details: None,
+            }],
+        );
+        assert_eq!(state.pending_deliveries_count(), 1);
+
+        state.record_stream_events(&[RelayStreamEvent {
+            event_type: "delivery_outcome".to_string(),
+            bundle_name: "agentmux".to_string(),
+            target_session: "user".to_string(),
+            created_at: "2026-03-29T00:00:00Z".to_string(),
+            payload: json!({
+                "message_id": "msg-1",
+                "phase": "delivered",
+                "outcome": "success",
+            }),
+        }]);
+        assert_eq!(state.pending_deliveries_count(), 0);
+    }
+
+    #[test]
+    fn queued_result_does_not_readd_pending_after_terminal_outcome_arrives_first() {
+        let mut state = make_state();
+        state.record_stream_events(&[RelayStreamEvent {
+            event_type: "delivery_outcome".to_string(),
+            bundle_name: "agentmux".to_string(),
+            target_session: "user".to_string(),
+            created_at: "2026-03-29T00:00:00Z".to_string(),
+            payload: json!({
+                "message_id": "msg-1",
+                "phase": "delivered",
+                "outcome": "success",
+            }),
+        }]);
+        assert_eq!(state.pending_deliveries_count(), 0);
+
+        state.record_chat_events(
+            &ChatStatus::Accepted,
+            &[ChatResult {
+                target_session: "user".to_string(),
+                message_id: "msg-1".to_string(),
+                outcome: ChatOutcome::Queued,
+                reason_code: None,
+                reason: None,
+                details: None,
+            }],
+        );
+        assert_eq!(state.pending_deliveries_count(), 0);
     }
 }
