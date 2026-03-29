@@ -1,6 +1,6 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
@@ -12,9 +12,9 @@ pub(crate) fn render(frame: &mut Frame, state: &mut AppState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(1),
             Constraint::Min(12),
-            Constraint::Length(3),
+            Constraint::Length(1),
         ])
         .split(frame.area());
 
@@ -52,7 +52,7 @@ fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
             state.pending_deliveries_count()
         )),
     ])];
-    let paragraph = Paragraph::new(text).block(main_pane_block());
+    let paragraph = Paragraph::new(text).style(Style::default().bg(Color::DarkGray));
     frame.render_widget(paragraph, area);
 }
 
@@ -72,7 +72,7 @@ fn render_compose_cursor(frame: &mut Frame, area: Rect, state: &AppState) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(12), Constraint::Length(9)])
         .split(area);
-    let compose_inner = main_pane_titled_block("Compose").inner(rows[1]);
+    let compose_inner = workbench_titled_block("  Compose  ").inner(rows[1]);
     let Some((x, y)) = compose_cursor_position(compose_inner, state) else {
         return;
     };
@@ -182,12 +182,14 @@ fn render_compose(frame: &mut Frame, area: Rect, state: &AppState) {
 
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
-        .block(main_pane_titled_block("Compose"));
+        .block(workbench_titled_block("  Compose  "));
     frame.render_widget(paragraph, area);
 }
 
 fn render_chat_history(frame: &mut Frame, area: Rect, state: &mut AppState) {
-    let viewport_height = main_pane_titled_block("Chat History").inner(area).height as usize;
+    let viewport_height = workbench_titled_block("  Chat History  ")
+        .inner(area)
+        .height as usize;
     state.set_chat_history_viewport_height(viewport_height);
 
     let lines = if state.chat_history.is_empty() {
@@ -215,7 +217,7 @@ fn render_chat_history(frame: &mut Frame, area: Rect, state: &mut AppState) {
     };
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
-        .block(main_pane_titled_block("Chat History"));
+        .block(workbench_titled_block("  Chat History  "));
     frame.render_widget(paragraph, area);
 }
 
@@ -255,7 +257,7 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
         .unwrap_or_else(|| Line::from("Ready."));
     let footer = Paragraph::new(vec![line])
         .wrap(Wrap { trim: false })
-        .block(main_pane_titled_block("Status"));
+        .style(Style::default().bg(Color::DarkGray));
     frame.render_widget(footer, area);
 }
 
@@ -396,10 +398,9 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
         .split(vertical[1])[1]
 }
 
-fn main_pane_block() -> Block<'static> {
-    Block::default().borders(Borders::TOP | Borders::BOTTOM)
-}
-
-fn main_pane_titled_block(title: &'static str) -> Block<'static> {
-    main_pane_block().title(title)
+fn workbench_titled_block(title: &'static str) -> Block<'static> {
+    Block::default()
+        .borders(Borders::TOP)
+        .title(title)
+        .title_alignment(Alignment::Center)
 }
