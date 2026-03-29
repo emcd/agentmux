@@ -30,7 +30,8 @@ This directory owns the unified CLI surface for `agentmux`.
 - `send.rs`
   - `agentmux send`, including stdin/message precedence and timeout fields.
 - `tui.rs`
-  - `agentmux tui` launch path and session/default precedence wiring.
+  - `agentmux tui` launch path, session/default precedence wiring, and relay
+    auto-spawn fallback using resolved runtime roots.
 - `shared.rs`
   - reusable parsing/output helpers shared across command handlers.
 

@@ -247,14 +247,31 @@ silently degrade into synthetic success states.
 
 Same-bundle MVP lock SHALL remain enforced for transport and history updates.
 
+When startup transport is unavailable, TUI SHALL attempt runtime relay
+auto-start before rendering an unavailable state.
+
+Auto-started relay lifecycle remains external in MVP; TUI exit SHALL NOT
+auto-stop relay.
+
 #### Scenario: Surface relay connectivity failure explicitly
 
 - **WHEN** relay transport is unavailable during TUI stream handling
 - **THEN** TUI renders machine-readable transport error state
 - **AND** does not report synthetic successful delivery/history updates
 
+#### Scenario: Attempt relay auto-start on startup transport miss
+
+- **WHEN** operator launches `agentmux tui`
+- **AND** relay socket is unavailable at startup
+- **THEN** TUI attempts runtime relay auto-start before declaring unavailable
+
+#### Scenario: Do not auto-stop relay on tui exit
+
+- **WHEN** relay was auto-started during TUI startup
+- **AND** TUI process exits
+- **THEN** TUI does not issue relay shutdown solely due to TUI exit
+
 #### Scenario: Reject cross-bundle transport scope in MVP
 
 - **WHEN** TUI transport scope attempts bundle outside associated context
 - **THEN** request is rejected with `validation_cross_bundle_unsupported`
-

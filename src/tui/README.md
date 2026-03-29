@@ -52,7 +52,10 @@ User-facing usage details and keybindings are documented under
 - look workflow via relay `look`,
 - stable rendering for validation/runtime error codes,
 - stream reconnect handling with explicit `relay_unavailable` (not reachable)
-  and `relay_timeout` (reachable but unresponsive/saturated) status.
+  and `relay_timeout` (reachable but unresponsive/saturated) status,
+- startup relay auto-spawn fallback when relay socket is unavailable, using the
+  same resolved configuration/state/inscriptions roots as the active TUI
+  launch.
 
 ## Stream and State Notes
 

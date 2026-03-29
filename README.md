@@ -83,7 +83,7 @@ artifact locations, see
 - Operator CLI:
   - Commands: `agentmux list`, `agentmux look`, `agentmux send`, `agentmux tui`
   - Responsibility: direct local inspection, message delivery, and interactive
-    coordination flows.
+    coordination flows with relay auto-start fallback for `agentmux tui`.
 
 Both host modes use shared runtime roots for configuration, sockets, locks, and
 logs.

@@ -122,6 +122,16 @@ Default bootstrap values SHALL be:
 - `auto_start_relay = true`
 - `startup_timeout_ms = 10000`
 
+`agentmux tui` startup SHALL invoke this helper before entering the interactive
+event loop.
+
+When helper-triggered spawn is required for `agentmux tui`, spawned relay
+invocation SHALL use the same resolved runtime roots as TUI startup:
+
+- `--config-directory` from active runtime resolution
+- `--state-directory` from active runtime resolution
+- `--inscriptions-directory` from active runtime resolution
+
 #### Scenario: Auto-start relay when unavailable
 
 - **WHEN** bootstrap helper is called with `auto_start_relay = true`
@@ -134,6 +144,28 @@ Default bootstrap values SHALL be:
 - **WHEN** bootstrap helper is called with `auto_start_relay = false`
 - **AND** `relay.sock` is not connectable
 - **THEN** helper returns a structured bootstrap error
+
+#### Scenario: Start tui with matching-root relay auto-spawn
+
+- **WHEN** operator starts `agentmux tui`
+- **AND** resolved `relay.sock` is unavailable
+- **THEN** startup invokes relay auto-start helper
+- **AND** helper spawn uses the same resolved `--config-directory`,
+  `--state-directory`, and `--inscriptions-directory` values
+
+### Requirement: TUI Auto-Spawn Relay Lifecycle Ownership
+
+In MVP, relay auto-start from `agentmux tui` SHALL be bootstrap-only.
+
+`agentmux tui` SHALL NOT terminate a relay process on TUI exit solely because
+that relay was auto-started by that TUI invocation.
+
+#### Scenario: Keep auto-started relay running after tui exit
+
+- **WHEN** `agentmux tui` auto-starts relay
+- **AND** TUI exits normally or via signal
+- **THEN** relay process remains running until explicitly managed by relay
+  lifecycle controls (`agentmux host relay`, service manager, or operator action)
 
 ### Requirement: Spawn Coordination and Stale Socket Handling
 
@@ -601,4 +633,3 @@ Unknown selectors SHALL return existing validation errors:
 - **WHEN** operator runs `agentmux down --group nightly`
 - **AND** no configured bundle declares group `nightly`
 - **THEN** runtime returns `validation_unknown_group`
-
