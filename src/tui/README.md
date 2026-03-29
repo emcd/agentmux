@@ -9,9 +9,14 @@ User-facing usage details and keybindings are documented under
 
 - `mod.rs`
   - top-level run loop and terminal lifecycle.
-- `state.rs`
-  - app state model, relay stream client, recipient cache, event/chat history,
-    pending delivery tracking, and error/status surfaces.
+- `state/mod.rs`
+  - app state model/types and shared helpers for runtime error/status mapping.
+- `state/history.rs`
+  - chat history/event tracking, pending-delivery accounting, stream-event
+    dedupe, and paging/snap behavior.
+- `state/relay.rs`
+  - relay request/response plumbing, recipient refresh, and stream polling
+    lifecycle.
 - `input.rs`
   - key handling and command intent updates.
 - `render.rs`
