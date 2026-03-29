@@ -13,8 +13,7 @@ identity and policy contracts.
 - Introduce global TUI session registry in `<config-root>/tui.toml`.
 - Define `default-bundle` and `default-session` for TUI startup defaults.
 - Define global TUI sessions in `[[sessions]]` with:
-  - selector id
-  - wire `session-id`
+  - id (selector and wire identity)
   - policy reference
 - Keep `--bundle` as an override for TUI startup bundle selection.
 - Use `--session` as the only sender selector for `send` and `tui` in MVP.

@@ -69,21 +69,20 @@ Supported fields SHALL use kebab-case and include:
 - `default-session` (optional)
 - `[[sessions]]` entries with required:
   - `id`
-  - `session-id`
   - `policy`
 - `[[sessions]]` optional:
   - `name`
 
 Missing files SHALL not be treated as errors.
 Malformed files SHALL fail fast with structured bootstrap validation errors.
-Session `id` SHALL be selector-only (not wire identity) and `id` values SHALL
-be unique within the file.
+Session `id` SHALL be canonical wire identity for relay operations and SHALL be
+unique within the file.
 
 #### Scenario: Resolve sender from session entry in global tui.toml
 
 - **WHEN** runtime selects session `user`
-- **AND** `[[sessions]]` contains `id = "user"` and `session-id = "tui"`
-- **THEN** runtime resolves sender identity as `tui`
+- **AND** `[[sessions]]` contains `id = "user"`
+- **THEN** runtime resolves sender identity as `user`
 
 #### Scenario: Reject unknown configured default session
 

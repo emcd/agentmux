@@ -9,10 +9,10 @@ messaging, and pane snapshots.
 agentmux tui
 ```
 
-Optional sender override:
+Optional session selector:
 
 ```bash
-agentmux tui --sender master
+agentmux tui --session user
 ```
 
 ## Keybindings

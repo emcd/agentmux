@@ -4,3 +4,4 @@ mod host;
 mod lifecycle;
 mod look;
 mod send;
+mod tui;

@@ -21,7 +21,7 @@ Session selection SHALL resolve as:
 2. `default-session` from global `tui.toml`
 3. fail-fast `validation_unknown_session`
 
-Resolved TUI session SHALL provide canonical wire `session-id` for relay
+Resolved TUI session SHALL provide canonical wire `id` for relay
 operations in that process.
 
 #### Scenario: Launch TUI with explicit session and bundle selectors
@@ -44,7 +44,7 @@ operations in that process.
 #### Scenario: Reject sender flag on TUI command
 
 - **WHEN** an operator runs `agentmux tui --sender relay`
-- **THEN** CLI rejects invocation with `validation_invalid_arguments`
+- **THEN** CLI rejects invocation as an unknown argument
 
 ## ADDED Requirements
 
@@ -68,14 +68,14 @@ Send session resolution SHALL be:
 2. `default-session` from global `tui.toml`
 3. fail-fast `validation_unknown_session`
 
-Resolved session `session-id` SHALL be used as send caller identity before
+Resolved session `id` SHALL be used as send caller identity before
 relay dispatch.
 
 #### Scenario: Send with explicit session selector
 
 - **WHEN** an operator runs `agentmux send --bundle agentmux --session user --target mcp --message "hi"`
-- **AND** session `user` resolves to `session-id = "tui"`
-- **THEN** send caller identity resolves as session `tui`
+- **AND** session `user` is configured in global TUI sessions
+- **THEN** send caller identity resolves as session `user`
 
 #### Scenario: Send with default session fallback
 
@@ -99,4 +99,4 @@ relay dispatch.
 #### Scenario: Reject sender flag on send command
 
 - **WHEN** an operator runs `agentmux send --sender relay --target mcp --message "hi"`
-- **THEN** CLI rejects invocation with `validation_invalid_arguments`
+- **THEN** CLI rejects invocation as an unknown argument

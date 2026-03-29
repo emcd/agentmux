@@ -142,8 +142,8 @@ agentmux up (<bundle-id> | --group GROUP)
 agentmux down (<bundle-id> | --group GROUP)
 agentmux list [--bundle NAME] [--sender NAME] [--json]
 agentmux look <target-session> [--bundle NAME] [--lines N]
-agentmux tui [--bundle NAME] [--sender NAME] [--lines N]
-agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--bundle NAME] [--sender NAME] [--json]
+agentmux tui [--bundle NAME] [--session NAME] [--lines N]
+agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--bundle NAME] [--session NAME] [--json]
 ```
 
 Use `--help` on each command for the full flag list.
@@ -169,7 +169,7 @@ Common runtime flags for all commands:
 Example piped send:
 
 ```bash
-printf 'queued hello\n' | agentmux send --bundle myproject --sender master --target tui
+printf 'queued hello\n' | agentmux send --bundle myproject --session user --target tui
 ```
 
 ## MCP Surface
@@ -210,21 +210,21 @@ Typical topology:
 - one relay host process serving all configured bundle sockets (started by `agentmux host relay`),
 - one MCP host per worktree/session identity (`master`, `relay`, `mcp`, `tui`).
 
-Association resolution for `list`/`send` and MCP host startup:
+Association resolution:
 
-- CLI flags have highest precedence (`--bundle`, `--sender` / `--session-name`).
-- explicit CLI `--sender` values must match a configured bundle session; invalid
-  values fail fast with `validation_unknown_sender` (no silent remap/fallback).
-- Auto-discovery fallback:
+- `list` and `host mcp` use association auto-discovery fallback:
   - bundle from Git common-dir owner name,
   - session from worktree top-level directory name.
+- `send` and `tui` use TUI session selectors from global `tui.toml`:
+  - `--bundle` or `default-bundle`,
+  - `--session` or `default-session`,
+  - fail-fast validation when defaults/selectors are missing or unknown.
 
-TUI sender identity resolution:
+TUI session identity resolution:
 
-- `--sender` flag
-- local debug/testing override sender file
-- `<config-root>/tui.toml` sender
-- association fallback
+- `--session` selector
+- active `tui.toml` defaults (`default-session`)
+- no association fallback for TUI/send in MVP
 
 ## Configuration
 
@@ -240,17 +240,22 @@ Bundle configuration file path:
 
 - `<config-root>/bundles/<bundle-name>.toml`
 
-Optional TUI sender defaults:
+Global TUI session configuration:
 
 - normal config file: `<config-root>/tui.toml`
 - local debug/testing override:
   `.auxiliary/configuration/agentmux/overrides/tui.toml`
+- keys:
+  - `default-bundle`
+  - `default-session`
+  - `[[sessions]]` with `id`, optional `name`, and `policy`
 
 Starter files are generated when missing:
 
 - `<config-root>/coders.toml`
 - `<config-root>/bundles/example.toml`
 - `<config-root>/policies.toml`
+- `<config-root>/tui.toml`
 
 ### Example `coders.toml`
 
@@ -325,7 +330,8 @@ Inscriptions:
   with coder sessions without dropping to tmux.
 - Config include/pointer support so centrally hosted configs can reference
   project-local bundle definitions.
-- Profile-based sender selection for CLI/TUI workflows.
+- Expanded global TUI session-management ergonomics (session lifecycle,
+  profile-style grouping, and keybinding customization).
 - Additional autostart examples beyond systemd (for example launchd/OpenRC/Windows service patterns).
 
 ## Development

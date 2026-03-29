@@ -21,7 +21,7 @@ Bundle resolution:
 
 Association-derived sender fallback SHALL NOT be used for TUI startup in MVP.
 
-TUI runtime SHALL use resolved session `session-id` consistently for
+TUI runtime SHALL use resolved session `id` consistently for
 relay-backed operations in that process.
 If selected session references unknown policy, startup SHALL fail fast with
 `validation_unknown_policy`.
@@ -29,8 +29,8 @@ If selected session references unknown policy, startup SHALL fail fast with
 #### Scenario: Resolve TUI startup from explicit session/bundle selectors
 
 - **WHEN** operator starts TUI with `--bundle agentmux --session user`
-- **AND** session `user` resolves to `session-id = "tui"`
-- **THEN** TUI resolves bundle `agentmux` and sender identity `tui`
+- **AND** session `user` is configured in global TUI sessions
+- **THEN** TUI resolves bundle `agentmux` and sender identity `user`
 
 #### Scenario: Resolve TUI startup from global defaults
 
@@ -41,7 +41,7 @@ If selected session references unknown policy, startup SHALL fail fast with
 #### Scenario: Reject sender flag at startup
 
 - **WHEN** operator starts TUI with `--sender relay`
-- **THEN** startup fails with `validation_invalid_arguments`
+- **THEN** startup fails as unknown argument
 
 #### Scenario: Fail fast when required defaults are missing
 

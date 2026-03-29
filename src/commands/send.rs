@@ -9,13 +9,8 @@ use crate::{
     configuration::load_bundle_configuration,
     relay::{RelayRequest, RelayResponse, request_relay},
     runtime::{
-        association::{
-            McpAssociationCli, WorkspaceContext, load_local_mcp_overrides, resolve_association,
-            resolve_sender_session, validate_sender_session,
-        },
-        error::RuntimeError,
-        paths::BundleRuntimePaths,
-        starter::ensure_starter_configuration_layout,
+        association::WorkspaceContext, error::RuntimeError, paths::BundleRuntimePaths,
+        starter::ensure_starter_configuration_layout, tui_session::resolve_tui_session_identity,
     },
 };
 
@@ -35,30 +30,22 @@ pub(super) fn run_agentmux_send(arguments: &[String]) -> Result<(), RuntimeError
     let current_directory = env::current_dir()
         .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
     let workspace = WorkspaceContext::discover(&current_directory)?;
-    let local_overrides = load_local_mcp_overrides(&workspace.workspace_root)?;
-    let association = resolve_association(
-        &McpAssociationCli {
-            bundle_name: parsed.bundle_name.clone(),
-            session_name: parsed.sender_session.clone(),
-        },
-        local_overrides.as_ref(),
-        &workspace,
-    )?;
-    let roots = shared::resolve_roots(&parsed.runtime, &workspace, local_overrides.as_ref())?;
+    let roots = shared::resolve_roots(&parsed.runtime, &workspace, None)?;
     ensure_starter_configuration_layout(&roots.configuration_root)?;
-    let bundle = load_bundle_configuration(&roots.configuration_root, &association.bundle_name)
+    let resolved_session = resolve_tui_session_identity(
+        &roots.configuration_root,
+        &workspace.workspace_root,
+        parsed.bundle_name.as_deref(),
+        parsed.session_selector.as_deref(),
+    )?;
+    load_bundle_configuration(&roots.configuration_root, &resolved_session.bundle_name)
         .map_err(shared::map_bundle_load_error)?;
-    let sender_session = if let Some(explicit_sender) = parsed.sender_session.as_deref() {
-        validate_sender_session(&bundle, explicit_sender)?
-    } else {
-        resolve_sender_session(&bundle, &association.session_name, &current_directory)?
-    };
-    let paths = BundleRuntimePaths::resolve(&roots.state_root, &association.bundle_name)?;
+    let paths = BundleRuntimePaths::resolve(&roots.state_root, &resolved_session.bundle_name)?;
     let response = request_relay(
         &paths.relay_socket,
         &RelayRequest::Chat {
             request_id: parsed.request_id.clone(),
-            sender_session,
+            sender_session: resolved_session.session_id,
             message: parsed.message.clone(),
             targets: parsed.targets.clone(),
             broadcast: parsed.broadcast,
@@ -128,7 +115,7 @@ pub(super) fn run_agentmux_send(arguments: &[String]) -> Result<(), RuntimeError
 
 fn parse_send_arguments(arguments: &[String]) -> Result<SendArguments, RuntimeError> {
     let mut bundle_name = None;
-    let mut sender_session = None;
+    let mut session_selector = None;
     let mut request_id = None;
     let mut targets = Vec::<String>::new();
     let mut broadcast = false;
@@ -149,8 +136,8 @@ fn parse_send_arguments(arguments: &[String]) -> Result<SendArguments, RuntimeEr
             "--bundle" | "--bundle-name" => {
                 bundle_name = Some(shared::take_value(arguments, &mut index, "--bundle")?);
             }
-            "--sender" | "--session-name" => {
-                sender_session = Some(shared::take_value(arguments, &mut index, "--sender")?);
+            "--session" => {
+                session_selector = Some(shared::take_value(arguments, &mut index, "--session")?);
             }
             "--request-id" => {
                 request_id = Some(shared::take_value(arguments, &mut index, "--request-id")?);
@@ -200,7 +187,7 @@ fn parse_send_arguments(arguments: &[String]) -> Result<SendArguments, RuntimeEr
     }
     Ok(SendArguments {
         bundle_name,
-        sender_session,
+        session_selector,
         request_id,
         message,
         targets,
@@ -279,6 +266,6 @@ fn validate_send_targets(arguments: &SendArguments) -> Result<(), RuntimeError> 
 
 pub(super) fn print_send_help() {
     println!(
-        "Usage: agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--quiescence-timeout-ms MS] [--acp-turn-timeout-ms MS] [--request-id ID] [--bundle NAME] [--sender NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--quiescence-timeout-ms MS] [--acp-turn-timeout-ms MS] [--request-id ID] [--bundle NAME] [--session NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }

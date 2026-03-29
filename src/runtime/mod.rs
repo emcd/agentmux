@@ -7,4 +7,4 @@ pub mod inscriptions;
 pub mod paths;
 pub mod signals;
 pub mod starter;
-pub mod tui_sender;
+pub mod tui_session;

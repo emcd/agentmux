@@ -4,13 +4,14 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
-    configuration::{BundleConfiguration, BundleMember},
+    configuration::{BundleConfiguration, BundleMember, load_tui_configuration},
     relay::{POLICIES_FILE, POLICIES_FORMAT_VERSION, RelayError, relay_error},
 };
 
 #[derive(Clone, Debug)]
 pub(super) struct AuthorizationContext {
     controls_by_session: HashMap<String, PolicyControls>,
+    ui_sessions: HashMap<String, UiSessionAuthorization>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,13 +46,18 @@ struct AuthorizationDecisionContext<'a> {
     targets: Option<&'a [String]>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct PolicyControls {
     find: PolicyScope,
     list: PolicyScope,
     look: PolicyScope,
     send: PolicyScope,
     do_controls: HashMap<String, PolicyScope>,
+}
+
+#[derive(Clone, Debug)]
+struct UiSessionAuthorization {
+    display_name: Option<String>,
 }
 
 impl PolicyControls {
@@ -187,9 +193,75 @@ pub(super) fn load_authorization_context(
         )?;
         controls_by_session.insert(member.id.clone(), controls.clone());
     }
+    let mut ui_sessions = HashMap::<String, UiSessionAuthorization>::new();
+    if let Some(tui_configuration) =
+        load_tui_configuration(configuration_root).map_err(map_tui_configuration_error)?
+    {
+        for session in tui_configuration.sessions {
+            let session_id = session.id.clone();
+            let policy_id = normalize_policy_id(session.policy_id.as_str()).ok_or_else(|| {
+                relay_error(
+                    "validation_unknown_policy",
+                    "ui session policy reference is empty",
+                    Some(json!({
+                        "session_selector": session_id.as_str(),
+                        "session_id": session_id.as_str(),
+                    })),
+                )
+            })?;
+            let controls = presets.get(policy_id).ok_or_else(|| {
+                relay_error(
+                    "validation_unknown_policy",
+                    "ui session policy references unknown policy id",
+                    Some(json!({
+                        "session_selector": session_id.as_str(),
+                        "session_id": session_id.as_str(),
+                        "policy_id": policy_id,
+                    })),
+                )
+            })?;
+            if let Some(existing_controls) = controls_by_session.get(session_id.as_str())
+                && existing_controls != controls
+            {
+                return Err(relay_error(
+                    "validation_invalid_arguments",
+                    "session_id maps to conflicting authorization policies",
+                    Some(json!({
+                        "session_id": session_id.as_str(),
+                    })),
+                ));
+            }
+            controls_by_session.insert(session_id.clone(), controls.clone());
+            ui_sessions
+                .entry(session_id)
+                .and_modify(|existing| {
+                    if existing.display_name.is_none() {
+                        existing.display_name = session.name.clone();
+                    }
+                })
+                .or_insert(UiSessionAuthorization {
+                    display_name: session.name.clone(),
+                });
+        }
+    }
     Ok(AuthorizationContext {
         controls_by_session,
+        ui_sessions,
     })
+}
+
+pub(super) fn has_ui_session(authorization: &AuthorizationContext, session_id: &str) -> bool {
+    authorization.ui_sessions.contains_key(session_id)
+}
+
+pub(super) fn ui_session_display_name<'a>(
+    authorization: &'a AuthorizationContext,
+    session_id: &str,
+) -> Option<&'a str> {
+    authorization
+        .ui_sessions
+        .get(session_id)
+        .and_then(|session| session.display_name.as_deref())
 }
 
 fn parse_policy_controls(
@@ -515,4 +587,34 @@ fn normalize_policy_id(value: &str) -> Option<&str> {
         return None;
     }
     Some(value)
+}
+
+fn map_tui_configuration_error(source: crate::configuration::ConfigurationError) -> RelayError {
+    match source {
+        crate::configuration::ConfigurationError::InvalidConfiguration { path, message } => {
+            relay_error(
+                "validation_invalid_arguments",
+                "tui configuration is invalid",
+                Some(json!({
+                    "path": path.display().to_string(),
+                    "cause": message,
+                })),
+            )
+        }
+        crate::configuration::ConfigurationError::Io { context, source } => relay_error(
+            "validation_invalid_arguments",
+            "failed to load tui configuration",
+            Some(json!({
+                "context": context,
+                "cause": source.to_string(),
+            })),
+        ),
+        other => relay_error(
+            "validation_invalid_arguments",
+            "failed to load tui configuration",
+            Some(json!({
+                "cause": other.to_string(),
+            })),
+        ),
+    }
 }

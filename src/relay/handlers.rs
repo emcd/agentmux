@@ -4,9 +4,17 @@ use serde_json::json;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
-use crate::{configuration::BundleConfiguration, runtime::inscriptions::emit_inscription};
+use crate::{
+    configuration::{
+        BundleConfiguration, BundleMember, TargetConfiguration, TmuxTargetConfiguration,
+    },
+    runtime::inscriptions::emit_inscription,
+};
 
-use super::authorization::{AuthorizationContext, authorize_list, authorize_look, authorize_send};
+use super::authorization::{
+    AuthorizationContext, authorize_list, authorize_look, authorize_send, has_ui_session,
+    ui_session_display_name,
+};
 use super::delivery::{
     QuiescenceOptions, aggregate_chat_status, deliver_one_target, enqueue_async_delivery,
     enqueue_sync_delivery, load_acp_snapshot_lines_for_look, prompt_batch_settings,
@@ -21,6 +29,35 @@ use super::{
 
 const LOOK_LINES_DEFAULT: usize = 120;
 const LOOK_LINES_MAX: usize = 1000;
+
+#[derive(Clone, Debug)]
+struct SenderIdentity {
+    session_id: String,
+    display_name: Option<String>,
+}
+
+impl SenderIdentity {
+    fn from_bundle_member(member: &BundleMember) -> Self {
+        Self {
+            session_id: member.id.clone(),
+            display_name: member.name.clone(),
+        }
+    }
+
+    fn to_bundle_member(&self) -> BundleMember {
+        BundleMember {
+            id: self.session_id.clone(),
+            name: self.display_name.clone(),
+            working_directory: None,
+            target: TargetConfiguration::Tmux(TmuxTargetConfiguration {
+                start_command: "ui-session".to_string(),
+                prompt_readiness: None,
+            }),
+            coder_session_id: None,
+            policy_id: None,
+        }
+    }
+}
 
 pub(super) fn handle_request(
     request: RelayRequest,
@@ -155,22 +192,17 @@ fn handle_list(
             None,
         )
     })?;
-    let sender = bundle
-        .members
-        .iter()
-        .find(|member| member.id == sender_session)
-        .ok_or_else(|| {
-            relay_error(
-                "validation_unknown_sender",
-                "sender_session is not in bundle configuration",
-                Some(json!({"sender_session": sender_session})),
-            )
-        })?;
-    authorize_list(bundle, authorization, sender.id.as_str())?;
+    let sender = resolve_sender_identity(
+        bundle,
+        authorization,
+        sender_session.as_str(),
+        "sender_session",
+    )?;
+    authorize_list(bundle, authorization, sender.session_id.as_str())?;
     let recipients = bundle
         .members
         .iter()
-        .filter(|member| member.id != sender.id)
+        .filter(|member| member.id != sender.session_id)
         .map(|member| Recipient {
             session_name: member.id.clone(),
             display_name: member.name.clone(),
@@ -192,7 +224,7 @@ fn handle_list(
             "relay.list.response",
             &json!({
                 "bundle_name": bundle_name,
-                "sender_session": sender.id,
+                "sender_session": sender.session_id,
                 "recipient_count": recipients.len(),
             }),
         );
@@ -261,24 +293,19 @@ fn handle_chat(
         ));
     }
 
-    let sender = bundle
-        .members
-        .iter()
-        .find(|member| member.id == sender_session)
-        .cloned()
-        .ok_or_else(|| {
-            relay_error(
-                "validation_unknown_sender",
-                "sender_session is not in bundle configuration",
-                Some(json!({"sender_session": sender_session})),
-            )
-        })?;
+    let sender = resolve_sender_identity(
+        bundle,
+        authorization,
+        sender_session.as_str(),
+        "sender_session",
+    )?;
+    let sender_member = sender.to_bundle_member();
 
     emit_inscription(
         "relay.chat.request",
         &json!({
             "bundle_name": bundle.bundle_name,
-            "sender_session": sender.id,
+            "sender_session": sender.session_id,
             "broadcast": broadcast,
             "delivery_mode": delivery_mode,
             "target_count": targets.len(),
@@ -291,7 +318,7 @@ fn handle_chat(
         bundle
             .members
             .iter()
-            .filter(|member| member.id != sender.id)
+            .filter(|member| member.id != sender.session_id)
             .map(|member| member.id.clone())
             .collect::<Vec<_>>()
     } else {
@@ -342,7 +369,7 @@ fn handle_chat(
     authorize_send(
         bundle,
         authorization,
-        sender.id.as_str(),
+        sender.session_id.as_str(),
         resolved_targets.as_slice(),
     )?;
 
@@ -360,7 +387,7 @@ fn handle_chat(
                 let message_id = Uuid::new_v4().to_string();
                 let task = AsyncDeliveryTask {
                     bundle: bundle.clone(),
-                    sender: sender.clone(),
+                    sender: sender_member.clone(),
                     all_target_sessions: all_target_sessions.clone(),
                     target_session,
                     message: message.clone(),
@@ -404,7 +431,7 @@ fn handle_chat(
                 let message_id = Uuid::new_v4().to_string();
                 let task = AsyncDeliveryTask {
                     bundle: bundle.clone(),
-                    sender: sender.clone(),
+                    sender: sender_member.clone(),
                     all_target_sessions: all_target_sessions.clone(),
                     target_session: target_session.clone(),
                     message: message.clone(),
@@ -419,7 +446,7 @@ fn handle_chat(
                     "relay.chat.async.queued",
                     &json!({
                         "bundle_name": bundle.bundle_name,
-                        "sender_session": sender.id,
+                        "sender_session": sender.session_id,
                         "target_session": target_session,
                         "message_id": message_id,
                     }),
@@ -441,8 +468,8 @@ fn handle_chat(
         schema_version: SCHEMA_VERSION.to_string(),
         bundle_name: bundle.bundle_name.clone(),
         request_id,
-        sender_session: sender.id.clone(),
-        sender_display_name: sender.name.clone(),
+        sender_session: sender.session_id.clone(),
+        sender_display_name: sender.display_name.clone(),
         delivery_mode,
         status,
         results,
@@ -512,17 +539,12 @@ fn handle_look(
         ));
     }
 
-    let requester = bundle
-        .members
-        .iter()
-        .find(|member| member.id == requester_session)
-        .ok_or_else(|| {
-            relay_error(
-                "validation_unknown_sender",
-                "requester_session is not in bundle configuration",
-                Some(json!({"requester_session": requester_session})),
-            )
-        })?;
+    let requester = resolve_sender_identity(
+        bundle,
+        authorization,
+        requester_session.as_str(),
+        "requester_session",
+    )?;
     let target = bundle
         .members
         .iter()
@@ -537,7 +559,7 @@ fn handle_look(
     authorize_look(
         bundle,
         authorization,
-        requester.id.as_str(),
+        requester.session_id.as_str(),
         target.id.as_str(),
     )?;
 
@@ -582,7 +604,7 @@ fn handle_look(
     let response = RelayResponse::Look {
         schema_version: SCHEMA_VERSION.to_string(),
         bundle_name: bundle.bundle_name.clone(),
-        requester_session: requester.id.clone(),
+        requester_session: requester.session_id.clone(),
         target_session: target.id.clone(),
         captured_at,
         snapshot_lines,
@@ -607,6 +629,36 @@ fn handle_look(
         );
     }
     Ok(response)
+}
+
+fn resolve_sender_identity(
+    bundle: &BundleConfiguration,
+    authorization: &AuthorizationContext,
+    sender_session: &str,
+    detail_field: &str,
+) -> Result<SenderIdentity, RelayError> {
+    if let Some(member) = bundle
+        .members
+        .iter()
+        .find(|member| member.id == sender_session)
+    {
+        return Ok(SenderIdentity::from_bundle_member(member));
+    }
+    if has_ui_session(authorization, sender_session) {
+        return Ok(SenderIdentity {
+            session_id: sender_session.to_string(),
+            display_name: ui_session_display_name(authorization, sender_session)
+                .map(ToString::to_string),
+        });
+    }
+    Err(relay_error(
+        "validation_unknown_sender",
+        "sender session is not configured",
+        Some(json!({
+            "field": detail_field,
+            "value": sender_session,
+        })),
+    ))
 }
 
 fn resolve_explicit_targets(

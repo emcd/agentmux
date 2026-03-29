@@ -4,3 +4,4 @@ mod bundle;
 mod coder;
 mod group;
 mod session;
+mod tui;

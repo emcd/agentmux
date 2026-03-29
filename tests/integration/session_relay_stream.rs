@@ -53,6 +53,18 @@ send = "all:home"
     )
     .expect("write policies configuration");
     std::fs::write(
+        configuration_root.join("tui.toml"),
+        r#"
+default-bundle = "example"
+default-session = "bravo"
+
+[[sessions]]
+id = "bravo"
+policy = "default"
+"#,
+    )
+    .expect("write tui configuration");
+    std::fs::write(
         bundles_directory.join(format!("{bundle_name}.toml")),
         r#"
 format-version = 1

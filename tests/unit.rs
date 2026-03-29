@@ -18,7 +18,7 @@ mod runtime_paths;
 mod runtime_starter;
 #[path = "unit/tui.rs"]
 mod tui;
-#[path = "unit/tui_sender.rs"]
-mod tui_sender;
+#[path = "unit/tui_session.rs"]
+mod tui_session;
 #[path = "unit/tui_workbench.rs"]
 mod tui_workbench;

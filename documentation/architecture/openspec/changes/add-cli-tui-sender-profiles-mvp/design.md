@@ -26,8 +26,7 @@ and duplicates global operator identity concerns.
   - `default-session`
   - `[[sessions]]`
 - Each global TUI session defines:
-  - `id` (selector only; not used as wire identity)
-  - `session-id` (wire sender identity used for hello/routing/auth principal)
+  - `id` (selector and wire sender identity used for hello/routing/auth principal)
   - optional `name`
   - `policy` (policy reference)
   - `id` values must be unique within `tui.toml` (fail-fast on duplicates)
@@ -52,7 +51,7 @@ and duplicates global operator identity concerns.
 - `--sender` is removed from `send` and `tui` in MVP.
 - Relay remains canonical for identity/policy evaluation:
   - principal remains `(bundle_name, session_id)`
-  - for `client_class=ui`, validates `session_id` via global TUI sessions
+  - for `client_class=ui`, validates `session_id` via global TUI session `id`
   - for `client_class=ui`, evaluates authorization from global TUI session
     `policy` reference.
 

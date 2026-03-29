@@ -1,6 +1,23 @@
 use agentmux::relay::{ChatDeliveryMode, RelayRequest, RelayResponse, handle_request};
 use tempfile::TempDir;
 
+fn write_tui_configuration(root: &std::path::Path, policy: &str) {
+    std::fs::write(
+        root.join("tui.toml"),
+        format!(
+            r#"
+default-bundle = "party"
+default-session = "user"
+
+[[sessions]]
+id = "user"
+policy = "{policy}"
+"#
+        ),
+    )
+    .expect("write tui configuration");
+}
+
 fn write_bundle(temporary: &TempDir, name: &str) -> std::path::PathBuf {
     let root = temporary.path().join("config");
     let bundles = root.join("bundles");
@@ -207,6 +224,48 @@ fn list_excludes_sender_session() {
     };
     assert_eq!(recipients.len(), 1);
     assert_eq!(recipients[0].session_name, "bravo");
+}
+
+#[test]
+fn list_allows_ui_sender_from_global_tui_sessions() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    write_tui_configuration(&config_root, "default");
+    let tmux_socket = temporary.path().join("tmux.sock");
+    let response = handle_request(
+        RelayRequest::List {
+            sender_session: Some("user".to_string()),
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect("list response");
+
+    let RelayResponse::List { recipients, .. } = response else {
+        panic!("expected list response");
+    };
+    assert_eq!(recipients.len(), 2);
+    assert_eq!(recipients[0].session_name, "alpha");
+    assert_eq!(recipients[1].session_name, "bravo");
+}
+
+#[test]
+fn list_rejects_ui_sender_with_unknown_policy_reference() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    write_tui_configuration(&config_root, "missing");
+    let tmux_socket = temporary.path().join("tmux.sock");
+    let response = handle_request(
+        RelayRequest::List {
+            sender_session: Some("user".to_string()),
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect_err("list should fail");
+    assert_eq!(response.code, "validation_unknown_policy");
 }
 
 #[test]

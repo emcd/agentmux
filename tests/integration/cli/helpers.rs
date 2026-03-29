@@ -157,6 +157,30 @@ send = "all:home"
     .expect("write bundle config");
 }
 
+pub(super) fn write_tui_configuration(
+    config_root: &Path,
+    default_bundle: Option<&str>,
+    default_session: Option<&str>,
+    sessions: &[(&str, &str, Option<&str>)],
+) {
+    let mut body = String::new();
+    if let Some(default_bundle) = default_bundle {
+        body.push_str(format!("default-bundle = \"{default_bundle}\"\n").as_str());
+    }
+    if let Some(default_session) = default_session {
+        body.push_str(format!("default-session = \"{default_session}\"\n").as_str());
+    }
+    for (id, policy_id, name) in sessions {
+        body.push_str(
+            format!("\n[[sessions]]\nid = \"{id}\"\npolicy = \"{policy_id}\"\n").as_str(),
+        );
+        if let Some(name) = name {
+            body.push_str(format!("name = \"{name}\"\n").as_str());
+        }
+    }
+    fs::write(config_root.join("tui.toml"), body).expect("write tui config");
+}
+
 pub(super) fn parse_summary_json_line(stdout: &[u8]) -> Value {
     let text = String::from_utf8_lossy(stdout);
     let line = text

@@ -12,7 +12,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
-    configuration::{BundleConfiguration, ConfigurationError, load_bundle_configuration},
+    configuration::{
+        BundleConfiguration, ConfigurationError, load_bundle_configuration, load_policy_ids,
+        load_tui_configuration,
+    },
     envelope::{ENVELOPE_SCHEMA_VERSION, PromptBatchSettings},
     runtime::paths::BundleRuntimePaths,
 };
@@ -903,24 +906,63 @@ fn handle_hello_frame(
             })),
         ));
     }
-    let bundle = load_bundle_configuration(configuration_root, &bundle_paths.bundle_name)
-        .map_err(map_config)?;
-    if !bundle
-        .members
-        .iter()
-        .any(|member| member.id == hello.session_id)
-    {
-        return Err(relay_error(
-            "validation_unknown_sender",
-            "hello session_id is not configured in associated bundle",
-            Some(json!({
-                "bundle_name": bundle.bundle_name,
-                "session_id": hello.session_id,
-            })),
-        ));
-    }
     match hello.client_class {
-        RelayClientClass::Agent | RelayClientClass::Ui => Ok(()),
+        RelayClientClass::Agent => {
+            let bundle = load_bundle_configuration(configuration_root, &bundle_paths.bundle_name)
+                .map_err(map_config)?;
+            if bundle
+                .members
+                .iter()
+                .any(|member| member.id == hello.session_id)
+            {
+                return Ok(());
+            }
+            Err(relay_error(
+                "validation_unknown_sender",
+                "hello session_id is not configured in associated bundle",
+                Some(json!({
+                    "bundle_name": bundle.bundle_name,
+                    "session_id": hello.session_id,
+                })),
+            ))
+        }
+        RelayClientClass::Ui => {
+            let Some(tui_configuration) =
+                load_tui_configuration(configuration_root).map_err(map_tui_config)?
+            else {
+                return Err(relay_error(
+                    "validation_unknown_sender",
+                    "hello session_id is not configured in global tui sessions",
+                    Some(json!({
+                        "bundle_name": bundle_paths.bundle_name,
+                        "session_id": hello.session_id,
+                    })),
+                ));
+            };
+            let Some(tui_session) = tui_configuration.session_by_id(hello.session_id.as_str())
+            else {
+                return Err(relay_error(
+                    "validation_unknown_sender",
+                    "hello session_id is not configured in global tui sessions",
+                    Some(json!({
+                        "bundle_name": bundle_paths.bundle_name,
+                        "session_id": hello.session_id,
+                    })),
+                ));
+            };
+            let policy_ids = load_policy_ids(configuration_root).map_err(map_tui_config)?;
+            if policy_ids.contains(tui_session.policy_id.as_str()) {
+                return Ok(());
+            }
+            Err(relay_error(
+                "validation_unknown_policy",
+                "ui session policy references unknown policy id",
+                Some(json!({
+                    "session_id": tui_session.id,
+                    "policy_id": tui_session.policy_id,
+                })),
+            ))
+        }
     }
 }
 
@@ -967,6 +1009,26 @@ pub(super) fn relay_error(code: &str, message: &str, details: Option<Value>) -> 
         code: code.to_string(),
         message: message.to_string(),
         details,
+    }
+}
+
+fn map_tui_config(error: ConfigurationError) -> RelayError {
+    match error {
+        ConfigurationError::InvalidConfiguration { path, message } => relay_error(
+            "validation_invalid_arguments",
+            "tui configuration is invalid",
+            Some(json!({"path": path, "cause": message})),
+        ),
+        ConfigurationError::Io { context, source } => relay_error(
+            "validation_invalid_arguments",
+            "failed to load tui configuration",
+            Some(json!({"context": context, "cause": source.to_string()})),
+        ),
+        other => relay_error(
+            "validation_invalid_arguments",
+            "failed to load tui configuration",
+            Some(json!({"cause": other.to_string()})),
+        ),
     }
 }
 

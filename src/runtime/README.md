@@ -12,9 +12,9 @@ shared by relay and MCP hosts.
 - `association.rs`
   - resolves bundle/session association for MCP + CLI workflows,
   - supports precedence: CLI flags > local overrides > auto-discovery.
-- `tui_sender.rs`
-  - resolves TUI sender precedence from CLI + sender config files + association
-    fallback.
+- `tui_session.rs`
+  - resolves TUI session/bundle selection from CLI + `tui.toml` defaults,
+  - validates selected TUI session policy references.
 - `bootstrap.rs`
   - relay socket bind and runtime lock acquisition.
 - `inscriptions.rs`
@@ -43,15 +43,17 @@ Supported keys:
 - `session_name`
 - `config_root`
 
-## TUI Sender Override File
+## TUI Session Override File
 
-Per-worktree TUI sender overrides are loaded from:
+Per-worktree TUI session overrides are loaded from:
 
 - `.auxiliary/configuration/agentmux/overrides/tui.toml`
 
-Supported key:
+Supported keys:
 
-- `sender`
+- `default-bundle`
+- `default-session`
+- `[[sessions]]`
 
 ## Bootstrap Notes
 

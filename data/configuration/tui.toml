@@ -1,0 +1,8 @@
+# agentmux global TUI sessions
+default-bundle = "example"
+default-session = "user"
+
+[[sessions]]
+id = "user"
+name = "Operator"
+policy = "default"

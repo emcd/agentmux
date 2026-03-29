@@ -26,7 +26,7 @@ owner is still live, relay SHALL reject second claim with
 #### Scenario: Accept hello for configured UI session identity
 
 - **WHEN** TUI client sends valid `hello` with `client_class=ui`
-- **AND** `session_id` maps to configured global TUI session `session-id`
+- **AND** `session_id` maps to configured global TUI session `id`
 - **THEN** relay accepts hello and binds stream owner identity
 
 #### Scenario: Reject hello for unknown UI session identity
@@ -50,12 +50,12 @@ For request-path operations such as `send`, relay SHALL:
 
 #### Scenario: Authorize send using global UI session policy
 
-- **WHEN** relay receives `send` request with UI sender `session_id = "tui"`
-- **AND** global TUI sessions include `session-id = "tui"` with `policy = "ui-default"`
+- **WHEN** relay receives `send` request with UI sender `session_id = "user"`
+- **AND** global TUI sessions include `id = "user"` with `policy = "ui-default"`
 - **THEN** relay evaluates authorization using policy `ui-default`
 
 #### Scenario: Reject request-path sender missing from global UI sessions
 
 - **WHEN** relay receives `send` request with UI sender `session_id = "ghost"`
-- **AND** no global TUI session maps to `session-id = "ghost"`
+- **AND** no global TUI session maps to `id = "ghost"`
 - **THEN** relay rejects request with `validation_unknown_sender`

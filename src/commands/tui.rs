@@ -3,16 +3,8 @@ use std::env;
 use crate::{
     configuration::load_bundle_configuration,
     runtime::{
-        association::{
-            McpAssociationCli, WorkspaceContext, load_local_mcp_overrides, resolve_association,
-        },
-        error::RuntimeError,
-        paths::BundleRuntimePaths,
-        starter::ensure_starter_configuration_layout,
-        tui_sender::{
-            load_local_tui_override_sender, load_tui_configuration_sender,
-            resolve_tui_sender_session,
-        },
+        association::WorkspaceContext, error::RuntimeError, paths::BundleRuntimePaths,
+        starter::ensure_starter_configuration_layout, tui_session::resolve_tui_session_identity,
     },
 };
 
@@ -31,33 +23,20 @@ pub(super) fn run_agentmux_tui(arguments: &[String]) -> Result<(), RuntimeError>
     let current_directory = env::current_dir()
         .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
     let workspace = WorkspaceContext::discover(&current_directory)?;
-    let local_overrides = load_local_mcp_overrides(&workspace.workspace_root)?;
-    let association = resolve_association(
-        &McpAssociationCli {
-            bundle_name: parsed.bundle_name.clone(),
-            session_name: parsed.sender_session.clone(),
-        },
-        local_overrides.as_ref(),
-        &workspace,
-    )?;
-    let roots = shared::resolve_roots(&parsed.runtime, &workspace, local_overrides.as_ref())?;
+    let roots = shared::resolve_roots(&parsed.runtime, &workspace, None)?;
     ensure_starter_configuration_layout(&roots.configuration_root)?;
-    let bundle = load_bundle_configuration(&roots.configuration_root, &association.bundle_name)
-        .map_err(shared::map_bundle_load_error)?;
-    let override_sender = load_local_tui_override_sender(&workspace.workspace_root)?;
-    let configuration_sender = load_tui_configuration_sender(&roots.configuration_root)?;
-    let sender_session = resolve_tui_sender_session(
-        &bundle,
-        &current_directory,
-        &association.session_name,
-        parsed.sender_session.as_deref(),
-        override_sender.as_deref(),
-        configuration_sender.as_deref(),
+    let resolved_session = resolve_tui_session_identity(
+        &roots.configuration_root,
+        &workspace.workspace_root,
+        parsed.bundle_name.as_deref(),
+        parsed.session_selector.as_deref(),
     )?;
-    let paths = BundleRuntimePaths::resolve(&roots.state_root, &association.bundle_name)?;
+    load_bundle_configuration(&roots.configuration_root, &resolved_session.bundle_name)
+        .map_err(shared::map_bundle_load_error)?;
+    let paths = BundleRuntimePaths::resolve(&roots.state_root, &resolved_session.bundle_name)?;
     crate::tui::run(crate::tui::TuiLaunchOptions {
-        bundle_name: association.bundle_name,
-        sender_session,
+        bundle_name: resolved_session.bundle_name,
+        sender_session: resolved_session.session_id,
         relay_socket: paths.relay_socket,
         look_lines: parsed.lines,
     })
@@ -66,7 +45,7 @@ pub(super) fn run_agentmux_tui(arguments: &[String]) -> Result<(), RuntimeError>
 fn parse_tui_arguments(arguments: &[String]) -> Result<TuiArguments, RuntimeError> {
     let mut parsed = TuiArguments {
         bundle_name: None,
-        sender_session: None,
+        session_selector: None,
         lines: None,
         runtime: RuntimeArguments::default(),
     };
@@ -80,9 +59,9 @@ fn parse_tui_arguments(arguments: &[String]) -> Result<TuiArguments, RuntimeErro
             "--bundle" | "--bundle-name" => {
                 parsed.bundle_name = Some(shared::take_value(arguments, &mut index, "--bundle")?);
             }
-            "--sender" | "--session-name" => {
-                parsed.sender_session =
-                    Some(shared::take_value(arguments, &mut index, "--sender")?);
+            "--session" => {
+                parsed.session_selector =
+                    Some(shared::take_value(arguments, &mut index, "--session")?);
             }
             "--lines" => {
                 let value = shared::take_value(arguments, &mut index, "--lines")?;
@@ -102,6 +81,6 @@ fn parse_tui_arguments(arguments: &[String]) -> Result<TuiArguments, RuntimeErro
 
 pub(super) fn print_tui_help() {
     println!(
-        "Usage: agentmux tui [--bundle NAME] [--sender NAME] [--lines N] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux tui [--bundle NAME] [--session NAME] [--lines N] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }

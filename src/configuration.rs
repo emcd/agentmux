@@ -15,6 +15,8 @@ const FORMAT_VERSION: u32 = 1;
 const CODERS_FILE: &str = "coders.toml";
 const BUNDLES_DIRECTORY: &str = "bundles";
 const BUNDLE_EXTENSION: &str = "toml";
+const TUI_FILE: &str = "tui.toml";
+const POLICIES_FILE: &str = "policies.toml";
 const SESSION_ID_LENGTH_MAX: usize = 31;
 pub const RESERVED_GROUP_ALL: &str = "ALL";
 
@@ -94,6 +96,36 @@ pub struct BundleGroupMembership {
     pub bundle_name: String,
     pub autostart: bool,
     pub groups: Vec<String>,
+}
+
+/// One global TUI session entry from `tui.toml`.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct TuiSession {
+    /// Selector identity used by CLI (`--session`).
+    pub id: String,
+    /// Optional operator-facing label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Policy preset reference.
+    pub policy_id: String,
+}
+
+/// Global TUI configuration loaded from `tui.toml`.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct TuiConfiguration {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_bundle: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_session: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sessions: Vec<TuiSession>,
+}
+
+impl TuiConfiguration {
+    #[must_use]
+    pub fn session_by_id(&self, selector: &str) -> Option<&TuiSession> {
+        self.sessions.iter().find(|session| session.id == selector)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -194,6 +226,46 @@ struct RawBundleFile {
     groups: Vec<String>,
     #[serde(default)]
     sessions: Vec<RawSession>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct RawTuiFile {
+    #[serde(default)]
+    default_bundle: Option<String>,
+    #[serde(default)]
+    default_session: Option<String>,
+    #[serde(default)]
+    sessions: Vec<RawTuiSession>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct RawTuiSession {
+    id: String,
+    #[serde(default)]
+    name: Option<String>,
+    policy: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct RawPoliciesFile {
+    format_version: u32,
+    #[serde(default, rename = "default")]
+    _default: Option<String>,
+    #[serde(default)]
+    policies: Vec<RawPolicyPreset>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct RawPolicyPreset {
+    id: String,
+    #[serde(default, rename = "description")]
+    _description: Option<String>,
+    #[serde(default, rename = "controls")]
+    _controls: Option<toml::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -312,6 +384,16 @@ pub fn bundle_configuration_path(configuration_root: &Path, bundle_name: &str) -
         .join(format!("{bundle_name}.{BUNDLE_EXTENSION}"))
 }
 
+/// Resolves path to global TUI configuration file.
+pub fn tui_configuration_path(configuration_root: &Path) -> PathBuf {
+    configuration_root.join(TUI_FILE)
+}
+
+/// Resolves path to authorization policy presets file.
+pub fn policies_configuration_path(configuration_root: &Path) -> PathBuf {
+    configuration_root.join(POLICIES_FILE)
+}
+
 /// Loads bundle-group membership metadata for configured bundles.
 ///
 /// # Errors
@@ -411,6 +493,94 @@ pub fn load_bundle_configuration(
         bundle_file,
         &bundle_path,
     )
+}
+
+/// Loads global TUI configuration from `<config-root>/tui.toml`.
+///
+/// # Errors
+///
+/// Returns `ConfigurationError` when the file exists but is malformed.
+pub fn load_tui_configuration(
+    configuration_root: &Path,
+) -> Result<Option<TuiConfiguration>, ConfigurationError> {
+    load_tui_configuration_file(&tui_configuration_path(configuration_root))
+}
+
+/// Loads global TUI configuration from an explicit file path.
+///
+/// # Errors
+///
+/// Returns `ConfigurationError` when the file exists but is malformed.
+pub fn load_tui_configuration_file(
+    path: &Path,
+) -> Result<Option<TuiConfiguration>, ConfigurationError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = fs::read_to_string(path)
+        .map_err(|source| ConfigurationError::io(format!("read {}", path.display()), source))?;
+    let parsed = toml::from_str::<RawTuiFile>(&raw).map_err(|source| {
+        ConfigurationError::InvalidConfiguration {
+            path: path.to_path_buf(),
+            message: source.to_string(),
+        }
+    })?;
+
+    let default_bundle = parsed
+        .default_bundle
+        .as_deref()
+        .map(normalize_field)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let default_session = parsed
+        .default_session
+        .as_deref()
+        .map(normalize_field)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let sessions = validate_tui_sessions(parsed.sessions, path)?;
+
+    Ok(Some(TuiConfiguration {
+        default_bundle,
+        default_session,
+        sessions,
+    }))
+}
+
+/// Loads known policy preset identifiers from `<config-root>/policies.toml`.
+///
+/// # Errors
+///
+/// Returns `ConfigurationError` when the artifact is missing or malformed.
+pub fn load_policy_ids(configuration_root: &Path) -> Result<HashSet<String>, ConfigurationError> {
+    let path = policies_configuration_path(configuration_root);
+    let raw = fs::read_to_string(&path)
+        .map_err(|source| ConfigurationError::io(format!("read {}", path.display()), source))?;
+    let parsed = toml::from_str::<RawPoliciesFile>(&raw).map_err(|source| {
+        ConfigurationError::InvalidConfiguration {
+            path: path.clone(),
+            message: source.to_string(),
+        }
+    })?;
+    validate_format_version(parsed.format_version, &path)?;
+
+    let mut unique = HashSet::<String>::new();
+    for policy in parsed.policies {
+        let policy_id = normalize_field(policy.id.as_str());
+        if policy_id.is_empty() {
+            return Err(ConfigurationError::InvalidConfiguration {
+                path: path.clone(),
+                message: "policy id must be non-empty".to_string(),
+            });
+        }
+        if !unique.insert(policy_id.to_string()) {
+            return Err(ConfigurationError::InvalidConfiguration {
+                path: path.clone(),
+                message: format!("duplicate policy id '{policy_id}'"),
+            });
+        }
+    }
+    Ok(unique)
 }
 
 /// Infers sender session from bundle member working-directory matches.
@@ -575,6 +745,51 @@ fn validate_loaded_configuration(
         groups,
         members,
     })
+}
+
+fn validate_tui_sessions(
+    sessions: Vec<RawTuiSession>,
+    path: &Path,
+) -> Result<Vec<TuiSession>, ConfigurationError> {
+    let mut unique = HashSet::<String>::new();
+    let mut validated = Vec::<TuiSession>::with_capacity(sessions.len());
+    for session in sessions {
+        let selector_id = normalize_field(session.id.as_str());
+        if selector_id.is_empty() {
+            return Err(ConfigurationError::InvalidConfiguration {
+                path: path.to_path_buf(),
+                message: "tui session id must be non-empty".to_string(),
+            });
+        }
+        validate_session_id(path, selector_id)?;
+        if !unique.insert(selector_id.to_string()) {
+            return Err(ConfigurationError::InvalidConfiguration {
+                path: path.to_path_buf(),
+                message: format!("duplicate tui session id '{selector_id}'"),
+            });
+        }
+
+        let policy_id = normalize_field(session.policy.as_str());
+        if policy_id.is_empty() {
+            return Err(ConfigurationError::InvalidConfiguration {
+                path: path.to_path_buf(),
+                message: format!("tui session '{}' policy must be non-empty", selector_id),
+            });
+        }
+        let name = session
+            .name
+            .as_deref()
+            .map(normalize_field)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+
+        validated.push(TuiSession {
+            id: selector_id.to_string(),
+            name,
+            policy_id: policy_id.to_string(),
+        });
+    }
+    Ok(validated)
 }
 
 fn validate_coders(

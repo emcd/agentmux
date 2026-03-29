@@ -26,11 +26,13 @@ User-facing usage details and keybindings are documented under
 - recipient discovery from relay `list` responses,
 - explicit `To` recipient field with deterministic target parsing,
 - async send workflow with local pending tracking and terminal outcome updates,
-- sender identity precedence:
-  - `--sender`
-  - `.auxiliary/configuration/agentmux/overrides/tui.toml` (debug/testing)
-  - `<config-root>/tui.toml`
-  - association fallback,
+- session identity precedence:
+  - `--session`
+  - `default-session` from active `tui.toml` configuration
+  - no association fallback in MVP,
+- bundle precedence:
+  - `--bundle`
+  - `default-bundle` from active `tui.toml` configuration,
 - delivery outcome vocabulary:
   - `accepted`, `success`, `timeout`, `failed`,
 - recipient completion via `@` token triggers plus explicit manual trigger,
