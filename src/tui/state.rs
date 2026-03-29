@@ -556,6 +556,7 @@ impl AppState {
         self.message_field.clear();
         self.message_cursor_index = 0;
         self.message_cursor_preferred_column = None;
+        self.focus = FocusField::To;
         self.clear_to_completion();
     }
 
