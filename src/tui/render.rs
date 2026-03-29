@@ -8,6 +8,9 @@ use ratatui::{
 
 use super::state::{AppState, ChatHistoryDirection, FocusField, StatusEntry};
 
+const WORKBENCH_MIN_CHAT_HEIGHT: u16 = 1;
+const WORKBENCH_MIN_COMPOSE_HEIGHT: u16 = 4;
+
 pub(crate) fn render(frame: &mut Frame, state: &mut AppState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -68,11 +71,8 @@ fn render_compose_cursor(frame: &mut Frame, area: Rect, state: &AppState) {
     {
         return;
     }
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(12), Constraint::Length(9)])
-        .split(area);
-    let compose_inner = workbench_titled_block("  Compose  ").inner(rows[1]);
+    let rows = split_workbench_rows(area, state);
+    let compose_inner = compose_titled_block("  Compose  ").inner(rows[1]);
     let Some((x, y)) = compose_cursor_position(compose_inner, state) else {
         return;
     };
@@ -80,7 +80,7 @@ fn render_compose_cursor(frame: &mut Frame, area: Rect, state: &AppState) {
 }
 
 fn compose_cursor_position(inner_area: Rect, state: &AppState) -> Option<(u16, u16)> {
-    if inner_area.width == 0 || inner_area.height < 3 {
+    if inner_area.width == 0 || inner_area.height < 2 {
         return None;
     }
     let inner_left = inner_area.x;
@@ -113,7 +113,7 @@ fn compose_cursor_position(inner_area: Rect, state: &AppState) -> Option<(u16, u
             (
                 inner_left.saturating_add(cursor_column),
                 inner_top
-                    .saturating_add(3)
+                    .saturating_add(1)
                     .saturating_add(line_index as u16),
             )
         }
@@ -138,10 +138,7 @@ fn visible_cursor_column_count(count: usize, width: u16) -> u16 {
 }
 
 fn render_workbench_panes(frame: &mut Frame, area: Rect, state: &mut AppState) {
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(12), Constraint::Length(9)])
-        .split(area);
+    let rows = split_workbench_rows(area, state);
     render_chat_history(frame, rows[0], state);
     render_compose(frame, rows[1], state);
 }
@@ -152,37 +149,21 @@ fn render_compose(frame: &mut Frame, area: Rect, state: &AppState) {
     } else {
         Style::default()
     };
-    let message_style = if state.focus == FocusField::Message {
-        Style::default().fg(Color::Yellow)
-    } else {
-        Style::default()
-    };
 
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled("To: ", to_style.add_modifier(Modifier::BOLD)),
-            Span::raw(state.to_field.as_str()),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Message:",
-            message_style.add_modifier(Modifier::BOLD),
-        )),
-    ];
+    let mut lines = vec![Line::from(vec![
+        Span::styled("To: ", to_style.add_modifier(Modifier::BOLD)),
+        Span::raw(state.to_field.as_str()),
+    ])];
     lines.extend(
         state
             .message_field
-            .lines()
-            .take(4)
+            .split('\n')
             .map(|line| Line::from(Span::raw(line.to_string()))),
     );
-    if state.message_field.lines().count() > 4 {
-        lines.push(Line::from("…"));
-    }
 
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
-        .block(workbench_titled_block("  Compose  "));
+        .block(compose_titled_block("  Compose  "));
     frame.render_widget(paragraph, area);
 }
 
@@ -398,9 +379,42 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
         .split(vertical[1])[1]
 }
 
+fn split_workbench_rows(area: Rect, state: &AppState) -> [Rect; 2] {
+    let compose_height = compute_compose_height(area.height, state);
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(WORKBENCH_MIN_CHAT_HEIGHT),
+            Constraint::Length(compose_height),
+        ])
+        .split(area);
+    [rows[0], rows[1]]
+}
+
+fn compute_compose_height(available_height: u16, state: &AppState) -> u16 {
+    if available_height <= WORKBENCH_MIN_COMPOSE_HEIGHT {
+        return available_height;
+    }
+
+    let message_line_count = state.message_field.split('\n').count().max(1) as u16;
+    let desired = message_line_count
+        .saturating_add(1) // To row
+        .saturating_add(2); // top + bottom borders
+    let max_compose = available_height.saturating_sub(WORKBENCH_MIN_CHAT_HEIGHT);
+    let min_compose = WORKBENCH_MIN_COMPOSE_HEIGHT.min(max_compose.max(1));
+    desired.clamp(min_compose, max_compose.max(min_compose))
+}
+
 fn workbench_titled_block(title: &'static str) -> Block<'static> {
     Block::default()
         .borders(Borders::TOP)
+        .title(title)
+        .title_alignment(Alignment::Center)
+}
+
+fn compose_titled_block(title: &'static str) -> Block<'static> {
+    Block::default()
+        .borders(Borders::TOP | Borders::BOTTOM)
         .title(title)
         .title_alignment(Alignment::Center)
 }
