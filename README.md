@@ -1,8 +1,9 @@
 # agentmux
 
-`agentmux` is a tmux-backed coordination runtime for multi-agent coding.
-It provides one CLI (`agentmux`) with host + operator subcommands and one MCP
-tool surface for LLM clients.
+`agentmux` is a product-agnostic runtime for inter-agent communication that
+lets agent sessions exchange structured messages and coordinate work without
+being tied to one specific coding product or harness. It supports agent
+harnesses running in tmux panes and ACP-backed sessions.
 
 ## Disclaimer
 
@@ -12,24 +13,8 @@ in any way.
 ## Documentation
 
 - Usage guides: [documentation/usage/README.md](documentation/usage/README.md)
-- TUI guide: [documentation/usage/tui.md](documentation/usage/tui.md)
 - Tool comparisons: [documentation/comparisons.md](documentation/comparisons.md)
-
-## Architecture At A Glance
-
-- Relay host:
-  - Command: `agentmux host relay [--no-autostart]`
-  - Responsibility: start one relay process that serves configured bundles and route
-    envelopes to tmux panes.
-- MCP host:
-  - Command: `agentmux host mcp`
-  - Responsibility: expose MCP tools (`list`, `look`, `send`) and forward requests to relay.
-- Operator CLI:
-  - Commands: `agentmux list`, `agentmux look`, `agentmux send`
-  - Responsibility: direct local inspection of recipients and message delivery.
-
-Both host modes use shared runtime roots for configuration, sockets, locks, and
-logs.
+- Developer guide: [documentation/development/README.md](documentation/development/README.md)
 
 ## Requirements
 
@@ -49,17 +34,10 @@ cargo install agentmux
 agentmux host relay
 ```
 
-Optional: start relay processes without autostarting bundle runtimes:
+Optional: start relay without autostarting bundle runtimes:
 
 ```bash
 agentmux host relay --no-autostart
-```
-
-Use lifecycle commands for explicit bundle transitions:
-
-```bash
-agentmux up myproject
-agentmux down myproject
 ```
 
 2. Start MCP host:
@@ -81,57 +59,34 @@ agentmux host mcp
 }
 ```
 
-## Auto Start On Login
-
-### Systemd (--user)
-
-If you run `agentmux` as a user service, add:
-
-`~/.config/systemd/user/agentmux-relay.service`
-
-```ini
-[Unit]
-Description=agentmux relay host
-After=default.target
-
-[Service]
-Type=simple
-ExecStart=/usr/bin/env agentmux host relay
-Restart=on-failure
-RestartSec=2
-Environment=RUST_LOG=info
-
-[Install]
-WantedBy=default.target
-```
-
-Enable and start the service:
+4. Use lifecycle commands for explicit bundle transitions:
 
 ```bash
-systemctl --user daemon-reload
-systemctl --user enable --now agentmux-relay.service
-systemctl --user status agentmux-relay.service
+agentmux up myproject
+agentmux down myproject
 ```
 
-Follow relay logs:
+For login-time startup, service examples, shared runtime flags, and runtime
+artifact locations, see
+[documentation/usage/operations.md](documentation/usage/operations.md).
 
-```bash
-journalctl --user -u agentmux-relay.service -f
-```
+## Architecture At A Glance
 
-If coder CLIs are installed via tools like Mise/Asdf/NVM or a custom npm
-prefix, set explicit environment in the unit so relay autostart can find
-`codex`/`claude`/`opencode` consistently:
+- Relay host:
+  - Command: `agentmux host relay [--no-autostart]`
+  - Responsibility: start one relay process that serves configured bundles
+    ("agent teams") and routes envelopes to target runtimes.
+- MCP host:
+  - Command: `agentmux host mcp`
+  - Responsibility: expose MCP tools (`list`, `look`, `send`) and forward
+    requests to relay.
+- Operator CLI:
+  - Commands: `agentmux list`, `agentmux look`, `agentmux send`, `agentmux tui`
+  - Responsibility: direct local inspection, message delivery, and interactive
+    coordination flows.
 
-```ini
-[Service]
-Environment=PATH=/path/to/node/bin:/path/to/cargo/bin:/path/to/npm-prefix/bin:/usr/local/bin:/usr/bin:/bin
-Environment=CODEX_HOME=/path/to/codex/home
-Environment=CLAUDE_CONFIG_DIR=/path/to/claude/config
-```
-
-After environment changes, run `systemctl --user daemon-reload` and restart the
-service.
+Both host modes use shared runtime roots for configuration, sockets, locks, and
+logs.
 
 ## CLI Surface
 
@@ -143,7 +98,7 @@ agentmux down (<bundle-id> | --group GROUP)
 agentmux list [--bundle NAME] [--sender NAME] [--json]
 agentmux look <target-session> [--bundle NAME] [--lines N]
 agentmux tui [--bundle NAME] [--session NAME] [--lines N]
-agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--bundle NAME] [--session NAME] [--json]
+agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--quiescence-timeout-ms MS] [--acp-turn-timeout-ms MS] [--request-id ID] [--bundle NAME] [--session NAME] [--json]
 ```
 
 Use `--help` on each command for the full flag list.
@@ -153,24 +108,8 @@ Bare `agentmux` dispatch behavior:
 - interactive TTY: starts `agentmux tui`
 - non-interactive context: prints help and exits non-zero
 
-Common runtime flags for all commands:
-
-- `--config-directory PATH`
-- `--state-directory PATH`
-- `--inscriptions-directory PATH` (alias: `--logs-directory PATH`)
-- `--repository-root PATH`
-
-`send` message input rules:
-
-- Use `--message TEXT`, or pipe stdin.
-- Do not provide both `--message` and piped stdin.
-- Empty messages are rejected.
-
-Example piped send:
-
-```bash
-printf 'queued hello\n' | agentmux send --bundle myproject --session user --target tui
-```
+For shared runtime flags and operational details, see
+[documentation/usage/operations.md](documentation/usage/operations.md).
 
 ## MCP Surface
 
@@ -182,49 +121,39 @@ The MCP server advertises:
 
 Delivery behavior:
 
-- `delivery_mode=async` (default): accept immediately and queue background delivery.
-- `delivery_mode=sync`: block until per-target outcomes are known.
+- `delivery_mode=async` (default): accept immediately and queue background
+  delivery.
+- `delivery_mode=sync`: block until per-target sync outcomes are known.
 - `quiescence_timeout_ms` optionally bounds tmux prompt-readiness waiting.
 - `acp_turn_timeout_ms` optionally bounds ACP turn-wait behavior.
-- For ACP sync sends, success means first activity was observed. Terminal completion
-  is correlated out-of-band by `message_id`.
-
-Example `.mcp.json` snippet:
-
-```json
-{
-  "mcpServers": {
-    "agentmux": {
-      "command": "agentmux",
-      "args": ["host", "mcp"]
-    }
-  }
-}
-```
+- For ACP sync sends, success is declared at first observed ACP activity
+  (`details.delivery_phase = accepted_in_progress`); relay does not wait for
+  terminal turn completion before returning sync success.
+- Terminal completion is correlated out-of-band by `message_id`.
 
 ## Multi-Worktree Workflow
 
 Typical topology:
 
 - one shared bundle id (for example `agentmux`),
-- one relay host process serving all configured bundle sockets (started by `agentmux host relay`),
+- one relay host process serving all configured bundle sockets,
 - one MCP host per worktree/session identity (`master`, `relay`, `mcp`, `tui`).
 
 Association resolution:
 
 - `list` and `host mcp` use association auto-discovery fallback:
   - bundle from Git common-dir owner name,
-  - session from worktree top-level directory name.
-- `send` and `tui` use TUI session selectors from global `tui.toml`:
+  - session from worktree top-level directory name,
+- `send` and `tui` use global TUI session selectors:
   - `--bundle` or `default-bundle`,
   - `--session` or `default-session`,
-  - fail-fast validation when defaults/selectors are missing or unknown.
+  - fail-fast validation when selectors are missing or unknown.
 
 TUI session identity resolution:
 
 - `--session` selector
 - active `tui.toml` defaults (`default-session`)
-- no association fallback for TUI/send in MVP
+- no association fallback for TUI/send
 
 ## Configuration
 
@@ -232,9 +161,7 @@ Runtime roots by default:
 
 - config root: `$XDG_CONFIG_HOME/agentmux` or `~/.config/agentmux`
 - state root: `$XDG_STATE_HOME/agentmux` or `~/.local/state/agentmux`
-- inscriptions (logs) root:
-  - release: `<state-root>/inscriptions`
-  - debug with `--repository-root` available: `<repo>/.auxiliary/inscriptions/agentmux`
+- inscriptions root: `<state-root>/inscriptions`
 
 Bundle configuration file path:
 
@@ -243,8 +170,6 @@ Bundle configuration file path:
 Global TUI session configuration:
 
 - normal config file: `<config-root>/tui.toml`
-- local debug/testing override:
-  `.auxiliary/configuration/agentmux/overrides/tui.toml`
 - keys:
   - `default-bundle`
   - `default-session`
@@ -271,6 +196,13 @@ resume-command = "codex resume {coder-session-id}"
 prompt-regex = "(?m)^›"
 prompt-inspect-lines = 3
 prompt-idle-column = 2
+
+[[coders]]
+id = "opencode"
+
+[coders.acp]
+channel = "stdio"
+command = "opencode acp"
 ```
 
 ### Example `bundles/myproject.toml`
@@ -293,33 +225,6 @@ directory = "/home/me/src/WORKTREES/myproject/tui"
 coder = "codex"
 ```
 
-## Runtime Artifacts
-
-Per-bundle state directory:
-
-- `<state-root>/bundles/<bundle-name>/`
-
-Important files:
-
-- `relay.sock`: relay Unix socket
-- `tmux.sock`: bundle tmux socket
-- `relay.lock`: relay host lock
-- `relay.spawn.lock`: relay spawn lock
-
-Inscriptions:
-
-- relay log: `<inscriptions-root>/bundles/<bundle-name>/relay.log`
-- MCP log: `<inscriptions-root>/bundles/<bundle-name>/sessions/<session-name>/mcp.log`
-
-## Troubleshooting
-
-| Symptom | Likely Cause | Quick Check |
-|---|---|---|
-| `relay_unavailable` from CLI/MCP | Relay host is not running for selected bundle | Start relay: `agentmux host relay` |
-| `relay_timeout` from CLI/MCP/TUI | Relay is running but request did not complete before timeout (often saturation/stuck workers) | Check relay health/logs and active stream clients; retry after relay restart |
-| `authorization_forbidden` on `look` | Policy scope disallows non-self inspection | Check `<config-root>/policies.toml` `look` control |
-| Sync ACP send reports timeout | First ACP activity not observed before timeout budget | Retry with async mode for coordination flow; inspect relay log by `message_id` |
-
 ## Planned Features
 
 - Bundle/session `about` surfaces with human-readable descriptions for operators
@@ -330,31 +235,10 @@ Inscriptions:
   with coder sessions without dropping to tmux.
 - Config include/pointer support so centrally hosted configs can reference
   project-local bundle definitions.
-- Expanded global TUI session-management ergonomics (session lifecycle,
-  profile-style grouping, and keybinding customization).
-- Additional autostart examples beyond systemd (for example launchd/OpenRC/Windows service patterns).
-
-## Development
-
-For local source development, install a Rust toolchain.
-
-Validation commands:
-
-```bash
-cargo check --all-targets --all-features
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-features
-```
-
-Source map:
-
-- [src/README.md](src/README.md)
-- [src/bin/README.md](src/bin/README.md)
-- [src/runtime/README.md](src/runtime/README.md)
-- [src/mcp/README.md](src/mcp/README.md)
-- [documentation/usage/README.md](documentation/usage/README.md)
-- [documentation/comparisons.md](documentation/comparisons.md)
-- `documentation/architecture/openspec/specs/`
+- Expanded global TUI session-management ergonomics (session lifecycle and
+  keybinding customization).
+- Additional autostart examples beyond systemd (for example
+  launchd/OpenRC/Windows service patterns).
 
 ## License
 
