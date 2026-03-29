@@ -322,27 +322,31 @@ fn handle_chat(
             .map(|member| member.id.clone())
             .collect::<Vec<_>>()
     } else {
-        resolve_explicit_targets(bundle, &targets)?
+        resolve_explicit_targets(bundle, authorization, &targets)?
     };
 
     let mut has_tmux_target = false;
     let mut has_acp_target = false;
     for target_session in &resolved_targets {
-        let target_member = bundle
+        if let Some(target_member) = bundle
             .members
             .iter()
             .find(|member| member.id == *target_session)
-            .ok_or_else(|| {
-                relay_error(
-                    "internal_unexpected_failure",
-                    "resolved target member is missing from bundle configuration",
-                    Some(json!({"target_session": target_session})),
-                )
-            })?;
-        match &target_member.target {
-            crate::configuration::TargetConfiguration::Tmux(_) => has_tmux_target = true,
-            crate::configuration::TargetConfiguration::Acp(_) => has_acp_target = true,
+        {
+            match &target_member.target {
+                crate::configuration::TargetConfiguration::Tmux(_) => has_tmux_target = true,
+                crate::configuration::TargetConfiguration::Acp(_) => has_acp_target = true,
+            }
+            continue;
         }
+        if has_ui_session(authorization, target_session) {
+            continue;
+        }
+        return Err(relay_error(
+            "internal_unexpected_failure",
+            "resolved target session has no configured transport",
+            Some(json!({"target_session": target_session})),
+        ));
     }
 
     if quiescence_timeout_ms.is_some() && has_acp_target {
@@ -385,11 +389,17 @@ fn handle_chat(
             let mut results = Vec::with_capacity(resolved_targets.len());
             for target_session in resolved_targets {
                 let message_id = Uuid::new_v4().to_string();
+                let target_is_ui = has_ui_session(authorization, target_session.as_str())
+                    && bundle
+                        .members
+                        .iter()
+                        .all(|member| member.id != target_session);
                 let task = AsyncDeliveryTask {
                     bundle: bundle.clone(),
                     sender: sender_member.clone(),
                     all_target_sessions: all_target_sessions.clone(),
                     target_session,
+                    target_is_ui,
                     message: message.clone(),
                     message_id,
                     quiescence,
@@ -397,23 +407,27 @@ fn handle_chat(
                     tmux_socket: tmux_socket.to_path_buf(),
                     completion_sender: None,
                 };
-                let target_member = bundle
-                    .members
-                    .iter()
-                    .find(|member| member.id == task.target_session)
-                    .ok_or_else(|| {
-                        relay_error(
-                            "internal_unexpected_failure",
-                            "resolved target member is missing from bundle configuration",
-                            Some(json!({"target_session": task.target_session})),
-                        )
-                    })?;
-                let result = match &target_member.target {
-                    crate::configuration::TargetConfiguration::Acp(_) => {
-                        enqueue_sync_delivery(task)?
-                    }
-                    crate::configuration::TargetConfiguration::Tmux(_) => {
-                        deliver_one_target(&task)?
+                let result = if task.target_is_ui {
+                    deliver_one_target(&task)?
+                } else {
+                    let target_member = bundle
+                        .members
+                        .iter()
+                        .find(|member| member.id == task.target_session)
+                        .ok_or_else(|| {
+                            relay_error(
+                                "internal_unexpected_failure",
+                                "resolved target member is missing from bundle configuration",
+                                Some(json!({"target_session": task.target_session})),
+                            )
+                        })?;
+                    match &target_member.target {
+                        crate::configuration::TargetConfiguration::Acp(_) => {
+                            enqueue_sync_delivery(task)?
+                        }
+                        crate::configuration::TargetConfiguration::Tmux(_) => {
+                            deliver_one_target(&task)?
+                        }
                     }
                 };
                 results.push(result);
@@ -429,11 +443,17 @@ fn handle_chat(
             let mut results = Vec::with_capacity(resolved_targets.len());
             for target_session in resolved_targets {
                 let message_id = Uuid::new_v4().to_string();
+                let target_is_ui = has_ui_session(authorization, target_session.as_str())
+                    && bundle
+                        .members
+                        .iter()
+                        .all(|member| member.id != target_session);
                 let task = AsyncDeliveryTask {
                     bundle: bundle.clone(),
                     sender: sender_member.clone(),
                     all_target_sessions: all_target_sessions.clone(),
                     target_session: target_session.clone(),
+                    target_is_ui,
                     message: message.clone(),
                     message_id: message_id.clone(),
                     quiescence,
@@ -663,6 +683,7 @@ fn resolve_sender_identity(
 
 fn resolve_explicit_targets(
     bundle: &BundleConfiguration,
+    authorization: &AuthorizationContext,
     targets: &[String],
 ) -> Result<Vec<String>, RelayError> {
     let mut resolved = Vec::with_capacity(targets.len());
@@ -676,6 +697,10 @@ fn resolve_explicit_targets(
         }
         if let Some(member) = bundle.members.iter().find(|member| member.id == requested) {
             resolved.push(member.id.clone());
+            continue;
+        }
+        if has_ui_session(authorization, requested) {
+            resolved.push(requested.to_string());
             continue;
         }
 

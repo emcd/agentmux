@@ -6,7 +6,6 @@ use std::{
 use serde_json::{Value, json};
 use time::format_description::well_known::Rfc3339;
 
-use crate::configuration::BundleMember;
 use crate::runtime::signals::shutdown_requested;
 
 use super::super::stream::{RelayStreamEvent, StreamEventSendOutcome, send_event_to_registered_ui};
@@ -18,8 +17,8 @@ const UI_RECONNECT_POLL_INTERVAL_MS: u64 = 100;
 
 pub(super) fn deliver_one_target_ui(
     task: &AsyncDeliveryTask,
-    sender: &BundleMember,
-    cc_members: &[BundleMember],
+    sender_session: &str,
+    cc_sessions: &[String],
     target_session: String,
     message_id: String,
     message: &str,
@@ -55,12 +54,12 @@ pub(super) fn deliver_one_target_ui(
             created_at: timestamp_rfc3339(),
             payload: json!({
                 "message_id": message_id.clone(),
-                "sender_session": sender.id.as_str(),
+                "sender_session": sender_session,
                 "body": message,
-                "cc_sessions": if cc_members.is_empty() {
+                "cc_sessions": if cc_sessions.is_empty() {
                     Value::Null
                 } else {
-                    json!(cc_members.iter().map(|member| member.id.clone()).collect::<Vec<_>>())
+                    json!(cc_sessions)
                 },
             }),
         };

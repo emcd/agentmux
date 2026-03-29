@@ -133,18 +133,13 @@ pub(super) fn unregister_worker(key: &AsyncWorkerKey) {
 }
 
 pub(super) fn task_uses_acp_transport(task: &AsyncDeliveryTask) -> Result<bool, RelayError> {
-    task.bundle
+    Ok(task
+        .bundle
         .members
         .iter()
         .find(|member| member.id == task.target_session)
         .map(|member| matches!(member.target, TargetConfiguration::Acp(_)))
-        .ok_or_else(|| {
-            super::super::relay_error(
-                "internal_unexpected_failure",
-                "resolved target member is missing from bundle configuration",
-                Some(json!({"target_session": task.target_session})),
-            )
-        })
+        .unwrap_or(false))
 }
 
 pub(super) fn reserve_acp_pending_slot(pending: &AtomicUsize) -> bool {

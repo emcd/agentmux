@@ -302,6 +302,7 @@ pub(super) struct AsyncDeliveryTask {
     sender: crate::configuration::BundleMember,
     all_target_sessions: Vec<String>,
     target_session: String,
+    target_is_ui: bool,
     message: String,
     message_id: String,
     quiescence: QuiescenceOptions,

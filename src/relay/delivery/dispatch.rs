@@ -117,14 +117,19 @@ pub(in crate::relay) fn deliver_one_target_with_worker_state(
     let target_member = bundle
         .members
         .iter()
-        .find(|member| member.id == target_session)
-        .ok_or_else(|| {
-            super::super::relay_error(
-                "internal_unexpected_failure",
-                "resolved target member is missing from bundle configuration",
-                Some(json!({"target_session": target_session})),
-            )
-        })?;
+        .find(|member| member.id == target_session);
+    if target_member.is_none() && !task.target_is_ui {
+        return Err(super::super::relay_error(
+            "internal_unexpected_failure",
+            "resolved target member is missing from bundle configuration",
+            Some(json!({"target_session": target_session})),
+        ));
+    }
+    let cc_sessions = all_target_sessions
+        .iter()
+        .filter(|candidate| **candidate != target_session)
+        .cloned()
+        .collect::<Vec<_>>();
     let cc_members = all_target_sessions
         .iter()
         .filter(|candidate| **candidate != target_session)
@@ -143,15 +148,10 @@ pub(in crate::relay) fn deliver_one_target_with_worker_state(
         bundle_name: bundle.bundle_name.clone(),
         sender_session: sender.id.clone(),
         target_sessions: vec![target_session.clone()],
-        cc_sessions: if cc_members.is_empty() {
+        cc_sessions: if cc_sessions.is_empty() {
             None
         } else {
-            Some(
-                cc_members
-                    .iter()
-                    .map(|member| member.id.clone())
-                    .collect::<Vec<_>>(),
-            )
+            Some(cc_sessions.clone())
         },
         created_at,
     };
@@ -174,8 +174,8 @@ pub(in crate::relay) fn deliver_one_target_with_worker_state(
             display_name: sender.name.clone(),
         },
         to: vec![AddressIdentity {
-            session_name: target_member.id.clone(),
-            display_name: target_member.name.clone(),
+            session_name: target_session.clone(),
+            display_name: target_member.and_then(|member| member.name.clone()),
         }],
         cc: cc_members
             .iter()
@@ -187,6 +187,16 @@ pub(in crate::relay) fn deliver_one_target_with_worker_state(
         subject: None,
         body: message.to_string(),
     });
+    if task.target_is_ui {
+        return Ok(deliver_one_target_ui(
+            task,
+            sender.id.as_str(),
+            cc_sessions.as_slice(),
+            target_session,
+            message_id,
+            message,
+        ));
+    }
     let prompt_batches = batch_envelopes(&[envelope], batch_settings);
     let resolved_client_class =
         resolve_registered_client_class(bundle.bundle_name.as_str(), target_session.as_str())
@@ -204,18 +214,19 @@ pub(in crate::relay) fn deliver_one_target_with_worker_state(
     if matches!(resolved_client_class, Some(RelayClientClass::Ui)) {
         return Ok(deliver_one_target_ui(
             task,
-            sender,
-            &cc_members,
+            sender.id.as_str(),
+            cc_sessions.as_slice(),
             target_session,
             message_id,
             message,
         ));
     }
 
-    match &target_member.target {
+    let non_ui_target_member = target_member.expect("non-UI target_member must exist");
+    match &non_ui_target_member.target {
         TargetConfiguration::Acp(acp) => Ok(deliver_one_target_acp(
             task,
-            target_member,
+            non_ui_target_member,
             acp,
             prompt_batches,
             target_session,

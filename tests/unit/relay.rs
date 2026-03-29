@@ -324,6 +324,37 @@ fn chat_accepts_target_by_recipient_name() {
 }
 
 #[test]
+fn chat_accepts_global_ui_target_not_in_bundle_configuration() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    write_tui_configuration(&config_root, "default");
+    let tmux_socket = temporary.path().join("tmux.sock");
+    let response = handle_request(
+        RelayRequest::Chat {
+            request_id: None,
+            sender_session: "alpha".to_string(),
+            message: "hello".to_string(),
+            targets: vec!["user".to_string()],
+            broadcast: false,
+            delivery_mode: ChatDeliveryMode::Sync,
+            quiet_window_ms: Some(1),
+            quiescence_timeout_ms: Some(1),
+            acp_turn_timeout_ms: None,
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect("chat response");
+
+    let RelayResponse::Chat { results, .. } = response else {
+        panic!("expected chat response");
+    };
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].target_session, "user");
+}
+
+#[test]
 fn chat_broadcast_excludes_sender_session() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
