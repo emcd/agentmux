@@ -67,6 +67,10 @@ fn bare_agentmux_without_tty_prints_help_and_fails() {
         "unexpected stdout: {stdout}"
     );
     assert!(
+        !stdout.contains("\\n"),
+        "help output should render line breaks, not literal escapes: {stdout}"
+    );
+    assert!(
         stderr.contains("validation_missing_subcommand"),
         "unexpected stderr: {stderr}"
     );

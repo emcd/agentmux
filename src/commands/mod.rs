@@ -167,7 +167,40 @@ pub async fn run_agentmux(arguments: Vec<String>) -> Result<(), RuntimeError> {
 }
 
 fn print_agentmux_help() {
-    println!(
-        "Usage: agentmux <command> [options]\\n\\nCommands:\\n  host relay [--no-autostart] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\\n  host mcp [--bundle NAME] [--session-name NAME] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\\n  up (<bundle-id> | --group GROUP) [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\\n  down (<bundle-id> | --group GROUP) [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\\n  list [--bundle NAME] [--sender NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\\n  look <target-session> [--bundle NAME] [--lines N] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\\n  tui [--bundle NAME] [--session NAME] [--lines N] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\\n  send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--quiescence-timeout-ms MS] [--acp-turn-timeout-ms MS] [--request-id ID] [--bundle NAME] [--session NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
-    );
+    println!(concat!(
+        "Usage: agentmux <command> [options]\n",
+        "\n",
+        "Commands:\n",
+        "  host relay [--no-autostart] [--config-directory PATH] ",
+        "[--state-directory PATH] [--inscriptions-directory PATH|",
+        "--logs-directory PATH] [--repository-root PATH]\n",
+        "  host mcp [--bundle NAME] [--session-name NAME] ",
+        "[--config-directory PATH] [--state-directory PATH] ",
+        "[--inscriptions-directory PATH|--logs-directory PATH] ",
+        "[--repository-root PATH]\n",
+        "  up (<bundle-id> | --group GROUP) [--config-directory PATH] ",
+        "[--state-directory PATH] [--inscriptions-directory PATH|",
+        "--logs-directory PATH] [--repository-root PATH]\n",
+        "  down (<bundle-id> | --group GROUP) [--config-directory PATH] ",
+        "[--state-directory PATH] [--inscriptions-directory PATH|",
+        "--logs-directory PATH] [--repository-root PATH]\n",
+        "  list [--bundle NAME] [--sender NAME] [--json] ",
+        "[--config-directory PATH] [--state-directory PATH] ",
+        "[--inscriptions-directory PATH|--logs-directory PATH] ",
+        "[--repository-root PATH]\n",
+        "  look <target-session> [--bundle NAME] [--lines N] ",
+        "[--config-directory PATH] [--state-directory PATH] ",
+        "[--inscriptions-directory PATH|--logs-directory PATH] ",
+        "[--repository-root PATH]\n",
+        "  tui [--bundle NAME] [--session NAME] [--lines N] ",
+        "[--config-directory PATH] [--state-directory PATH] ",
+        "[--inscriptions-directory PATH|--logs-directory PATH] ",
+        "[--repository-root PATH]\n",
+        "  send (--target NAME ... | --broadcast) [--message TEXT] ",
+        "[--delivery-mode async|sync] [--quiescence-timeout-ms MS] ",
+        "[--acp-turn-timeout-ms MS] [--request-id ID] [--bundle NAME] ",
+        "[--session NAME] [--json] [--config-directory PATH] ",
+        "[--state-directory PATH] [--inscriptions-directory PATH|",
+        "--logs-directory PATH] [--repository-root PATH]"
+    ));
 }
