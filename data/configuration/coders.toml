@@ -36,8 +36,6 @@ prompt-idle-column = 3
 [[coders]]
 id = "opencode"
 
-[coders.tmux]
-initial-command = "opencode"
-resume-command = "opencode --session {coder-session-id}"
-# Start with quiescence-only delivery for opencode; add prompt template after
-# collecting stable pane-tail and cursor_x samples across themes/layouts.
+[coders.acp]
+channel = "stdio"
+command = "opencode acp"
