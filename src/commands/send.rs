@@ -203,7 +203,7 @@ fn parse_send_arguments(arguments: &[String]) -> Result<SendArguments, RuntimeEr
 fn resolve_send_message(message_flag: Option<String>) -> Result<String, RuntimeError> {
     let stdin_is_terminal = std::io::stdin().is_terminal();
     if let Some(message) = message_flag {
-        if !stdin_is_terminal {
+        if !stdin_is_terminal && stdin_has_message_payload()? {
             return Err(RuntimeError::validation(
                 "validation_conflicting_message_input",
                 "provide either --message or piped stdin, not both".to_string(),
@@ -228,6 +228,84 @@ fn resolve_send_message(message_flag: Option<String>) -> Result<String, RuntimeE
         ));
     }
     Ok(buffer)
+}
+
+fn stdin_has_message_payload() -> Result<bool, RuntimeError> {
+    let mut buffer = Vec::<u8>::new();
+    read_stdin_nonblocking(&mut buffer)?;
+    if buffer.is_empty() {
+        return Ok(false);
+    }
+    let payload = String::from_utf8_lossy(&buffer);
+    Ok(!payload.trim().is_empty())
+}
+
+#[cfg(unix)]
+fn read_stdin_nonblocking(buffer: &mut Vec<u8>) -> Result<(), RuntimeError> {
+    use std::os::fd::AsRawFd;
+
+    let stdin = std::io::stdin();
+    let file_descriptor = stdin.as_raw_fd();
+    let original_flags = get_stdin_flags(file_descriptor)?;
+    set_stdin_flags(file_descriptor, original_flags | libc::O_NONBLOCK)?;
+    let read_result = read_stdin_available_bytes(buffer);
+    let restore_result = set_stdin_flags(file_descriptor, original_flags);
+    match (read_result, restore_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Err(error), Err(_)) => Err(error),
+    }
+}
+
+#[cfg(unix)]
+fn read_stdin_available_bytes(buffer: &mut Vec<u8>) -> Result<(), RuntimeError> {
+    let stdin = std::io::stdin();
+    let mut handle = stdin.lock();
+    let mut chunk = [0u8; 4096];
+    loop {
+        match handle.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read_count) => buffer.extend_from_slice(&chunk[..read_count]),
+            Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(source) if source.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(source) => return Err(RuntimeError::io("read send message from stdin", source)),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn get_stdin_flags(file_descriptor: i32) -> Result<i32, RuntimeError> {
+    // SAFETY: `fcntl` is called with stdin's live file descriptor and valid
+    // command argument.
+    let flags = unsafe { libc::fcntl(file_descriptor, libc::F_GETFL) };
+    if flags < 0 {
+        return Err(RuntimeError::io(
+            "get stdin status flags",
+            std::io::Error::last_os_error(),
+        ));
+    }
+    Ok(flags)
+}
+
+#[cfg(unix)]
+fn set_stdin_flags(file_descriptor: i32, flags: i32) -> Result<(), RuntimeError> {
+    // SAFETY: `fcntl` is called with stdin's live file descriptor and valid
+    // command + flags arguments.
+    let result = unsafe { libc::fcntl(file_descriptor, libc::F_SETFL, flags) };
+    if result < 0 {
+        return Err(RuntimeError::io(
+            "set stdin status flags",
+            std::io::Error::last_os_error(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn read_stdin_nonblocking(_buffer: &mut Vec<u8>) -> Result<(), RuntimeError> {
+    Ok(())
 }
 
 fn validate_send_targets(arguments: &SendArguments) -> Result<(), RuntimeError> {

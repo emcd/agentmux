@@ -53,6 +53,83 @@ fn send_rejects_conflicting_flag_and_piped_message_sources() {
 }
 
 #[test]
+fn send_accepts_message_flag_when_piped_stdin_is_empty() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration(
+        &config_root,
+        "agentmux",
+        Some(&["dev"]),
+        &["alpha", "bravo"],
+    );
+    write_tui_configuration(
+        &config_root,
+        Some("agentmux"),
+        Some("user"),
+        &[("user", "default", Some("Operator"))],
+    );
+
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux").expect("bundle paths");
+    ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
+    let request_log = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let relay_thread = spawn_fake_relay_once(
+        &bundle_paths.relay_socket,
+        RelayResponse::Chat {
+            schema_version: "1".to_string(),
+            bundle_name: "agentmux".to_string(),
+            request_id: None,
+            sender_session: "user".to_string(),
+            sender_display_name: Some("Operator".to_string()),
+            delivery_mode: ChatDeliveryMode::Async,
+            status: ChatStatus::Accepted,
+            results: vec![ChatResult {
+                target_session: "bravo".to_string(),
+                message_id: "msg-1".to_string(),
+                outcome: ChatOutcome::Queued,
+                reason_code: None,
+                reason: None,
+                details: None,
+            }],
+        },
+        Arc::clone(&request_log),
+    );
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "send",
+            "--target",
+            "bravo",
+            "--message",
+            "hello from flag",
+            "--json",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux send");
+    drop(child.stdin.take());
+    let output = child.wait_with_output().expect("wait for child");
+    relay_thread.join().expect("join fake relay thread");
+
+    assert!(output.status.success(), "command should succeed");
+    let requests = request_log.lock().expect("request log lock");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0]["message"], "hello from flag");
+}
+
+#[test]
 fn send_rejects_conflicting_timeout_flags() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
         .args([
