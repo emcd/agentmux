@@ -239,6 +239,7 @@ coder = "codex"
   keybinding customization).
 - Additional autostart examples beyond systemd (for example
   launchd/OpenRC/Windows service patterns).
+- Native Windows support (direct PTY/ConPTY and non-tmux transport path).
 
 ## License
 
