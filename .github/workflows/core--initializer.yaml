@@ -35,9 +35,9 @@ jobs:
         id: platforms
         run: |
           set -eu
-          platforms="$(jq --compact-output <<EOF
           # Windows support is pending: current runtime relies on Unix-only
           # socket/process primitives and tmux-oriented integration paths.
+          platforms="$(jq --compact-output <<EOF
           ["ubuntu-latest", "ubuntu-24.04-arm", "macos-latest"]
           EOF
           )"
