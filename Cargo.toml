@@ -2,6 +2,15 @@
 name = "agentmux"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.90"
+description = "Multi-agent coordination runtime with inter-agent messaging across CLI, MCP, tmux, and ACP."
+license = "Apache-2.0"
+repository = "https://github.com/emcd/agentmux"
+homepage = "https://github.com/emcd/agentmux"
+documentation = "https://docs.rs/agentmux"
+readme = "README.md"
+keywords = ["agent", "mcp", "cli", "tmux", "coordination"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 anyhow = "1.0.97"
