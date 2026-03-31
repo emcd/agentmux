@@ -94,6 +94,14 @@ fn read_json(reader: &mut BufReader<UnixStream>) -> Value {
     serde_json::from_str::<Value>(line.trim_end()).expect("decode frame")
 }
 
+fn shutdown_stream(stream: &UnixStream, context: &str) {
+    match stream.shutdown(std::net::Shutdown::Both) {
+        Ok(()) => {}
+        Err(source) if source.kind() == std::io::ErrorKind::NotConnected => {}
+        Err(source) => panic!("{context}: {source:?}"),
+    }
+}
+
 #[test]
 fn stream_request_before_hello_is_rejected() {
     let temporary = TempDir::new().expect("temporary directory");
@@ -121,9 +129,7 @@ fn stream_request_before_hello_is_rejected() {
         "validation_missing_hello"
     );
 
-    client_stream
-        .shutdown(std::net::Shutdown::Both)
-        .expect("shutdown client stream");
+    shutdown_stream(&client_stream, "shutdown client stream");
     join_handle.join().expect("join relay thread");
 }
 
@@ -169,9 +175,7 @@ fn stream_hello_acknowledges_and_allows_request() {
     assert_eq!(response["response"]["kind"], "list");
     assert_eq!(response["response"]["bundle_name"], bundle_name);
 
-    client_stream
-        .shutdown(std::net::Shutdown::Both)
-        .expect("shutdown client stream");
+    shutdown_stream(&client_stream, "shutdown client stream");
     join_handle.join().expect("join relay thread");
 }
 
@@ -237,12 +241,8 @@ fn duplicate_live_hello_claim_is_rejected_with_identity_conflict() {
     assert_eq!(first_response["frame"], "response");
     assert_eq!(first_response["response"]["kind"], "list");
 
-    first_client
-        .shutdown(std::net::Shutdown::Both)
-        .expect("shutdown first client");
-    second_client
-        .shutdown(std::net::Shutdown::Both)
-        .expect("shutdown second client");
+    shutdown_stream(&first_client, "shutdown first client");
+    shutdown_stream(&second_client, "shutdown second client");
     first_handle.join().expect("join first relay thread");
     second_handle.join().expect("join second relay thread");
 }
@@ -272,9 +272,7 @@ fn hello_claim_is_accepted_after_prior_owner_disconnects() {
     );
     let first_ack = read_json(&mut first_reader);
     assert_eq!(first_ack["frame"], "hello_ack");
-    first_client
-        .shutdown(std::net::Shutdown::Both)
-        .expect("shutdown first client");
+    shutdown_stream(&first_client, "shutdown first client");
     first_handle.join().expect("join first relay thread");
 
     let (mut second_client, second_handle) =
@@ -294,8 +292,6 @@ fn hello_claim_is_accepted_after_prior_owner_disconnects() {
     let second_ack = read_json(&mut second_reader);
     assert_eq!(second_ack["frame"], "hello_ack");
 
-    second_client
-        .shutdown(std::net::Shutdown::Both)
-        .expect("shutdown second client");
+    shutdown_stream(&second_client, "shutdown second client");
     second_handle.join().expect("join second relay thread");
 }

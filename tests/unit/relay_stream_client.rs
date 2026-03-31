@@ -2,18 +2,38 @@ use std::{
     io::{BufRead, BufReader, Write},
     os::unix::net::UnixListener,
     path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
     thread,
     time::{Duration, Instant},
 };
 
 use agentmux::relay::{RelayStreamClientClass, RelayStreamSession};
 use serde_json::{Value, json};
-use tempfile::TempDir;
+static SOCKET_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-fn temporary_socket_path(prefix: &str) -> (TempDir, PathBuf) {
-    let temporary = TempDir::new().expect("temporary directory");
-    let socket_path = temporary.path().join(format!("{prefix}.sock"));
-    (temporary, socket_path)
+struct SocketPathGuard {
+    socket_path: PathBuf,
+}
+
+impl Drop for SocketPathGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.socket_path);
+    }
+}
+
+fn temporary_socket_path(prefix: &str) -> (SocketPathGuard, PathBuf) {
+    let counter = SOCKET_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let short_prefix = &prefix[..prefix.len().min(12)];
+    let socket_path =
+        PathBuf::from("/tmp").join(format!("amx-{short_prefix}-{pid}-{counter}.sock"));
+    let _ = std::fs::remove_file(&socket_path);
+    (
+        SocketPathGuard {
+            socket_path: socket_path.clone(),
+        },
+        socket_path,
+    )
 }
 
 fn read_json_line(reader: &mut BufReader<std::os::unix::net::UnixStream>) -> Value {
@@ -28,6 +48,14 @@ fn write_json_line(stream: &mut std::os::unix::net::UnixStream, value: &Value) {
         .write_all(format!("{text}\n").as_bytes())
         .expect("write json line");
     stream.flush().expect("flush json line");
+}
+
+fn shutdown_stream(stream: &std::os::unix::net::UnixStream, context: &str) {
+    match stream.shutdown(std::net::Shutdown::Both) {
+        Ok(()) => {}
+        Err(source) if source.kind() == std::io::ErrorKind::NotConnected => {}
+        Err(source) => panic!("{context}: {source:?}"),
+    }
 }
 
 fn assert_and_ack_hello(
@@ -126,9 +154,7 @@ fn stream_client_does_not_auto_retry_request_after_disconnect() {
         let first_request = read_json_line(&mut first_reader);
         assert_eq!(first_request["frame"], "request");
         assert_eq!(first_request["request"]["operation"], "list");
-        first_stream
-            .shutdown(std::net::Shutdown::Both)
-            .expect("shutdown first stream");
+        shutdown_stream(&first_stream, "shutdown first stream");
 
         // Second stream: fresh hello + request, then normal response.
         let (mut second_stream, _) = listener.accept().expect("accept second client");
@@ -219,9 +245,7 @@ fn stream_client_retries_hello_after_identity_claim_conflict() {
                 }
             }),
         );
-        conflict_stream
-            .shutdown(std::net::Shutdown::Both)
-            .expect("shutdown conflict stream");
+        shutdown_stream(&conflict_stream, "shutdown conflict stream");
 
         let (mut stream, _) = listener.accept().expect("accept retry client");
         let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
