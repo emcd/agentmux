@@ -615,7 +615,13 @@ impl RelayStreamSession {
                     }
                     thread::sleep(Duration::from_millis(HELLO_CONFLICT_RETRY_INTERVAL_MS));
                 }
-                Err(ConnectAttemptError::Io(source)) => return Err(source),
+                Err(ConnectAttemptError::Io(source)) => {
+                    if is_retriable_connect_error(&source) && Instant::now() < deadline {
+                        thread::sleep(Duration::from_millis(HELLO_CONFLICT_RETRY_INTERVAL_MS));
+                        continue;
+                    }
+                    return Err(source);
+                }
             }
         }
     }
@@ -836,6 +842,20 @@ fn is_retriable_stream_error(error: Option<&io::Error>) -> bool {
             | io::ErrorKind::BrokenPipe
             | io::ErrorKind::TimedOut
             | io::ErrorKind::UnexpectedEof
+    )
+}
+
+fn is_retriable_connect_error(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::NotConnected
+            | io::ErrorKind::ConnectionRefused
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::TimedOut
+            | io::ErrorKind::WouldBlock
+            | io::ErrorKind::Interrupted
+            | io::ErrorKind::InvalidInput
     )
 }
 
