@@ -14,7 +14,10 @@ use super::super::ACP_PROTOCOL_VERSION;
 const ACP_CLIENT_NAME: &str = "agentmux-relay";
 const ACP_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const ACP_LOAD_POST_RESPONSE_DRAIN_TIMEOUT: Duration = Duration::from_millis(200);
-const ACP_PROMPT_POST_RESPONSE_DRAIN_TIMEOUT: Duration = Duration::from_millis(50);
+// Prompt responses can arrive before follow-on `session/update` notifications.
+// Keep a small post-response drain window so late updates are still observed
+// and persisted for look snapshots across slower CI/runtime scheduling.
+const ACP_PROMPT_POST_RESPONSE_DRAIN_TIMEOUT: Duration = Duration::from_millis(250);
 
 type DispatchObserver<'a> = &'a mut dyn FnMut();
 type SnapshotObserver<'a> = &'a mut dyn FnMut(&[String]) -> Result<(), String>;
