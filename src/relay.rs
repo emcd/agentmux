@@ -689,9 +689,11 @@ impl RelayStreamSession {
                             "relay hello acknowledgement class mismatch",
                         )));
                     }
-                    stream
-                        .set_read_timeout(None)
-                        .map_err(ConnectAttemptError::Io)?;
+                    if let Err(source) = stream.set_read_timeout(None)
+                        && !is_ignorable_socket_option_error(&source)
+                    {
+                        return Err(ConnectAttemptError::Io(source));
+                    }
                     return Ok(RelayStreamConnection { stream, reader });
                 }
                 StreamServerFrame::Response {
@@ -824,6 +826,7 @@ fn read_stream_response_frame(
     let reset = connection.stream.set_read_timeout(None);
     if let Err(source) = reset
         && result.is_ok()
+        && !is_ignorable_socket_option_error(&source)
     {
         return Err(source);
     }
@@ -886,8 +889,25 @@ fn poll_stream_events_nonblocking(
     };
     let reset = connection.stream.set_nonblocking(false);
     read_result?;
-    reset?;
+    if let Err(source) = reset
+        && !is_ignorable_socket_option_error(&source)
+    {
+        return Err(source);
+    }
     Ok(events)
+}
+
+fn is_ignorable_socket_option_error(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::NotConnected
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::BrokenPipe
+            | io::ErrorKind::TimedOut
+            | io::ErrorKind::UnexpectedEof
+            | io::ErrorKind::InvalidInput
+    )
 }
 
 fn dispatch_request(
