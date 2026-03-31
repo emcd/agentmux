@@ -185,10 +185,6 @@ struct McpHarness {
 }
 
 impl McpHarness {
-    async fn spawn(current_directory: &Path, arguments: &[&str]) -> Self {
-        Self::spawn_with_environment(current_directory, arguments, &[]).await
-    }
-
     async fn spawn_with_environment(
         current_directory: &Path,
         arguments: &[&str],
@@ -716,7 +712,7 @@ async fn mcp_uses_repository_root_debug_state_override() {
         ),
     );
 
-    let mut harness = McpHarness::spawn(
+    let mut harness = McpHarness::spawn_with_environment(
         &workspace,
         &[
             "--bundle-name",
@@ -728,6 +724,7 @@ async fn mcp_uses_repository_root_debug_state_override() {
             "--repository-root",
             repository_root.to_str().expect("utf8 repository path"),
         ],
+        &[],
     )
     .await;
 
