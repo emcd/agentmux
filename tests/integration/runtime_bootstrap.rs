@@ -108,6 +108,9 @@ fn handle_connection(
     requests: &Arc<Mutex<Vec<Value>>>,
     responder: &RelayResponder,
 ) {
+    stream
+        .set_nonblocking(false)
+        .expect("set fake relay connection stream blocking");
     let mut reader = BufReader::new(
         stream
             .try_clone()
@@ -115,9 +118,15 @@ fn handle_connection(
     );
     loop {
         let mut line = String::new();
-        let bytes = reader
-            .read_line(&mut line)
-            .expect("read fake relay request");
+        let bytes = match reader.read_line(&mut line) {
+            Ok(bytes) => bytes,
+            Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+            Err(source) if source.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(source) => panic!("read fake relay request: {source:?}"),
+        };
         if bytes == 0 {
             return;
         }
