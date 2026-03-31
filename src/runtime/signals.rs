@@ -10,6 +10,11 @@ extern "C" fn shutdown_signal_handler(_: libc::c_int) {
     SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
 }
 
+#[inline]
+fn shutdown_signal_handler_pointer() -> libc::sighandler_t {
+    shutdown_signal_handler as *const () as libc::sighandler_t
+}
+
 /// Installed signal handlers that are restored on drop.
 #[derive(Debug)]
 pub struct ShutdownSignalGuard {
@@ -34,8 +39,7 @@ impl Drop for ShutdownSignalGuard {
 /// Returns an I/O error if signal handlers cannot be installed.
 pub fn install_shutdown_signal_handlers() -> Result<ShutdownSignalGuard, RuntimeError> {
     SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
-    let previous_sigint =
-        unsafe { libc::signal(libc::SIGINT, shutdown_signal_handler as libc::sighandler_t) };
+    let previous_sigint = unsafe { libc::signal(libc::SIGINT, shutdown_signal_handler_pointer()) };
     if previous_sigint == libc::SIG_ERR {
         return Err(RuntimeError::io(
             "install SIGINT handler",
@@ -44,7 +48,7 @@ pub fn install_shutdown_signal_handlers() -> Result<ShutdownSignalGuard, Runtime
     }
 
     let previous_sigterm =
-        unsafe { libc::signal(libc::SIGTERM, shutdown_signal_handler as libc::sighandler_t) };
+        unsafe { libc::signal(libc::SIGTERM, shutdown_signal_handler_pointer()) };
     if previous_sigterm == libc::SIG_ERR {
         unsafe {
             libc::signal(libc::SIGINT, previous_sigint);

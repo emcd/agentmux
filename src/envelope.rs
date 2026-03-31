@@ -73,16 +73,11 @@ struct MimePart {
 }
 
 /// Tokenizer profile used for prompt-size estimation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TokenizerProfile {
+    #[default]
     Characters0Point3,
     WhitespaceRough,
-}
-
-impl Default for TokenizerProfile {
-    fn default() -> Self {
-        Self::Characters0Point3
-    }
 }
 
 /// Prompt batching settings for envelope injection.
