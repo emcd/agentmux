@@ -59,7 +59,7 @@ fn acp_sync_send_reuses_persistent_worker_across_requests() {
     assert_eq!(second_status, ChatStatus::Success);
     assert_eq!(second_result.outcome, ChatOutcome::Delivered);
 
-    let requests = read_request_log(log_path.as_path());
+    let requests = wait_for_request_count(log_path.as_path(), "session/prompt", 2);
     assert_eq!(request_count_by_method(&requests, "initialize"), 1);
     assert_eq!(request_count_by_method(&requests, "session/new"), 1);
     assert_eq!(request_count_by_method(&requests, "session/prompt"), 2);
@@ -430,4 +430,15 @@ fn wait_for_worker_state(
         thread::sleep(Duration::from_millis(20));
     }
     false
+}
+
+fn wait_for_request_count(log_path: &std::path::Path, method: &str, expected: usize) -> Vec<Value> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let requests = read_request_log(log_path);
+        if request_count_by_method(&requests, method) >= expected || Instant::now() >= deadline {
+            return requests;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
 }

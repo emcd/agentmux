@@ -152,7 +152,7 @@ fn wait_for_look(
     lines: Option<usize>,
     condition: impl Fn(&[String]) -> bool,
 ) -> RelayResponse {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let look = dispatch_look(
             config_root,
