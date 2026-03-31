@@ -55,7 +55,7 @@ If selected session references unknown policy, runtime SHALL fail with
 - **AND** `default-bundle` is absent in `tui.toml`
 - **THEN** runtime returns `validation_unknown_bundle`
 
-### Requirement: TUI Session Configuration Files
+### Requirement: TUI Sender Configuration Files
 
 The runtime SHALL support global TUI session configuration files at:
 

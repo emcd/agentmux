@@ -472,77 +472,105 @@ Reconnect logic SHALL preserve identity-ownership hardening behavior:
 
 ### Requirement: TUI Sender Association Resolution
 
-The TUI runtime SHALL resolve sender association at startup using precedence:
+The runtime SHALL resolve sender identity for `agentmux tui` and
+session-selected `agentmux send` invocations using global `tui.toml`
+configuration with deterministic precedence.
 
-1. explicit CLI `--sender` when present
-2. local testing override sender from
-   `.auxiliary/configuration/agentmux/overrides/tui.toml` when present in
-   debug/testing mode
-3. normal config sender from `<config-root>/tui.toml` when present
-4. runtime association auto-discovery
+Sender/session resolution SHALL be:
 
-If sender cannot be resolved or does not map to a known bundle member, startup
-SHALL fail with structured `validation_unknown_sender`.
+1. explicit CLI `--session` when present
+2. `default-session` from active global `tui.toml`
+3. fail-fast `validation_unknown_session`
 
-#### Scenario: Resolve sender from CLI override
+Bundle resolution for `agentmux tui` SHALL be:
 
-- **WHEN** TUI startup includes explicit `--sender`
-- **THEN** sender association is set to that configured session
+1. explicit CLI `--bundle` when present
+2. `default-bundle` from active global `tui.toml`
+3. fail-fast `validation_unknown_bundle`
 
-#### Scenario: Resolve sender from debug/testing override
+Bundle resolution for session-selected `agentmux send` SHALL be:
 
-- **WHEN** CLI sender is absent
-- **AND** runtime is debug/testing mode
-- **AND** `overrides/tui.toml` provides `sender`
-- **THEN** sender association resolves from override sender value
+1. explicit CLI `--bundle` when present
+2. `default-bundle` from active global `tui.toml`
+3. fail-fast `validation_unknown_bundle`
 
-#### Scenario: Resolve sender from normal config tui.toml
+Association-derived sender fallback SHALL NOT be used for these surfaces in
+MVP.
 
-- **WHEN** CLI sender is absent
-- **AND** override sender is absent or not active for current mode
-- **AND** `<config-root>/tui.toml` provides `sender`
-- **THEN** sender association resolves from normal config sender value
+If selected session resolves to invalid sender identity, runtime SHALL fail with
+`validation_unknown_sender`.
+If selected session references unknown policy, runtime SHALL fail with
+`validation_unknown_policy`.
 
-#### Scenario: Resolve sender from runtime association fallback
+#### Scenario: Resolve sender and bundle from explicit selectors
 
-- **WHEN** all configured sender files are absent or inapplicable
-- **THEN** runtime association fallback is used to resolve sender identity
+- **WHEN** invocation includes `--bundle agentmux --session user`
+- **THEN** runtime resolves bundle `agentmux` and sender from session `user`
 
-#### Scenario: Reject unresolved sender association
+#### Scenario: Resolve sender and bundle from global defaults
 
-- **WHEN** all sender resolution sources fail to produce a valid sender
-- **THEN** TUI startup returns structured `validation_unknown_sender`
+- **WHEN** invocation omits selectors
+- **AND** `tui.toml` provides `default-bundle` and `default-session`
+- **THEN** runtime resolves bundle/session from those defaults
+
+#### Scenario: Reject startup when default bundle is missing
+
+- **WHEN** `agentmux tui` omits `--bundle`
+- **AND** `default-bundle` is absent in `tui.toml`
+- **THEN** runtime returns `validation_unknown_bundle`
+
+#### Scenario: Reject send when default bundle is missing
+
+- **WHEN** `agentmux send` omits `--bundle`
+- **AND** `default-bundle` is absent in `tui.toml`
+- **THEN** runtime returns `validation_unknown_bundle`
 
 ### Requirement: TUI Sender Configuration Files
 
-The TUI runtime SHALL support optional sender configuration files:
+The runtime SHALL support global TUI session configuration files at:
 
 - normal config path: `<config-root>/tui.toml`
 - debug/testing override path:
   `.auxiliary/configuration/agentmux/overrides/tui.toml`
 
-Supported fields for this proposal SHALL include:
+Supported fields SHALL use kebab-case and include:
 
-- `sender`
+- `default-bundle` (optional)
+- `default-session` (optional)
+- `[[sessions]]` entries with required:
+  - `id`
+  - `policy`
+- `[[sessions]]` optional:
+  - `name`
 
 Missing files SHALL not be treated as errors.
 Malformed files SHALL fail fast with structured bootstrap validation errors.
+Session `id` SHALL be canonical wire identity for relay operations and SHALL be
+unique within the file.
 
-#### Scenario: Ignore missing tui sender config files
+#### Scenario: Resolve sender from session entry in global tui.toml
 
-- **WHEN** both normal and override `tui.toml` are missing
-- **THEN** startup continues using remaining precedence sources
+- **WHEN** runtime selects session `user`
+- **AND** `[[sessions]]` contains `id = "user"`
+- **THEN** runtime resolves sender identity as `user`
 
-#### Scenario: Reject malformed normal tui.toml
+#### Scenario: Reject unknown configured default session
 
-- **WHEN** `<config-root>/tui.toml` exists but has invalid TOML or invalid
-  fields
-- **THEN** startup fails with structured bootstrap validation error
+- **WHEN** `default-session = "missing"`
+- **AND** no `[[sessions]]` entry has `id = "missing"`
+- **THEN** runtime returns `validation_unknown_session`
 
-#### Scenario: Reject malformed override tui.toml in debug/testing mode
+#### Scenario: Reject duplicate session identifiers in tui.toml
 
-- **WHEN** override `tui.toml` is active for mode and malformed
-- **THEN** startup fails with structured bootstrap validation error
+- **WHEN** `tui.toml` contains multiple `[[sessions]]` entries with the same
+  `id`
+- **THEN** runtime fails fast with structured bootstrap validation error
+
+#### Scenario: Reject selected session with unknown policy reference
+
+- **WHEN** runtime selects session `user`
+- **AND** `[[sessions]]` entry references unknown `policy`
+- **THEN** runtime returns `validation_unknown_policy`
 
 ### Requirement: TUI Override File VCS Posture
 
@@ -633,3 +661,4 @@ Unknown selectors SHALL return existing validation errors:
 - **WHEN** operator runs `agentmux down --group nightly`
 - **AND** no configured bundle declares group `nightly`
 - **THEN** runtime returns `validation_unknown_group`
+

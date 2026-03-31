@@ -1,6 +1,6 @@
 ## MODIFIED Requirements
 
-### Requirement: Stream Hello Registration Contract
+### Requirement: Hello Registration Contract
 
 Each client stream SHALL begin with `hello` registration frame containing:
 

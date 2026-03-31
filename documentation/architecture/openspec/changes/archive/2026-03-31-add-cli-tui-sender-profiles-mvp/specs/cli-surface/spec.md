@@ -1,6 +1,6 @@
 ## MODIFIED Requirements
 
-### Requirement: TUI Session Override Precedence Hook
+### Requirement: TUI Sender Override Precedence Hook
 
 `agentmux tui` SHALL support session/bundle selectors:
 

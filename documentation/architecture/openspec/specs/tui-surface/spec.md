@@ -178,29 +178,59 @@ The initial TUI MVP SHALL exclude:
 
 ### Requirement: TUI Sender Identity Precedence
 
-`agentmux tui` sender identity SHALL resolve with deterministic precedence:
+`agentmux tui` SHALL resolve identity and bundle from global `tui.toml`
+configuration with deterministic precedence:
 
-1. CLI `--sender` when provided
-2. local testing override `tui.toml` sender when active
-3. normal `<config-root>/tui.toml` sender
-4. runtime association-derived sender identity
-5. fail-fast validation error when unresolved
+Sender/session resolution:
 
-TUI runtime SHALL use the resolved sender identity consistently for relay-backed
-operations in that TUI process.
+1. CLI `--session` when provided
+2. `default-session` from global `tui.toml`
+3. fail-fast `validation_unknown_session`
 
-#### Scenario: Prefer CLI sender over configured sender files
+Bundle resolution:
 
-- **WHEN** operator starts TUI with `--sender`
-- **AND** sender is also configured via override or normal `tui.toml`
-- **THEN** TUI resolves sender from `--sender`
+1. CLI `--bundle` when provided
+2. `default-bundle` from global `tui.toml`
+3. fail-fast `validation_unknown_bundle`
 
-#### Scenario: Fail fast when sender cannot be resolved
+`agentmux tui --sender` SHALL NOT be supported in MVP.
 
-- **WHEN** CLI sender is absent
-- **AND** configured sender files are absent or inapplicable
-- **AND** runtime association cannot resolve a valid sender
-- **THEN** TUI startup fails with stable validation error code
+Association-derived sender fallback SHALL NOT be used for TUI startup in MVP.
+
+TUI runtime SHALL use resolved session `id` consistently for
+relay-backed operations in that process.
+If selected session references unknown policy, startup SHALL fail fast with
+`validation_unknown_policy`.
+
+#### Scenario: Resolve TUI startup from explicit session/bundle selectors
+
+- **WHEN** operator starts TUI with `--bundle agentmux --session user`
+- **AND** session `user` is configured in global TUI sessions
+- **THEN** TUI resolves bundle `agentmux` and sender identity `user`
+
+#### Scenario: Resolve TUI startup from global defaults
+
+- **WHEN** operator starts TUI without `--bundle`/`--session`
+- **AND** global `tui.toml` defines `default-bundle` and `default-session`
+- **THEN** TUI resolves startup identity from those defaults
+
+#### Scenario: Reject sender flag at startup
+
+- **WHEN** operator starts TUI with `--sender relay`
+- **THEN** startup fails as unknown argument
+
+#### Scenario: Fail fast when required defaults are missing
+
+- **WHEN** operator starts TUI without selectors
+- **AND** required default keys are absent in global `tui.toml`
+- **THEN** startup fails with stable validation code
+
+#### Scenario: Reject default session with unknown policy
+
+- **WHEN** operator starts TUI without selectors
+- **AND** defaults resolve to session `user`
+- **AND** session `user` references unknown policy
+- **THEN** startup fails with `validation_unknown_policy`
 
 ### Requirement: TUI Delivery State Mapping
 
@@ -275,3 +305,4 @@ auto-stop relay.
 
 - **WHEN** TUI transport scope attempts bundle outside associated context
 - **THEN** request is rejected with `validation_cross_bundle_unsupported`
+

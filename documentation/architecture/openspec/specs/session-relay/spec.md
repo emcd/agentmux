@@ -730,84 +730,36 @@ registration with `validation_missing_hello`.
 
 Each client stream SHALL begin with `hello` registration frame containing:
 
-- `schema_version`
 - `bundle_name`
 - `session_id`
 - `client_class` (`agent` | `ui`)
 
 `hello` identity SHALL bind principal/session for that stream using canonical
-tuple `(bundle_name, session_id)`.
+identity key:
 
-`session_id` SHALL resolve to a configured bundle session id for the associated
-bundle. Display labels or aliases are non-authoritative for stream identity.
+- `(bundle_name, session_id)`
 
-Relay SHALL maintain at most one active owner binding for each
-`(bundle_name, session_id)` identity.
+For `client_class=agent`, `session_id` SHALL resolve via bundle
+`[[sessions]]` configuration.
+
+For `client_class=ui`, `session_id` SHALL resolve via global TUI sessions from
+`<config-root>/tui.toml`.
 
 If a second stream attempts `hello` for the same identity while the current
-owner is still live, relay SHALL reject the claim with
+owner is still live, relay SHALL reject second claim with
 `runtime_identity_claim_conflict`.
 
-`runtime_identity_claim_conflict` details SHALL include required fields:
-
-- `bundle_name`
-- `session_id`
-- `reason`
-
-Conflict details MAY include optional debug fields, including:
-
-- `existing_connection_id`
-- `existing_owner_token`
-
-Relay MAY replace ownership for the same identity in MVP only when hard-dead
-evidence already exists for the current owner binding:
-
-- observed stream close,
-- read/write failure, or
-- explicit disconnect event already observed by relay.
-
-MVP claim handling SHALL NOT run active liveness probes in the claim path.
-
-If `hello.bundle_name` does not match relay's associated bundle context, relay
-SHALL reject `hello` with `validation_cross_bundle_unsupported`.
-
-If `hello.session_id` is not a configured session id in the associated bundle,
-relay SHALL reject `hello` with `validation_unknown_sender`.
-
-#### Scenario: Register agent-class stream
-
-- **WHEN** MCP client sends valid `hello` with `client_class=agent`
-- **THEN** relay registers live agent endpoint for that identity
-
-#### Scenario: Register ui-class stream
+#### Scenario: Accept hello for configured UI session identity
 
 - **WHEN** TUI client sends valid `hello` with `client_class=ui`
-- **THEN** relay registers live UI endpoint for that identity
+- **AND** `session_id` maps to configured global TUI session `id`
+- **THEN** relay accepts hello and binds stream owner identity
 
-#### Scenario: Reject duplicate live claim for same identity
+#### Scenario: Reject hello for unknown UI session identity
 
-- **WHEN** one stream already owns a live `(bundle_name, session_id)` binding
-- **AND** a second stream sends `hello` for that same identity
-- **THEN** relay rejects second claim with `runtime_identity_claim_conflict`
-
-#### Scenario: Replace identity owner only after hard-dead evidence
-
-- **WHEN** prior owner binding has hard-dead evidence already observed by relay
-- **AND** a new stream sends `hello` for the same identity
-- **THEN** relay accepts the new binding
-- **AND** does not run claim-path liveness probes
-
-#### Scenario: Reject hello for mismatched bundle context
-
-- **WHEN** a stream sends `hello` with `bundle_name` not matching associated
-  relay bundle context
-- **THEN** relay rejects with `validation_cross_bundle_unsupported`
-
-#### Scenario: Reject hello for unknown session id
-
-- **WHEN** a stream sends `hello` with `session_id` not configured in
-  associated bundle
-- **THEN** relay rejects with `validation_unknown_sender`
+- **WHEN** a stream sends `hello` with `client_class=ui`
+- **AND** `session_id` is not present in global TUI sessions
+- **THEN** relay rejects hello with `validation_unknown_sender`
 
 ### Requirement: Same-Bundle Stream Scope Enforcement
 
@@ -1643,4 +1595,27 @@ MVP boundary:
 - **THEN** relay marks worker state `busy`
 - **AND** relay does not consider that worker ready for next delivery until
   terminal stopReason is observed
+
+### Requirement: UI Request-Path Sender Validation
+
+Relay SHALL validate non-hello request-path UI sender identities using global
+TUI sessions from `<config-root>/tui.toml`.
+
+For request-path operations such as `send`, relay SHALL:
+
+1. validate sender `session_id` exists in global TUI sessions,
+2. evaluate authorization using that TUI session's `policy` reference,
+3. return canonical `authorization_forbidden` when policy denies.
+
+#### Scenario: Authorize send using global UI session policy
+
+- **WHEN** relay receives `send` request with UI sender `session_id = "user"`
+- **AND** global TUI sessions include `id = "user"` with `policy = "ui-default"`
+- **THEN** relay evaluates authorization using policy `ui-default`
+
+#### Scenario: Reject request-path sender missing from global UI sessions
+
+- **WHEN** relay receives `send` request with UI sender `session_id = "ghost"`
+- **AND** no global TUI session maps to `id = "ghost"`
+- **THEN** relay rejects request with `validation_unknown_sender`
 
