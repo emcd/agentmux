@@ -87,6 +87,11 @@
       ],
       "enabled": true,
       "timeout": 900000
+    },
+    "pty-debug": {
+      "type": "local",
+      "command": ["npx", "-y", "@so2liu/pty-mcp-server@1.0.11"],
+      "enabled": true
     }
   },
 
