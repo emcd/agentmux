@@ -169,6 +169,17 @@ fn main() -> anyhow::Result<()> {
     result
 }
 
+/// Drain any key events buffered in crossterm's internal queue.
+/// Called after a synchronous prompt to prevent queued keypresses
+/// (including Enter) from firing on the next event loop iteration.
+fn drain_event_buffer() {
+    while let Ok(true) = event::poll(Duration::ZERO) {
+        if event::read().is_err() {
+            break;
+        }
+    }
+}
+
 fn run_tui(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     mut client: AcpStdioClient,
@@ -218,6 +229,9 @@ fn run_tui(
                 KeyCode::Enter => {
                     let prompt_text = app.input.clone();
                     app.send_prompt();
+                    if !app.prompt_active {
+                        continue;
+                    }
                     // Handle prompt synchronously for MVP
                     // (TUI freezes during prompt — acceptable for debugging use case)
                     let session = session_id.to_string();
@@ -231,10 +245,10 @@ fn run_tui(
                     match result {
                         Ok(completion) => {
                             let snapshot = client.take_snapshot_lines();
-                            for line in snapshot {
+                            if !snapshot.is_empty() {
                                 let _ = tx.send(AppEvent::Message(Message {
                                     role: MessageRole::Assistant,
-                                    text: line,
+                                    text: snapshot.join("\n"),
                                 }));
                             }
                             let _ = tx.send(AppEvent::PromptComplete(completion.stop_reason));
@@ -243,10 +257,13 @@ fn run_tui(
                             let _ = tx.send(AppEvent::Error(format!("{e:?}")));
                         }
                     }
-                    // Process events accumulated during prompt
+                    // Drain events accumulated during prompt
                     while let Ok(event) = rx.try_recv() {
                         app.handle_event(event);
                     }
+                    // Drain crossterm input buffer so queued keys
+                    // (including a second Enter) don't fire immediately
+                    drain_event_buffer();
                     continue;
                 }
                 KeyCode::Backspace => {
@@ -341,30 +358,41 @@ fn draw(frame: &mut Frame, app: &App) {
     frame.render_widget(status, chunks[0]);
 
     // Conversation history
+    let user_label_style = Style::default()
+        .fg(Color::Blue)
+        .add_modifier(Modifier::BOLD);
+    let assistant_label_style = Style::default()
+        .fg(Color::Green)
+        .add_modifier(Modifier::BOLD);
+    let system_label_style = Style::default()
+        .fg(Color::DarkGray)
+        .add_modifier(Modifier::BOLD);
+
+    let user_body_style = Style::default().fg(Color::White);
+    let assistant_body_style = Style::default().fg(Color::Rgb(180, 180, 180));
+    let system_body_style = Style::default().fg(Color::DarkGray);
+
     let history_lines: Vec<Line> = app
         .messages
         .iter()
         .flat_map(|msg| {
-            let (prefix, style) = match msg.role {
-                MessageRole::User => (
-                    "[you] ",
-                    Style::default()
-                        .fg(Color::Blue)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                MessageRole::Assistant => (
-                    "[acp] ",
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                MessageRole::System => ("[sys] ", Style::default().fg(Color::DarkGray)),
+            let (label_style, body_style) = match msg.role {
+                MessageRole::User => (user_label_style, user_body_style),
+                MessageRole::Assistant => (assistant_label_style, assistant_body_style),
+                MessageRole::System => (system_label_style, system_body_style),
             };
-            msg.text.lines().map(move |line| {
-                Line::from(vec![
-                    Span::styled(prefix.to_string(), style),
-                    Span::raw(line.to_string()),
-                ])
+            msg.text.split('\n').enumerate().map(move |(i, line)| {
+                if i == 0 {
+                    Line::from(vec![
+                        Span::styled(" you  ", label_style),
+                        Span::styled(line.to_string(), body_style),
+                    ])
+                } else {
+                    Line::from(vec![
+                        Span::styled("      ", label_style),
+                        Span::styled(line.to_string(), body_style),
+                    ])
+                }
             })
         })
         .collect();
@@ -393,13 +421,14 @@ fn draw(frame: &mut Frame, app: &App) {
     frame.render_widget(history, chunks[1]);
 
     // Input area
-    let input_text = format!("{}_", app.input);
+    let footer = if app.input.is_empty() {
+        " type a message and press Enter | Up/Down: history | Ctrl+C: quit "
+    } else {
+        " Enter: send | Ctrl+C: quit "
+    };
+    let input_text = format!("> {} ", app.input);
     let input = Paragraph::new(input_text)
-        .block(
-            Block::default()
-                .borders(Borders::TOP)
-                .title(" Send (Enter) | History (Up/Down) | Quit (Ctrl+C) "),
-        )
+        .block(Block::default().borders(Borders::TOP).title(footer))
         .style(Style::default().fg(Color::White));
     frame.render_widget(input, chunks[2]);
 }
