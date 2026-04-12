@@ -59,6 +59,7 @@ pub struct AcpStdioClient {
     read_buffer: Vec<u8>,
     next_id: u64,
     snapshot_line_buffer: Vec<String>,
+    replay_buffer: Vec<(String, Vec<String>)>,
 }
 
 impl AcpStdioClient {
@@ -106,6 +107,7 @@ impl AcpStdioClient {
             read_buffer: Vec::new(),
             next_id: 1,
             snapshot_line_buffer: Vec::new(),
+            replay_buffer: Vec::new(),
         })
     }
 
@@ -133,6 +135,7 @@ impl AcpStdioClient {
                 on_dispatched: None,
                 on_snapshot_lines: None,
             },
+            None,
         )
         .map(|value| value.result)
         .map_err(|error| match error {
@@ -159,6 +162,7 @@ impl AcpStdioClient {
                     on_dispatched: None,
                     on_snapshot_lines: None,
                 },
+                None,
             )
             .map(|value| value.result)
             .map_err(|error| match error {
@@ -179,8 +183,9 @@ impl AcpStdioClient {
         &mut self,
         session_id: &str,
         working_directory: &Path,
-    ) -> Result<Vec<String>, String> {
-        let _ = self
+    ) -> Result<Vec<(String, Vec<String>)>, String> {
+        let mut replay_buffer = std::mem::take(&mut self.replay_buffer);
+        let result = self
             .request(
                 "session/load",
                 json!({
@@ -195,6 +200,7 @@ impl AcpStdioClient {
                     on_dispatched: None,
                     on_snapshot_lines: None,
                 },
+                Some(&mut replay_buffer),
             )
             .map(|value| value.result)
             .map_err(|error| match error {
@@ -203,8 +209,11 @@ impl AcpStdioClient {
                     format!("ACP session/load timed out after {}ms", timeout.as_millis())
                 }
                 AcpRequestError::ConnectionClosed { reason, .. } => reason,
-            })?;
-        Ok(self.take_snapshot_lines())
+            });
+        let entries = std::mem::take(&mut replay_buffer);
+        self.replay_buffer = replay_buffer;
+        result?;
+        Ok(entries)
     }
 
     pub fn prompt<'a>(
@@ -233,6 +242,7 @@ impl AcpStdioClient {
                 on_dispatched,
                 on_snapshot_lines,
             },
+            None,
         )?;
         result
             .result
@@ -253,6 +263,10 @@ impl AcpStdioClient {
         std::mem::take(&mut self.snapshot_line_buffer)
     }
 
+    pub fn take_replay_entries(&mut self) -> Vec<(String, Vec<String>)> {
+        std::mem::take(&mut self.replay_buffer)
+    }
+
     pub fn child_stderr(&mut self) -> Option<std::process::ChildStderr> {
         self.child.stderr.take()
     }
@@ -267,6 +281,7 @@ impl AcpStdioClient {
         params: Value,
         timeout: Option<Duration>,
         mut observers: RequestObservers<'_>,
+        mut replay_buffer: Option<&mut Vec<(String, Vec<String>)>>,
     ) -> Result<AcpRequestResult, AcpRequestError> {
         let request_id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
@@ -316,6 +331,9 @@ impl AcpStdioClient {
                     observers.prompt_session_id.as_deref(),
                     &mut observers.on_snapshot_lines,
                 )?;
+                if let Some(buf) = replay_buffer.as_deref_mut() {
+                    self.capture_replay_from_value(&decoded, buf);
+                }
                 if (observed_update
                     || self.observe_permission_request_activity(
                         &decoded,
@@ -339,6 +357,7 @@ impl AcpStdioClient {
                     observers.prompt_session_id.as_deref(),
                     drain_timeout,
                     &mut observers.on_snapshot_lines,
+                    replay_buffer.as_deref_mut(),
                 )?
             {
                 first_activity_observed = true;
@@ -355,6 +374,7 @@ impl AcpStdioClient {
         session_id: Option<&str>,
         timeout: Duration,
         on_snapshot_lines: &mut Option<SnapshotObserver<'_>>,
+        mut replay_buffer: Option<&mut Vec<(String, Vec<String>)>>,
     ) -> Result<bool, AcpRequestError> {
         let mut observed = false;
         while let Ok(line) = self.read_response_line(Some(timeout)) {
@@ -366,6 +386,9 @@ impl AcpStdioClient {
                 Ok(value) => value,
                 Err(_) => continue,
             };
+            if let Some(buf) = replay_buffer.as_deref_mut() {
+                self.capture_replay_from_value(&decoded, buf);
+            }
             if self.capture_update_snapshot_lines(&decoded, session_id, on_snapshot_lines)?
                 || self.observe_permission_request_activity(&decoded, session_id)
             {
@@ -416,6 +439,39 @@ impl AcpStdioClient {
             return false;
         }
         true
+    }
+
+    fn capture_replay_from_value(
+        &mut self,
+        value: &Value,
+        replay_buffer: &mut Vec<(String, Vec<String>)>,
+    ) {
+        if value.get("method").and_then(Value::as_str) != Some("session/update") {
+            return;
+        }
+        let params = value.get("params").unwrap_or(&Value::Null);
+        let update_field = params.get("update").unwrap_or(&Value::Null);
+        let updates: Vec<&Value> = match update_field.as_array() {
+            Some(arr) => arr.iter().collect(),
+            None if !update_field.is_null() => vec![update_field],
+            None => return,
+        };
+        for update in updates {
+            let update_type = update
+                .get("sessionUpdate")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let role = match update_type {
+                "user_message_chunk" => "user",
+                "agent_message_chunk" => "agent",
+                _ => continue,
+            };
+            let mut lines = Vec::new();
+            collect_text_lines_from_value(update, &mut lines);
+            if !lines.is_empty() {
+                replay_buffer.push((role.to_string(), lines));
+            }
+        }
     }
 
     fn read_response_line(&mut self, timeout: Option<Duration>) -> Result<String, AcpRequestError> {

@@ -108,6 +108,40 @@ impl App {
     }
 }
 
+fn replay_entries_to_messages(entries: Vec<(String, Vec<String>)>) -> Vec<Message> {
+    let mut messages = Vec::new();
+    let mut current_role: Option<String> = None;
+    let mut current_lines: Vec<String> = Vec::new();
+
+    for (role, lines) in entries {
+        if current_role.as_ref() != Some(&role) {
+            if let Some(prev_role) = current_role.take() {
+                let text = current_lines.join("\n");
+                messages.push(Message {
+                    role: match prev_role.as_str() {
+                        "user" => MessageRole::User,
+                        _ => MessageRole::Assistant,
+                    },
+                    text,
+                });
+                current_lines.clear();
+            }
+            current_role = Some(role);
+        }
+        current_lines.extend(lines);
+    }
+    if let Some(role) = current_role {
+        messages.push(Message {
+            role: match role.as_str() {
+                "user" => MessageRole::User,
+                _ => MessageRole::Assistant,
+            },
+            text: current_lines.join("\n"),
+        });
+    }
+    messages
+}
+
 fn main() -> anyhow::Result<()> {
     let mut command = None;
     let mut session_id = None;
@@ -141,16 +175,10 @@ fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("ACP initialize failed: {e}"))?;
 
     let (session_id, initial_messages) = if let Some(id) = session_id {
-        let replay_lines = client
+        let replay_entries = client
             .load_session(&id, &cwd)
             .map_err(|e| anyhow::anyhow!("ACP session/load failed: {e}"))?;
-        let mut msgs = Vec::new();
-        if !replay_lines.is_empty() {
-            msgs.push(Message {
-                role: MessageRole::Assistant,
-                text: replay_lines.join("\n"),
-            });
-        }
+        let msgs = replay_entries_to_messages(replay_entries);
         (id, msgs)
     } else {
         let id = client
