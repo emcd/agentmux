@@ -402,14 +402,19 @@ fn draw(frame: &mut Frame, app: &App) {
                 MessageRole::System => (system_label_style, system_body_style),
             };
             msg.text.split('\n').enumerate().map(move |(i, line)| {
+                let (label, label_width) = match msg.role {
+                    MessageRole::User => ("you  ", 5),
+                    MessageRole::Assistant => ("acp  ", 5),
+                    MessageRole::System => ("sys  ", 5),
+                };
                 if i == 0 {
                     Line::from(vec![
-                        Span::styled(" you  ", label_style),
+                        Span::styled(label, label_style),
                         Span::styled(line.to_string(), body_style),
                     ])
                 } else {
                     Line::from(vec![
-                        Span::styled("      ", label_style),
+                        Span::raw(" ".repeat(label_width)),
                         Span::styled(line.to_string(), body_style),
                     ])
                 }
