@@ -463,7 +463,7 @@ impl AcpStdioClient {
                 .unwrap_or("");
             let role = match update_type {
                 "user_message_chunk" => "user",
-                "agent_message_chunk" => "agent",
+                "agent_message_chunk" | "agent_thought_chunk" => "agent",
                 _ => continue,
             };
             let mut lines = Vec::new();
