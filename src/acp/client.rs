@@ -9,7 +9,7 @@ use std::{
 
 use serde_json::{Value, json};
 
-use super::PROTOCOL_VERSION;
+use super::{PROTOCOL_VERSION, ReplayEntry};
 
 const ACP_CLIENT_NAME: &str = "agentmux-relay";
 const ACP_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -59,7 +59,7 @@ pub struct AcpStdioClient {
     read_buffer: Vec<u8>,
     next_id: u64,
     snapshot_line_buffer: Vec<String>,
-    replay_buffer: Vec<(String, Vec<String>)>,
+    replay_buffer: Vec<ReplayEntry>,
 }
 
 impl AcpStdioClient {
@@ -183,7 +183,7 @@ impl AcpStdioClient {
         &mut self,
         session_id: &str,
         working_directory: &Path,
-    ) -> Result<Vec<(String, Vec<String>)>, String> {
+    ) -> Result<Vec<ReplayEntry>, String> {
         let mut replay_buffer = std::mem::take(&mut self.replay_buffer);
         let result = self
             .request(
@@ -263,7 +263,7 @@ impl AcpStdioClient {
         std::mem::take(&mut self.snapshot_line_buffer)
     }
 
-    pub fn take_replay_entries(&mut self) -> Vec<(String, Vec<String>)> {
+    pub fn take_replay_entries(&mut self) -> Vec<ReplayEntry> {
         std::mem::take(&mut self.replay_buffer)
     }
 
@@ -281,7 +281,7 @@ impl AcpStdioClient {
         params: Value,
         timeout: Option<Duration>,
         mut observers: RequestObservers<'_>,
-        mut replay_buffer: Option<&mut Vec<(String, Vec<String>)>>,
+        mut replay_buffer: Option<&mut Vec<ReplayEntry>>,
     ) -> Result<AcpRequestResult, AcpRequestError> {
         let request_id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
@@ -374,7 +374,7 @@ impl AcpStdioClient {
         session_id: Option<&str>,
         timeout: Duration,
         on_snapshot_lines: &mut Option<SnapshotObserver<'_>>,
-        mut replay_buffer: Option<&mut Vec<(String, Vec<String>)>>,
+        mut replay_buffer: Option<&mut Vec<ReplayEntry>>,
     ) -> Result<bool, AcpRequestError> {
         let mut observed = false;
         while let Ok(line) = self.read_response_line(Some(timeout)) {
@@ -414,8 +414,7 @@ impl AcpStdioClient {
         {
             return Ok(false);
         }
-        let mut captured_lines = Vec::new();
-        collect_text_lines_from_value(params, &mut captured_lines);
+        let captured_lines = collect_text_lines_from_value(params);
         if captured_lines.is_empty() {
             return Ok(true);
         }
@@ -441,11 +440,7 @@ impl AcpStdioClient {
         true
     }
 
-    fn capture_replay_from_value(
-        &mut self,
-        value: &Value,
-        replay_buffer: &mut Vec<(String, Vec<String>)>,
-    ) {
+    fn capture_replay_from_value(&mut self, value: &Value, replay_buffer: &mut Vec<ReplayEntry>) {
         if value.get("method").and_then(Value::as_str) != Some("session/update") {
             return;
         }
@@ -461,15 +456,45 @@ impl AcpStdioClient {
                 .get("sessionUpdate")
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            let role = match update_type {
-                "user_message_chunk" => "user",
-                "agent_message_chunk" | "agent_thought_chunk" => "agent",
-                _ => continue,
-            };
-            let mut lines = Vec::new();
-            collect_text_lines_from_value(update, &mut lines);
-            if !lines.is_empty() {
-                replay_buffer.push((role.to_string(), lines));
+            match update_type {
+                "user_message_chunk" => {
+                    let lines = collect_text_lines_from_value(update);
+                    if !lines.is_empty() {
+                        replay_buffer.push(ReplayEntry::User(lines));
+                    }
+                }
+                "agent_message_chunk" => {
+                    let lines = collect_text_lines_from_value(update);
+                    if !lines.is_empty() {
+                        replay_buffer.push(ReplayEntry::Agent(lines));
+                    }
+                }
+                "agent_thought_chunk" => {
+                    let lines = collect_text_lines_from_value(update);
+                    if !lines.is_empty() {
+                        replay_buffer.push(ReplayEntry::Thinking(lines));
+                    }
+                }
+                "tool_call" => {
+                    let title = update
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .unwrap_or("tool")
+                        .to_string();
+                    let status = update
+                        .get("status")
+                        .and_then(Value::as_str)
+                        .unwrap_or("pending")
+                        .to_string();
+                    replay_buffer.push(ReplayEntry::ToolCall { title, status });
+                }
+                "tool_call_update" => {
+                    let lines = collect_text_lines_from_value(update);
+                    if !lines.is_empty() {
+                        replay_buffer.push(ReplayEntry::ToolResult(lines));
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -545,11 +570,17 @@ impl Drop for AcpStdioClient {
     }
 }
 
-fn collect_text_lines_from_value(value: &Value, output: &mut Vec<String>) {
+fn collect_text_lines_from_value(value: &Value) -> Vec<String> {
+    let mut output = Vec::new();
+    collect_text_lines_recursive(value, &mut output);
+    output
+}
+
+fn collect_text_lines_recursive(value: &Value, output: &mut Vec<String>) {
     match value {
         Value::Array(values) => {
             for value in values {
-                collect_text_lines_from_value(value, output);
+                collect_text_lines_recursive(value, output);
             }
         }
         Value::Object(values) => {
@@ -557,7 +588,7 @@ fn collect_text_lines_from_value(value: &Value, output: &mut Vec<String>) {
                 append_text_lines(text, output);
             }
             for value in values.values() {
-                collect_text_lines_from_value(value, output);
+                collect_text_lines_recursive(value, output);
             }
         }
         _ => {}

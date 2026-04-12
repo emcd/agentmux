@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use agentmux::acp::AcpStdioClient;
+use agentmux::acp::{AcpStdioClient, ReplayEntry};
 use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
     execute,
@@ -29,6 +29,8 @@ struct Message {
 enum MessageRole {
     User,
     Assistant,
+    Thinking,
+    Tool,
     System,
 }
 
@@ -108,15 +110,30 @@ impl App {
     }
 }
 
-fn replay_entries_to_messages(entries: Vec<(String, Vec<String>)>) -> Vec<Message> {
+fn replay_entries_to_messages(entries: Vec<ReplayEntry>) -> Vec<Message> {
     entries
         .into_iter()
-        .map(|(role, lines)| Message {
-            role: match role.as_str() {
-                "user" => MessageRole::User,
-                _ => MessageRole::Assistant,
+        .map(|entry| match entry {
+            ReplayEntry::User(lines) => Message {
+                role: MessageRole::User,
+                text: lines.join("\n"),
             },
-            text: lines.join("\n"),
+            ReplayEntry::Agent(lines) => Message {
+                role: MessageRole::Assistant,
+                text: lines.join("\n"),
+            },
+            ReplayEntry::Thinking(lines) => Message {
+                role: MessageRole::Thinking,
+                text: lines.join("\n"),
+            },
+            ReplayEntry::ToolCall { title, status } => Message {
+                role: MessageRole::Tool,
+                text: format!("{title}: {status}"),
+            },
+            ReplayEntry::ToolResult(lines) => Message {
+                role: MessageRole::Tool,
+                text: lines.join("\n"),
+            },
         })
         .collect()
 }
@@ -384,29 +401,36 @@ fn draw(frame: &mut Frame, app: &App) {
     let assistant_label_style = Style::default()
         .fg(Color::Green)
         .add_modifier(Modifier::BOLD);
+    let thinking_label_style = Style::default()
+        .fg(Color::DarkGray)
+        .add_modifier(Modifier::ITALIC);
+    let tool_label_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
     let system_label_style = Style::default()
         .fg(Color::DarkGray)
         .add_modifier(Modifier::BOLD);
 
     let user_body_style = Style::default().fg(Color::White);
     let assistant_body_style = Style::default().fg(Color::Rgb(180, 180, 180));
+    let thinking_body_style = Style::default()
+        .fg(Color::Rgb(120, 120, 120))
+        .add_modifier(Modifier::ITALIC);
+    let tool_body_style = Style::default().fg(Color::Rgb(180, 180, 100));
     let system_body_style = Style::default().fg(Color::DarkGray);
 
     let history_lines: Vec<Line> = app
         .messages
         .iter()
         .flat_map(|msg| {
-            let (label_style, body_style) = match msg.role {
-                MessageRole::User => (user_label_style, user_body_style),
-                MessageRole::Assistant => (assistant_label_style, assistant_body_style),
-                MessageRole::System => (system_label_style, system_body_style),
+            let (label, label_style, body_style) = match msg.role {
+                MessageRole::User => ("you  ", user_label_style, user_body_style),
+                MessageRole::Assistant => ("acp  ", assistant_label_style, assistant_body_style),
+                MessageRole::Thinking => ("think", thinking_label_style, thinking_body_style),
+                MessageRole::Tool => ("tool ", tool_label_style, tool_body_style),
+                MessageRole::System => ("sys  ", system_label_style, system_body_style),
             };
             msg.text.split('\n').enumerate().map(move |(i, line)| {
-                let (label, label_width) = match msg.role {
-                    MessageRole::User => ("you  ", 5),
-                    MessageRole::Assistant => ("acp  ", 5),
-                    MessageRole::System => ("sys  ", 5),
-                };
                 if i == 0 {
                     Line::from(vec![
                         Span::styled(label, label_style),
@@ -414,7 +438,7 @@ fn draw(frame: &mut Frame, app: &App) {
                     ])
                 } else {
                     Line::from(vec![
-                        Span::raw(" ".repeat(label_width)),
+                        Span::raw("      "),
                         Span::styled(line.to_string(), body_style),
                     ])
                 }
