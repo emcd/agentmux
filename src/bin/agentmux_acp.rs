@@ -133,7 +133,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     // Spawn ACP agent and initialize
-    let mut client = AcpStdioClient::spawn(&command, &cwd)
+    let mut client = AcpStdioClient::spawn(&command, &cwd, &[])
         .map_err(|e| anyhow::anyhow!("Failed to spawn ACP agent: {e}"))?;
 
     let _init_result = client

@@ -78,6 +78,8 @@ pub struct AcpTargetConfiguration {
     pub turn_timeout_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub headers: Vec<NameValueEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub environment: Vec<NameValueEntry>,
 }
 
 /// Configuration for one named bundle.
@@ -171,13 +173,15 @@ struct RawAcpTarget {
     turn_timeout_ms: Option<u64>,
     #[serde(default)]
     headers: Vec<NameValueEntry>,
+    #[serde(default)]
+    environment: Vec<NameValueEntry>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct NameValueEntry {
-    name: String,
-    value: String,
+    pub name: String,
+    pub value: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -214,6 +218,7 @@ struct AcpTarget {
     url: Option<String>,
     turn_timeout_ms: Option<u64>,
     headers: Vec<NameValueEntry>,
+    environment: Vec<NameValueEntry>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -725,6 +730,7 @@ fn validate_loaded_configuration(
                 url: target.url.clone(),
                 turn_timeout_ms: target.turn_timeout_ms,
                 headers: target.headers.clone(),
+                environment: target.environment.clone(),
             }),
         };
 
@@ -1088,12 +1094,15 @@ fn validate_acp_target(
         }
     }
 
+    validate_name_value_entries(&target.environment, coders_path, coder_id, "environment")?;
+
     Ok(AcpTarget {
         channel: target.channel,
         command: target.command,
         url: target.url,
         turn_timeout_ms: target.turn_timeout_ms,
         headers: target.headers,
+        environment: target.environment,
     })
 }
 

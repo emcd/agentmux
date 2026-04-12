@@ -5,6 +5,57 @@ use agentmux::configuration::{TargetConfiguration, load_bundle_configuration};
 use super::helpers::*;
 
 #[test]
+fn loads_acp_coder_with_environment() {
+    let temporary = TempDir::new().expect("temporary");
+    let root = write_config(
+        &temporary,
+        "alpha",
+        r#"
+format-version = 1
+
+[[coders]]
+id = "acp"
+
+[coders.acp]
+channel = "stdio"
+command = "opencode acp"
+
+[[coders.acp.environment]]
+name = "ACP_TOKEN"
+value = "secret-123"
+
+[[coders.acp.environment]]
+name = "LOG_LEVEL"
+value = "debug"
+"#,
+        &format!(
+            r#"
+format-version = 1
+
+[[sessions]]
+id = "a"
+name = "a"
+directory = "{dir}"
+coder = "acp"
+"#,
+            dir = temporary.path().display()
+        ),
+    );
+
+    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    assert_eq!(loaded.members.len(), 1);
+    let TargetConfiguration::Acp(ref acp) = loaded.members[0].target else {
+        panic!("expected ACP target configuration");
+    };
+    assert_eq!(acp.command.as_deref(), Some("opencode acp"));
+    assert_eq!(acp.environment.len(), 2);
+    assert_eq!(acp.environment[0].name, "ACP_TOKEN");
+    assert_eq!(acp.environment[0].value, "secret-123");
+    assert_eq!(acp.environment[1].name, "LOG_LEVEL");
+    assert_eq!(acp.environment[1].value, "debug");
+}
+
+#[test]
 fn rejects_invalid_prompt_regex() {
     let temporary = TempDir::new().expect("temporary");
     let root = write_config(

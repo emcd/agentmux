@@ -62,15 +62,31 @@ pub struct AcpStdioClient {
 }
 
 impl AcpStdioClient {
-    pub fn spawn(command_template: &str, working_directory: &Path) -> Result<Self, String> {
-        let mut command = Command::new("sh");
+    // Spawn the ACP agent directly (no shell middleman). The command
+    // template is split on whitespace. Environment variables are passed
+    // explicitly via the `environment` parameter.
+    //
+    // TODO: Consider shell-word parsing (e.g. shell-words crate) for
+    //       templates containing metacharacters ($, |, &&, backticks).
+    pub fn spawn(
+        command_template: &str,
+        working_directory: &Path,
+        environment: &[(String, String)],
+    ) -> Result<Self, String> {
+        let parts: Vec<&str> = command_template.split_whitespace().collect();
+        if parts.is_empty() {
+            return Err("ACP command template is empty".to_string());
+        }
+        let mut command = Command::new(parts[0]);
         command
-            .arg("-lc")
-            .arg(command_template)
+            .args(&parts[1..])
             .current_dir(working_directory)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        for (key, value) in environment {
+            command.env(key, value);
+        }
         let mut child = command
             .spawn()
             .map_err(|source| format!("spawn ACP stdio command failed: {source}"))?;

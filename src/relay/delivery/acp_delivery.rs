@@ -259,7 +259,15 @@ fn initialize_persistent_acp_worker_runtime(
                     "ACP stdio target requires command",
                 )));
             };
-            AcpStdioClient::spawn(command, working_directory).map_err(|reason| {
+            AcpStdioClient::spawn(
+                command,
+                working_directory,
+                &acp.environment
+                    .iter()
+                    .map(|e| (e.name.clone(), e.value.clone()))
+                    .collect::<Vec<_>>(),
+            )
+            .map_err(|reason| {
                 Box::new(failed_result(
                     target_session.to_string(),
                     message_id.to_string(),

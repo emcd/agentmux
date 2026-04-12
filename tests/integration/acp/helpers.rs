@@ -161,34 +161,75 @@ pub(super) fn write_configuration(root: &Path, options: &AcpStubOptions) -> (Pat
     let script_path = root.join("acp_stub.sh");
     let log_path = root.join("acp_requests.log");
     write_acp_stub(&script_path);
-    let command = format!(
-        "ACP_LOG_FILE={} FAIL_INITIALIZE={} FAIL_LOAD={} FAIL_NEW={} FAIL_PROMPT={} DISCONNECT_ON_PROMPT={} REQUEST_PERMISSION_ON_PROMPT={} LOAD_CAPABILITY={} PROMPT_CAPABILITY={} STOP_REASON={} PROMPT_DELAY_SEC={} UPDATE_COUNT={} UPDATE_AFTER_RESPONSE={} UPDATE_DELAY_MS={} NEW_SESSION_ID=sess-generated {}",
-        log_path.display(),
-        if options.fail_initialize { "1" } else { "0" },
-        if options.fail_load { "1" } else { "0" },
-        if options.fail_new { "1" } else { "0" },
-        if options.fail_prompt { "1" } else { "0" },
-        options.disconnect_on_prompt.as_deref().unwrap_or("none"),
-        if options.request_permission_on_prompt {
-            "1"
-        } else {
-            "0"
-        },
-        as_json_boolean(options.load_capability),
-        as_json_boolean(options.prompt_capability),
-        options.stop_reason,
-        options.prompt_delay_sec,
-        options.update_count,
-        if options.update_after_response {
-            "1"
-        } else {
-            "0"
-        },
-        options.update_delay_ms,
-        script_path.display(),
-    );
 
-    let escaped_command = command.replace('\\', "\\\\").replace('"', "\\\"");
+    let env_entries: Vec<(&str, String)> = vec![
+        ("ACP_LOG_FILE", log_path.display().to_string()),
+        (
+            "FAIL_INITIALIZE",
+            if options.fail_initialize { "1" } else { "0" }.to_string(),
+        ),
+        (
+            "FAIL_LOAD",
+            if options.fail_load { "1" } else { "0" }.to_string(),
+        ),
+        (
+            "FAIL_NEW",
+            if options.fail_new { "1" } else { "0" }.to_string(),
+        ),
+        (
+            "FAIL_PROMPT",
+            if options.fail_prompt { "1" } else { "0" }.to_string(),
+        ),
+        (
+            "DISCONNECT_ON_PROMPT",
+            options
+                .disconnect_on_prompt
+                .as_deref()
+                .unwrap_or("none")
+                .to_string(),
+        ),
+        (
+            "REQUEST_PERMISSION_ON_PROMPT",
+            if options.request_permission_on_prompt {
+                "1"
+            } else {
+                "0"
+            }
+            .to_string(),
+        ),
+        (
+            "LOAD_CAPABILITY",
+            as_json_boolean(options.load_capability).to_string(),
+        ),
+        (
+            "PROMPT_CAPABILITY",
+            as_json_boolean(options.prompt_capability).to_string(),
+        ),
+        ("STOP_REASON", options.stop_reason.clone()),
+        ("PROMPT_DELAY_SEC", options.prompt_delay_sec.to_string()),
+        ("UPDATE_COUNT", options.update_count.to_string()),
+        (
+            "UPDATE_AFTER_RESPONSE",
+            if options.update_after_response {
+                "1"
+            } else {
+                "0"
+            }
+            .to_string(),
+        ),
+        ("UPDATE_DELAY_MS", options.update_delay_ms.to_string()),
+        ("NEW_SESSION_ID", "sess-generated".to_string()),
+    ];
+
+    let mut env_toml = String::new();
+    for (name, value) in &env_entries {
+        let escaped_value = value.replace('\\', "\\\\").replace('"', "\\\"");
+        env_toml.push_str(&format!(
+            "\n[[coders.acp.environment]]\nname = \"{name}\"\nvalue = \"{escaped_value}\"\n"
+        ));
+    }
+
+    let command = script_path.display().to_string();
     let coder_timeout_line = options
         .coder_turn_timeout_ms
         .map(|value| format!("turn-timeout-ms = {value}\n"))
@@ -201,9 +242,8 @@ id = "acp"
 
 [coders.acp]
 channel = "stdio"
-command = "{escaped_command}"
-{coder_timeout_line}
-"#
+command = "{command}"
+{coder_timeout_line}{env_toml}"#
     );
     fs::write(config_root.join("coders.toml"), coders).expect("write coders");
 
