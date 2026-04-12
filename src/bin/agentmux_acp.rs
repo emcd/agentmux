@@ -45,6 +45,10 @@ struct App {
     status: String,
     prompt_active: bool,
     should_quit: bool,
+    scroll_offset: usize,
+    history: Vec<String>,
+    history_index: Option<usize>,
+    input_draft: String,
 }
 
 impl App {
@@ -56,6 +60,10 @@ impl App {
             status: "Ready".to_string(),
             prompt_active: false,
             should_quit: false,
+            scroll_offset: 0,
+            history: Vec::new(),
+            history_index: None,
+            input_draft: String::new(),
         }
     }
 
@@ -68,12 +76,16 @@ impl App {
         if input.is_empty() || self.prompt_active {
             return;
         }
+        self.history.push(input.clone());
+        self.history_index = None;
+        self.input_draft.clear();
         self.add_message(Message {
             role: MessageRole::User,
-            text: input.clone(),
+            text: input,
         });
         self.input.clear();
         self.prompt_active = true;
+        self.scroll_offset = 0;
         self.status = "Processing...".to_string();
     }
 
@@ -239,10 +251,43 @@ fn run_tui(
                 }
                 KeyCode::Backspace => {
                     app.input.pop();
+                    app.history_index = None;
                 }
                 KeyCode::Char(c) => {
                     app.input.push(c);
+                    app.history_index = None;
                 }
+                KeyCode::PageUp => {
+                    app.scroll_offset = app.scroll_offset.saturating_add(10);
+                }
+                KeyCode::PageDown => {
+                    app.scroll_offset = app.scroll_offset.saturating_sub(10);
+                }
+                KeyCode::Up => {
+                    if !app.history.is_empty() {
+                        let new_index = match app.history_index {
+                            None => app.history.len() - 1,
+                            Some(idx) => idx.saturating_sub(1),
+                        };
+                        if app.history_index.is_none() {
+                            app.input_draft = app.input.clone();
+                        }
+                        app.history_index = Some(new_index);
+                        app.input = app.history[new_index].clone();
+                    }
+                }
+                KeyCode::Down => match app.history_index {
+                    Some(idx) if idx + 1 < app.history.len() => {
+                        let new_index = idx + 1;
+                        app.history_index = Some(new_index);
+                        app.input = app.history[new_index].clone();
+                    }
+                    Some(_) => {
+                        app.history_index = None;
+                        app.input = app.input_draft.clone();
+                    }
+                    None => {}
+                },
                 _ => {}
             }
         }
@@ -324,15 +369,26 @@ fn draw(frame: &mut Frame, app: &App) {
         })
         .collect();
 
-    let visible_start = if history_lines.len() > (chunks[1].height as usize).saturating_sub(2) {
-        history_lines.len() - (chunks[1].height as usize).saturating_sub(2)
+    let viewport = (chunks[1].height as usize).saturating_sub(2);
+    let end = if app.scroll_offset > 0 {
+        history_lines.len().saturating_sub(app.scroll_offset)
     } else {
-        0
+        history_lines.len()
     };
-    let visible_lines: Vec<Line> = history_lines[visible_start..].to_vec();
+    let start = end.saturating_sub(viewport);
+    let visible_lines: Vec<Line> = history_lines[start..end].to_vec();
+
+    let title = if app.scroll_offset > 0 {
+        format!(
+            " Scrollback ({} lines up) — PgDn to bottom ",
+            app.scroll_offset
+        )
+    } else {
+        " History (PgUp/PgDn) ".to_string()
+    };
 
     let history = Paragraph::new(visible_lines)
-        .block(Block::default().borders(Borders::TOP))
+        .block(Block::default().borders(Borders::TOP).title(title))
         .wrap(Wrap { trim: false });
     frame.render_widget(history, chunks[1]);
 
@@ -342,7 +398,7 @@ fn draw(frame: &mut Frame, app: &App) {
         .block(
             Block::default()
                 .borders(Borders::TOP)
-                .title(" Send (Enter) | Quit (Ctrl+C) "),
+                .title(" Send (Enter) | History (Up/Down) | Quit (Ctrl+C) "),
         )
         .style(Style::default().fg(Color::White));
     frame.render_widget(input, chunks[2]);

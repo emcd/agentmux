@@ -13,6 +13,7 @@ use super::PROTOCOL_VERSION;
 
 const ACP_CLIENT_NAME: &str = "agentmux-relay";
 const ACP_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+const ACP_READ_BUFFER_MAX: usize = 1024 * 1024; // 1 MiB — fail fast on pathological peers
 const ACP_LOAD_POST_RESPONSE_DRAIN_TIMEOUT: Duration = Duration::from_millis(200);
 // Prompt responses can arrive before follow-on `session/update` notifications.
 // Keep a small post-response drain window so late updates are still observed
@@ -430,7 +431,15 @@ impl AcpStdioClient {
                         "ACP peer closed stdout (exit_code={exit_code:?})"
                     )));
                 }
-                Ok(count) => self.read_buffer.extend_from_slice(&chunk[..count]),
+                Ok(count) => {
+                    let end = self.read_buffer.len() + count;
+                    if end > ACP_READ_BUFFER_MAX {
+                        return Err(AcpRequestError::Failed(format!(
+                            "ACP read buffer exceeded {ACP_READ_BUFFER_MAX} bytes — peer may be misbehaving"
+                        )));
+                    }
+                    self.read_buffer.extend_from_slice(&chunk[..count]);
+                }
                 Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
                     if let Some(limit) = deadline
                         && Instant::now() >= limit
