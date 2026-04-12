@@ -1,5 +1,6 @@
 //! Shared primitives for agentmux executables.
 
+pub mod acp;
 pub mod commands;
 pub mod configuration;
 pub mod envelope;

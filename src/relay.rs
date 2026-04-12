@@ -27,8 +27,6 @@ mod lifecycle;
 mod stream;
 mod tmux;
 
-pub(super) const ACP_PROTOCOL_VERSION: u32 = 1;
-
 use self::authorization::load_authorization_context;
 use self::delivery::QuiescenceOptions;
 use self::stream::{

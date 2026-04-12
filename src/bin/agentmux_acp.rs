@@ -1,0 +1,349 @@
+use std::{
+    io::{self, BufRead, BufReader},
+    path::PathBuf,
+    sync::mpsc,
+    thread,
+    time::Duration,
+};
+
+use agentmux::acp::AcpStdioClient;
+use crossterm::{
+    event::{self, Event, KeyCode, KeyModifiers},
+    execute,
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+};
+use ratatui::{
+    Frame, Terminal,
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph, Wrap},
+};
+
+struct Message {
+    role: MessageRole,
+    text: String,
+}
+
+enum MessageRole {
+    User,
+    Assistant,
+    System,
+}
+
+enum AppEvent {
+    Message(Message),
+    PromptComplete(String),
+    Error(String),
+}
+
+struct App {
+    messages: Vec<Message>,
+    input: String,
+    session_id: String,
+    status: String,
+    prompt_active: bool,
+    should_quit: bool,
+}
+
+impl App {
+    fn new(session_id: String) -> Self {
+        Self {
+            messages: Vec::new(),
+            input: String::new(),
+            session_id,
+            status: "Ready".to_string(),
+            prompt_active: false,
+            should_quit: false,
+        }
+    }
+
+    fn add_message(&mut self, message: Message) {
+        self.messages.push(message);
+    }
+
+    fn send_prompt(&mut self) {
+        let input = self.input.trim().to_string();
+        if input.is_empty() || self.prompt_active {
+            return;
+        }
+        self.add_message(Message {
+            role: MessageRole::User,
+            text: input.clone(),
+        });
+        self.input.clear();
+        self.prompt_active = true;
+        self.status = "Processing...".to_string();
+    }
+
+    fn handle_event(&mut self, event: AppEvent) {
+        match event {
+            AppEvent::Message(msg) => self.add_message(msg),
+            AppEvent::PromptComplete(stop_reason) => {
+                self.prompt_active = false;
+                self.status = format!("Ready (last: {stop_reason})");
+            }
+            AppEvent::Error(err) => {
+                self.prompt_active = false;
+                self.add_message(Message {
+                    role: MessageRole::System,
+                    text: format!("Error: {err}"),
+                });
+                self.status = "Error".to_string();
+            }
+        }
+    }
+}
+
+fn main() -> anyhow::Result<()> {
+    let mut command = None;
+    let mut session_id = None;
+    let mut working_directory = None;
+    let mut args = std::env::args().skip(1);
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--session-id" => session_id = args.next(),
+            "-C" | "--cd" | "--current-directory" => working_directory = args.next(),
+            _ if arg.starts_with('-') => {
+                eprintln!("unknown option: {arg}");
+                std::process::exit(1);
+            }
+            _ => command = Some(arg),
+        }
+    }
+
+    let command = command.unwrap_or_else(|| "opencode acp".to_string());
+    let cwd = match working_directory {
+        Some(dir) => PathBuf::from(dir),
+        None => std::env::current_dir()?,
+    };
+
+    // Spawn ACP agent and initialize
+    let mut client = AcpStdioClient::spawn(&command, &cwd)
+        .map_err(|e| anyhow::anyhow!("Failed to spawn ACP agent: {e}"))?;
+
+    let _init_result = client
+        .initialize()
+        .map_err(|e| anyhow::anyhow!("ACP initialize failed: {e}"))?;
+
+    let session_id = if let Some(id) = session_id {
+        client
+            .load_session(&id, &cwd)
+            .map_err(|e| anyhow::anyhow!("ACP session/load failed: {e}"))?;
+        id
+    } else {
+        client
+            .new_session(&cwd)
+            .map_err(|e| anyhow::anyhow!("ACP session/new failed: {e}"))?
+    };
+
+    // Set up terminal
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    // Run TUI
+    let result = run_tui(&mut terminal, client, &session_id);
+
+    // Restore terminal
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+
+    result
+}
+
+fn run_tui(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    mut client: AcpStdioClient,
+    session_id: &str,
+) -> anyhow::Result<()> {
+    let mut app = App::new(session_id.to_string());
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+
+    // Spawn stderr reader for ACP agent diagnostics
+    if let Some(stderr) = client.child_stderr() {
+        let tx_stderr = tx.clone();
+        thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines() {
+                match line {
+                    Ok(line) if !line.trim().is_empty() => {
+                        let _ = tx_stderr.send(AppEvent::Message(Message {
+                            role: MessageRole::System,
+                            text: format!("stderr: {line}"),
+                        }));
+                    }
+                    _ => break,
+                }
+            }
+        });
+    }
+
+    app.add_message(Message {
+        role: MessageRole::System,
+        text: format!("Connected. Session: {session_id}"),
+    });
+
+    loop {
+        terminal.draw(|frame| draw(frame, &app))?;
+
+        if event::poll(Duration::from_millis(50))?
+            && let Event::Key(key) = event::read()?
+        {
+            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+                break;
+            }
+            if app.prompt_active {
+                continue;
+            }
+            match key.code {
+                KeyCode::Enter => {
+                    let prompt_text = app.input.clone();
+                    app.send_prompt();
+                    // Handle prompt synchronously for MVP
+                    // (TUI freezes during prompt — acceptable for debugging use case)
+                    let session = session_id.to_string();
+                    let result = client.prompt(
+                        &session,
+                        &prompt_text,
+                        Some(Duration::from_secs(120)),
+                        None,
+                        None,
+                    );
+                    match result {
+                        Ok(completion) => {
+                            let snapshot = client.take_snapshot_lines();
+                            for line in snapshot {
+                                let _ = tx.send(AppEvent::Message(Message {
+                                    role: MessageRole::Assistant,
+                                    text: line,
+                                }));
+                            }
+                            let _ = tx.send(AppEvent::PromptComplete(completion.stop_reason));
+                        }
+                        Err(e) => {
+                            let _ = tx.send(AppEvent::Error(format!("{e:?}")));
+                        }
+                    }
+                    // Process events accumulated during prompt
+                    while let Ok(event) = rx.try_recv() {
+                        app.handle_event(event);
+                    }
+                    continue;
+                }
+                KeyCode::Backspace => {
+                    app.input.pop();
+                }
+                KeyCode::Char(c) => {
+                    app.input.push(c);
+                }
+                _ => {}
+            }
+        }
+
+        // Process any accumulated events
+        while let Ok(event) = rx.try_recv() {
+            app.handle_event(event);
+        }
+
+        if app.should_quit {
+            break;
+        }
+    }
+
+    client.kill();
+    Ok(())
+}
+
+fn draw(frame: &mut Frame, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(3),
+        ])
+        .split(frame.area());
+
+    // Status bar
+    let status = Paragraph::new(Line::from(vec![
+        Span::styled(
+            format!(
+                " Session: {} ",
+                &app.session_id[..std::cmp::min(12, app.session_id.len())]
+            ),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            format!("Status: {} ", app.status),
+            Style::default().fg(Color::Green),
+        ),
+        if app.prompt_active {
+            Span::styled(" [busy]", Style::default().fg(Color::Yellow))
+        } else {
+            Span::raw("")
+        },
+    ]));
+    frame.render_widget(status, chunks[0]);
+
+    // Conversation history
+    let history_lines: Vec<Line> = app
+        .messages
+        .iter()
+        .flat_map(|msg| {
+            let (prefix, style) = match msg.role {
+                MessageRole::User => (
+                    "[you] ",
+                    Style::default()
+                        .fg(Color::Blue)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                MessageRole::Assistant => (
+                    "[acp] ",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                MessageRole::System => ("[sys] ", Style::default().fg(Color::DarkGray)),
+            };
+            msg.text.lines().map(move |line| {
+                Line::from(vec![
+                    Span::styled(prefix.to_string(), style),
+                    Span::raw(line.to_string()),
+                ])
+            })
+        })
+        .collect();
+
+    let visible_start = if history_lines.len() > (chunks[1].height as usize).saturating_sub(2) {
+        history_lines.len() - (chunks[1].height as usize).saturating_sub(2)
+    } else {
+        0
+    };
+    let visible_lines: Vec<Line> = history_lines[visible_start..].to_vec();
+
+    let history = Paragraph::new(visible_lines)
+        .block(Block::default().borders(Borders::TOP))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(history, chunks[1]);
+
+    // Input area
+    let input_text = format!("{}_", app.input);
+    let input = Paragraph::new(input_text)
+        .block(
+            Block::default()
+                .borders(Borders::TOP)
+                .title(" Send (Enter) | Quit (Ctrl+C) "),
+        )
+        .style(Style::default().fg(Color::White));
+    frame.render_widget(input, chunks[2]);
+}

@@ -39,5 +39,9 @@ tokio = { version = "1.44.1", features = ["macros", "process", "rt-multi-thread"
 toml = "0.8.23"
 uuid = { version = "1.18.1", features = ["v4"] }
 
+[[bin]]
+name = "agentmux-acp"
+path = "src/bin/agentmux_acp.rs"
+
 [dev-dependencies]
 tempfile = "3.18.0"
