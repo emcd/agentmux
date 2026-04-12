@@ -140,15 +140,23 @@ fn main() -> anyhow::Result<()> {
         .initialize()
         .map_err(|e| anyhow::anyhow!("ACP initialize failed: {e}"))?;
 
-    let session_id = if let Some(id) = session_id {
-        client
+    let (session_id, initial_messages) = if let Some(id) = session_id {
+        let replay_lines = client
             .load_session(&id, &cwd)
             .map_err(|e| anyhow::anyhow!("ACP session/load failed: {e}"))?;
-        id
+        let mut msgs = Vec::new();
+        if !replay_lines.is_empty() {
+            msgs.push(Message {
+                role: MessageRole::Assistant,
+                text: replay_lines.join("\n"),
+            });
+        }
+        (id, msgs)
     } else {
-        client
+        let id = client
             .new_session(&cwd)
-            .map_err(|e| anyhow::anyhow!("ACP session/new failed: {e}"))?
+            .map_err(|e| anyhow::anyhow!("ACP session/new failed: {e}"))?;
+        (id, Vec::new())
     };
 
     // Set up terminal
@@ -159,7 +167,7 @@ fn main() -> anyhow::Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // Run TUI
-    let result = run_tui(&mut terminal, client, &session_id);
+    let result = run_tui(&mut terminal, client, &session_id, initial_messages);
 
     // Restore terminal
     disable_raw_mode()?;
@@ -184,6 +192,7 @@ fn run_tui(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     mut client: AcpStdioClient,
     session_id: &str,
+    initial_messages: Vec<Message>,
 ) -> anyhow::Result<()> {
     let mut app = App::new(session_id.to_string());
 
@@ -206,6 +215,10 @@ fn run_tui(
                 }
             }
         });
+    }
+
+    for msg in initial_messages {
+        app.add_message(msg);
     }
 
     app.add_message(Message {

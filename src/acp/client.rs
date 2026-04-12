@@ -179,7 +179,7 @@ impl AcpStdioClient {
         &mut self,
         session_id: &str,
         working_directory: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<String>, String> {
         let _ = self
             .request(
                 "session/load",
@@ -204,7 +204,7 @@ impl AcpStdioClient {
                 }
                 AcpRequestError::ConnectionClosed { reason, .. } => reason,
             })?;
-        Ok(())
+        Ok(self.take_snapshot_lines())
     }
 
     pub fn prompt<'a>(
