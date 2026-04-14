@@ -126,6 +126,7 @@ pub(super) fn deliver_one_target_acp(
             turn_timeout,
             Some(&mut on_dispatched),
             Some(&mut on_snapshot_lines),
+            None,
         );
         // Drop any in-memory buffered lines now that updates are persisted
         // incrementally while observed.

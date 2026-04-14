@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use agentmux::acp::{AcpStdioClient, ReplayEntry};
+use agentmux::acp::{AcpStdioClient, PermissionRequest, ReplayEntry};
 use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
     execute,
@@ -273,12 +273,19 @@ fn run_tui(
                     // Handle prompt synchronously for MVP
                     // (TUI freezes during prompt — acceptable for debugging use case)
                     let session = session_id.to_string();
+                    let mut permission_handler = |req: &PermissionRequest| -> Option<String> {
+                        disable_raw_mode().ok();
+                        let result = show_permission_menu(req);
+                        enable_raw_mode().ok();
+                        result
+                    };
                     let result = client.prompt(
                         &session,
                         &prompt_text,
                         Some(Duration::from_secs(120)),
                         None,
                         None,
+                        Some(&mut permission_handler),
                     );
                     match result {
                         Ok(completion) => {
@@ -507,4 +514,29 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
         remaining = remaining[wrap_at..].trim_start();
     }
     result
+}
+
+fn show_permission_menu(request: &PermissionRequest) -> Option<String> {
+    use std::io::{self, BufRead, Write};
+    let stderr = io::stderr();
+    let mut out = stderr.lock();
+    let _ = writeln!(out, "\n[Permission Required]");
+    let _ = writeln!(out, "Tool: {}", request.tool_call_title);
+    let _ = writeln!(out);
+    for (i, opt) in request.options.iter().enumerate() {
+        let _ = writeln!(out, "  [{}] {} ({})", i + 1, opt.name, opt.kind);
+    }
+    let _ = writeln!(out);
+    let _ = write!(out, "Select option (1-{}): ", request.options.len());
+    let _ = out.flush();
+    let stdin = io::stdin();
+    let mut input = String::new();
+    if stdin.lock().read_line(&mut input).is_ok()
+        && let Ok(idx) = input.trim().parse::<usize>()
+        && idx >= 1
+        && idx <= request.options.len()
+    {
+        return Some(request.options[idx - 1].option_id.clone());
+    }
+    None
 }

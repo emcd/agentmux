@@ -9,7 +9,7 @@ use std::{
 
 use serde_json::{Value, json};
 
-use super::{PROTOCOL_VERSION, ReplayEntry};
+use super::{PROTOCOL_VERSION, PermissionOption, PermissionRequest, ReplayEntry};
 
 const ACP_CLIENT_NAME: &str = "agentmux-relay";
 const ACP_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -22,12 +22,14 @@ const ACP_PROMPT_POST_RESPONSE_DRAIN_TIMEOUT: Duration = Duration::from_millis(2
 
 type DispatchObserver<'a> = &'a mut dyn FnMut();
 type SnapshotObserver<'a> = &'a mut dyn FnMut(&[String]) -> Result<(), String>;
+pub type PermissionHandler<'a> = &'a mut dyn FnMut(&PermissionRequest) -> Option<String>;
 
 struct RequestObservers<'a> {
     prompt_session_id: Option<String>,
     post_response_drain_timeout: Option<Duration>,
     on_dispatched: Option<DispatchObserver<'a>>,
     on_snapshot_lines: Option<SnapshotObserver<'a>>,
+    on_permission_request: Option<PermissionHandler<'a>>,
 }
 
 #[derive(Debug)]
@@ -134,6 +136,7 @@ impl AcpStdioClient {
                 post_response_drain_timeout: None,
                 on_dispatched: None,
                 on_snapshot_lines: None,
+                on_permission_request: None,
             },
             None,
         )
@@ -161,6 +164,7 @@ impl AcpStdioClient {
                     post_response_drain_timeout: Some(ACP_LOAD_POST_RESPONSE_DRAIN_TIMEOUT),
                     on_dispatched: None,
                     on_snapshot_lines: None,
+                    on_permission_request: None,
                 },
                 None,
             )
@@ -199,6 +203,7 @@ impl AcpStdioClient {
                     post_response_drain_timeout: Some(ACP_LOAD_POST_RESPONSE_DRAIN_TIMEOUT),
                     on_dispatched: None,
                     on_snapshot_lines: None,
+                    on_permission_request: None,
                 },
                 Some(&mut replay_buffer),
             )
@@ -223,6 +228,7 @@ impl AcpStdioClient {
         timeout: Option<Duration>,
         on_dispatched: Option<DispatchObserver<'a>>,
         on_snapshot_lines: Option<SnapshotObserver<'a>>,
+        on_permission_request: Option<PermissionHandler<'a>>,
     ) -> Result<AcpPromptCompletion, AcpRequestError> {
         let result = self.request(
             "session/prompt",
@@ -241,6 +247,7 @@ impl AcpStdioClient {
                 post_response_drain_timeout: Some(ACP_PROMPT_POST_RESPONSE_DRAIN_TIMEOUT),
                 on_dispatched,
                 on_snapshot_lines,
+                on_permission_request,
             },
             None,
         )?;
@@ -334,13 +341,12 @@ impl AcpStdioClient {
                 if let Some(buf) = replay_buffer.as_deref_mut() {
                     self.capture_replay_from_value(&decoded, buf);
                 }
-                if (observed_update
-                    || self.observe_permission_request_activity(
-                        &decoded,
-                        observers.prompt_session_id.as_deref(),
-                    ))
-                    && !first_activity_observed
-                {
+                let observed_permission = self.handle_permission_request(
+                    &decoded,
+                    observers.prompt_session_id.as_deref(),
+                    &mut observers.on_permission_request,
+                )?;
+                if (observed_update || observed_permission) && !first_activity_observed {
                     first_activity_observed = true;
                     read_timeout = None;
                 }
@@ -358,6 +364,7 @@ impl AcpStdioClient {
                     drain_timeout,
                     &mut observers.on_snapshot_lines,
                     replay_buffer.as_deref_mut(),
+                    &mut observers.on_permission_request,
                 )?
             {
                 first_activity_observed = true;
@@ -375,6 +382,7 @@ impl AcpStdioClient {
         timeout: Duration,
         on_snapshot_lines: &mut Option<SnapshotObserver<'_>>,
         mut replay_buffer: Option<&mut Vec<ReplayEntry>>,
+        on_permission_request: &mut Option<PermissionHandler<'_>>,
     ) -> Result<bool, AcpRequestError> {
         let mut observed = false;
         while let Ok(line) = self.read_response_line(Some(timeout)) {
@@ -390,7 +398,7 @@ impl AcpStdioClient {
                 self.capture_replay_from_value(&decoded, buf);
             }
             if self.capture_update_snapshot_lines(&decoded, session_id, on_snapshot_lines)?
-                || self.observe_permission_request_activity(&decoded, session_id)
+                || self.handle_permission_request(&decoded, session_id, on_permission_request)?
             {
                 observed = true;
             }
@@ -426,18 +434,81 @@ impl AcpStdioClient {
         Ok(true)
     }
 
-    fn observe_permission_request_activity(&self, value: &Value, session_id: Option<&str>) -> bool {
+    fn handle_permission_request(
+        &mut self,
+        value: &Value,
+        session_id: Option<&str>,
+        permission_handler: &mut Option<PermissionHandler<'_>>,
+    ) -> Result<bool, AcpRequestError> {
         if value.get("method").and_then(Value::as_str) != Some("session/request_permission") {
-            return false;
+            return Ok(false);
         }
         let params = value.get("params").unwrap_or(&Value::Null);
         if let Some(expected_session_id) = session_id
             && let Some(observed_session_id) = params.get("sessionId").and_then(Value::as_str)
             && observed_session_id != expected_session_id
         {
-            return false;
+            return Ok(false);
         }
-        true
+        let request_id = match value.get("id").and_then(Value::as_u64) {
+            Some(id) => id,
+            None => return Ok(true), // malformed but treat as observed
+        };
+        let tool_call_title = params
+            .get("toolCall")
+            .and_then(|tc| tc.get("title"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown tool")
+            .to_string();
+        let options: Vec<PermissionOption> = params
+            .get("options")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|opt| {
+                        Some(PermissionOption {
+                            option_id: opt.get("optionId")?.as_str()?.to_string(),
+                            name: opt.get("name")?.as_str()?.to_string(),
+                            kind: opt
+                                .get("kind")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let request = PermissionRequest {
+            request_id,
+            tool_call_title,
+            options: options.clone(),
+        };
+        let selected = if let Some(handler) = permission_handler.as_mut() {
+            handler(&request)
+        } else {
+            None
+        };
+        let outcome = match selected {
+            Some(option_id) => json!({ "outcome": "selected", "optionId": option_id }),
+            None => json!({ "outcome": "cancelled" }),
+        };
+        let response = serde_json::to_string(&json!({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": { "outcome": outcome }
+        }))
+        .map_err(|source| {
+            AcpRequestError::Failed(format!("serialize permission response failed: {source}"))
+        })?;
+        self.stdin
+            .write_all(response.as_bytes())
+            .and_then(|_| self.stdin.write_all(b"\n"))
+            .and_then(|_| self.stdin.flush())
+            .map_err(|source| {
+                AcpRequestError::Failed(format!("write permission response failed: {source}"))
+            })?;
+        Ok(true)
     }
 
     fn capture_replay_from_value(&mut self, value: &Value, replay_buffer: &mut Vec<ReplayEntry>) {
