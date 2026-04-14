@@ -30,7 +30,8 @@ enum MessageRole {
     User,
     Assistant,
     Thinking,
-    Tool,
+    ToolCall,
+    ToolResult,
     System,
 }
 
@@ -127,11 +128,11 @@ fn replay_entries_to_messages(entries: Vec<ReplayEntry>) -> Vec<Message> {
                 text: lines.join("\n"),
             },
             ReplayEntry::ToolCall { title, status } => Message {
-                role: MessageRole::Tool,
-                text: format!("{title}: {status}"),
+                role: MessageRole::ToolCall,
+                text: format!("{title} ({status})"),
             },
             ReplayEntry::ToolResult(lines) => Message {
-                role: MessageRole::Tool,
+                role: MessageRole::ToolResult,
                 text: lines.join("\n"),
             },
         })
@@ -420,56 +421,31 @@ fn draw(frame: &mut Frame, app: &App) {
     let system_body_style = Style::default().fg(Color::DarkGray);
 
     let available_width = chunks[1].width.saturating_sub(2) as usize; // subtract block borders
-    let continuation_prefix = "      ";
 
     let history_lines: Vec<Line> = app
         .messages
         .iter()
         .flat_map(|msg| {
             let (label, label_style, body_style) = match msg.role {
-                MessageRole::User => ("you  ", user_label_style, user_body_style),
-                MessageRole::Assistant => ("acp  ", assistant_label_style, assistant_body_style),
-                MessageRole::Thinking => ("think", thinking_label_style, thinking_body_style),
-                MessageRole::Tool => ("tool ", tool_label_style, tool_body_style),
-                MessageRole::System => ("sys  ", system_label_style, system_body_style),
+                MessageRole::User => ("User:", user_label_style, user_body_style),
+                MessageRole::Assistant => ("Agent:", assistant_label_style, assistant_body_style),
+                MessageRole::Thinking => ("Cognition:", thinking_label_style, thinking_body_style),
+                MessageRole::ToolCall => ("Invocation:", tool_label_style, tool_body_style),
+                MessageRole::ToolResult => ("Result:", tool_label_style, tool_body_style),
+                MessageRole::System => ("System:", system_label_style, system_body_style),
             };
-            msg.text.split('\n').enumerate().flat_map(move |(i, line)| {
-                let prefix = if i == 0 { label } else { continuation_prefix };
-                let prefix_len = prefix.len();
-                let max_text_width = available_width.saturating_sub(prefix_len);
-                let mut lines = Vec::new();
-                let mut remaining = line;
-                let mut first = true;
-                while !remaining.is_empty() {
-                    if remaining.len() <= max_text_width {
-                        let prefix_str = if first { prefix } else { continuation_prefix };
-                        lines.push(Line::from(vec![
-                            Span::styled(
-                                prefix_str.to_string(),
-                                if first { label_style } else { Style::default() },
-                            ),
-                            Span::styled(remaining.to_string(), body_style),
-                        ]));
-                        break;
-                    }
-                    let wrap_at = if let Some(pos) = remaining[..max_text_width].rfind(' ') {
-                        pos
-                    } else {
-                        max_text_width
-                    };
-                    let prefix_str = if first { prefix } else { continuation_prefix };
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            prefix_str.to_string(),
-                            if first { label_style } else { Style::default() },
-                        ),
-                        Span::styled(remaining[..wrap_at].to_string(), body_style),
-                    ]));
-                    remaining = remaining[wrap_at..].trim_start();
-                    first = false;
+            let mut lines = Vec::new();
+            // Blank line separator before each message
+            lines.push(Line::raw(""));
+            // Label on its own line
+            lines.push(Line::from(Span::styled(label.to_string(), label_style)));
+            // Wrap body text to full available width
+            for text_line in msg.text.split('\n') {
+                for wrapped in wrap_text(text_line, available_width) {
+                    lines.push(Line::from(Span::styled(wrapped, body_style)));
                 }
-                lines
-            })
+            }
+            lines
         })
         .collect();
 
@@ -506,4 +482,29 @@ fn draw(frame: &mut Frame, app: &App) {
         .block(Block::default().borders(Borders::TOP).title(footer))
         .style(Style::default().fg(Color::White));
     frame.render_widget(input, chunks[2]);
+}
+
+fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    if width == 0 || text.is_empty() {
+        return vec![text.to_string()];
+    }
+    if text.len() <= width {
+        return vec![text.to_string()];
+    }
+    let mut result = Vec::new();
+    let mut remaining = text;
+    while !remaining.is_empty() {
+        if remaining.len() <= width {
+            result.push(remaining.to_string());
+            break;
+        }
+        let wrap_at = if let Some(pos) = remaining[..width].rfind(' ') {
+            pos
+        } else {
+            width
+        };
+        result.push(remaining[..wrap_at].to_string());
+        remaining = remaining[wrap_at..].trim_start();
+    }
+    result
 }
