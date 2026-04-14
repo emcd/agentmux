@@ -427,12 +427,12 @@ fn draw(frame: &mut Frame, app: &App) {
         .iter()
         .flat_map(|msg| {
             let (label, label_style, body_style) = match msg.role {
-                MessageRole::User => ("User:", user_label_style, user_body_style),
-                MessageRole::Assistant => ("Agent:", assistant_label_style, assistant_body_style),
-                MessageRole::Thinking => ("Cognition:", thinking_label_style, thinking_body_style),
-                MessageRole::ToolCall => ("Invocation:", tool_label_style, tool_body_style),
-                MessageRole::ToolResult => ("Result:", tool_label_style, tool_body_style),
-                MessageRole::System => ("System:", system_label_style, system_body_style),
+                MessageRole::User => ("[User]", user_label_style, user_body_style),
+                MessageRole::Assistant => ("[Agent]", assistant_label_style, assistant_body_style),
+                MessageRole::Thinking => ("[Cognition]", thinking_label_style, thinking_body_style),
+                MessageRole::ToolCall => ("[Invocation]", tool_label_style, tool_body_style),
+                MessageRole::ToolResult => ("[Result]", tool_label_style, tool_body_style),
+                MessageRole::System => ("[System]", system_label_style, system_body_style),
             };
             let mut lines = Vec::new();
             // Blank line separator before each message
