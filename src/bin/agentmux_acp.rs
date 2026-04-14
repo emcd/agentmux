@@ -18,7 +18,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph},
 };
 
 struct Message {
@@ -419,6 +419,9 @@ fn draw(frame: &mut Frame, app: &App) {
     let tool_body_style = Style::default().fg(Color::Rgb(180, 180, 100));
     let system_body_style = Style::default().fg(Color::DarkGray);
 
+    let available_width = chunks[1].width.saturating_sub(2) as usize; // subtract block borders
+    let continuation_prefix = "      ";
+
     let history_lines: Vec<Line> = app
         .messages
         .iter()
@@ -430,18 +433,42 @@ fn draw(frame: &mut Frame, app: &App) {
                 MessageRole::Tool => ("tool ", tool_label_style, tool_body_style),
                 MessageRole::System => ("sys  ", system_label_style, system_body_style),
             };
-            msg.text.split('\n').enumerate().map(move |(i, line)| {
-                if i == 0 {
-                    Line::from(vec![
-                        Span::styled(label, label_style),
-                        Span::styled(line.to_string(), body_style),
-                    ])
-                } else {
-                    Line::from(vec![
-                        Span::raw("      "),
-                        Span::styled(line.to_string(), body_style),
-                    ])
+            msg.text.split('\n').enumerate().flat_map(move |(i, line)| {
+                let prefix = if i == 0 { label } else { continuation_prefix };
+                let prefix_len = prefix.len();
+                let max_text_width = available_width.saturating_sub(prefix_len);
+                let mut lines = Vec::new();
+                let mut remaining = line;
+                let mut first = true;
+                while !remaining.is_empty() {
+                    if remaining.len() <= max_text_width {
+                        let prefix_str = if first { prefix } else { continuation_prefix };
+                        lines.push(Line::from(vec![
+                            Span::styled(
+                                prefix_str.to_string(),
+                                if first { label_style } else { Style::default() },
+                            ),
+                            Span::styled(remaining.to_string(), body_style),
+                        ]));
+                        break;
+                    }
+                    let wrap_at = if let Some(pos) = remaining[..max_text_width].rfind(' ') {
+                        pos
+                    } else {
+                        max_text_width
+                    };
+                    let prefix_str = if first { prefix } else { continuation_prefix };
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            prefix_str.to_string(),
+                            if first { label_style } else { Style::default() },
+                        ),
+                        Span::styled(remaining[..wrap_at].to_string(), body_style),
+                    ]));
+                    remaining = remaining[wrap_at..].trim_start();
+                    first = false;
                 }
+                lines
             })
         })
         .collect();
@@ -464,9 +491,8 @@ fn draw(frame: &mut Frame, app: &App) {
         " History (PgUp/PgDn) ".to_string()
     };
 
-    let history = Paragraph::new(visible_lines)
-        .block(Block::default().borders(Borders::TOP).title(title))
-        .wrap(Wrap { trim: false });
+    let history =
+        Paragraph::new(visible_lines).block(Block::default().borders(Borders::TOP).title(title));
     frame.render_widget(history, chunks[1]);
 
     // Input area
