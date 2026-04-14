@@ -225,6 +225,50 @@ impl AppState {
         self.move_message_cursor_vertical(1);
     }
 
+    pub fn move_message_cursor_left(&mut self) {
+        if self.focus != FocusField::Message || self.message_cursor_index == 0 {
+            return;
+        }
+        self.message_cursor_index =
+            previous_char_boundary(self.message_field.as_str(), self.message_cursor_index);
+        self.message_cursor_preferred_column = None;
+    }
+
+    pub fn move_message_cursor_right(&mut self) {
+        if self.focus != FocusField::Message
+            || self.message_cursor_index >= self.message_field.len()
+        {
+            return;
+        }
+        self.message_cursor_index =
+            next_char_boundary(self.message_field.as_str(), self.message_cursor_index);
+        self.message_cursor_preferred_column = None;
+    }
+
+    pub fn move_message_cursor_home(&mut self) {
+        if self.focus != FocusField::Message {
+            return;
+        }
+        let (line_start, _) =
+            line_range_for_cursor(self.message_field.as_str(), self.message_cursor_index);
+        self.message_cursor_index = line_start;
+        self.message_cursor_preferred_column = None;
+    }
+
+    pub fn move_message_cursor_end(&mut self) {
+        if self.focus != FocusField::Message {
+            return;
+        }
+        let (_, line_end) =
+            line_range_for_cursor(self.message_field.as_str(), self.message_cursor_index);
+        self.message_cursor_index = line_end;
+        self.message_cursor_preferred_column = None;
+    }
+
+    pub fn message_cursor_index(&self) -> usize {
+        self.message_cursor_index
+    }
+
     pub fn message_cursor_line_and_column(&self) -> (usize, usize) {
         line_and_column_for_index(self.message_field.as_str(), self.message_cursor_index)
     }
@@ -461,6 +505,13 @@ fn previous_char_boundary(value: &str, cursor_index: usize) -> usize {
         .unwrap_or(0)
 }
 
+fn next_char_boundary(value: &str, cursor_index: usize) -> usize {
+    value
+        .char_indices()
+        .find_map(|(index, _)| (index > cursor_index).then_some(index))
+        .unwrap_or(value.len())
+}
+
 fn line_ranges(value: &str) -> Vec<(usize, usize)> {
     let mut ranges = Vec::<(usize, usize)>::new();
     let mut line_start = 0usize;
@@ -472,6 +523,17 @@ fn line_ranges(value: &str) -> Vec<(usize, usize)> {
     }
     ranges.push((line_start, value.len()));
     ranges
+}
+
+fn line_range_for_cursor(value: &str, cursor_index: usize) -> (usize, usize) {
+    let cursor_index = cursor_index.min(value.len());
+    let ranges = line_ranges(value);
+    for (line_index, (line_start, line_end)) in ranges.iter().enumerate() {
+        if cursor_index <= *line_end || line_index + 1 == ranges.len() {
+            return (*line_start, *line_end);
+        }
+    }
+    (0, value.len())
 }
 
 fn line_and_column_for_index(value: &str, cursor_index: usize) -> (usize, usize) {

@@ -176,6 +176,63 @@ fn message_cursor_moves_vertically_without_history_recall() {
 }
 
 #[test]
+fn message_cursor_supports_horizontal_arrow_and_home_end_navigation() {
+    let mut state = make_state();
+    state.set_focus(WorkbenchField::Message);
+    state.insert_text("abcd");
+
+    state
+        .dispatch_event(key_event(KeyCode::Left, KeyModifiers::NONE))
+        .expect("left should move cursor");
+    state
+        .dispatch_event(key_event(KeyCode::Left, KeyModifiers::NONE))
+        .expect("left should move cursor");
+    state
+        .dispatch_event(key_event(KeyCode::Char('X'), KeyModifiers::NONE))
+        .expect("insert should honor moved cursor");
+    assert_eq!(state.message_field(), "abXcd");
+
+    state
+        .dispatch_event(key_event(KeyCode::Home, KeyModifiers::NONE))
+        .expect("home should move to line start");
+    state
+        .dispatch_event(key_event(KeyCode::Char('^'), KeyModifiers::NONE))
+        .expect("insert at start should work");
+    assert_eq!(state.message_field(), "^abXcd");
+
+    state
+        .dispatch_event(key_event(KeyCode::End, KeyModifiers::NONE))
+        .expect("end should move to line end");
+    state
+        .dispatch_event(key_event(KeyCode::Char('$'), KeyModifiers::NONE))
+        .expect("insert at end should work");
+    assert_eq!(state.message_field(), "^abXcd$");
+}
+
+#[test]
+fn message_cursor_supports_readline_ctrl_a_ctrl_e_navigation() {
+    let mut state = make_state();
+    state.set_focus(WorkbenchField::Message);
+    state.insert_text("hello");
+
+    state
+        .dispatch_event(key_event(KeyCode::Char('a'), KeyModifiers::CONTROL))
+        .expect("ctrl+a should move to line start");
+    state
+        .dispatch_event(key_event(KeyCode::Char('>'), KeyModifiers::NONE))
+        .expect("insert at start should work");
+    assert_eq!(state.message_field(), ">hello");
+
+    state
+        .dispatch_event(key_event(KeyCode::Char('e'), KeyModifiers::CONTROL))
+        .expect("ctrl+e should move to line end");
+    state
+        .dispatch_event(key_event(KeyCode::Char('<'), KeyModifiers::NONE))
+        .expect("insert at end should work");
+    assert_eq!(state.message_field(), ">hello<");
+}
+
+#[test]
 fn f4_is_not_bound_on_main_workbench_surface() {
     let mut state = make_state();
     state.insert_text("master");

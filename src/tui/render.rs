@@ -108,13 +108,28 @@ fn compose_cursor_position(inner_area: Rect, state: &AppState) -> Option<(u16, u
             )
         }
         FocusField::Message => {
-            let (line_index, column_index) = state.message_cursor_line_and_column();
-            let cursor_column = visible_cursor_column_count(column_index, inner_width);
+            let message_view_height = inner_area.height.saturating_sub(1) as usize;
+            if message_view_height == 0 {
+                return None;
+            }
+            let message_layout = compose_message_layout(
+                state.message_field.as_str(),
+                state.message_cursor_index(),
+                inner_width as usize,
+            );
+            let start = compose_message_visible_start(
+                message_layout.lines.len(),
+                message_layout.cursor_row,
+                message_view_height,
+            );
+            let cursor_row = message_layout
+                .cursor_row
+                .saturating_sub(start)
+                .saturating_add(1);
+            let cursor_column = visible_cursor_column_count(message_layout.cursor_col, inner_width);
             (
                 inner_left.saturating_add(cursor_column),
-                inner_top
-                    .saturating_add(1)
-                    .saturating_add(line_index as u16),
+                inner_top.saturating_add(cursor_row as u16),
             )
         }
     };
@@ -144,6 +159,8 @@ fn render_workbench_panes(frame: &mut Frame, area: Rect, state: &mut AppState) {
 }
 
 fn render_compose(frame: &mut Frame, area: Rect, state: &AppState) {
+    let block = compose_titled_block("  Compose  ");
+    let inner = block.inner(area);
     let to_style = if state.focus == FocusField::To {
         Style::default().fg(Color::Yellow)
     } else {
@@ -154,16 +171,25 @@ fn render_compose(frame: &mut Frame, area: Rect, state: &AppState) {
         Span::styled("To: ", to_style.add_modifier(Modifier::BOLD)),
         Span::raw(state.to_field.as_str()),
     ])];
+    let message_layout = compose_message_layout(
+        state.message_field.as_str(),
+        state.message_cursor_index(),
+        inner.width.max(1) as usize,
+    );
+    let message_view_height = inner.height.saturating_sub(1) as usize;
+    let start = compose_message_visible_start(
+        message_layout.lines.len(),
+        message_layout.cursor_row,
+        message_view_height,
+    );
+    let end = (start + message_view_height).min(message_layout.lines.len());
     lines.extend(
-        state
-            .message_field
-            .split('\n')
-            .map(|line| Line::from(Span::raw(line.to_string()))),
+        message_layout.lines[start..end]
+            .iter()
+            .map(|line| Line::from(Span::raw(line.clone()))),
     );
 
-    let paragraph = Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .block(compose_titled_block("  Compose  "));
+    let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
 }
 
@@ -317,7 +343,8 @@ fn render_help_overlay(frame: &mut Frame, _state: &AppState) {
         Line::from("Tab / Shift+Tab: Focus next/previous"),
         Line::from("Ctrl+Space: Trigger recipient completion in To"),
         Line::from("Up/Down in To: Navigate active completion"),
-        Line::from("Up/Down in Message: Move cursor between lines"),
+        Line::from("Arrows/Home/End in Message: Move cursor"),
+        Line::from("Ctrl+A/Ctrl+E in Message: Move to line start/end"),
         Line::from("Enter: Accept completion in To (adds ', ') / send in Message"),
         Line::from("Ctrl+J: Insert newline in Message"),
         Line::from("Esc in Message: Snap history to latest"),
@@ -380,7 +407,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 }
 
 fn split_workbench_rows(area: Rect, state: &AppState) -> [Rect; 2] {
-    let compose_height = compute_compose_height(area.height, state);
+    let compose_height = compute_compose_height(area.width, area.height, state);
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -391,12 +418,19 @@ fn split_workbench_rows(area: Rect, state: &AppState) -> [Rect; 2] {
     [rows[0], rows[1]]
 }
 
-fn compute_compose_height(available_height: u16, state: &AppState) -> u16 {
+fn compute_compose_height(available_width: u16, available_height: u16, state: &AppState) -> u16 {
     if available_height <= WORKBENCH_MIN_COMPOSE_HEIGHT {
         return available_height;
     }
 
-    let message_line_count = state.message_field.split('\n').count().max(1) as u16;
+    let message_line_count = compose_message_layout(
+        state.message_field.as_str(),
+        state.message_cursor_index(),
+        available_width.max(1) as usize,
+    )
+    .lines
+    .len()
+    .max(1) as u16;
     let desired = message_line_count
         .saturating_add(1) // To row
         .saturating_add(2); // top + bottom borders
@@ -417,4 +451,78 @@ fn compose_titled_block(title: &'static str) -> Block<'static> {
         .borders(Borders::TOP | Borders::BOTTOM)
         .title(title)
         .title_alignment(Alignment::Center)
+}
+
+#[derive(Clone, Debug)]
+struct MessageLayout {
+    lines: Vec<String>,
+    cursor_row: usize,
+    cursor_col: usize,
+}
+
+fn compose_message_layout(value: &str, cursor_index: usize, width: usize) -> MessageLayout {
+    let width = width.max(1);
+    let clamped_cursor = cursor_index.min(value.len());
+
+    let mut lines = Vec::<String>::new();
+    let mut line = String::new();
+    let mut line_width = 0usize;
+    let mut line_index = 0usize;
+
+    let mut cursor_row = 0usize;
+    let mut cursor_col = 0usize;
+    let mut cursor_set = false;
+
+    for (index, character) in value.char_indices() {
+        if index == clamped_cursor {
+            cursor_row = line_index;
+            cursor_col = line_width;
+            cursor_set = true;
+        }
+
+        if character == '\n' {
+            lines.push(line);
+            line = String::new();
+            line_width = 0;
+            line_index += 1;
+            continue;
+        }
+
+        if line_width + 1 > width && line_width > 0 {
+            lines.push(line);
+            line = String::new();
+            line_width = 0;
+            line_index += 1;
+        }
+
+        line.push(character);
+        line_width += 1;
+    }
+
+    if !cursor_set {
+        cursor_row = line_index;
+        cursor_col = line_width;
+    }
+
+    lines.push(line);
+    MessageLayout {
+        lines,
+        cursor_row,
+        cursor_col,
+    }
+}
+
+fn compose_message_visible_start(
+    total_lines: usize,
+    cursor_row: usize,
+    view_height: usize,
+) -> usize {
+    if view_height == 0 || total_lines <= view_height {
+        return 0;
+    }
+    let max_start = total_lines.saturating_sub(view_height);
+    cursor_row
+        .saturating_add(1)
+        .saturating_sub(view_height)
+        .min(max_start)
 }

@@ -53,6 +53,18 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
 
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
+            KeyCode::Char('a') => {
+                if state.focus == FocusField::Message {
+                    state.move_message_cursor_home();
+                    return Ok(());
+                }
+            }
+            KeyCode::Char('e') => {
+                if state.focus == FocusField::Message {
+                    state.move_message_cursor_end();
+                    return Ok(());
+                }
+            }
             KeyCode::Char('j') => {
                 state.insert_newline_if_message();
                 return Ok(());
@@ -98,6 +110,26 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
                 state.move_to_completion_selection(1);
             } else if state.focus == FocusField::Message {
                 state.move_message_cursor_down();
+            }
+        }
+        KeyCode::Left => {
+            if state.focus == FocusField::Message {
+                state.move_message_cursor_left();
+            }
+        }
+        KeyCode::Right => {
+            if state.focus == FocusField::Message {
+                state.move_message_cursor_right();
+            }
+        }
+        KeyCode::Home => {
+            if state.focus == FocusField::Message {
+                state.move_message_cursor_home();
+            }
+        }
+        KeyCode::End => {
+            if state.focus == FocusField::Message {
+                state.move_message_cursor_end();
             }
         }
         KeyCode::Backspace => state.backspace(),
