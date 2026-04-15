@@ -173,7 +173,7 @@ fn stream_hello_acknowledges_and_allows_request() {
     assert_eq!(response["frame"], "response");
     assert_eq!(response["request_id"], "req-1");
     assert_eq!(response["response"]["kind"], "list");
-    assert_eq!(response["response"]["bundle_name"], bundle_name);
+    assert_eq!(response["response"]["bundle"]["id"], bundle_name);
 
     shutdown_stream(&client_stream, "shutdown client stream");
     join_handle.join().expect("join relay thread");

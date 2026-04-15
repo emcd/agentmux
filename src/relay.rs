@@ -44,12 +44,41 @@ const RELAY_STREAM_READ_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const HELLO_CONFLICT_RETRY_INTERVAL_MS: u64 = 50;
 const HELLO_CONFLICT_RETRY_TIMEOUT_MS: u64 = 1_000;
 
-/// Recipient metadata returned by `list`.
+/// Transport class for one listed bundle session.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct Recipient {
-    pub session_name: String,
+#[serde(rename_all = "snake_case")]
+pub enum ListedSessionTransport {
+    Tmux,
+    Acp,
+}
+
+/// One configured session entry in list-sessions payloads.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ListedSession {
+    pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub display_name: Option<String>,
+    pub name: Option<String>,
+    pub transport: ListedSessionTransport,
+}
+
+/// Bundle live state in list-sessions payloads.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ListedBundleState {
+    Up,
+    Down,
+}
+
+/// Canonical listed bundle payload for session-listing responses.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ListedBundle {
+    pub id: String,
+    pub state: ListedBundleState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_reason_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_reason: Option<String>,
+    pub sessions: Vec<ListedSession>,
 }
 
 /// Per-target delivery result for one `chat` request.
@@ -246,8 +275,7 @@ pub enum RelayResponse {
     },
     List {
         schema_version: String,
-        bundle_name: String,
-        recipients: Vec<Recipient>,
+        bundle: ListedBundle,
     },
     Chat {
         schema_version: String,

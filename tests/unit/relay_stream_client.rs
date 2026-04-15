@@ -182,8 +182,11 @@ fn stream_client_does_not_auto_retry_request_after_disconnect() {
                 "response": {
                     "kind": "list",
                     "schema_version": "1",
-                    "bundle_name": "party",
-                    "recipients": [],
+                    "bundle": {
+                        "id": "party",
+                        "state": "up",
+                        "sessions": [],
+                    },
                 }
             }),
         );
@@ -209,13 +212,9 @@ fn stream_client_does_not_auto_retry_request_after_disconnect() {
         .expect("second request should reconnect and succeed");
     assert!(events.is_empty());
     match response {
-        agentmux::relay::RelayResponse::List {
-            bundle_name,
-            recipients,
-            ..
-        } => {
-            assert_eq!(bundle_name, "party");
-            assert!(recipients.is_empty());
+        agentmux::relay::RelayResponse::List { bundle, .. } => {
+            assert_eq!(bundle.id, "party");
+            assert!(bundle.sessions.is_empty());
         }
         other => panic!("unexpected response: {other:?}"),
     }
@@ -266,8 +265,11 @@ fn stream_client_retries_hello_after_identity_claim_conflict() {
                 "response": {
                     "kind": "list",
                     "schema_version": "1",
-                    "bundle_name": "party",
-                    "recipients": [],
+                    "bundle": {
+                        "id": "party",
+                        "state": "up",
+                        "sessions": [],
+                    },
                 }
             }),
         );
@@ -286,13 +288,9 @@ fn stream_client_retries_hello_after_identity_claim_conflict() {
         .expect("retry after hello conflict should succeed");
     assert!(events.is_empty());
     match response {
-        agentmux::relay::RelayResponse::List {
-            bundle_name,
-            recipients,
-            ..
-        } => {
-            assert_eq!(bundle_name, "party");
-            assert!(recipients.is_empty());
+        agentmux::relay::RelayResponse::List { bundle, .. } => {
+            assert_eq!(bundle.id, "party");
+            assert!(bundle.sessions.is_empty());
         }
         other => panic!("unexpected response: {other:?}"),
     }

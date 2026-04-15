@@ -3,7 +3,7 @@ use crate::{
     runtime::error::RuntimeError,
 };
 
-use super::{AppState, map_relay_error, map_relay_request_failure};
+use super::{AppState, Recipient, map_relay_error, map_relay_request_failure};
 
 impl AppState {
     pub fn refresh_recipients(&mut self) -> Result<(), RuntimeError> {
@@ -11,7 +11,15 @@ impl AppState {
             sender_session: Some(self.sender_session.clone()),
         })?;
         match response {
-            RelayResponse::List { recipients, .. } => {
+            RelayResponse::List { bundle, .. } => {
+                let recipients = bundle
+                    .sessions
+                    .into_iter()
+                    .map(|session| Recipient {
+                        session_name: session.id,
+                        display_name: session.name,
+                    })
+                    .collect::<Vec<_>>();
                 self.recipients = recipients;
                 if self.recipients.is_empty() {
                     self.recipients_state.select(None);

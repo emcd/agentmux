@@ -55,13 +55,27 @@ pub(super) fn run_agentmux_list(arguments: &[String]) -> Result<(), RuntimeError
     let payload = match response {
         RelayResponse::List {
             schema_version,
-            bundle_name,
-            recipients,
-        } => json!({
-            "schema_version": schema_version,
-            "bundle_name": bundle_name,
-            "recipients": recipients,
-        }),
+            bundle,
+        } => {
+            let recipients = bundle
+                .sessions
+                .iter()
+                .map(|session| {
+                    json!({
+                        "session_name": session.id,
+                        "display_name": session.name,
+                    })
+                })
+                .collect::<Vec<_>>();
+            json!({
+                "schema_version": schema_version,
+                "bundle_name": bundle.id,
+                "state": bundle.state,
+                "state_reason_code": bundle.state_reason_code,
+                "state_reason": bundle.state_reason,
+                "recipients": recipients,
+            })
+        }
         RelayResponse::Error { error } => return Err(shared::map_relay_error(error)),
         other => {
             return Err(RuntimeError::validation(

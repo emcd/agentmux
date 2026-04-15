@@ -7,7 +7,7 @@ use std::{
 use ratatui::widgets::ListState;
 
 use crate::{
-    relay::{Recipient, RelayError, RelayStreamClientClass, RelayStreamSession},
+    relay::{RelayError, RelayStreamClientClass, RelayStreamSession},
     runtime::error::RuntimeError,
 };
 
@@ -58,6 +58,12 @@ pub(crate) enum FocusField {
 pub(crate) struct StatusEntry {
     pub code: Option<String>,
     pub message: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Recipient {
+    pub session_name: String,
+    pub display_name: Option<String>,
 }
 
 #[derive(Debug)]
@@ -240,7 +246,7 @@ mod tests {
 
     use crate::relay::{ChatOutcome, ChatResult, ChatStatus, RelayStreamEvent};
 
-    use super::{AppState, ChatHistoryDirection, ChatHistoryEntry, TuiLaunchOptions};
+    use super::{AppState, ChatHistoryDirection, ChatHistoryEntry, Recipient, TuiLaunchOptions};
 
     fn make_state() -> AppState {
         AppState::new(TuiLaunchOptions {
@@ -307,7 +313,7 @@ mod tests {
     #[test]
     fn closing_look_overlay_restores_picker_when_opened_from_picker() {
         let mut state = make_state();
-        state.recipients = vec![crate::relay::Recipient {
+        state.recipients = vec![Recipient {
             session_name: "master".to_string(),
             display_name: None,
         }];

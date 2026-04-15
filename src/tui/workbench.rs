@@ -2,11 +2,13 @@
 
 use crossterm::event::Event;
 
-use crate::{relay::Recipient, runtime::error::RuntimeError};
+use crate::runtime::error::RuntimeError;
 
 use super::{
     input,
-    state::{AppState, ChatHistoryDirection, ChatHistoryEntry, FocusField, TuiLaunchOptions},
+    state::{
+        AppState, ChatHistoryDirection, ChatHistoryEntry, FocusField, Recipient, TuiLaunchOptions,
+    },
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

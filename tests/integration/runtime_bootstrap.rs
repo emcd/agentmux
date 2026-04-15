@@ -707,8 +707,11 @@ async fn mcp_uses_repository_root_debug_state_override() {
                 Some("list") => json!({
                     "kind": "list",
                     "schema_version": "1",
-                    "bundle_name": "party",
-                    "recipients": [{"session_name": "bravo"}],
+                    "bundle": {
+                        "id": "party",
+                        "state": "up",
+                        "sessions": [{"id": "bravo", "transport": "tmux"}],
+                    },
                 }),
                 _ => json!({
                     "kind": "error",

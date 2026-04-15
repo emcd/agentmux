@@ -23,8 +23,8 @@ use super::lifecycle::{reconcile_loaded_bundle_for_lifecycle, shutdown_bundle_ru
 use super::tmux::{capture_pane_tail_lines, resolve_active_pane_target};
 use super::{
     AsyncDeliveryTask, ChatDeliveryMode, ChatOutcome, ChatRequestContext, ChatResult, ChatStatus,
-    LifecycleBundleResult, LookRequestContext, Recipient, RelayError, RelayRequest, RelayResponse,
-    SCHEMA_VERSION, relay_error,
+    LifecycleBundleResult, ListedBundle, ListedBundleState, ListedSession, ListedSessionTransport,
+    LookRequestContext, RelayError, RelayRequest, RelayResponse, SCHEMA_VERSION, relay_error,
 };
 
 const LOOK_LINES_DEFAULT: usize = 120;
@@ -199,33 +199,37 @@ fn handle_list(
         "sender_session",
     )?;
     authorize_list(bundle, authorization, sender.session_id.as_str())?;
-    let recipients = bundle
+    let sessions = bundle
         .members
         .iter()
-        .filter(|member| member.id != sender.session_id)
-        .map(|member| Recipient {
-            session_name: member.id.clone(),
-            display_name: member.name.clone(),
+        .map(|member| ListedSession {
+            id: member.id.clone(),
+            name: member.name.clone(),
+            transport: match member.target {
+                TargetConfiguration::Tmux(_) => ListedSessionTransport::Tmux,
+                TargetConfiguration::Acp(_) => ListedSessionTransport::Acp,
+            },
         })
         .collect::<Vec<_>>();
 
     let response = RelayResponse::List {
         schema_version: SCHEMA_VERSION.to_string(),
-        bundle_name: bundle.bundle_name.clone(),
-        recipients,
+        bundle: ListedBundle {
+            id: bundle.bundle_name.clone(),
+            state: ListedBundleState::Up,
+            state_reason_code: None,
+            state_reason: None,
+            sessions,
+        },
     };
-    if let RelayResponse::List {
-        bundle_name,
-        recipients,
-        ..
-    } = &response
-    {
+    if let RelayResponse::List { bundle, .. } = &response {
         emit_inscription(
             "relay.list.response",
             &json!({
-                "bundle_name": bundle_name,
+                "bundle_name": bundle.id,
                 "sender_session": sender.session_id,
-                "recipient_count": recipients.len(),
+                "state": bundle.state,
+                "session_count": bundle.sessions.len(),
             }),
         );
     }

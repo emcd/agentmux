@@ -1,4 +1,7 @@
-use agentmux::relay::{ChatDeliveryMode, RelayRequest, RelayResponse, handle_request};
+use agentmux::relay::{
+    ChatDeliveryMode, ListedBundleState, ListedSessionTransport, RelayRequest, RelayResponse,
+    handle_request,
+};
 use tempfile::TempDir;
 
 fn write_tui_configuration(root: &std::path::Path, policy: &str) {
@@ -205,7 +208,7 @@ resume-command = "sh -lc 'exec sleep 45'"
 }
 
 #[test]
-fn list_excludes_sender_session() {
+fn list_returns_all_configured_sessions_with_transport() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
@@ -219,11 +222,16 @@ fn list_excludes_sender_session() {
     )
     .expect("list response");
 
-    let RelayResponse::List { recipients, .. } = response else {
+    let RelayResponse::List { bundle, .. } = response else {
         panic!("expected list response");
     };
-    assert_eq!(recipients.len(), 1);
-    assert_eq!(recipients[0].session_name, "bravo");
+    assert_eq!(bundle.id, "party");
+    assert_eq!(bundle.state, ListedBundleState::Up);
+    assert_eq!(bundle.sessions.len(), 2);
+    assert_eq!(bundle.sessions[0].id, "alpha");
+    assert_eq!(bundle.sessions[0].transport, ListedSessionTransport::Tmux);
+    assert_eq!(bundle.sessions[1].id, "bravo");
+    assert_eq!(bundle.sessions[1].transport, ListedSessionTransport::Tmux);
 }
 
 #[test]
@@ -242,12 +250,12 @@ fn list_allows_ui_sender_from_global_tui_sessions() {
     )
     .expect("list response");
 
-    let RelayResponse::List { recipients, .. } = response else {
+    let RelayResponse::List { bundle, .. } = response else {
         panic!("expected list response");
     };
-    assert_eq!(recipients.len(), 2);
-    assert_eq!(recipients[0].session_name, "alpha");
-    assert_eq!(recipients[1].session_name, "bravo");
+    assert_eq!(bundle.sessions.len(), 2);
+    assert_eq!(bundle.sessions[0].id, "alpha");
+    assert_eq!(bundle.sessions[1].id, "bravo");
 }
 
 #[test]

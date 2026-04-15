@@ -14,8 +14,11 @@ async fn tool_catalog_contains_list_send_and_look() {
                 Some("list") => json!({
                     "kind": "list",
                     "schema_version": "1",
-                    "bundle_name": BUNDLE_NAME,
-                    "recipients": [],
+                    "bundle": {
+                        "id": BUNDLE_NAME,
+                        "state": "up",
+                        "sessions": [],
+                    },
                 }),
                 Some("chat") => json!({
                     "kind": "chat",
@@ -74,11 +77,16 @@ async fn list_returns_recipient_payload_from_relay() {
                 Some("list") => json!({
                     "kind": "list",
                     "schema_version": "1",
-                    "bundle_name": BUNDLE_NAME,
-                    "recipients": [
-                        {"session_name": "bravo", "display_name": "Bravo"},
-                        {"session_name": "charlie"},
-                    ],
+                    "bundle": {
+                        "id": BUNDLE_NAME,
+                        "state": "up",
+                        "state_reason_code": null,
+                        "state_reason": null,
+                        "sessions": [
+                            {"id": "bravo", "name": "Bravo", "transport": "tmux"},
+                            {"id": "charlie", "transport": "tmux"},
+                        ],
+                    },
                 }),
                 _ => json!({
                     "kind": "error",
@@ -96,6 +104,7 @@ async fn list_returns_recipient_payload_from_relay() {
 
     assert_eq!(payload["schema_version"], "1");
     assert_eq!(payload["bundle_name"], BUNDLE_NAME);
+    assert_eq!(payload["state"], "up");
     assert_eq!(payload["recipients"][0]["session_name"], "bravo");
     assert_eq!(payload["recipients"][0]["display_name"], "Bravo");
     assert_eq!(payload["recipients"][1]["session_name"], "charlie");
