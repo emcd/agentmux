@@ -834,6 +834,7 @@ async fn run_mcp_host(arguments: McpHostArguments) -> Result<(), RuntimeError> {
     );
     let paths = BundleRuntimePaths::resolve(&roots.state_root, &association.bundle_name)?;
     crate::mcp::run(McpConfiguration {
+        configuration_root: roots.configuration_root,
         bundle_paths: paths,
         sender_session: Some(session_name),
     })

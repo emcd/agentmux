@@ -5,7 +5,7 @@ This module implements the MCP stdio server for `agentmux`.
 ## Responsibilities
 
 - Advertise and handle MCP tools:
-  - `list`
+  - `list.sessions`
   - `look`
   - `send`
 - Validate MCP request payloads.
@@ -15,18 +15,21 @@ This module implements the MCP stdio server for `agentmux`.
 
 ## Data Flow
 
-1. MCP client calls `list`, `look`, or `send`.
+1. MCP client calls `list.sessions`, `look`, or `send`.
 2. `src/mcp/mod.rs` validates parameter shape and transport-compatible options.
-3. Request is forwarded as relay contract over `RelayStreamSession`:
-   - `list` -> `RelayRequest::List`
-   - `look` -> `RelayRequest::Look`
-   - `send` -> `RelayRequest::Chat`
-4. Relay response is mapped back to MCP JSON payload.
+3. Request is forwarded as relay contract:
+   - `list.sessions` -> one-shot `request_relay` probes (`RelayRequest::List`)
+   - `look` -> `RelayStreamSession` (`RelayRequest::Look`)
+   - `send` -> `RelayStreamSession` (`RelayRequest::Chat`)
+4. For `all=true`, MCP performs adapter fanout across bundle relays in
+   deterministic lexicographic order.
+5. Relay response is mapped back to MCP JSON payload.
 
 ## Key Types
 
 - `McpConfiguration`
-  - startup configuration for bundle paths and sender session identity.
+  - startup configuration for runtime roots, bundle paths, and sender session
+    identity.
 - `McpServer`
   - tool router + handlers.
 - `SendParams`

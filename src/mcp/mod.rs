@@ -1,7 +1,7 @@
 //! MCP server surface for agentmux.
 
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
@@ -18,16 +18,23 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::relay::{
-    ChatDeliveryMode, RelayError, RelayRequest, RelayResponse, RelayStreamClientClass,
-    RelayStreamSession,
+use crate::configuration::{
+    BundleConfiguration, ConfigurationError, TargetConfiguration, load_bundle_configuration,
+    load_bundle_group_memberships,
 };
+use crate::relay::{
+    ChatDeliveryMode, ListedBundle, ListedBundleState, ListedSession, ListedSessionTransport,
+    RelayError, RelayRequest, RelayResponse, RelayStreamClientClass, RelayStreamSession,
+    request_relay,
+};
+use crate::runtime::error::RuntimeError;
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::paths::BundleRuntimePaths;
 
 /// Configuration provided when booting MCP stdio service.
 #[derive(Clone, Debug)]
 pub struct McpConfiguration {
+    pub configuration_root: PathBuf,
     pub bundle_paths: BundleRuntimePaths,
     pub sender_session: Option<String>,
 }
@@ -45,7 +52,14 @@ struct McpState {
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
-struct ListParams {}
+struct ListSessionsParams {
+    /// Optional bundle selector. Mutually exclusive with all=true.
+    #[serde(default)]
+    bundle_name: Option<String>,
+    /// Optional all-bundles fanout selector.
+    #[serde(default)]
+    all: bool,
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct SendParams {
@@ -102,6 +116,7 @@ impl From<SendDeliveryModeParam> for ChatDeliveryMode {
 
 const LOOK_LINES_MIN: u64 = 1;
 const LOOK_LINES_MAX: u64 = 1000;
+const LIST_SESSIONS_SCHEMA_VERSION: &str = "1";
 
 #[tool_router]
 impl McpServer {
@@ -123,11 +138,15 @@ impl McpServer {
         }
     }
 
-    #[tool(description = "List potential recipient sessions for this bundle.")]
-    async fn list(
+    #[tool(
+        name = "list.sessions",
+        description = "List sessions for one bundle or fan out across bundles."
+    )]
+    async fn list_sessions(
         &self,
-        Parameters(_params): Parameters<ListParams>,
+        Parameters(params): Parameters<ListSessionsParams>,
     ) -> Result<CallToolResult, McpError> {
+        validate_list_sessions_request(&params)?;
         let sender_session = self
             .state
             .configuration
@@ -141,79 +160,55 @@ impl McpServer {
                     None,
                 )
             })?;
+        let selected_bundle = params
+            .bundle_name
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
         emit_inscription(
-            "mcp.tool.list.request",
+            "mcp.tool.list_sessions.request",
             &json!({
-                "bundle_name": self.state.configuration.bundle_paths.bundle_name,
                 "sender_session": sender_session,
+                "bundle_name": selected_bundle,
+                "all": params.all,
             }),
         );
-        match self.request_relay(&RelayRequest::List {
-            sender_session: Some(sender_session),
-        }) {
-            Ok(RelayResponse::List {
-                schema_version,
-                bundle,
-            }) => {
-                let recipients = bundle
-                    .sessions
-                    .iter()
-                    .map(|session| {
-                        json!({
-                            "session_name": session.id,
-                            "display_name": session.name,
-                        })
-                    })
-                    .collect::<Vec<_>>();
+        if params.all {
+            let bundles = self.list_sessions_all_bundles(sender_session.as_str())?;
+            let response = json!({
+                "schema_version": LIST_SESSIONS_SCHEMA_VERSION,
+                "bundles": bundles,
+            });
+            emit_inscription(
+                "mcp.tool.list_sessions.success",
+                &json!({
+                    "all": true,
+                    "bundle_count": response["bundles"].as_array().map_or(0, |value| value.len()),
+                }),
+            );
+            return Ok(CallToolResult::success(vec![Content::json(response)?]));
+        }
+        let bundle_name = selected_bundle
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| self.home_bundle_name().to_string());
+        match self.list_sessions_single_bundle(bundle_name.as_str(), sender_session.as_str()) {
+            Ok(bundle) => {
                 let response = json!({
-                    "schema_version": schema_version,
-                    "bundle_name": bundle.id,
-                    "state": bundle.state,
-                    "state_reason_code": bundle.state_reason_code,
-                    "state_reason": bundle.state_reason,
-                    "recipients": recipients,
+                    "schema_version": LIST_SESSIONS_SCHEMA_VERSION,
+                    "bundle": bundle,
                 });
                 emit_inscription(
-                    "mcp.tool.list.success",
+                    "mcp.tool.list_sessions.success",
                     &json!({
-                        "bundle_name": response["bundle_name"],
-                        "recipient_count": response["recipients"].as_array().map_or(0, |value| value.len()),
+                        "all": false,
+                        "bundle_name": response["bundle"]["id"],
+                        "session_count": response["bundle"]["sessions"].as_array().map_or(0, |value| value.len()),
                     }),
                 );
                 Ok(CallToolResult::success(vec![Content::json(response)?]))
             }
-            Ok(RelayResponse::Error { error }) => {
-                emit_inscription(
-                    "mcp.tool.list.relay_error",
-                    &json!({
-                        "code": error.code.clone(),
-                        "message": error.message.clone(),
-                        "details": error.details.clone(),
-                    }),
-                );
-                Err(map_relay_error(error))
-            }
-            Ok(other) => {
-                emit_inscription(
-                    "mcp.tool.list.unexpected_response",
-                    &json!({"response": other}),
-                );
-                Err(internal_tool_error(
-                    "internal_unexpected_failure",
-                    "relay returned unexpected response variant",
-                    Some(json!({"response": other})),
-                ))
-            }
-            Err(source) => {
-                emit_inscription(
-                    "mcp.tool.list.io_error",
-                    &json!({"error": source.to_string()}),
-                );
-                Err(map_relay_request_failure(
-                    &self.state.configuration.bundle_paths.relay_socket,
-                    source,
-                ))
-            }
+            Err(error) => Err(error),
         }
     }
 
@@ -426,6 +421,88 @@ impl McpServer {
         }
     }
 
+    fn list_sessions_single_bundle(
+        &self,
+        bundle_name: &str,
+        sender_session: &str,
+    ) -> Result<ListedBundle, McpError> {
+        let bundle_paths = BundleRuntimePaths::resolve(
+            &self.state.configuration.bundle_paths.state_root,
+            bundle_name,
+        )
+        .map_err(map_runtime_error)?;
+        let bundle =
+            load_bundle_configuration(&self.state.configuration.configuration_root, bundle_name)
+                .map_err(map_configuration_error)?;
+        let relay_socket = bundle_paths.relay_socket;
+        match request_relay(
+            &relay_socket,
+            &RelayRequest::List {
+                sender_session: Some(sender_session.to_string()),
+            },
+        ) {
+            Ok(RelayResponse::List { bundle, .. }) => Ok(bundle),
+            Ok(RelayResponse::Error { error }) => Err(map_relay_error(error)),
+            Ok(other) => Err(internal_tool_error(
+                "internal_unexpected_failure",
+                "relay returned unexpected response variant",
+                Some(json!({"response": other})),
+            )),
+            Err(source)
+                if is_relay_unavailable_error(&source)
+                    && bundle_name == self.home_bundle_name() =>
+            {
+                Ok(self.synthesize_down_bundle(&bundle, &relay_socket))
+            }
+            Err(source) => Err(map_relay_request_failure(&relay_socket, source)),
+        }
+    }
+
+    fn list_sessions_all_bundles(
+        &self,
+        sender_session: &str,
+    ) -> Result<Vec<ListedBundle>, McpError> {
+        let memberships =
+            load_bundle_group_memberships(&self.state.configuration.configuration_root)
+                .map_err(map_configuration_error)?;
+        let mut bundles = Vec::with_capacity(memberships.len());
+        for membership in memberships {
+            let listed =
+                self.list_sessions_single_bundle(membership.bundle_name.as_str(), sender_session)?;
+            bundles.push(listed);
+        }
+        Ok(bundles)
+    }
+
+    fn home_bundle_name(&self) -> &str {
+        self.state.configuration.bundle_paths.bundle_name.as_str()
+    }
+
+    fn synthesize_down_bundle(
+        &self,
+        bundle: &BundleConfiguration,
+        relay_socket: &Path,
+    ) -> ListedBundle {
+        let (state_reason_code, state_reason) = if relay_socket.exists() {
+            (
+                Some("relay_unavailable".to_string()),
+                Some("bundle relay socket is present but relay is unavailable".to_string()),
+            )
+        } else {
+            (
+                Some("not_started".to_string()),
+                Some("bundle relay socket is not present".to_string()),
+            )
+        };
+        ListedBundle {
+            id: bundle.bundle_name.clone(),
+            state: ListedBundleState::Down,
+            state_reason_code,
+            state_reason,
+            sessions: list_sessions_from_bundle_configuration(bundle),
+        }
+    }
+
     fn request_relay(&self, request: &RelayRequest) -> Result<RelayResponse, std::io::Error> {
         let mut guard = self
             .state
@@ -460,11 +537,46 @@ impl rmcp::ServerHandler for McpServer {
     }
 }
 
+fn list_sessions_from_bundle_configuration(bundle: &BundleConfiguration) -> Vec<ListedSession> {
+    bundle
+        .members
+        .iter()
+        .map(|member| ListedSession {
+            id: member.id.clone(),
+            name: member.name.clone(),
+            transport: match member.target {
+                TargetConfiguration::Tmux(_) => ListedSessionTransport::Tmux,
+                TargetConfiguration::Acp(_) => ListedSessionTransport::Acp,
+            },
+        })
+        .collect::<Vec<_>>()
+}
+
 /// Runs the MCP stdio service and blocks until shutdown.
 pub async fn run(configuration: McpConfiguration) -> Result<()> {
     let server = McpServer::new(configuration);
     let service = server.serve(stdio()).await?;
     service.waiting().await?;
+    Ok(())
+}
+
+fn validate_list_sessions_request(params: &ListSessionsParams) -> Result<(), McpError> {
+    if params.all && params.bundle_name.is_some() {
+        return Err(validation_tool_error(
+            "validation_invalid_params",
+            "bundle_name and all=true are mutually exclusive",
+            None,
+        ));
+    }
+    if let Some(bundle_name) = params.bundle_name.as_ref()
+        && bundle_name.trim().is_empty()
+    {
+        return Err(validation_tool_error(
+            "validation_invalid_params",
+            "bundle_name must be non-empty when provided",
+            None,
+        ));
+    }
     Ok(())
 }
 
@@ -545,6 +657,84 @@ fn map_relay_error(error: RelayError) -> McpError {
         return validation_tool_error(&error.code, &error.message, error.details);
     }
     internal_tool_error(&error.code, &error.message, error.details)
+}
+
+fn map_configuration_error(source: ConfigurationError) -> McpError {
+    match source {
+        ConfigurationError::UnknownBundle { bundle_name, path } => {
+            let message = format!(
+                "bundle '{}' is not configured under {}",
+                bundle_name,
+                path.display()
+            );
+            validation_tool_error(
+                "validation_unknown_bundle",
+                message.as_str(),
+                Some(json!({
+                    "bundle_name": bundle_name,
+                    "path": path.display().to_string(),
+                })),
+            )
+        }
+        ConfigurationError::InvalidConfiguration { path, message } => validation_tool_error(
+            "validation_invalid_arguments",
+            "bundle configuration is invalid",
+            Some(json!({
+                "path": path.display().to_string(),
+                "cause": message,
+            })),
+        ),
+        ConfigurationError::InvalidGroupName { path, group_name } => validation_tool_error(
+            "validation_invalid_group_name",
+            "bundle configuration has invalid group name",
+            Some(json!({
+                "path": path.display().to_string(),
+                "group_name": group_name,
+            })),
+        ),
+        ConfigurationError::ReservedGroupName { path, group_name } => validation_tool_error(
+            "validation_reserved_group_name",
+            "bundle configuration uses reserved group name",
+            Some(json!({
+                "path": path.display().to_string(),
+                "group_name": group_name,
+            })),
+        ),
+        ConfigurationError::AmbiguousSender {
+            working_directory,
+            matches,
+        } => validation_tool_error(
+            "validation_ambiguous_sender",
+            "sender session selection is ambiguous",
+            Some(json!({
+                "working_directory": working_directory.display().to_string(),
+                "matches": matches,
+            })),
+        ),
+        ConfigurationError::Io { context, source } => internal_tool_error(
+            "internal_unexpected_failure",
+            "failed to load bundle configuration",
+            Some(json!({
+                "context": context,
+                "cause": source.to_string(),
+            })),
+        ),
+    }
+}
+
+fn map_runtime_error(source: RuntimeError) -> McpError {
+    match source {
+        RuntimeError::InvalidBundleName { bundle_name } => validation_tool_error(
+            "validation_invalid_params",
+            "bundle_name contains unsupported characters",
+            Some(json!({"bundle_name": bundle_name})),
+        ),
+        other => internal_tool_error(
+            "internal_unexpected_failure",
+            "failed to resolve bundle runtime paths",
+            Some(json!({"cause": other.to_string()})),
+        ),
+    }
 }
 
 fn map_relay_request_failure(socket_path: &Path, source: std::io::Error) -> McpError {

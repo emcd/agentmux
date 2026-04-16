@@ -740,8 +740,8 @@ async fn mcp_uses_repository_root_debug_state_override() {
     )
     .await;
 
-    let response = harness.call_tool(2, "list", Map::new()).await;
+    let response = harness.call_tool(2, "list.sessions", Map::new()).await;
     let payload = decode_tool_payload(&response);
-    assert_eq!(payload["bundle_name"], "party");
+    assert_eq!(payload["bundle"]["id"], "party");
     assert_eq!(relay.requests_for_operation("list").len(), 1);
 }

@@ -1,13 +1,33 @@
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use serde_json::{Map, Value, json};
 
 use super::helpers::*;
 
+fn relay_socket_for(runtime: &TestRuntime, bundle_name: &str) -> PathBuf {
+    runtime
+        .state_root
+        .join("bundles")
+        .join(bundle_name)
+        .join("relay.sock")
+}
+
+fn ensure_socket_parent(socket_path: &Path) {
+    let parent = socket_path
+        .parent()
+        .expect("relay socket must have parent directory");
+    fs::create_dir_all(parent).expect("create relay socket parent");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tool_catalog_contains_list_send_and_look() {
+async fn tool_catalog_contains_list_sessions_send_and_look() {
     let runtime = TestRuntime::create();
-    let relay = FakeRelay::start(
+    let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
         Arc::new(
             |request| match request.get("operation").and_then(Value::as_str) {
@@ -61,14 +81,16 @@ async fn tool_catalog_contains_list_send_and_look() {
         .collect::<BTreeSet<_>>();
     assert_eq!(
         names,
-        BTreeSet::from(["list".to_string(), "look".to_string(), "send".to_string()])
+        BTreeSet::from([
+            "list.sessions".to_string(),
+            "look".to_string(),
+            "send".to_string(),
+        ])
     );
-
-    assert!(relay.requests_for_operation("list").is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_returns_recipient_payload_from_relay() {
+async fn list_sessions_returns_canonical_bundle_payload_from_relay() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -84,7 +106,7 @@ async fn list_returns_recipient_payload_from_relay() {
                         "state_reason": null,
                         "sessions": [
                             {"id": "bravo", "name": "Bravo", "transport": "tmux"},
-                            {"id": "charlie", "transport": "tmux"},
+                            {"id": "charlie", "transport": "acp"},
                         ],
                     },
                 }),
@@ -99,35 +121,158 @@ async fn list_returns_recipient_payload_from_relay() {
         ),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
-    let response = harness.call_tool(2, "list", Map::new()).await;
+    let response = harness.call_tool(2, "list.sessions", Map::new()).await;
     let payload = decode_tool_payload(&response);
 
     assert_eq!(payload["schema_version"], "1");
-    assert_eq!(payload["bundle_name"], BUNDLE_NAME);
-    assert_eq!(payload["state"], "up");
-    assert_eq!(payload["recipients"][0]["session_name"], "bravo");
-    assert_eq!(payload["recipients"][0]["display_name"], "Bravo");
-    assert_eq!(payload["recipients"][1]["session_name"], "charlie");
+    assert_eq!(payload["bundle"]["id"], BUNDLE_NAME);
+    assert_eq!(payload["bundle"]["state"], "up");
+    assert_eq!(payload["bundle"]["sessions"][0]["id"], "bravo");
+    assert_eq!(payload["bundle"]["sessions"][0]["name"], "Bravo");
+    assert_eq!(payload["bundle"]["sessions"][1]["id"], "charlie");
+    assert_eq!(payload["bundle"]["sessions"][1]["transport"], "acp");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_reports_relay_unavailable_when_relay_is_not_running() {
+async fn list_sessions_rejects_conflicting_bundle_and_all_selectors() {
     let runtime = TestRuntime::create();
     let mut harness = McpHarness::spawn(&runtime).await;
-    let response = harness.call_tool(2, "list", Map::new()).await;
+    let arguments = Map::from_iter([
+        (
+            "bundle_name".to_string(),
+            Value::String(BUNDLE_NAME.to_string()),
+        ),
+        ("all".to_string(), Value::Bool(true)),
+    ]);
+    let response = harness.call_tool(2, "list.sessions", arguments).await;
 
-    assert_eq!(error_code(&response), Some("relay_unavailable"));
+    assert_eq!(error_code(&response), Some("validation_invalid_params"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_sessions_synthesizes_down_bundle_for_unreachable_home_bundle() {
+    let runtime = TestRuntime::create();
+    let mut harness = McpHarness::spawn(&runtime).await;
+    let response = harness.call_tool(2, "list.sessions", Map::new()).await;
+    let payload = decode_tool_payload(&response);
+
+    assert_eq!(payload["schema_version"], "1");
+    assert_eq!(payload["bundle"]["id"], BUNDLE_NAME);
+    assert_eq!(payload["bundle"]["state"], "down");
+    assert_eq!(payload["bundle"]["state_reason_code"], "not_started");
     assert_eq!(
-        response["error"]["data"]["details"]["relay_socket"],
-        Value::String(runtime.relay_socket.display().to_string())
+        payload["bundle"]["sessions"]
+            .as_array()
+            .map_or(0, |value| value.len()),
+        3
     );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_maps_authorization_forbidden_error_from_relay() {
+async fn list_sessions_rejects_unreachable_non_home_bundle_with_relay_unavailable() {
     let runtime = TestRuntime::create();
-    let _relay = FakeRelay::start(
-        runtime.relay_socket.clone(),
+    write_bundle_configuration(&runtime.config_root, "zeta", &["zeta"]);
+    let mut harness = McpHarness::spawn(&runtime).await;
+    let arguments =
+        Map::from_iter([("bundle_name".to_string(), Value::String("zeta".to_string()))]);
+    let response = harness.call_tool(2, "list.sessions", arguments).await;
+
+    assert_eq!(error_code(&response), Some("relay_unavailable"));
+    assert_eq!(
+        response["error"]["data"]["details"]["relay_socket"],
+        Value::String(relay_socket_for(&runtime, "zeta").display().to_string())
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_sessions_all_mode_aggregates_in_lexicographic_bundle_order() {
+    let runtime = TestRuntime::create();
+    write_bundle_configuration(&runtime.config_root, "alpha", &["alpha"]);
+    write_bundle_configuration(&runtime.config_root, "zeta", &["zeta"]);
+    let alpha_socket = relay_socket_for(&runtime, "alpha");
+    let zeta_socket = relay_socket_for(&runtime, "zeta");
+    ensure_socket_parent(&alpha_socket);
+    ensure_socket_parent(&zeta_socket);
+    let alpha_relay = FakeRelay::start(
+        alpha_socket,
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("list") => json!({
+                    "kind": "list",
+                    "schema_version": "1",
+                    "bundle": {
+                        "id": "alpha",
+                        "state": "up",
+                        "state_reason_code": null,
+                        "state_reason": null,
+                        "sessions": [{"id": "alpha", "transport": "tmux"}],
+                    },
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+    let zeta_relay = FakeRelay::start(
+        zeta_socket,
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("list") => json!({
+                    "kind": "list",
+                    "schema_version": "1",
+                    "bundle": {
+                        "id": "zeta",
+                        "state": "up",
+                        "state_reason_code": null,
+                        "state_reason": null,
+                        "sessions": [{"id": "zeta", "transport": "acp"}],
+                    },
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+    let arguments = Map::from_iter([("all".to_string(), Value::Bool(true))]);
+    let response = harness.call_tool(2, "list.sessions", arguments).await;
+    let payload = decode_tool_payload(&response);
+    let bundles = payload["bundles"]
+        .as_array()
+        .expect("bundles must be array");
+    let bundle_ids = bundles
+        .iter()
+        .filter_map(|bundle| bundle["id"].as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(bundle_ids, vec!["alpha", "party", "zeta"]);
+    assert_eq!(bundles[1]["state"], "down");
+    assert_eq!(bundles[1]["state_reason_code"], "not_started");
+    assert_eq!(alpha_relay.requests_for_operation("list").len(), 1);
+    assert_eq!(zeta_relay.requests_for_operation("list").len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_sessions_all_mode_fails_fast_on_first_authorization_denial() {
+    let runtime = TestRuntime::create();
+    write_bundle_configuration(&runtime.config_root, "alpha", &["alpha"]);
+    write_bundle_configuration(&runtime.config_root, "zeta", &["zeta"]);
+    let alpha_socket = relay_socket_for(&runtime, "alpha");
+    let zeta_socket = relay_socket_for(&runtime, "zeta");
+    ensure_socket_parent(&alpha_socket);
+    ensure_socket_parent(&zeta_socket);
+    let alpha_relay = FakeRelay::start(
+        alpha_socket,
         Arc::new(
             |request| match request.get("operation").and_then(Value::as_str) {
                 Some("list") => json!({
@@ -138,7 +283,7 @@ async fn list_maps_authorization_forbidden_error_from_relay() {
                         "details": {
                             "capability": "list.read",
                             "requester_session": SENDER_SESSION,
-                            "bundle_name": BUNDLE_NAME,
+                            "bundle_name": "alpha",
                             "reason": "list visibility denied by policy",
                         },
                     },
@@ -153,12 +298,62 @@ async fn list_maps_authorization_forbidden_error_from_relay() {
             },
         ),
     );
+    let party_relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("list") => json!({
+                    "kind": "list",
+                    "schema_version": "1",
+                    "bundle": {
+                        "id": BUNDLE_NAME,
+                        "state": "up",
+                        "state_reason_code": null,
+                        "state_reason": null,
+                        "sessions": [{"id": BUNDLE_NAME, "transport": "tmux"}],
+                    },
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+    let zeta_relay = FakeRelay::start(
+        zeta_socket,
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("list") => json!({
+                    "kind": "list",
+                    "schema_version": "1",
+                    "bundle": {
+                        "id": "zeta",
+                        "state": "up",
+                        "state_reason_code": null,
+                        "state_reason": null,
+                        "sessions": [{"id": "zeta", "transport": "tmux"}],
+                    },
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
     let mut harness = McpHarness::spawn(&runtime).await;
-    let response = harness.call_tool(2, "list", Map::new()).await;
+    let arguments = Map::from_iter([("all".to_string(), Value::Bool(true))]);
+    let response = harness.call_tool(2, "list.sessions", arguments).await;
 
     assert_eq!(error_code(&response), Some("authorization_forbidden"));
-    assert_eq!(
-        response["error"]["data"]["details"]["capability"],
-        "list.read"
-    );
+    assert_eq!(alpha_relay.requests_for_operation("list").len(), 1);
+    assert_eq!(party_relay.requests_for_operation("list").len(), 0);
+    assert_eq!(zeta_relay.requests_for_operation("list").len(), 0);
 }
