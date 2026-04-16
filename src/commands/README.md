@@ -24,7 +24,7 @@ This directory owns the unified CLI surface for `agentmux`.
 - `down.rs`
   - `agentmux down` selector parsing and execution.
 - `list.rs`
-  - `agentmux list`.
+  - `agentmux list sessions`.
 - `look.rs`
   - `agentmux look`.
 - `send.rs`

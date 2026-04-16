@@ -52,6 +52,20 @@ fn tui_help_output_includes_usage_line() {
 }
 
 #[test]
+fn list_help_output_includes_sessions_subcommand() {
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args(["list", "--help"])
+        .output()
+        .expect("run agentmux list --help");
+    assert!(output.status.success(), "list help should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Usage: agentmux list sessions"),
+        "unexpected list help output: {stdout}"
+    );
+}
+
+#[test]
 fn bare_agentmux_without_tty_prints_help_and_fails() {
     let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
         .output()
@@ -65,6 +79,10 @@ fn bare_agentmux_without_tty_prints_help_and_fails() {
     assert!(
         stdout.contains("Usage: agentmux <command>"),
         "unexpected stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("list sessions [--bundle NAME|--all]"),
+        "top-level help should advertise relocked list sessions surface: {stdout}"
     );
     assert!(
         !stdout.contains("\\n"),

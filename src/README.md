@@ -12,7 +12,7 @@ End-user workflows are documented under `documentation/usage/`.
   - See [src/bin/README.md](bin/README.md).
 - `commands/`
   - CLI surface parsing, validation, and command dispatch (`host`, `up`, `down`,
-    `list`, `look`, `send`, `tui`).
+    `list sessions`, `look`, `send`, `tui`).
   - See [src/commands/README.md](commands/README.md).
 - `runtime/`
   - Runtime-root resolution, bootstrap locks/socket binding, startup template

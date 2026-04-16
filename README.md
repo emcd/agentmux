@@ -81,7 +81,7 @@ artifact locations, see
   - Responsibility: expose MCP tools (`list`, `look`, `send`) and forward
     requests to relay.
 - Operator CLI:
-  - Commands: `agentmux list`, `agentmux look`, `agentmux send`, `agentmux tui`
+  - Commands: `agentmux list sessions`, `agentmux look`, `agentmux send`, `agentmux tui`
   - Responsibility: direct local inspection, message delivery, and interactive
     coordination flows with relay auto-start fallback for `agentmux tui`.
 
@@ -95,7 +95,7 @@ agentmux host relay [--no-autostart]
 agentmux host mcp [--bundle NAME] [--session-name NAME]
 agentmux up (<bundle-id> | --group GROUP)
 agentmux down (<bundle-id> | --group GROUP)
-agentmux list [--bundle NAME] [--sender NAME] [--json]
+agentmux list sessions [--bundle NAME|--all] [--json]
 agentmux look <target-session> [--bundle NAME] [--lines N]
 agentmux tui [--bundle NAME] [--session NAME] [--lines N]
 agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--quiescence-timeout-ms MS] [--acp-turn-timeout-ms MS] [--request-id ID] [--bundle NAME] [--session NAME] [--json]
@@ -141,7 +141,7 @@ Typical topology:
 
 Association resolution:
 
-- `list` and `host mcp` use association auto-discovery fallback:
+- `list sessions` and `host mcp` use association auto-discovery fallback:
   - bundle from Git common-dir owner name,
   - session from worktree top-level directory name,
 - `send` and `tui` use global TUI session selectors:

@@ -57,7 +57,7 @@ pub(super) struct McpHostArguments {
 #[derive(Clone, Debug, Default)]
 pub(super) struct ListArguments {
     pub(super) bundle_name: Option<String>,
-    pub(super) sender_session: Option<String>,
+    pub(super) all_bundles: bool,
     pub(super) output_json: bool,
     pub(super) runtime: RuntimeArguments,
 }
@@ -184,7 +184,7 @@ fn print_agentmux_help() {
         "  down (<bundle-id> | --group GROUP) [--config-directory PATH] ",
         "[--state-directory PATH] [--inscriptions-directory PATH|",
         "--logs-directory PATH] [--repository-root PATH]\n",
-        "  list [--bundle NAME] [--sender NAME] [--json] ",
+        "  list sessions [--bundle NAME|--all] [--json] ",
         "[--config-directory PATH] [--state-directory PATH] ",
         "[--inscriptions-directory PATH|--logs-directory PATH] ",
         "[--repository-root PATH]\n",
