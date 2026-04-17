@@ -1092,16 +1092,17 @@ When relay denies a valid/resolved request by policy, relay SHALL return
 
 ### Requirement: Relay List Authorization
 
-Relay list responses SHALL require policy evaluation for capability `list.read`.
+Relay `list_sessions` responses SHALL require policy evaluation for capability
+`list.read`.
 If requester identity is valid and list access is denied by policy, relay SHALL
-return `authorization_forbidden` and SHALL NOT return an empty successful list.
+return `authorization_forbidden` and SHALL NOT return successful list payload.
 
-#### Scenario: Deny list without returning empty success payload
+#### Scenario: Deny list_sessions without successful payload
 
 - **WHEN** requester identity is valid
-- **AND** policy denies list visibility for that requester
+- **AND** policy denies `list.read` for that requester
 - **THEN** relay returns `authorization_forbidden`
-- **AND** relay does not return `recipients=[]` as a success response
+- **AND** relay does not return a successful `bundle.sessions[]` payload
 
 ### Requirement: Relay Send Scope Control
 
@@ -1618,4 +1619,14 @@ For request-path operations such as `send`, relay SHALL:
 - **WHEN** relay receives `send` request with UI sender `session_id = "ghost"`
 - **AND** no global TUI session maps to `id = "ghost"`
 - **THEN** relay rejects request with `validation_unknown_sender`
+
+### Requirement: Relay List Sessions Request Scope
+
+Relay SHALL support only single-bundle session listing requests in MVP.
+Relay SHALL NOT accept all-bundle list selectors.
+
+#### Scenario: Reject all-bundle relay list selector
+
+- **WHEN** a caller requests relay list with all-bundle selector semantics
+- **THEN** relay rejects request with `validation_invalid_params`
 

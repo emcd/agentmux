@@ -1,4 +1,4 @@
-## MODIFIED Requirements
+## ADDED Requirements
 
 ### Requirement: Relay List Bundle Live-State Payload
 
@@ -43,6 +43,8 @@ MVP list down-state reason mapping SHALL be deterministic:
 - **AND** connection or request probe fails
 - **THEN** state contract uses `state=down`
 - **AND** `state_reason_code=relay_unavailable`
+
+## MODIFIED Requirements
 
 ### Requirement: Relay List Authorization
 
