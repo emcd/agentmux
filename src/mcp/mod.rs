@@ -16,7 +16,7 @@ use rmcp::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::configuration::{
     BundleConfiguration, ConfigurationError, TargetConfiguration, load_bundle_configuration,
@@ -57,8 +57,16 @@ struct ListParams {
     #[serde(default)]
     command: Option<String>,
     /// Command-scoped arguments.
+    #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
     #[serde(default)]
-    args: ListArgs,
+    args: Value,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+struct HelpParams {
+    /// Namespace, tool, or command query (for example `list` or `list.sessions`).
+    #[serde(default)]
+    query: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -128,6 +136,11 @@ const LOOK_LINES_MIN: u64 = 1;
 const LOOK_LINES_MAX: u64 = 1000;
 const LIST_SESSIONS_SCHEMA_VERSION: &str = "1";
 const LIST_COMMAND_SESSIONS: &str = "sessions";
+const TOOL_HELP: &str = "help";
+const TOOL_LIST: &str = "list";
+const TOOL_LOOK: &str = "look";
+const TOOL_SEND: &str = "send";
+const NAMESPACE_AGENTMUX: &str = "agentmux";
 
 #[tool_router]
 impl McpServer {
@@ -154,7 +167,17 @@ impl McpServer {
         &self,
         Parameters(params): Parameters<ListParams>,
     ) -> Result<CallToolResult, McpError> {
-        validate_list_request(&params)?;
+        let parsed_args = parse_meta_tool_args::<ListArgs>(params.args.clone()).map_err(|reason| {
+            validation_tool_error(
+                "validation_invalid_params",
+                "invalid args for list command",
+                Some(json!({
+                    "reason": reason,
+                    "hint": "pass args as a JSON object; use help query 'list.sessions' for exact schema",
+                })),
+            )
+        })?;
+        validate_list_request(params.command.as_deref(), &parsed_args)?;
         let sender_session = self
             .state
             .configuration
@@ -168,8 +191,7 @@ impl McpServer {
                     None,
                 )
             })?;
-        let selected_bundle = params
-            .args
+        let selected_bundle = parsed_args
             .bundle_name
             .as_ref()
             .map(|value| value.trim().to_string())
@@ -180,10 +202,10 @@ impl McpServer {
                 "sender_session": sender_session,
                 "command": LIST_COMMAND_SESSIONS,
                 "bundle_name": selected_bundle,
-                "all": params.args.all,
+                "all": parsed_args.all,
             }),
         );
-        if params.args.all {
+        if parsed_args.all {
             let bundles = self.list_sessions_all_bundles(sender_session.as_str())?;
             let response = json!({
                 "schema_version": LIST_SESSIONS_SCHEMA_VERSION,
@@ -220,6 +242,18 @@ impl McpServer {
             }
             Err(error) => Err(error),
         }
+    }
+
+    #[tool(
+        description = "Return tool/command help and JSON schemas. Query omitted or `agentmux` for tool list, `list` for list meta-tool commands, or `list.sessions`/`send`/`look` for exact schemas."
+    )]
+    async fn help(
+        &self,
+        Parameters(params): Parameters<HelpParams>,
+    ) -> Result<CallToolResult, McpError> {
+        Ok(CallToolResult::success(vec![Content::json(help_tool(
+            params,
+        )?)?]))
     }
 
     #[tool(description = "Submit a message to explicit targets or broadcast.")]
@@ -570,11 +604,9 @@ pub async fn run(configuration: McpConfiguration) -> Result<()> {
     Ok(())
 }
 
-fn validate_list_request(params: &ListParams) -> Result<(), McpError> {
-    let command = params
-        .command
-        .as_ref()
-        .map(|value| value.trim())
+fn validate_list_request(command: Option<&str>, args: &ListArgs) -> Result<(), McpError> {
+    let command = command
+        .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
             validation_tool_error(
@@ -587,17 +619,17 @@ fn validate_list_request(params: &ListParams) -> Result<(), McpError> {
         return Err(validation_tool_error(
             "validation_invalid_params",
             "command is required and must equal \"sessions\"",
-            Some(json!({"command": params.command})),
+            Some(json!({"command": command})),
         ));
     }
-    if params.args.all && params.args.bundle_name.is_some() {
+    if args.all && args.bundle_name.is_some() {
         return Err(validation_tool_error(
             "validation_invalid_params",
             "bundle_name and all=true are mutually exclusive",
             None,
         ));
     }
-    if let Some(bundle_name) = params.args.bundle_name.as_ref()
+    if let Some(bundle_name) = args.bundle_name.as_ref()
         && bundle_name.trim().is_empty()
     {
         return Err(validation_tool_error(
@@ -607,6 +639,145 @@ fn validate_list_request(params: &ListParams) -> Result<(), McpError> {
         ));
     }
     Ok(())
+}
+
+fn parse_meta_tool_args<T: serde::de::DeserializeOwned + Default>(
+    value: serde_json::Value,
+) -> Result<T, String> {
+    if value.is_null() {
+        return Ok(T::default());
+    }
+    let value = match value {
+        serde_json::Value::Object(map) => {
+            if map.is_empty() {
+                return Ok(T::default());
+            }
+            serde_json::Value::Object(map)
+        }
+        other => {
+            return Err(format!(
+                "args must be a JSON object, got {}",
+                json_type_name(&other)
+            ));
+        }
+    };
+
+    serde_json::from_value::<T>(value).map_err(|err| err.to_string())
+}
+
+fn json_type_name(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
+}
+
+fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpError> {
+    let query = params.query.as_deref().map(str::trim).unwrap_or_default();
+    match query {
+        "" | NAMESPACE_AGENTMUX => Ok(json!({
+            "namespace": NAMESPACE_AGENTMUX,
+            "shape_hints": [
+                "Call help with query='list' for meta-tool command list.",
+                "Call help with query='list.sessions' for list command args schema.",
+                "Call help with query='send' or query='look' for exact tool args schemas."
+            ],
+            "tools": [
+                {"tool": TOOL_LIST, "kind": "meta_tool", "description": "List sessions for one bundle or fan out across bundles."},
+                {"tool": TOOL_SEND, "kind": "tool", "description": "Submit a message to explicit targets or broadcast."},
+                {"tool": TOOL_LOOK, "kind": "tool", "description": "Inspect a target session pane snapshot for this bundle."},
+                {"tool": TOOL_HELP, "kind": "tool", "description": "Return tool/command help and JSON schemas."}
+            ],
+            "invoke": {
+                "tool": TOOL_HELP,
+                "params": {"query": TOOL_LIST}
+            }
+        })),
+        TOOL_LIST => Ok(json!({
+            "tool": TOOL_LIST,
+            "kind": "meta_tool",
+            "description": "List sessions for one bundle or fan out across bundles.",
+            "commands": [
+                {
+                    "command": "list.sessions",
+                    "description": "List sessions for one bundle or fan out across bundles."
+                }
+            ],
+            "invoke": {
+                "tool": TOOL_LIST,
+                "params": {
+                    "command": LIST_COMMAND_SESSIONS,
+                    "args": {}
+                }
+            }
+        })),
+        "list.sessions" => Ok(command_help(
+            "list.sessions",
+            "List sessions for one bundle or fan out across bundles.",
+            json_schema_for::<ListArgs>(),
+            json!({
+                "tool": TOOL_LIST,
+                "params": {
+                    "command": LIST_COMMAND_SESSIONS,
+                    "args": {}
+                }
+            }),
+        )),
+        TOOL_SEND => Ok(command_help(
+            TOOL_SEND,
+            "Submit a message to explicit targets or broadcast.",
+            json_schema_for::<SendParams>(),
+            json!({
+                "tool": TOOL_SEND,
+                "params": {}
+            }),
+        )),
+        TOOL_LOOK => Ok(command_help(
+            TOOL_LOOK,
+            "Inspect a target session pane snapshot for this bundle.",
+            json_schema_for::<LookParams>(),
+            json!({
+                "tool": TOOL_LOOK,
+                "params": {}
+            }),
+        )),
+        TOOL_HELP => Ok(command_help(
+            TOOL_HELP,
+            "Return tool/command help and JSON schemas.",
+            json_schema_for::<HelpParams>(),
+            json!({
+                "tool": TOOL_HELP,
+                "params": {}
+            }),
+        )),
+        _ => Err(validation_tool_error(
+            "validation_invalid_params",
+            "unknown help query; try empty query, 'agentmux', 'list', 'list.sessions', 'send', or 'look'",
+            Some(json!({"query": query})),
+        )),
+    }
+}
+
+fn command_help(
+    command: &str,
+    description: &str,
+    args_schema: serde_json::Value,
+    invoke: serde_json::Value,
+) -> serde_json::Value {
+    json!({
+        "command": command,
+        "description": description,
+        "args_schema": args_schema,
+        "invoke": invoke,
+    })
+}
+
+fn json_schema_for<T: JsonSchema>() -> serde_json::Value {
+    serde_json::to_value(schemars::schema_for!(T)).unwrap_or(serde_json::Value::Null)
 }
 
 fn validate_send_request(params: &SendParams) -> Result<(), McpError> {

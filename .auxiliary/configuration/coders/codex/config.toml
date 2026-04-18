@@ -55,6 +55,9 @@ args = [
 startup_timeout_sec = 60
 tool_timeout_sec = 900
 
+[mcp_servers.agentmux.tools.help]
+approval_mode = "approve"
+
 [mcp_servers.agentmux.tools.list]
 approval_mode = "approve"
 

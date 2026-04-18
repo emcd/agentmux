@@ -8,6 +8,8 @@ TBD - created by archiving change add-mcp-tool-surface-contract. Update Purpose 
 The system SHALL expose the following MCP tools for relay MVP:
 
 - `list`
+- `help`
+- `look`
 - `send`
 
 The relocked pre-stable MCP surface removes `list.sessions` with no
@@ -17,7 +19,50 @@ compatibility alias.
 
 - **WHEN** an MCP client enumerates available tools
 - **THEN** tool inventory includes `list`
+- **AND** includes `help`
+- **AND** includes `look`
+- **AND** includes `send`
 - **AND** does not include `list.sessions`
+
+### Requirement: MCP Help Tool
+
+The system SHALL expose a read-only MCP tool named `help` that returns
+tool/command discovery metadata and JSON argument schemas.
+
+`help` SHALL support query modes:
+
+- no query (or `query="agentmux"`) returns namespace-level tool inventory
+- `query="list"` returns list meta-tool command catalog
+- `query="list.sessions"` returns exact `list` command argument schema and
+  invoke shape
+- `query="send"` or `query="look"` returns exact tool argument schemas and
+  invoke shapes
+
+Unknown help queries SHALL fail fast with `validation_invalid_params`.
+
+#### Scenario: Return namespace inventory with no query
+
+- **WHEN** an MCP client calls `help` without `query`
+- **THEN** the response includes namespace-level tool inventory
+- **AND** includes `list`, `help`, `look`, and `send`
+
+#### Scenario: Return list meta-tool command catalog
+
+- **WHEN** an MCP client calls `help` with `query="list"`
+- **THEN** the response lists supported `list` commands
+- **AND** includes `list.sessions` for MVP
+
+#### Scenario: Return list.sessions argument schema
+
+- **WHEN** an MCP client calls `help` with `query="list.sessions"`
+- **THEN** the response includes JSON schema for command-scoped `args`
+- **AND** includes canonical invoke shape with top-level tool `list`
+- **AND** includes `command="sessions"`
+
+#### Scenario: Reject unknown help query
+
+- **WHEN** an MCP client calls `help` with unknown `query`
+- **THEN** MCP returns `validation_invalid_params`
 
 ### Requirement: Manual Bundle Configuration for MVP
 
@@ -434,4 +479,3 @@ In `all=true` mode, encountering unreachable non-home bundle SHALL fail with
 - **WHEN** target bundle is not associated/home bundle
 - **AND** bundle relay is unreachable
 - **THEN** MCP returns `relay_unavailable`
-

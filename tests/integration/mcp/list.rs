@@ -88,7 +88,12 @@ async fn tool_catalog_contains_list_sessions_send_and_look() {
         .collect::<BTreeSet<_>>();
     assert_eq!(
         names,
-        BTreeSet::from(["list".to_string(), "look".to_string(), "send".to_string(),])
+        BTreeSet::from([
+            "help".to_string(),
+            "list".to_string(),
+            "look".to_string(),
+            "send".to_string(),
+        ])
     );
 }
 
@@ -175,6 +180,35 @@ async fn list_rejects_missing_or_invalid_command() {
     assert_eq!(
         error_code(&invalid_command),
         Some("validation_invalid_params")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_rejects_stringified_args_with_informative_validation_error() {
+    let runtime = TestRuntime::create();
+    let mut harness = McpHarness::spawn(&runtime).await;
+    let response = harness
+        .call_tool(
+            2,
+            "list",
+            Map::from_iter([
+                ("command".to_string(), Value::String("sessions".to_string())),
+                (
+                    "args".to_string(),
+                    Value::String("{\"all\":true}".to_string()),
+                ),
+            ]),
+        )
+        .await;
+
+    assert_eq!(error_code(&response), Some("validation_invalid_params"));
+    assert_eq!(
+        response["error"]["data"]["message"],
+        Value::String("invalid args for list command".to_string())
+    );
+    assert_eq!(
+        response["error"]["data"]["details"]["reason"],
+        Value::String("args must be a JSON object, got string".to_string())
     );
 }
 

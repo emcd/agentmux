@@ -78,7 +78,7 @@ artifact locations, see
     ("agent teams") and routes envelopes to target runtimes.
 - MCP host:
   - Command: `agentmux host mcp`
-  - Responsibility: expose MCP tools (`list`, `look`, `send`) and forward
+  - Responsibility: expose MCP tools (`list`, `help`, `look`, `send`) and forward
     requests to relay.
 - Operator CLI:
   - Commands: `agentmux list sessions`, `agentmux look`, `agentmux send`, `agentmux tui`
@@ -115,8 +115,9 @@ For shared runtime flags and operational details, see
 
 The MCP server advertises:
 
-- `list`: return candidate recipients in the selected bundle.
-- `look`: capture a read-only pane snapshot from a target session.
+- `help`: return tool/command help and JSON argument schemas.
+- `list`: meta-tool for session listing (`command="sessions"`).
+- `look`: capture a read-only session snapshot (`snapshot_lines`) from a target session.
 - `send`: deliver to explicit targets or broadcast.
 
 Delivery behavior:
