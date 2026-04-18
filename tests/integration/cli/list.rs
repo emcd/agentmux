@@ -1,5 +1,5 @@
 use std::{
-    env, fs,
+    fs,
     process::Command,
     sync::{Arc, Mutex},
 };
@@ -8,20 +8,11 @@ use agentmux::relay::{
     ListedBundle, ListedBundleState, ListedSession, ListedSessionTransport, RelayError,
     RelayResponse,
 };
-use agentmux::runtime::association::WorkspaceContext;
 use agentmux::runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory};
 use serde_json::Value;
 use tempfile::TempDir;
 
 use super::helpers::*;
-
-fn discovered_sender_session_id() -> String {
-    let current_directory = env::current_dir().expect("resolve current directory");
-    let workspace = WorkspaceContext::discover(&current_directory).expect("discover workspace");
-    workspace
-        .auto_session_name()
-        .expect("resolve sender session name")
-}
 
 #[test]
 fn list_sessions_rejects_conflicting_bundle_and_all_selectors() {
@@ -60,13 +51,13 @@ fn list_sessions_single_bundle_json_uses_canonical_bundle_shape() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    let sender_session = discovered_sender_session_id();
-    let mut sessions = vec!["tui".to_string(), "master".to_string()];
-    if !sessions.iter().any(|value| value == &sender_session) {
-        sessions.push(sender_session);
-    }
-    let session_refs = sessions.iter().map(String::as_str).collect::<Vec<_>>();
-    write_bundle_configuration(&config_root, "agentmux", Some(&["dev"]), &session_refs);
+    write_bundle_configuration(&config_root, "agentmux", Some(&["dev"]), &["tui", "master"]);
+    write_tui_configuration(
+        &config_root,
+        Some("agentmux"),
+        Some("user"),
+        &[("user", "default", Some("Operator"))],
+    );
 
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux").expect("bundle paths");
     ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
@@ -133,6 +124,7 @@ fn list_sessions_single_bundle_json_uses_canonical_bundle_shape() {
     let requests = request_log.lock().expect("request log lock");
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0]["operation"], "list");
+    assert_eq!(requests[0]["sender_session"], "user");
 }
 
 #[test]
@@ -144,14 +136,14 @@ fn list_sessions_all_json_orders_bundles_lexicographically() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    let sender_session = discovered_sender_session_id();
-    let mut sessions = vec!["tui".to_string()];
-    if !sessions.iter().any(|value| value == &sender_session) {
-        sessions.push(sender_session);
-    }
-    let session_refs = sessions.iter().map(String::as_str).collect::<Vec<_>>();
-    write_bundle_configuration(&config_root, "beta", Some(&["dev"]), &session_refs);
-    write_bundle_configuration(&config_root, "alpha", Some(&["dev"]), &session_refs);
+    write_bundle_configuration(&config_root, "beta", Some(&["dev"]), &["tui"]);
+    write_bundle_configuration(&config_root, "alpha", Some(&["dev"]), &["tui"]);
+    write_tui_configuration(
+        &config_root,
+        Some("alpha"),
+        Some("user"),
+        &[("user", "default", Some("Operator"))],
+    );
 
     let alpha_paths = BundleRuntimePaths::resolve(&state_root, "alpha").expect("alpha paths");
     ensure_bundle_runtime_directory(&alpha_paths).expect("ensure alpha runtime directory");
@@ -221,6 +213,10 @@ fn list_sessions_all_json_orders_bundles_lexicographically() {
     assert_eq!(bundles.len(), 2);
     assert_eq!(bundles[0]["id"], "alpha");
     assert_eq!(bundles[1]["id"], "beta");
+    let alpha_requests = alpha_log.lock().expect("alpha request lock");
+    assert_eq!(alpha_requests[0]["sender_session"], "user");
+    let beta_requests = beta_log.lock().expect("beta request lock");
+    assert_eq!(beta_requests[0]["sender_session"], "user");
 }
 
 #[test]
@@ -232,14 +228,14 @@ fn list_sessions_all_fails_fast_on_first_authorization_denial() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    let sender_session = discovered_sender_session_id();
-    let mut sessions = vec!["tui".to_string()];
-    if !sessions.iter().any(|value| value == &sender_session) {
-        sessions.push(sender_session);
-    }
-    let session_refs = sessions.iter().map(String::as_str).collect::<Vec<_>>();
-    write_bundle_configuration(&config_root, "alpha", Some(&["dev"]), &session_refs);
-    write_bundle_configuration(&config_root, "beta", Some(&["dev"]), &session_refs);
+    write_bundle_configuration(&config_root, "alpha", Some(&["dev"]), &["tui"]);
+    write_bundle_configuration(&config_root, "beta", Some(&["dev"]), &["tui"]);
+    write_tui_configuration(
+        &config_root,
+        Some("alpha"),
+        Some("user"),
+        &[("user", "default", Some("Operator"))],
+    );
 
     let alpha_paths = BundleRuntimePaths::resolve(&state_root, "alpha").expect("alpha paths");
     ensure_bundle_runtime_directory(&alpha_paths).expect("ensure alpha runtime directory");
@@ -282,4 +278,72 @@ fn list_sessions_all_fails_fast_on_first_authorization_denial() {
         !stderr.contains("relay_unavailable"),
         "fanout must stop on first authorization denial: {stderr}"
     );
+}
+
+#[test]
+fn list_sessions_uses_ui_session_identity_defaults_outside_associated_workspace() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    let workspace_root = temporary.path().join("workspace");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    fs::create_dir_all(&workspace_root).expect("create workspace root");
+    write_bundle_configuration(
+        &config_root,
+        "infrastructure",
+        Some(&["dev"]),
+        &["alpha", "bravo"],
+    );
+    write_tui_configuration(
+        &config_root,
+        Some("infrastructure"),
+        Some("user"),
+        &[("user", "default", Some("Operator"))],
+    );
+
+    let bundle_paths =
+        BundleRuntimePaths::resolve(&state_root, "infrastructure").expect("bundle paths");
+    ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
+    let request_log = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let relay_thread = spawn_fake_relay_once(
+        &bundle_paths.relay_socket,
+        RelayResponse::List {
+            schema_version: "1".to_string(),
+            bundle: ListedBundle {
+                id: "infrastructure".to_string(),
+                state: ListedBundleState::Up,
+                state_reason_code: None,
+                state_reason: None,
+                sessions: vec![],
+            },
+        },
+        Arc::clone(&request_log),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .current_dir(&workspace_root)
+        .args([
+            "list",
+            "sessions",
+            "--bundle",
+            "infrastructure",
+            "--json",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .output()
+        .expect("run list sessions --bundle infrastructure");
+    relay_thread.join().expect("join fake relay thread");
+
+    assert!(output.status.success(), "command should succeed");
+    let requests = request_log.lock().expect("request log lock");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0]["sender_session"], "user");
 }

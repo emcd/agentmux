@@ -12,13 +12,8 @@ use crate::{
         RelayResponse, request_relay,
     },
     runtime::{
-        association::{
-            McpAssociationCli, WorkspaceContext, load_local_mcp_overrides, resolve_association,
-            resolve_sender_session,
-        },
-        error::RuntimeError,
-        paths::BundleRuntimePaths,
-        starter::ensure_starter_configuration_layout,
+        association::WorkspaceContext, error::RuntimeError, paths::BundleRuntimePaths,
+        starter::ensure_starter_configuration_layout, tui_session::resolve_tui_session_identity,
     },
 };
 
@@ -37,19 +32,16 @@ pub(super) fn run_agentmux_list(arguments: &[String]) -> Result<(), RuntimeError
     let current_directory = env::current_dir()
         .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
     let workspace = WorkspaceContext::discover(&current_directory)?;
-    let local_overrides = load_local_mcp_overrides(&workspace.workspace_root)?;
-    let roots = shared::resolve_roots(&parsed.runtime, &workspace, local_overrides.as_ref())?;
+    let roots = shared::resolve_roots(&parsed.runtime, &workspace, None)?;
     ensure_starter_configuration_layout(&roots.configuration_root)?;
-    let association = resolve_association(
-        &McpAssociationCli {
-            bundle_name: parsed.bundle_name.clone(),
-            session_name: None,
-        },
-        local_overrides.as_ref(),
-        &workspace,
+    let resolved_session = resolve_tui_session_identity(
+        &roots.configuration_root,
+        &workspace.workspace_root,
+        parsed.bundle_name.as_deref(),
+        parsed.session_selector.as_deref(),
     )?;
-    let home_bundle_name = association.bundle_name.clone();
-    let sender_candidate = association.session_name.clone();
+    let home_bundle_name = resolved_session.bundle_name.clone();
+    let sender_session = resolved_session.session_id.clone();
 
     let payload = if parsed.all_bundles {
         let memberships = load_bundle_group_memberships(&roots.configuration_root)
@@ -67,9 +59,8 @@ pub(super) fn run_agentmux_list(arguments: &[String]) -> Result<(), RuntimeError
             let listed = request_listed_bundle(
                 &roots,
                 &bundle_name,
-                sender_candidate.as_str(),
+                sender_session.as_str(),
                 home_bundle_name.as_str(),
-                &current_directory,
             )?;
             schema_version = listed.schema_version;
             bundles.push(listed.bundle);
@@ -81,10 +72,9 @@ pub(super) fn run_agentmux_list(arguments: &[String]) -> Result<(), RuntimeError
     } else {
         let listed = request_listed_bundle(
             &roots,
-            &association.bundle_name,
-            sender_candidate.as_str(),
+            &resolved_session.bundle_name,
+            sender_session.as_str(),
             home_bundle_name.as_str(),
-            &current_directory,
         )?;
         json!({
             "schema_version": listed.schema_version,
@@ -142,6 +132,10 @@ fn parse_list_arguments(arguments: &[String]) -> Result<ListArguments, RuntimeEr
             "--bundle" | "--bundle-name" => {
                 parsed.bundle_name = Some(shared::take_value(arguments, &mut index, "--bundle")?);
             }
+            "--as-session" => {
+                parsed.session_selector =
+                    Some(shared::take_value(arguments, &mut index, "--as-session")?);
+            }
             "--all" => parsed.all_bundles = true,
             "--json" => parsed.output_json = true,
             unknown => {
@@ -164,7 +158,7 @@ fn parse_list_arguments(arguments: &[String]) -> Result<ListArguments, RuntimeEr
 
 pub(super) fn print_list_help() {
     println!(
-        "Usage: agentmux list sessions [--bundle NAME|--all] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux list sessions [--bundle NAME|--all] [--as-session NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }
 
@@ -177,18 +171,16 @@ struct ListedBundleResult {
 fn request_listed_bundle(
     roots: &crate::runtime::paths::RuntimeRoots,
     bundle_name: &str,
-    sender_candidate: &str,
+    sender_session: &str,
     home_bundle_name: &str,
-    current_directory: &std::path::Path,
 ) -> Result<ListedBundleResult, RuntimeError> {
     let bundle = load_bundle_configuration(&roots.configuration_root, bundle_name)
         .map_err(shared::map_bundle_load_error)?;
-    let sender_session = resolve_sender_session(&bundle, sender_candidate, current_directory)?;
     let paths = BundleRuntimePaths::resolve(&roots.state_root, bundle_name)?;
     let response = request_relay(
         &paths.relay_socket,
         &RelayRequest::List {
-            sender_session: Some(sender_session),
+            sender_session: Some(sender_session.to_string()),
         },
     );
     let response = match response {

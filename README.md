@@ -95,10 +95,10 @@ agentmux host relay [--no-autostart]
 agentmux host mcp [--bundle NAME] [--session-name NAME]
 agentmux up (<bundle-id> | --group GROUP)
 agentmux down (<bundle-id> | --group GROUP)
-agentmux list sessions [--bundle NAME|--all] [--json]
-agentmux look <target-session> [--bundle NAME] [--lines N]
-agentmux tui [--bundle NAME] [--session NAME] [--lines N]
-agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--quiescence-timeout-ms MS] [--acp-turn-timeout-ms MS] [--request-id ID] [--bundle NAME] [--session NAME] [--json]
+agentmux list sessions [--bundle NAME|--all] [--as-session NAME] [--json]
+agentmux look <target-session> [--bundle NAME] [--as-session NAME] [--lines N]
+agentmux tui [--bundle NAME] [--as-session NAME] [--lines N]
+agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--quiescence-timeout-ms MS] [--acp-turn-timeout-ms MS] [--request-id ID] [--bundle NAME] [--as-session NAME] [--json]
 ```
 
 Use `--help` on each command for the full flag list.
@@ -146,12 +146,12 @@ Association resolution:
   - session from worktree top-level directory name,
 - `send` and `tui` use global TUI session selectors:
   - `--bundle` or `default-bundle`,
-  - `--session` or `default-session`,
+  - `--as-session` or `default-session`,
   - fail-fast validation when selectors are missing or unknown.
 
 TUI session identity resolution:
 
-- `--session` selector
+- `--as-session` selector
 - active `tui.toml` defaults (`default-session`)
 - no association fallback for TUI/send
 

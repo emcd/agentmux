@@ -42,7 +42,7 @@ pub fn load_active_tui_configuration(
 /// Resolves TUI bundle/session identity with deterministic precedence.
 ///
 /// Resolution order:
-/// 1. explicit `--bundle` and `--session`
+/// 1. explicit `--bundle` and `--as-session`
 /// 2. `default-bundle` and `default-session` from active TUI configuration
 /// 3. fail-fast validation errors
 ///
@@ -105,7 +105,7 @@ fn resolve_session_selector(
     }
     Err(RuntimeError::validation(
         "validation_unknown_session",
-        "session is required via --session or tui.toml default-session".to_string(),
+        "session is required via --as-session or tui.toml default-session".to_string(),
     ))
 }
 

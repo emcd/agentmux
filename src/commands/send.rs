@@ -136,8 +136,8 @@ fn parse_send_arguments(arguments: &[String]) -> Result<SendArguments, RuntimeEr
             "--bundle" | "--bundle-name" => {
                 bundle_name = Some(shared::take_value(arguments, &mut index, "--bundle")?);
             }
-            "--session" => {
-                session_selector = Some(shared::take_value(arguments, &mut index, "--session")?);
+            "--as-session" => {
+                session_selector = Some(shared::take_value(arguments, &mut index, "--as-session")?);
             }
             "--request-id" => {
                 request_id = Some(shared::take_value(arguments, &mut index, "--request-id")?);
@@ -344,6 +344,6 @@ fn validate_send_targets(arguments: &SendArguments) -> Result<(), RuntimeError> 
 
 pub(super) fn print_send_help() {
     println!(
-        "Usage: agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--quiescence-timeout-ms MS] [--acp-turn-timeout-ms MS] [--request-id ID] [--bundle NAME] [--session NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--quiescence-timeout-ms MS] [--acp-turn-timeout-ms MS] [--request-id ID] [--bundle NAME] [--as-session NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }

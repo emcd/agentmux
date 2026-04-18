@@ -57,6 +57,7 @@ pub(super) struct McpHostArguments {
 #[derive(Clone, Debug, Default)]
 pub(super) struct ListArguments {
     pub(super) bundle_name: Option<String>,
+    pub(super) session_selector: Option<String>,
     pub(super) all_bundles: bool,
     pub(super) output_json: bool,
     pub(super) runtime: RuntimeArguments,
@@ -65,6 +66,7 @@ pub(super) struct ListArguments {
 #[derive(Clone, Debug)]
 pub(super) struct LookArguments {
     pub(super) bundle_name: Option<String>,
+    pub(super) session_selector: Option<String>,
     pub(super) target_session: String,
     pub(super) lines: Option<u64>,
     pub(super) runtime: RuntimeArguments,
@@ -184,22 +186,22 @@ fn print_agentmux_help() {
         "  down (<bundle-id> | --group GROUP) [--config-directory PATH] ",
         "[--state-directory PATH] [--inscriptions-directory PATH|",
         "--logs-directory PATH] [--repository-root PATH]\n",
-        "  list sessions [--bundle NAME|--all] [--json] ",
+        "  list sessions [--bundle NAME|--all] [--as-session NAME] [--json] ",
         "[--config-directory PATH] [--state-directory PATH] ",
         "[--inscriptions-directory PATH|--logs-directory PATH] ",
         "[--repository-root PATH]\n",
-        "  look <target-session> [--bundle NAME] [--lines N] ",
+        "  look <target-session> [--bundle NAME] [--as-session NAME] [--lines N] ",
         "[--config-directory PATH] [--state-directory PATH] ",
         "[--inscriptions-directory PATH|--logs-directory PATH] ",
         "[--repository-root PATH]\n",
-        "  tui [--bundle NAME] [--session NAME] [--lines N] ",
+        "  tui [--bundle NAME] [--as-session NAME] [--lines N] ",
         "[--config-directory PATH] [--state-directory PATH] ",
         "[--inscriptions-directory PATH|--logs-directory PATH] ",
         "[--repository-root PATH]\n",
         "  send (--target NAME ... | --broadcast) [--message TEXT] ",
         "[--delivery-mode async|sync] [--quiescence-timeout-ms MS] ",
         "[--acp-turn-timeout-ms MS] [--request-id ID] [--bundle NAME] ",
-        "[--session NAME] [--json] [--config-directory PATH] ",
+        "[--as-session NAME] [--json] [--config-directory PATH] ",
         "[--state-directory PATH] [--inscriptions-directory PATH|",
         "--logs-directory PATH] [--repository-root PATH]"
     ));

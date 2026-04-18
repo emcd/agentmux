@@ -69,9 +69,9 @@ fn parse_tui_arguments(arguments: &[String]) -> Result<TuiArguments, RuntimeErro
             "--bundle" | "--bundle-name" => {
                 parsed.bundle_name = Some(shared::take_value(arguments, &mut index, "--bundle")?);
             }
-            "--session" => {
+            "--as-session" => {
                 parsed.session_selector =
-                    Some(shared::take_value(arguments, &mut index, "--session")?);
+                    Some(shared::take_value(arguments, &mut index, "--as-session")?);
             }
             "--lines" => {
                 let value = shared::take_value(arguments, &mut index, "--lines")?;
@@ -91,7 +91,7 @@ fn parse_tui_arguments(arguments: &[String]) -> Result<TuiArguments, RuntimeErro
 
 pub(super) fn print_tui_help() {
     println!(
-        "Usage: agentmux tui [--bundle NAME] [--session NAME] [--lines N] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux tui [--bundle NAME] [--as-session NAME] [--lines N] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }
 

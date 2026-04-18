@@ -345,7 +345,7 @@ context:
 
 `agentmux tui` SHALL support session/bundle selectors:
 
-- optional `--session <session-selector>`
+- optional `--as-session <session-selector>`
 - optional `--bundle <bundle-id>`
 
 `agentmux tui --sender` SHALL NOT be supported in MVP.
@@ -358,7 +358,7 @@ Bundle selection SHALL resolve as:
 
 Session selection SHALL resolve as:
 
-1. explicit `--session`
+1. explicit `--as-session`
 2. `default-session` from global `tui.toml`
 3. fail-fast `validation_unknown_session`
 
@@ -367,18 +367,18 @@ operations in that process.
 
 #### Scenario: Launch TUI with explicit session and bundle selectors
 
-- **WHEN** an operator runs `agentmux tui --bundle agentmux --session user`
+- **WHEN** an operator runs `agentmux tui --bundle agentmux --as-session user`
 - **THEN** startup resolves session `user` on bundle `agentmux`
 
 #### Scenario: Launch TUI from config defaults
 
-- **WHEN** operator runs `agentmux tui` without `--bundle` and `--session`
+- **WHEN** operator runs `agentmux tui` without `--bundle` and `--as-session`
 - **AND** `tui.toml` has `default-bundle` and `default-session`
 - **THEN** startup resolves both values from config defaults
 
 #### Scenario: Reject missing default session when selector is omitted
 
-- **WHEN** operator runs `agentmux tui` without `--session`
+- **WHEN** operator runs `agentmux tui` without `--as-session`
 - **AND** `default-session` is absent from `tui.toml`
 - **THEN** CLI fails fast with `validation_unknown_session`
 
@@ -521,7 +521,7 @@ When relay returns phase-1 acknowledgment, CLI JSON output SHALL include:
 
 `agentmux send` SHALL support optional sender session selector:
 
-- `--session <session-selector>`
+- `--as-session <session-selector>`
 
 `agentmux send --sender` SHALL NOT be supported in MVP.
 
@@ -533,7 +533,7 @@ Send bundle resolution SHALL be:
 
 Send session resolution SHALL be:
 
-1. explicit `--session`
+1. explicit `--as-session`
 2. `default-session` from global `tui.toml`
 3. fail-fast `validation_unknown_session`
 
@@ -542,7 +542,7 @@ relay dispatch.
 
 #### Scenario: Send with explicit session selector
 
-- **WHEN** an operator runs `agentmux send --bundle agentmux --session user --target mcp --message "hi"`
+- **WHEN** an operator runs `agentmux send --bundle agentmux --as-session user --target mcp --message "hi"`
 - **AND** session `user` is configured in global TUI sessions
 - **THEN** send caller identity resolves as session `user`
 
@@ -555,13 +555,13 @@ relay dispatch.
 
 #### Scenario: Reject missing default bundle for send
 
-- **WHEN** an operator runs `agentmux send --session user --target mcp --message "hi"`
+- **WHEN** an operator runs `agentmux send --as-session user --target mcp --message "hi"`
 - **AND** `default-bundle` is absent from `tui.toml`
 - **THEN** CLI rejects invocation with `validation_unknown_bundle`
 
 #### Scenario: Reject unknown explicit session selector
 
-- **WHEN** an operator runs `agentmux send --bundle agentmux --session missing --target mcp --message "hi"`
+- **WHEN** an operator runs `agentmux send --bundle agentmux --as-session missing --target mcp --message "hi"`
 - **AND** `tui.toml` has no matching `[[sessions]]` selector
 - **THEN** CLI rejects invocation with `validation_unknown_session`
 
@@ -663,4 +663,3 @@ In `--all` mode, encountering unreachable non-home bundle SHALL fail with
 - **WHEN** target bundle is not associated/home bundle
 - **AND** bundle relay is unreachable
 - **THEN** CLI returns `relay_unavailable`
-

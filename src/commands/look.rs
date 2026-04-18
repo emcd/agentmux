@@ -6,13 +6,8 @@ use crate::{
     configuration::load_bundle_configuration,
     relay::{RelayRequest, RelayResponse, request_relay},
     runtime::{
-        association::{
-            McpAssociationCli, WorkspaceContext, load_local_mcp_overrides, resolve_association,
-            resolve_sender_session,
-        },
-        error::RuntimeError,
-        paths::BundleRuntimePaths,
-        starter::ensure_starter_configuration_layout,
+        association::WorkspaceContext, error::RuntimeError, paths::BundleRuntimePaths,
+        starter::ensure_starter_configuration_layout, tui_session::resolve_tui_session_identity,
     },
 };
 
@@ -31,35 +26,24 @@ pub(super) fn run_agentmux_look(arguments: &[String]) -> Result<(), RuntimeError
     let current_directory = env::current_dir()
         .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
     let workspace = WorkspaceContext::discover(&current_directory)?;
-    let local_overrides = load_local_mcp_overrides(&workspace.workspace_root)?;
-    let associated = resolve_association(
-        &McpAssociationCli::default(),
-        local_overrides.as_ref(),
-        &workspace,
-    )?;
-    if let Some(requested_bundle_name) = parsed.bundle_name.as_ref()
-        && requested_bundle_name != &associated.bundle_name
-    {
-        return Err(RuntimeError::validation(
-            "validation_cross_bundle_unsupported",
-            "look is limited to the associated bundle in MVP".to_string(),
-        ));
-    }
-
-    let roots = shared::resolve_roots(&parsed.runtime, &workspace, local_overrides.as_ref())?;
+    let roots = shared::resolve_roots(&parsed.runtime, &workspace, None)?;
     ensure_starter_configuration_layout(&roots.configuration_root)?;
-    let bundle = load_bundle_configuration(&roots.configuration_root, &associated.bundle_name)
+    let resolved_session = resolve_tui_session_identity(
+        &roots.configuration_root,
+        &workspace.workspace_root,
+        parsed.bundle_name.as_deref(),
+        parsed.session_selector.as_deref(),
+    )?;
+    load_bundle_configuration(&roots.configuration_root, &resolved_session.bundle_name)
         .map_err(shared::map_bundle_load_error)?;
-    let requester_session =
-        resolve_sender_session(&bundle, &associated.session_name, &current_directory)?;
-    let paths = BundleRuntimePaths::resolve(&roots.state_root, &associated.bundle_name)?;
+    let paths = BundleRuntimePaths::resolve(&roots.state_root, &resolved_session.bundle_name)?;
     let response = request_relay(
         &paths.relay_socket,
         &RelayRequest::Look {
-            requester_session,
+            requester_session: resolved_session.session_id,
             target_session: parsed.target_session,
             lines: parsed.lines.map(|value| value as usize),
-            bundle_name: parsed.bundle_name,
+            bundle_name: Some(resolved_session.bundle_name),
         },
     )
     .map_err(|source| shared::map_relay_request_failure(&paths.relay_socket, source))?;
@@ -99,6 +83,7 @@ pub(super) fn run_agentmux_look(arguments: &[String]) -> Result<(), RuntimeError
 fn parse_look_arguments(arguments: &[String]) -> Result<LookArguments, RuntimeError> {
     let mut parsed = LookArguments {
         bundle_name: None,
+        session_selector: None,
         target_session: String::new(),
         lines: None,
         runtime: RuntimeArguments::default(),
@@ -113,6 +98,10 @@ fn parse_look_arguments(arguments: &[String]) -> Result<LookArguments, RuntimeEr
         match arguments[index].as_str() {
             "--bundle" | "--bundle-name" => {
                 parsed.bundle_name = Some(shared::take_value(arguments, &mut index, "--bundle")?);
+            }
+            "--as-session" => {
+                parsed.session_selector =
+                    Some(shared::take_value(arguments, &mut index, "--as-session")?);
             }
             "--lines" => {
                 let value = shared::take_value(arguments, &mut index, "--lines")?;
@@ -145,6 +134,6 @@ fn parse_look_arguments(arguments: &[String]) -> Result<LookArguments, RuntimeEr
 
 pub(super) fn print_look_help() {
     println!(
-        "Usage: agentmux look <target-session> [--bundle NAME] [--lines N] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux look <target-session> [--bundle NAME] [--as-session NAME] [--lines N] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }

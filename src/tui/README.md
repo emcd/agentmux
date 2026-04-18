@@ -32,7 +32,7 @@ User-facing usage details and keybindings are documented under
 - explicit `To` recipient field with deterministic target parsing,
 - async send workflow with local pending tracking and terminal outcome updates,
 - session identity precedence:
-  - `--session`
+  - `--as-session`
   - `default-session` from active `tui.toml` configuration
   - no association fallback in MVP,
 - bundle precedence:

@@ -103,7 +103,7 @@ pub struct BundleGroupMembership {
 /// One global TUI session entry from `tui.toml`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct TuiSession {
-    /// Selector identity used by CLI (`--session`).
+    /// Selector identity used by CLI (`--as-session`).
     pub id: String,
     /// Optional operator-facing label.
     #[serde(default, skip_serializing_if = "Option::is_none")]

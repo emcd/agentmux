@@ -81,7 +81,7 @@ fn bare_agentmux_without_tty_prints_help_and_fails() {
         "unexpected stdout: {stdout}"
     );
     assert!(
-        stdout.contains("list sessions [--bundle NAME|--all]"),
+        stdout.contains("list sessions [--bundle NAME|--all] [--as-session NAME]"),
         "top-level help should advertise relocked list sessions surface: {stdout}"
     );
     assert!(

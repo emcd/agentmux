@@ -355,15 +355,3 @@ pub(super) fn spawn_fake_relay_once(
         panic!("timed out waiting for fake relay request");
     })
 }
-
-pub(super) fn configure_local_mcp_override(
-    workspace_root: &Path,
-    bundle_name: &str,
-    session_name: &str,
-) {
-    let override_path = workspace_root.join(".auxiliary/configuration/agentmux/overrides");
-    fs::create_dir_all(&override_path).expect("create local override directory");
-    let override_file = override_path.join("mcp.toml");
-    let content = format!("bundle_name = \"{bundle_name}\"\nsession_name = \"{session_name}\"\n");
-    fs::write(override_file, content).expect("write local mcp override file");
-}
