@@ -289,12 +289,10 @@ fn run_tui(
                     );
                     match result {
                         Ok(completion) => {
-                            let snapshot = client.take_snapshot_lines();
-                            if !snapshot.is_empty() {
-                                let _ = tx.send(AppEvent::Message(Message {
-                                    role: MessageRole::Assistant,
-                                    text: snapshot.join("\n"),
-                                }));
+                            let replay_entries = client.take_replay_entries();
+                            let replay_messages = replay_entries_to_messages(replay_entries);
+                            for msg in replay_messages {
+                                let _ = tx.send(AppEvent::Message(msg));
                             }
                             let _ = tx.send(AppEvent::PromptComplete(completion.stop_reason));
                         }
@@ -302,6 +300,7 @@ fn run_tui(
                             let _ = tx.send(AppEvent::Error(format!("{e:?}")));
                         }
                     }
+                    let _ = terminal.draw(|frame| draw(frame, &app));
                     // Drain events accumulated during prompt
                     while let Ok(event) = rx.try_recv() {
                         app.handle_event(event);
