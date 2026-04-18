@@ -707,36 +707,13 @@ fn resolve_explicit_targets(
             resolved.push(requested.to_string());
             continue;
         }
-
-        let matched_by_name = bundle
-            .members
-            .iter()
-            .filter(|member| member.name.as_deref() == Some(requested))
-            .collect::<Vec<_>>();
-        match matched_by_name.as_slice() {
-            [] => unknown_targets.push(target.clone()),
-            [member] => resolved.push(member.id.clone()),
-            _ => {
-                let matching_sessions = matched_by_name
-                    .iter()
-                    .map(|member| member.id.clone())
-                    .collect::<Vec<_>>();
-                return Err(relay_error(
-                    "validation_ambiguous_recipient",
-                    "target matches multiple configured session names",
-                    Some(json!({
-                        "target": target,
-                        "matching_sessions": matching_sessions,
-                    })),
-                ));
-            }
-        }
+        unknown_targets.push(target.clone());
     }
 
     if !unknown_targets.is_empty() {
         return Err(relay_error(
-            "validation_unknown_recipient",
-            "one or more targets are not in bundle configuration",
+            "validation_unknown_target",
+            "one or more targets are not canonical configured target identifiers",
             Some(json!({"unknown_targets": unknown_targets})),
         ));
     }

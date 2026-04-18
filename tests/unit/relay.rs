@@ -298,11 +298,11 @@ fn chat_rejects_unknown_target() {
         &tmux_socket,
     )
     .expect_err("chat should fail");
-    assert_eq!(response.code, "validation_unknown_recipient");
+    assert_eq!(response.code, "validation_unknown_target");
 }
 
 #[test]
-fn chat_accepts_target_by_recipient_name() {
+fn chat_rejects_target_by_configured_session_name_alias() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
@@ -322,13 +322,8 @@ fn chat_accepts_target_by_recipient_name() {
         "party",
         &tmux_socket,
     )
-    .expect("chat response");
-
-    let RelayResponse::Chat { results, .. } = response else {
-        panic!("expected chat response");
-    };
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].target_session, "bravo");
+    .expect_err("chat should fail");
+    assert_eq!(response.code, "validation_unknown_target");
 }
 
 #[test]
