@@ -324,18 +324,16 @@ fn run_tui(
                 KeyCode::PageDown => {
                     app.scroll_offset = app.scroll_offset.saturating_sub(10);
                 }
-                KeyCode::Up => {
-                    if !app.history.is_empty() {
-                        let new_index = match app.history_index {
-                            None => app.history.len() - 1,
-                            Some(idx) => idx.saturating_sub(1),
-                        };
-                        if app.history_index.is_none() {
-                            app.input_draft = app.input.clone();
-                        }
-                        app.history_index = Some(new_index);
-                        app.input = app.history[new_index].clone();
+                KeyCode::Up if !app.history.is_empty() => {
+                    let new_index = match app.history_index {
+                        None => app.history.len() - 1,
+                        Some(idx) => idx.saturating_sub(1),
+                    };
+                    if app.history_index.is_none() {
+                        app.input_draft = app.input.clone();
                     }
+                    app.history_index = Some(new_index);
+                    app.input = app.history[new_index].clone();
                 }
                 KeyCode::Down => match app.history_index {
                     Some(idx) if idx + 1 < app.history.len() => {

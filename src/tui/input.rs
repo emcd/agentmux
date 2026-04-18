@@ -53,17 +53,13 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
 
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
-            KeyCode::Char('a') => {
-                if state.focus == FocusField::Message {
-                    state.move_message_cursor_home();
-                    return Ok(());
-                }
+            KeyCode::Char('a') if state.focus == FocusField::Message => {
+                state.move_message_cursor_home();
+                return Ok(());
             }
-            KeyCode::Char('e') => {
-                if state.focus == FocusField::Message {
-                    state.move_message_cursor_end();
-                    return Ok(());
-                }
+            KeyCode::Char('e') if state.focus == FocusField::Message => {
+                state.move_message_cursor_end();
+                return Ok(());
             }
             KeyCode::Char('j') => {
                 state.insert_newline_if_message();
@@ -93,10 +89,8 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
                 return state.send_message();
             }
         }
-        KeyCode::Esc => {
-            if state.focus == FocusField::Message {
-                state.snap_chat_history_to_latest();
-            }
+        KeyCode::Esc if state.focus == FocusField::Message => {
+            state.snap_chat_history_to_latest();
         }
         KeyCode::Up => {
             if state.focus == FocusField::To {
@@ -112,25 +106,17 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
                 state.move_message_cursor_down();
             }
         }
-        KeyCode::Left => {
-            if state.focus == FocusField::Message {
-                state.move_message_cursor_left();
-            }
+        KeyCode::Left if state.focus == FocusField::Message => {
+            state.move_message_cursor_left();
         }
-        KeyCode::Right => {
-            if state.focus == FocusField::Message {
-                state.move_message_cursor_right();
-            }
+        KeyCode::Right if state.focus == FocusField::Message => {
+            state.move_message_cursor_right();
         }
-        KeyCode::Home => {
-            if state.focus == FocusField::Message {
-                state.move_message_cursor_home();
-            }
+        KeyCode::Home if state.focus == FocusField::Message => {
+            state.move_message_cursor_home();
         }
-        KeyCode::End => {
-            if state.focus == FocusField::Message {
-                state.move_message_cursor_end();
-            }
+        KeyCode::End if state.focus == FocusField::Message => {
+            state.move_message_cursor_end();
         }
         KeyCode::Backspace => state.backspace(),
         KeyCode::PageUp => state.scroll_chat_history_page_up(),
