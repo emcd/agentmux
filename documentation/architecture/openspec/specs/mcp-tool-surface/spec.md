@@ -7,16 +7,17 @@ TBD - created by archiving change add-mcp-tool-surface-contract. Update Purpose 
 
 The system SHALL expose the following MCP tools for relay MVP:
 
-- `list.sessions`
+- `list`
 - `send`
 
-The legacy `list` tool is removed in this pre-MVP change.
+The relocked pre-stable MCP surface removes `list.sessions` with no
+compatibility alias.
 
-#### Scenario: Advertise relocked list sessions tool
+#### Scenario: Advertise relocked list meta-tool
 
 - **WHEN** an MCP client enumerates available tools
-- **THEN** tool inventory includes `list.sessions`
-- **AND** does not include legacy `list`
+- **THEN** tool inventory includes `list`
+- **AND** does not include `list.sessions`
 
 ### Requirement: Manual Bundle Configuration for MVP
 
@@ -30,7 +31,7 @@ MVP and SHALL NOT expose MCP tools that mutate bundle configuration.
 
 ### Requirement: Recipient Listing Contract
 
-`list.sessions` SHALL return bundle session listing payloads.
+`list` with `command="sessions"` SHALL return bundle session listing payloads.
 
 Single-bundle successful responses SHALL include:
 
@@ -48,7 +49,7 @@ If requester identity is valid and policy denies relay-handled single-bundle
 list access, MCP SHALL return `authorization_forbidden` and SHALL NOT return a
 successful list payload.
 
-#### Scenario: Deny single-bundle list sessions request with authorization_forbidden
+#### Scenario: Deny single-bundle list request with authorization_forbidden
 
 - **WHEN** requester identity is valid
 - **AND** policy denies list visibility for requester
@@ -363,23 +364,31 @@ When relay marks early delivery acknowledgment, MCP response SHALL preserve:
 
 ### Requirement: MCP List Sessions Selectors
 
-`list.sessions` request parameters SHALL be:
+`list` request parameters for MVP sessions listing SHALL be:
 
-- `bundle_name` (optional)
-- `all` (optional bool; default `false`)
+- `command` (required, must equal `"sessions"`)
+- `args` (optional object)
+  - `bundle_name` (optional)
+  - `all` (optional bool; default `false`)
 
 `bundle_name` and `all=true` SHALL be mutually exclusive.
-If neither is provided, MCP SHALL resolve associated/home bundle.
+If neither selector is provided, MCP SHALL resolve associated/home bundle.
 
-#### Scenario: Reject conflicting list sessions selectors
+#### Scenario: Reject missing or unsupported list command
+
+- **WHEN** caller omits `command` or provides a value other than `"sessions"`
+- **THEN** MCP rejects request with `validation_invalid_params`
+
+#### Scenario: Reject conflicting list selectors
 
 - **WHEN** caller provides `bundle_name` and `all=true`
 - **THEN** MCP rejects request with `validation_invalid_params`
 
 ### Requirement: MCP List Sessions All-Mode Aggregation
 
-When `all=true`, MCP SHALL perform adapter-owned fanout in lexicographic
-bundle-id order and return aggregate payload:
+When `list` is called with `command="sessions"` and `all=true`, MCP SHALL perform
+adapter-owned fanout in lexicographic bundle-id order and return aggregate
+payload:
 
 - `schema_version`
 - `bundles[]` (array of canonical single-bundle `bundle` objects)

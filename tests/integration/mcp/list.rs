@@ -9,6 +9,13 @@ use serde_json::{Map, Value, json};
 
 use super::helpers::*;
 
+fn list_sessions_call(args: Map<String, Value>) -> Map<String, Value> {
+    Map::from_iter([
+        ("command".to_string(), Value::String("sessions".to_string())),
+        ("args".to_string(), Value::Object(args)),
+    ])
+}
+
 fn relay_socket_for(runtime: &TestRuntime, bundle_name: &str) -> PathBuf {
     runtime
         .state_root
@@ -81,11 +88,7 @@ async fn tool_catalog_contains_list_sessions_send_and_look() {
         .collect::<BTreeSet<_>>();
     assert_eq!(
         names,
-        BTreeSet::from([
-            "list.sessions".to_string(),
-            "look".to_string(),
-            "send".to_string(),
-        ])
+        BTreeSet::from(["list".to_string(), "look".to_string(), "send".to_string(),])
     );
 }
 
@@ -121,7 +124,9 @@ async fn list_sessions_returns_canonical_bundle_payload_from_relay() {
         ),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
-    let response = harness.call_tool(2, "list.sessions", Map::new()).await;
+    let response = harness
+        .call_tool(2, "list", list_sessions_call(Map::new()))
+        .await;
     let payload = decode_tool_payload(&response);
 
     assert_eq!(payload["schema_version"], "1");
@@ -137,23 +142,49 @@ async fn list_sessions_returns_canonical_bundle_payload_from_relay() {
 async fn list_sessions_rejects_conflicting_bundle_and_all_selectors() {
     let runtime = TestRuntime::create();
     let mut harness = McpHarness::spawn(&runtime).await;
-    let arguments = Map::from_iter([
+    let arguments = list_sessions_call(Map::from_iter([
         (
             "bundle_name".to_string(),
             Value::String(BUNDLE_NAME.to_string()),
         ),
         ("all".to_string(), Value::Bool(true)),
-    ]);
-    let response = harness.call_tool(2, "list.sessions", arguments).await;
+    ]));
+    let response = harness.call_tool(2, "list", arguments).await;
 
     assert_eq!(error_code(&response), Some("validation_invalid_params"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_rejects_missing_or_invalid_command() {
+    let runtime = TestRuntime::create();
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let missing_command = harness.call_tool(2, "list", Map::new()).await;
+    assert_eq!(
+        error_code(&missing_command),
+        Some("validation_invalid_params")
+    );
+
+    let invalid_command = harness
+        .call_tool(
+            2,
+            "list",
+            Map::from_iter([("command".to_string(), Value::String("bundles".to_string()))]),
+        )
+        .await;
+    assert_eq!(
+        error_code(&invalid_command),
+        Some("validation_invalid_params")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn list_sessions_synthesizes_down_bundle_for_unreachable_home_bundle() {
     let runtime = TestRuntime::create();
     let mut harness = McpHarness::spawn(&runtime).await;
-    let response = harness.call_tool(2, "list.sessions", Map::new()).await;
+    let response = harness
+        .call_tool(2, "list", list_sessions_call(Map::new()))
+        .await;
     let payload = decode_tool_payload(&response);
 
     assert_eq!(payload["schema_version"], "1");
@@ -173,9 +204,11 @@ async fn list_sessions_rejects_unreachable_non_home_bundle_with_relay_unavailabl
     let runtime = TestRuntime::create();
     write_bundle_configuration(&runtime.config_root, "zeta", &["zeta"]);
     let mut harness = McpHarness::spawn(&runtime).await;
-    let arguments =
-        Map::from_iter([("bundle_name".to_string(), Value::String("zeta".to_string()))]);
-    let response = harness.call_tool(2, "list.sessions", arguments).await;
+    let arguments = list_sessions_call(Map::from_iter([(
+        "bundle_name".to_string(),
+        Value::String("zeta".to_string()),
+    )]));
+    let response = harness.call_tool(2, "list", arguments).await;
 
     assert_eq!(error_code(&response), Some("relay_unavailable"));
     assert_eq!(
@@ -244,8 +277,8 @@ async fn list_sessions_all_mode_aggregates_in_lexicographic_bundle_order() {
         ),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
-    let arguments = Map::from_iter([("all".to_string(), Value::Bool(true))]);
-    let response = harness.call_tool(2, "list.sessions", arguments).await;
+    let arguments = list_sessions_call(Map::from_iter([("all".to_string(), Value::Bool(true))]));
+    let response = harness.call_tool(2, "list", arguments).await;
     let payload = decode_tool_payload(&response);
     let bundles = payload["bundles"]
         .as_array()
@@ -349,8 +382,8 @@ async fn list_sessions_all_mode_fails_fast_on_first_authorization_denial() {
         ),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
-    let arguments = Map::from_iter([("all".to_string(), Value::Bool(true))]);
-    let response = harness.call_tool(2, "list.sessions", arguments).await;
+    let arguments = list_sessions_call(Map::from_iter([("all".to_string(), Value::Bool(true))]));
+    let response = harness.call_tool(2, "list", arguments).await;
 
     assert_eq!(error_code(&response), Some("authorization_forbidden"));
     assert_eq!(alpha_relay.requests_for_operation("list").len(), 1);

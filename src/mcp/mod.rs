@@ -52,7 +52,17 @@ struct McpState {
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
-struct ListSessionsParams {
+struct ListParams {
+    /// List command selector. MVP requires command="sessions".
+    #[serde(default)]
+    command: Option<String>,
+    /// Command-scoped arguments.
+    #[serde(default)]
+    args: ListArgs,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+struct ListArgs {
     /// Optional bundle selector. Mutually exclusive with all=true.
     #[serde(default)]
     bundle_name: Option<String>,
@@ -117,6 +127,7 @@ impl From<SendDeliveryModeParam> for ChatDeliveryMode {
 const LOOK_LINES_MIN: u64 = 1;
 const LOOK_LINES_MAX: u64 = 1000;
 const LIST_SESSIONS_SCHEMA_VERSION: &str = "1";
+const LIST_COMMAND_SESSIONS: &str = "sessions";
 
 #[tool_router]
 impl McpServer {
@@ -138,15 +149,12 @@ impl McpServer {
         }
     }
 
-    #[tool(
-        name = "list.sessions",
-        description = "List sessions for one bundle or fan out across bundles."
-    )]
-    async fn list_sessions(
+    #[tool(description = "List sessions for one bundle or fan out across bundles.")]
+    async fn list(
         &self,
-        Parameters(params): Parameters<ListSessionsParams>,
+        Parameters(params): Parameters<ListParams>,
     ) -> Result<CallToolResult, McpError> {
-        validate_list_sessions_request(&params)?;
+        validate_list_request(&params)?;
         let sender_session = self
             .state
             .configuration
@@ -161,26 +169,28 @@ impl McpServer {
                 )
             })?;
         let selected_bundle = params
+            .args
             .bundle_name
             .as_ref()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
         emit_inscription(
-            "mcp.tool.list_sessions.request",
+            "mcp.tool.list.request",
             &json!({
                 "sender_session": sender_session,
+                "command": LIST_COMMAND_SESSIONS,
                 "bundle_name": selected_bundle,
-                "all": params.all,
+                "all": params.args.all,
             }),
         );
-        if params.all {
+        if params.args.all {
             let bundles = self.list_sessions_all_bundles(sender_session.as_str())?;
             let response = json!({
                 "schema_version": LIST_SESSIONS_SCHEMA_VERSION,
                 "bundles": bundles,
             });
             emit_inscription(
-                "mcp.tool.list_sessions.success",
+                "mcp.tool.list.success",
                 &json!({
                     "all": true,
                     "bundle_count": response["bundles"].as_array().map_or(0, |value| value.len()),
@@ -199,7 +209,7 @@ impl McpServer {
                     "bundle": bundle,
                 });
                 emit_inscription(
-                    "mcp.tool.list_sessions.success",
+                    "mcp.tool.list.success",
                     &json!({
                         "all": false,
                         "bundle_name": response["bundle"]["id"],
@@ -560,15 +570,34 @@ pub async fn run(configuration: McpConfiguration) -> Result<()> {
     Ok(())
 }
 
-fn validate_list_sessions_request(params: &ListSessionsParams) -> Result<(), McpError> {
-    if params.all && params.bundle_name.is_some() {
+fn validate_list_request(params: &ListParams) -> Result<(), McpError> {
+    let command = params
+        .command
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            validation_tool_error(
+                "validation_invalid_params",
+                "command is required and must equal \"sessions\"",
+                None,
+            )
+        })?;
+    if command != LIST_COMMAND_SESSIONS {
+        return Err(validation_tool_error(
+            "validation_invalid_params",
+            "command is required and must equal \"sessions\"",
+            Some(json!({"command": params.command})),
+        ));
+    }
+    if params.args.all && params.args.bundle_name.is_some() {
         return Err(validation_tool_error(
             "validation_invalid_params",
             "bundle_name and all=true are mutually exclusive",
             None,
         ));
     }
-    if let Some(bundle_name) = params.bundle_name.as_ref()
+    if let Some(bundle_name) = params.args.bundle_name.as_ref()
         && bundle_name.trim().is_empty()
     {
         return Err(validation_tool_error(
