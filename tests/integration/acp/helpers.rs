@@ -19,8 +19,11 @@ pub(super) struct AcpStubOptions {
     pub(super) stop_reason: String,
     pub(super) prompt_delay_sec: u64,
     pub(super) update_count: usize,
+    pub(super) update_line_prefix: String,
     pub(super) update_after_response: bool,
     pub(super) update_delay_ms: u64,
+    pub(super) load_replay_count: usize,
+    pub(super) load_replay_line_prefix: String,
     pub(super) request_permission_on_prompt: bool,
     pub(super) disconnect_on_prompt: Option<String>,
     pub(super) configured_session_id: Option<String>,
@@ -39,8 +42,11 @@ impl Default for AcpStubOptions {
             stop_reason: "end_turn".to_string(),
             prompt_delay_sec: 0,
             update_count: 0,
+            update_line_prefix: "ACP".to_string(),
             update_after_response: false,
             update_delay_ms: 0,
+            load_replay_count: 0,
+            load_replay_line_prefix: "ACP-LOAD".to_string(),
             request_permission_on_prompt: false,
             disconnect_on_prompt: None,
             configured_session_id: None,
@@ -63,8 +69,11 @@ prompt_capability="${PROMPT_CAPABILITY:-true}"
 stop_reason="${STOP_REASON:-end_turn}"
 prompt_delay_sec="${PROMPT_DELAY_SEC:-0}"
 update_count="${UPDATE_COUNT:-0}"
+update_line_prefix="${UPDATE_LINE_PREFIX:-ACP}"
 update_after_response="${UPDATE_AFTER_RESPONSE:-0}"
 update_delay_ms="${UPDATE_DELAY_MS:-0}"
+load_replay_count="${LOAD_REPLAY_COUNT:-0}"
+load_replay_line_prefix="${LOAD_REPLAY_LINE_PREFIX:-ACP-LOAD}"
 new_session_id="${NEW_SESSION_ID:-sess-generated}"
 disconnect_on_prompt="${DISCONNECT_ON_PROMPT:-none}"
 request_permission_on_prompt="${REQUEST_PERMISSION_ON_PROMPT:-0}"
@@ -88,6 +97,12 @@ while IFS= read -r line; do
       if [ "$fail_load" = "1" ]; then
         printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32001,"message":"load failed"}}\n' "$id"
       else
+        count=1
+        while [ "$count" -le "$load_replay_count" ]; do
+          printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"%s","update":[{"type":"text","text":"%s-LINE-%s"}]}}\n' \
+            "$new_session_id" "$load_replay_line_prefix" "$count"
+          count=$((count + 1))
+        done
         printf '{"jsonrpc":"2.0","id":%s,"result":null}\n' "$id"
       fi
       ;;
@@ -117,8 +132,8 @@ while IFS= read -r line; do
       emit_updates() {
         count=1
         while [ "$count" -le "$update_count" ]; do
-          printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"%s","update":[{"type":"text","text":"ACP-LINE-%s"}]}}\n' \
-            "$prompt_session_id" "$count"
+          printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"%s","update":[{"type":"text","text":"%s-LINE-%s"}]}}\n' \
+            "$prompt_session_id" "$update_line_prefix" "$count"
           count=$((count + 1))
         done
       }
@@ -208,6 +223,7 @@ pub(super) fn write_configuration(root: &Path, options: &AcpStubOptions) -> (Pat
         ("STOP_REASON", options.stop_reason.clone()),
         ("PROMPT_DELAY_SEC", options.prompt_delay_sec.to_string()),
         ("UPDATE_COUNT", options.update_count.to_string()),
+        ("UPDATE_LINE_PREFIX", options.update_line_prefix.clone()),
         (
             "UPDATE_AFTER_RESPONSE",
             if options.update_after_response {
@@ -218,6 +234,11 @@ pub(super) fn write_configuration(root: &Path, options: &AcpStubOptions) -> (Pat
             .to_string(),
         ),
         ("UPDATE_DELAY_MS", options.update_delay_ms.to_string()),
+        ("LOAD_REPLAY_COUNT", options.load_replay_count.to_string()),
+        (
+            "LOAD_REPLAY_LINE_PREFIX",
+            options.load_replay_line_prefix.clone(),
+        ),
         ("NEW_SESSION_ID", "sess-generated".to_string()),
     ];
 

@@ -1,13 +1,16 @@
-use std::path::Path;
+use std::{path::Path, time::Duration};
 
 use serde_json::{Value, json};
 
-use crate::configuration::{AcpTargetConfiguration, BundleMember};
+use crate::{
+    acp::ReplayEntry,
+    configuration::{AcpTargetConfiguration, BundleMember, TargetConfiguration},
+};
 
 use super::acp_client::{AcpRequestError, AcpStdioClient};
 use super::acp_state::{
     AcpWorkerReadinessState, load_persisted_acp_session_id, persist_acp_session_id,
-    persist_acp_snapshot_lines, persist_acp_worker_state,
+    persist_acp_snapshot_lines, persist_acp_worker_state, replace_acp_snapshot_lines,
 };
 use super::results::{
     delivered_in_progress_result, delivered_result, failed_result, failed_result_with_code,
@@ -24,6 +27,7 @@ pub(super) const ACP_ERROR_CODE_SESSION_NEW_FAILED: &str = "runtime_acp_session_
 pub(super) const ACP_ERROR_CODE_PROMPT_FAILED: &str = "runtime_acp_prompt_failed";
 pub(super) const ACP_ERROR_CODE_CONNECTION_CLOSED: &str = "runtime_acp_connection_closed";
 pub(super) const ACP_ERROR_CODE_MISSING_CAPABILITY: &str = "validation_missing_acp_capability";
+const ACP_LOOK_REFRESH_TIMEOUT: Duration = Duration::from_millis(1500);
 
 #[derive(Clone, Copy, Debug)]
 enum AcpLifecycleSelection {
@@ -40,6 +44,82 @@ struct AcpCapabilities {
 pub(super) struct PersistentAcpWorkerRuntime {
     pub client: AcpStdioClient,
     pub session_id: String,
+}
+
+pub(in crate::relay) fn refresh_acp_snapshot_for_look(
+    runtime_socket_path: &Path,
+    target_member: &BundleMember,
+) -> Result<(), String> {
+    let TargetConfiguration::Acp(acp_target) = &target_member.target else {
+        return Ok(());
+    };
+    let Some(working_directory) = target_member.working_directory.as_ref() else {
+        return Err("ACP look refresh requires target working directory".to_string());
+    };
+    let mut client = match acp_target.channel {
+        crate::configuration::AcpChannel::Stdio => {
+            let Some(command) = acp_target.command.as_deref() else {
+                return Err("ACP stdio target requires command for look refresh".to_string());
+            };
+            AcpStdioClient::spawn(
+                command,
+                working_directory,
+                &acp_target
+                    .environment
+                    .iter()
+                    .map(|entry| (entry.name.clone(), entry.value.clone()))
+                    .collect::<Vec<_>>(),
+            )
+            .map_err(|reason| format!("spawn ACP look refresh client failed: {reason}"))?
+        }
+        crate::configuration::AcpChannel::Http => {
+            return Ok(());
+        }
+    };
+
+    let initialize = client
+        .initialize()
+        .map_err(|reason| format!("ACP look refresh initialize failed: {reason}"))?;
+    let load_capability = initialize
+        .get("agentCapabilities")
+        .and_then(|value| value.get("loadSession"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !load_capability {
+        return Ok(());
+    }
+
+    let session_id = if let Some(configured) = target_member.coder_session_id.as_deref() {
+        configured.to_string()
+    } else {
+        let Some(persisted) =
+            load_persisted_acp_session_id(runtime_socket_path, target_member.id.as_str())?
+        else {
+            return Ok(());
+        };
+        persisted
+    };
+
+    let replay_entries = client
+        .load_session_with_timeout(
+            session_id.as_str(),
+            working_directory,
+            Some(ACP_LOOK_REFRESH_TIMEOUT),
+        )
+        .map_err(|reason| format!("ACP look refresh session/load failed: {reason}"))?;
+    let mut refreshed_lines = client.take_snapshot_lines();
+    if refreshed_lines.is_empty() {
+        refreshed_lines = replay_entries_to_snapshot_lines(replay_entries);
+    }
+    if refreshed_lines.is_empty() {
+        return Ok(());
+    }
+    replace_acp_snapshot_lines(
+        runtime_socket_path,
+        target_member.id.as_str(),
+        session_id.as_str(),
+        refreshed_lines.as_slice(),
+    )
 }
 
 pub(super) fn deliver_one_target_acp(
@@ -439,4 +519,20 @@ fn initialize_persistent_acp_worker_runtime(
     }
 
     Ok(PersistentAcpWorkerRuntime { client, session_id })
+}
+
+fn replay_entries_to_snapshot_lines(entries: Vec<ReplayEntry>) -> Vec<String> {
+    let mut lines = Vec::new();
+    for entry in entries {
+        match entry {
+            ReplayEntry::User(value)
+            | ReplayEntry::Agent(value)
+            | ReplayEntry::Thinking(value)
+            | ReplayEntry::ToolResult(value) => lines.extend(value),
+            ReplayEntry::ToolCall { title, status } => {
+                lines.push(format!("{title} ({status})"));
+            }
+        }
+    }
+    lines
 }

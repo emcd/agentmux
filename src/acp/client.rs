@@ -188,6 +188,15 @@ impl AcpStdioClient {
         session_id: &str,
         working_directory: &Path,
     ) -> Result<Vec<ReplayEntry>, String> {
+        self.load_session_with_timeout(session_id, working_directory, None)
+    }
+
+    pub fn load_session_with_timeout(
+        &mut self,
+        session_id: &str,
+        working_directory: &Path,
+        timeout: Option<Duration>,
+    ) -> Result<Vec<ReplayEntry>, String> {
         let mut replay_buffer = std::mem::take(&mut self.replay_buffer);
         let result = self
             .request(
@@ -197,7 +206,7 @@ impl AcpStdioClient {
                     "cwd": working_directory.display().to_string(),
                     "mcpServers": [],
                 }),
-                None,
+                timeout,
                 RequestObservers {
                     prompt_session_id: None,
                     post_response_drain_timeout: Some(ACP_LOAD_POST_RESPONSE_DRAIN_TIMEOUT),

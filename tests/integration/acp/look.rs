@@ -144,6 +144,33 @@ fn acp_look_captures_updates_emitted_after_prompt_response() {
     );
 }
 
+#[test]
+fn acp_look_refreshes_stale_snapshot_from_live_session_replay() {
+    let temporary = TempDir::new().expect("temporary");
+    let options = AcpStubOptions {
+        update_count: 1,
+        update_line_prefix: "STALE".to_string(),
+        load_replay_count: 2,
+        load_replay_line_prefix: "LIVE".to_string(),
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let tmux_socket = temporary.path().join("tmux.sock");
+    let response = dispatch_send(&config_root, &tmux_socket, Some(1_000));
+    let (status, result) = chat_result(response);
+    assert_eq!(status, ChatStatus::Success);
+    assert_eq!(result.outcome, ChatOutcome::Delivered);
+
+    let look = dispatch_look(&config_root, &tmux_socket, "bravo", "bravo", Some(5));
+    let RelayResponse::Look { snapshot_lines, .. } = look else {
+        panic!("expected look response");
+    };
+    assert_eq!(
+        snapshot_lines,
+        vec!["LIVE-LINE-1".to_string(), "LIVE-LINE-2".to_string()]
+    );
+}
+
 fn wait_for_look(
     config_root: &std::path::Path,
     tmux_socket: &std::path::Path,

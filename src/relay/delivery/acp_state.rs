@@ -152,6 +152,33 @@ pub(super) fn persist_acp_snapshot_lines(
     store_persisted_acp_session_state(path.as_path(), &state)
 }
 
+pub(super) fn replace_acp_snapshot_lines(
+    runtime_socket_path: &Path,
+    target_session: &str,
+    session_id: &str,
+    snapshot_lines: &[String],
+) -> Result<(), String> {
+    let path = resolve_acp_session_state_path(runtime_socket_path, target_session)?;
+    let _guard = acp_session_state_lock()
+        .lock()
+        .map_err(|_| "failed to lock ACP session state".to_string())?;
+    let mut state =
+        load_persisted_acp_session_state(path.as_path())?.unwrap_or(PersistedAcpSessionState {
+            schema_version: ACP_SESSION_STATE_SCHEMA_VERSION,
+            acp_session_id: session_id.to_string(),
+            worker_state: AcpWorkerReadinessState::Available,
+            snapshot_lines: Vec::new(),
+        });
+    state.schema_version = ACP_SESSION_STATE_SCHEMA_VERSION;
+    state.acp_session_id = session_id.to_string();
+    state.snapshot_lines = snapshot_lines.to_vec();
+    if state.snapshot_lines.len() > ACP_LOOK_SNAPSHOT_MAX_LINES {
+        let overflow = state.snapshot_lines.len() - ACP_LOOK_SNAPSHOT_MAX_LINES;
+        state.snapshot_lines.drain(0..overflow);
+    }
+    store_persisted_acp_session_state(path.as_path(), &state)
+}
+
 fn append_snapshot_lines(storage: &mut Vec<String>, appended: &[String], max_lines: usize) {
     storage.extend(appended.iter().cloned());
     if storage.len() > max_lines {

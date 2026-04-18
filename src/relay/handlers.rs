@@ -18,6 +18,7 @@ use super::authorization::{
 use super::delivery::{
     QuiescenceOptions, aggregate_chat_status, deliver_one_target, enqueue_async_delivery,
     enqueue_sync_delivery, load_acp_snapshot_lines_for_look, prompt_batch_settings,
+    refresh_acp_snapshot_for_look,
 };
 use super::lifecycle::{reconcile_loaded_bundle_for_lifecycle, shutdown_bundle_runtime};
 use super::tmux::{capture_pane_tail_lines, resolve_active_pane_target};
@@ -607,20 +608,30 @@ fn handle_look(
                 },
             )?
         }
-        crate::configuration::TargetConfiguration::Acp(_) => load_acp_snapshot_lines_for_look(
+        crate::configuration::TargetConfiguration::Acp(_) => {
+            // Refresh from ACP session replay before reading retained snapshot
+            // so look reflects current ACP pane state deterministically.
+            if let Err(reason) = refresh_acp_snapshot_for_look(tmux_socket, target) {
+                emit_inscription(
+                    "relay.look.acp_refresh_failed",
+                    &json!({
+                        "bundle_name": bundle.bundle_name,
+                        "target_session": target.id,
+                        "reason": reason,
+                    }),
+                );
+            }
             // ACP look state is runtime-scoped; the runtime directory is resolved
             // from the socket path anchor.
-            tmux_socket,
-            target.id.as_str(),
-            requested_lines,
-        )
-        .map_err(|reason| {
-            relay_error(
-                "internal_unexpected_failure",
-                "failed to load ACP look snapshot",
-                Some(json!({"target_session": target.id, "cause": reason})),
-            )
-        })?,
+            load_acp_snapshot_lines_for_look(tmux_socket, target.id.as_str(), requested_lines)
+                .map_err(|reason| {
+                    relay_error(
+                        "internal_unexpected_failure",
+                        "failed to load ACP look snapshot",
+                        Some(json!({"target_session": target.id, "cause": reason})),
+                    )
+                })?
+        }
     };
     let captured_at = time::OffsetDateTime::now_utc()
         .format(&Rfc3339)
