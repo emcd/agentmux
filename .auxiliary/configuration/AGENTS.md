@@ -73,6 +73,12 @@ Use consistent tags for discoverability:
 - Track todos: Use `nb.todo`, `nb.tasks`, `nb.do`, `nb.undo`.
 - Organize with folders: `nb.folders`, `nb.mkdir`.
 
+### Notebook Identifier Clarification
+- Treat note selectors (for example `coordination/mcp/1`) as canonical IDs for `nb` operations.
+- `nb` MCP responses may include notebook-scoped identifiers (for example `agentmux:coordination/...`) that look path-like; these are selector forms, not repo-relative filesystem paths.
+- Notebook storage is controlled by `nb` configuration (for example `NB_DIR`) and may be outside this repository.
+- Prefer `nb` MCP commands to read/edit notes. Avoid assuming a selector maps to a file under the current repo.
+
 ### Recommended `nb` Organization (Project-Defined)
 - Prefer a folder taxonomy of `<issue-type>/<component>` (max depth 2) and avoid mixing top-level component folders with top-level issue-type folders.
 - Recommended top-level issue types are:
