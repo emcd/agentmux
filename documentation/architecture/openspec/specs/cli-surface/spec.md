@@ -83,6 +83,11 @@ In no-selector mode:
 - one or more explicit `--target` values
 - `--broadcast`
 
+For explicit `--target` mode, tokens SHALL be canonical send target
+identifiers only.
+Configured session `name` values and display-name aliases are not valid
+explicit send targets.
+
 Send authorization SHALL follow requester policy control scope:
 
 - `all:home`
@@ -92,6 +97,11 @@ Send authorization SHALL follow requester policy control scope:
 
 - **WHEN** a caller invokes `agentmux send` with `--target` values
 - **THEN** the system routes to exactly those selected recipients
+
+#### Scenario: Reject configured name alias token for send target
+
+- **WHEN** a caller invokes `agentmux send --target <configured-session-name>`
+- **THEN** CLI surfaces `validation_unknown_target`
 
 #### Scenario: Send as broadcast
 

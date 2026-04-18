@@ -201,8 +201,19 @@ The system SHALL resolve each target session to its currently active pane at
 delivery time.
 The system SHALL support directed delivery to one or more explicitly selected
 target sessions.
-The system SHALL additionally allow explicit targets to reference configured
-session names as aliases.
+
+For send explicit targets, relay SHALL accept only canonical target
+identifiers:
+
+- configured bundle member `session_id`,
+- configured/registered UI session id (when UI routing is supported).
+
+Relay SHALL NOT resolve configured bundle session `name` values as send-target
+aliases.
+Session `name` remains informational metadata only and is not send-routable.
+
+When one explicit token exactly matches both a bundle member `session_id` and a
+UI session id, relay SHALL route to the bundle member `session_id`.
 
 #### Scenario: Resolve session target for direct send
 
@@ -211,11 +222,16 @@ session names as aliases.
 - **AND** resolves the session's active pane as the concrete tmux injection
   endpoint
 
-#### Scenario: Resolve session target by configured name alias
+#### Scenario: Reject configured name alias as explicit send target
 
-- **WHEN** a caller sends a message using a configured session name
-- **THEN** the system resolves that name to one session id
-- **AND** routes delivery to that resolved id
+- **WHEN** a caller sends a message using a configured session `name` token
+- **THEN** relay rejects the target with `validation_unknown_target`
+
+#### Scenario: Prefer bundle member session_id on overlap with UI session id
+
+- **WHEN** an explicit token matches both bundle member `session_id` and UI
+  session id
+- **THEN** relay routes to the bundle member target
 
 #### Scenario: Active pane changes before delivery
 
@@ -1062,9 +1078,15 @@ Relay SHALL evaluate requests in this order:
 
 Validation failures SHALL take precedence over authorization denials.
 
-#### Scenario: Prefer validation failure over authorization denial
+#### Scenario: Prefer validation failure over authorization denial for non-send target
 
-- **WHEN** a request includes an unknown target session
+- **WHEN** a non-send request includes an unknown target session
+- **THEN** relay returns `validation_unknown_target`
+- **AND** relay does not return `authorization_forbidden` for that request
+
+#### Scenario: Prefer send explicit-target validation over authorization denial
+
+- **WHEN** a send request includes an unknown or non-canonical explicit target
 - **THEN** relay returns `validation_unknown_target`
 - **AND** relay does not return `authorization_forbidden` for that request
 
@@ -1629,4 +1651,3 @@ Relay SHALL NOT accept all-bundle list selectors.
 
 - **WHEN** a caller requests relay list with all-bundle selector semantics
 - **THEN** relay rejects request with `validation_invalid_params`
-

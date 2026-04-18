@@ -9,7 +9,7 @@
 - [x] 1.4 Remove send-path `validation_ambiguous_recipient` alias semantics.
 - [x] 1.5 Lock validation-code unification on `validation_unknown_target` for
   unknown/non-canonical explicit target tokens.
-- [ ] 1.6 Lock deterministic overlap precedence:
+- [x] 1.6 Lock deterministic overlap precedence:
   bundle member `session_id` wins over UI session id on exact-token overlap.
 
 ## 2. Surface Consistency
@@ -26,7 +26,7 @@
   display-name targeting.
 - [x] 3.3 Add/adjust tests for name alias no longer routable.
 - [x] 3.4 Add/adjust tests for canonical unknown-target rejection code.
-- [ ] 3.5 Add/adjust tests for overlap precedence behavior.
+- [x] 3.5 Add/adjust tests for overlap precedence behavior.
 
 ## 4. Validation
 

@@ -21,6 +21,23 @@ policy = "{policy}"
     .expect("write tui configuration");
 }
 
+fn write_tui_configuration_with_session_id(root: &std::path::Path, policy: &str, session_id: &str) {
+    std::fs::write(
+        root.join("tui.toml"),
+        format!(
+            r#"
+default-bundle = "party"
+default-session = "{session_id}"
+
+[[sessions]]
+id = "{session_id}"
+policy = "{policy}"
+"#
+        ),
+    )
+    .expect("write tui configuration");
+}
+
 fn write_bundle(temporary: &TempDir, name: &str) -> std::path::PathBuf {
     let root = temporary.path().join("config");
     let bundles = root.join("bundles");
@@ -355,6 +372,41 @@ fn chat_accepts_global_ui_target_not_in_bundle_configuration() {
     };
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].target_session, "user");
+}
+
+#[test]
+fn chat_prefers_bundle_member_when_target_id_overlaps_with_ui_session_id() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    write_tui_configuration_with_session_id(&config_root, "default", "alpha");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    let response = handle_request(
+        RelayRequest::Chat {
+            request_id: None,
+            sender_session: "bravo".to_string(),
+            message: "hello".to_string(),
+            targets: vec!["alpha".to_string()],
+            broadcast: false,
+            delivery_mode: ChatDeliveryMode::Sync,
+            quiet_window_ms: Some(1),
+            quiescence_timeout_ms: Some(1),
+            acp_turn_timeout_ms: None,
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect("chat response");
+
+    let RelayResponse::Chat { results, .. } = response else {
+        panic!("expected chat response");
+    };
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].target_session, "alpha");
+    // Overlap precedence is bundle-member-first, so missing tmux runtime yields
+    // a direct tmux delivery failure (not a UI stream timeout).
+    assert_eq!(results[0].outcome, agentmux::relay::ChatOutcome::Failed);
 }
 
 #[test]

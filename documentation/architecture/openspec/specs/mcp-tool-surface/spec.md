@@ -105,8 +105,19 @@ successful list payload.
 
 `send` SHALL support exactly one target mode per request:
 
-- `targets` (non-empty list of recipient identifiers)
+- `targets` (non-empty list of canonical recipient identifiers)
 - `broadcast=true` for full bundle delivery
+
+For send explicit targets, canonical identifiers in MVP are:
+
+- bundle member `session_id`
+- UI session id (where UI routing is supported)
+
+Configured session `name` values and display-name aliases are not canonical send
+target identifiers and SHALL NOT be relay-routed.
+
+If one token matches both a bundle member `session_id` and UI session id, the
+bundle member `session_id` interpretation SHALL win.
 
 `send` SHALL additionally support optional `delivery_mode` with values:
 
@@ -130,6 +141,17 @@ Transport-incompatible timeout overrides SHALL fail fast with
 
 - `all:home`
 - `all:all`
+
+#### Scenario: Reject non-canonical configured-name token for explicit send target
+
+- **WHEN** `send` targets a configured session `name` token
+- **THEN** the tool returns `validation_unknown_target`
+
+#### Scenario: Resolve overlap token as bundle member session_id
+
+- **WHEN** one explicit target token matches both bundle member `session_id` and
+  UI session id
+- **THEN** the token is interpreted as bundle member `session_id`
 
 #### Scenario: Reject conflicting timeout override fields
 
@@ -250,17 +272,11 @@ Validation failures SHALL be returned before authorization denials.
 - **THEN** the tool returns error code `validation_unknown_bundle`
 - **AND** includes a human-readable message
 
-#### Scenario: Unknown recipient error
+#### Scenario: Unknown target error
 
-- **WHEN** `send` targets a session that is not in the selected bundle
-- **THEN** the tool returns error code `validation_unknown_recipient`
+- **WHEN** `send` targets a token that is not a canonical send target identifier
+- **THEN** the tool returns error code `validation_unknown_target`
 - **AND** includes a human-readable message
-
-#### Scenario: Ambiguous recipient name error
-
-- **WHEN** `send` targets a configured recipient name shared by multiple sessions
-- **THEN** the tool returns error code `validation_ambiguous_recipient`
-- **AND** includes matching session identifiers in error details
 
 #### Scenario: Return canonical authorization denial schema
 
