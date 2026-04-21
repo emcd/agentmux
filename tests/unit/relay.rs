@@ -4,6 +4,24 @@ use agentmux::relay::{
 };
 use tempfile::TempDir;
 
+fn dispatch_request(
+    request: RelayRequest,
+    configuration_root: &std::path::Path,
+    bundle_name: &str,
+    tmux_socket: &std::path::Path,
+) -> Result<RelayResponse, agentmux::relay::RelayError> {
+    let runtime_directory = tmux_socket
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    handle_request(
+        request,
+        configuration_root,
+        bundle_name,
+        runtime_directory,
+        tmux_socket,
+    )
+}
+
 fn write_tui_configuration(root: &std::path::Path, policy: &str) {
     std::fs::write(
         root.join("tui.toml"),
@@ -229,7 +247,7 @@ fn list_returns_all_configured_sessions_with_transport() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::List {
             sender_session: Some("alpha".to_string()),
         },
@@ -264,7 +282,7 @@ fn list_allows_ui_sender_from_global_tui_sessions() {
     let config_root = write_bundle(&temporary, "party");
     write_tui_configuration(&config_root, "default");
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::List {
             sender_session: Some("user".to_string()),
         },
@@ -291,7 +309,7 @@ fn list_rejects_ui_sender_with_unknown_policy_reference() {
     let config_root = write_bundle(&temporary, "party");
     write_tui_configuration(&config_root, "missing");
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::List {
             sender_session: Some("user".to_string()),
         },
@@ -308,7 +326,7 @@ fn chat_rejects_unknown_target() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Chat {
             request_id: None,
             sender_session: "alpha".to_string(),
@@ -333,7 +351,7 @@ fn chat_rejects_target_by_configured_session_name_alias() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Chat {
             request_id: None,
             sender_session: "alpha".to_string(),
@@ -359,7 +377,7 @@ fn chat_accepts_global_ui_target_not_in_bundle_configuration() {
     let config_root = write_bundle(&temporary, "party");
     write_tui_configuration(&config_root, "default");
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Chat {
             request_id: None,
             sender_session: "alpha".to_string(),
@@ -391,7 +409,7 @@ fn chat_prefers_bundle_member_when_target_id_overlaps_with_ui_session_id() {
     write_tui_configuration_with_session_id(&config_root, "default", "alpha");
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Chat {
             request_id: None,
             sender_session: "bravo".to_string(),
@@ -424,7 +442,7 @@ fn chat_broadcast_excludes_sender_session() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Chat {
             request_id: None,
             sender_session: "alpha".to_string(),
@@ -454,7 +472,7 @@ fn chat_async_returns_accepted_and_queued_outcome() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Chat {
             request_id: None,
             sender_session: "alpha".to_string(),
@@ -489,7 +507,7 @@ fn chat_rejects_zero_timeout_override() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Chat {
             request_id: None,
             sender_session: "alpha".to_string(),
@@ -515,7 +533,7 @@ fn chat_broadcast_with_only_sender_returns_empty_results() {
     let config_root = write_single_member_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let sync_response = handle_request(
+    let sync_response = dispatch_request(
         RelayRequest::Chat {
             request_id: None,
             sender_session: "alpha".to_string(),
@@ -544,7 +562,7 @@ fn chat_broadcast_with_only_sender_returns_empty_results() {
     assert_eq!(sync_status, agentmux::relay::ChatStatus::Success);
     assert!(sync_results.is_empty());
 
-    let async_response = handle_request(
+    let async_response = dispatch_request(
         RelayRequest::Chat {
             request_id: None,
             sender_session: "alpha".to_string(),
@@ -579,7 +597,7 @@ fn chat_rejects_quiescence_timeout_for_acp_target() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_acp_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Chat {
             request_id: None,
             sender_session: "alpha".to_string(),
@@ -607,7 +625,7 @@ fn chat_rejects_acp_turn_timeout_for_tmux_target() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Chat {
             request_id: None,
             sender_session: "alpha".to_string(),
@@ -635,7 +653,7 @@ fn chat_rejects_conflicting_timeout_fields() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Chat {
             request_id: None,
             sender_session: "alpha".to_string(),
@@ -661,7 +679,7 @@ fn look_rejects_cross_bundle_scope() {
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
             target_session: "bravo".to_string(),
@@ -682,7 +700,7 @@ fn look_rejects_out_of_range_lines() {
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
             target_session: "bravo".to_string(),
@@ -703,7 +721,7 @@ fn look_rejects_unknown_target() {
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
             target_session: "missing".to_string(),
@@ -724,7 +742,7 @@ fn look_returns_empty_snapshot_for_acp_target_without_recorded_updates() {
     let config_root = write_acp_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Look {
             requester_session: "bravo".to_string(),
             target_session: "bravo".to_string(),
@@ -747,7 +765,7 @@ fn look_denies_same_bundle_non_self_target_under_default_self_scope() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
             target_session: "bravo".to_string(),
@@ -784,7 +802,7 @@ coder = "shell"
         None,
     );
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::List {
             sender_session: Some("alpha".to_string()),
         },
@@ -813,7 +831,7 @@ coder = "shell"
         Some("not = [valid"),
     );
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::List {
             sender_session: Some("alpha".to_string()),
         },
@@ -857,7 +875,7 @@ send = "all:home"
         ),
     );
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::List {
             sender_session: Some("alpha".to_string()),
         },

@@ -8,6 +8,22 @@ pub(super) use agentmux::relay::ChatDeliveryMode;
 use agentmux::relay::{ChatStatus, RelayRequest, RelayResponse, handle_request};
 use serde_json::Value;
 
+fn dispatch_request(
+    request: RelayRequest,
+    configuration_root: &Path,
+    bundle_name: &str,
+    tmux_socket: &Path,
+) -> Result<RelayResponse, agentmux::relay::RelayError> {
+    let runtime_directory = tmux_socket.parent().unwrap_or_else(|| Path::new("."));
+    handle_request(
+        request,
+        configuration_root,
+        bundle_name,
+        runtime_directory,
+        tmux_socket,
+    )
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct AcpStubOptions {
     pub(super) fail_initialize: bool,
@@ -341,7 +357,7 @@ pub(super) fn dispatch_send_with_mode_result(
     delivery_mode: ChatDeliveryMode,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
     startup_bundle(config_root, tmux_socket)?;
-    handle_request(
+    dispatch_request(
         RelayRequest::Chat {
             request_id: Some("req-acp".to_string()),
             sender_session: "alpha".to_string(),
@@ -365,7 +381,7 @@ pub(super) fn dispatch_send_without_startup_result(
     acp_turn_timeout_ms: Option<u64>,
     delivery_mode: ChatDeliveryMode,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
-    handle_request(
+    dispatch_request(
         RelayRequest::Chat {
             request_id: Some("req-acp".to_string()),
             sender_session: "alpha".to_string(),
@@ -391,7 +407,7 @@ pub(super) fn dispatch_look(
     lines: Option<usize>,
 ) -> RelayResponse {
     startup_bundle(config_root, tmux_socket).expect("relay startup should parse");
-    handle_request(
+    dispatch_request(
         RelayRequest::Look {
             requester_session: requester_session.to_string(),
             target_session: target_session.to_string(),
@@ -412,7 +428,7 @@ pub(super) fn dispatch_look_without_startup(
     target_session: &str,
     lines: Option<usize>,
 ) -> RelayResponse {
-    handle_request(
+    dispatch_request(
         RelayRequest::Look {
             requester_session: requester_session.to_string(),
             target_session: target_session.to_string(),
@@ -430,7 +446,8 @@ fn startup_bundle(
     config_root: &Path,
     tmux_socket: &Path,
 ) -> Result<(), agentmux::relay::RelayError> {
-    let _ = agentmux::relay::startup_bundle(config_root, "party", tmux_socket)?;
+    let runtime_directory = tmux_socket.parent().unwrap_or_else(|| Path::new("."));
+    let _ = agentmux::relay::startup_bundle(config_root, "party", runtime_directory, tmux_socket)?;
     Ok(())
 }
 

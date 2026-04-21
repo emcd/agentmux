@@ -17,6 +17,22 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 use uuid::Uuid;
 
+fn dispatch_request(
+    request: RelayRequest,
+    configuration_root: &Path,
+    bundle_name: &str,
+    runtime_directory: &Path,
+    tmux_socket: &Path,
+) -> Result<RelayResponse, agentmux::relay::RelayError> {
+    handle_request(
+        request,
+        configuration_root,
+        bundle_name,
+        runtime_directory,
+        tmux_socket,
+    )
+}
+
 fn write_bundle_configuration(temporary: &TempDir, bundle_name: &str) -> PathBuf {
     let configuration_root = temporary.path().join("config");
     let bundles_directory = configuration_root.join("bundles");
@@ -154,7 +170,7 @@ fn relay_chat_routes_to_connected_ui_stream_with_event_frames() {
     let hello_ack = read_json(&mut reader);
     assert_eq!(hello_ack["frame"], "hello_ack");
 
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Chat {
             request_id: Some("req-1".to_string()),
             sender_session: "alpha".to_string(),
@@ -168,6 +184,7 @@ fn relay_chat_routes_to_connected_ui_stream_with_event_frames() {
         },
         &configuration_root,
         bundle_name.as_str(),
+        &bundle_paths.runtime_directory,
         &bundle_paths.tmux_socket,
     )
     .expect("chat response");
@@ -270,7 +287,7 @@ fn relay_chat_waits_for_ui_reconnect_before_delivery() {
     });
 
     let start = Instant::now();
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Chat {
             request_id: Some("req-2".to_string()),
             sender_session: "alpha".to_string(),
@@ -284,6 +301,7 @@ fn relay_chat_waits_for_ui_reconnect_before_delivery() {
         },
         &configuration_root,
         bundle_name.as_str(),
+        &bundle_paths.runtime_directory,
         &bundle_paths.tmux_socket,
     )
     .expect("chat response");
@@ -341,7 +359,7 @@ fn relay_async_chat_emits_terminal_delivery_outcome_to_sender_ui_stream() {
     let sender_ack = read_json(&mut sender_reader);
     assert_eq!(sender_ack["frame"], "hello_ack");
 
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Chat {
             request_id: Some("req-async-sender".to_string()),
             sender_session: "bravo".to_string(),
@@ -355,6 +373,7 @@ fn relay_async_chat_emits_terminal_delivery_outcome_to_sender_ui_stream() {
         },
         &configuration_root,
         bundle_name.as_str(),
+        &bundle_paths.runtime_directory,
         &bundle_paths.tmux_socket,
     )
     .expect("chat response");

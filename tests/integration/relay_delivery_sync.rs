@@ -13,6 +13,22 @@ use crate::support::relay_delivery::{
     wait_for_pane_contains, write_bundle_configuration, write_bundle_configuration_members,
 };
 
+fn dispatch_request(
+    request: RelayRequest,
+    configuration_root: &std::path::Path,
+    bundle_name: &str,
+    runtime_directory: &std::path::Path,
+    tmux_socket: &std::path::Path,
+) -> Result<RelayResponse, agentmux::relay::RelayError> {
+    handle_request(
+        request,
+        configuration_root,
+        bundle_name,
+        runtime_directory,
+        tmux_socket,
+    )
+}
+
 #[test]
 fn relay_chat_broadcast_delivers_to_all_other_configured_sessions() {
     if !tmux_available() {
@@ -35,7 +51,7 @@ fn relay_chat_broadcast_delivers_to_all_other_configured_sessions() {
     spawn_session(&paths.tmux_socket, "bravo", "exec sleep 45");
     spawn_session(&paths.tmux_socket, "charlie", "exec sleep 45");
 
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Chat {
             request_id: Some("req-broadcast".to_string()),
             sender_session: "alpha".to_string(),
@@ -49,6 +65,7 @@ fn relay_chat_broadcast_delivers_to_all_other_configured_sessions() {
         },
         &config_root,
         bundle_name,
+        &paths.runtime_directory,
         &paths.tmux_socket,
     )
     .expect("broadcast should succeed");
@@ -100,7 +117,7 @@ fn relay_chat_reports_timeout_for_noisy_target_with_partial_status() {
         "while :; do date +%s%N; sleep 0.01; done",
     );
 
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Chat {
             request_id: Some("req-partial".to_string()),
             sender_session: "alpha".to_string(),
@@ -114,6 +131,7 @@ fn relay_chat_reports_timeout_for_noisy_target_with_partial_status() {
         },
         &config_root,
         bundle_name,
+        &paths.runtime_directory,
         &paths.tmux_socket,
     )
     .expect("targeted chat should return results");
@@ -225,7 +243,7 @@ fn relay_chat_times_out_when_activity_changes_despite_stable_visible_text() {
         return;
     }
 
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Chat {
             request_id: Some("req-stable-text-busy".to_string()),
             sender_session: "alpha".to_string(),
@@ -239,6 +257,7 @@ fn relay_chat_times_out_when_activity_changes_despite_stable_visible_text() {
         },
         &config_root,
         bundle_name,
+        &paths.runtime_directory,
         &paths.tmux_socket,
     )
     .expect("delivery should complete");

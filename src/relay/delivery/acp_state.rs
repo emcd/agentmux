@@ -63,12 +63,9 @@ fn acp_session_state_lock() -> &'static Mutex<()> {
 }
 
 pub(super) fn resolve_acp_session_state_path(
-    runtime_socket_path: &Path,
+    runtime_directory: &Path,
     target_session: &str,
 ) -> Result<PathBuf, String> {
-    let Some(runtime_directory) = runtime_socket_path.parent() else {
-        return Err("runtime socket path has no parent runtime directory".to_string());
-    };
     Ok(runtime_directory
         .join(ACP_SESSIONS_DIRECTORY)
         .join(target_session)
@@ -76,10 +73,10 @@ pub(super) fn resolve_acp_session_state_path(
 }
 
 pub(in crate::relay) fn load_acp_worker_readiness_state(
-    runtime_socket_path: &Path,
+    runtime_directory: &Path,
     target_session: &str,
 ) -> Result<Option<AcpWorkerReadinessState>, String> {
-    let path = resolve_acp_session_state_path(runtime_socket_path, target_session)?;
+    let path = resolve_acp_session_state_path(runtime_directory, target_session)?;
     let _guard = acp_session_state_lock()
         .lock()
         .map_err(|_| "failed to lock ACP session state".to_string())?;
@@ -88,10 +85,10 @@ pub(in crate::relay) fn load_acp_worker_readiness_state(
 }
 
 pub(super) fn load_persisted_acp_session_id(
-    runtime_socket_path: &Path,
+    runtime_directory: &Path,
     target_session: &str,
 ) -> Result<Option<String>, String> {
-    let path = resolve_acp_session_state_path(runtime_socket_path, target_session)?;
+    let path = resolve_acp_session_state_path(runtime_directory, target_session)?;
     let _guard = acp_session_state_lock()
         .lock()
         .map_err(|_| "failed to lock ACP session state".to_string())?;
@@ -100,10 +97,10 @@ pub(super) fn load_persisted_acp_session_id(
 }
 
 pub(in crate::relay) fn acp_session_ready_for_startup(
-    runtime_socket_path: &Path,
+    runtime_directory: &Path,
     target_session: &str,
 ) -> Result<bool, String> {
-    let path = resolve_acp_session_state_path(runtime_socket_path, target_session)?;
+    let path = resolve_acp_session_state_path(runtime_directory, target_session)?;
     let _guard = acp_session_state_lock()
         .lock()
         .map_err(|_| "failed to lock ACP session state".to_string())?;
@@ -115,12 +112,12 @@ pub(in crate::relay) fn acp_session_ready_for_startup(
 }
 
 pub(in crate::relay) fn load_acp_snapshot_lines_for_look(
-    runtime_socket_path: &Path,
+    runtime_directory: &Path,
     target_session: &str,
     requested_lines: usize,
     prime_timed_out: bool,
 ) -> Result<AcpLookSnapshot, String> {
-    let path = resolve_acp_session_state_path(runtime_socket_path, target_session)?;
+    let path = resolve_acp_session_state_path(runtime_directory, target_session)?;
     let _guard = acp_session_state_lock()
         .lock()
         .map_err(|_| "failed to lock ACP session state".to_string())?;
@@ -202,20 +199,20 @@ pub(in crate::relay) fn load_acp_snapshot_lines_for_look(
 }
 
 pub(super) fn persist_acp_session_id(
-    runtime_socket_path: &Path,
+    runtime_directory: &Path,
     target_session: &str,
     session_id: &str,
 ) -> Result<(), String> {
-    persist_acp_snapshot_lines(runtime_socket_path, target_session, session_id, &[])
+    persist_acp_snapshot_lines(runtime_directory, target_session, session_id, &[])
 }
 
 pub(super) fn persist_acp_worker_state(
-    runtime_socket_path: &Path,
+    runtime_directory: &Path,
     target_session: &str,
     session_id: Option<&str>,
     worker_state: AcpWorkerReadinessState,
 ) -> Result<(), String> {
-    let path = resolve_acp_session_state_path(runtime_socket_path, target_session)?;
+    let path = resolve_acp_session_state_path(runtime_directory, target_session)?;
     let _guard = acp_session_state_lock()
         .lock()
         .map_err(|_| "failed to lock ACP session state".to_string())?;
@@ -243,12 +240,12 @@ pub(super) fn persist_acp_worker_state(
 }
 
 pub(super) fn persist_acp_snapshot_lines(
-    runtime_socket_path: &Path,
+    runtime_directory: &Path,
     target_session: &str,
     session_id: &str,
     snapshot_lines: &[String],
 ) -> Result<(), String> {
-    let path = resolve_acp_session_state_path(runtime_socket_path, target_session)?;
+    let path = resolve_acp_session_state_path(runtime_directory, target_session)?;
     let _guard = acp_session_state_lock()
         .lock()
         .map_err(|_| "failed to lock ACP session state".to_string())?;
@@ -274,12 +271,12 @@ pub(super) fn persist_acp_snapshot_lines(
 }
 
 pub(super) fn replace_acp_snapshot_lines(
-    runtime_socket_path: &Path,
+    runtime_directory: &Path,
     target_session: &str,
     session_id: &str,
     snapshot_lines: &[String],
 ) -> Result<(), String> {
-    let path = resolve_acp_session_state_path(runtime_socket_path, target_session)?;
+    let path = resolve_acp_session_state_path(runtime_directory, target_session)?;
     let _guard = acp_session_state_lock()
         .lock()
         .map_err(|_| "failed to lock ACP session state".to_string())?;

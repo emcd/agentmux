@@ -664,6 +664,7 @@ fn host_selected_bundle(
         let report = match startup_bundle(
             &roots.configuration_root,
             &paths.bundle_name,
+            &paths.runtime_directory,
             &paths.tmux_socket,
         )
         .map_err(shared::map_reconcile_error)

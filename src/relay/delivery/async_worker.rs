@@ -28,7 +28,7 @@ const ACP_MAX_PENDING: usize = 64;
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(super) struct AsyncWorkerKey {
-    pub tmux_socket: PathBuf,
+    pub runtime_directory: PathBuf,
     pub bundle_name: String,
     pub target_session: String,
 }

@@ -28,6 +28,22 @@ fn tmux_command(socket: &Path, arguments: &[&str]) -> std::process::Output {
         .expect("run tmux command")
 }
 
+fn dispatch_request(
+    request: RelayRequest,
+    configuration_root: &Path,
+    bundle_name: &str,
+    runtime_directory: &Path,
+    tmux_socket: &Path,
+) -> Result<RelayResponse, agentmux::relay::RelayError> {
+    handle_request(
+        request,
+        configuration_root,
+        bundle_name,
+        runtime_directory,
+        tmux_socket,
+    )
+}
+
 struct TmuxServerGuard {
     socket: PathBuf,
 }
@@ -170,7 +186,7 @@ fn relay_look_returns_oldest_to_newest_snapshot_lines() {
         Duration::from_secs(3),
     );
 
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
             target_session: "bravo".to_string(),
@@ -179,6 +195,7 @@ fn relay_look_returns_oldest_to_newest_snapshot_lines() {
         },
         &config_root,
         bundle_name,
+        &paths.runtime_directory,
         &paths.tmux_socket,
     )
     .expect("look response");
@@ -220,7 +237,7 @@ fn relay_look_allows_optional_or_matching_bundle_and_applies_default_lines() {
         Duration::from_secs(3),
     );
 
-    let omitted_bundle = handle_request(
+    let omitted_bundle = dispatch_request(
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
             target_session: "bravo".to_string(),
@@ -229,6 +246,7 @@ fn relay_look_allows_optional_or_matching_bundle_and_applies_default_lines() {
         },
         &config_root,
         bundle_name,
+        &paths.runtime_directory,
         &paths.tmux_socket,
     )
     .expect("look response");
@@ -240,7 +258,7 @@ fn relay_look_allows_optional_or_matching_bundle_and_applies_default_lines() {
         panic!("expected look response");
     };
 
-    let matching_bundle = handle_request(
+    let matching_bundle = dispatch_request(
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
             target_session: "bravo".to_string(),
@@ -249,6 +267,7 @@ fn relay_look_allows_optional_or_matching_bundle_and_applies_default_lines() {
         },
         &config_root,
         bundle_name,
+        &paths.runtime_directory,
         &paths.tmux_socket,
     )
     .expect("look response");
@@ -260,7 +279,7 @@ fn relay_look_allows_optional_or_matching_bundle_and_applies_default_lines() {
         panic!("expected look response");
     };
 
-    let explicit_default = handle_request(
+    let explicit_default = dispatch_request(
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
             target_session: "bravo".to_string(),
@@ -269,6 +288,7 @@ fn relay_look_allows_optional_or_matching_bundle_and_applies_default_lines() {
         },
         &config_root,
         bundle_name,
+        &paths.runtime_directory,
         &paths.tmux_socket,
     )
     .expect("look response");

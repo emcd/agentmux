@@ -17,9 +17,9 @@ use super::authorization::{
     ui_session_display_name,
 };
 use super::delivery::{
-    QuiescenceOptions, acp_session_ready_for_startup, aggregate_chat_status, deliver_one_target,
-    enqueue_async_delivery, enqueue_sync_delivery, ensure_acp_worker_ready_for_look,
-    load_acp_snapshot_lines_for_look, prompt_batch_settings,
+    QuiescenceOptions, acp_session_ready_for_startup, aggregate_chat_status,
+    await_acp_worker_prime_for_look, deliver_one_target, enqueue_async_delivery,
+    enqueue_sync_delivery, load_acp_snapshot_lines_for_look, prompt_batch_settings,
 };
 use super::lifecycle::{reconcile_loaded_bundle_for_lifecycle, shutdown_bundle_runtime};
 use super::tmux::{capture_pane_tail_lines, resolve_active_pane_target};
@@ -66,14 +66,19 @@ pub(super) fn handle_request(
     request: RelayRequest,
     bundle: &BundleConfiguration,
     authorization: &AuthorizationContext,
+    runtime_directory: &Path,
     tmux_socket: &Path,
 ) -> Result<RelayResponse, RelayError> {
     match request {
         RelayRequest::Up => handle_lifecycle_up(bundle, tmux_socket),
         RelayRequest::Down => handle_lifecycle_down(bundle, tmux_socket),
-        RelayRequest::List { sender_session } => {
-            handle_list(bundle, authorization, sender_session, tmux_socket)
-        }
+        RelayRequest::List { sender_session } => handle_list(
+            bundle,
+            authorization,
+            sender_session,
+            runtime_directory,
+            tmux_socket,
+        ),
         RelayRequest::Chat {
             request_id,
             sender_session,
@@ -98,6 +103,7 @@ pub(super) fn handle_request(
                 quiescence_timeout_ms,
                 acp_turn_timeout_ms,
             },
+            runtime_directory,
             tmux_socket,
         ),
         RelayRequest::Look {
@@ -114,6 +120,7 @@ pub(super) fn handle_request(
                 lines,
                 bundle_name: request_bundle_name,
             },
+            runtime_directory,
             tmux_socket,
         ),
     }
@@ -189,6 +196,7 @@ fn handle_list(
     bundle: &BundleConfiguration,
     authorization: &AuthorizationContext,
     sender_session: Option<String>,
+    runtime_directory: &Path,
     tmux_socket: &Path,
 ) -> Result<RelayResponse, RelayError> {
     let sender_session = sender_session.ok_or_else(|| {
@@ -218,13 +226,6 @@ fn handle_list(
         })
         .collect::<Vec<_>>();
 
-    let runtime_directory = tmux_socket.parent().ok_or_else(|| {
-        relay_error(
-            "internal_unexpected_failure",
-            "tmux socket path has no runtime directory parent",
-            None,
-        )
-    })?;
     let recent_startup_failures = load_startup_failures(runtime_directory).map_err(|cause| {
         relay_error(
             "internal_unexpected_failure",
@@ -245,17 +246,19 @@ fn handle_list(
                 resolve_active_pane_target(tmux_socket, member.id.as_str()).is_ok()
             }
             TargetConfiguration::Acp(_) => {
-                acp_session_ready_for_startup(tmux_socket, member.id.as_str()).map_err(|cause| {
-                    relay_error(
-                        "internal_unexpected_failure",
-                        "failed to evaluate ACP startup readiness",
-                        Some(json!({
-                            "bundle_name": bundle.bundle_name,
-                            "session_id": member.id,
-                            "cause": cause,
-                        })),
-                    )
-                })?
+                acp_session_ready_for_startup(runtime_directory, member.id.as_str()).map_err(
+                    |cause| {
+                        relay_error(
+                            "internal_unexpected_failure",
+                            "failed to evaluate ACP startup readiness",
+                            Some(json!({
+                                "bundle_name": bundle.bundle_name,
+                                "session_id": member.id,
+                                "cause": cause,
+                            })),
+                        )
+                    },
+                )?
             }
         };
         if ready {
@@ -320,6 +323,7 @@ fn handle_chat(
     bundle: &BundleConfiguration,
     authorization: &AuthorizationContext,
     request: ChatRequestContext,
+    runtime_directory: &Path,
     tmux_socket: &Path,
 ) -> Result<RelayResponse, RelayError> {
     let ChatRequestContext {
@@ -488,6 +492,7 @@ fn handle_chat(
                     message_id,
                     quiescence,
                     batch_settings,
+                    runtime_directory: runtime_directory.to_path_buf(),
                     tmux_socket: tmux_socket.to_path_buf(),
                     completion_sender: None,
                 };
@@ -542,6 +547,7 @@ fn handle_chat(
                     message_id: message_id.clone(),
                     quiescence,
                     batch_settings,
+                    runtime_directory: runtime_directory.to_path_buf(),
                     tmux_socket: tmux_socket.to_path_buf(),
                     completion_sender: None,
                 };
@@ -609,6 +615,7 @@ fn handle_look(
     bundle: &BundleConfiguration,
     authorization: &AuthorizationContext,
     request: LookRequestContext,
+    runtime_directory: &Path,
     tmux_socket: &Path,
 ) -> Result<RelayResponse, RelayError> {
     let LookRequestContext {
@@ -690,16 +697,18 @@ fn handle_look(
                 (snapshot_lines, None, None, None, None)
             }
             crate::configuration::TargetConfiguration::Acp(_) => {
-                let prime_timed_out = ensure_acp_worker_ready_for_look(bundle, target, tmux_socket)
-                    .map_err(|reason| {
-                        relay_error(
-                            "internal_unexpected_failure",
-                            "failed to ensure ACP worker for look",
-                            Some(json!({"target_session": target.id, "cause": reason})),
-                        )
-                    })?;
+                let prime_timed_out =
+                    await_acp_worker_prime_for_look(bundle, target, runtime_directory).map_err(
+                        |reason| {
+                            relay_error(
+                                "internal_unexpected_failure",
+                                "failed to await ACP worker prime for look",
+                                Some(json!({"target_session": target.id, "cause": reason})),
+                            )
+                        },
+                    )?;
                 let snapshot = load_acp_snapshot_lines_for_look(
-                    tmux_socket,
+                    runtime_directory,
                     target.id.as_str(),
                     requested_lines,
                     prime_timed_out,

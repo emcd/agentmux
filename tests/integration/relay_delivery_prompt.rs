@@ -13,6 +13,22 @@ use crate::support::relay_delivery::{
     wait_for_pane_contains, write_bundle_configuration_members,
 };
 
+fn dispatch_request(
+    request: RelayRequest,
+    configuration_root: &std::path::Path,
+    bundle_name: &str,
+    runtime_directory: &std::path::Path,
+    tmux_socket: &std::path::Path,
+) -> Result<RelayResponse, agentmux::relay::RelayError> {
+    handle_request(
+        request,
+        configuration_root,
+        bundle_name,
+        runtime_directory,
+        tmux_socket,
+    )
+}
+
 #[test]
 fn relay_chat_delivers_when_prompt_readiness_template_matches() {
     if !tmux_available() {
@@ -71,7 +87,7 @@ fn relay_chat_delivers_when_prompt_readiness_template_matches() {
         "printf 'booting\\n'; sleep 0.2; printf 'READY>\\n'; exec sleep 45",
     );
 
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Chat {
             request_id: Some("req-ready".to_string()),
             sender_session: "alpha".to_string(),
@@ -85,6 +101,7 @@ fn relay_chat_delivers_when_prompt_readiness_template_matches() {
         },
         &config_root,
         bundle_name,
+        &paths.runtime_directory,
         &paths.tmux_socket,
     )
     .expect("delivery should complete");
@@ -161,7 +178,7 @@ fn relay_chat_times_out_when_prompt_readiness_never_matches() {
         "printf 'idle\\n'; exec sleep 45",
     );
 
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Chat {
             request_id: Some("req-unready".to_string()),
             sender_session: "alpha".to_string(),
@@ -175,6 +192,7 @@ fn relay_chat_times_out_when_prompt_readiness_never_matches() {
         },
         &config_root,
         bundle_name,
+        &paths.runtime_directory,
         &paths.tmux_socket,
     )
     .expect("delivery should complete");
@@ -265,7 +283,7 @@ fn relay_chat_delivers_when_prompt_idle_column_matches() {
         Duration::from_millis(1_200),
     );
 
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Chat {
             request_id: Some("req-idle-match".to_string()),
             sender_session: "alpha".to_string(),
@@ -279,6 +297,7 @@ fn relay_chat_delivers_when_prompt_idle_column_matches() {
         },
         &config_root,
         bundle_name,
+        &paths.runtime_directory,
         &paths.tmux_socket,
     )
     .expect("delivery should complete");
@@ -360,7 +379,7 @@ fn relay_chat_delivers_when_prompt_regex_requires_blank_separator_line() {
         Duration::from_millis(1_200),
     );
 
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Chat {
             request_id: Some("req-blank-line".to_string()),
             sender_session: "alpha".to_string(),
@@ -374,6 +393,7 @@ fn relay_chat_delivers_when_prompt_regex_requires_blank_separator_line() {
         },
         &config_root,
         bundle_name,
+        &paths.runtime_directory,
         &paths.tmux_socket,
     )
     .expect("delivery should complete");
@@ -464,7 +484,7 @@ fn relay_chat_times_out_when_prompt_idle_column_does_not_match() {
         String::from_utf8_lossy(&typed.stderr)
     );
 
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Chat {
             request_id: Some("req-idle-mismatch".to_string()),
             sender_session: "alpha".to_string(),
@@ -478,6 +498,7 @@ fn relay_chat_times_out_when_prompt_idle_column_does_not_match() {
         },
         &config_root,
         bundle_name,
+        &paths.runtime_directory,
         &paths.tmux_socket,
     )
     .expect("delivery should complete");

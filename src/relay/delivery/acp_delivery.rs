@@ -45,8 +45,8 @@ pub(super) struct PersistentAcpWorkerRuntime {
     pub session_id: String,
 }
 
-pub(super) fn bootstrap_acp_worker_runtime_for_look(
-    runtime_socket_path: &Path,
+pub(super) fn bootstrap_acp_worker_runtime(
+    runtime_directory: &Path,
     target_member: &BundleMember,
 ) -> Result<PersistentAcpWorkerRuntime, String> {
     let TargetConfiguration::Acp(acp_target) = &target_member.target else {
@@ -57,7 +57,7 @@ pub(super) fn bootstrap_acp_worker_runtime_for_look(
     };
     let target_session = target_member.id.as_str();
     persist_acp_worker_state(
-        runtime_socket_path,
+        runtime_directory,
         target_session,
         target_member.coder_session_id.as_deref(),
         AcpWorkerReadinessState::Initializing,
@@ -69,7 +69,7 @@ pub(super) fn bootstrap_acp_worker_runtime_for_look(
         target_member,
         acp_target,
         working_directory,
-        runtime_socket_path,
+        runtime_directory,
         target_session,
         message_id,
     )
@@ -92,7 +92,7 @@ pub(super) fn bootstrap_acp_worker_runtime_for_look(
     }
     if !refreshed_lines.is_empty() {
         replace_acp_snapshot_lines(
-            runtime_socket_path,
+            runtime_directory,
             target_session,
             runtime.session_id.as_str(),
             refreshed_lines.as_slice(),
@@ -100,7 +100,7 @@ pub(super) fn bootstrap_acp_worker_runtime_for_look(
         .map_err(|reason| format!("persist ACP bootstrap snapshot lines failed: {reason}"))?;
     }
     persist_acp_worker_state(
-        runtime_socket_path,
+        runtime_directory,
         target_session,
         Some(runtime.session_id.as_str()),
         AcpWorkerReadinessState::Available,
@@ -125,7 +125,7 @@ pub(super) fn deliver_one_target_acp(
             "ACP target is missing working directory",
         );
     }
-    let runtime_socket_path = task.tmux_socket.as_path();
+    let runtime_directory = task.runtime_directory.as_path();
 
     let Some(runtime) = acp_runtime.as_mut() else {
         return failed_result_with_code(
@@ -151,7 +151,7 @@ pub(super) fn deliver_one_target_acp(
             if !first_activity_observed {
                 first_activity_observed = true;
                 let _ = persist_acp_worker_state(
-                    runtime_socket_path,
+                    runtime_directory,
                     target_member.id.as_str(),
                     Some(session_id.as_str()),
                     AcpWorkerReadinessState::Busy,
@@ -171,7 +171,7 @@ pub(super) fn deliver_one_target_acp(
         };
         let mut on_snapshot_lines = |snapshot_lines: &[String]| -> Result<(), String> {
             persist_acp_snapshot_lines(
-                runtime_socket_path,
+                runtime_directory,
                 target_member.id.as_str(),
                 session_id.as_str(),
                 snapshot_lines,
@@ -192,7 +192,7 @@ pub(super) fn deliver_one_target_acp(
             Ok(prompt_completion) => {
                 first_activity_observed |= prompt_completion.first_activity_observed;
                 if let Err(reason) = persist_acp_worker_state(
-                    runtime_socket_path,
+                    runtime_directory,
                     target_member.id.as_str(),
                     Some(session_id.as_str()),
                     AcpWorkerReadinessState::Available,
@@ -229,7 +229,7 @@ pub(super) fn deliver_one_target_acp(
             }
             Err(AcpRequestError::Timeout(timeout)) => {
                 let _ = persist_acp_worker_state(
-                    runtime_socket_path,
+                    runtime_directory,
                     target_member.id.as_str(),
                     Some(session_id.as_str()),
                     AcpWorkerReadinessState::Unavailable,
@@ -251,7 +251,7 @@ pub(super) fn deliver_one_target_acp(
             }) => {
                 first_activity_observed |= observed;
                 let _ = persist_acp_worker_state(
-                    runtime_socket_path,
+                    runtime_directory,
                     target_member.id.as_str(),
                     Some(session_id.as_str()),
                     AcpWorkerReadinessState::Unavailable,
@@ -273,7 +273,7 @@ pub(super) fn deliver_one_target_acp(
             }
             Err(AcpRequestError::Failed(reason)) => {
                 let _ = persist_acp_worker_state(
-                    runtime_socket_path,
+                    runtime_directory,
                     target_member.id.as_str(),
                     Some(session_id.as_str()),
                     AcpWorkerReadinessState::Unavailable,
@@ -304,7 +304,7 @@ fn initialize_persistent_acp_worker_runtime(
     target_member: &BundleMember,
     acp: &AcpTargetConfiguration,
     working_directory: &Path,
-    runtime_socket_path: &Path,
+    runtime_directory: &Path,
     target_session: &str,
     message_id: &str,
 ) -> Result<PersistentAcpWorkerRuntime, Box<ChatResult>> {
@@ -346,7 +346,7 @@ fn initialize_persistent_acp_worker_runtime(
         Ok(value) => value,
         Err(reason) => {
             let _ = persist_acp_worker_state(
-                runtime_socket_path,
+                runtime_directory,
                 target_member.id.as_str(),
                 None,
                 AcpWorkerReadinessState::Unavailable,
@@ -388,7 +388,7 @@ fn initialize_persistent_acp_worker_runtime(
     let persisted_session_id = if target_member.coder_session_id.is_some() {
         None
     } else {
-        load_persisted_acp_session_id(runtime_socket_path, target_member.id.as_str()).map_err(
+        load_persisted_acp_session_id(runtime_directory, target_member.id.as_str()).map_err(
             |reason| {
                 Box::new(failed_result(
                     target_session.to_string(),
@@ -427,7 +427,7 @@ fn initialize_persistent_acp_worker_runtime(
                 client.load_session(lifecycle_session_id.as_str(), working_directory)
             {
                 let _ = persist_acp_worker_state(
-                    runtime_socket_path,
+                    runtime_directory,
                     target_member.id.as_str(),
                     Some(lifecycle_session_id.as_str()),
                     AcpWorkerReadinessState::Unavailable,
@@ -450,7 +450,7 @@ fn initialize_persistent_acp_worker_runtime(
             Ok(value) => value,
             Err(reason) => {
                 let _ = persist_acp_worker_state(
-                    runtime_socket_path,
+                    runtime_directory,
                     target_member.id.as_str(),
                     None,
                     AcpWorkerReadinessState::Unavailable,
@@ -470,7 +470,7 @@ fn initialize_persistent_acp_worker_runtime(
     };
 
     if let Err(reason) = persist_acp_session_id(
-        runtime_socket_path,
+        runtime_directory,
         target_member.id.as_str(),
         session_id.as_str(),
     ) {

@@ -17,7 +17,7 @@ use crate::{
 };
 
 use super::acp_delivery::{
-    PersistentAcpWorkerRuntime, bootstrap_acp_worker_runtime_for_look, deliver_one_target_acp,
+    PersistentAcpWorkerRuntime, bootstrap_acp_worker_runtime, deliver_one_target_acp,
 };
 use super::acp_state::{
     ACP_LOOK_PRIME_TIMEOUT_MS, AcpWorkerReadinessState, load_acp_worker_readiness_state,
@@ -41,29 +41,29 @@ const DROPPED_ON_SHUTDOWN_REASON_CODE: &str = "dropped_on_shutdown";
 #[derive(Clone)]
 struct AcpWorkerBootstrap {
     target_member: BundleMember,
-    tmux_socket: std::path::PathBuf,
+    runtime_directory: std::path::PathBuf,
 }
 
 pub(in crate::relay) fn wait_for_async_delivery_shutdown(timeout: Duration) -> usize {
     super::async_worker::wait_for_async_delivery_shutdown(timeout)
 }
 
-pub(in crate::relay) fn ensure_acp_worker_ready_for_look(
+pub(in crate::relay) fn await_acp_worker_prime_for_look(
     bundle: &BundleConfiguration,
     target_member: &BundleMember,
-    tmux_socket: &std::path::Path,
+    runtime_directory: &std::path::Path,
 ) -> Result<bool, RelayError> {
     if !matches!(target_member.target, TargetConfiguration::Acp(_)) {
         return Ok(false);
     }
     let key = super::async_worker::AsyncWorkerKey {
-        tmux_socket: tmux_socket.to_path_buf(),
+        runtime_directory: runtime_directory.to_path_buf(),
         bundle_name: bundle.bundle_name.clone(),
         target_session: target_member.id.clone(),
     };
     if !super::async_worker::worker_exists(&key)? {
         let persisted_session_id =
-            load_persisted_acp_session_id(tmux_socket, target_member.id.as_str()).map_err(
+            load_persisted_acp_session_id(runtime_directory, target_member.id.as_str()).map_err(
                 |cause| {
                     super::super::relay_error(
                         "internal_unexpected_failure",
@@ -76,7 +76,7 @@ pub(in crate::relay) fn ensure_acp_worker_ready_for_look(
                 },
             )?;
         let _ = persist_acp_worker_state(
-            tmux_socket,
+            runtime_directory,
             target_member.id.as_str(),
             persisted_session_id.as_deref(),
             AcpWorkerReadinessState::Unavailable,
@@ -85,17 +85,19 @@ pub(in crate::relay) fn ensure_acp_worker_ready_for_look(
     }
     let deadline = Instant::now() + Duration::from_millis(ACP_LOOK_PRIME_TIMEOUT_MS);
     loop {
-        let readiness = load_acp_worker_readiness_state(tmux_socket, target_member.id.as_str())
-            .map_err(|cause| {
-                super::super::relay_error(
-                    "internal_unexpected_failure",
-                    "failed to load ACP worker readiness state",
-                    Some(json!({
-                        "target_session": target_member.id,
-                        "cause": cause,
-                    })),
-                )
-            })?;
+        let readiness =
+            load_acp_worker_readiness_state(runtime_directory, target_member.id.as_str()).map_err(
+                |cause| {
+                    super::super::relay_error(
+                        "internal_unexpected_failure",
+                        "failed to load ACP worker readiness state",
+                        Some(json!({
+                            "target_session": target_member.id,
+                            "cause": cause,
+                        })),
+                    )
+                },
+            )?;
         match readiness {
             Some(AcpWorkerReadinessState::Initializing) | None => {
                 if Instant::now() >= deadline {
@@ -110,7 +112,7 @@ pub(in crate::relay) fn ensure_acp_worker_ready_for_look(
 
 pub(in crate::relay) fn initialize_acp_target_for_startup(
     bundle_name: &str,
-    tmux_socket: &std::path::Path,
+    runtime_directory: &std::path::Path,
     target_member: &BundleMember,
 ) -> Result<(), (String, String, Option<serde_json::Value>)> {
     if !matches!(target_member.target, TargetConfiguration::Acp(_)) {
@@ -126,7 +128,7 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
         ));
     }
     let key = super::async_worker::AsyncWorkerKey {
-        tmux_socket: tmux_socket.to_path_buf(),
+        runtime_directory: runtime_directory.to_path_buf(),
         bundle_name: bundle_name.to_string(),
         target_session: target_member.id.clone(),
     };
@@ -144,7 +146,7 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
         let pending = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let bootstrap = AcpWorkerBootstrap {
             target_member: target_member.clone(),
-            tmux_socket: tmux_socket.to_path_buf(),
+            runtime_directory: runtime_directory.to_path_buf(),
         };
         if super::async_worker::register_worker_if_absent(
             key.clone(),
@@ -167,17 +169,19 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
     }
     let deadline = Instant::now() + Duration::from_millis(ACP_LOOK_PRIME_TIMEOUT_MS);
     loop {
-        let readiness = load_acp_worker_readiness_state(tmux_socket, target_member.id.as_str())
-            .map_err(|cause| {
-                (
-                    "internal_unexpected_failure".to_string(),
-                    "failed to load ACP worker readiness state".to_string(),
-                    Some(json!({
-                        "target_session": target_member.id,
-                        "cause": cause,
-                    })),
-                )
-            })?;
+        let readiness =
+            load_acp_worker_readiness_state(runtime_directory, target_member.id.as_str()).map_err(
+                |cause| {
+                    (
+                        "internal_unexpected_failure".to_string(),
+                        "failed to load ACP worker readiness state".to_string(),
+                        Some(json!({
+                            "target_session": target_member.id,
+                            "cause": cause,
+                        })),
+                    )
+                },
+            )?;
         match readiness {
             Some(AcpWorkerReadinessState::Available | AcpWorkerReadinessState::Busy) => {
                 return Ok(());
@@ -230,7 +234,7 @@ pub(in crate::relay) fn enqueue_sync_delivery(
 fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
     let bounded_acp_queue = super::async_worker::task_uses_acp_transport(&task)?;
     let key = super::async_worker::AsyncWorkerKey {
-        tmux_socket: task.tmux_socket.clone(),
+        runtime_directory: task.runtime_directory.clone(),
         bundle_name: task.bundle.bundle_name.clone(),
         target_session: task.target_session.clone(),
     };
@@ -546,8 +550,8 @@ fn spawn_async_delivery_worker(
     thread::spawn(move || {
         let mut acp_runtime = None::<PersistentAcpWorkerRuntime>;
         if let Some(bootstrap) = bootstrap {
-            match bootstrap_acp_worker_runtime_for_look(
-                bootstrap.tmux_socket.as_path(),
+            match bootstrap_acp_worker_runtime(
+                bootstrap.runtime_directory.as_path(),
                 &bootstrap.target_member,
             ) {
                 Ok(runtime) => acp_runtime = Some(runtime),

@@ -16,7 +16,7 @@
 - [x] 2.4 Implement deterministic cold-start prime behavior (`750ms`) with required ACP freshness fields.
 - [x] 2.5 Implement deterministic stale reason mapping (`acp_worker_initializing`, `acp_worker_unavailable`, `acp_snapshot_prime_timeout`, `acp_stream_stalled`).
 - [x] 2.6 Keep event/inscription freshness carriers additive only (not required for machine correctness).
-- [ ] 2.7 Replace ACP runtime key/state anchoring that references tmux socket naming with relay runtime context anchoring, including rename cleanup for bridge-era ACP helpers (`bootstrap_acp_worker_runtime_for_look`, `ensure_acp_worker_ready_for_look`).
+- [x] 2.7 Replace ACP runtime key/state anchoring that references tmux socket naming with relay runtime context anchoring, including rename cleanup for bridge-era ACP helpers (`bootstrap_acp_worker_runtime`, `await_acp_worker_prime_for_look`).
 
 ## 3. Adapter and Serialization
 

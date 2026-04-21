@@ -13,6 +13,22 @@ use crate::support::relay_delivery::{
     wait_for_pane_contains, write_bundle_configuration,
 };
 
+fn dispatch_request(
+    request: RelayRequest,
+    configuration_root: &std::path::Path,
+    bundle_name: &str,
+    runtime_directory: &std::path::Path,
+    tmux_socket: &std::path::Path,
+) -> Result<RelayResponse, agentmux::relay::RelayError> {
+    handle_request(
+        request,
+        configuration_root,
+        bundle_name,
+        runtime_directory,
+        tmux_socket,
+    )
+}
+
 #[test]
 fn relay_chat_async_processes_repeated_target_messages_in_fifo_order() {
     if !tmux_available() {
@@ -34,7 +50,7 @@ fn relay_chat_async_processes_repeated_target_messages_in_fifo_order() {
     let first_marker = "FIFO-ONE-MARKER";
     let second_marker = "FIFO-TWO-MARKER";
 
-    let first = handle_request(
+    let first = dispatch_request(
         RelayRequest::Chat {
             request_id: Some("req-fifo-1".to_string()),
             sender_session: "alpha".to_string(),
@@ -48,6 +64,7 @@ fn relay_chat_async_processes_repeated_target_messages_in_fifo_order() {
         },
         &config_root,
         bundle_name,
+        &paths.runtime_directory,
         &paths.tmux_socket,
     )
     .expect("first async send should be accepted");
@@ -63,7 +80,7 @@ fn relay_chat_async_processes_repeated_target_messages_in_fifo_order() {
     assert_eq!(first_results.len(), 1);
     assert_eq!(first_results[0].outcome, ChatOutcome::Queued);
 
-    let second = handle_request(
+    let second = dispatch_request(
         RelayRequest::Chat {
             request_id: Some("req-fifo-2".to_string()),
             sender_session: "alpha".to_string(),
@@ -77,6 +94,7 @@ fn relay_chat_async_processes_repeated_target_messages_in_fifo_order() {
         },
         &config_root,
         bundle_name,
+        &paths.runtime_directory,
         &paths.tmux_socket,
     )
     .expect("second async send should be accepted");
@@ -149,7 +167,7 @@ fn relay_chat_async_without_timeout_waits_for_late_quiescence() {
     );
 
     let marker = "ASYNC-LATE-QUIESCENCE-MARKER";
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Chat {
             request_id: Some("req-async-default".to_string()),
             sender_session: "alpha".to_string(),
@@ -163,6 +181,7 @@ fn relay_chat_async_without_timeout_waits_for_late_quiescence() {
         },
         &config_root,
         bundle_name,
+        &paths.runtime_directory,
         &paths.tmux_socket,
     )
     .expect("async send should be accepted");
@@ -216,7 +235,7 @@ fn relay_chat_async_timeout_override_stops_wait_before_late_quiescence() {
     );
 
     let marker = "ASYNC-TIMEOUT-OVERRIDE-MARKER";
-    let response = handle_request(
+    let response = dispatch_request(
         RelayRequest::Chat {
             request_id: Some("req-async-timeout".to_string()),
             sender_session: "alpha".to_string(),
@@ -230,6 +249,7 @@ fn relay_chat_async_timeout_override_stops_wait_before_late_quiescence() {
         },
         &config_root,
         bundle_name,
+        &paths.runtime_directory,
         &paths.tmux_socket,
     )
     .expect("async send should be accepted");

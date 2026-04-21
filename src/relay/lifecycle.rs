@@ -64,11 +64,12 @@ pub(super) fn reconcile_loaded_bundle_for_lifecycle(
 pub(super) fn startup_bundle(
     configuration_root: &Path,
     bundle_name: &str,
+    runtime_directory: &Path,
     tmux_socket: &Path,
 ) -> Result<BundleStartupReport, RelayError> {
     let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
     let _authorization = load_authorization_context(configuration_root, &bundle)?;
-    startup_loaded_bundle(&bundle, tmux_socket)
+    startup_loaded_bundle(&bundle, runtime_directory, tmux_socket)
 }
 
 fn reconcile_loaded_bundle(
@@ -145,6 +146,7 @@ fn reconcile_loaded_bundle(
 
 fn startup_loaded_bundle(
     bundle: &BundleConfiguration,
+    runtime_directory: &Path,
     tmux_socket: &Path,
 ) -> Result<BundleStartupReport, RelayError> {
     let configured_tmux_sessions = bundle
@@ -186,7 +188,7 @@ fn startup_loaded_bundle(
             TargetConfiguration::Acp(_) => {
                 match initialize_acp_target_for_startup(
                     bundle.bundle_name.as_str(),
-                    tmux_socket,
+                    runtime_directory,
                     &member,
                 ) {
                     Ok(()) => ready_session_count += 1,
