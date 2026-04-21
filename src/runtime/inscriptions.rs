@@ -39,6 +39,12 @@ pub fn mcp_inscriptions_path(
         .join("mcp.log")
 }
 
+/// Resolves MCP inscription file path for an unassociated MCP process.
+#[must_use]
+pub fn mcp_unassociated_inscriptions_path(inscriptions_root: &Path) -> PathBuf {
+    inscriptions_root.join("mcp").join("unassociated.log")
+}
+
 /// Configures process-local inscription sink path.
 ///
 /// # Errors

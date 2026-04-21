@@ -540,6 +540,82 @@ fn bootstrap_removes_stale_socket_before_spawn() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_initializes_without_active_bundle_context() {
+    let temporary = TempDir::new().expect("temporary");
+    let root = temporary.path().to_path_buf();
+    let workspace = root.join("outside");
+    let config_root = root.join("config");
+    let state_root = root.join("state");
+    fs::create_dir_all(&workspace).expect("create workspace");
+    write_bundle_configuration(&config_root, "party", &["alpha"]);
+
+    let mut harness = McpHarness::spawn_with_environment(
+        &workspace,
+        &[
+            "--config-directory",
+            config_root.to_str().expect("utf8 config path"),
+            "--state-directory",
+            state_root.to_str().expect("utf8 state path"),
+        ],
+        &[],
+    )
+    .await;
+
+    let help_response = harness.call_tool(2, "help", Map::new()).await;
+    let help_payload = decode_tool_payload(&help_response);
+    assert_eq!(help_payload["namespace"], "agentmux");
+
+    let mut send_arguments = Map::new();
+    send_arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    send_arguments.insert(
+        "targets".to_string(),
+        Value::Array(vec![Value::String("alpha".to_string())]),
+    );
+    send_arguments.insert("broadcast".to_string(), Value::Bool(false));
+    let send_response = harness.call_tool(3, "send", send_arguments).await;
+    assert_eq!(
+        send_response["error"]["data"]["code"],
+        Value::String("validation_unknown_sender".to_string())
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_explicit_unknown_bundle_still_fails_startup() {
+    let temporary = TempDir::new().expect("temporary");
+    let root = temporary.path().to_path_buf();
+    let workspace = root.join("outside");
+    let config_root = root.join("config");
+    let state_root = root.join("state");
+    fs::create_dir_all(&workspace).expect("create workspace");
+    write_bundle_configuration(&config_root, "party", &["alpha"]);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .current_dir(&workspace)
+        .arg("host")
+        .arg("mcp")
+        .arg("--bundle-name")
+        .arg("missing")
+        .arg("--config-directory")
+        .arg(config_root.to_str().expect("utf8 config path"))
+        .arg("--state-directory")
+        .arg(state_root.to_str().expect("utf8 state path"))
+        .output()
+        .await
+        .expect("run agentmux host mcp");
+    assert!(
+        !output.status.success(),
+        "explicit unknown bundle should fail startup, stdout={}, stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("validation_unknown_bundle"),
+        "expected validation_unknown_bundle in stderr: {stderr}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_auto_discovers_association_from_non_git_cwd() {
     let temporary = TempDir::new().expect("temporary");
     let root = temporary.path().to_path_buf();

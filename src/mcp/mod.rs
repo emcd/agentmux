@@ -35,7 +35,8 @@ use crate::runtime::paths::BundleRuntimePaths;
 #[derive(Clone, Debug)]
 pub struct McpConfiguration {
     pub configuration_root: PathBuf,
-    pub bundle_paths: BundleRuntimePaths,
+    pub state_root: PathBuf,
+    pub associated_bundle_paths: Option<BundleRuntimePaths>,
     pub sender_session: Option<String>,
 }
 
@@ -145,14 +146,18 @@ const NAMESPACE_AGENTMUX: &str = "agentmux";
 #[tool_router]
 impl McpServer {
     fn new(configuration: McpConfiguration) -> Self {
-        let relay_stream = configuration.sender_session.as_ref().map(|sender_session| {
-            RelayStreamSession::new(
-                configuration.bundle_paths.relay_socket.clone(),
-                configuration.bundle_paths.bundle_name.clone(),
-                sender_session.clone(),
-                RelayStreamClientClass::Agent,
-            )
-        });
+        let relay_stream = configuration
+            .sender_session
+            .as_ref()
+            .zip(configuration.associated_bundle_paths.as_ref())
+            .map(|(sender_session, bundle_paths)| {
+                RelayStreamSession::new(
+                    bundle_paths.relay_socket.clone(),
+                    bundle_paths.bundle_name.clone(),
+                    sender_session.clone(),
+                    RelayStreamClientClass::Agent,
+                )
+            });
         Self {
             state: Arc::new(McpState {
                 configuration,
@@ -223,7 +228,14 @@ impl McpServer {
         let bundle_name = selected_bundle
             .as_ref()
             .map(ToString::to_string)
-            .unwrap_or_else(|| self.home_bundle_name().to_string());
+            .or_else(|| self.home_bundle_name().map(ToString::to_string))
+            .ok_or_else(|| {
+                validation_tool_error(
+                    "validation_unknown_bundle",
+                    "bundle_name is required when MCP server is not associated with a bundle",
+                    None,
+                )
+            })?;
         match self.list_sessions_single_bundle(bundle_name.as_str(), sender_session.as_str()) {
             Ok(bundle) => {
                 let response = json!({
@@ -265,7 +277,7 @@ impl McpServer {
         emit_inscription(
             "mcp.tool.send.request",
             &json!({
-                "bundle_name": self.state.configuration.bundle_paths.bundle_name,
+                "bundle_name": self.associated_bundle_name(),
                 "request_id": params.request_id.clone(),
                 "targets": params.targets.clone(),
                 "broadcast": params.broadcast,
@@ -353,16 +365,7 @@ impl McpServer {
                     Some(json!({"response": other})),
                 ))
             }
-            Err(source) => {
-                emit_inscription(
-                    "mcp.tool.send.io_error",
-                    &json!({"error": source.to_string()}),
-                );
-                Err(map_relay_request_failure(
-                    &self.state.configuration.bundle_paths.relay_socket,
-                    source,
-                ))
-            }
+            Err(source) => Err(self.map_relay_stream_failure("mcp.tool.send.io_error", source)),
         }
     }
 
@@ -375,7 +378,7 @@ impl McpServer {
         emit_inscription(
             "mcp.tool.look.request",
             &json!({
-                "bundle_name": self.state.configuration.bundle_paths.bundle_name,
+                "bundle_name": self.associated_bundle_name(),
                 "requester_session": self.state.configuration.sender_session.clone(),
                 "target_session": params.target_session.clone(),
                 "requested_bundle_name": params.bundle_name.clone(),
@@ -471,16 +474,7 @@ impl McpServer {
                     Some(json!({"response": other})),
                 ))
             }
-            Err(source) => {
-                emit_inscription(
-                    "mcp.tool.look.io_error",
-                    &json!({"error": source.to_string()}),
-                );
-                Err(map_relay_request_failure(
-                    &self.state.configuration.bundle_paths.relay_socket,
-                    source,
-                ))
-            }
+            Err(source) => Err(self.map_relay_stream_failure("mcp.tool.look.io_error", source)),
         }
     }
 
@@ -489,11 +483,9 @@ impl McpServer {
         bundle_name: &str,
         sender_session: &str,
     ) -> Result<ListedBundle, McpError> {
-        let bundle_paths = BundleRuntimePaths::resolve(
-            &self.state.configuration.bundle_paths.state_root,
-            bundle_name,
-        )
-        .map_err(map_runtime_error)?;
+        let bundle_paths =
+            BundleRuntimePaths::resolve(&self.state.configuration.state_root, bundle_name)
+                .map_err(map_runtime_error)?;
         let bundle =
             load_bundle_configuration(&self.state.configuration.configuration_root, bundle_name)
                 .map_err(map_configuration_error)?;
@@ -513,7 +505,7 @@ impl McpServer {
             )),
             Err(source)
                 if is_relay_unavailable_error(&source)
-                    && bundle_name == self.home_bundle_name() =>
+                    && self.home_bundle_name() == Some(bundle_name) =>
             {
                 Ok(self.synthesize_down_bundle(&bundle, &relay_socket))
             }
@@ -537,8 +529,20 @@ impl McpServer {
         Ok(bundles)
     }
 
-    fn home_bundle_name(&self) -> &str {
-        self.state.configuration.bundle_paths.bundle_name.as_str()
+    fn home_bundle_name(&self) -> Option<&str> {
+        self.state
+            .configuration
+            .associated_bundle_paths
+            .as_ref()
+            .map(|paths| paths.bundle_name.as_str())
+    }
+
+    fn associated_bundle_name(&self) -> Option<&str> {
+        self.state
+            .configuration
+            .associated_bundle_paths
+            .as_ref()
+            .map(|paths| paths.bundle_name.as_str())
     }
 
     fn synthesize_down_bundle(
@@ -596,12 +600,26 @@ impl McpServer {
             emit_inscription(
                 "mcp.tool.stream.events_ignored",
                 &json!({
-                    "bundle_name": self.state.configuration.bundle_paths.bundle_name,
+                    "bundle_name": self.associated_bundle_name(),
                     "count": events.len(),
                 }),
             );
         }
         Ok(response)
+    }
+
+    fn map_relay_stream_failure(&self, event: &str, source: std::io::Error) -> McpError {
+        emit_inscription(event, &json!({"error": source.to_string()}));
+        if let Some(bundle_paths) = self.state.configuration.associated_bundle_paths.as_ref() {
+            return map_relay_request_failure(&bundle_paths.relay_socket, source);
+        }
+        internal_tool_error(
+            "internal_unexpected_failure",
+            "relay stream is unavailable for unassociated MCP server",
+            Some(json!({
+                "cause": source.to_string(),
+            })),
+        )
     }
 }
 
