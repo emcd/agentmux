@@ -1,11 +1,78 @@
 use std::{
     fs,
+    path::Path,
     process::{Command, Stdio},
 };
 
+use serde_json::Value;
 use tempfile::TempDir;
 
 use super::helpers::*;
+
+fn write_bundle_configuration_with_tmux_and_acp_failure(config_root: &Path, bundle_name: &str) {
+    fs::create_dir_all(config_root.join("bundles")).expect("create bundles directory");
+    fs::write(
+        config_root.join("coders.toml"),
+        r#"
+format-version = 1
+
+[[coders]]
+id = "tmux-default"
+
+[coders.tmux]
+initial-command = "sh -lc 'exec sleep 45'"
+resume-command = "sh -lc 'exec sleep 45'"
+
+[[coders]]
+id = "acp-broken"
+
+[coders.acp]
+channel = "stdio"
+command = "/definitely/missing/agentmux-acp"
+"#,
+    )
+    .expect("write coders config");
+    fs::write(
+        config_root.join("policies.toml"),
+        r#"
+format-version = 1
+default = "default"
+
+[[policies]]
+id = "default"
+
+[policies.controls]
+find = "self"
+list = "all:home"
+look = "self"
+send = "all:home"
+"#,
+    )
+    .expect("write policies config");
+    fs::write(
+        config_root
+            .join("bundles")
+            .join(format!("{bundle_name}.toml")),
+        r#"
+format-version = 1
+autostart = true
+groups = ["dev"]
+
+[[sessions]]
+id = "alpha"
+name = "alpha"
+directory = "/tmp"
+coder = "tmux-default"
+
+[[sessions]]
+id = "bravo"
+name = "bravo"
+directory = "/tmp"
+coder = "acp-broken"
+"#,
+    )
+    .expect("write bundle config");
+}
 
 #[test]
 fn host_relay_rejects_positional_bundle_selector() {
@@ -124,6 +191,86 @@ fn host_relay_default_mode_starts_autostart_bundles() {
     assert_eq!(alpha["outcome"], "hosted");
     assert_eq!(bravo["outcome"], "skipped");
     assert_eq!(bravo["reason_code"], "process_only");
+}
+
+#[test]
+fn host_relay_records_startup_failures_and_list_reports_degraded_health() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_tmux_and_acp_failure(&config_root, "alpha");
+    write_tui_configuration(
+        &config_root,
+        Some("alpha"),
+        Some("user"),
+        &[("user", "default", Some("Operator"))],
+    );
+
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay");
+    wait_for_relay_socket(&state_root, "alpha");
+
+    let listed = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "list",
+            "sessions",
+            "--bundle",
+            "alpha",
+            "--json",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .output()
+        .expect("run list sessions");
+    assert!(listed.status.success(), "list sessions should succeed");
+    let listed_json: Value = serde_json::from_slice(&listed.stdout).expect("decode list payload");
+    assert_eq!(listed_json["bundle"]["state"], "up");
+    assert_eq!(listed_json["bundle"]["startup_health"], "degraded");
+    let startup_failure_count = listed_json["bundle"]["startup_failure_count"]
+        .as_u64()
+        .expect("startup failure count");
+    assert!(
+        startup_failure_count >= 1,
+        "expected startup failure record in list payload: {listed_json}"
+    );
+    let failures = listed_json["bundle"]["recent_startup_failures"]
+        .as_array()
+        .expect("startup failures array");
+    assert!(
+        failures.iter().any(|entry| entry["session_id"] == "bravo"),
+        "expected ACP startup failure for bravo session: {listed_json}"
+    );
+
+    shutdown_relay_if_present(&state_root, "alpha");
+    let output = child
+        .wait_with_output()
+        .expect("wait for agentmux host relay");
+    assert!(output.status.success(), "command should succeed");
 }
 
 #[test]

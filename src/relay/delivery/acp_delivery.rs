@@ -122,6 +122,65 @@ pub(in crate::relay) fn refresh_acp_snapshot_for_look(
     )
 }
 
+pub(in crate::relay) fn initialize_acp_target_for_startup(
+    runtime_directory: &Path,
+    target_member: &BundleMember,
+) -> Result<(), (String, String, Option<Value>)> {
+    let TargetConfiguration::Acp(acp_target) = &target_member.target else {
+        return Ok(());
+    };
+    let Some(working_directory) = target_member.working_directory.as_ref() else {
+        return Err((
+            ACP_ERROR_CODE_INITIALIZE_FAILED.to_string(),
+            "ACP startup requires target working directory".to_string(),
+            Some(json!({
+                "target_session": target_member.id,
+            })),
+        ));
+    };
+    let runtime_socket_path = runtime_directory.join("tmux.sock");
+    let initialization = initialize_persistent_acp_worker_runtime(
+        target_member,
+        acp_target,
+        working_directory,
+        runtime_socket_path.as_path(),
+        target_member.id.as_str(),
+        "startup",
+    );
+    let runtime = match initialization {
+        Ok(runtime) => runtime,
+        Err(chat_result) => {
+            return Err((
+                chat_result
+                    .reason_code
+                    .clone()
+                    .unwrap_or_else(|| "runtime_startup_failed".to_string()),
+                chat_result
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| "ACP startup failed".to_string()),
+                chat_result.details.clone(),
+            ));
+        }
+    };
+    if let Err(reason) = persist_acp_worker_state(
+        runtime_socket_path.as_path(),
+        target_member.id.as_str(),
+        Some(runtime.session_id.as_str()),
+        AcpWorkerReadinessState::Available,
+    ) {
+        return Err((
+            "runtime_startup_failed".to_string(),
+            "failed to persist ACP worker readiness state".to_string(),
+            Some(json!({
+                "target_session": target_member.id,
+                "cause": reason,
+            })),
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn deliver_one_target_acp(
     task: &AsyncDeliveryTask,
     target_member: &BundleMember,

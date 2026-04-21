@@ -5,8 +5,8 @@ use std::{
 };
 
 use agentmux::relay::{
-    ListedBundle, ListedBundleState, ListedSession, ListedSessionTransport, RelayError,
-    RelayResponse,
+    ListedBundle, ListedBundleStartupHealth, ListedBundleState, ListedSession,
+    ListedSessionTransport, RelayError, RelayResponse,
 };
 use agentmux::runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory};
 use serde_json::Value;
@@ -69,8 +69,11 @@ fn list_sessions_single_bundle_json_uses_canonical_bundle_shape() {
             bundle: ListedBundle {
                 id: "agentmux".to_string(),
                 state: ListedBundleState::Up,
+                startup_health: Some(ListedBundleStartupHealth::Healthy),
                 state_reason_code: None,
                 state_reason: None,
+                startup_failure_count: 0,
+                recent_startup_failures: Vec::new(),
                 sessions: vec![
                     ListedSession {
                         id: "tui".to_string(),
@@ -109,6 +112,13 @@ fn list_sessions_single_bundle_json_uses_canonical_bundle_shape() {
     assert_eq!(payload["schema_version"], "1");
     assert_eq!(payload["bundle"]["id"], "agentmux");
     assert_eq!(payload["bundle"]["state"], "up");
+    assert_eq!(payload["bundle"]["startup_health"], "healthy");
+    assert_eq!(payload["bundle"]["startup_failure_count"], 0);
+    assert!(
+        payload["bundle"]["recent_startup_failures"]
+            .as_array()
+            .is_some_and(|values| values.is_empty())
+    );
     assert!(
         payload.get("recipients").is_none(),
         "legacy recipients payload must not be present: {payload}"
@@ -159,8 +169,11 @@ fn list_sessions_all_json_orders_bundles_lexicographically() {
             bundle: ListedBundle {
                 id: "alpha".to_string(),
                 state: ListedBundleState::Up,
+                startup_health: Some(ListedBundleStartupHealth::Healthy),
                 state_reason_code: None,
                 state_reason: None,
+                startup_failure_count: 0,
+                recent_startup_failures: Vec::new(),
                 sessions: vec![ListedSession {
                     id: "tui".to_string(),
                     name: None,
@@ -177,8 +190,11 @@ fn list_sessions_all_json_orders_bundles_lexicographically() {
             bundle: ListedBundle {
                 id: "beta".to_string(),
                 state: ListedBundleState::Up,
+                startup_health: Some(ListedBundleStartupHealth::Healthy),
                 state_reason_code: None,
                 state_reason: None,
+                startup_failure_count: 0,
+                recent_startup_failures: Vec::new(),
                 sessions: vec![ListedSession {
                     id: "tui".to_string(),
                     name: None,
@@ -213,6 +229,10 @@ fn list_sessions_all_json_orders_bundles_lexicographically() {
     assert_eq!(bundles.len(), 2);
     assert_eq!(bundles[0]["id"], "alpha");
     assert_eq!(bundles[1]["id"], "beta");
+    assert_eq!(bundles[0]["startup_health"], "healthy");
+    assert_eq!(bundles[0]["startup_failure_count"], 0);
+    assert_eq!(bundles[1]["startup_health"], "healthy");
+    assert_eq!(bundles[1]["startup_failure_count"], 0);
     let alpha_requests = alpha_log.lock().expect("alpha request lock");
     assert_eq!(alpha_requests[0]["sender_session"], "user");
     let beta_requests = beta_log.lock().expect("beta request lock");
@@ -315,8 +335,11 @@ fn list_sessions_uses_ui_session_identity_defaults_outside_associated_workspace(
             bundle: ListedBundle {
                 id: "infrastructure".to_string(),
                 state: ListedBundleState::Up,
+                startup_health: Some(ListedBundleStartupHealth::Healthy),
                 state_reason_code: None,
                 state_reason: None,
+                startup_failure_count: 0,
+                recent_startup_failures: Vec::new(),
                 sessions: vec![],
             },
         },

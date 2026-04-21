@@ -1,11 +1,18 @@
 use std::{collections::HashSet, path::Path, thread, time::Duration};
 
 use serde_json::json;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use crate::configuration::{BundleConfiguration, TargetConfiguration, load_bundle_configuration};
 
-use super::{ReconciliationReport, RelayError, ShutdownReport, map_config, relay_error};
+use super::{
+    BundleStartupReport, ListedSessionTransport, ReconciliationReport, RelayError, ShutdownReport,
+    StartupFailureRecord, map_config, relay_error,
+};
 use crate::relay::authorization::load_authorization_context;
+use crate::relay::delivery::initialize_acp_target_for_startup;
+use crate::relay::tmux::resolve_active_pane_target;
 use crate::relay::tmux::{run_tmux_command, run_tmux_command_capture};
 
 const OWNERSHIP_OPTION_NAME: &str = "@agentmux_owned";
@@ -52,6 +59,16 @@ pub(super) fn reconcile_loaded_bundle_for_lifecycle(
     tmux_socket: &Path,
 ) -> Result<ReconciliationReport, RelayError> {
     reconcile_loaded_bundle(bundle, tmux_socket)
+}
+
+pub(super) fn startup_bundle(
+    configuration_root: &Path,
+    bundle_name: &str,
+    tmux_socket: &Path,
+) -> Result<BundleStartupReport, RelayError> {
+    let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
+    let _authorization = load_authorization_context(configuration_root, &bundle)?;
+    startup_loaded_bundle(&bundle, tmux_socket)
 }
 
 fn reconcile_loaded_bundle(
@@ -124,6 +141,133 @@ fn reconcile_loaded_bundle(
 
     let _ = cleanup_tmux_server_when_unowned(tmux_socket)?;
     Ok(report)
+}
+
+fn startup_loaded_bundle(
+    bundle: &BundleConfiguration,
+    tmux_socket: &Path,
+) -> Result<BundleStartupReport, RelayError> {
+    let configured_tmux_sessions = bundle
+        .members
+        .iter()
+        .filter(|member| matches!(member.target, TargetConfiguration::Tmux(_)))
+        .map(|member| member.id.clone())
+        .collect::<HashSet<_>>();
+
+    let mut stale_owned = list_owned_sessions(tmux_socket)?
+        .into_iter()
+        .filter(|session_name| !configured_tmux_sessions.contains(session_name))
+        .collect::<Vec<_>>();
+    stale_owned.sort();
+    for session_name in stale_owned {
+        prune_owned_session(tmux_socket, &session_name)?;
+    }
+
+    let mut ready_session_count = 0usize;
+    let mut failed_startups = Vec::<StartupFailureRecord>::new();
+    let mut members = bundle.members.clone();
+    members.sort_by(|left, right| left.id.cmp(&right.id));
+
+    for member in members {
+        match &member.target {
+            TargetConfiguration::Tmux(_) => match startup_tmux_member(tmux_socket, &member) {
+                Ok(()) => ready_session_count += 1,
+                Err((code, reason, details)) => failed_startups.push(StartupFailureRecord {
+                    bundle_name: bundle.bundle_name.clone(),
+                    session_id: member.id.clone(),
+                    transport: ListedSessionTransport::Tmux,
+                    code,
+                    reason,
+                    timestamp: startup_timestamp(),
+                    sequence: 0,
+                    details,
+                }),
+            },
+            TargetConfiguration::Acp(_) => {
+                let Some(runtime_directory) = tmux_socket.parent() else {
+                    failed_startups.push(StartupFailureRecord {
+                        bundle_name: bundle.bundle_name.clone(),
+                        session_id: member.id.clone(),
+                        transport: ListedSessionTransport::Acp,
+                        code: "runtime_startup_failed".to_string(),
+                        reason: "tmux socket path has no runtime directory parent".to_string(),
+                        timestamp: startup_timestamp(),
+                        sequence: 0,
+                        details: None,
+                    });
+                    continue;
+                };
+                match initialize_acp_target_for_startup(runtime_directory, &member) {
+                    Ok(()) => ready_session_count += 1,
+                    Err((code, reason, details)) => failed_startups.push(StartupFailureRecord {
+                        bundle_name: bundle.bundle_name.clone(),
+                        session_id: member.id.clone(),
+                        transport: ListedSessionTransport::Acp,
+                        code,
+                        reason,
+                        timestamp: startup_timestamp(),
+                        sequence: 0,
+                        details,
+                    }),
+                }
+            }
+        }
+    }
+
+    Ok(BundleStartupReport {
+        ready_session_count,
+        failed_startups,
+    })
+}
+
+fn startup_tmux_member(
+    tmux_socket: &Path,
+    member: &crate::configuration::BundleMember,
+) -> Result<(), (String, String, Option<serde_json::Value>)> {
+    match session_exists(tmux_socket, member.id.as_str()) {
+        Ok(true) => {}
+        Ok(false) => {
+            if let Err(error) = create_member_with_retry(tmux_socket, member) {
+                return Err((
+                    "runtime_startup_failed".to_string(),
+                    "failed to create tmux session during startup".to_string(),
+                    Some(json!({
+                        "session_id": member.id,
+                        "cause": error.message,
+                        "error_code": error.code,
+                    })),
+                ));
+            }
+        }
+        Err(reason) => {
+            return Err((
+                "runtime_startup_failed".to_string(),
+                "failed to query tmux session state during startup".to_string(),
+                Some(json!({
+                    "session_id": member.id,
+                    "cause": reason,
+                })),
+            ));
+        }
+    }
+
+    match resolve_active_pane_target(tmux_socket, member.id.as_str()) {
+        Ok(_) => Ok(()),
+        Err(reason) => Err((
+            "runtime_startup_failed".to_string(),
+            "tmux session is not ready".to_string(),
+            Some(json!({
+                "session_id": member.id,
+                "cause": reason,
+            })),
+        )),
+    }
+}
+
+fn startup_timestamp() -> String {
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
 fn create_member_with_retry(

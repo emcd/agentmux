@@ -185,6 +185,9 @@ fn stream_client_does_not_auto_retry_request_after_disconnect() {
                     "bundle": {
                         "id": "party",
                         "state": "up",
+                        "startup_health": "healthy",
+                        "startup_failure_count": 0,
+                        "recent_startup_failures": [],
                         "sessions": [],
                     },
                 }
@@ -268,6 +271,9 @@ fn stream_client_retries_hello_after_identity_claim_conflict() {
                     "bundle": {
                         "id": "party",
                         "state": "up",
+                        "startup_health": "healthy",
+                        "startup_failure_count": 0,
+                        "recent_startup_failures": [],
                         "sessions": [],
                     },
                 }

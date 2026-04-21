@@ -65,6 +65,21 @@ pub(super) fn load_persisted_acp_session_id(
     Ok(state.map(|value| value.acp_session_id))
 }
 
+pub(in crate::relay) fn acp_session_ready_for_startup(
+    runtime_socket_path: &Path,
+    target_session: &str,
+) -> Result<bool, String> {
+    let path = resolve_acp_session_state_path(runtime_socket_path, target_session)?;
+    let _guard = acp_session_state_lock()
+        .lock()
+        .map_err(|_| "failed to lock ACP session state".to_string())?;
+    let Some(state) = load_persisted_acp_session_state(path.as_path())? else {
+        return Ok(false);
+    };
+    Ok(!state.acp_session_id.trim().is_empty()
+        && matches!(state.worker_state, AcpWorkerReadinessState::Available))
+}
+
 pub(in crate::relay) fn load_acp_snapshot_lines_for_look(
     runtime_socket_path: &Path,
     target_session: &str,

@@ -9,7 +9,7 @@ use crate::{
     },
     relay::{
         ListedBundle, ListedBundleState, ListedSession, ListedSessionTransport, RelayRequest,
-        RelayResponse, request_relay,
+        RelayResponse, load_startup_failures, request_relay,
     },
     runtime::{
         association::WorkspaceContext, error::RuntimeError, paths::BundleRuntimePaths,
@@ -247,11 +247,19 @@ fn synthesize_unreachable_bundle(
             )),
         )
     };
+    let (startup_failure_count, recent_startup_failures) =
+        match load_startup_failures(&paths.runtime_directory) {
+            Ok(records) => (records.len(), records),
+            Err(_) => (0, Vec::new()),
+        };
     ListedBundle {
         id: bundle.bundle_name.clone(),
         state: ListedBundleState::Down,
+        startup_health: None,
         state_reason_code,
         state_reason,
+        startup_failure_count,
+        recent_startup_failures,
         sessions: bundle
             .members
             .iter()
@@ -279,11 +287,17 @@ fn print_human_bundle(bundle: &serde_json::Map<String, Value>) {
         .unwrap_or_default()
         .to_string();
     let mut header = format!("bundle={bundle_id} state={state}");
+    if let Some(startup_health) = bundle.get("startup_health").and_then(Value::as_str) {
+        header.push_str(format!(" startup_health={startup_health}").as_str());
+    }
     if let Some(reason_code) = bundle.get("state_reason_code").and_then(Value::as_str) {
         header.push_str(format!(" reason_code={reason_code}").as_str());
     }
     if let Some(reason) = bundle.get("state_reason").and_then(Value::as_str) {
         header.push_str(format!(" reason={reason}").as_str());
+    }
+    if let Some(count) = bundle.get("startup_failure_count").and_then(Value::as_u64) {
+        header.push_str(format!(" startup_failure_count={count}").as_str());
     }
     println!("{header}");
 

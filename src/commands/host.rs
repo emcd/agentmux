@@ -18,7 +18,10 @@ use serde_json::{Map, Value, json};
 use crate::{
     configuration::{load_bundle_configuration, load_bundle_group_memberships},
     mcp::McpConfiguration,
-    relay::{reconcile_bundle, shutdown_bundle_runtime, wait_for_async_delivery_shutdown},
+    relay::{
+        append_startup_failure, shutdown_bundle_runtime, startup_bundle,
+        wait_for_async_delivery_shutdown,
+    },
     runtime::{
         association::{
             McpAssociationCli, WorkspaceContext, load_local_mcp_overrides, resolve_association,
@@ -656,22 +659,70 @@ fn host_selected_bundle(
             return (failed_startup_bundle(bundle_name, source), None);
         }
     };
-    if let RelayHostStartupMode::Autostart = startup_mode
-        && let Err(source) = reconcile_bundle(
+    let mut startup_report = None;
+    if let RelayHostStartupMode::Autostart = startup_mode {
+        let report = match startup_bundle(
             &roots.configuration_root,
             &paths.bundle_name,
             &paths.tmux_socket,
         )
         .map_err(shared::map_reconcile_error)
-    {
-        return (failed_startup_bundle(bundle_name, source), None);
+        {
+            Ok(report) => report,
+            Err(source) => return (failed_startup_bundle(bundle_name, source), None),
+        };
+        for failure in &report.failed_startups {
+            let persisted = match append_startup_failure(&paths.runtime_directory, failure.clone())
+            {
+                Ok(value) => value,
+                Err(cause) => {
+                    return (
+                        RelayHostStartupBundle {
+                            bundle_name: bundle_name.to_string(),
+                            outcome: "failed".to_string(),
+                            reason_code: Some("runtime_startup_failed".to_string()),
+                            reason: Some(format!(
+                                "failed to persist startup failure history: {cause}"
+                            )),
+                        },
+                        None,
+                    );
+                }
+            };
+            emit_inscription(
+                "relay.session_start_failed",
+                &json!({
+                    "bundle_name": persisted.bundle_name,
+                    "session_id": persisted.session_id,
+                    "transport": persisted.transport,
+                    "code": persisted.code,
+                    "reason": persisted.reason,
+                    "timestamp": persisted.timestamp,
+                    "sequence": persisted.sequence,
+                    "details": persisted.details,
+                }),
+            );
+        }
+        startup_report = Some(report);
     }
     let listener = match bind_relay_listener(&paths) {
         Ok(listener) => listener,
         Err(source) => return (failed_startup_bundle(bundle_name, source), None),
     };
     let startup_bundle = match startup_mode {
-        RelayHostStartupMode::Autostart => hosted_startup_bundle(bundle_name),
+        RelayHostStartupMode::Autostart => {
+            let report = startup_report.expect("autostart report must be present");
+            if report.ready_session_count > 0 {
+                hosted_startup_bundle(bundle_name)
+            } else {
+                RelayHostStartupBundle {
+                    bundle_name: bundle_name.to_string(),
+                    outcome: "failed".to_string(),
+                    reason_code: Some("runtime_startup_failed".to_string()),
+                    reason: Some("zero configured sessions reached ready state".to_string()),
+                }
+            }
+        }
         RelayHostStartupMode::ProcessOnly => skipped_startup_bundle(
             bundle_name,
             "process_only",

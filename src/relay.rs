@@ -24,6 +24,7 @@ mod authorization;
 mod delivery;
 mod handlers;
 mod lifecycle;
+mod startup_state;
 mod stream;
 mod tmux;
 
@@ -69,15 +70,41 @@ pub enum ListedBundleState {
     Down,
 }
 
-/// Canonical listed bundle payload for session-listing responses.
+/// Startup health marker for an `up` bundle in list-sessions payloads.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ListedBundleStartupHealth {
+    Healthy,
+    Degraded,
+}
+
+/// One persisted startup-failure record surfaced in list-sessions payloads.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct StartupFailureRecord {
+    pub bundle_name: String,
+    pub session_id: String,
+    pub transport: ListedSessionTransport,
+    pub code: String,
+    pub reason: String,
+    pub timestamp: String,
+    pub sequence: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<Value>,
+}
+
+/// Canonical listed bundle payload for session-listing responses.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct ListedBundle {
     pub id: String,
     pub state: ListedBundleState,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub startup_health: Option<ListedBundleStartupHealth>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub state_reason_code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state_reason: Option<String>,
+    pub startup_failure_count: usize,
+    pub recent_startup_failures: Vec<StartupFailureRecord>,
     pub sessions: Vec<ListedSession>,
 }
 
@@ -108,6 +135,13 @@ pub struct ReconciliationReport {
 pub struct ShutdownReport {
     pub pruned_sessions: Vec<String>,
     pub killed_tmux_server: bool,
+}
+
+/// Per-bundle startup pass outcome for relay host autostart.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BundleStartupReport {
+    pub ready_session_count: usize,
+    pub failed_startups: Vec<StartupFailureRecord>,
 }
 
 /// Aggregate delivery status for `chat`.
@@ -763,6 +797,15 @@ pub fn reconcile_bundle(
     lifecycle::reconcile_bundle(configuration_root, bundle_name, tmux_socket)
 }
 
+/// Attempts startup for all configured bundle sessions and reports outcomes.
+pub fn startup_bundle(
+    configuration_root: &Path,
+    bundle_name: &str,
+    tmux_socket: &Path,
+) -> Result<BundleStartupReport, RelayError> {
+    lifecycle::startup_bundle(configuration_root, bundle_name, tmux_socket)
+}
+
 /// Prunes managed sessions and reaps tmux server when safe during shutdown.
 ///
 /// # Errors
@@ -770,6 +813,21 @@ pub fn reconcile_bundle(
 /// Returns internal failures when tmux session operations fail.
 pub fn shutdown_bundle_runtime(tmux_socket: &Path) -> Result<ShutdownReport, RelayError> {
     lifecycle::shutdown_bundle_runtime(tmux_socket)
+}
+
+/// Loads persisted startup-failure history for one bundle runtime directory.
+pub fn load_startup_failures(
+    runtime_directory: &Path,
+) -> Result<Vec<StartupFailureRecord>, String> {
+    startup_state::load_startup_failures(runtime_directory)
+}
+
+/// Appends one startup-failure record to persisted bundle history.
+pub fn append_startup_failure(
+    runtime_directory: &Path,
+    record: StartupFailureRecord,
+) -> Result<StartupFailureRecord, String> {
+    startup_state::append_startup_failure(runtime_directory, record)
 }
 
 /// Waits for async delivery workers to stop after shutdown is requested.

@@ -16,16 +16,17 @@ use super::authorization::{
     ui_session_display_name,
 };
 use super::delivery::{
-    QuiescenceOptions, aggregate_chat_status, deliver_one_target, enqueue_async_delivery,
-    enqueue_sync_delivery, load_acp_snapshot_lines_for_look, prompt_batch_settings,
-    refresh_acp_snapshot_for_look,
+    QuiescenceOptions, acp_session_ready_for_startup, aggregate_chat_status, deliver_one_target,
+    enqueue_async_delivery, enqueue_sync_delivery, load_acp_snapshot_lines_for_look,
+    prompt_batch_settings, refresh_acp_snapshot_for_look,
 };
 use super::lifecycle::{reconcile_loaded_bundle_for_lifecycle, shutdown_bundle_runtime};
 use super::tmux::{capture_pane_tail_lines, resolve_active_pane_target};
 use super::{
     AsyncDeliveryTask, ChatDeliveryMode, ChatOutcome, ChatRequestContext, ChatResult, ChatStatus,
-    LifecycleBundleResult, ListedBundle, ListedBundleState, ListedSession, ListedSessionTransport,
-    LookRequestContext, RelayError, RelayRequest, RelayResponse, SCHEMA_VERSION, relay_error,
+    LifecycleBundleResult, ListedBundle, ListedBundleStartupHealth, ListedBundleState,
+    ListedSession, ListedSessionTransport, LookRequestContext, RelayError, RelayRequest,
+    RelayResponse, SCHEMA_VERSION, load_startup_failures, relay_error,
 };
 
 const LOOK_LINES_DEFAULT: usize = 120;
@@ -69,7 +70,9 @@ pub(super) fn handle_request(
     match request {
         RelayRequest::Up => handle_lifecycle_up(bundle, tmux_socket),
         RelayRequest::Down => handle_lifecycle_down(bundle, tmux_socket),
-        RelayRequest::List { sender_session } => handle_list(bundle, authorization, sender_session),
+        RelayRequest::List { sender_session } => {
+            handle_list(bundle, authorization, sender_session, tmux_socket)
+        }
         RelayRequest::Chat {
             request_id,
             sender_session,
@@ -185,6 +188,7 @@ fn handle_list(
     bundle: &BundleConfiguration,
     authorization: &AuthorizationContext,
     sender_session: Option<String>,
+    tmux_socket: &Path,
 ) -> Result<RelayResponse, RelayError> {
     let sender_session = sender_session.ok_or_else(|| {
         relay_error(
@@ -213,13 +217,85 @@ fn handle_list(
         })
         .collect::<Vec<_>>();
 
+    let runtime_directory = tmux_socket.parent().ok_or_else(|| {
+        relay_error(
+            "internal_unexpected_failure",
+            "tmux socket path has no runtime directory parent",
+            None,
+        )
+    })?;
+    let recent_startup_failures = load_startup_failures(runtime_directory).map_err(|cause| {
+        relay_error(
+            "internal_unexpected_failure",
+            "failed to load startup failure history",
+            Some(json!({
+                "bundle_name": bundle.bundle_name,
+                "cause": cause,
+            })),
+        )
+    })?;
+    let startup_failure_count = recent_startup_failures.len();
+
+    let configured_session_count = bundle.members.len();
+    let mut ready_session_count = 0usize;
+    for member in &bundle.members {
+        let ready = match member.target {
+            TargetConfiguration::Tmux(_) => {
+                resolve_active_pane_target(tmux_socket, member.id.as_str()).is_ok()
+            }
+            TargetConfiguration::Acp(_) => {
+                acp_session_ready_for_startup(tmux_socket, member.id.as_str()).map_err(|cause| {
+                    relay_error(
+                        "internal_unexpected_failure",
+                        "failed to evaluate ACP startup readiness",
+                        Some(json!({
+                            "bundle_name": bundle.bundle_name,
+                            "session_id": member.id,
+                            "cause": cause,
+                        })),
+                    )
+                })?
+            }
+        };
+        if ready {
+            ready_session_count += 1;
+        }
+    }
+
+    let (state, startup_health, state_reason_code, state_reason) = if configured_session_count == 0
+    {
+        (
+            ListedBundleState::Down,
+            None,
+            Some("runtime_no_configured_sessions".to_string()),
+            Some("bundle has zero configured sessions".to_string()),
+        )
+    } else if ready_session_count == 0 {
+        (
+            ListedBundleState::Down,
+            None,
+            Some("runtime_startup_failed".to_string()),
+            Some("zero configured sessions are currently ready".to_string()),
+        )
+    } else {
+        let health = if ready_session_count == configured_session_count {
+            ListedBundleStartupHealth::Healthy
+        } else {
+            ListedBundleStartupHealth::Degraded
+        };
+        (ListedBundleState::Up, Some(health), None, None)
+    };
+
     let response = RelayResponse::List {
         schema_version: SCHEMA_VERSION.to_string(),
         bundle: ListedBundle {
             id: bundle.bundle_name.clone(),
-            state: ListedBundleState::Up,
-            state_reason_code: None,
-            state_reason: None,
+            state,
+            startup_health,
+            state_reason_code,
+            state_reason,
+            startup_failure_count,
+            recent_startup_failures,
             sessions,
         },
     };
@@ -230,6 +306,8 @@ fn handle_list(
                 "bundle_name": bundle.id,
                 "sender_session": sender.session_id,
                 "state": bundle.state,
+                "startup_health": bundle.startup_health,
+                "startup_failure_count": bundle.startup_failure_count,
                 "session_count": bundle.sessions.len(),
             }),
         );

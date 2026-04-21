@@ -710,6 +710,9 @@ async fn mcp_uses_repository_root_debug_state_override() {
                     "bundle": {
                         "id": "party",
                         "state": "up",
+                        "startup_health": "healthy",
+                        "startup_failure_count": 0,
+                        "recent_startup_failures": [],
                         "sessions": [{"id": "bravo", "transport": "tmux"}],
                     },
                 }),

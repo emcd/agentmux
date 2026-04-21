@@ -25,7 +25,7 @@ use crate::configuration::{
 use crate::relay::{
     ChatDeliveryMode, ListedBundle, ListedBundleState, ListedSession, ListedSessionTransport,
     RelayError, RelayRequest, RelayResponse, RelayStreamClientClass, RelayStreamSession,
-    request_relay,
+    load_startup_failures, request_relay,
 };
 use crate::runtime::error::RuntimeError;
 use crate::runtime::inscriptions::emit_inscription;
@@ -538,11 +538,24 @@ impl McpServer {
                 Some("bundle relay socket is not present".to_string()),
             )
         };
+        let (startup_failure_count, recent_startup_failures) =
+            relay_socket
+                .parent()
+                .map_or(
+                    (0, Vec::new()),
+                    |runtime_directory| match load_startup_failures(runtime_directory) {
+                        Ok(records) => (records.len(), records),
+                        Err(_) => (0, Vec::new()),
+                    },
+                );
         ListedBundle {
             id: bundle.bundle_name.clone(),
             state: ListedBundleState::Down,
+            startup_health: None,
             state_reason_code,
             state_reason,
+            startup_failure_count,
+            recent_startup_failures,
             sessions: list_sessions_from_bundle_configuration(bundle),
         }
     }

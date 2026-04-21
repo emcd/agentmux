@@ -243,7 +243,14 @@ fn list_returns_all_configured_sessions_with_transport() {
         panic!("expected list response");
     };
     assert_eq!(bundle.id, "party");
-    assert_eq!(bundle.state, ListedBundleState::Up);
+    assert_eq!(bundle.state, ListedBundleState::Down);
+    assert!(bundle.startup_health.is_none());
+    assert_eq!(
+        bundle.state_reason_code.as_deref(),
+        Some("runtime_startup_failed")
+    );
+    assert_eq!(bundle.startup_failure_count, 0);
+    assert!(bundle.recent_startup_failures.is_empty());
     assert_eq!(bundle.sessions.len(), 2);
     assert_eq!(bundle.sessions[0].id, "alpha");
     assert_eq!(bundle.sessions[0].transport, ListedSessionTransport::Tmux);
@@ -270,6 +277,9 @@ fn list_allows_ui_sender_from_global_tui_sessions() {
     let RelayResponse::List { bundle, .. } = response else {
         panic!("expected list response");
     };
+    assert_eq!(bundle.state, ListedBundleState::Down);
+    assert!(bundle.startup_health.is_none());
+    assert_eq!(bundle.startup_failure_count, 0);
     assert_eq!(bundle.sessions.len(), 2);
     assert_eq!(bundle.sessions[0].id, "alpha");
     assert_eq!(bundle.sessions[1].id, "bravo");

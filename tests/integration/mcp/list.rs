@@ -44,6 +44,9 @@ async fn tool_catalog_contains_list_sessions_send_and_look() {
                     "bundle": {
                         "id": BUNDLE_NAME,
                         "state": "up",
+                        "startup_health": "healthy",
+                        "startup_failure_count": 0,
+                        "recent_startup_failures": [],
                         "sessions": [],
                     },
                 }),
@@ -110,8 +113,11 @@ async fn list_sessions_returns_canonical_bundle_payload_from_relay() {
                     "bundle": {
                         "id": BUNDLE_NAME,
                         "state": "up",
+                        "startup_health": "healthy",
                         "state_reason_code": null,
                         "state_reason": null,
+                        "startup_failure_count": 0,
+                        "recent_startup_failures": [],
                         "sessions": [
                             {"id": "bravo", "name": "Bravo", "transport": "tmux"},
                             {"id": "charlie", "transport": "acp"},
@@ -137,6 +143,13 @@ async fn list_sessions_returns_canonical_bundle_payload_from_relay() {
     assert_eq!(payload["schema_version"], "1");
     assert_eq!(payload["bundle"]["id"], BUNDLE_NAME);
     assert_eq!(payload["bundle"]["state"], "up");
+    assert_eq!(payload["bundle"]["startup_health"], "healthy");
+    assert_eq!(payload["bundle"]["startup_failure_count"], 0);
+    assert!(
+        payload["bundle"]["recent_startup_failures"]
+            .as_array()
+            .is_some_and(|values| values.is_empty())
+    );
     assert_eq!(payload["bundle"]["sessions"][0]["id"], "bravo");
     assert_eq!(payload["bundle"]["sessions"][0]["name"], "Bravo");
     assert_eq!(payload["bundle"]["sessions"][1]["id"], "charlie");
@@ -225,6 +238,12 @@ async fn list_sessions_synthesizes_down_bundle_for_unreachable_home_bundle() {
     assert_eq!(payload["bundle"]["id"], BUNDLE_NAME);
     assert_eq!(payload["bundle"]["state"], "down");
     assert_eq!(payload["bundle"]["state_reason_code"], "not_started");
+    assert_eq!(payload["bundle"]["startup_failure_count"], 0);
+    assert!(
+        payload["bundle"]["recent_startup_failures"]
+            .as_array()
+            .is_some_and(|values| values.is_empty())
+    );
     assert_eq!(
         payload["bundle"]["sessions"]
             .as_array()
@@ -270,8 +289,11 @@ async fn list_sessions_all_mode_aggregates_in_lexicographic_bundle_order() {
                     "bundle": {
                         "id": "alpha",
                         "state": "up",
+                        "startup_health": "healthy",
                         "state_reason_code": null,
                         "state_reason": null,
+                        "startup_failure_count": 0,
+                        "recent_startup_failures": [],
                         "sessions": [{"id": "alpha", "transport": "tmux"}],
                     },
                 }),
@@ -295,8 +317,11 @@ async fn list_sessions_all_mode_aggregates_in_lexicographic_bundle_order() {
                     "bundle": {
                         "id": "zeta",
                         "state": "up",
+                        "startup_health": "healthy",
                         "state_reason_code": null,
                         "state_reason": null,
+                        "startup_failure_count": 0,
+                        "recent_startup_failures": [],
                         "sessions": [{"id": "zeta", "transport": "acp"}],
                     },
                 }),
@@ -325,6 +350,7 @@ async fn list_sessions_all_mode_aggregates_in_lexicographic_bundle_order() {
     assert_eq!(bundle_ids, vec!["alpha", "party", "zeta"]);
     assert_eq!(bundles[1]["state"], "down");
     assert_eq!(bundles[1]["state_reason_code"], "not_started");
+    assert_eq!(bundles[1]["startup_failure_count"], 0);
     assert_eq!(alpha_relay.requests_for_operation("list").len(), 1);
     assert_eq!(zeta_relay.requests_for_operation("list").len(), 1);
 }
@@ -375,8 +401,11 @@ async fn list_sessions_all_mode_fails_fast_on_first_authorization_denial() {
                     "bundle": {
                         "id": BUNDLE_NAME,
                         "state": "up",
+                        "startup_health": "healthy",
                         "state_reason_code": null,
                         "state_reason": null,
+                        "startup_failure_count": 0,
+                        "recent_startup_failures": [],
                         "sessions": [{"id": BUNDLE_NAME, "transport": "tmux"}],
                     },
                 }),
@@ -400,8 +429,11 @@ async fn list_sessions_all_mode_fails_fast_on_first_authorization_denial() {
                     "bundle": {
                         "id": "zeta",
                         "state": "up",
+                        "startup_health": "healthy",
                         "state_reason_code": null,
                         "state_reason": null,
+                        "startup_failure_count": 0,
+                        "recent_startup_failures": [],
                         "sessions": [{"id": "zeta", "transport": "tmux"}],
                     },
                 }),

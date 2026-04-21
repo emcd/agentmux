@@ -261,6 +261,31 @@ case "${{command_name}}" in
     : > "${{SESSIONS_FILE}}"
     : > "${{OWNED_FILE}}"
     ;;
+  display-message)
+    target="${{args[3]-}}"
+    format_value="${{args[4]-}}"
+    if [[ "${{format_value}}" == "#{{pane_id}}" ]]; then
+      if [[ -s "${{SESSIONS_FILE}}" ]] && grep -Fxq "${{target}}" "${{SESSIONS_FILE}}"; then
+        echo "%1"
+        exit 0
+      fi
+      echo "can't find session: ${{target}}" >&2
+      exit 1
+    fi
+    if [[ "${{format_value}}" == "#{{pane_in_mode}}" ]]; then
+      echo "0"
+      exit 0
+    fi
+    if [[ "${{format_value}}" == "#{{window_activity}}" ]]; then
+      echo "0"
+      exit 0
+    fi
+    if [[ "${{format_value}}" == "#{{cursor_x}}" ]]; then
+      echo "0"
+      exit 0
+    fi
+    echo ""
+    ;;
   *)
     :
     ;;
