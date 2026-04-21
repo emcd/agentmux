@@ -58,6 +58,17 @@ pub(super) fn async_worker_count() -> usize {
         .unwrap_or(0)
 }
 
+pub(super) fn worker_exists(key: &AsyncWorkerKey) -> Result<bool, RelayError> {
+    let workers = async_delivery_registry().workers.lock().map_err(|_| {
+        super::super::relay_error(
+            "internal_unexpected_failure",
+            "failed to lock async delivery registry",
+            None,
+        )
+    })?;
+    Ok(workers.contains_key(key))
+}
+
 pub(super) fn wait_for_async_delivery_shutdown(timeout: Duration) -> usize {
     if !shutdown_requested() {
         return 0;
@@ -126,6 +137,33 @@ pub(super) fn register_worker(
             },
         );
     }
+}
+
+pub(super) fn register_worker_if_absent(
+    key: AsyncWorkerKey,
+    sender: mpsc::Sender<AsyncDeliveryTask>,
+    pending: std::sync::Arc<AtomicUsize>,
+    bounded_acp_queue: bool,
+) -> Result<bool, RelayError> {
+    let mut workers = async_delivery_registry().workers.lock().map_err(|_| {
+        super::super::relay_error(
+            "internal_unexpected_failure",
+            "failed to lock async delivery registry",
+            None,
+        )
+    })?;
+    if workers.contains_key(&key) {
+        return Ok(false);
+    }
+    workers.insert(
+        key,
+        AsyncWorkerEntry {
+            sender,
+            pending,
+            bounded_acp_queue,
+        },
+    );
+    Ok(true)
 }
 
 pub(super) fn unregister_worker(key: &AsyncWorkerKey) {

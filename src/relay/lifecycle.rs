@@ -184,20 +184,11 @@ fn startup_loaded_bundle(
                 }),
             },
             TargetConfiguration::Acp(_) => {
-                let Some(runtime_directory) = tmux_socket.parent() else {
-                    failed_startups.push(StartupFailureRecord {
-                        bundle_name: bundle.bundle_name.clone(),
-                        session_id: member.id.clone(),
-                        transport: ListedSessionTransport::Acp,
-                        code: "runtime_startup_failed".to_string(),
-                        reason: "tmux socket path has no runtime directory parent".to_string(),
-                        timestamp: startup_timestamp(),
-                        sequence: 0,
-                        details: None,
-                    });
-                    continue;
-                };
-                match initialize_acp_target_for_startup(runtime_directory, &member) {
+                match initialize_acp_target_for_startup(
+                    bundle.bundle_name.as_str(),
+                    tmux_socket,
+                    &member,
+                ) {
                     Ok(()) => ready_session_count += 1,
                     Err((code, reason, details)) => failed_startups.push(StartupFailureRecord {
                         bundle_name: bundle.bundle_name.clone(),
@@ -354,6 +345,8 @@ fn is_tmux_server_unavailable_error(reason: &str) -> bool {
         || lowered.contains("failed to connect to server")
         || lowered.contains("server exited unexpectedly")
         || lowered.contains("connection refused")
+        || lowered.contains("error connecting")
+        || lowered.contains("no such file or directory")
 }
 
 fn session_exists(tmux_socket: &Path, session_name: &str) -> Result<bool, String> {

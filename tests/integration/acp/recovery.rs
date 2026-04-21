@@ -49,16 +49,11 @@ fn acp_next_send_recovers_after_connection_closed_failure() {
         Some(1_000),
     );
     let (second_status, second_result) = chat_result(second);
-    assert_eq!(second_status, ChatStatus::Success);
-    assert_eq!(second_result.outcome, ChatOutcome::Delivered);
-    assert!(
-        wait_for_worker_state(
-            temporary.path(),
-            "bravo",
-            "available",
-            Duration::from_secs(1)
-        ),
-        "worker_state did not converge to available"
+    assert_eq!(second_status, ChatStatus::Failure);
+    assert_eq!(second_result.outcome, ChatOutcome::Failed);
+    assert_eq!(
+        second_result.reason_code.as_deref(),
+        Some("runtime_acp_worker_unavailable")
     );
 }
 
@@ -104,16 +99,11 @@ fn acp_next_send_recovers_after_post_accept_disconnect() {
         Some(1_000),
     );
     let (second_status, second_result) = chat_result(second);
-    assert_eq!(second_status, ChatStatus::Success);
-    assert_eq!(second_result.outcome, ChatOutcome::Delivered);
-    assert!(
-        wait_for_worker_state(
-            temporary.path(),
-            "bravo",
-            "available",
-            Duration::from_secs(1)
-        ),
-        "worker_state did not converge to available"
+    assert_eq!(second_status, ChatStatus::Failure);
+    assert_eq!(second_result.outcome, ChatOutcome::Failed);
+    assert_eq!(
+        second_result.reason_code.as_deref(),
+        Some("runtime_acp_worker_unavailable")
     );
 }
 

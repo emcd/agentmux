@@ -340,6 +340,31 @@ pub(super) fn dispatch_send_with_mode_result(
     acp_turn_timeout_ms: Option<u64>,
     delivery_mode: ChatDeliveryMode,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
+    startup_bundle(config_root, tmux_socket)?;
+    handle_request(
+        RelayRequest::Chat {
+            request_id: Some("req-acp".to_string()),
+            sender_session: "alpha".to_string(),
+            message: "status?".to_string(),
+            targets: vec!["bravo".to_string()],
+            broadcast: false,
+            delivery_mode,
+            quiet_window_ms: Some(50),
+            quiescence_timeout_ms: None,
+            acp_turn_timeout_ms,
+        },
+        config_root,
+        "party",
+        tmux_socket,
+    )
+}
+
+pub(super) fn dispatch_send_without_startup_result(
+    config_root: &Path,
+    tmux_socket: &Path,
+    acp_turn_timeout_ms: Option<u64>,
+    delivery_mode: ChatDeliveryMode,
+) -> Result<RelayResponse, agentmux::relay::RelayError> {
     handle_request(
         RelayRequest::Chat {
             request_id: Some("req-acp".to_string()),
@@ -365,6 +390,7 @@ pub(super) fn dispatch_look(
     target_session: &str,
     lines: Option<usize>,
 ) -> RelayResponse {
+    startup_bundle(config_root, tmux_socket).expect("relay startup should parse");
     handle_request(
         RelayRequest::Look {
             requester_session: requester_session.to_string(),
@@ -377,6 +403,35 @@ pub(super) fn dispatch_look(
         tmux_socket,
     )
     .expect("relay look should parse")
+}
+
+pub(super) fn dispatch_look_without_startup(
+    config_root: &Path,
+    tmux_socket: &Path,
+    requester_session: &str,
+    target_session: &str,
+    lines: Option<usize>,
+) -> RelayResponse {
+    handle_request(
+        RelayRequest::Look {
+            requester_session: requester_session.to_string(),
+            target_session: target_session.to_string(),
+            lines,
+            bundle_name: None,
+        },
+        config_root,
+        "party",
+        tmux_socket,
+    )
+    .expect("relay look should parse")
+}
+
+fn startup_bundle(
+    config_root: &Path,
+    tmux_socket: &Path,
+) -> Result<(), agentmux::relay::RelayError> {
+    let _ = agentmux::relay::startup_bundle(config_root, "party", tmux_socket)?;
+    Ok(())
 }
 
 pub(super) fn read_request_log(path: &Path) -> Vec<Value> {

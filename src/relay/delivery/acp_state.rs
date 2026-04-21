@@ -1,14 +1,24 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
+
+use crate::relay::{AcpLookFreshness, AcpLookSnapshotSource};
 
 const ACP_LOOK_SNAPSHOT_MAX_LINES: usize = 1000;
 const ACP_SESSION_STATE_SCHEMA_VERSION: u32 = 1;
 const ACP_SESSIONS_DIRECTORY: &str = "sessions";
 const ACP_SESSION_STATE_FILE: &str = "state.json";
+pub(in crate::relay) const ACP_LOOK_PRIME_TIMEOUT_MS: u64 = 750;
+pub(in crate::relay) const ACP_STREAM_STALLED_AFTER_MS: u64 = 5000;
+pub(in crate::relay) const ACP_STALE_REASON_WORKER_INITIALIZING: &str = "acp_worker_initializing";
+pub(in crate::relay) const ACP_STALE_REASON_WORKER_UNAVAILABLE: &str = "acp_worker_unavailable";
+pub(in crate::relay) const ACP_STALE_REASON_SNAPSHOT_PRIME_TIMEOUT: &str =
+    "acp_snapshot_prime_timeout";
+pub(in crate::relay) const ACP_STALE_REASON_STREAM_STALLED: &str = "acp_stream_stalled";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct PersistedAcpSessionState {
@@ -18,14 +28,26 @@ pub(super) struct PersistedAcpSessionState {
     pub worker_state: AcpWorkerReadinessState,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub snapshot_lines: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_snapshot_update_ms: Option<i64>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum AcpWorkerReadinessState {
+    Initializing,
     Available,
     Busy,
     Unavailable,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::relay) struct AcpLookSnapshot {
+    pub snapshot_lines: Vec<String>,
+    pub freshness: AcpLookFreshness,
+    pub snapshot_source: AcpLookSnapshotSource,
+    pub stale_reason_code: Option<String>,
+    pub snapshot_age_ms: Option<u64>,
 }
 
 fn default_acp_worker_readiness_state() -> AcpWorkerReadinessState {
@@ -51,6 +73,18 @@ pub(super) fn resolve_acp_session_state_path(
         .join(ACP_SESSIONS_DIRECTORY)
         .join(target_session)
         .join(ACP_SESSION_STATE_FILE))
+}
+
+pub(in crate::relay) fn load_acp_worker_readiness_state(
+    runtime_socket_path: &Path,
+    target_session: &str,
+) -> Result<Option<AcpWorkerReadinessState>, String> {
+    let path = resolve_acp_session_state_path(runtime_socket_path, target_session)?;
+    let _guard = acp_session_state_lock()
+        .lock()
+        .map_err(|_| "failed to lock ACP session state".to_string())?;
+    let state = load_persisted_acp_session_state(path.as_path())?;
+    Ok(state.map(|value| value.worker_state))
 }
 
 pub(super) fn load_persisted_acp_session_id(
@@ -84,20 +118,87 @@ pub(in crate::relay) fn load_acp_snapshot_lines_for_look(
     runtime_socket_path: &Path,
     target_session: &str,
     requested_lines: usize,
-) -> Result<Vec<String>, String> {
+    prime_timed_out: bool,
+) -> Result<AcpLookSnapshot, String> {
     let path = resolve_acp_session_state_path(runtime_socket_path, target_session)?;
     let _guard = acp_session_state_lock()
         .lock()
         .map_err(|_| "failed to lock ACP session state".to_string())?;
     let state = load_persisted_acp_session_state(path.as_path())?;
     let Some(state) = state else {
-        return Ok(Vec::new());
+        let stale_reason = if prime_timed_out {
+            ACP_STALE_REASON_SNAPSHOT_PRIME_TIMEOUT
+        } else {
+            ACP_STALE_REASON_WORKER_UNAVAILABLE
+        };
+        return Ok(AcpLookSnapshot {
+            snapshot_lines: Vec::new(),
+            freshness: AcpLookFreshness::Stale,
+            snapshot_source: AcpLookSnapshotSource::None,
+            stale_reason_code: Some(stale_reason.to_string()),
+            snapshot_age_ms: None,
+        });
     };
     let count = state.snapshot_lines.len();
-    if requested_lines >= count {
-        return Ok(state.snapshot_lines);
+    let snapshot_lines = if requested_lines >= count {
+        state.snapshot_lines
+    } else {
+        state.snapshot_lines[count - requested_lines..].to_vec()
+    };
+    let has_snapshot = !snapshot_lines.is_empty();
+    let snapshot_source = if has_snapshot {
+        AcpLookSnapshotSource::LiveBuffer
+    } else {
+        AcpLookSnapshotSource::None
+    };
+    let snapshot_age_ms = if has_snapshot {
+        snapshot_age_millis(state.last_snapshot_update_ms)
+    } else {
+        None
+    };
+
+    if !has_snapshot {
+        let stale_reason = if prime_timed_out {
+            ACP_STALE_REASON_SNAPSHOT_PRIME_TIMEOUT
+        } else {
+            match state.worker_state {
+                AcpWorkerReadinessState::Initializing => ACP_STALE_REASON_WORKER_INITIALIZING,
+                AcpWorkerReadinessState::Unavailable => ACP_STALE_REASON_WORKER_UNAVAILABLE,
+                AcpWorkerReadinessState::Available | AcpWorkerReadinessState::Busy => {
+                    ACP_STALE_REASON_WORKER_INITIALIZING
+                }
+            }
+        };
+        return Ok(AcpLookSnapshot {
+            snapshot_lines,
+            freshness: AcpLookFreshness::Stale,
+            snapshot_source,
+            stale_reason_code: Some(stale_reason.to_string()),
+            snapshot_age_ms,
+        });
     }
-    Ok(state.snapshot_lines[count - requested_lines..].to_vec())
+
+    let stale_reason_code = if matches!(state.worker_state, AcpWorkerReadinessState::Unavailable) {
+        Some(ACP_STALE_REASON_WORKER_UNAVAILABLE.to_string())
+    } else if !matches!(state.worker_state, AcpWorkerReadinessState::Busy)
+        && snapshot_age_ms.is_some_and(|age| age >= ACP_STREAM_STALLED_AFTER_MS)
+    {
+        Some(ACP_STALE_REASON_STREAM_STALLED.to_string())
+    } else {
+        None
+    };
+    let freshness = if stale_reason_code.is_some() {
+        AcpLookFreshness::Stale
+    } else {
+        AcpLookFreshness::Fresh
+    };
+    Ok(AcpLookSnapshot {
+        snapshot_lines,
+        freshness,
+        snapshot_source,
+        stale_reason_code,
+        snapshot_age_ms,
+    })
 }
 
 pub(super) fn persist_acp_session_id(
@@ -129,6 +230,7 @@ pub(super) fn persist_acp_worker_state(
                 acp_session_id: session_id.to_string(),
                 worker_state: AcpWorkerReadinessState::Available,
                 snapshot_lines: Vec::new(),
+                last_snapshot_update_ms: None,
             }
         }
     };
@@ -156,6 +258,7 @@ pub(super) fn persist_acp_snapshot_lines(
             acp_session_id: session_id.to_string(),
             worker_state: AcpWorkerReadinessState::Available,
             snapshot_lines: Vec::new(),
+            last_snapshot_update_ms: None,
         });
     state.schema_version = ACP_SESSION_STATE_SCHEMA_VERSION;
     state.acp_session_id = session_id.to_string();
@@ -164,6 +267,9 @@ pub(super) fn persist_acp_snapshot_lines(
         snapshot_lines,
         ACP_LOOK_SNAPSHOT_MAX_LINES,
     );
+    if !snapshot_lines.is_empty() {
+        state.last_snapshot_update_ms = current_timestamp_millis();
+    }
     store_persisted_acp_session_state(path.as_path(), &state)
 }
 
@@ -183,6 +289,7 @@ pub(super) fn replace_acp_snapshot_lines(
             acp_session_id: session_id.to_string(),
             worker_state: AcpWorkerReadinessState::Available,
             snapshot_lines: Vec::new(),
+            last_snapshot_update_ms: None,
         });
     state.schema_version = ACP_SESSION_STATE_SCHEMA_VERSION;
     state.acp_session_id = session_id.to_string();
@@ -190,6 +297,9 @@ pub(super) fn replace_acp_snapshot_lines(
     if state.snapshot_lines.len() > ACP_LOOK_SNAPSHOT_MAX_LINES {
         let overflow = state.snapshot_lines.len() - ACP_LOOK_SNAPSHOT_MAX_LINES;
         state.snapshot_lines.drain(0..overflow);
+    }
+    if !snapshot_lines.is_empty() {
+        state.last_snapshot_update_ms = current_timestamp_millis();
     }
     store_persisted_acp_session_state(path.as_path(), &state)
 }
@@ -257,4 +367,18 @@ fn store_persisted_acp_session_state(
             path.display()
         )
     })
+}
+
+fn current_timestamp_millis() -> Option<i64> {
+    let elapsed = SystemTime::now().duration_since(UNIX_EPOCH).ok()?;
+    i64::try_from(elapsed.as_millis()).ok()
+}
+
+fn snapshot_age_millis(updated_at_ms: Option<i64>) -> Option<u64> {
+    let now_ms = current_timestamp_millis()?;
+    let updated_at_ms = updated_at_ms?;
+    if updated_at_ms > now_ms {
+        return None;
+    }
+    u64::try_from(now_ms - updated_at_ms).ok()
 }

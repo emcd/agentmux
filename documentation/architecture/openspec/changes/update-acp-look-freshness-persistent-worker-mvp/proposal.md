@@ -6,6 +6,9 @@
 ## What Changes
 - Relock relay ACP look freshness to one shared persistent ACP worker/client per target session.
 - Remove one-shot per-request ACP refresh from steady-state look path.
+- Relock ACP worker lifecycle to startup-owned behavior: ACP workers are initialized during bundle startup and remain authoritative while bundle state is `up`.
+- Remove lazy request-time worker creation for ACP send/look paths.
+- Lock runtime anchoring to relay runtime context (relay socket/runtime directory), not tmux transport semantics.
 - Define deterministic first-look cold-start behavior with fixed bounded prime timeout.
 - Lock canonical MVP behavior as success-with-explicit-stale-metadata (no silent stale-success, no fail-fast error on prime timeout).
 - Add additive ACP look freshness fields across relay/MCP/CLI surfaces while keeping canonical look fields unchanged.
@@ -19,4 +22,5 @@
 - Affected code:
   - relay ACP worker lifecycle/state ownership paths
   - relay look ACP read path
+  - startup lifecycle orchestration for ACP worker bring-up
   - MCP and CLI look passthrough serialization/tests

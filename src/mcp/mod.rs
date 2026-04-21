@@ -410,15 +410,34 @@ impl McpServer {
                 target_session,
                 captured_at,
                 snapshot_lines,
+                freshness,
+                snapshot_source,
+                stale_reason_code,
+                snapshot_age_ms,
             }) => {
-                let response = json!({
-                    "schema_version": schema_version,
-                    "bundle_name": bundle_name,
-                    "requester_session": requester_session,
-                    "target_session": target_session,
-                    "captured_at": captured_at,
-                    "snapshot_lines": snapshot_lines,
-                });
+                let mut response_map = serde_json::Map::new();
+                response_map.insert("schema_version".to_string(), Value::String(schema_version));
+                response_map.insert("bundle_name".to_string(), Value::String(bundle_name));
+                response_map.insert(
+                    "requester_session".to_string(),
+                    Value::String(requester_session),
+                );
+                response_map.insert("target_session".to_string(), Value::String(target_session));
+                response_map.insert("captured_at".to_string(), Value::String(captured_at));
+                response_map.insert("snapshot_lines".to_string(), json!(snapshot_lines));
+                if let Some(value) = freshness {
+                    response_map.insert("freshness".to_string(), json!(value));
+                }
+                if let Some(value) = snapshot_source {
+                    response_map.insert("snapshot_source".to_string(), json!(value));
+                }
+                if let Some(value) = stale_reason_code {
+                    response_map.insert("stale_reason_code".to_string(), Value::String(value));
+                }
+                if let Some(value) = snapshot_age_ms {
+                    response_map.insert("snapshot_age_ms".to_string(), json!(value));
+                }
+                let response = Value::Object(response_map);
                 emit_inscription(
                     "mcp.tool.look.success",
                     &json!({

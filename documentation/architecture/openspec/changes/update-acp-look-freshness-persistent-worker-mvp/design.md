@@ -18,10 +18,12 @@ Relay ACP look currently depends on retained snapshot state fed by prompt-turn u
 ## Decisions
 
 - Decision: one shared authoritative per-target ACP worker/client is used for both send lifecycle and look snapshot ingestion.
-- Decision: worker startup remains lazy (first ACP send/look), not eager at relay host startup.
-  - Rationale: avoids coupling relay host startup success to ACP runtime availability,
-    preserves process-only/no-autostart host behavior, and prevents unnecessary ACP
-    process fanout for sessions never targeted.
+- Decision: ACP worker lifecycle is startup-owned for hosted bundles.
+  - ACP workers are initialized during bundle startup/session startup pass.
+  - ACP workers remain authoritative while bundle state is `up`.
+  - ACP send/look paths SHALL NOT lazily create workers at request time.
+- Decision: runtime anchoring for ACP worker keys/state uses relay runtime
+  context (relay socket/runtime directory), not tmux transport semantics.
 - Decision: MVP removes `persisted_fallback` snapshot source vocabulary for look freshness; source is `live_buffer` or `none`.
 - Decision: first ACP look cold-start uses fixed prime timeout `750ms`.
   - prime success: success payload with `freshness=fresh`.
@@ -42,12 +44,18 @@ Relay ACP look currently depends on retained snapshot state fed by prompt-turn u
 ## Risks / Trade-offs
 
 - Shared worker ownership reduces freshness drift but increases coupling between send and look paths.
+- Startup-owned workers increase deterministic behavior and simplify look/send
+  semantics, but can increase startup failure volume and startup-time process
+  fanout for bundles with ACP sessions.
 - Fixed thresholds improve determinism and testability but may need post-MVP tuning.
 - Success-with-stale metadata avoids hard failures but requires operator/adapter awareness.
 
 ## Migration Plan
 
 1. Update specs (`session-relay`, `mcp-tool-surface`, `cli-surface`) with relocked behavior.
-2. Move ACP look path to shared worker-owned live snapshot buffer.
-3. Remove steady-state one-shot look refresh path.
-4. Add/update tests for cold-start, stale signaling, passthrough parity, and snapshot requiredness.
+2. Relock worker lifecycle to startup-owned initialization and remove
+   request-time worker bootstrap for ACP send/look.
+3. Move ACP look path to shared worker-owned live snapshot buffer.
+4. Remove steady-state one-shot look refresh path.
+5. Add/update tests for startup-owned worker behavior, stale signaling,
+   passthrough parity, and snapshot requiredness.

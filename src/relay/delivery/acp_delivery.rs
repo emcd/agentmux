@@ -1,4 +1,4 @@
-use std::{path::Path, time::Duration};
+use std::path::Path;
 
 use serde_json::{Value, json};
 
@@ -27,7 +27,6 @@ pub(super) const ACP_ERROR_CODE_SESSION_NEW_FAILED: &str = "runtime_acp_session_
 pub(super) const ACP_ERROR_CODE_PROMPT_FAILED: &str = "runtime_acp_prompt_failed";
 pub(super) const ACP_ERROR_CODE_CONNECTION_CLOSED: &str = "runtime_acp_connection_closed";
 pub(super) const ACP_ERROR_CODE_MISSING_CAPABILITY: &str = "validation_missing_acp_capability";
-const ACP_LOOK_REFRESH_TIMEOUT: Duration = Duration::from_millis(1500);
 
 #[derive(Clone, Copy, Debug)]
 enum AcpLifecycleSelection {
@@ -46,139 +45,68 @@ pub(super) struct PersistentAcpWorkerRuntime {
     pub session_id: String,
 }
 
-pub(in crate::relay) fn refresh_acp_snapshot_for_look(
+pub(super) fn bootstrap_acp_worker_runtime_for_look(
     runtime_socket_path: &Path,
     target_member: &BundleMember,
-) -> Result<(), String> {
+) -> Result<PersistentAcpWorkerRuntime, String> {
     let TargetConfiguration::Acp(acp_target) = &target_member.target else {
-        return Ok(());
+        return Err("ACP worker bootstrap requires ACP target".to_string());
     };
     let Some(working_directory) = target_member.working_directory.as_ref() else {
-        return Err("ACP look refresh requires target working directory".to_string());
+        return Err("ACP worker bootstrap requires target working directory".to_string());
     };
-    let mut client = match acp_target.channel {
-        crate::configuration::AcpChannel::Stdio => {
-            let Some(command) = acp_target.command.as_deref() else {
-                return Err("ACP stdio target requires command for look refresh".to_string());
-            };
-            AcpStdioClient::spawn(
-                command,
-                working_directory,
-                &acp_target
-                    .environment
-                    .iter()
-                    .map(|entry| (entry.name.clone(), entry.value.clone()))
-                    .collect::<Vec<_>>(),
-            )
-            .map_err(|reason| format!("spawn ACP look refresh client failed: {reason}"))?
-        }
-        crate::configuration::AcpChannel::Http => {
-            return Ok(());
-        }
-    };
-
-    let initialize = client
-        .initialize()
-        .map_err(|reason| format!("ACP look refresh initialize failed: {reason}"))?;
-    let load_capability = initialize
-        .get("agentCapabilities")
-        .and_then(|value| value.get("loadSession"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    if !load_capability {
-        return Ok(());
-    }
-
-    let session_id = if let Some(configured) = target_member.coder_session_id.as_deref() {
-        configured.to_string()
-    } else {
-        let Some(persisted) =
-            load_persisted_acp_session_id(runtime_socket_path, target_member.id.as_str())?
-        else {
-            return Ok(());
-        };
-        persisted
-    };
-
-    let replay_entries = client
-        .load_session_with_timeout(
-            session_id.as_str(),
-            working_directory,
-            Some(ACP_LOOK_REFRESH_TIMEOUT),
-        )
-        .map_err(|reason| format!("ACP look refresh session/load failed: {reason}"))?;
-    let mut refreshed_lines = client.take_snapshot_lines();
-    if refreshed_lines.is_empty() {
-        refreshed_lines = replay_entries_to_snapshot_lines(replay_entries);
-    }
-    if refreshed_lines.is_empty() {
-        return Ok(());
-    }
-    replace_acp_snapshot_lines(
+    let target_session = target_member.id.as_str();
+    persist_acp_worker_state(
         runtime_socket_path,
-        target_member.id.as_str(),
-        session_id.as_str(),
-        refreshed_lines.as_slice(),
+        target_session,
+        target_member.coder_session_id.as_deref(),
+        AcpWorkerReadinessState::Initializing,
     )
-}
+    .map_err(|reason| format!("persist ACP worker initializing state failed: {reason}"))?;
 
-pub(in crate::relay) fn initialize_acp_target_for_startup(
-    runtime_directory: &Path,
-    target_member: &BundleMember,
-) -> Result<(), (String, String, Option<Value>)> {
-    let TargetConfiguration::Acp(acp_target) = &target_member.target else {
-        return Ok(());
-    };
-    let Some(working_directory) = target_member.working_directory.as_ref() else {
-        return Err((
-            ACP_ERROR_CODE_INITIALIZE_FAILED.to_string(),
-            "ACP startup requires target working directory".to_string(),
-            Some(json!({
-                "target_session": target_member.id,
-            })),
-        ));
-    };
-    let runtime_socket_path = runtime_directory.join("tmux.sock");
-    let initialization = initialize_persistent_acp_worker_runtime(
+    let message_id = "acp-worker-bootstrap";
+    let mut runtime = initialize_persistent_acp_worker_runtime(
         target_member,
         acp_target,
         working_directory,
-        runtime_socket_path.as_path(),
-        target_member.id.as_str(),
-        "startup",
-    );
-    let runtime = match initialization {
-        Ok(runtime) => runtime,
-        Err(chat_result) => {
-            return Err((
-                chat_result
-                    .reason_code
-                    .clone()
-                    .unwrap_or_else(|| "runtime_startup_failed".to_string()),
-                chat_result
-                    .reason
-                    .clone()
-                    .unwrap_or_else(|| "ACP startup failed".to_string()),
-                chat_result.details.clone(),
-            ));
-        }
-    };
-    if let Err(reason) = persist_acp_worker_state(
-        runtime_socket_path.as_path(),
-        target_member.id.as_str(),
+        runtime_socket_path,
+        target_session,
+        message_id,
+    )
+    .map_err(|result| {
+        let code = result
+            .reason_code
+            .clone()
+            .unwrap_or_else(|| "runtime_startup_failed".to_string());
+        let reason = result
+            .reason
+            .clone()
+            .unwrap_or_else(|| "ACP worker bootstrap failed".to_string());
+        format!("{code}: {reason}")
+    })?;
+
+    let replay_entries = runtime.client.take_replay_entries();
+    let mut refreshed_lines = runtime.client.take_snapshot_lines();
+    if refreshed_lines.is_empty() {
+        refreshed_lines = replay_entries_to_snapshot_lines(replay_entries);
+    }
+    if !refreshed_lines.is_empty() {
+        replace_acp_snapshot_lines(
+            runtime_socket_path,
+            target_session,
+            runtime.session_id.as_str(),
+            refreshed_lines.as_slice(),
+        )
+        .map_err(|reason| format!("persist ACP bootstrap snapshot lines failed: {reason}"))?;
+    }
+    persist_acp_worker_state(
+        runtime_socket_path,
+        target_session,
         Some(runtime.session_id.as_str()),
         AcpWorkerReadinessState::Available,
-    ) {
-        return Err((
-            "runtime_startup_failed".to_string(),
-            "failed to persist ACP worker readiness state".to_string(),
-            Some(json!({
-                "target_session": target_member.id,
-                "cause": reason,
-            })),
-        ));
-    }
-    Ok(())
+    )
+    .map_err(|reason| format!("persist ACP worker available state failed: {reason}"))?;
+    Ok(runtime)
 }
 
 pub(super) fn deliver_one_target_acp(
@@ -190,34 +118,24 @@ pub(super) fn deliver_one_target_acp(
     message_id: String,
     acp_runtime: &mut Option<PersistentAcpWorkerRuntime>,
 ) -> ChatResult {
-    let Some(working_directory) = target_member.working_directory.as_ref() else {
+    if target_member.working_directory.is_none() {
         return failed_result(
             target_session,
             message_id,
             "ACP target is missing working directory",
         );
-    };
+    }
     let runtime_socket_path = task.tmux_socket.as_path();
 
-    if acp_runtime.is_none() {
-        match initialize_persistent_acp_worker_runtime(
-            target_member,
-            acp,
-            working_directory,
-            runtime_socket_path,
-            target_session.as_str(),
-            message_id.as_str(),
-        ) {
-            Ok(runtime) => *acp_runtime = Some(runtime),
-            Err(result) => return *result,
-        }
-    }
-
     let Some(runtime) = acp_runtime.as_mut() else {
-        return failed_result(
+        return failed_result_with_code(
             target_session,
             message_id,
-            "ACP worker runtime was not initialized",
+            "runtime_acp_worker_unavailable",
+            "ACP worker is unavailable for target session",
+            Some(json!({
+                "target_session": target_member.id,
+            })),
         );
     };
 

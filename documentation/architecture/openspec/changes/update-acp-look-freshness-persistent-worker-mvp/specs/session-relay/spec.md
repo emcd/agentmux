@@ -44,6 +44,10 @@ Worker model SHALL be:
 - one worker per target session
 - serialized request queue per worker
 - fixed MVP queue bound `max_pending = 64`
+- initialized during bundle startup/session startup pass for hosted bundles
+- anchored by relay runtime context (relay socket/runtime directory), not tmux
+  transport semantics
+- never lazily created by ACP send/look request handlers
 
 Backpressure contract:
 
@@ -70,12 +74,28 @@ Failure taxonomy SHALL include:
 - `runtime_acp_session_new_failed`
 - `runtime_acp_prompt_failed`
 - `acp_turn_timeout`
+- `runtime_acp_worker_unavailable`
 
 #### Scenario: Keep one authoritative worker for ACP send and look ingestion
 
 - **WHEN** relay handles ACP send requests and ACP look reads for one target
 - **THEN** lifecycle/reconnect ownership remains with one shared worker
 - **AND** relay avoids dual ACP worker/client ownership for that target
+
+#### Scenario: Start ACP worker during startup pass without lazy send/look bootstrap
+
+- **WHEN** relay runs startup pass for a hosted bundle with ACP targets
+- **THEN** relay initializes one ACP worker per configured ACP target
+- **AND** ACP send/look request handlers do not lazily create ACP workers
+
+#### Scenario: Return deterministic unavailable outcome when ACP worker is absent
+
+- **WHEN** ACP send or ACP look is requested for a target whose ACP worker is
+  unavailable
+- **THEN** relay does not spawn a request-scoped ACP client
+- **AND** send returns failure with `runtime_acp_worker_unavailable`
+- **AND** look returns stale metadata with
+  `stale_reason_code=acp_worker_unavailable`
 
 ### Requirement: Look Response Contract
 

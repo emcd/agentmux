@@ -78,6 +78,22 @@ pub enum ListedBundleStartupHealth {
     Degraded,
 }
 
+/// Freshness status for ACP-backed look snapshot responses.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AcpLookFreshness {
+    Fresh,
+    Stale,
+}
+
+/// Source marker for ACP-backed look snapshot responses.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AcpLookSnapshotSource {
+    LiveBuffer,
+    None,
+}
+
 /// One persisted startup-failure record surfaced in list-sessions payloads.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct StartupFailureRecord {
@@ -329,6 +345,14 @@ pub enum RelayResponse {
         target_session: String,
         captured_at: String,
         snapshot_lines: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        freshness: Option<AcpLookFreshness>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        snapshot_source: Option<AcpLookSnapshotSource>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        stale_reason_code: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        snapshot_age_ms: Option<u64>,
     },
     Error {
         error: RelayError,

@@ -1,6 +1,6 @@
 use std::env;
 
-use serde_json::json;
+use serde_json::{Map, Value, json};
 
 use crate::{
     configuration::load_bundle_configuration,
@@ -55,14 +55,35 @@ pub(super) fn run_agentmux_look(arguments: &[String]) -> Result<(), RuntimeError
             target_session,
             captured_at,
             snapshot_lines,
-        } => json!({
-            "schema_version": schema_version,
-            "bundle_name": bundle_name,
-            "requester_session": requester_session,
-            "target_session": target_session,
-            "captured_at": captured_at,
-            "snapshot_lines": snapshot_lines,
-        }),
+            freshness,
+            snapshot_source,
+            stale_reason_code,
+            snapshot_age_ms,
+        } => {
+            let mut payload = Map::new();
+            payload.insert("schema_version".to_string(), Value::String(schema_version));
+            payload.insert("bundle_name".to_string(), Value::String(bundle_name));
+            payload.insert(
+                "requester_session".to_string(),
+                Value::String(requester_session),
+            );
+            payload.insert("target_session".to_string(), Value::String(target_session));
+            payload.insert("captured_at".to_string(), Value::String(captured_at));
+            payload.insert("snapshot_lines".to_string(), json!(snapshot_lines));
+            if let Some(value) = freshness {
+                payload.insert("freshness".to_string(), json!(value));
+            }
+            if let Some(value) = snapshot_source {
+                payload.insert("snapshot_source".to_string(), json!(value));
+            }
+            if let Some(value) = stale_reason_code {
+                payload.insert("stale_reason_code".to_string(), Value::String(value));
+            }
+            if let Some(value) = snapshot_age_ms {
+                payload.insert("snapshot_age_ms".to_string(), json!(value));
+            }
+            Value::Object(payload)
+        }
         RelayResponse::Error { error } => return Err(shared::map_relay_error(error)),
         other => {
             return Err(RuntimeError::validation(

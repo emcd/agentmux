@@ -42,6 +42,10 @@ fn look_returns_canonical_json_payload() {
             target_session: "bravo".to_string(),
             captured_at: "2026-03-08T00:00:00Z".to_string(),
             snapshot_lines: vec!["LOOK-A".to_string(), "LOOK-B".to_string()],
+            freshness: None,
+            snapshot_source: None,
+            stale_reason_code: None,
+            snapshot_age_ms: None,
         },
         Arc::clone(&request_log),
     );
@@ -73,12 +77,77 @@ fn look_returns_canonical_json_payload() {
         payload["snapshot_lines"],
         serde_json::json!(["LOOK-A", "LOOK-B"])
     );
+    assert!(payload.get("freshness").is_none());
+    assert!(payload.get("snapshot_source").is_none());
+    assert!(payload.get("stale_reason_code").is_none());
+    assert!(payload.get("snapshot_age_ms").is_none());
 
     let requests = request_log.lock().expect("request log lock");
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0]["operation"], "look");
     assert_eq!(requests[0]["requester_session"], "user");
     assert_eq!(requests[0]["target_session"], "bravo");
+}
+
+#[test]
+fn look_preserves_additive_acp_freshness_fields_in_machine_output() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration(&config_root, "agentmux", Some(&["dev"]), &["tui", "bravo"]);
+    write_tui_configuration(
+        &config_root,
+        Some("agentmux"),
+        Some("user"),
+        &[("user", "default", Some("Operator"))],
+    );
+
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux").expect("bundle paths");
+    ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
+    let workspace_root = temporary.path().join("workspace");
+    fs::create_dir_all(&workspace_root).expect("create workspace");
+    let relay_thread = spawn_fake_relay_once(
+        &bundle_paths.relay_socket,
+        RelayResponse::Look {
+            schema_version: "1".to_string(),
+            bundle_name: "agentmux".to_string(),
+            requester_session: "user".to_string(),
+            target_session: "bravo".to_string(),
+            captured_at: "2026-03-08T00:00:00Z".to_string(),
+            snapshot_lines: vec![],
+            freshness: Some(agentmux::relay::AcpLookFreshness::Stale),
+            snapshot_source: Some(agentmux::relay::AcpLookSnapshotSource::None),
+            stale_reason_code: Some("acp_snapshot_prime_timeout".to_string()),
+            snapshot_age_ms: None,
+        },
+        Arc::new(Mutex::new(Vec::<Value>::new())),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .current_dir(&workspace_root)
+        .args([
+            "look",
+            "bravo",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .output()
+        .expect("run agentmux look");
+    relay_thread.join().expect("join fake relay thread");
+
+    assert!(output.status.success(), "command should succeed");
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("decode look json payload");
+    assert_eq!(payload["freshness"], "stale");
+    assert_eq!(payload["snapshot_source"], "none");
+    assert_eq!(payload["stale_reason_code"], "acp_snapshot_prime_timeout");
 }
 
 #[test]

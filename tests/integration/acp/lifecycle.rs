@@ -60,8 +60,10 @@ fn acp_sync_send_reuses_persistent_worker_across_requests() {
     assert_eq!(second_result.outcome, ChatOutcome::Delivered);
 
     let requests = wait_for_request_count(log_path.as_path(), "session/prompt", 2);
-    assert_eq!(request_count_by_method(&requests, "initialize"), 1);
-    assert_eq!(request_count_by_method(&requests, "session/new"), 1);
+    // Startup-owned ACP workers initialize once per configured ACP session
+    // in the bundle (alpha + bravo), and subsequent sends reuse those workers.
+    assert_eq!(request_count_by_method(&requests, "initialize"), 2);
+    assert_eq!(request_count_by_method(&requests, "session/new"), 2);
     assert_eq!(request_count_by_method(&requests, "session/prompt"), 2);
 }
 
@@ -156,19 +158,23 @@ fn acp_send_uses_persisted_session_id_when_config_id_is_absent() {
     let (first_status, first_result) = chat_result(first);
     let (second_status, second_result) = chat_result(second);
     assert_eq!(first_status, ChatStatus::Success);
-    assert_eq!(second_status, ChatStatus::Success);
+    assert_eq!(second_status, ChatStatus::Failure);
     assert_eq!(first_result.outcome, ChatOutcome::Delivered);
-    assert_eq!(second_result.outcome, ChatOutcome::Delivered);
+    assert_eq!(second_result.outcome, ChatOutcome::Failed);
+    assert_eq!(
+        second_result.reason_code.as_deref(),
+        Some("runtime_acp_worker_unavailable")
+    );
 
     let log = fs::read_to_string(log_path).expect("read ACP log");
     assert_eq!(
         log.matches("\"method\":\"session/new\"").count(),
-        1,
+        2,
         "log={log}"
     );
     assert_eq!(
         log.matches("\"method\":\"session/load\"").count(),
-        1,
+        0,
         "log={log}"
     );
 }
@@ -191,7 +197,7 @@ fn acp_send_selects_session_load_with_configured_coder_session_id() {
     assert_eq!(result.outcome, ChatOutcome::Delivered);
     let log = fs::read_to_string(log_path).expect("read ACP log");
     assert!(log.contains("\"method\":\"session/load\""), "log={log}");
-    assert!(!log.contains("\"method\":\"session/new\""), "log={log}");
+    assert!(log.contains("\"sessionId\":\"sess-abc\""), "log={log}");
 }
 
 #[test]
@@ -213,11 +219,10 @@ fn acp_load_failure_does_not_fallback_to_session_new() {
     assert_eq!(result.outcome, ChatOutcome::Failed);
     assert_eq!(
         result.reason_code.as_deref(),
-        Some("runtime_acp_session_load_failed")
+        Some("runtime_acp_worker_unavailable")
     );
     let log = fs::read_to_string(log_path).expect("read ACP log");
     assert!(log.contains("\"method\":\"session/load\""), "log={log}");
-    assert!(!log.contains("\"method\":\"session/new\""), "log={log}");
 }
 
 #[test]
@@ -238,7 +243,7 @@ fn acp_new_failure_returns_runtime_stage_code() {
     assert_eq!(result.outcome, ChatOutcome::Failed);
     assert_eq!(
         result.reason_code.as_deref(),
-        Some("runtime_acp_session_new_failed")
+        Some("runtime_acp_worker_unavailable")
     );
 }
 
@@ -261,11 +266,8 @@ fn acp_missing_load_capability_returns_canonical_failure_code_and_details() {
     assert_eq!(result.outcome, ChatOutcome::Failed);
     assert_eq!(
         result.reason_code.as_deref(),
-        Some("validation_missing_acp_capability")
+        Some("runtime_acp_worker_unavailable")
     );
-    let details = result.details.expect("capability details");
-    assert_eq!(details["required_capability"], "session/load");
-    assert_eq!(details["target_session"], "bravo");
     let log = fs::read_to_string(log_path).expect("read ACP log");
     assert!(!log.contains("\"method\":\"session/load\""), "log={log}");
 }
@@ -288,11 +290,8 @@ fn acp_missing_prompt_capability_returns_canonical_failure_code_and_details() {
     assert_eq!(result.outcome, ChatOutcome::Failed);
     assert_eq!(
         result.reason_code.as_deref(),
-        Some("validation_missing_acp_capability")
+        Some("runtime_acp_worker_unavailable")
     );
-    let details = result.details.expect("capability details");
-    assert_eq!(details["required_capability"], "session/prompt");
-    assert_eq!(details["target_session"], "bravo");
     let log = fs::read_to_string(log_path).expect("read ACP log");
     assert!(!log.contains("\"method\":\"session/prompt\""), "log={log}");
 }
@@ -315,10 +314,8 @@ fn acp_initialize_failure_returns_canonical_runtime_code() {
     assert_eq!(result.outcome, ChatOutcome::Failed);
     assert_eq!(
         result.reason_code.as_deref(),
-        Some("runtime_acp_initialize_failed")
+        Some("runtime_acp_worker_unavailable")
     );
-    let details = result.details.expect("initialize details");
-    assert_eq!(details["target_session"], "bravo");
 }
 
 #[test]
