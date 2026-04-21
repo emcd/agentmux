@@ -9,7 +9,7 @@ use crate::{
         BundleConfiguration, BundleMember, TargetConfiguration, TmuxTargetConfiguration,
     },
     relay::{AcpLookFreshness, AcpLookSnapshotSource},
-    runtime::inscriptions::emit_inscription,
+    runtime::{inscriptions::emit_inscription, paths::tmux_socket_path_for_runtime_directory},
 };
 
 use super::authorization::{
@@ -67,18 +67,13 @@ pub(super) fn handle_request(
     bundle: &BundleConfiguration,
     authorization: &AuthorizationContext,
     runtime_directory: &Path,
-    tmux_socket: &Path,
 ) -> Result<RelayResponse, RelayError> {
     match request {
-        RelayRequest::Up => handle_lifecycle_up(bundle, tmux_socket),
-        RelayRequest::Down => handle_lifecycle_down(bundle, tmux_socket),
-        RelayRequest::List { sender_session } => handle_list(
-            bundle,
-            authorization,
-            sender_session,
-            runtime_directory,
-            tmux_socket,
-        ),
+        RelayRequest::Up => handle_lifecycle_up(bundle, runtime_directory),
+        RelayRequest::Down => handle_lifecycle_down(bundle, runtime_directory),
+        RelayRequest::List { sender_session } => {
+            handle_list(bundle, authorization, sender_session, runtime_directory)
+        }
         RelayRequest::Chat {
             request_id,
             sender_session,
@@ -104,7 +99,6 @@ pub(super) fn handle_request(
                 acp_turn_timeout_ms,
             },
             runtime_directory,
-            tmux_socket,
         ),
         RelayRequest::Look {
             requester_session,
@@ -121,16 +115,16 @@ pub(super) fn handle_request(
                 bundle_name: request_bundle_name,
             },
             runtime_directory,
-            tmux_socket,
         ),
     }
 }
 
 fn handle_lifecycle_up(
     bundle: &BundleConfiguration,
-    tmux_socket: &Path,
+    runtime_directory: &Path,
 ) -> Result<RelayResponse, RelayError> {
-    let report = reconcile_loaded_bundle_for_lifecycle(bundle, tmux_socket)?;
+    let tmux_socket = tmux_socket_path_for_runtime_directory(runtime_directory);
+    let report = reconcile_loaded_bundle_for_lifecycle(bundle, tmux_socket.as_path())?;
     let changed = report.bootstrap_session.is_some()
         || !report.created_sessions.is_empty()
         || !report.pruned_sessions.is_empty();
@@ -162,9 +156,10 @@ fn handle_lifecycle_up(
 
 fn handle_lifecycle_down(
     bundle: &BundleConfiguration,
-    tmux_socket: &Path,
+    runtime_directory: &Path,
 ) -> Result<RelayResponse, RelayError> {
-    let report = shutdown_bundle_runtime(tmux_socket)?;
+    let tmux_socket = tmux_socket_path_for_runtime_directory(runtime_directory);
+    let report = shutdown_bundle_runtime(tmux_socket.as_path())?;
     let changed = !report.pruned_sessions.is_empty() || report.killed_tmux_server;
     let bundle_result = if changed {
         LifecycleBundleResult {
@@ -197,8 +192,8 @@ fn handle_list(
     authorization: &AuthorizationContext,
     sender_session: Option<String>,
     runtime_directory: &Path,
-    tmux_socket: &Path,
 ) -> Result<RelayResponse, RelayError> {
+    let tmux_socket = tmux_socket_path_for_runtime_directory(runtime_directory);
     let sender_session = sender_session.ok_or_else(|| {
         relay_error(
             "validation_unknown_sender",
@@ -243,7 +238,7 @@ fn handle_list(
     for member in &bundle.members {
         let ready = match member.target {
             TargetConfiguration::Tmux(_) => {
-                resolve_active_pane_target(tmux_socket, member.id.as_str()).is_ok()
+                resolve_active_pane_target(tmux_socket.as_path(), member.id.as_str()).is_ok()
             }
             TargetConfiguration::Acp(_) => {
                 acp_session_ready_for_startup(runtime_directory, member.id.as_str()).map_err(
@@ -324,7 +319,6 @@ fn handle_chat(
     authorization: &AuthorizationContext,
     request: ChatRequestContext,
     runtime_directory: &Path,
-    tmux_socket: &Path,
 ) -> Result<RelayResponse, RelayError> {
     let ChatRequestContext {
         request_id,
@@ -493,7 +487,6 @@ fn handle_chat(
                     quiescence,
                     batch_settings,
                     runtime_directory: runtime_directory.to_path_buf(),
-                    tmux_socket: tmux_socket.to_path_buf(),
                     completion_sender: None,
                 };
                 let result = if task.target_is_ui {
@@ -548,7 +541,6 @@ fn handle_chat(
                     quiescence,
                     batch_settings,
                     runtime_directory: runtime_directory.to_path_buf(),
-                    tmux_socket: tmux_socket.to_path_buf(),
                     completion_sender: None,
                 };
                 enqueue_async_delivery(task)?;
@@ -616,7 +608,6 @@ fn handle_look(
     authorization: &AuthorizationContext,
     request: LookRequestContext,
     runtime_directory: &Path,
-    tmux_socket: &Path,
 ) -> Result<RelayResponse, RelayError> {
     let LookRequestContext {
         requester_session,
@@ -677,23 +668,29 @@ fn handle_look(
     let (snapshot_lines, freshness, snapshot_source, stale_reason_code, snapshot_age_ms) =
         match &target.target {
             crate::configuration::TargetConfiguration::Tmux(_) => {
-                let pane_target = resolve_active_pane_target(tmux_socket, target.id.as_str())
-                    .map_err(|reason| {
-                        relay_error(
-                            "internal_unexpected_failure",
-                            "failed to resolve active pane for look target",
-                            Some(json!({"target_session": target.id, "cause": reason})),
-                        )
-                    })?;
-                let snapshot_lines =
-                    capture_pane_tail_lines(tmux_socket, pane_target.as_str(), requested_lines)
-                        .map_err(|reason| {
+                let tmux_socket = tmux_socket_path_for_runtime_directory(runtime_directory);
+                let pane_target =
+                    resolve_active_pane_target(tmux_socket.as_path(), target.id.as_str()).map_err(
+                        |reason| {
                             relay_error(
                                 "internal_unexpected_failure",
-                                "failed to capture look snapshot",
+                                "failed to resolve active pane for look target",
                                 Some(json!({"target_session": target.id, "cause": reason})),
                             )
-                        })?;
+                        },
+                    )?;
+                let snapshot_lines = capture_pane_tail_lines(
+                    tmux_socket.as_path(),
+                    pane_target.as_str(),
+                    requested_lines,
+                )
+                .map_err(|reason| {
+                    relay_error(
+                        "internal_unexpected_failure",
+                        "failed to capture look snapshot",
+                        Some(json!({"target_session": target.id, "cause": reason})),
+                    )
+                })?;
                 (snapshot_lines, None, None, None, None)
             }
             crate::configuration::TargetConfiguration::Acp(_) => {

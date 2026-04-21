@@ -18,15 +18,8 @@ fn dispatch_request(
     configuration_root: &std::path::Path,
     bundle_name: &str,
     runtime_directory: &std::path::Path,
-    tmux_socket: &std::path::Path,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
-    handle_request(
-        request,
-        configuration_root,
-        bundle_name,
-        runtime_directory,
-        tmux_socket,
-    )
+    handle_request(request, configuration_root, bundle_name, runtime_directory)
 }
 
 #[test]
@@ -66,7 +59,6 @@ fn relay_chat_broadcast_delivers_to_all_other_configured_sessions() {
         &config_root,
         bundle_name,
         &paths.runtime_directory,
-        &paths.tmux_socket,
     )
     .expect("broadcast should succeed");
 
@@ -132,7 +124,6 @@ fn relay_chat_reports_timeout_for_noisy_target_with_partial_status() {
         &config_root,
         bundle_name,
         &paths.runtime_directory,
-        &paths.tmux_socket,
     )
     .expect("targeted chat should return results");
 
@@ -258,7 +249,6 @@ fn relay_chat_times_out_when_activity_changes_despite_stable_visible_text() {
         &config_root,
         bundle_name,
         &paths.runtime_directory,
-        &paths.tmux_socket,
     )
     .expect("delivery should complete");
 

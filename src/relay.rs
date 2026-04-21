@@ -392,7 +392,6 @@ pub(super) struct AsyncDeliveryTask {
     quiescence: QuiescenceOptions,
     batch_settings: PromptBatchSettings,
     runtime_directory: PathBuf,
-    tmux_socket: PathBuf,
     completion_sender: Option<std::sync::mpsc::Sender<Result<ChatResult, RelayError>>>,
 }
 
@@ -448,7 +447,6 @@ pub fn serve_connection(
                     configuration_root,
                     &bundle_paths.bundle_name,
                     &bundle_paths.runtime_directory,
-                    &bundle_paths.tmux_socket,
                 );
                 write_response(stream, &response)?;
             }
@@ -564,7 +562,6 @@ pub fn serve_connection(
                     configuration_root,
                     &bundle_paths.bundle_name,
                     &bundle_paths.runtime_directory,
-                    &bundle_paths.tmux_socket,
                 );
                 write_stream_frame_to_writer(
                     &writer,
@@ -589,17 +586,10 @@ pub fn handle_request(
     configuration_root: &Path,
     bundle_name: &str,
     runtime_directory: &Path,
-    tmux_socket: &Path,
 ) -> Result<RelayResponse, RelayError> {
     let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
     let authorization = load_authorization_context(configuration_root, &bundle)?;
-    handlers::handle_request(
-        request,
-        &bundle,
-        &authorization,
-        runtime_directory,
-        tmux_socket,
-    )
+    handlers::handle_request(request, &bundle, &authorization, runtime_directory)
 }
 
 impl RelayStreamSession {
@@ -836,14 +826,8 @@ pub fn startup_bundle(
     configuration_root: &Path,
     bundle_name: &str,
     runtime_directory: &Path,
-    tmux_socket: &Path,
 ) -> Result<BundleStartupReport, RelayError> {
-    lifecycle::startup_bundle(
-        configuration_root,
-        bundle_name,
-        runtime_directory,
-        tmux_socket,
-    )
+    lifecycle::startup_bundle(configuration_root, bundle_name, runtime_directory)
 }
 
 /// Prunes managed sessions and reaps tmux server when safe during shutdown.
@@ -1039,15 +1023,8 @@ fn dispatch_request(
     configuration_root: &Path,
     bundle_name: &str,
     runtime_directory: &Path,
-    tmux_socket: &Path,
 ) -> RelayResponse {
-    match handle_request(
-        request,
-        configuration_root,
-        bundle_name,
-        runtime_directory,
-        tmux_socket,
-    ) {
+    match handle_request(request, configuration_root, bundle_name, runtime_directory) {
         Ok(value) => value,
         Err(error) => RelayResponse::Error { error },
     }

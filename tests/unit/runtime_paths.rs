@@ -1,7 +1,7 @@
 use agentmux::runtime::paths::{
     BundleRuntimePaths, RuntimeRootOverrides, RuntimeRoots, debug_repository_configuration_root,
     debug_repository_inscriptions_root, debug_repository_state_root,
-    ensure_bundle_runtime_directory,
+    ensure_bundle_runtime_directory, tmux_socket_path_for_runtime_directory,
 };
 use tempfile::TempDir;
 
@@ -86,4 +86,14 @@ fn creates_bundle_runtime_directory() {
     let paths = BundleRuntimePaths::resolve(temporary.path(), "party-alpha").expect("paths");
     ensure_bundle_runtime_directory(&paths).expect("directory");
     assert!(paths.runtime_directory.is_dir());
+}
+
+#[test]
+fn derives_tmux_socket_from_runtime_directory() {
+    let runtime_directory = std::path::Path::new("/state/root/bundles/party-alpha");
+    let tmux_socket = tmux_socket_path_for_runtime_directory(runtime_directory);
+    assert_eq!(
+        tmux_socket,
+        std::path::Path::new("/state/root/bundles/party-alpha/tmux.sock")
+    );
 }

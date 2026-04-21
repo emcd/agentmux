@@ -18,15 +18,8 @@ fn dispatch_request(
     configuration_root: &std::path::Path,
     bundle_name: &str,
     runtime_directory: &std::path::Path,
-    tmux_socket: &std::path::Path,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
-    handle_request(
-        request,
-        configuration_root,
-        bundle_name,
-        runtime_directory,
-        tmux_socket,
-    )
+    handle_request(request, configuration_root, bundle_name, runtime_directory)
 }
 
 #[test]
@@ -102,7 +95,6 @@ fn relay_chat_delivers_when_prompt_readiness_template_matches() {
         &config_root,
         bundle_name,
         &paths.runtime_directory,
-        &paths.tmux_socket,
     )
     .expect("delivery should complete");
 
@@ -193,7 +185,6 @@ fn relay_chat_times_out_when_prompt_readiness_never_matches() {
         &config_root,
         bundle_name,
         &paths.runtime_directory,
-        &paths.tmux_socket,
     )
     .expect("delivery should complete");
 
@@ -298,7 +289,6 @@ fn relay_chat_delivers_when_prompt_idle_column_matches() {
         &config_root,
         bundle_name,
         &paths.runtime_directory,
-        &paths.tmux_socket,
     )
     .expect("delivery should complete");
 
@@ -394,7 +384,6 @@ fn relay_chat_delivers_when_prompt_regex_requires_blank_separator_line() {
         &config_root,
         bundle_name,
         &paths.runtime_directory,
-        &paths.tmux_socket,
     )
     .expect("delivery should complete");
 
@@ -499,7 +488,6 @@ fn relay_chat_times_out_when_prompt_idle_column_does_not_match() {
         &config_root,
         bundle_name,
         &paths.runtime_directory,
-        &paths.tmux_socket,
     )
     .expect("delivery should complete");
 

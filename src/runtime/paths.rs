@@ -110,6 +110,12 @@ pub fn debug_repository_inscriptions_root(repository_root: &Path) -> PathBuf {
         .join(APPLICATION_DIRECTORY)
 }
 
+/// Resolves the tmux socket path for one bundle runtime directory.
+#[must_use]
+pub fn tmux_socket_path_for_runtime_directory(runtime_directory: &Path) -> PathBuf {
+    runtime_directory.join(TMUX_SOCKET_FILE)
+}
+
 /// Ensures the bundle runtime directory exists with owner-only permissions.
 ///
 /// # Errors

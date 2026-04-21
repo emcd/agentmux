@@ -22,15 +22,8 @@ fn dispatch_request(
     configuration_root: &Path,
     bundle_name: &str,
     runtime_directory: &Path,
-    tmux_socket: &Path,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
-    handle_request(
-        request,
-        configuration_root,
-        bundle_name,
-        runtime_directory,
-        tmux_socket,
-    )
+    handle_request(request, configuration_root, bundle_name, runtime_directory)
 }
 
 fn write_bundle_configuration(temporary: &TempDir, bundle_name: &str) -> PathBuf {
@@ -185,7 +178,6 @@ fn relay_chat_routes_to_connected_ui_stream_with_event_frames() {
         &configuration_root,
         bundle_name.as_str(),
         &bundle_paths.runtime_directory,
-        &bundle_paths.tmux_socket,
     )
     .expect("chat response");
     let RelayResponse::Chat { results, .. } = response else {
@@ -302,7 +294,6 @@ fn relay_chat_waits_for_ui_reconnect_before_delivery() {
         &configuration_root,
         bundle_name.as_str(),
         &bundle_paths.runtime_directory,
-        &bundle_paths.tmux_socket,
     )
     .expect("chat response");
     assert!(
@@ -374,7 +365,6 @@ fn relay_async_chat_emits_terminal_delivery_outcome_to_sender_ui_stream() {
         &configuration_root,
         bundle_name.as_str(),
         &bundle_paths.runtime_directory,
-        &bundle_paths.tmux_socket,
     )
     .expect("chat response");
     let RelayResponse::Chat {

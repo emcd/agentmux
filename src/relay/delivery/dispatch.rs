@@ -306,7 +306,10 @@ pub(in crate::relay) fn deliver_one_target_with_worker_state(
     let target_session = task.target_session.clone();
     let message = task.message.as_str();
     let message_id = task.message_id.clone();
-    let tmux_socket = task.tmux_socket.as_path();
+    let tmux_socket_path = crate::runtime::paths::tmux_socket_path_for_runtime_directory(
+        task.runtime_directory.as_path(),
+    );
+    let tmux_socket = tmux_socket_path.as_path();
     let quiescence = task.quiescence;
     let batch_settings = task.batch_settings;
     let created_at = time::OffsetDateTime::now_utc()

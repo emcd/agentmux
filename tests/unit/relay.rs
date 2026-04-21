@@ -13,13 +13,7 @@ fn dispatch_request(
     let runtime_directory = tmux_socket
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
-    handle_request(
-        request,
-        configuration_root,
-        bundle_name,
-        runtime_directory,
-        tmux_socket,
-    )
+    handle_request(request, configuration_root, bundle_name, runtime_directory)
 }
 
 fn write_tui_configuration(root: &std::path::Path, policy: &str) {

@@ -33,15 +33,8 @@ fn dispatch_request(
     configuration_root: &Path,
     bundle_name: &str,
     runtime_directory: &Path,
-    tmux_socket: &Path,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
-    handle_request(
-        request,
-        configuration_root,
-        bundle_name,
-        runtime_directory,
-        tmux_socket,
-    )
+    handle_request(request, configuration_root, bundle_name, runtime_directory)
 }
 
 struct TmuxServerGuard {
@@ -196,7 +189,6 @@ fn relay_look_returns_oldest_to_newest_snapshot_lines() {
         &config_root,
         bundle_name,
         &paths.runtime_directory,
-        &paths.tmux_socket,
     )
     .expect("look response");
     let RelayResponse::Look { snapshot_lines, .. } = response else {
@@ -247,7 +239,6 @@ fn relay_look_allows_optional_or_matching_bundle_and_applies_default_lines() {
         &config_root,
         bundle_name,
         &paths.runtime_directory,
-        &paths.tmux_socket,
     )
     .expect("look response");
     let RelayResponse::Look {
@@ -268,7 +259,6 @@ fn relay_look_allows_optional_or_matching_bundle_and_applies_default_lines() {
         &config_root,
         bundle_name,
         &paths.runtime_directory,
-        &paths.tmux_socket,
     )
     .expect("look response");
     let RelayResponse::Look {
@@ -289,7 +279,6 @@ fn relay_look_allows_optional_or_matching_bundle_and_applies_default_lines() {
         &config_root,
         bundle_name,
         &paths.runtime_directory,
-        &paths.tmux_socket,
     )
     .expect("look response");
     let RelayResponse::Look {

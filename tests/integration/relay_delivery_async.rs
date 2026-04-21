@@ -18,15 +18,8 @@ fn dispatch_request(
     configuration_root: &std::path::Path,
     bundle_name: &str,
     runtime_directory: &std::path::Path,
-    tmux_socket: &std::path::Path,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
-    handle_request(
-        request,
-        configuration_root,
-        bundle_name,
-        runtime_directory,
-        tmux_socket,
-    )
+    handle_request(request, configuration_root, bundle_name, runtime_directory)
 }
 
 #[test]
@@ -65,7 +58,6 @@ fn relay_chat_async_processes_repeated_target_messages_in_fifo_order() {
         &config_root,
         bundle_name,
         &paths.runtime_directory,
-        &paths.tmux_socket,
     )
     .expect("first async send should be accepted");
     let RelayResponse::Chat {
@@ -95,7 +87,6 @@ fn relay_chat_async_processes_repeated_target_messages_in_fifo_order() {
         &config_root,
         bundle_name,
         &paths.runtime_directory,
-        &paths.tmux_socket,
     )
     .expect("second async send should be accepted");
     let RelayResponse::Chat {
@@ -182,7 +173,6 @@ fn relay_chat_async_without_timeout_waits_for_late_quiescence() {
         &config_root,
         bundle_name,
         &paths.runtime_directory,
-        &paths.tmux_socket,
     )
     .expect("async send should be accepted");
 
@@ -250,7 +240,6 @@ fn relay_chat_async_timeout_override_stops_wait_before_late_quiescence() {
         &config_root,
         bundle_name,
         &paths.runtime_directory,
-        &paths.tmux_socket,
     )
     .expect("async send should be accepted");
 

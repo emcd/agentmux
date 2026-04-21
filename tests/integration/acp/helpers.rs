@@ -15,13 +15,7 @@ fn dispatch_request(
     tmux_socket: &Path,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
     let runtime_directory = tmux_socket.parent().unwrap_or_else(|| Path::new("."));
-    handle_request(
-        request,
-        configuration_root,
-        bundle_name,
-        runtime_directory,
-        tmux_socket,
-    )
+    handle_request(request, configuration_root, bundle_name, runtime_directory)
 }
 
 #[derive(Clone, Debug)]
@@ -447,7 +441,7 @@ fn startup_bundle(
     tmux_socket: &Path,
 ) -> Result<(), agentmux::relay::RelayError> {
     let runtime_directory = tmux_socket.parent().unwrap_or_else(|| Path::new("."));
-    let _ = agentmux::relay::startup_bundle(config_root, "party", runtime_directory, tmux_socket)?;
+    let _ = agentmux::relay::startup_bundle(config_root, "party", runtime_directory)?;
     Ok(())
 }
 

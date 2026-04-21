@@ -5,6 +5,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::configuration::{BundleConfiguration, TargetConfiguration, load_bundle_configuration};
+use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 
 use super::{
     BundleStartupReport, ListedSessionTransport, ReconciliationReport, RelayError, ShutdownReport,
@@ -65,11 +66,11 @@ pub(super) fn startup_bundle(
     configuration_root: &Path,
     bundle_name: &str,
     runtime_directory: &Path,
-    tmux_socket: &Path,
 ) -> Result<BundleStartupReport, RelayError> {
     let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
     let _authorization = load_authorization_context(configuration_root, &bundle)?;
-    startup_loaded_bundle(&bundle, runtime_directory, tmux_socket)
+    let tmux_socket = tmux_socket_path_for_runtime_directory(runtime_directory);
+    startup_loaded_bundle(&bundle, runtime_directory, tmux_socket.as_path())
 }
 
 fn reconcile_loaded_bundle(
