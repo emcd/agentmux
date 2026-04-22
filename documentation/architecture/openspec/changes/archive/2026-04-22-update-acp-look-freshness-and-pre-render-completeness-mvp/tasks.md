@@ -1,21 +1,21 @@
 ## 1. Spec Relock
 
-- [ ] 1.1 Update `session-relay` look contract to discriminated payload format:
+- [x] 1.1 Update `session-relay` look contract to discriminated payload format:
   tmux lines + ACP structured entries.
-- [ ] 1.2 Lock deterministic replay ingestion/write order (`session/load`
+- [x] 1.2 Lock deterministic replay ingestion/write order (`session/load`
   replace baseline + live append) and retention behavior.
-- [ ] 1.3 Lock deterministic freshness predicate order and authoritative age
+- [x] 1.3 Lock deterministic freshness predicate order and authoritative age
   source precedence.
-- [ ] 1.4 Lock compatibility posture:
+- [x] 1.4 Lock compatibility posture:
   - tmux shape unchanged,
   - ACP shape intentionally changed pre-MVP,
   - additive freshness fields preserved for ACP.
-- [ ] 1.5 Lock replace-on-first-successful-structured-load compatibility
+- [x] 1.5 Lock replace-on-first-successful-structured-load compatibility
   handoff where legacy flattened ACP snapshots are ignored until canonical
   structured baseline replacement.
 - [x] 1.6 Update MCP look contract to preserve relay structured ACP payloads
   unchanged (no parsing/transforms).
-- [ ] 1.7 Update CLI look contract to preserve relay structured ACP payloads
+- [x] 1.7 Update CLI look contract to preserve relay structured ACP payloads
   unchanged in machine output.
 
 ## 2. Implementation Follow-up (post-approval)
