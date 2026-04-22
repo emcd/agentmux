@@ -12,16 +12,12 @@ readme = "README.md"
 keywords = ["agent", "mcp", "cli", "tmux", "coordination"]
 categories = ["command-line-utilities", "development-tools"]
 include = [
-    "src/**",
-    "data/configuration/*.toml",
-    "Cargo.toml",
-    "Cargo.lock",
-    "README.md",
-    "LICENSE",
-    "!.auxiliary/**",
-    "!.opencode/**",
-    "!documentation/**",
-    "!tests/**",
+    "/src/**",
+    "/data/configuration/*.toml",
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/README.md",
+    "/LICENSE",
 ]
 
 [dependencies]
