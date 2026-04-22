@@ -47,12 +47,14 @@
     "build": {
       "mode": "primary",
       // "model": "zai-coding-plan/glm-4.7"
-      "model": "deepseek/deepseek-chat"
+      //"model": "deepseek/deepseek-chat"
+      "model": "opencode/big-pickle"
     },
     "plan": {
       "mode": "primary",
       // "model": "zai-coding-plan/glm-4.7"
-      "model": "deepseek/deepseek-chat"
+      //"model": "deepseek/deepseek-chat"
+      "model": "opencode/big-pickle"
     }
   },
 
