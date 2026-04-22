@@ -4,7 +4,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use agentmux::relay::{RelayError, RelayResponse};
+use agentmux::relay::{LookSnapshotPayload, RelayError, RelayResponse};
 use agentmux::runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory};
 use serde_json::Value;
 use tempfile::TempDir;
@@ -41,11 +41,9 @@ fn look_returns_canonical_json_payload() {
             requester_session: "user".to_string(),
             target_session: "bravo".to_string(),
             captured_at: "2026-03-08T00:00:00Z".to_string(),
-            snapshot_lines: vec!["LOOK-A".to_string(), "LOOK-B".to_string()],
-            freshness: None,
-            snapshot_source: None,
-            stale_reason_code: None,
-            snapshot_age_ms: None,
+            snapshot: LookSnapshotPayload::Lines {
+                snapshot_lines: vec!["LOOK-A".to_string(), "LOOK-B".to_string()],
+            },
         },
         Arc::clone(&request_log),
     );
@@ -73,6 +71,7 @@ fn look_returns_canonical_json_payload() {
     assert_eq!(payload["requester_session"], "user");
     assert_eq!(payload["target_session"], "bravo");
     assert_eq!(payload["captured_at"], "2026-03-08T00:00:00Z");
+    assert_eq!(payload["snapshot_format"], "lines");
     assert_eq!(
         payload["snapshot_lines"],
         serde_json::json!(["LOOK-A", "LOOK-B"])
@@ -118,11 +117,13 @@ fn look_preserves_additive_acp_freshness_fields_in_machine_output() {
             requester_session: "user".to_string(),
             target_session: "bravo".to_string(),
             captured_at: "2026-03-08T00:00:00Z".to_string(),
-            snapshot_lines: vec![],
-            freshness: Some(agentmux::relay::AcpLookFreshness::Stale),
-            snapshot_source: Some(agentmux::relay::AcpLookSnapshotSource::None),
-            stale_reason_code: Some("acp_snapshot_prime_timeout".to_string()),
-            snapshot_age_ms: None,
+            snapshot: LookSnapshotPayload::AcpEntriesV1 {
+                snapshot_entries: vec![],
+                freshness: agentmux::relay::AcpLookFreshness::Stale,
+                snapshot_source: agentmux::relay::AcpLookSnapshotSource::None,
+                stale_reason_code: Some("acp_snapshot_prime_timeout".to_string()),
+                snapshot_age_ms: None,
+            },
         },
         Arc::new(Mutex::new(Vec::<Value>::new())),
     );
@@ -145,6 +146,8 @@ fn look_preserves_additive_acp_freshness_fields_in_machine_output() {
 
     assert!(output.status.success(), "command should succeed");
     let payload: Value = serde_json::from_slice(&output.stdout).expect("decode look json payload");
+    assert_eq!(payload["snapshot_format"], "acp_entries_v1");
+    assert_eq!(payload["snapshot_entries"], serde_json::json!([]));
     assert_eq!(payload["freshness"], "stale");
     assert_eq!(payload["snapshot_source"], "none");
     assert_eq!(payload["stale_reason_code"], "acp_snapshot_prime_timeout");

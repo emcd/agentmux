@@ -64,8 +64,9 @@ to typed structured entries while keeping tmux payload shape unchanged.
 - Decision: no separate offline migration is required for legacy flattened ACP
   snapshot state.
   - compatibility handoff is replace-on-first-successful-structured-load:
-    first successful new-path `session/load` atomically replaces legacy baseline
-    with canonical structured entries.
+    legacy flattened lines are ignored for look responses until first successful
+    new-path `session/load` atomically replaces legacy baseline with canonical
+    structured entries.
 
 ## Risks / Trade-offs
 

@@ -16,6 +16,7 @@ async fn look_returns_snapshot_payload_and_forwards_request_shape() {
                     "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
                     "target_session": request.get("target_session").cloned().unwrap_or(Value::Null),
                     "captured_at": "2026-03-10T00:00:00Z",
+                    "snapshot_format": "lines",
                     "snapshot_lines": ["LOOK-A", "LOOK-B", "LOOK-C"],
                 }),
                 _ => json!({
@@ -47,6 +48,7 @@ async fn look_returns_snapshot_payload_and_forwards_request_shape() {
     assert_eq!(payload["bundle_name"], BUNDLE_NAME);
     assert_eq!(payload["requester_session"], SENDER_SESSION);
     assert_eq!(payload["target_session"], "bravo");
+    assert_eq!(payload["snapshot_format"], "lines");
     assert_eq!(
         payload["snapshot_lines"],
         Value::Array(vec![
@@ -82,7 +84,8 @@ async fn look_preserves_additive_acp_freshness_fields() {
                     "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
                     "target_session": request.get("target_session").cloned().unwrap_or(Value::Null),
                     "captured_at": "2026-03-10T00:00:00Z",
-                    "snapshot_lines": [],
+                    "snapshot_format": "acp_entries_v1",
+                    "snapshot_entries": [],
                     "freshness": "stale",
                     "snapshot_source": "none",
                     "stale_reason_code": "acp_snapshot_prime_timeout",
@@ -107,6 +110,8 @@ async fn look_preserves_additive_acp_freshness_fields() {
     let response = harness.call_tool(2, "look", arguments).await;
     let payload = decode_tool_payload(&response);
 
+    assert_eq!(payload["snapshot_format"], "acp_entries_v1");
+    assert_eq!(payload["snapshot_entries"], json!([]));
     assert_eq!(payload["freshness"], "stale");
     assert_eq!(payload["snapshot_source"], "none");
     assert_eq!(payload["stale_reason_code"], "acp_snapshot_prime_timeout");

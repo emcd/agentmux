@@ -24,8 +24,8 @@ use crate::configuration::{
 };
 use crate::relay::{
     ChatDeliveryMode, ListedBundle, ListedBundleState, ListedSession, ListedSessionTransport,
-    RelayError, RelayRequest, RelayResponse, RelayStreamClientClass, RelayStreamSession,
-    load_startup_failures, request_relay,
+    LookSnapshotPayload, RelayError, RelayRequest, RelayResponse, RelayStreamClientClass,
+    RelayStreamSession, load_startup_failures, request_relay,
 };
 use crate::runtime::error::RuntimeError;
 use crate::runtime::inscriptions::emit_inscription;
@@ -412,11 +412,7 @@ impl McpServer {
                 requester_session,
                 target_session,
                 captured_at,
-                snapshot_lines,
-                freshness,
-                snapshot_source,
-                stale_reason_code,
-                snapshot_age_ms,
+                snapshot,
             }) => {
                 let mut response_map = serde_json::Map::new();
                 response_map.insert("schema_version".to_string(), Value::String(schema_version));
@@ -427,19 +423,36 @@ impl McpServer {
                 );
                 response_map.insert("target_session".to_string(), Value::String(target_session));
                 response_map.insert("captured_at".to_string(), Value::String(captured_at));
-                response_map.insert("snapshot_lines".to_string(), json!(snapshot_lines));
-                if let Some(value) = freshness {
-                    response_map.insert("freshness".to_string(), json!(value));
-                }
-                if let Some(value) = snapshot_source {
-                    response_map.insert("snapshot_source".to_string(), json!(value));
-                }
-                if let Some(value) = stale_reason_code {
-                    response_map.insert("stale_reason_code".to_string(), Value::String(value));
-                }
-                if let Some(value) = snapshot_age_ms {
-                    response_map.insert("snapshot_age_ms".to_string(), json!(value));
-                }
+                let snapshot_count = match snapshot {
+                    LookSnapshotPayload::Lines { snapshot_lines } => {
+                        let count = snapshot_lines.len();
+                        response_map.insert("snapshot_format".to_string(), json!("lines"));
+                        response_map.insert("snapshot_lines".to_string(), json!(snapshot_lines));
+                        count
+                    }
+                    LookSnapshotPayload::AcpEntriesV1 {
+                        snapshot_entries,
+                        freshness,
+                        snapshot_source,
+                        stale_reason_code,
+                        snapshot_age_ms,
+                    } => {
+                        let count = snapshot_entries.len();
+                        response_map.insert("snapshot_format".to_string(), json!("acp_entries_v1"));
+                        response_map
+                            .insert("snapshot_entries".to_string(), json!(snapshot_entries));
+                        response_map.insert("freshness".to_string(), json!(freshness));
+                        response_map.insert("snapshot_source".to_string(), json!(snapshot_source));
+                        if let Some(value) = stale_reason_code {
+                            response_map
+                                .insert("stale_reason_code".to_string(), Value::String(value));
+                        }
+                        if let Some(value) = snapshot_age_ms {
+                            response_map.insert("snapshot_age_ms".to_string(), json!(value));
+                        }
+                        count
+                    }
+                };
                 let response = Value::Object(response_map);
                 emit_inscription(
                     "mcp.tool.look.success",
@@ -447,7 +460,8 @@ impl McpServer {
                         "bundle_name": response["bundle_name"],
                         "requester_session": response["requester_session"],
                         "target_session": response["target_session"],
-                        "snapshot_line_count": response["snapshot_lines"].as_array().map_or(0, |value| value.len()),
+                        "snapshot_format": response["snapshot_format"],
+                        "snapshot_count": snapshot_count,
                     }),
                 );
                 Ok(CallToolResult::success(vec![Content::json(response)?]))

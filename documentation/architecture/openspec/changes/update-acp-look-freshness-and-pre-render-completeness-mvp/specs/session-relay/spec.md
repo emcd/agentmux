@@ -31,8 +31,8 @@ Canonical ACP snapshot entry vocabulary SHALL be:
 Relay SHALL NOT inject ANSI/control sequences into ACP snapshot entries.
 
 Legacy compatibility handoff behavior SHALL be:
-- legacy flattened snapshot lines remain readable until first successful
-  new-path `session/load`,
+- legacy flattened snapshot lines are ignored by look responses until first
+  successful new-path `session/load`,
 - first successful new-path `session/load` atomically replaces legacy baseline
   with canonical ACP snapshot entries,
 - relay SHALL NOT keep mixed legacy/new composition after replacement.
@@ -60,7 +60,10 @@ Legacy compatibility handoff behavior SHALL be:
 #### Scenario: Replace legacy flattened baseline on first successful structured load
 
 - **WHEN** persisted snapshot contains legacy flattened lines
-- **AND** first successful new-path `session/load` is ingested
+- **AND** no successful new-path `session/load` has occurred yet
+- **THEN** look responses ignore legacy flattened lines
+- **AND** MAY return empty ACP snapshot entries
+- **WHEN** first successful new-path `session/load` is ingested
 - **THEN** relay replaces persisted snapshot with canonical ACP entry baseline
 - **AND** subsequent look responses use canonical ACP entries only
 

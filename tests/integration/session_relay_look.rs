@@ -6,7 +6,7 @@ use std::{
 };
 
 use agentmux::{
-    relay::{RelayRequest, RelayResponse, handle_request},
+    relay::{LookSnapshotPayload, RelayRequest, RelayResponse, handle_request},
     runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory},
 };
 use tempfile::TempDir;
@@ -191,7 +191,11 @@ fn relay_look_returns_oldest_to_newest_snapshot_lines() {
         &paths.runtime_directory,
     )
     .expect("look response");
-    let RelayResponse::Look { snapshot_lines, .. } = response else {
+    let RelayResponse::Look {
+        snapshot: LookSnapshotPayload::Lines { snapshot_lines },
+        ..
+    } = response
+    else {
         panic!("expected look response");
     };
     assert_eq!(snapshot_lines, vec!["LOOK-A", "LOOK-B", "LOOK-C"]);
@@ -242,7 +246,9 @@ fn relay_look_allows_optional_or_matching_bundle_and_applies_default_lines() {
     )
     .expect("look response");
     let RelayResponse::Look {
-        snapshot_lines: omitted_lines,
+        snapshot: LookSnapshotPayload::Lines {
+            snapshot_lines: omitted_lines,
+        },
         ..
     } = omitted_bundle
     else {
@@ -262,7 +268,9 @@ fn relay_look_allows_optional_or_matching_bundle_and_applies_default_lines() {
     )
     .expect("look response");
     let RelayResponse::Look {
-        snapshot_lines: matching_lines,
+        snapshot: LookSnapshotPayload::Lines {
+            snapshot_lines: matching_lines,
+        },
         ..
     } = matching_bundle
     else {
@@ -282,7 +290,10 @@ fn relay_look_allows_optional_or_matching_bundle_and_applies_default_lines() {
     )
     .expect("look response");
     let RelayResponse::Look {
-        snapshot_lines: explicit_default_lines,
+        snapshot:
+            LookSnapshotPayload::Lines {
+                snapshot_lines: explicit_default_lines,
+            },
         ..
     } = explicit_default
     else {

@@ -22,6 +22,7 @@ const ACP_PROMPT_POST_RESPONSE_DRAIN_TIMEOUT: Duration = Duration::from_millis(2
 
 type DispatchObserver<'a> = &'a mut dyn FnMut();
 type SnapshotObserver<'a> = &'a mut dyn FnMut(&[String]) -> Result<(), String>;
+type ReplayObserver<'a> = &'a mut dyn FnMut(&[ReplayEntry]) -> Result<(), String>;
 pub type PermissionHandler<'a> = &'a mut dyn FnMut(&PermissionRequest) -> Option<String>;
 
 struct RequestObservers<'a> {
@@ -29,6 +30,7 @@ struct RequestObservers<'a> {
     post_response_drain_timeout: Option<Duration>,
     on_dispatched: Option<DispatchObserver<'a>>,
     on_snapshot_lines: Option<SnapshotObserver<'a>>,
+    on_replay_entries: Option<ReplayObserver<'a>>,
     on_permission_request: Option<PermissionHandler<'a>>,
 }
 
@@ -136,6 +138,7 @@ impl AcpStdioClient {
                 post_response_drain_timeout: None,
                 on_dispatched: None,
                 on_snapshot_lines: None,
+                on_replay_entries: None,
                 on_permission_request: None,
             },
             None,
@@ -164,6 +167,7 @@ impl AcpStdioClient {
                     post_response_drain_timeout: Some(ACP_LOAD_POST_RESPONSE_DRAIN_TIMEOUT),
                     on_dispatched: None,
                     on_snapshot_lines: None,
+                    on_replay_entries: None,
                     on_permission_request: None,
                 },
                 None,
@@ -212,6 +216,7 @@ impl AcpStdioClient {
                     post_response_drain_timeout: Some(ACP_LOAD_POST_RESPONSE_DRAIN_TIMEOUT),
                     on_dispatched: None,
                     on_snapshot_lines: None,
+                    on_replay_entries: None,
                     on_permission_request: None,
                 },
                 Some(&mut replay_buffer),
@@ -236,7 +241,7 @@ impl AcpStdioClient {
         prompt: &str,
         timeout: Option<Duration>,
         on_dispatched: Option<DispatchObserver<'a>>,
-        on_snapshot_lines: Option<SnapshotObserver<'a>>,
+        on_replay_entries: Option<ReplayObserver<'a>>,
         on_permission_request: Option<PermissionHandler<'a>>,
     ) -> Result<AcpPromptCompletion, AcpRequestError> {
         let result = self.request(
@@ -255,7 +260,8 @@ impl AcpStdioClient {
                 prompt_session_id: Some(session_id.to_string()),
                 post_response_drain_timeout: Some(ACP_PROMPT_POST_RESPONSE_DRAIN_TIMEOUT),
                 on_dispatched,
-                on_snapshot_lines,
+                on_snapshot_lines: None,
+                on_replay_entries,
                 on_permission_request,
             },
             None,
@@ -347,15 +353,20 @@ impl AcpStdioClient {
                     observers.prompt_session_id.as_deref(),
                     &mut observers.on_snapshot_lines,
                 )?;
-                if let Some(buf) = replay_buffer.as_deref_mut() {
-                    self.capture_replay_from_value(&decoded, buf);
-                }
+                let observed_replay = self.capture_replay_from_value(
+                    &decoded,
+                    observers.prompt_session_id.as_deref(),
+                    &mut observers.on_replay_entries,
+                    replay_buffer.as_deref_mut(),
+                )?;
                 let observed_permission = self.handle_permission_request(
                     &decoded,
                     observers.prompt_session_id.as_deref(),
                     &mut observers.on_permission_request,
                 )?;
-                if (observed_update || observed_permission) && !first_activity_observed {
+                if (observed_update || observed_replay || observed_permission)
+                    && !first_activity_observed
+                {
                     first_activity_observed = true;
                     read_timeout = None;
                 }
@@ -372,6 +383,7 @@ impl AcpStdioClient {
                     observers.prompt_session_id.as_deref(),
                     drain_timeout,
                     &mut observers.on_snapshot_lines,
+                    &mut observers.on_replay_entries,
                     replay_buffer.as_deref_mut(),
                     &mut observers.on_permission_request,
                 )?
@@ -390,6 +402,7 @@ impl AcpStdioClient {
         session_id: Option<&str>,
         timeout: Duration,
         on_snapshot_lines: &mut Option<SnapshotObserver<'_>>,
+        on_replay_entries: &mut Option<ReplayObserver<'_>>,
         mut replay_buffer: Option<&mut Vec<ReplayEntry>>,
         on_permission_request: &mut Option<PermissionHandler<'_>>,
     ) -> Result<bool, AcpRequestError> {
@@ -403,12 +416,17 @@ impl AcpStdioClient {
                 Ok(value) => value,
                 Err(_) => continue,
             };
-            if let Some(buf) = replay_buffer.as_deref_mut() {
-                self.capture_replay_from_value(&decoded, buf);
-            }
-            if self.capture_update_snapshot_lines(&decoded, session_id, on_snapshot_lines)?
-                || self.handle_permission_request(&decoded, session_id, on_permission_request)?
-            {
+            let observed_update =
+                self.capture_update_snapshot_lines(&decoded, session_id, on_snapshot_lines)?;
+            let observed_replay = self.capture_replay_from_value(
+                &decoded,
+                session_id,
+                on_replay_entries,
+                replay_buffer.as_deref_mut(),
+            )?;
+            let observed_permission =
+                self.handle_permission_request(&decoded, session_id, on_permission_request)?;
+            if observed_update || observed_replay || observed_permission {
                 observed = true;
             }
         }
@@ -520,63 +538,32 @@ impl AcpStdioClient {
         Ok(true)
     }
 
-    fn capture_replay_from_value(&mut self, value: &Value, replay_buffer: &mut Vec<ReplayEntry>) {
+    fn capture_replay_from_value(
+        &mut self,
+        value: &Value,
+        session_id: Option<&str>,
+        on_replay_entries: &mut Option<ReplayObserver<'_>>,
+        replay_buffer: Option<&mut Vec<ReplayEntry>>,
+    ) -> Result<bool, AcpRequestError> {
         if value.get("method").and_then(Value::as_str) != Some("session/update") {
-            return;
+            return Ok(false);
         }
         let params = value.get("params").unwrap_or(&Value::Null);
-        let update_field = params.get("update").unwrap_or(&Value::Null);
-        let updates: Vec<&Value> = match update_field.as_array() {
-            Some(arr) => arr.iter().collect(),
-            None if !update_field.is_null() => vec![update_field],
-            None => return,
-        };
-        for update in updates {
-            let update_type = update
-                .get("sessionUpdate")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            match update_type {
-                "user_message_chunk" => {
-                    let lines = collect_text_lines_from_value(update);
-                    if !lines.is_empty() {
-                        replay_buffer.push(ReplayEntry::User(lines));
-                    }
-                }
-                "agent_message_chunk" => {
-                    let lines = collect_text_lines_from_value(update);
-                    if !lines.is_empty() {
-                        replay_buffer.push(ReplayEntry::Agent(lines));
-                    }
-                }
-                "agent_thought_chunk" => {
-                    let lines = collect_text_lines_from_value(update);
-                    if !lines.is_empty() {
-                        replay_buffer.push(ReplayEntry::Thinking(lines));
-                    }
-                }
-                "tool_call" => {
-                    let title = update
-                        .get("title")
-                        .and_then(Value::as_str)
-                        .unwrap_or("tool")
-                        .to_string();
-                    let status = update
-                        .get("status")
-                        .and_then(Value::as_str)
-                        .unwrap_or("pending")
-                        .to_string();
-                    replay_buffer.push(ReplayEntry::ToolCall { title, status });
-                }
-                "tool_call_update" => {
-                    let lines = collect_text_lines_from_value(update);
-                    if !lines.is_empty() {
-                        replay_buffer.push(ReplayEntry::ToolResult(lines));
-                    }
-                }
-                _ => {}
-            }
+        if let Some(expected_session_id) = session_id
+            && let Some(observed_session_id) = params.get("sessionId").and_then(Value::as_str)
+            && observed_session_id != expected_session_id
+        {
+            return Ok(false);
         }
+        let entries = parse_replay_entries_from_params(params);
+        if let Some(callback) = on_replay_entries.as_mut() {
+            callback(entries.as_slice()).map_err(AcpRequestError::Failed)?;
+        }
+        if let Some(storage) = replay_buffer {
+            storage.extend(entries.iter().cloned());
+        }
+        self.replay_buffer.extend(entries);
+        Ok(true)
     }
 
     fn read_response_line(&mut self, timeout: Option<Duration>) -> Result<String, AcpRequestError> {
@@ -642,6 +629,55 @@ impl AcpStdioClient {
             }
         }
     }
+}
+
+fn parse_replay_entries_from_params(params: &Value) -> Vec<ReplayEntry> {
+    let update_field = params.get("update").unwrap_or(&Value::Null);
+    let updates: Vec<&Value> = match update_field.as_array() {
+        Some(arr) => arr.iter().collect(),
+        None if !update_field.is_null() => vec![update_field],
+        None => return Vec::new(),
+    };
+    let mut entries = Vec::with_capacity(updates.len());
+    for update in updates {
+        let update_kind = update
+            .get("sessionUpdate")
+            .and_then(Value::as_str)
+            .or_else(|| update.get("type").and_then(Value::as_str))
+            .unwrap_or("unknown")
+            .to_string();
+        match update_kind.as_str() {
+            "user_message_chunk" => {
+                let lines = collect_text_lines_from_value(update);
+                if !lines.is_empty() {
+                    entries.push(ReplayEntry::User { lines });
+                }
+            }
+            "agent_message_chunk" => {
+                let lines = collect_text_lines_from_value(update);
+                if !lines.is_empty() {
+                    entries.push(ReplayEntry::Agent { lines });
+                }
+            }
+            "agent_thought_chunk" => {
+                let lines = collect_text_lines_from_value(update);
+                if !lines.is_empty() {
+                    entries.push(ReplayEntry::Cognition { lines });
+                }
+            }
+            "tool_call" => entries.push(ReplayEntry::Invocation {
+                invocation: update.clone(),
+            }),
+            "tool_call_update" => entries.push(ReplayEntry::Result {
+                result: update.clone(),
+            }),
+            _ => entries.push(ReplayEntry::Update {
+                update_kind,
+                lines: collect_text_lines_from_value(update),
+            }),
+        }
+    }
+    entries
 }
 
 impl Drop for AcpStdioClient {

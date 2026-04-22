@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
+    acp::AcpSnapshotEntry,
     configuration::{
         BundleConfiguration, ConfigurationError, load_bundle_configuration, load_policy_ids,
         load_tui_configuration,
@@ -92,6 +93,24 @@ pub enum AcpLookFreshness {
 pub enum AcpLookSnapshotSource {
     LiveBuffer,
     None,
+}
+
+/// Snapshot payload variant for look responses.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(tag = "snapshot_format", rename_all = "snake_case")]
+pub enum LookSnapshotPayload {
+    Lines {
+        snapshot_lines: Vec<String>,
+    },
+    AcpEntriesV1 {
+        snapshot_entries: Vec<AcpSnapshotEntry>,
+        freshness: AcpLookFreshness,
+        snapshot_source: AcpLookSnapshotSource,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        stale_reason_code: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        snapshot_age_ms: Option<u64>,
+    },
 }
 
 /// One persisted startup-failure record surfaced in list-sessions payloads.
@@ -344,15 +363,8 @@ pub enum RelayResponse {
         requester_session: String,
         target_session: String,
         captured_at: String,
-        snapshot_lines: Vec<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        freshness: Option<AcpLookFreshness>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        snapshot_source: Option<AcpLookSnapshotSource>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        stale_reason_code: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        snapshot_age_ms: Option<u64>,
+        #[serde(flatten)]
+        snapshot: LookSnapshotPayload,
     },
     Error {
         error: RelayError,

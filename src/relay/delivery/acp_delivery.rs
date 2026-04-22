@@ -3,14 +3,14 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use crate::{
-    acp::ReplayEntry,
+    acp::{AcpSnapshotEntry, ReplayEntry, replay_entries_to_snapshot_entries},
     configuration::{AcpTargetConfiguration, BundleMember, TargetConfiguration},
 };
 
 use super::acp_client::{AcpRequestError, AcpStdioClient};
 use super::acp_state::{
-    AcpWorkerReadinessState, load_persisted_acp_session_id, persist_acp_session_id,
-    persist_acp_snapshot_lines, persist_acp_worker_state, replace_acp_snapshot_lines,
+    AcpWorkerReadinessState, append_acp_snapshot_entries, load_persisted_acp_session_id,
+    persist_acp_session_id, persist_acp_worker_state, replace_acp_snapshot_entries_from_load,
 };
 use super::results::{
     delivered_in_progress_result, delivered_result, failed_result, failed_result_with_code,
@@ -43,6 +43,8 @@ struct AcpCapabilities {
 pub(super) struct PersistentAcpWorkerRuntime {
     pub client: AcpStdioClient,
     pub session_id: String,
+    pub loaded_existing_session: bool,
+    pub bootstrap_load_entries: Vec<ReplayEntry>,
 }
 
 pub(super) fn bootstrap_acp_worker_runtime(
@@ -85,20 +87,22 @@ pub(super) fn bootstrap_acp_worker_runtime(
         format!("{code}: {reason}")
     })?;
 
-    let replay_entries = runtime.client.take_replay_entries();
-    let mut refreshed_lines = runtime.client.take_snapshot_lines();
-    if refreshed_lines.is_empty() {
-        refreshed_lines = replay_entries_to_snapshot_lines(replay_entries);
-    }
-    if !refreshed_lines.is_empty() {
-        replace_acp_snapshot_lines(
+    if runtime.loaded_existing_session {
+        let mut refreshed_entries =
+            replay_entries_to_snapshot_entries(runtime.bootstrap_load_entries.as_slice());
+        if refreshed_entries.is_empty() {
+            let refreshed_lines = runtime.client.take_snapshot_lines();
+            refreshed_entries = text_lines_to_update_entries(refreshed_lines.as_slice());
+        }
+        replace_acp_snapshot_entries_from_load(
             runtime_directory,
             target_session,
             runtime.session_id.as_str(),
-            refreshed_lines.as_slice(),
+            refreshed_entries.as_slice(),
         )
-        .map_err(|reason| format!("persist ACP bootstrap snapshot lines failed: {reason}"))?;
+        .map_err(|reason| format!("persist ACP bootstrap snapshot entries failed: {reason}"))?;
     }
+    runtime.bootstrap_load_entries.clear();
     persist_acp_worker_state(
         runtime_directory,
         target_session,
@@ -169,12 +173,13 @@ pub(super) fn deliver_one_target_acp(
                 message_id_for_dispatch.clone(),
             )));
         };
-        let mut on_snapshot_lines = |snapshot_lines: &[String]| -> Result<(), String> {
-            persist_acp_snapshot_lines(
+        let mut on_replay_entries = |replay_entries: &[ReplayEntry]| -> Result<(), String> {
+            let snapshot_entries = replay_entries_to_snapshot_entries(replay_entries);
+            append_acp_snapshot_entries(
                 runtime_directory,
                 target_member.id.as_str(),
                 session_id.as_str(),
-                snapshot_lines,
+                snapshot_entries.as_slice(),
             )
         };
         let prompt_result = runtime.client.prompt(
@@ -182,12 +187,11 @@ pub(super) fn deliver_one_target_acp(
             prompt.as_str(),
             turn_timeout,
             Some(&mut on_dispatched),
-            Some(&mut on_snapshot_lines),
+            Some(&mut on_replay_entries),
             None,
         );
-        // Drop any in-memory buffered lines now that updates are persisted
-        // incrementally while observed.
         let _ = runtime.client.take_snapshot_lines();
+        let _ = runtime.client.take_replay_entries();
         match prompt_result {
             Ok(prompt_completion) => {
                 first_activity_observed |= prompt_completion.first_activity_observed;
@@ -408,6 +412,7 @@ fn initialize_persistent_acp_worker_runtime(
             (AcpLifecycleSelection::NewSession, String::new())
         };
 
+    let mut bootstrap_load_entries = Vec::<ReplayEntry>::new();
     let session_id = match lifecycle {
         AcpLifecycleSelection::LoadSession => {
             if !capabilities.load_session {
@@ -423,27 +428,29 @@ fn initialize_persistent_acp_worker_runtime(
                     })),
                 )));
             }
-            if let Err(reason) =
-                client.load_session(lifecycle_session_id.as_str(), working_directory)
-            {
-                let _ = persist_acp_worker_state(
-                    runtime_directory,
-                    target_member.id.as_str(),
-                    Some(lifecycle_session_id.as_str()),
-                    AcpWorkerReadinessState::Unavailable,
-                );
-                return Err(Box::new(failed_result_with_code(
-                    target_session.to_string(),
-                    message_id.to_string(),
-                    ACP_ERROR_CODE_SESSION_LOAD_FAILED,
-                    "ACP session/load failed",
-                    Some(json!({
-                        "target_session": target_member.id,
-                        "session_id": lifecycle_session_id,
-                        "reason": reason,
-                    })),
-                )));
-            }
+            bootstrap_load_entries =
+                match client.load_session(lifecycle_session_id.as_str(), working_directory) {
+                    Ok(entries) => entries,
+                    Err(reason) => {
+                        let _ = persist_acp_worker_state(
+                            runtime_directory,
+                            target_member.id.as_str(),
+                            Some(lifecycle_session_id.as_str()),
+                            AcpWorkerReadinessState::Unavailable,
+                        );
+                        return Err(Box::new(failed_result_with_code(
+                            target_session.to_string(),
+                            message_id.to_string(),
+                            ACP_ERROR_CODE_SESSION_LOAD_FAILED,
+                            "ACP session/load failed",
+                            Some(json!({
+                                "target_session": target_member.id,
+                                "session_id": lifecycle_session_id,
+                                "reason": reason,
+                            })),
+                        )));
+                    }
+                };
             lifecycle_session_id
         }
         AcpLifecycleSelection::NewSession => match client.new_session(working_directory) {
@@ -495,21 +502,20 @@ fn initialize_persistent_acp_worker_runtime(
         )));
     }
 
-    Ok(PersistentAcpWorkerRuntime { client, session_id })
+    Ok(PersistentAcpWorkerRuntime {
+        client,
+        session_id,
+        loaded_existing_session: matches!(lifecycle, AcpLifecycleSelection::LoadSession),
+        bootstrap_load_entries,
+    })
 }
 
-fn replay_entries_to_snapshot_lines(entries: Vec<ReplayEntry>) -> Vec<String> {
-    let mut lines = Vec::new();
-    for entry in entries {
-        match entry {
-            ReplayEntry::User(value)
-            | ReplayEntry::Agent(value)
-            | ReplayEntry::Thinking(value)
-            | ReplayEntry::ToolResult(value) => lines.extend(value),
-            ReplayEntry::ToolCall { title, status } => {
-                lines.push(format!("{title} ({status})"));
-            }
-        }
-    }
+fn text_lines_to_update_entries(lines: &[String]) -> Vec<AcpSnapshotEntry> {
     lines
+        .iter()
+        .map(|line| AcpSnapshotEntry::Update {
+            update_kind: "text".to_string(),
+            lines: vec![line.clone()],
+        })
+        .collect()
 }

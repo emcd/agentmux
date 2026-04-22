@@ -19,7 +19,8 @@ activity) the way `agentmux-acp` does.
 - Relock MCP and CLI ACP look adapter behavior to preserve structured payloads
   unchanged and keep additive freshness fields.
 - Lock compatibility handoff from legacy flattened ACP snapshots to canonical
-  structured ACP snapshot entries.
+  structured ACP snapshot entries with legacy lines ignored for look responses
+  until first successful `session/load` replacement.
 
 ## Breaking Changes (pre-MVP intentional)
 

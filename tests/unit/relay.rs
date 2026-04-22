@@ -1,6 +1,6 @@
 use agentmux::relay::{
-    ChatDeliveryMode, ListedBundleState, ListedSessionTransport, RelayRequest, RelayResponse,
-    handle_request,
+    ChatDeliveryMode, ListedBundleState, ListedSessionTransport, LookSnapshotPayload, RelayRequest,
+    RelayResponse, handle_request,
 };
 use tempfile::TempDir;
 
@@ -748,10 +748,16 @@ fn look_returns_empty_snapshot_for_acp_target_without_recorded_updates() {
         &tmux_socket,
     )
     .expect("look should succeed");
-    let RelayResponse::Look { snapshot_lines, .. } = response else {
+    let RelayResponse::Look {
+        snapshot: LookSnapshotPayload::AcpEntriesV1 {
+            snapshot_entries, ..
+        },
+        ..
+    } = response
+    else {
         panic!("expected look response");
     };
-    assert!(snapshot_lines.is_empty());
+    assert!(snapshot_entries.is_empty());
 }
 
 #[test]

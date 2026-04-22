@@ -1,5 +1,6 @@
 use crate::{
-    relay::{RelayRequest, RelayResponse},
+    acp::snapshot_entries_to_plain_lines,
+    relay::{LookSnapshotPayload, RelayRequest, RelayResponse},
     runtime::error::RuntimeError,
 };
 
@@ -462,12 +463,18 @@ impl AppState {
             RelayResponse::Look {
                 target_session,
                 captured_at,
-                snapshot_lines,
+                snapshot,
                 ..
             } => {
+                let look_snapshot_lines = match snapshot {
+                    LookSnapshotPayload::Lines { snapshot_lines } => snapshot_lines,
+                    LookSnapshotPayload::AcpEntriesV1 {
+                        snapshot_entries, ..
+                    } => snapshot_entries_to_plain_lines(snapshot_entries.as_slice()),
+                };
                 self.look_target = Some(target_session.clone());
                 self.look_captured_at = Some(captured_at);
-                self.look_snapshot_lines = snapshot_lines;
+                self.look_snapshot_lines = look_snapshot_lines;
                 self.open_look_overlay();
                 self.push_status(None, format!("look captured target={target_session}"));
                 self.relay_stream_poll_error_reported = false;

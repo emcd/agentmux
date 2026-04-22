@@ -8,7 +8,7 @@ use crate::{
     configuration::{
         BundleConfiguration, BundleMember, TargetConfiguration, TmuxTargetConfiguration,
     },
-    relay::{AcpLookFreshness, AcpLookSnapshotSource},
+    relay::{AcpLookFreshness, AcpLookSnapshotSource, LookSnapshotPayload},
     runtime::{inscriptions::emit_inscription, paths::tmux_socket_path_for_runtime_directory},
 };
 
@@ -19,7 +19,7 @@ use super::authorization::{
 use super::delivery::{
     QuiescenceOptions, acp_session_ready_for_startup, aggregate_chat_status,
     await_acp_worker_prime_for_look, deliver_one_target, enqueue_async_delivery,
-    enqueue_sync_delivery, load_acp_snapshot_lines_for_look, prompt_batch_settings,
+    enqueue_sync_delivery, load_acp_snapshot_for_look, prompt_batch_settings,
 };
 use super::lifecycle::{reconcile_loaded_bundle_for_lifecycle, shutdown_bundle_runtime};
 use super::tmux::{capture_pane_tail_lines, resolve_active_pane_target};
@@ -665,67 +665,64 @@ fn handle_look(
         target.id.as_str(),
     )?;
 
-    let (snapshot_lines, freshness, snapshot_source, stale_reason_code, snapshot_age_ms) =
-        match &target.target {
-            crate::configuration::TargetConfiguration::Tmux(_) => {
-                let tmux_socket = tmux_socket_path_for_runtime_directory(runtime_directory);
-                let pane_target =
-                    resolve_active_pane_target(tmux_socket.as_path(), target.id.as_str()).map_err(
-                        |reason| {
-                            relay_error(
-                                "internal_unexpected_failure",
-                                "failed to resolve active pane for look target",
-                                Some(json!({"target_session": target.id, "cause": reason})),
-                            )
-                        },
-                    )?;
-                let snapshot_lines = capture_pane_tail_lines(
-                    tmux_socket.as_path(),
-                    pane_target.as_str(),
-                    requested_lines,
-                )
+    let snapshot = match &target.target {
+        crate::configuration::TargetConfiguration::Tmux(_) => {
+            let tmux_socket = tmux_socket_path_for_runtime_directory(runtime_directory);
+            let pane_target = resolve_active_pane_target(tmux_socket.as_path(), target.id.as_str())
                 .map_err(|reason| {
                     relay_error(
                         "internal_unexpected_failure",
-                        "failed to capture look snapshot",
+                        "failed to resolve active pane for look target",
                         Some(json!({"target_session": target.id, "cause": reason})),
                     )
                 })?;
-                (snapshot_lines, None, None, None, None)
-            }
-            crate::configuration::TargetConfiguration::Acp(_) => {
-                let prime_timed_out =
-                    await_acp_worker_prime_for_look(bundle, target, runtime_directory).map_err(
-                        |reason| {
-                            relay_error(
-                                "internal_unexpected_failure",
-                                "failed to await ACP worker prime for look",
-                                Some(json!({"target_session": target.id, "cause": reason})),
-                            )
-                        },
-                    )?;
-                let snapshot = load_acp_snapshot_lines_for_look(
-                    runtime_directory,
-                    target.id.as_str(),
-                    requested_lines,
-                    prime_timed_out,
+            let snapshot_lines = capture_pane_tail_lines(
+                tmux_socket.as_path(),
+                pane_target.as_str(),
+                requested_lines,
+            )
+            .map_err(|reason| {
+                relay_error(
+                    "internal_unexpected_failure",
+                    "failed to capture look snapshot",
+                    Some(json!({"target_session": target.id, "cause": reason})),
                 )
-                .map_err(|reason| {
-                    relay_error(
-                        "internal_unexpected_failure",
-                        "failed to load ACP look snapshot",
-                        Some(json!({"target_session": target.id, "cause": reason})),
-                    )
-                })?;
-                (
-                    snapshot.snapshot_lines,
-                    Some(snapshot.freshness),
-                    Some(snapshot.snapshot_source),
-                    snapshot.stale_reason_code,
-                    snapshot.snapshot_age_ms,
+            })?;
+            LookSnapshotPayload::Lines { snapshot_lines }
+        }
+        crate::configuration::TargetConfiguration::Acp(_) => {
+            let prime_timed_out =
+                await_acp_worker_prime_for_look(bundle, target, runtime_directory).map_err(
+                    |reason| {
+                        relay_error(
+                            "internal_unexpected_failure",
+                            "failed to await ACP worker prime for look",
+                            Some(json!({"target_session": target.id, "cause": reason})),
+                        )
+                    },
+                )?;
+            let snapshot = load_acp_snapshot_for_look(
+                runtime_directory,
+                target.id.as_str(),
+                requested_lines,
+                prime_timed_out,
+            )
+            .map_err(|reason| {
+                relay_error(
+                    "internal_unexpected_failure",
+                    "failed to load ACP look snapshot",
+                    Some(json!({"target_session": target.id, "cause": reason})),
                 )
+            })?;
+            LookSnapshotPayload::AcpEntriesV1 {
+                snapshot_entries: snapshot.snapshot_entries,
+                freshness: snapshot.freshness,
+                snapshot_source: snapshot.snapshot_source,
+                stale_reason_code: snapshot.stale_reason_code,
+                snapshot_age_ms: snapshot.snapshot_age_ms,
             }
-        };
+        }
+    };
     let response = RelayResponse::Look {
         schema_version: SCHEMA_VERSION.to_string(),
         bundle_name: bundle.bundle_name.clone(),
@@ -734,33 +731,47 @@ fn handle_look(
         captured_at: time::OffsetDateTime::now_utc()
             .format(&Rfc3339)
             .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string()),
-        snapshot_lines,
-        freshness,
-        snapshot_source,
-        stale_reason_code,
-        snapshot_age_ms,
+        snapshot,
     };
     if let RelayResponse::Look {
         bundle_name,
         requester_session,
         target_session,
-        snapshot_lines,
-        freshness,
-        snapshot_source,
-        stale_reason_code,
-        snapshot_age_ms,
+        snapshot,
         ..
     } = &response
     {
-        let freshness_label = match freshness {
-            Some(AcpLookFreshness::Fresh) => Some("fresh"),
-            Some(AcpLookFreshness::Stale) => Some("stale"),
-            None => None,
-        };
-        let snapshot_source_label = match snapshot_source {
-            Some(AcpLookSnapshotSource::LiveBuffer) => Some("live_buffer"),
-            Some(AcpLookSnapshotSource::None) => Some("none"),
-            None => None,
+        let (
+            snapshot_format,
+            snapshot_count,
+            freshness_label,
+            snapshot_source_label,
+            stale_reason_code,
+            snapshot_age_ms,
+        ) = match snapshot {
+            LookSnapshotPayload::Lines { snapshot_lines } => {
+                ("lines", snapshot_lines.len(), None, None, None, None)
+            }
+            LookSnapshotPayload::AcpEntriesV1 {
+                snapshot_entries,
+                freshness,
+                snapshot_source,
+                stale_reason_code,
+                snapshot_age_ms,
+            } => (
+                "acp_entries_v1",
+                snapshot_entries.len(),
+                Some(match freshness {
+                    AcpLookFreshness::Fresh => "fresh",
+                    AcpLookFreshness::Stale => "stale",
+                }),
+                Some(match snapshot_source {
+                    AcpLookSnapshotSource::LiveBuffer => "live_buffer",
+                    AcpLookSnapshotSource::None => "none",
+                }),
+                stale_reason_code.as_deref(),
+                *snapshot_age_ms,
+            ),
         };
         emit_inscription(
             "relay.look.response",
@@ -768,7 +779,8 @@ fn handle_look(
                 "bundle_name": bundle_name,
                 "requester_session": requester_session,
                 "target_session": target_session,
-                "snapshot_line_count": snapshot_lines.len(),
+                "snapshot_format": snapshot_format,
+                "snapshot_count": snapshot_count,
                 "lines_requested": requested_lines,
                 "freshness": freshness_label,
                 "snapshot_source": snapshot_source_label,

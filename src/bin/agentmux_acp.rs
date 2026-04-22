@@ -115,25 +115,34 @@ fn replay_entries_to_messages(entries: Vec<ReplayEntry>) -> Vec<Message> {
     entries
         .into_iter()
         .map(|entry| match entry {
-            ReplayEntry::User(lines) => Message {
+            ReplayEntry::User { lines } => Message {
                 role: MessageRole::User,
                 text: lines.join("\n"),
             },
-            ReplayEntry::Agent(lines) => Message {
+            ReplayEntry::Agent { lines } => Message {
                 role: MessageRole::Assistant,
                 text: lines.join("\n"),
             },
-            ReplayEntry::Thinking(lines) => Message {
+            ReplayEntry::Cognition { lines } => Message {
                 role: MessageRole::Thinking,
                 text: lines.join("\n"),
             },
-            ReplayEntry::ToolCall { title, status } => Message {
+            ReplayEntry::Invocation { invocation } => Message {
                 role: MessageRole::ToolCall,
-                text: format!("{title} ({status})"),
+                text: serde_json::to_string_pretty(&invocation)
+                    .unwrap_or_else(|_| invocation.to_string()),
             },
-            ReplayEntry::ToolResult(lines) => Message {
+            ReplayEntry::Result { result } => Message {
                 role: MessageRole::ToolResult,
-                text: lines.join("\n"),
+                text: serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string()),
+            },
+            ReplayEntry::Update { update_kind, lines } => Message {
+                role: MessageRole::System,
+                text: if lines.is_empty() {
+                    format!("update: {update_kind}")
+                } else {
+                    format!("{update_kind}\n{}", lines.join("\n"))
+                },
             },
         })
         .collect()
