@@ -7,6 +7,7 @@ use std::{
 use ratatui::widgets::ListState;
 
 use crate::{
+    acp::AcpSnapshotEntry,
     relay::{RelayError, RelayStreamClientClass, RelayStreamSession},
     runtime::error::RuntimeError,
 };
@@ -37,6 +38,12 @@ pub(crate) struct ChatHistoryEntry {
     pub peer_session: String,
     pub body: String,
     pub message_id: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LookSnapshotFormat {
+    Lines,
+    AcpEntriesV1,
 }
 
 #[derive(Clone, Debug)]
@@ -88,7 +95,10 @@ pub(crate) struct AppState {
     message_cursor_preferred_column: Option<usize>,
     pub look_target: Option<String>,
     pub look_captured_at: Option<String>,
+    pub look_snapshot_format: Option<LookSnapshotFormat>,
     pub look_snapshot_lines: Vec<String>,
+    pub look_snapshot_entries: Vec<AcpSnapshotEntry>,
+    pub look_overlay_scroll: usize,
     pub status_history: VecDeque<StatusEntry>,
     pub event_history: VecDeque<String>,
     pub chat_history: VecDeque<ChatHistoryEntry>,
@@ -141,7 +151,10 @@ impl AppState {
             message_cursor_preferred_column: None,
             look_target: None,
             look_captured_at: None,
+            look_snapshot_format: None,
             look_snapshot_lines: Vec::new(),
+            look_snapshot_entries: Vec::new(),
+            look_overlay_scroll: 0,
             status_history: VecDeque::from([StatusEntry {
                 code: None,
                 message: "Ready. Press F1 for help.".to_string(),

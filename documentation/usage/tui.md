@@ -12,7 +12,7 @@ agentmux tui
 Optional session selector:
 
 ```bash
-agentmux tui --session user
+agentmux tui --as-session user
 ```
 
 Startup behavior:

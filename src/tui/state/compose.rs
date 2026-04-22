@@ -1,11 +1,10 @@
 use crate::{
-    acp::snapshot_entries_to_plain_lines,
     relay::{LookSnapshotPayload, RelayRequest, RelayResponse},
     runtime::error::RuntimeError,
 };
 
 use super::{
-    AppState, FocusField, ToCompletionState, append_recipient_token,
+    AppState, FocusField, LookSnapshotFormat, ToCompletionState, append_recipient_token,
     current_recipient_token_context, map_relay_error, matching_recipient_candidates,
 };
 
@@ -51,6 +50,7 @@ impl AppState {
     pub fn open_look_overlay(&mut self) {
         self.look_overlay_restore_picker_on_close = self.picker_open;
         self.look_overlay_open = true;
+        self.look_overlay_scroll = 0;
         self.picker_open = false;
         self.events_overlay_open = false;
         self.help_overlay_open = false;
@@ -63,6 +63,22 @@ impl AppState {
         if restore_picker {
             self.open_picker();
         }
+    }
+
+    pub fn scroll_look_overlay_up(&mut self) {
+        self.look_overlay_scroll = self.look_overlay_scroll.saturating_add(1);
+    }
+
+    pub fn scroll_look_overlay_down(&mut self) {
+        self.look_overlay_scroll = self.look_overlay_scroll.saturating_sub(1);
+    }
+
+    pub fn scroll_look_overlay_page_up(&mut self) {
+        self.look_overlay_scroll = self.look_overlay_scroll.saturating_add(10);
+    }
+
+    pub fn scroll_look_overlay_page_down(&mut self) {
+        self.look_overlay_scroll = self.look_overlay_scroll.saturating_sub(10);
     }
 
     pub fn toggle_help_overlay(&mut self) {
@@ -466,15 +482,13 @@ impl AppState {
                 snapshot,
                 ..
             } => {
-                let look_snapshot_lines = match snapshot {
-                    LookSnapshotPayload::Lines { snapshot_lines } => snapshot_lines,
-                    LookSnapshotPayload::AcpEntriesV1 {
-                        snapshot_entries, ..
-                    } => snapshot_entries_to_plain_lines(snapshot_entries.as_slice()),
-                };
+                let (look_snapshot_format, look_snapshot_lines, look_snapshot_entries) =
+                    overlay_snapshot_from_payload(snapshot);
                 self.look_target = Some(target_session.clone());
                 self.look_captured_at = Some(captured_at);
+                self.look_snapshot_format = Some(look_snapshot_format);
                 self.look_snapshot_lines = look_snapshot_lines;
+                self.look_snapshot_entries = look_snapshot_entries;
                 self.open_look_overlay();
                 self.push_status(None, format!("look captured target={target_session}"));
                 self.relay_stream_poll_error_reported = false;
@@ -573,4 +587,25 @@ fn cursor_index_for_line_column(
             .nth(clamped_column)
             .map(|(index, _)| index)
             .unwrap_or(0)
+}
+
+fn overlay_snapshot_from_payload(
+    snapshot: LookSnapshotPayload,
+) -> (
+    LookSnapshotFormat,
+    Vec<String>,
+    Vec<crate::acp::AcpSnapshotEntry>,
+) {
+    match snapshot {
+        LookSnapshotPayload::Lines { snapshot_lines } => {
+            (LookSnapshotFormat::Lines, snapshot_lines, Vec::new())
+        }
+        LookSnapshotPayload::AcpEntriesV1 {
+            snapshot_entries, ..
+        } => (
+            LookSnapshotFormat::AcpEntriesV1,
+            Vec::new(),
+            snapshot_entries,
+        ),
+    }
 }

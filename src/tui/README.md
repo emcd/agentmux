@@ -47,6 +47,10 @@ User-facing usage details and keybindings are documented under
   - recipient picker,
   - delivery events,
   - look snapshot,
+- look snapshot rendering:
+  - tmux targets: line snapshot rendering (`snapshot_lines`),
+  - ACP targets: structured entry rendering by canonical kinds
+    (`user`, `agent`, `cognition`, `invocation`, `result`, `update`),
 - chat history viewport for sent/received messages,
 - send workflow via relay `chat`,
 - look workflow via relay `look`,

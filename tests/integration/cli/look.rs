@@ -4,6 +4,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use agentmux::acp::AcpSnapshotEntry;
 use agentmux::relay::{LookSnapshotPayload, RelayError, RelayResponse};
 use agentmux::runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory};
 use serde_json::Value;
@@ -151,6 +152,95 @@ fn look_preserves_additive_acp_freshness_fields_in_machine_output() {
     assert_eq!(payload["freshness"], "stale");
     assert_eq!(payload["snapshot_source"], "none");
     assert_eq!(payload["stale_reason_code"], "acp_snapshot_prime_timeout");
+}
+
+#[test]
+fn look_preserves_structured_acp_entries_in_machine_output() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration(&config_root, "agentmux", Some(&["dev"]), &["tui", "bravo"]);
+    write_tui_configuration(
+        &config_root,
+        Some("agentmux"),
+        Some("user"),
+        &[("user", "default", Some("Operator"))],
+    );
+
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux").expect("bundle paths");
+    ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
+    let workspace_root = temporary.path().join("workspace");
+    fs::create_dir_all(&workspace_root).expect("create workspace");
+    let snapshot_entries = vec![
+        AcpSnapshotEntry::User {
+            lines: vec!["hello".to_string()],
+        },
+        AcpSnapshotEntry::Agent {
+            lines: vec!["world".to_string()],
+        },
+        AcpSnapshotEntry::Cognition {
+            lines: vec!["thinking".to_string()],
+        },
+        AcpSnapshotEntry::Invocation {
+            invocation: serde_json::json!({"tool": "search", "args": {"q": "agentmux"}}),
+        },
+        AcpSnapshotEntry::Result {
+            result: serde_json::json!({"ok": true}),
+        },
+        AcpSnapshotEntry::Update {
+            update_kind: "custom_update".to_string(),
+            lines: vec!["line-a".to_string(), "line-b".to_string()],
+        },
+    ];
+    let relay_thread = spawn_fake_relay_once(
+        &bundle_paths.relay_socket,
+        RelayResponse::Look {
+            schema_version: "1".to_string(),
+            bundle_name: "agentmux".to_string(),
+            requester_session: "user".to_string(),
+            target_session: "bravo".to_string(),
+            captured_at: "2026-03-08T00:00:00Z".to_string(),
+            snapshot: LookSnapshotPayload::AcpEntriesV1 {
+                snapshot_entries: snapshot_entries.clone(),
+                freshness: agentmux::relay::AcpLookFreshness::Fresh,
+                snapshot_source: agentmux::relay::AcpLookSnapshotSource::LiveBuffer,
+                stale_reason_code: None,
+                snapshot_age_ms: Some(17),
+            },
+        },
+        Arc::new(Mutex::new(Vec::<Value>::new())),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .current_dir(&workspace_root)
+        .args([
+            "look",
+            "bravo",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .output()
+        .expect("run agentmux look");
+    relay_thread.join().expect("join fake relay thread");
+
+    assert!(output.status.success(), "command should succeed");
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("decode look json payload");
+    assert_eq!(payload["snapshot_format"], "acp_entries_v1");
+    assert_eq!(payload["freshness"], "fresh");
+    assert_eq!(payload["snapshot_source"], "live_buffer");
+    assert_eq!(payload["snapshot_age_ms"], serde_json::json!(17));
+    assert_eq!(
+        payload["snapshot_entries"],
+        serde_json::to_value(snapshot_entries).expect("serialize snapshot entries")
+    );
 }
 
 #[test]

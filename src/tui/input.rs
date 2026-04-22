@@ -168,6 +168,10 @@ fn handle_events_overlay_key(state: &mut AppState, key: KeyEvent) -> Result<(), 
 fn handle_look_overlay_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
     match key.code {
         KeyCode::Esc => state.close_look_overlay(),
+        KeyCode::Up => state.scroll_look_overlay_up(),
+        KeyCode::Down => state.scroll_look_overlay_down(),
+        KeyCode::PageUp => state.scroll_look_overlay_page_up(),
+        KeyCode::PageDown => state.scroll_look_overlay_page_down(),
         KeyCode::F(2) => {
             state.close_look_overlay();
             state.open_picker();

@@ -5,8 +5,11 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
+use serde_json::Value;
 
-use super::state::{AppState, ChatHistoryDirection, FocusField, StatusEntry};
+use crate::acp::AcpSnapshotEntry;
+
+use super::state::{AppState, ChatHistoryDirection, FocusField, LookSnapshotFormat, StatusEntry};
 
 const WORKBENCH_MIN_CHAT_HEIGHT: u16 = 1;
 const WORKBENCH_MIN_COMPOSE_HEIGHT: u16 = 4;
@@ -231,7 +234,7 @@ fn render_chat_history(frame: &mut Frame, area: Rect, state: &mut AppState) {
 fn render_look_overlay(frame: &mut Frame, state: &AppState) {
     let popup = centered_rect(90, 80, frame.area());
     frame.render_widget(Clear, popup);
-    let title = match (&state.look_target, &state.look_captured_at) {
+    let base_title = match (&state.look_target, &state.look_captured_at) {
         (Some(target), Some(captured_at)) => {
             format!(
                 "Look Snapshot target={} captured_at={}",
@@ -241,19 +244,154 @@ fn render_look_overlay(frame: &mut Frame, state: &AppState) {
         (Some(target), None) => format!("Look Snapshot target={}", target),
         _ => "Look Snapshot".to_string(),
     };
-    let lines = if state.look_snapshot_lines.is_empty() {
-        vec![Line::from("(no snapshot captured)")]
+    let content_width = popup.width.saturating_sub(2) as usize;
+    let all_lines = match state.look_snapshot_format {
+        Some(LookSnapshotFormat::AcpEntriesV1) => {
+            let rendered =
+                render_acp_snapshot_entries(state.look_snapshot_entries.as_slice(), content_width);
+            if rendered.is_empty() {
+                vec![Line::from("(no snapshot captured)")]
+            } else {
+                rendered
+            }
+        }
+        _ => {
+            if state.look_snapshot_lines.is_empty() {
+                vec![Line::from("(no snapshot captured)")]
+            } else {
+                let mut lines = Vec::<Line>::new();
+                for line in &state.look_snapshot_lines {
+                    for wrapped in wrap_text(line, content_width.max(1)) {
+                        lines.push(Line::from(Span::raw(wrapped)));
+                    }
+                }
+                lines
+            }
+        }
+    };
+    let viewport_height = popup.height.saturating_sub(2) as usize;
+    let effective_scroll = if all_lines.is_empty() {
+        0
     } else {
         state
-            .look_snapshot_lines
-            .iter()
-            .map(|line| Line::from(Span::raw(line.clone())))
-            .collect::<Vec<_>>()
+            .look_overlay_scroll
+            .min(all_lines.len().saturating_sub(1))
     };
-    let paragraph = Paragraph::new(lines)
+    let end = all_lines.len().saturating_sub(effective_scroll);
+    let start = end.saturating_sub(viewport_height);
+    let visible_lines = all_lines[start..end].to_vec();
+    let title = if effective_scroll == 0 {
+        base_title
+    } else {
+        format!("{base_title} (scroll {effective_scroll})")
+    };
+    let paragraph = Paragraph::new(visible_lines)
         .wrap(Wrap { trim: false })
         .block(Block::default().borders(Borders::ALL).title(title));
     frame.render_widget(paragraph, popup);
+}
+
+fn render_acp_snapshot_entries(entries: &[AcpSnapshotEntry], width: usize) -> Vec<Line<'static>> {
+    let mut rendered = Vec::<Line<'static>>::new();
+    for entry in entries {
+        match entry {
+            AcpSnapshotEntry::User { lines } => {
+                push_labeled_lines(&mut rendered, "user", Color::Green, lines, width);
+            }
+            AcpSnapshotEntry::Agent { lines } => {
+                push_labeled_lines(&mut rendered, "agent", Color::Cyan, lines, width);
+            }
+            AcpSnapshotEntry::Cognition { lines } => {
+                push_labeled_lines(&mut rendered, "cognition", Color::Yellow, lines, width);
+            }
+            AcpSnapshotEntry::Invocation { invocation } => {
+                push_labeled_json(
+                    &mut rendered,
+                    "invocation",
+                    Color::Magenta,
+                    invocation,
+                    width,
+                );
+            }
+            AcpSnapshotEntry::Result { result } => {
+                push_labeled_json(&mut rendered, "result", Color::Blue, result, width);
+            }
+            AcpSnapshotEntry::Update { update_kind, lines } => {
+                let mut update_lines = vec![format!("kind: {update_kind}")];
+                update_lines.extend(lines.iter().cloned());
+                push_labeled_lines(&mut rendered, "update", Color::White, &update_lines, width);
+            }
+        }
+    }
+    rendered
+}
+
+fn push_labeled_json(
+    rendered: &mut Vec<Line<'static>>,
+    label: &str,
+    color: Color,
+    value: &Value,
+    width: usize,
+) {
+    let payload = serde_json::to_string_pretty(value)
+        .unwrap_or_else(|_| serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string()));
+    let lines = payload.lines().map(ToString::to_string).collect::<Vec<_>>();
+    push_labeled_lines(rendered, label, color, lines.as_slice(), width);
+}
+
+fn push_labeled_lines(
+    rendered: &mut Vec<Line<'static>>,
+    label: &str,
+    color: Color,
+    lines: &[String],
+    width: usize,
+) {
+    let label_style = Style::default().fg(color).add_modifier(Modifier::BOLD);
+    rendered.push(Line::from(Span::styled(format!("[{label}]"), label_style)));
+    let body_style = Style::default().fg(Color::White);
+    let body_width = width.saturating_sub(2).max(1);
+    if lines.is_empty() {
+        rendered.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled("(empty)", body_style),
+        ]));
+        rendered.push(Line::raw(""));
+        return;
+    }
+    for line in lines {
+        for wrapped in wrap_text(line, body_width) {
+            rendered.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(wrapped, body_style),
+            ]));
+        }
+    }
+    rendered.push(Line::raw(""));
+}
+
+fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    if width == 0 || text.is_empty() {
+        return vec![text.to_string()];
+    }
+    if text.chars().count() <= width {
+        return vec![text.to_string()];
+    }
+    let mut wrapped = Vec::<String>::new();
+    let mut current = String::new();
+    let mut current_width = 0usize;
+    for character in text.chars() {
+        if current_width >= width {
+            wrapped.push(current);
+            current = String::new();
+            current_width = 0;
+        }
+        current.push(character);
+        current_width += 1;
+    }
+    if !current.is_empty() {
+        wrapped.push(current);
+    }
+    wrapped
 }
 
 fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -367,6 +505,8 @@ fn render_help_overlay(frame: &mut Frame, _state: &AppState) {
         Line::from("Esc: Close look and return to picker"),
         Line::from("F2: Open picker"),
         Line::from("F3: Open events"),
+        Line::from("Up/Down: Scroll look snapshot"),
+        Line::from("PgUp/PgDn: Page look snapshot"),
         Line::from(""),
         Line::from(Span::styled(
             "Overlays",
