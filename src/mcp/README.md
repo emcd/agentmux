@@ -9,6 +9,9 @@ This module implements the MCP stdio server for `agentmux`.
   - `help`
   - `look`
   - `send`
+- Preserve canonical relay `look` success payloads without adapter reshaping:
+  - tmux: `snapshot_format="lines"` + `snapshot_lines`
+  - ACP: `snapshot_format="acp_entries_v1"` + `snapshot_entries` (+ freshness fields)
 - Validate MCP request payloads.
 - Forward valid requests to relay over the bundle Unix socket.
 - Preserve relay error taxonomy/details when relay returns structured errors.

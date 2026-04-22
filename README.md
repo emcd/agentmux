@@ -117,7 +117,7 @@ The MCP server advertises:
 
 - `help`: return tool/command help and JSON argument schemas.
 - `list`: meta-tool for session listing (`command="sessions"`).
-- `look`: capture a read-only session snapshot (`snapshot_lines`) from a target session.
+- `look`: capture a read-only session snapshot from a target session.
 - `send`: deliver to explicit targets or broadcast.
 
 Delivery behavior:

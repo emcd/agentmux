@@ -13,7 +13,7 @@
 - [ ] 1.5 Lock replace-on-first-successful-structured-load compatibility
   handoff where legacy flattened ACP snapshots are ignored until canonical
   structured baseline replacement.
-- [ ] 1.6 Update MCP look contract to preserve relay structured ACP payloads
+- [x] 1.6 Update MCP look contract to preserve relay structured ACP payloads
   unchanged (no parsing/transforms).
 - [ ] 1.7 Update CLI look contract to preserve relay structured ACP payloads
   unchanged in machine output.

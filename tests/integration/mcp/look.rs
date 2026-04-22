@@ -57,6 +57,7 @@ async fn look_returns_snapshot_payload_and_forwards_request_shape() {
             Value::String("LOOK-C".to_string()),
         ])
     );
+    assert!(payload.get("snapshot_entries").is_none());
     assert!(payload.get("freshness").is_none());
     assert!(payload.get("snapshot_source").is_none());
     assert!(payload.get("stale_reason_code").is_none());
@@ -112,9 +113,98 @@ async fn look_preserves_additive_acp_freshness_fields() {
 
     assert_eq!(payload["snapshot_format"], "acp_entries_v1");
     assert_eq!(payload["snapshot_entries"], json!([]));
+    assert!(payload.get("snapshot_lines").is_none());
     assert_eq!(payload["freshness"], "stale");
     assert_eq!(payload["snapshot_source"], "none");
     assert_eq!(payload["stale_reason_code"], "acp_snapshot_prime_timeout");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn look_preserves_structured_acp_entries_passthrough() {
+    let runtime = TestRuntime::create();
+    let _relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("look") => json!({
+                    "kind": "look",
+                    "schema_version": "1",
+                    "bundle_name": BUNDLE_NAME,
+                    "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
+                    "target_session": request.get("target_session").cloned().unwrap_or(Value::Null),
+                    "captured_at": "2026-03-10T00:00:00Z",
+                    "snapshot_format": "acp_entries_v1",
+                    "snapshot_entries": [
+                        {
+                            "kind": "user",
+                            "lines": ["Please summarize the changes."]
+                        },
+                        {
+                            "kind": "invocation",
+                            "invocation": {"tool": "search", "query": "agentmux changelog"}
+                        },
+                        {
+                            "kind": "agent",
+                            "lines": ["Summary generated."]
+                        },
+                        {
+                            "kind": "update",
+                            "update_kind": "status",
+                            "lines": ["done"]
+                        }
+                    ],
+                    "freshness": "fresh",
+                    "snapshot_source": "live_buffer",
+                    "snapshot_age_ms": 42,
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let mut arguments = Map::new();
+    arguments.insert(
+        "target_session".to_string(),
+        Value::String("bravo".to_string()),
+    );
+    let response = harness.call_tool(2, "look", arguments).await;
+    let payload = decode_tool_payload(&response);
+
+    assert_eq!(payload["snapshot_format"], "acp_entries_v1");
+    assert_eq!(
+        payload["snapshot_entries"],
+        json!([
+            {
+                "kind": "user",
+                "lines": ["Please summarize the changes."]
+            },
+            {
+                "kind": "invocation",
+                "invocation": {"tool": "search", "query": "agentmux changelog"}
+            },
+            {
+                "kind": "agent",
+                "lines": ["Summary generated."]
+            },
+            {
+                "kind": "update",
+                "update_kind": "status",
+                "lines": ["done"]
+            }
+        ])
+    );
+    assert!(payload.get("snapshot_lines").is_none());
+    assert_eq!(payload["freshness"], "fresh");
+    assert_eq!(payload["snapshot_source"], "live_buffer");
+    assert_eq!(payload["snapshot_age_ms"], 42);
+    assert!(payload.get("stale_reason_code").is_none());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
