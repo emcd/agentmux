@@ -63,5 +63,9 @@ Delivery outcomes:
 - Successful send clears `To` and `Message`.
 - Recipient completion supports both `@`-triggered suggestions and manual
   trigger (`Ctrl+Space`).
+- Look overlay payload handling is transport-aware:
+  - tmux look snapshots render line payloads directly.
+  - ACP look snapshots render structured entries by kind:
+    `user`, `agent`, `cognition`, `invocation`, `result`, `update`.
 - Terminal outcomes are sourced from relay completion updates keyed by
   `message_id`.
