@@ -30,15 +30,8 @@ fn acp_worker_state_transitions_busy_then_available() {
         )
     });
 
-    let deadline = Instant::now() + Duration::from_millis(800);
-    let mut observed_busy = false;
-    while Instant::now() < deadline {
-        if read_worker_state(temporary.path(), "bravo").as_deref() == Some("busy") {
-            observed_busy = true;
-            break;
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
+    let observed_busy =
+        wait_for_worker_state(temporary.path(), "bravo", "busy", Duration::from_secs(2));
     assert!(
         observed_busy,
         "expected worker_state=busy before completion"
@@ -76,15 +69,8 @@ fn acp_request_permission_marks_worker_busy_until_completion() {
         dispatch_send(&config_root_for_thread, &tmux_socket_for_thread, Some(100))
     });
 
-    let deadline = Instant::now() + Duration::from_millis(800);
-    let mut observed_busy = false;
-    while Instant::now() < deadline {
-        if read_worker_state(temporary.path(), "bravo").as_deref() == Some("busy") {
-            observed_busy = true;
-            break;
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
+    let observed_busy =
+        wait_for_worker_state(temporary.path(), "bravo", "busy", Duration::from_secs(2));
     assert!(
         observed_busy,
         "expected worker_state=busy while ACP requested permission"

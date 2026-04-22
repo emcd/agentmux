@@ -51,4 +51,6 @@ jobs:
         run: cargo build --release
 
       - name: Test
+        env:
+          RUST_BACKTRACE: '1'
         run: cargo test --release
