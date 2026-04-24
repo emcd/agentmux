@@ -47,33 +47,18 @@
     "build": {
       "mode": "primary",
       // "model": "zai-coding-plan/glm-4.7"
-      //"model": "deepseek/deepseek-chat"
+      // "model": "deepseek/deepseek-chat"
       "model": "opencode/big-pickle"
     },
     "plan": {
       "mode": "primary",
       // "model": "zai-coding-plan/glm-4.7"
-      //"model": "deepseek/deepseek-chat"
+      // "model": "deepseek/deepseek-chat"
       "model": "opencode/big-pickle"
     }
   },
 
   "mcp": {
-    "context7": {
-      "type": "local",
-      "command": ["npx", "-y", "@upstash/context7-mcp"],
-      "enabled": true
-    },
-    "nb": {
-      "type": "local",
-      "command": [
-        "nb-mcp",
-        "--notebook",
-        "agentmux",
-        "--no-commit-signing"
-      ],
-      "enabled": true
-    },
     "agentmux": {
       "type": "local",
       "command": [
@@ -89,6 +74,21 @@
       ],
       "enabled": true,
       "timeout": 900000
+    },
+    "context7": {
+      "type": "local",
+      "command": ["npx", "-y", "@upstash/context7-mcp"],
+      "enabled": true
+    },
+    "nb": {
+      "type": "local",
+      "command": [
+        "nb-mcp",
+        "--notebook",
+        "agentmux",
+        "--no-commit-signing"
+      ],
+      "enabled": true
     },
     "pty-debug": {
       "type": "local",
@@ -129,13 +129,21 @@
       "gh status *": "allow",
       "git add *": "allow",
       "git branch *": "allow",
+      "git checkout *": "allow",
       "git diff *": "allow",
+      "git fetch *": "allow",
       "git log *": "allow",
+      "git rebase *": "allow",
+      "git restore *": "allow",
+      "git rev-parse *": "allow",
       "git show *": "allow",
+      "git stash list": "allow",
+      "git stash list *": "allow",
       "git status *": "allow",
       "grep *": "allow",
       "head *": "allow",
       "ls *": "allow",
+      "mkdir *": "allow",
       "ps *": "allow",
       "pwd *": "allow",
       "rg *": "allow",

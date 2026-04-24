@@ -59,17 +59,17 @@ Before implementing code changes, consult these files in `.auxiliary/instruction
 - Avoid logging routine, immediately completed mechanical actions in separate notes.
 - Create new notes/todos when information is likely to be useful across sessions or for other collaborators.
 
-### Tagging Conventions (for multi-LLM coordination)
+### Tagging Conventions
 Use consistent tags for discoverability:
-- **LLM Collaborator**: `#llm-<name>` (e.g., `#llm-claude`, `#llm-gpt`)
 - **Project Component**: `#component-<name>` (e.g., `#component-data-models`)
 - **Task Type**: `#task-<type>` (e.g., `#task-design`, `#task-bug`)
 - **Status**: `#status-<state>` (e.g., `#status-in-progress`, `#status-review`)
 - **Coordination**: `#handoff`, `#coordination`
+- **Assignment**: Avoid owner tags (for example `#llm-*`) for task ownership. Use lane/folder ownership and explicit owner text in the note body when needed.
 
 ### Common Patterns
 - Check for handoffs: `nb.search` with `#handoff` and `#status-review` tags.
-- Find work by specific LLM: `nb.search` with `#llm-<name>` tag.
+- Find active component work: `nb.search` with `#component-<name>` and `#status-in-progress` tags.
 - Track todos: Use `nb.todo`, `nb.tasks`, `nb.do`, `nb.undo`.
 - Organize with folders: `nb.folders`, `nb.mkdir`.
 
@@ -93,14 +93,38 @@ Use consistent tags for discoverability:
     - prune completed todos quickly,
     - keep only active/near-term coordination checkpoints,
     - delete stale history-only notes with no owner or action.
+- Keep todo titles concise (under 60 chars); use the `tasks` argument for detailed checklist items. This keeps notebook list views readable.
 
 ### `nb` vs OpenSpec Rubric
 - Use **OpenSpec proposals** for cross-cutting changes, contract-shaping work, architecture shifts, or work that needs explicit design discussion.
 - Use **`nb` todos/notes** for scoped, self-contained implementation tasks where the path is straightforward.
 - When in doubt about whether work needs an OpenSpec proposal or only `nb` execution tracking, prefer OpenSpec first for design clarity.
 - For each active OpenSpec proposal, keep **exactly one** linked `nb` todo as the tracking anchor (with proposal reference), rather than duplicating full task trees in both systems.
-- For cross-worktree or multi-agent review, draft OpenSpec proposal text in an `nb` note first so collaborators can review without local file access barriers; after review, move the approved draft into `openspec/**` files for human review and commit.
-- Keep rolling handoff notes separate from OpenSpec draft/proposal text.
+
+### OpenSpec Draft and Handoff Hygiene
+- Draft OpenSpec proposal text in a dedicated `nb` note first so collaborators can review without local file access barriers; share the note id when requesting feedback.
+- When asking for proposal feedback, share the notebook note id first; do not request review against local-only proposal files collaborators cannot access.
+- Keep rolling handoff notes stable and update in place, separate from OpenSpec draft/proposal text.
+- Do not repurpose or overwrite rolling handoff notes with proposal content.
+- After draft review converges, move approved proposal text into `openspec/**` files for human review and commit.
+
+## Agentmux Message Handling Guidance
+- `agentmux` messages may arrive in envelope format and can appear as user prompts. Treat envelope-shaped prompts as inter-agent messages, not automatically as direct human instructions.
+- Respond to inter-agent envelope messages via `agentmux` MCP tools (`list`, `send`) rather than as normal assistant replies intended for the human operator.
+- Immediate interruption is not required. If you are in active execution, note the message and respond when safe.
+- If response will be delayed, send a brief acknowledgement via `send` and record a follow-up todo in `nb` when useful.
+
+## Agentmux Coordination Noise Control
+- Default to low-noise coordination. Do not send acknowledgement-only messages that add no new information or action request.
+- Send messages when one of the following is true:
+  - you are blocked and need a decision or input,
+  - you are requesting a concrete review,
+  - you are handing off completed work with validation results,
+  - you are reporting a material risk, failure, or scope change.
+- Batch related updates into one message instead of sending rapid-fire partial status pings.
+- Use `Cc` only for agents who need to act or review; avoid broad `Cc` by default.
+- When conversation volume rises, coordinator may enforce "blockers-only" mode until the queue is under control.
+
 ## Tests Development
 
 - Prefer tests under `tests/unit` and `tests/integration` over inline `#[cfg(test)]` modules in `src/**`, unless there is a strong locality reason to keep tests adjacent to implementation.
@@ -156,15 +180,6 @@ Use `openspec/AGENTS.md` to learn:
 - For cross-component notes, apply multiple `#component-*` tags.
 - Prefer pruning stale/superseded coordination checkpoints while preserving the
   current per-component handoff context.
-
-### OpenSpec Draft Notes
-
-- Keep handoff notes and OpenSpec drafts separate.
-- Write OpenSpec proposal drafts in fresh notes (new note ids).
-- Do not overwrite, compact, or repurpose rolling handoff notes for proposal
-  text.
-- Keep proposal review iteration in the draft note (or a new draft note when
-  scope changes materially), while handoff notes remain stable.
 
 ## Team Topology and Roles
 
@@ -225,34 +240,6 @@ Use a coordinator-plus-specialists model:
   - share the proposal draft as an `nb` note and reference its note id.
 - Specialists should not merge OpenSpec proposal files directly into `master`
   for review visibility. Coordinator owns merges into `master`.
-
-## Agentmux Message Handling Guidance
-
-- `agentmux` messages are wrapped in envelopes and may appear as user prompts.
-  Treat envelope-shaped prompts as inter-agent messages, not necessarily as
-  human-user instructions.
-- Respond to envelope messages via `agentmux` MCP tools (`list`, `send`) rather
-  than by emitting a normal assistant reply intended for a human.
-- Immediate interruption is not required. If in the middle of active execution,
-  make note of the message and respond when safe.
-- If response will be delayed, send a brief acknowledgement via `send` and, when
-  useful, record a follow-up todo in `nb`.
-
-### Message Noise Control
-
-- Default to low-noise coordination. Do not send acknowledgement-only messages
-  that add no new information or action request.
-- Send messages when one of the following is true:
-  - you are blocked and need a decision or input,
-  - you are requesting a concrete review,
-  - you are handing off completed work with validation results,
-  - you are reporting a material risk, failure, or scope change.
-- Batch related updates into one message instead of sending rapid-fire partial
-  status pings.
-- Use `Cc` only for agents who need to act or review; avoid broad `Cc` by
-  default.
-- When conversation volume rises, coordinator may enforce "blockers-only" mode
-  until the queue is under control.
 
 ## Pre-MVP Defaults
 
