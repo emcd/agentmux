@@ -209,6 +209,14 @@ pub enum ChatDeliveryMode {
     Sync,
 }
 
+/// Payload handling mode for one async delivery task.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryPayloadMode {
+    EnvelopeMessage,
+    RawInput,
+}
+
 /// Structured relay error object.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct RelayError {
@@ -327,6 +335,16 @@ pub enum RelayRequest {
         #[serde(default)]
         bundle_name: Option<String>,
     },
+    Raww {
+        request_id: Option<String>,
+        sender_session: String,
+        target_session: String,
+        text: String,
+        #[serde(default)]
+        no_enter: bool,
+        #[serde(default)]
+        bundle_name: Option<String>,
+    },
 }
 
 /// Relay response protocol.
@@ -366,6 +384,18 @@ pub enum RelayResponse {
         #[serde(flatten)]
         snapshot: LookSnapshotPayload,
     },
+    Raww {
+        schema_version: String,
+        status: String,
+        target_session: String,
+        transport: ListedSessionTransport,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        details: Option<Value>,
+    },
     Error {
         error: RelayError,
     },
@@ -393,6 +423,16 @@ pub(super) struct LookRequestContext {
 }
 
 #[derive(Clone, Debug)]
+pub(super) struct RawwRequestContext {
+    request_id: Option<String>,
+    sender_session: String,
+    target_session: String,
+    text: String,
+    no_enter: bool,
+    bundle_name: Option<String>,
+}
+
+#[derive(Clone, Debug)]
 pub(super) struct AsyncDeliveryTask {
     bundle: BundleConfiguration,
     sender: crate::configuration::BundleMember,
@@ -405,6 +445,8 @@ pub(super) struct AsyncDeliveryTask {
     batch_settings: PromptBatchSettings,
     runtime_directory: PathBuf,
     completion_sender: Option<std::sync::mpsc::Sender<Result<ChatResult, RelayError>>>,
+    payload_mode: DeliveryPayloadMode,
+    append_enter: bool,
 }
 
 /// Handles one relay socket request/response exchange on a connected stream.

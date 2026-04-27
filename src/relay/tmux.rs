@@ -201,13 +201,24 @@ pub(super) fn inject_prompt(
     pane_target: &str,
     prompt: &str,
 ) -> Result<(), String> {
-    for chunk in split_send_keys_chunks(prompt, SEND_KEYS_CHUNK_BYTES) {
+    inject_literal_text(tmux_socket, pane_target, prompt, true)
+}
+
+pub(super) fn inject_literal_text(
+    tmux_socket: &Path,
+    pane_target: &str,
+    text: &str,
+    append_enter: bool,
+) -> Result<(), String> {
+    for chunk in split_send_keys_chunks(text, SEND_KEYS_CHUNK_BYTES) {
         run_tmux_command(
             tmux_socket,
             &["send-keys", "-l", "-t", pane_target, "--", chunk.as_str()],
         )?;
     }
-    run_tmux_command(tmux_socket, &["send-keys", "-t", pane_target, "Enter"])?;
+    if append_enter {
+        run_tmux_command(tmux_socket, &["send-keys", "-t", pane_target, "Enter"])?;
+    }
     Ok(())
 }
 

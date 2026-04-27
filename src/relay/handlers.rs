@@ -13,8 +13,8 @@ use crate::{
 };
 
 use super::authorization::{
-    AuthorizationContext, authorize_list, authorize_look, authorize_send, has_ui_session,
-    ui_session_display_name,
+    AuthorizationContext, authorize_list, authorize_look, authorize_raww, authorize_send,
+    has_ui_session, ui_session_display_name,
 };
 use super::delivery::{
     QuiescenceOptions, acp_session_ready_for_startup, aggregate_chat_status,
@@ -25,9 +25,10 @@ use super::lifecycle::{reconcile_loaded_bundle_for_lifecycle, shutdown_bundle_ru
 use super::tmux::{capture_pane_tail_lines, resolve_active_pane_target};
 use super::{
     AsyncDeliveryTask, ChatDeliveryMode, ChatOutcome, ChatRequestContext, ChatResult, ChatStatus,
-    LifecycleBundleResult, ListedBundle, ListedBundleStartupHealth, ListedBundleState,
-    ListedSession, ListedSessionTransport, LookRequestContext, RelayError, RelayRequest,
-    RelayResponse, SCHEMA_VERSION, load_startup_failures, relay_error,
+    DeliveryPayloadMode, LifecycleBundleResult, ListedBundle, ListedBundleStartupHealth,
+    ListedBundleState, ListedSession, ListedSessionTransport, LookRequestContext,
+    RawwRequestContext, RelayError, RelayRequest, RelayResponse, SCHEMA_VERSION,
+    load_startup_failures, relay_error,
 };
 
 const LOOK_LINES_DEFAULT: usize = 120;
@@ -112,6 +113,26 @@ pub(super) fn handle_request(
                 requester_session,
                 target_session,
                 lines,
+                bundle_name: request_bundle_name,
+            },
+            runtime_directory,
+        ),
+        RelayRequest::Raww {
+            request_id,
+            sender_session,
+            target_session,
+            text,
+            no_enter,
+            bundle_name: request_bundle_name,
+        } => handle_raww(
+            bundle,
+            authorization,
+            RawwRequestContext {
+                request_id,
+                sender_session,
+                target_session,
+                text,
+                no_enter,
                 bundle_name: request_bundle_name,
             },
             runtime_directory,
@@ -488,6 +509,8 @@ fn handle_chat(
                     batch_settings,
                     runtime_directory: runtime_directory.to_path_buf(),
                     completion_sender: None,
+                    payload_mode: DeliveryPayloadMode::EnvelopeMessage,
+                    append_enter: true,
                 };
                 let result = if task.target_is_ui {
                     deliver_one_target(&task)?
@@ -542,6 +565,8 @@ fn handle_chat(
                     batch_settings,
                     runtime_directory: runtime_directory.to_path_buf(),
                     completion_sender: None,
+                    payload_mode: DeliveryPayloadMode::EnvelopeMessage,
+                    append_enter: true,
                 };
                 enqueue_async_delivery(task)?;
                 emit_inscription(
@@ -790,6 +815,161 @@ fn handle_look(
         );
     }
     Ok(response)
+}
+
+fn handle_raww(
+    bundle: &BundleConfiguration,
+    authorization: &AuthorizationContext,
+    request: RawwRequestContext,
+    runtime_directory: &Path,
+) -> Result<RelayResponse, RelayError> {
+    let RawwRequestContext {
+        request_id,
+        sender_session,
+        target_session,
+        text,
+        no_enter,
+        bundle_name: request_bundle_name,
+    } = request;
+
+    if let Some(request_bundle_name) = request_bundle_name.as_deref()
+        && request_bundle_name != bundle.bundle_name
+    {
+        return Err(relay_error(
+            "validation_cross_bundle_unsupported",
+            "raww is limited to the associated bundle in MVP",
+            Some(json!({
+                "associated_bundle_name": bundle.bundle_name,
+                "requested_bundle_name": request_bundle_name,
+            })),
+        ));
+    }
+    if target_session.trim().is_empty() {
+        return Err(relay_error(
+            "validation_invalid_params",
+            "target_session must be non-empty",
+            Some(json!({
+                "field": "target_session",
+            })),
+        ));
+    }
+    if text.len() > 32 * 1024 {
+        return Err(relay_error(
+            "validation_invalid_params",
+            "raww text exceeds maximum size of 32 KiB",
+            Some(json!({
+                "field": "text",
+                "max_bytes": 32 * 1024,
+                "bytes": text.len(),
+            })),
+        ));
+    }
+    let sender = resolve_sender_identity(
+        bundle,
+        authorization,
+        sender_session.as_str(),
+        "sender_session",
+    )?;
+    let target_member = if let Some(member) = bundle
+        .members
+        .iter()
+        .find(|member| member.id == target_session)
+    {
+        member
+    } else if has_ui_session(authorization, target_session.as_str()) {
+        return Err(relay_error(
+            "validation_invalid_params",
+            "raww target class is not supported",
+            Some(json!({
+                "target_session": target_session,
+                "target_class": "ui",
+                "supported_target_classes": ["tmux", "acp"],
+            })),
+        ));
+    } else {
+        return Err(relay_error(
+            "validation_unknown_target",
+            "target_session is not a canonical configured target identifier",
+            Some(json!({
+                "target_session": target_session,
+            })),
+        ));
+    };
+    authorize_raww(
+        bundle,
+        authorization,
+        sender.session_id.as_str(),
+        target_member.id.as_str(),
+    )?;
+
+    let transport = match &target_member.target {
+        TargetConfiguration::Tmux(_) => ListedSessionTransport::Tmux,
+        TargetConfiguration::Acp(_) => ListedSessionTransport::Acp,
+    };
+    let message_id = Uuid::new_v4().to_string();
+    let sender_member = sender.to_bundle_member();
+    let task = AsyncDeliveryTask {
+        bundle: bundle.clone(),
+        sender: sender_member,
+        all_target_sessions: vec![target_member.id.clone()],
+        target_session: target_member.id.clone(),
+        target_is_ui: false,
+        message: text,
+        message_id: message_id.clone(),
+        quiescence: QuiescenceOptions::for_sync(None, None, None),
+        batch_settings: prompt_batch_settings(),
+        runtime_directory: runtime_directory.to_path_buf(),
+        completion_sender: None,
+        payload_mode: DeliveryPayloadMode::RawInput,
+        append_enter: !no_enter,
+    };
+
+    let result = match &target_member.target {
+        TargetConfiguration::Acp(_) => enqueue_sync_delivery(task)?,
+        TargetConfiguration::Tmux(_) => deliver_one_target(&task)?,
+    };
+    if result.outcome != ChatOutcome::Delivered {
+        let reason = result
+            .reason
+            .unwrap_or_else(|| "raww dispatch failed".to_string());
+        let code = if matches!(
+            result.reason_code.as_deref(),
+            Some("runtime_acp_worker_unavailable")
+        ) {
+            "runtime_target_unavailable"
+        } else {
+            "runtime_transport_write_failed"
+        };
+        return Err(relay_error(
+            code,
+            "raww dispatch failed",
+            Some(json!({
+                "target_session": result.target_session,
+                "transport": transport,
+                "reason": reason,
+                "reason_code": result.reason_code,
+            })),
+        ));
+    }
+
+    let details = if transport == ListedSessionTransport::Acp {
+        Some(json!({
+            "delivery_phase": "accepted_in_progress",
+        }))
+    } else {
+        Some(json!({
+            "delivery_phase": "accepted_dispatched",
+        }))
+    };
+    Ok(RelayResponse::Raww {
+        schema_version: SCHEMA_VERSION.to_string(),
+        status: "accepted".to_string(),
+        target_session: target_member.id.clone(),
+        transport,
+        request_id,
+        message_id: Some(message_id),
+        details,
+    })
 }
 
 fn resolve_sender_identity(

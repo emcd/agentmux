@@ -52,6 +52,7 @@ struct PolicyControls {
     list: PolicyScope,
     look: PolicyScope,
     send: PolicyScope,
+    raww: PolicyScope,
     do_controls: HashMap<String, PolicyScope>,
 }
 
@@ -67,6 +68,7 @@ impl PolicyControls {
             list: PolicyScope::AllHome,
             look: PolicyScope::AllHome,
             send: PolicyScope::AllHome,
+            raww: PolicyScope::AllHome,
             do_controls: HashMap::new(),
         }
     }
@@ -98,8 +100,14 @@ struct RawPolicyControls {
     list: String,
     look: String,
     send: String,
+    #[serde(default = "default_raww_policy_scope")]
+    raww: String,
     #[serde(default, rename = "do")]
     do_controls: HashMap<String, String>,
+}
+
+fn default_raww_policy_scope() -> String {
+    "all:home".to_string()
 }
 
 pub(super) fn load_authorization_context(
@@ -280,6 +288,7 @@ fn parse_policy_controls(
             PolicyScope::AllHome,
             PolicyScope::AllAll,
         ],
+        "validation_invalid_arguments",
         "authorization policy control uses unsupported scope value",
     )?;
     let list = parse_scope_for_control(
@@ -288,6 +297,7 @@ fn parse_policy_controls(
         policy_id,
         "list",
         &[PolicyScope::AllHome, PolicyScope::AllAll],
+        "validation_invalid_arguments",
         "authorization policy list control uses unsupported scope value",
     )?;
     let look = parse_scope_for_control(
@@ -301,6 +311,7 @@ fn parse_policy_controls(
             PolicyScope::AllHome,
             PolicyScope::AllAll,
         ],
+        "validation_invalid_arguments",
         "authorization policy control uses unsupported scope value",
     )?;
     let send = parse_scope_for_control(
@@ -309,7 +320,21 @@ fn parse_policy_controls(
         policy_id,
         "send",
         &[PolicyScope::AllHome, PolicyScope::AllAll],
+        "validation_invalid_arguments",
         "authorization policy send control uses unsupported scope value",
+    )?;
+    let raww = parse_scope_for_control(
+        controls.raww.as_str(),
+        policies_path,
+        policy_id,
+        "raww",
+        &[
+            PolicyScope::None,
+            PolicyScope::SelfOnly,
+            PolicyScope::AllHome,
+        ],
+        "validation_invalid_policy_scope",
+        "authorization policy raww control uses unsupported scope value",
     )?;
     let mut do_controls = HashMap::with_capacity(controls.do_controls.len());
     for (action_id, scope_value) in controls.do_controls {
@@ -335,6 +360,7 @@ fn parse_policy_controls(
                 PolicyScope::AllHome,
                 PolicyScope::AllAll,
             ],
+            "validation_invalid_arguments",
             "authorization policy control uses unsupported scope value",
         )?;
         do_controls.insert(action_id.to_string(), scope);
@@ -344,6 +370,7 @@ fn parse_policy_controls(
         list,
         look,
         send,
+        raww,
         do_controls,
     })
 }
@@ -354,6 +381,7 @@ fn parse_scope_for_control(
     policy_id: &str,
     control: &str,
     allowed: &[PolicyScope],
+    error_code: &str,
     unsupported_message: &str,
 ) -> Result<PolicyScope, RelayError> {
     let value = raw.trim();
@@ -364,7 +392,7 @@ fn parse_scope_for_control(
         "all:all" => PolicyScope::AllAll,
         _ => {
             return Err(relay_error(
-                "validation_invalid_arguments",
+                error_code,
                 unsupported_message,
                 Some(json!({
                     "path": policies_path.display().to_string(),
@@ -379,7 +407,7 @@ fn parse_scope_for_control(
         return Ok(parsed);
     }
     Err(relay_error(
-        "validation_invalid_arguments",
+        error_code,
         unsupported_message,
         Some(json!({
             "path": policies_path.display().to_string(),
@@ -486,6 +514,32 @@ pub(super) fn authorize_look(
             requester_session,
             bundle_name: bundle.bundle_name.as_str(),
             reason: "look policy scope permits self-only inspection",
+            target_session: Some(target_session),
+            targets: None,
+        },
+    )
+}
+
+pub(super) fn authorize_raww(
+    bundle: &BundleConfiguration,
+    authorization: &AuthorizationContext,
+    requester_session: &str,
+    target_session: &str,
+) -> Result<(), RelayError> {
+    let controls = controls_for_requester(authorization, bundle, requester_session)?;
+    let minimum_scope = if requester_session == target_session {
+        PolicyScope::SelfOnly
+    } else {
+        PolicyScope::AllHome
+    };
+    authorize_scope(
+        controls.raww,
+        minimum_scope,
+        AuthorizationDecisionContext {
+            capability: "raww.write",
+            requester_session,
+            bundle_name: bundle.bundle_name.as_str(),
+            reason: "raww policy scope does not allow target write",
             target_session: Some(target_session),
             targets: None,
         },
