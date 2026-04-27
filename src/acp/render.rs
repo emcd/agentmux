@@ -3,7 +3,6 @@ use serde_json::Value;
 
 use super::ReplayEntry;
 
-/// Canonical ACP snapshot entry used by relay look payloads.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AcpSnapshotEntry {
@@ -17,10 +16,10 @@ pub enum AcpSnapshotEntry {
         lines: Vec<String>,
     },
     Invocation {
+        call_id: String,
+        status: super::ToolCallStatus,
         invocation: Value,
-    },
-    Result {
-        result: Value,
+        result: Option<Value>,
     },
     Update {
         update_kind: String,
@@ -41,10 +40,15 @@ pub fn replay_entries_to_snapshot_entries(entries: &[ReplayEntry]) -> Vec<AcpSna
             ReplayEntry::Cognition { lines } => AcpSnapshotEntry::Cognition {
                 lines: lines.clone(),
             },
-            ReplayEntry::Invocation { invocation } => AcpSnapshotEntry::Invocation {
+            ReplayEntry::Invocation {
+                call_id,
+                status,
+                invocation,
+                result,
+            } => AcpSnapshotEntry::Invocation {
+                call_id: call_id.clone(),
+                status: status.clone(),
                 invocation: invocation.clone(),
-            },
-            ReplayEntry::Result { result } => AcpSnapshotEntry::Result {
                 result: result.clone(),
             },
             ReplayEntry::Update { update_kind, lines } => AcpSnapshotEntry::Update {
@@ -65,17 +69,24 @@ pub fn snapshot_entries_to_plain_lines(entries: &[AcpSnapshotEntry]) -> Vec<Stri
             | AcpSnapshotEntry::Update { lines: value, .. } => {
                 lines.extend(value.clone());
             }
-            AcpSnapshotEntry::Invocation { invocation } => {
+            AcpSnapshotEntry::Invocation {
+                call_id,
+                status,
+                invocation,
+                result,
+            } => {
                 lines.push(format!(
-                    "invocation {}",
+                    "invocation {} {:?} {}",
+                    call_id,
+                    status,
                     serde_json::to_string(invocation).unwrap_or_else(|_| "{}".to_string())
                 ));
-            }
-            AcpSnapshotEntry::Result { result } => {
-                lines.push(format!(
-                    "result {}",
-                    serde_json::to_string(result).unwrap_or_else(|_| "{}".to_string())
-                ));
+                if let Some(result) = result {
+                    lines.push(format!(
+                        "result {}",
+                        serde_json::to_string(result).unwrap_or_else(|_| "{}".to_string())
+                    ));
+                }
             }
         }
     }

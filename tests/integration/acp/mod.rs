@@ -1,3 +1,4 @@
+mod coalescing;
 pub(crate) mod helpers;
 mod lifecycle;
 mod look;

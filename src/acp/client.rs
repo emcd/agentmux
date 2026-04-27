@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     io::{Read, Write},
     os::fd::AsRawFd,
     path::Path,
@@ -64,6 +65,8 @@ pub struct AcpStdioClient {
     next_id: u64,
     snapshot_line_buffer: Vec<String>,
     replay_buffer: Vec<ReplayEntry>,
+    pending_tool_calls: HashMap<String, ReplayEntry>,
+    next_fallback_call_id: u64,
 }
 
 impl AcpStdioClient {
@@ -112,6 +115,8 @@ impl AcpStdioClient {
             next_id: 1,
             snapshot_line_buffer: Vec::new(),
             replay_buffer: Vec::new(),
+            pending_tool_calls: HashMap::new(),
+            next_fallback_call_id: 0,
         })
     }
 
@@ -201,6 +206,7 @@ impl AcpStdioClient {
         working_directory: &Path,
         timeout: Option<Duration>,
     ) -> Result<Vec<ReplayEntry>, String> {
+        self.pending_tool_calls.clear();
         let mut replay_buffer = std::mem::take(&mut self.replay_buffer);
         let result = self
             .request(
@@ -555,7 +561,11 @@ impl AcpStdioClient {
         {
             return Ok(false);
         }
-        let entries = parse_replay_entries_from_params(params);
+        let entries = parse_replay_entries_from_params(
+            params,
+            &mut self.pending_tool_calls,
+            &mut self.next_fallback_call_id,
+        );
         if let Some(callback) = on_replay_entries.as_mut() {
             callback(entries.as_slice()).map_err(AcpRequestError::Failed)?;
         }
@@ -631,7 +641,11 @@ impl AcpStdioClient {
     }
 }
 
-fn parse_replay_entries_from_params(params: &Value) -> Vec<ReplayEntry> {
+pub(super) fn parse_replay_entries_from_params(
+    params: &Value,
+    pending_calls: &mut HashMap<String, ReplayEntry>,
+    next_fallback_call_id: &mut u64,
+) -> Vec<ReplayEntry> {
     let update_field = params.get("update").unwrap_or(&Value::Null);
     let updates: Vec<&Value> = match update_field.as_array() {
         Some(arr) => arr.iter().collect(),
@@ -665,12 +679,68 @@ fn parse_replay_entries_from_params(params: &Value) -> Vec<ReplayEntry> {
                     entries.push(ReplayEntry::Cognition { lines });
                 }
             }
-            "tool_call" => entries.push(ReplayEntry::Invocation {
-                invocation: update.clone(),
-            }),
-            "tool_call_update" => entries.push(ReplayEntry::Result {
-                result: update.clone(),
-            }),
+            "tool_call" => {
+                let call_id = update
+                    .get("id")
+                    .or_else(|| update.get("call_id"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+                    .unwrap_or_else(|| {
+                        let id = *next_fallback_call_id;
+                        *next_fallback_call_id += 1;
+                        format!("call_{}", id)
+                    });
+                let invocation = update.clone();
+                entries.push(ReplayEntry::Invocation {
+                    call_id: call_id.clone(),
+                    status: super::ToolCallStatus::Pending,
+                    invocation,
+                    result: None,
+                });
+                pending_calls.insert(call_id, entries.last().unwrap().clone());
+            }
+            "tool_call_update" => {
+                let call_id = update
+                    .get("id")
+                    .or_else(|| update.get("call_id"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                let result = update.clone();
+                if let Some(cid) = call_id {
+                    if let Some(ReplayEntry::Invocation {
+                        status,
+                        result: existing_result,
+                        call_id,
+                        invocation,
+                    }) = pending_calls.get_mut(&cid)
+                    {
+                        *status = super::ToolCallStatus::Completed;
+                        let result_clone = result.clone();
+                        *existing_result = Some(result_clone);
+                        let completed = ReplayEntry::Invocation {
+                            call_id: call_id.clone(),
+                            status: super::ToolCallStatus::Completed,
+                            invocation: invocation.clone(),
+                            result: Some(result),
+                        };
+                        entries.push(completed);
+                    } else {
+                        entries.push(ReplayEntry::Invocation {
+                            call_id: cid,
+                            status: super::ToolCallStatus::Completed,
+                            invocation: serde_json::json!({}),
+                            result: Some(result),
+                        });
+                    }
+                } else {
+                    entries.push(ReplayEntry::Invocation {
+                        call_id: "unknown".to_string(),
+                        status: super::ToolCallStatus::Completed,
+                        invocation: serde_json::json!({}),
+                        result: Some(result),
+                    });
+                }
+            }
             _ => entries.push(ReplayEntry::Update {
                 update_kind,
                 lines: collect_text_lines_from_value(update),

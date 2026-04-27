@@ -186,10 +186,10 @@ fn look_preserves_structured_acp_entries_in_machine_output() {
             lines: vec!["thinking".to_string()],
         },
         AcpSnapshotEntry::Invocation {
+            call_id: "call_1".to_string(),
+            status: agentmux::acp::ToolCallStatus::Completed,
             invocation: serde_json::json!({"tool": "search", "args": {"q": "agentmux"}}),
-        },
-        AcpSnapshotEntry::Result {
-            result: serde_json::json!({"ok": true}),
+            result: Some(serde_json::json!({"ok": true})),
         },
         AcpSnapshotEntry::Update {
             update_kind: "custom_update".to_string(),

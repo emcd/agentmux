@@ -31,7 +31,6 @@ enum MessageRole {
     Assistant,
     Thinking,
     ToolCall,
-    ToolResult,
     System,
 }
 
@@ -127,15 +126,37 @@ fn replay_entries_to_messages(entries: Vec<ReplayEntry>) -> Vec<Message> {
                 role: MessageRole::Thinking,
                 text: lines.join("\n"),
             },
-            ReplayEntry::Invocation { invocation } => Message {
-                role: MessageRole::ToolCall,
-                text: serde_json::to_string_pretty(&invocation)
-                    .unwrap_or_else(|_| invocation.to_string()),
-            },
-            ReplayEntry::Result { result } => Message {
-                role: MessageRole::ToolResult,
-                text: serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string()),
-            },
+            ReplayEntry::Invocation {
+                call_id,
+                status,
+                invocation,
+                result,
+            } => {
+                let status_label = format!("{:?}", status);
+                let invocation_text = serde_json::to_string_pretty(&invocation)
+                    .unwrap_or_else(|_| invocation.to_string());
+                let result_text = result.map(|r| {
+                    format!(
+                        "\n--- result ({}) ---\n{}",
+                        status_label,
+                        serde_json::to_string_pretty(&r).unwrap_or_else(|_| r.to_string())
+                    )
+                });
+                Message {
+                    role: MessageRole::ToolCall,
+                    text: format!(
+                        "tool_call {} [{}]{}{}",
+                        call_id,
+                        status_label,
+                        if invocation_text.len() > 100 {
+                            format!("\n{}", invocation_text)
+                        } else {
+                            format!(" {}", invocation_text)
+                        },
+                        result_text.unwrap_or_default()
+                    ),
+                }
+            }
             ReplayEntry::Update { update_kind, lines } => Message {
                 role: MessageRole::System,
                 text: if lines.is_empty() {
@@ -444,7 +465,6 @@ fn draw(frame: &mut Frame, app: &App) {
                 MessageRole::Assistant => ("[Agent]", assistant_label_style, assistant_body_style),
                 MessageRole::Thinking => ("[Cognition]", thinking_label_style, thinking_body_style),
                 MessageRole::ToolCall => ("[Invocation]", tool_label_style, tool_body_style),
-                MessageRole::ToolResult => ("[Result]", tool_label_style, tool_body_style),
                 MessageRole::System => ("[System]", system_label_style, system_body_style),
             };
             let mut lines = Vec::new();

@@ -304,17 +304,18 @@ fn render_acp_snapshot_entries(entries: &[AcpSnapshotEntry], width: usize) -> Ve
             AcpSnapshotEntry::Cognition { lines } => {
                 push_labeled_lines(&mut rendered, "cognition", Color::Yellow, lines, width);
             }
-            AcpSnapshotEntry::Invocation { invocation } => {
-                push_labeled_json(
-                    &mut rendered,
-                    "invocation",
-                    Color::Magenta,
-                    invocation,
-                    width,
-                );
-            }
-            AcpSnapshotEntry::Result { result } => {
-                push_labeled_json(&mut rendered, "result", Color::Blue, result, width);
+            AcpSnapshotEntry::Invocation {
+                call_id,
+                status,
+                invocation,
+                result,
+            } => {
+                let status_label = format!("{:?}", status);
+                let label = format!("tool_call {} [{}]", call_id, status_label);
+                push_labeled_json(&mut rendered, &label, Color::Magenta, invocation, width);
+                if let Some(result) = result {
+                    push_labeled_json(&mut rendered, "result", Color::Blue, result, width);
+                }
             }
             AcpSnapshotEntry::Update { update_kind, lines } => {
                 let mut update_lines = vec![format!("kind: {update_kind}")];

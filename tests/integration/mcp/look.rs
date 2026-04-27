@@ -141,7 +141,10 @@ async fn look_preserves_structured_acp_entries_passthrough() {
                         },
                         {
                             "kind": "invocation",
-                            "invocation": {"tool": "search", "query": "agentmux changelog"}
+                            "call_id": "call_0",
+                            "status": "Pending",
+                            "invocation": {"tool": "search", "query": "agentmux changelog"},
+                            "result": null
                         },
                         {
                             "kind": "agent",
@@ -187,7 +190,10 @@ async fn look_preserves_structured_acp_entries_passthrough() {
             },
             {
                 "kind": "invocation",
-                "invocation": {"tool": "search", "query": "agentmux changelog"}
+                "call_id": "call_0",
+                "status": "Pending",
+                "invocation": {"tool": "search", "query": "agentmux changelog"},
+                "result": null
             },
             {
                 "kind": "agent",
