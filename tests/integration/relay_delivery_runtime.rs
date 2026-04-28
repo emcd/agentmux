@@ -6,8 +6,8 @@ use std::{
 };
 
 use agentmux::relay::{
-    ChatDeliveryMode, ChatOutcome, ChatStatus, RelayRequest, RelayResponse, RelayStreamClientClass,
-    RelayStreamSession, request_relay,
+    ChatDeliveryMode, ChatOutcome, ChatStatus, ListedSessionTransport, RelayRequest, RelayResponse,
+    RelayStreamClientClass, RelayStreamSession, request_relay,
 };
 use tempfile::TempDir;
 use tokio::time::{sleep, timeout};
@@ -697,5 +697,157 @@ async fn relay_async_delivery_does_not_inject_while_pane_in_mode() {
     assert!(
         !log.contains("send-keys"),
         "no send-keys should be injected while pane_in_mode stays active, log={log:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn relay_raww_tmux_default_appends_enter_and_reports_dispatched_phase() {
+    let temporary = TempDir::new().expect("temporary");
+    let bundle_name = "party";
+    let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
+    let state_root = temporary.path().join("state");
+    let fake_tmux_script = temporary.path().join("fake-tmux.sh");
+    let attempts_file = temporary.path().join("attempts.txt");
+    let log_file = temporary.path().join("fake-tmux.log");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
+
+    let relay_socket = state_root
+        .join("bundles")
+        .join(bundle_name)
+        .join("relay.sock");
+    let mut child = spawn_relay_with_fake_tmux(
+        bundle_name,
+        &config_root,
+        &state_root,
+        &inscriptions_root,
+        &fake_tmux_script,
+    );
+    wait_for_relay_socket(&relay_socket).await;
+
+    let response = request_relay(
+        &relay_socket,
+        &RelayRequest::Raww {
+            request_id: Some("req-raww-default-enter".to_string()),
+            sender_session: "alpha".to_string(),
+            target_session: "alpha".to_string(),
+            text: "hello from raww".to_string(),
+            no_enter: false,
+            bundle_name: None,
+        },
+    )
+    .expect("raww request should succeed");
+
+    let RelayResponse::Raww {
+        status,
+        target_session,
+        transport,
+        request_id,
+        message_id,
+        details,
+        ..
+    } = response
+    else {
+        panic!("expected raww response");
+    };
+    assert_eq!(status, "accepted");
+    assert_eq!(target_session, "alpha");
+    assert_eq!(transport, ListedSessionTransport::Tmux);
+    assert_eq!(request_id.as_deref(), Some("req-raww-default-enter"));
+    assert!(message_id.is_some(), "message_id should be present");
+    assert_eq!(
+        details
+            .as_ref()
+            .and_then(|value| value.get("delivery_phase"))
+            .and_then(serde_json::Value::as_str),
+        Some("accepted_dispatched"),
+    );
+
+    child.start_kill().expect("kill relay");
+    let _ = child.wait().await;
+
+    let log = fs::read_to_string(&log_file).expect("read fake tmux log");
+    assert!(
+        log.contains("send-keys -l -t %1 -- hello from raww"),
+        "expected literal raww send-keys command, log={log:?}"
+    );
+    assert!(
+        log.contains("send-keys -t %1 Enter"),
+        "expected Enter command for default raww behavior, log={log:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn relay_raww_tmux_no_enter_omits_enter_command() {
+    let temporary = TempDir::new().expect("temporary");
+    let bundle_name = "party";
+    let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
+    let state_root = temporary.path().join("state");
+    let fake_tmux_script = temporary.path().join("fake-tmux.sh");
+    let attempts_file = temporary.path().join("attempts.txt");
+    let log_file = temporary.path().join("fake-tmux.log");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
+
+    let relay_socket = state_root
+        .join("bundles")
+        .join(bundle_name)
+        .join("relay.sock");
+    let mut child = spawn_relay_with_fake_tmux(
+        bundle_name,
+        &config_root,
+        &state_root,
+        &inscriptions_root,
+        &fake_tmux_script,
+    );
+    wait_for_relay_socket(&relay_socket).await;
+
+    let response = request_relay(
+        &relay_socket,
+        &RelayRequest::Raww {
+            request_id: Some("req-raww-no-enter".to_string()),
+            sender_session: "alpha".to_string(),
+            target_session: "alpha".to_string(),
+            text: "hello without enter".to_string(),
+            no_enter: true,
+            bundle_name: None,
+        },
+    )
+    .expect("raww request should succeed");
+
+    let RelayResponse::Raww {
+        status,
+        target_session,
+        transport,
+        request_id,
+        details,
+        ..
+    } = response
+    else {
+        panic!("expected raww response");
+    };
+    assert_eq!(status, "accepted");
+    assert_eq!(target_session, "alpha");
+    assert_eq!(transport, ListedSessionTransport::Tmux);
+    assert_eq!(request_id.as_deref(), Some("req-raww-no-enter"));
+    assert_eq!(
+        details
+            .as_ref()
+            .and_then(|value| value.get("delivery_phase"))
+            .and_then(serde_json::Value::as_str),
+        Some("accepted_dispatched"),
+    );
+
+    child.start_kill().expect("kill relay");
+    let _ = child.wait().await;
+
+    let log = fs::read_to_string(&log_file).expect("read fake tmux log");
+    assert!(
+        log.contains("send-keys -l -t %1 -- hello without enter"),
+        "expected literal raww send-keys command, log={log:?}"
+    );
+    assert!(
+        !log.contains("send-keys -t %1 Enter"),
+        "did not expect Enter command when no_enter=true, log={log:?}"
     );
 }

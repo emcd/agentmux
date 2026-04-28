@@ -436,6 +436,31 @@ pub(super) fn dispatch_look_without_startup(
     .expect("relay look should parse")
 }
 
+pub(super) fn dispatch_raww(
+    config_root: &Path,
+    tmux_socket: &Path,
+    sender_session: &str,
+    target_session: &str,
+    text: &str,
+    no_enter: bool,
+) -> RelayResponse {
+    startup_bundle(config_root, tmux_socket).expect("relay startup should parse");
+    dispatch_request(
+        RelayRequest::Raww {
+            request_id: Some("req-acp-raww".to_string()),
+            sender_session: sender_session.to_string(),
+            target_session: target_session.to_string(),
+            text: text.to_string(),
+            no_enter,
+            bundle_name: None,
+        },
+        config_root,
+        "party",
+        tmux_socket,
+    )
+    .expect("relay raww should parse")
+}
+
 fn startup_bundle(
     config_root: &Path,
     tmux_socket: &Path,
