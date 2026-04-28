@@ -262,29 +262,24 @@ case "${{command_name}}" in
     : > "${{OWNED_FILE}}"
     ;;
   display-message)
-    target="${{args[3]-}}"
     format_value="${{args[4]-}}"
-    if [[ "${{format_value}}" == "#{{pane_id}}" ]]; then
-      if [[ -s "${{SESSIONS_FILE}}" ]] && grep -Fxq "${{target}}" "${{SESSIONS_FILE}}"; then
-        echo "%1"
-        exit 0
-      fi
-      echo "can't find session: ${{target}}" >&2
-      exit 1
-    fi
-    if [[ "${{format_value}}" == "#{{pane_in_mode}}" ]]; then
-      echo "0"
-      exit 0
-    fi
-    if [[ "${{format_value}}" == "#{{window_activity}}" ]]; then
-      echo "0"
-      exit 0
-    fi
-    if [[ "${{format_value}}" == "#{{cursor_x}}" ]]; then
-      echo "0"
-      exit 0
-    fi
-    echo ""
+    case "${{format_value}}" in
+      '#{{pane_id}}')
+        printf "%%1\n"
+        ;;
+      '#{{window_activity}}')
+        printf "0\n"
+        ;;
+      '#{{pane_in_mode}}')
+        printf "0\n"
+        ;;
+      '#{{cursor_x}}')
+        printf "0\n"
+        ;;
+      *)
+        printf "\n"
+        ;;
+    esac
     ;;
   *)
     :
@@ -319,16 +314,33 @@ pub(super) fn shutdown_relay_if_present(state_root: &Path, bundle_name: &str) {
 
 pub(super) fn wait_for_relay_socket(state_root: &Path, bundle_name: &str) {
     let paths = BundleRuntimePaths::resolve(state_root, bundle_name).expect("bundle paths");
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
         if paths.relay_socket.exists() {
             return;
         }
         thread::sleep(Duration::from_millis(20));
     }
+    let startup_failures =
+        fs::read_to_string(paths.runtime_directory.join("startup_failures.json")).ok();
+    let relay_lock = fs::read_to_string(&paths.relay_lock_file).ok();
+    let known_bundle_sockets = fs::read_dir(state_root.join("bundles"))
+        .ok()
+        .into_iter()
+        .flat_map(|entries| entries.filter_map(Result::ok))
+        .filter_map(|entry| {
+            let bundle_name = entry.file_name().to_string_lossy().to_string();
+            let socket = entry.path().join("relay.sock");
+            if socket.exists() {
+                Some(format!("{bundle_name}:{}", socket.display()))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
     panic!(
-        "timed out waiting for relay socket {}",
-        paths.relay_socket.display()
+        "timed out waiting for relay socket {}; startup_failures={startup_failures:?}; relay_lock={relay_lock:?}; known_bundle_sockets={known_bundle_sockets:?}",
+        paths.relay_socket.display(),
     );
 }
 

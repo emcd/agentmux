@@ -1,3 +1,8 @@
+use std::{
+    thread,
+    time::{Duration, Instant},
+};
+
 use agentmux::relay::{ListedSessionTransport, RelayResponse};
 use tempfile::TempDir;
 
@@ -43,9 +48,16 @@ fn acp_raww_returns_accepted_in_progress_phase() {
         Some("accepted_in_progress"),
     );
 
-    let requests = read_request_log(log_path.as_path());
-    assert!(
-        request_count_by_method(requests.as_slice(), "session/prompt") >= 1,
-        "expected ACP session/prompt invocation in log"
-    );
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let requests = read_request_log(log_path.as_path());
+        if request_count_by_method(requests.as_slice(), "session/prompt") >= 1 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "expected ACP session/prompt invocation in log"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
 }
