@@ -8,7 +8,9 @@ use serde_json::json;
 use time::format_description::well_known::Rfc3339;
 
 use crate::{
-    configuration::{BundleConfiguration, BundleMember, TargetConfiguration},
+    configuration::{
+        BundleConfiguration, BundleMember, TargetConfiguration, TmuxTargetConfiguration,
+    },
     envelope::{
         AddressIdentity, EnvelopeRenderInput, ManifestPreamble, PromptBatchSettings,
         batch_envelopes, parse_tokenizer_profile, render_envelope,
@@ -38,6 +40,11 @@ const TOKENIZER_PROFILE_ENVVAR: &str = "AGENTMUX_TOKENIZER_PROFILE";
 const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;
 const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delivery";
 const DROPPED_ON_SHUTDOWN_REASON_CODE: &str = "dropped_on_shutdown";
+
+enum PreparedDeliveryPayload {
+    Immediate(ChatResult),
+    Batched { prompt_batches: Vec<String> },
+}
 
 #[derive(Clone)]
 struct AcpWorkerBootstrap {
@@ -301,44 +308,55 @@ pub(in crate::relay) fn deliver_one_target_with_worker_state(
     task: &AsyncDeliveryTask,
     acp_runtime: &mut Option<PersistentAcpWorkerRuntime>,
 ) -> Result<ChatResult, RelayError> {
-    let bundle = &task.bundle;
-    let sender = &task.sender;
-    let all_target_sessions = &task.all_target_sessions;
-    let target_session = task.target_session.clone();
-    let message = task.message.as_str();
-    let message_id = task.message_id.clone();
-    let tmux_socket_path = crate::runtime::paths::tmux_socket_path_for_runtime_directory(
-        task.runtime_directory.as_path(),
-    );
-    let tmux_socket = tmux_socket_path.as_path();
-    let quiescence = task.quiescence;
-    let batch_settings = task.batch_settings;
     let created_at = time::OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
-    let target_member = bundle
+    let target_member = resolve_target_member(task)?;
+    let prepared_payload = prepare_delivery_payload(task, target_member, created_at.as_str())?;
+    let prompt_batches = match prepared_payload {
+        PreparedDeliveryPayload::Immediate(result) => return Ok(result),
+        PreparedDeliveryPayload::Batched { prompt_batches } => prompt_batches,
+    };
+
+    let non_ui_target_member = target_member.expect("non-UI target_member must exist");
+    deliver_non_ui_target(task, non_ui_target_member, prompt_batches, acp_runtime)
+}
+
+fn resolve_target_member(task: &AsyncDeliveryTask) -> Result<Option<&BundleMember>, RelayError> {
+    let target_member = task
+        .bundle
         .members
         .iter()
-        .find(|member| member.id == target_session);
+        .find(|member| member.id == task.target_session);
     if target_member.is_none() && !task.target_is_ui {
         return Err(super::super::relay_error(
             "internal_unexpected_failure",
             "resolved target member is missing from bundle configuration",
-            Some(json!({"target_session": target_session})),
+            Some(json!({"target_session": task.target_session})),
         ));
     }
-    let (_cc_sessions, prompt_batches) = match task.payload_mode {
+    Ok(target_member)
+}
+
+fn prepare_delivery_payload(
+    task: &AsyncDeliveryTask,
+    target_member: Option<&BundleMember>,
+    created_at: &str,
+) -> Result<PreparedDeliveryPayload, RelayError> {
+    match task.payload_mode {
         DeliveryPayloadMode::EnvelopeMessage => {
-            let cc_sessions = all_target_sessions
+            let cc_sessions = task
+                .all_target_sessions
                 .iter()
-                .filter(|candidate| **candidate != target_session)
+                .filter(|candidate| **candidate != task.target_session)
                 .cloned()
                 .collect::<Vec<_>>();
-            let cc_members = all_target_sessions
+            let cc_members = task
+                .all_target_sessions
                 .iter()
-                .filter(|candidate| **candidate != target_session)
+                .filter(|candidate| **candidate != task.target_session)
                 .filter_map(|session_name| {
-                    bundle
+                    task.bundle
                         .members
                         .iter()
                         .find(|member| member.id == *session_name)
@@ -348,16 +366,16 @@ pub(in crate::relay) fn deliver_one_target_with_worker_state(
 
             let manifest = ManifestPreamble {
                 schema_version: SCHEMA_VERSION.to_string(),
-                message_id: message_id.clone(),
-                bundle_name: bundle.bundle_name.clone(),
-                sender_session: sender.id.clone(),
-                target_sessions: vec![target_session.clone()],
+                message_id: task.message_id.clone(),
+                bundle_name: task.bundle.bundle_name.clone(),
+                sender_session: task.sender.id.clone(),
+                target_sessions: vec![task.target_session.clone()],
                 cc_sessions: if cc_sessions.is_empty() {
                     None
                 } else {
                     Some(cc_sessions.clone())
                 },
-                created_at,
+                created_at: created_at.to_string(),
             };
             emit_inscription(
                 "relay.chat.envelope.metadata",
@@ -374,11 +392,11 @@ pub(in crate::relay) fn deliver_one_target_with_worker_state(
             let envelope = render_envelope(&EnvelopeRenderInput {
                 manifest,
                 from: AddressIdentity {
-                    session_name: sender.id.clone(),
-                    display_name: sender.name.clone(),
+                    session_name: task.sender.id.clone(),
+                    display_name: task.sender.name.clone(),
                 },
                 to: vec![AddressIdentity {
-                    session_name: target_session.clone(),
+                    session_name: task.target_session.clone(),
                     display_name: target_member.and_then(|member| member.name.clone()),
                 }],
                 cc: cc_members
@@ -389,44 +407,23 @@ pub(in crate::relay) fn deliver_one_target_with_worker_state(
                     })
                     .collect::<Vec<_>>(),
                 subject: None,
-                body: message.to_string(),
+                body: task.message.clone(),
             });
-            if task.target_is_ui {
-                return Ok(deliver_one_target_ui(
+
+            if should_route_to_ui(task)? {
+                return Ok(PreparedDeliveryPayload::Immediate(deliver_one_target_ui(
                     task,
-                    sender.id.as_str(),
+                    task.sender.id.as_str(),
                     cc_sessions.as_slice(),
-                    target_session,
-                    message_id,
-                    message,
-                ));
+                    task.target_session.clone(),
+                    task.message_id.clone(),
+                    task.message.as_str(),
+                )));
             }
-            let resolved_client_class = resolve_registered_client_class(
-                bundle.bundle_name.as_str(),
-                target_session.as_str(),
-            )
-            .map_err(|source| {
-                super::super::relay_error(
-                    "internal_unexpected_failure",
-                    "failed to resolve relay stream endpoint class",
-                    Some(json!({
-                        "bundle_name": bundle.bundle_name,
-                        "target_session": target_session,
-                        "cause": source.to_string(),
-                    })),
-                )
-            })?;
-            if matches!(resolved_client_class, Some(RelayClientClass::Ui)) {
-                return Ok(deliver_one_target_ui(
-                    task,
-                    sender.id.as_str(),
-                    cc_sessions.as_slice(),
-                    target_session,
-                    message_id,
-                    message,
-                ));
-            }
-            (cc_sessions, batch_envelopes(&[envelope], batch_settings))
+
+            Ok(PreparedDeliveryPayload::Batched {
+                prompt_batches: batch_envelopes(&[envelope], task.batch_settings),
+            })
         }
         DeliveryPayloadMode::RawInput => {
             if task.target_is_ui {
@@ -434,132 +431,188 @@ pub(in crate::relay) fn deliver_one_target_with_worker_state(
                     "internal_unexpected_failure",
                     "raw delivery tasks do not support ui targets",
                     Some(json!({
-                        "target_session": target_session,
+                        "target_session": task.target_session,
                     })),
                 ));
             }
-            (Vec::new(), vec![message.to_string()])
+            Ok(PreparedDeliveryPayload::Batched {
+                prompt_batches: vec![task.message.clone()],
+            })
         }
-    };
+    }
+}
 
-    let non_ui_target_member = target_member.expect("non-UI target_member must exist");
-    match &non_ui_target_member.target {
+fn should_route_to_ui(task: &AsyncDeliveryTask) -> Result<bool, RelayError> {
+    if task.target_is_ui {
+        return Ok(true);
+    }
+    let resolved_client_class = resolve_registered_client_class(
+        task.bundle.bundle_name.as_str(),
+        task.target_session.as_str(),
+    )
+    .map_err(|source| {
+        super::super::relay_error(
+            "internal_unexpected_failure",
+            "failed to resolve relay stream endpoint class",
+            Some(json!({
+                "bundle_name": task.bundle.bundle_name,
+                "target_session": task.target_session,
+                "cause": source.to_string(),
+            })),
+        )
+    })?;
+    Ok(matches!(resolved_client_class, Some(RelayClientClass::Ui)))
+}
+
+fn deliver_non_ui_target(
+    task: &AsyncDeliveryTask,
+    target_member: &BundleMember,
+    prompt_batches: Vec<String>,
+    acp_runtime: &mut Option<PersistentAcpWorkerRuntime>,
+) -> Result<ChatResult, RelayError> {
+    match &target_member.target {
         TargetConfiguration::Acp(acp) => Ok(deliver_one_target_acp(
             task,
-            non_ui_target_member,
+            target_member,
             acp,
             prompt_batches,
-            target_session,
-            message_id,
+            task.target_session.clone(),
+            task.message_id.clone(),
             acp_runtime,
         )),
         TargetConfiguration::Tmux(tmux_target) => {
-            let pane_target_result = match task.payload_mode {
-                DeliveryPayloadMode::EnvelopeMessage => wait_for_quiescent_pane(
-                    tmux_socket,
-                    &target_session,
-                    quiescence,
-                    tmux_target.prompt_readiness.as_ref(),
-                )
-                .map_err(|error| match error {
-                    DeliveryWaitError::Timeout {
-                        timeout,
-                        readiness_mismatch,
-                        mismatch_reason,
-                    } => {
-                        let reason = if readiness_mismatch {
-                            let detail = mismatch_reason
-                                .map(|value| format!(": {value}"))
-                                .unwrap_or_default();
-                            format!(
-                                "prompt readiness did not match before timeout after {}ms{}",
-                                timeout.as_millis(),
-                                detail
-                            )
-                        } else {
-                            format!("quiescence wait timed out after {}ms", timeout.as_millis())
-                        };
-                        ChatResult {
-                            target_session: target_session.clone(),
-                            message_id: message_id.clone(),
-                            outcome: ChatOutcome::Timeout,
-                            reason_code: None,
-                            reason: Some(reason),
-                            details: None,
-                        }
-                    }
-                    DeliveryWaitError::Failed { reason } => ChatResult {
-                        target_session: target_session.clone(),
-                        message_id: message_id.clone(),
-                        outcome: ChatOutcome::Failed,
+            Ok(deliver_one_target_tmux(task, tmux_target, prompt_batches))
+        }
+    }
+}
+
+fn deliver_one_target_tmux(
+    task: &AsyncDeliveryTask,
+    tmux_target: &TmuxTargetConfiguration,
+    prompt_batches: Vec<String>,
+) -> ChatResult {
+    let target_session = task.target_session.clone();
+    let message_id = task.message_id.clone();
+    let tmux_socket_path = crate::runtime::paths::tmux_socket_path_for_runtime_directory(
+        task.runtime_directory.as_path(),
+    );
+    let tmux_socket = tmux_socket_path.as_path();
+
+    let pane_target = match resolve_tmux_pane_target(task, tmux_target, tmux_socket) {
+        Ok(pane_target) => pane_target,
+        Err(result) => return *result,
+    };
+
+    let failed_reason = match task.payload_mode {
+        DeliveryPayloadMode::EnvelopeMessage => {
+            let mut failed_reason = None::<String>;
+            for prompt in prompt_batches {
+                if let Err(reason) = inject_prompt(tmux_socket, &pane_target, &prompt) {
+                    failed_reason = Some(reason);
+                    break;
+                }
+            }
+            failed_reason
+        }
+        DeliveryPayloadMode::RawInput => inject_literal_text(
+            tmux_socket,
+            &pane_target,
+            task.message.as_str(),
+            task.append_enter,
+        )
+        .err(),
+    };
+    match failed_reason {
+        None => ChatResult {
+            target_session,
+            message_id,
+            outcome: ChatOutcome::Delivered,
+            reason_code: None,
+            reason: None,
+            details: None,
+        },
+        Some(reason) => ChatResult {
+            target_session,
+            message_id,
+            outcome: ChatOutcome::Failed,
+            reason_code: None,
+            reason: Some(reason),
+            details: None,
+        },
+    }
+}
+
+fn resolve_tmux_pane_target(
+    task: &AsyncDeliveryTask,
+    tmux_target: &TmuxTargetConfiguration,
+    tmux_socket: &std::path::Path,
+) -> Result<String, Box<ChatResult>> {
+    match task.payload_mode {
+        DeliveryPayloadMode::EnvelopeMessage => wait_for_quiescent_pane(
+            tmux_socket,
+            task.target_session.as_str(),
+            task.quiescence,
+            tmux_target.prompt_readiness.as_ref(),
+        )
+        .map_err(|error| {
+            Box::new(match error {
+                DeliveryWaitError::Timeout {
+                    timeout,
+                    readiness_mismatch,
+                    mismatch_reason,
+                } => {
+                    let reason = if readiness_mismatch {
+                        let detail = mismatch_reason
+                            .map(|value| format!(": {value}"))
+                            .unwrap_or_default();
+                        format!(
+                            "prompt readiness did not match before timeout after {}ms{}",
+                            timeout.as_millis(),
+                            detail
+                        )
+                    } else {
+                        format!("quiescence wait timed out after {}ms", timeout.as_millis())
+                    };
+                    ChatResult {
+                        target_session: task.target_session.clone(),
+                        message_id: task.message_id.clone(),
+                        outcome: ChatOutcome::Timeout,
                         reason_code: None,
                         reason: Some(reason),
                         details: None,
-                    },
-                    DeliveryWaitError::Shutdown => ChatResult {
-                        target_session: target_session.clone(),
-                        message_id: message_id.clone(),
-                        outcome: ChatOutcome::DroppedOnShutdown,
-                        reason_code: Some(DROPPED_ON_SHUTDOWN_REASON_CODE.to_string()),
-                        reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
-                        details: None,
-                    },
-                }),
-                DeliveryPayloadMode::RawInput => {
-                    resolve_active_pane_target(tmux_socket, target_session.as_str()).map_err(
-                        |reason| ChatResult {
-                            target_session: target_session.clone(),
-                            message_id: message_id.clone(),
-                            outcome: ChatOutcome::Failed,
-                            reason_code: Some("tmux_target_unavailable".to_string()),
-                            reason: Some(reason),
-                            details: None,
-                        },
-                    )
-                }
-            };
-
-            let pane_target = match pane_target_result {
-                Ok(pane_target) => pane_target,
-                Err(result) => return Ok(result),
-            };
-
-            let mut failed_reason = None::<String>;
-            match task.payload_mode {
-                DeliveryPayloadMode::EnvelopeMessage => {
-                    for prompt in prompt_batches {
-                        if let Err(reason) = inject_prompt(tmux_socket, &pane_target, &prompt) {
-                            failed_reason = Some(reason);
-                            break;
-                        }
                     }
                 }
-                DeliveryPayloadMode::RawInput => {
-                    if let Err(reason) =
-                        inject_literal_text(tmux_socket, &pane_target, message, task.append_enter)
-                    {
-                        failed_reason = Some(reason);
-                    }
-                }
-            }
-            match failed_reason {
-                None => Ok(ChatResult {
-                    target_session,
-                    message_id,
-                    outcome: ChatOutcome::Delivered,
-                    reason_code: None,
-                    reason: None,
-                    details: None,
-                }),
-                Some(reason) => Ok(ChatResult {
-                    target_session,
-                    message_id,
+                DeliveryWaitError::Failed { reason } => ChatResult {
+                    target_session: task.target_session.clone(),
+                    message_id: task.message_id.clone(),
                     outcome: ChatOutcome::Failed,
                     reason_code: None,
                     reason: Some(reason),
                     details: None,
-                }),
-            }
+                },
+                DeliveryWaitError::Shutdown => ChatResult {
+                    target_session: task.target_session.clone(),
+                    message_id: task.message_id.clone(),
+                    outcome: ChatOutcome::DroppedOnShutdown,
+                    reason_code: Some(DROPPED_ON_SHUTDOWN_REASON_CODE.to_string()),
+                    reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
+                    details: None,
+                },
+            })
+        }),
+        DeliveryPayloadMode::RawInput => {
+            resolve_active_pane_target(tmux_socket, task.target_session.as_str()).map_err(
+                |reason| {
+                    Box::new(ChatResult {
+                        target_session: task.target_session.clone(),
+                        message_id: task.message_id.clone(),
+                        outcome: ChatOutcome::Failed,
+                        reason_code: Some("tmux_target_unavailable".to_string()),
+                        reason: Some(reason),
+                        details: None,
+                    })
+                },
+            )
         }
     }
 }
