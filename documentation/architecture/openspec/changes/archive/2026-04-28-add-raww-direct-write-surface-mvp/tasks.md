@@ -1,29 +1,29 @@
 ## 1. Contract Design
 
-- [ ] 1.1 Add relay `raww` operation contract and same-bundle selector semantics.
-- [ ] 1.2 Lock canonical validation/error taxonomy:
+- [x] 1.1 Add relay `raww` operation contract and same-bundle selector semantics.
+- [x] 1.2 Lock canonical validation/error taxonomy:
   - `validation_unknown_target`
   - `validation_cross_bundle_unsupported`
   - `validation_invalid_params`
-- [ ] 1.3 Lock deterministic success schema and accepted-phase details.
+- [x] 1.3 Lock deterministic success schema and accepted-phase details.
 
 ## 2. Authorization Contract
 
-- [ ] 2.1 Add policy control `raww` with allowed scopes `none|self|all:home`.
-- [ ] 2.2 Lock denial capability label `raww.write` and canonical
+- [x] 2.1 Add policy control `raww` with allowed scopes `none|self|all:home`.
+- [x] 2.2 Lock denial capability label `raww.write` and canonical
       `authorization_forbidden` minimum details requirements.
 
 ## 3. Transport Contract
 
-- [ ] 3.1 Lock tmux raww behavior (literal text + optional Enter).
-- [ ] 3.2 Lock ACP raww behavior on existing shared worker `session/prompt`
+- [x] 3.1 Lock tmux raww behavior (literal text + optional Enter).
+- [x] 3.2 Lock ACP raww behavior on existing shared worker `session/prompt`
       path with dispatch-boundary acceptance semantics.
-- [ ] 3.3 Lock unsupported target-class behavior (UI targets rejected with
+- [x] 3.3 Lock unsupported target-class behavior (UI targets rejected with
       `validation_invalid_params`).
 
 ## 4. Surface Contracts
 
-- [ ] 4.1 Add MCP `raww` tool request/response contract and association-derived
+- [x] 4.1 Add MCP `raww` tool request/response contract and association-derived
       sender authority lock.
 - [x] 4.2 Add CLI `agentmux raww` contract including `--no-enter` opt-out.
 - [x] 4.3 Add TUI raww dispatch contract against relay raww operation.
