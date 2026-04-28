@@ -32,7 +32,7 @@ fn ensure_socket_parent(socket_path: &Path) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tool_catalog_contains_list_sessions_send_and_look() {
+async fn tool_catalog_contains_list_sessions_send_look_and_raww() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -95,6 +95,7 @@ async fn tool_catalog_contains_list_sessions_send_and_look() {
             "help".to_string(),
             "list".to_string(),
             "look".to_string(),
+            "raww".to_string(),
             "send".to_string(),
         ])
     );

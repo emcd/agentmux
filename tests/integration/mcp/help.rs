@@ -20,7 +20,7 @@ async fn help_without_query_returns_tool_inventory() {
     assert_eq!(payload["namespace"], "agentmux");
     assert_eq!(
         payload["tools"].as_array().map_or(0, |value| value.len()),
-        4
+        5
     );
     assert_eq!(payload["tools"][0]["tool"], "list");
     assert_eq!(payload["tools"][0]["kind"], "meta_tool");
@@ -65,6 +65,19 @@ async fn help_send_query_returns_args_schema() {
     assert_eq!(payload["command"], "send");
     assert!(payload["args_schema"]["properties"]["message"].is_object());
     assert!(payload["args_schema"]["properties"]["targets"].is_object());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn help_raww_query_returns_args_schema() {
+    let runtime = TestRuntime::create();
+    let mut harness = McpHarness::spawn(&runtime).await;
+    let response = harness.call_tool(2, "help", help_call(Some("raww"))).await;
+    let payload = decode_tool_payload(&response);
+
+    assert_eq!(payload["command"], "raww");
+    assert!(payload["args_schema"]["properties"]["target_session"].is_object());
+    assert!(payload["args_schema"]["properties"]["text"].is_object());
+    assert!(payload["args_schema"]["properties"]["no_enter"].is_object());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

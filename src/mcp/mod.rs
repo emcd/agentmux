@@ -1,6 +1,7 @@
 //! MCP server surface for agentmux.
 
 use std::{
+    collections::BTreeMap,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -116,6 +117,24 @@ struct LookParams {
     lines: Option<u64>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+struct RawwParams {
+    /// Session identifier to write to.
+    target_session: String,
+    /// Raw text content to write.
+    text: String,
+    /// When true, suppress trailing Enter after raw write dispatch.
+    #[serde(default)]
+    no_enter: bool,
+    /// Optional client request identifier echoed in responses.
+    #[serde(default)]
+    request_id: Option<String>,
+    /// Unknown fields captured for explicit validation.
+    #[serde(flatten, default)]
+    #[schemars(skip)]
+    extra_fields: BTreeMap<String, Value>,
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum SendDeliveryModeParam {
@@ -140,6 +159,7 @@ const LIST_COMMAND_SESSIONS: &str = "sessions";
 const TOOL_HELP: &str = "help";
 const TOOL_LIST: &str = "list";
 const TOOL_LOOK: &str = "look";
+const TOOL_RAWW: &str = "raww";
 const TOOL_SEND: &str = "send";
 const NAMESPACE_AGENTMUX: &str = "agentmux";
 
@@ -257,7 +277,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Return tool/command help and JSON schemas. Query omitted or `agentmux` for tool list, `list` for list meta-tool commands, or `list.sessions`/`send`/`look` for exact schemas."
+        description = "Return tool/command help and JSON schemas. Query omitted or `agentmux` for tool list, `list` for list meta-tool commands, or `list.sessions`/`send`/`look`/`raww` for exact schemas."
     )]
     async fn help(
         &self,
@@ -489,6 +509,100 @@ impl McpServer {
                 ))
             }
             Err(source) => Err(self.map_relay_stream_failure("mcp.tool.look.io_error", source)),
+        }
+    }
+
+    #[tool(description = "Write raw text directly to one target session.")]
+    async fn raww(
+        &self,
+        Parameters(params): Parameters<RawwParams>,
+    ) -> Result<CallToolResult, McpError> {
+        validate_raww_request(&params)?;
+        emit_inscription(
+            "mcp.tool.raww.request",
+            &json!({
+                "bundle_name": self.associated_bundle_name(),
+                "request_id": params.request_id.clone(),
+                "target_session": params.target_session.clone(),
+                "text_length": params.text.len(),
+                "no_enter": params.no_enter,
+            }),
+        );
+        let sender_session = self
+            .state
+            .configuration
+            .sender_session
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| {
+                validation_tool_error(
+                    "validation_unknown_sender",
+                    "sender session is not configured for this MCP server",
+                    None,
+                )
+            })?;
+
+        let request = RelayRequest::Raww {
+            request_id: params.request_id.clone(),
+            sender_session,
+            target_session: params.target_session.clone(),
+            text: params.text.clone(),
+            no_enter: params.no_enter,
+            bundle_name: None,
+        };
+        match self.request_relay(&request) {
+            Ok(RelayResponse::Raww {
+                schema_version,
+                status,
+                target_session,
+                transport,
+                request_id,
+                message_id,
+                details,
+            }) => {
+                let response = json!({
+                    "schema_version": schema_version,
+                    "status": status,
+                    "target_session": target_session,
+                    "transport": transport,
+                    "request_id": request_id,
+                    "message_id": message_id,
+                    "details": details,
+                });
+                emit_inscription(
+                    "mcp.tool.raww.success",
+                    &json!({
+                        "bundle_name": self.associated_bundle_name(),
+                        "status": response["status"],
+                        "target_session": response["target_session"],
+                        "transport": response["transport"],
+                    }),
+                );
+                Ok(CallToolResult::success(vec![Content::json(response)?]))
+            }
+            Ok(RelayResponse::Error { error }) => {
+                emit_inscription(
+                    "mcp.tool.raww.relay_error",
+                    &json!({
+                        "code": error.code.clone(),
+                        "message": error.message.clone(),
+                        "details": error.details.clone(),
+                    }),
+                );
+                Err(map_relay_error(error))
+            }
+            Ok(other) => {
+                emit_inscription(
+                    "mcp.tool.raww.unexpected_response",
+                    &json!({"response": other}),
+                );
+                Err(internal_tool_error(
+                    "internal_unexpected_failure",
+                    "relay returned unexpected response variant",
+                    Some(json!({"response": other})),
+                ))
+            }
+            Err(source) => Err(self.map_relay_stream_failure("mcp.tool.raww.io_error", source)),
         }
     }
 
@@ -748,12 +862,13 @@ fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpError> {
             "shape_hints": [
                 "Call help with query='list' for meta-tool command list.",
                 "Call help with query='list.sessions' for list command args schema.",
-                "Call help with query='send' or query='look' for exact tool args schemas."
+                "Call help with query='send', 'look', or 'raww' for exact tool args schemas."
             ],
             "tools": [
                 {"tool": TOOL_LIST, "kind": "meta_tool", "description": "List sessions for one bundle or fan out across bundles."},
                 {"tool": TOOL_SEND, "kind": "tool", "description": "Submit a message to explicit targets or broadcast."},
                 {"tool": TOOL_LOOK, "kind": "tool", "description": "Inspect a target session pane snapshot for this bundle."},
+                {"tool": TOOL_RAWW, "kind": "tool", "description": "Write raw text directly to one target session."},
                 {"tool": TOOL_HELP, "kind": "tool", "description": "Return tool/command help and JSON schemas."}
             ],
             "invoke": {
@@ -809,6 +924,15 @@ fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpError> {
                 "params": {}
             }),
         )),
+        TOOL_RAWW => Ok(command_help(
+            TOOL_RAWW,
+            "Write raw text directly to one target session.",
+            json_schema_for::<RawwParams>(),
+            json!({
+                "tool": TOOL_RAWW,
+                "params": {}
+            }),
+        )),
         TOOL_HELP => Ok(command_help(
             TOOL_HELP,
             "Return tool/command help and JSON schemas.",
@@ -820,7 +944,7 @@ fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpError> {
         )),
         _ => Err(validation_tool_error(
             "validation_invalid_params",
-            "unknown help query; try empty query, 'agentmux', 'list', 'list.sessions', 'send', or 'look'",
+            "unknown help query; try empty query, 'agentmux', 'list', 'list.sessions', 'send', 'look', or 'raww'",
             Some(json!({"query": query})),
         )),
     }
@@ -914,6 +1038,55 @@ fn validate_look_request(params: &LookParams) -> Result<(), McpError> {
         ));
     }
     Ok(())
+}
+
+fn validate_raww_request(params: &RawwParams) -> Result<(), McpError> {
+    if params.target_session.trim().is_empty() {
+        return Err(validation_tool_error(
+            "validation_unknown_target",
+            "target_session must be non-empty",
+            None,
+        ));
+    }
+
+    let mut provided_fields = params.extra_fields.keys().cloned().collect::<Vec<_>>();
+    provided_fields.sort();
+    if !provided_fields.is_empty() {
+        let sender_like = provided_fields
+            .iter()
+            .filter(|field| is_sender_like_field(field.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !sender_like.is_empty() {
+            return Err(validation_tool_error(
+                "validation_invalid_params",
+                "sender-like fields are not allowed; sender authority is association-derived",
+                Some(json!({"fields": sender_like})),
+            ));
+        }
+        return Err(validation_tool_error(
+            "validation_invalid_params",
+            "unknown parameter(s) for raww request",
+            Some(json!({"fields": provided_fields})),
+        ));
+    }
+
+    Ok(())
+}
+
+fn is_sender_like_field(field: &str) -> bool {
+    matches!(
+        field,
+        "sender"
+            | "sender_id"
+            | "sender_name"
+            | "sender_session"
+            | "sender_session_id"
+            | "requester"
+            | "requester_session"
+            | "requester_session_id"
+            | "as_session"
+    )
 }
 
 fn map_relay_error(error: RelayError) -> McpError {

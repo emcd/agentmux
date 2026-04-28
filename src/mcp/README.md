@@ -8,6 +8,7 @@ This module implements the MCP stdio server for `agentmux`.
   - `list` (MVP requires `command="sessions"`)
   - `help`
   - `look`
+  - `raww`
   - `send`
 - Preserve canonical relay `look` success payloads without adapter reshaping:
   - tmux: `snapshot_format="lines"` + `snapshot_lines`
@@ -19,12 +20,13 @@ This module implements the MCP stdio server for `agentmux`.
 
 ## Data Flow
 
-1. MCP client calls `list`, `look`, or `send`.
+1. MCP client calls `list`, `look`, `raww`, or `send`.
 2. MCP client can call `help` to discover tool/command schemas.
 3. `src/mcp/mod.rs` validates parameter shape and transport-compatible options.
 4. Request is forwarded as relay contract:
    - `list` (`command="sessions"`) -> one-shot `request_relay` probes (`RelayRequest::List`)
    - `look` -> `RelayStreamSession` (`RelayRequest::Look`)
+   - `raww` -> `RelayStreamSession` (`RelayRequest::Raww`)
    - `send` -> `RelayStreamSession` (`RelayRequest::Chat`)
 5. For `all=true`, MCP performs adapter fanout across bundle relays in
    deterministic lexicographic order.

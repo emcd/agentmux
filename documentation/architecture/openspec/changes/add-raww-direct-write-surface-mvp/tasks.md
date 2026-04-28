@@ -32,7 +32,7 @@
 
 - [ ] 5.1 Implement relay raww request handling and policy evaluation.
 - [ ] 5.2 Implement policy parsing/validation support for `raww` control.
-- [ ] 5.3 Implement MCP raww tool wiring + validation.
+- [x] 5.3 Implement MCP raww tool wiring + validation.
 - [x] 5.4 Implement CLI raww command wiring + JSON output mapping.
 - [x] 5.5 Implement TUI raww dispatch integration.
 - [ ] 5.6 Add unit/integration coverage for taxonomy, authorization, target
