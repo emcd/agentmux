@@ -1,5 +1,5 @@
 use crate::{
-    relay::{LookSnapshotPayload, RelayRequest, RelayResponse},
+    relay::{ListedSessionTransport, LookSnapshotPayload, RelayRequest, RelayResponse},
     runtime::error::RuntimeError,
 };
 
@@ -502,6 +502,79 @@ impl AppState {
         }
     }
 
+    pub fn raww_picker_target(&mut self) -> Result<(), RuntimeError> {
+        let target = self.selected_picker_recipient_id().ok_or_else(|| {
+            RuntimeError::validation(
+                "validation_unknown_target",
+                "raww requires a selected recipient in picker",
+            )
+        })?;
+        if self.message_field.trim().is_empty() {
+            return Err(RuntimeError::validation(
+                "validation_missing_message_input",
+                "raww text is required from Message field",
+            ));
+        }
+
+        let text = self.message_field.clone();
+        let response = self.request_relay(&RelayRequest::Raww {
+            request_id: None,
+            sender_session: self.sender_session.clone(),
+            target_session: target.clone(),
+            text,
+            no_enter: false,
+            bundle_name: None,
+        })?;
+
+        match response {
+            RelayResponse::Raww {
+                status,
+                target_session,
+                transport,
+                request_id: _,
+                message_id,
+                details,
+                ..
+            } => {
+                let transport_label = render_transport_label(transport);
+                let phase = details
+                    .as_ref()
+                    .and_then(|value| value.get("delivery_phase"))
+                    .and_then(serde_json::Value::as_str);
+                let message_id_label = message_id.as_deref().unwrap_or("-");
+
+                if let Some(phase) = phase {
+                    self.push_status(
+                        None,
+                        format!(
+                            "raww accepted status={status} target={target_session} transport={transport_label} phase={phase}"
+                        ),
+                    );
+                    self.push_event(format!(
+                        "raww target={target_session} status={status} transport={transport_label} phase={phase} message_id={message_id_label}"
+                    ));
+                } else {
+                    self.push_status(
+                        None,
+                        format!(
+                            "raww accepted status={status} target={target_session} transport={transport_label}"
+                        ),
+                    );
+                    self.push_event(format!(
+                        "raww target={target_session} status={status} transport={transport_label} message_id={message_id_label}"
+                    ));
+                }
+                self.relay_stream_poll_error_reported = false;
+                Ok(())
+            }
+            RelayResponse::Error { error } => Err(map_relay_error(error)),
+            other => Err(RuntimeError::validation(
+                "internal_unexpected_failure",
+                format!("relay returned unexpected response variant: {other:?}"),
+            )),
+        }
+    }
+
     fn selected_picker_recipient_id(&self) -> Option<String> {
         self.picker_state
             .selected()
@@ -607,5 +680,12 @@ fn overlay_snapshot_from_payload(
             Vec::new(),
             snapshot_entries,
         ),
+    }
+}
+
+fn render_transport_label(transport: ListedSessionTransport) -> &'static str {
+    match transport {
+        ListedSessionTransport::Tmux => "tmux",
+        ListedSessionTransport::Acp => "acp",
     }
 }

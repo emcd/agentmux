@@ -25,19 +25,19 @@
 
 - [ ] 4.1 Add MCP `raww` tool request/response contract and association-derived
       sender authority lock.
-- [ ] 4.2 Add CLI `agentmux raww` contract including `--no-enter` opt-out.
-- [ ] 4.3 Add TUI raww dispatch contract against relay raww operation.
+- [x] 4.2 Add CLI `agentmux raww` contract including `--no-enter` opt-out.
+- [x] 4.3 Add TUI raww dispatch contract against relay raww operation.
 
 ## 5. Implementation Follow-up (post-approval)
 
 - [ ] 5.1 Implement relay raww request handling and policy evaluation.
 - [ ] 5.2 Implement policy parsing/validation support for `raww` control.
 - [ ] 5.3 Implement MCP raww tool wiring + validation.
-- [ ] 5.4 Implement CLI raww command wiring + JSON output mapping.
-- [ ] 5.5 Implement TUI raww dispatch integration.
+- [x] 5.4 Implement CLI raww command wiring + JSON output mapping.
+- [x] 5.5 Implement TUI raww dispatch integration.
 - [ ] 5.6 Add unit/integration coverage for taxonomy, authorization, target
       classes, payload bounds, and ACP/tmux acceptance details.
 
 ## 6. Validation
 
-- [ ] 6.1 Run `openspec validate add-raww-direct-write-surface-mvp --strict`.
+- [x] 6.1 Run `openspec validate add-raww-direct-write-surface-mvp --strict`.

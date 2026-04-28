@@ -47,6 +47,10 @@ User-facing usage details and keybindings are documented under
   - recipient picker,
   - delivery events,
   - look snapshot,
+- picker actions:
+  - insert recipient into `To`,
+  - capture look snapshot (`l`),
+  - dispatch raw write using current `Message` field (`w`) via relay `raww`,
 - look snapshot rendering:
   - tmux targets: line snapshot rendering (`snapshot_lines`),
   - ACP targets: structured entry rendering by canonical kinds
@@ -54,6 +58,7 @@ User-facing usage details and keybindings are documented under
 - chat history viewport for sent/received messages,
 - send workflow via relay `chat`,
 - look workflow via relay `look`,
+- raw write workflow via relay `raww`,
 - stable rendering for validation/runtime error codes,
 - stream reconnect handling with explicit `relay_unavailable` (not reachable)
   and `relay_timeout` (reachable but unresponsive/saturated) status,

@@ -274,6 +274,40 @@ fn picker_look_uses_selected_recipient_target() {
 }
 
 #[test]
+fn picker_raww_requires_non_empty_message_field() {
+    let mut state = make_state();
+    state.set_recipients(&["master"]);
+    state
+        .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
+        .expect("f2 should open picker");
+    let result = state.dispatch_event(key_event(KeyCode::Char('w'), KeyModifiers::NONE));
+    match result {
+        Err(RuntimeError::Validation { code, .. }) => {
+            assert_eq!(code, "validation_missing_message_input")
+        }
+        other => panic!("unexpected result: {other:?}"),
+    }
+}
+
+#[test]
+fn picker_raww_uses_selected_recipient_target() {
+    let mut state = make_state();
+    state.set_focus(WorkbenchField::Message);
+    state.insert_text("echo from picker");
+    state.set_recipients(&["master"]);
+    state
+        .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
+        .expect("f2 should open picker");
+    let result = state.dispatch_event(key_event(KeyCode::Char('w'), KeyModifiers::NONE));
+    match result {
+        Err(RuntimeError::Validation { code, .. }) => {
+            assert_eq!(code, "relay_unavailable")
+        }
+        other => panic!("unexpected result: {other:?}"),
+    }
+}
+
+#[test]
 fn ctrl_c_quits_even_when_picker_overlay_is_open() {
     let mut state = make_state();
     state

@@ -38,6 +38,7 @@ Startup behavior:
 - `F2`: open/close recipient picker
 - `F3`: open/close delivery events overlay
 - `l` in picker: capture look snapshot for selected recipient
+- `w` in picker: dispatch raw write to selected recipient using `Message` field
 - `Esc` in look overlay: close look and return to picker context
 - `PgUp` / `PgDn`: page chat history viewport backward/forward
 - `Up` / `Down` in picker: move recipient selection
@@ -67,5 +68,7 @@ Delivery outcomes:
   - tmux look snapshots render line payloads directly.
   - ACP look snapshots render structured entries by kind:
     `user`, `agent`, `cognition`, `invocation`, `result`, `update`.
+- Picker raw-write dispatch routes through relay `raww` and surfaces
+  acceptance-phase metadata when provided.
 - Terminal outcomes are sourced from relay completion updates keyed by
   `message_id`.

@@ -52,6 +52,24 @@ fn tui_help_output_includes_usage_line() {
 }
 
 #[test]
+fn raww_help_output_includes_usage_line() {
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args(["raww", "--help"])
+        .output()
+        .expect("run agentmux raww --help");
+    assert!(output.status.success(), "raww help should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Usage: agentmux raww"),
+        "unexpected raww help output: {stdout}"
+    );
+    assert!(
+        stdout.contains("--text TEXT"),
+        "unexpected raww help output: {stdout}"
+    );
+}
+
+#[test]
 fn list_help_output_includes_sessions_subcommand() {
     let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
         .args(["list", "--help"])

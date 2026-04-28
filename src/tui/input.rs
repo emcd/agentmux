@@ -148,6 +148,12 @@ fn handle_picker_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeE
         {
             return state.look_picker_target();
         }
+        KeyCode::Char(character)
+            if (character == 'w' || character == 'W')
+                && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
+        {
+            return state.raww_picker_target();
+        }
         _ => {}
     }
     Ok(())

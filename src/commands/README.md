@@ -27,6 +27,8 @@ This directory owns the unified CLI surface for `agentmux`.
   - `agentmux list sessions`.
 - `look.rs`
   - `agentmux look`.
+- `raww.rs`
+  - `agentmux raww` direct-write request surface.
 - `send.rs`
   - `agentmux send`, including stdin/message precedence and timeout fields.
 - `tui.rs`

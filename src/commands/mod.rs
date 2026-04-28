@@ -9,6 +9,7 @@ mod host;
 mod lifecycle;
 mod list;
 mod look;
+mod raww;
 mod send;
 mod shared;
 mod tui;
@@ -96,6 +97,17 @@ pub(super) struct SendArguments {
 }
 
 #[derive(Clone, Debug)]
+pub(super) struct RawwArguments {
+    pub(super) bundle_name: Option<String>,
+    pub(super) session_selector: Option<String>,
+    pub(super) target_session: String,
+    pub(super) text: String,
+    pub(super) no_enter: bool,
+    pub(super) output_json: bool,
+    pub(super) runtime: RuntimeArguments,
+}
+
+#[derive(Clone, Debug)]
 pub(super) struct RelayHostStartupBundle {
     pub(super) bundle_name: String,
     pub(super) outcome: String,
@@ -159,6 +171,7 @@ pub async fn run_agentmux(arguments: Vec<String>) -> Result<(), RuntimeError> {
         "down" => down::run_agentmux_down(&arguments[1..]),
         "list" => list::run_agentmux_list(&arguments[1..]),
         "look" => look::run_agentmux_look(&arguments[1..]),
+        "raww" => raww::run_agentmux_raww(&arguments[1..]),
         "tui" => tui::run_agentmux_tui(&arguments[1..]),
         "send" => send::run_agentmux_send(&arguments[1..]),
         unknown => Err(RuntimeError::InvalidArgument {
@@ -194,6 +207,10 @@ fn print_agentmux_help() {
         "[--config-directory PATH] [--state-directory PATH] ",
         "[--inscriptions-directory PATH|--logs-directory PATH] ",
         "[--repository-root PATH]\n",
+        "  raww <target-session> --text TEXT [--no-enter] [--bundle NAME] ",
+        "[--as-session NAME] [--json] [--config-directory PATH] ",
+        "[--state-directory PATH] [--inscriptions-directory PATH|",
+        "--logs-directory PATH] [--repository-root PATH]\n",
         "  tui [--bundle NAME] [--as-session NAME] [--lines N] ",
         "[--config-directory PATH] [--state-directory PATH] ",
         "[--inscriptions-directory PATH|--logs-directory PATH] ",

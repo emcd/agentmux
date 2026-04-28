@@ -81,7 +81,8 @@ artifact locations, see
   - Responsibility: expose MCP tools (`list`, `help`, `look`, `send`) and forward
     requests to relay.
 - Operator CLI:
-  - Commands: `agentmux list sessions`, `agentmux look`, `agentmux send`, `agentmux tui`
+  - Commands: `agentmux list sessions`, `agentmux look`, `agentmux raww`,
+    `agentmux send`, `agentmux tui`
   - Responsibility: direct local inspection, message delivery, and interactive
     coordination flows with relay auto-start fallback for `agentmux tui`.
 
@@ -97,6 +98,7 @@ agentmux up (<bundle-id> | --group GROUP)
 agentmux down (<bundle-id> | --group GROUP)
 agentmux list sessions [--bundle NAME|--all] [--as-session NAME] [--json]
 agentmux look <target-session> [--bundle NAME] [--as-session NAME] [--lines N]
+agentmux raww <target-session> --text TEXT [--no-enter] [--bundle NAME] [--as-session NAME] [--json]
 agentmux tui [--bundle NAME] [--as-session NAME] [--lines N]
 agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--quiescence-timeout-ms MS] [--acp-turn-timeout-ms MS] [--request-id ID] [--bundle NAME] [--as-session NAME] [--json]
 ```

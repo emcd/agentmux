@@ -496,6 +496,7 @@ fn render_help_overlay(frame: &mut Frame, _state: &AppState) {
         )),
         Line::from("Enter: Choose selected recipient into To"),
         Line::from("l: Capture look snapshot for selected recipient"),
+        Line::from("w: Dispatch raw write using Message field"),
         Line::from("Esc / F2: Close picker"),
         Line::from("Up/Down: Move picker selection"),
         Line::from(""),
