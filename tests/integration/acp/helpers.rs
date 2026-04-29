@@ -136,8 +136,9 @@ while IFS= read -r line; do
         prompt_session_id="$new_session_id"
       fi
       if [ "$request_permission_on_prompt" = "1" ]; then
-        printf '{"jsonrpc":"2.0","method":"session/request_permission","params":{"sessionId":"%s","kind":"exec","description":"need permission"}}\n' \
-          "$prompt_session_id"
+        permission_request_id=$((id + 1000000))
+        printf '{"jsonrpc":"2.0","id":%s,"method":"session/request_permission","params":{"sessionId":"%s","kind":"exec","description":"need permission","options":[{"optionId":"allow","name":"Allow","kind":"allow"}]}}\n' \
+          "$permission_request_id" "$prompt_session_id"
       fi
       emit_updates() {
         count=1

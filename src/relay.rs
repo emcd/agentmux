@@ -34,7 +34,8 @@ use self::delivery::QuiescenceOptions;
 use self::stream::{
     HelloFrame, IncomingFrame, OutgoingFrame, RegisterStreamOutcome, RelayClientClass,
     StreamRegistration, clone_stream_writer, parse_incoming_frame, register_stream,
-    registration_is_current, unregister_stream, write_stream_frame_to_writer,
+    registration_is_current, resolve_registered_client_class, unregister_stream,
+    write_stream_frame_to_writer,
 };
 
 const SCHEMA_VERSION: &str = ENVELOPE_SCHEMA_VERSION;
@@ -345,6 +346,26 @@ pub enum RelayRequest {
         #[serde(default)]
         bundle_name: Option<String>,
     },
+    PermissionApprove {
+        permission_request_id: String,
+        #[serde(default)]
+        option_id: Option<String>,
+        #[serde(default)]
+        bundle_name: Option<String>,
+        #[serde(default)]
+        ui_session_id: Option<String>,
+    },
+    PermissionDeny {
+        permission_request_id: String,
+        #[serde(default)]
+        option_id: Option<String>,
+        #[serde(default)]
+        reason: Option<String>,
+        #[serde(default)]
+        bundle_name: Option<String>,
+        #[serde(default)]
+        ui_session_id: Option<String>,
+    },
 }
 
 /// Relay response protocol.
@@ -396,6 +417,16 @@ pub enum RelayResponse {
         #[serde(skip_serializing_if = "Option::is_none")]
         details: Option<Value>,
     },
+    PermissionDecision {
+        schema_version: String,
+        status: String,
+        permission_request_id: String,
+        outcome: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason_code: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
     Error {
         error: RelayError,
     },
@@ -433,6 +464,21 @@ pub(super) struct RawwRequestContext {
 }
 
 #[derive(Clone, Debug)]
+pub(super) struct PermissionDecisionRequestContext {
+    permission_request_id: String,
+    option_id: Option<String>,
+    reason: Option<String>,
+    bundle_name: Option<String>,
+    ui_session_id: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct RequestPrincipal {
+    session_id: String,
+    client_class: RelayClientClass,
+}
+
+#[derive(Clone, Debug)]
 pub(super) struct AsyncDeliveryTask {
     bundle: BundleConfiguration,
     sender: crate::configuration::BundleMember,
@@ -447,6 +493,8 @@ pub(super) struct AsyncDeliveryTask {
     completion_sender: Option<std::sync::mpsc::Sender<Result<ChatResult, RelayError>>>,
     payload_mode: DeliveryPayloadMode,
     append_enter: bool,
+    permission_decider_sessions: Vec<String>,
+    permission_max_pending: usize,
 }
 
 /// Handles one relay socket request/response exchange on a connected stream.
@@ -501,6 +549,7 @@ pub fn serve_connection(
                     configuration_root,
                     &bundle_paths.bundle_name,
                     &bundle_paths.runtime_directory,
+                    None,
                 );
                 write_response(stream, &response)?;
             }
@@ -561,6 +610,24 @@ pub fn serve_connection(
                                 client_class: hello.client_class,
                             },
                         )?;
+                        if hello.client_class == RelayClientClass::Ui
+                            && let Err(error) =
+                                handlers::emit_permission_snapshot_for_ui_registration(
+                                    configuration_root,
+                                    &bundle_paths.bundle_name,
+                                    &bundle_paths.runtime_directory,
+                                    hello.session_id.as_str(),
+                                )
+                        {
+                            write_stream_frame_to_writer(
+                                &writer,
+                                OutgoingFrame::Response {
+                                    request_id: None,
+                                    response: &RelayResponse::Error { error },
+                                },
+                            )?;
+                            break;
+                        }
                     }
                     Err(error) => {
                         write_stream_frame_to_writer(
@@ -616,6 +683,10 @@ pub fn serve_connection(
                     configuration_root,
                     &bundle_paths.bundle_name,
                     &bundle_paths.runtime_directory,
+                    Some(RequestPrincipal {
+                        session_id: active_registration.session_id.clone(),
+                        client_class: hello_client_class(active_registration)?,
+                    }),
                 );
                 write_stream_frame_to_writer(
                     &writer,
@@ -641,9 +712,31 @@ pub fn handle_request(
     bundle_name: &str,
     runtime_directory: &Path,
 ) -> Result<RelayResponse, RelayError> {
+    handle_request_with_principal(
+        request,
+        configuration_root,
+        bundle_name,
+        runtime_directory,
+        None,
+    )
+}
+
+fn handle_request_with_principal(
+    request: RelayRequest,
+    configuration_root: &Path,
+    bundle_name: &str,
+    runtime_directory: &Path,
+    principal: Option<RequestPrincipal>,
+) -> Result<RelayResponse, RelayError> {
     let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
     let authorization = load_authorization_context(configuration_root, &bundle)?;
-    handlers::handle_request(request, &bundle, &authorization, runtime_directory)
+    handlers::handle_request(
+        request,
+        &bundle,
+        &authorization,
+        runtime_directory,
+        principal,
+    )
 }
 
 impl RelayStreamSession {
@@ -1072,13 +1165,28 @@ fn is_ignorable_socket_option_error(error: &io::Error) -> bool {
     )
 }
 
+fn hello_client_class(registration: &StreamRegistration) -> Result<RelayClientClass, io::Error> {
+    resolve_registered_client_class(
+        registration.bundle_name.as_str(),
+        registration.session_id.as_str(),
+    )?
+    .ok_or_else(|| io::Error::other("stream registration client class is missing"))
+}
+
 fn dispatch_request(
     request: RelayRequest,
     configuration_root: &Path,
     bundle_name: &str,
     runtime_directory: &Path,
+    principal: Option<RequestPrincipal>,
 ) -> RelayResponse {
-    match handle_request(request, configuration_root, bundle_name, runtime_directory) {
+    match handle_request_with_principal(
+        request,
+        configuration_root,
+        bundle_name,
+        runtime_directory,
+        principal,
+    ) {
         Ok(value) => value,
         Err(error) => RelayResponse::Error { error },
     }

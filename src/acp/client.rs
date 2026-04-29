@@ -515,6 +515,15 @@ impl AcpStdioClient {
         let request = PermissionRequest {
             request_id,
             tool_call_title,
+            requested_kind: params
+                .get("kind")
+                .and_then(Value::as_str)
+                // ACP Tool Calls: permission requests use tool kinds and default to "other"
+                // when kind is omitted by the agent payload.
+                // Ref: https://agentclientprotocol.com/protocol/tool-calls.md
+                .unwrap_or("other")
+                .to_string(),
+            requested_details: params.clone(),
             options: options.clone(),
         };
         let selected = if let Some(handler) = permission_handler.as_mut() {
@@ -522,6 +531,10 @@ impl AcpStdioClient {
         } else {
             None
         };
+        // ACP Request Permission response contract:
+        // - selected => {"outcome":"selected","optionId":...}
+        // - cancelled => {"outcome":"cancelled"}
+        // Ref: https://agentclientprotocol.com/protocol/tool-calls.md
         let outcome = match selected {
             Some(option_id) => json!({ "outcome": "selected", "optionId": option_id }),
             None => json!({ "outcome": "cancelled" }),

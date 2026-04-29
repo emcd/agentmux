@@ -53,10 +53,12 @@ pub fn parse_replay_entries_for_test(
 pub struct PermissionRequest {
     pub request_id: u64,
     pub tool_call_title: String,
+    pub requested_kind: String,
+    pub requested_details: Value,
     pub options: Vec<PermissionOption>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct PermissionOption {
     pub option_id: String,
     pub name: String,

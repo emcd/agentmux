@@ -53,7 +53,7 @@ fn acp_worker_state_transitions_busy_then_available() {
 }
 
 #[test]
-fn acp_request_permission_marks_worker_busy_until_completion() {
+fn acp_request_permission_keeps_worker_busy_while_pending_decision() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions {
         prompt_delay_sec: 1,
@@ -88,13 +88,17 @@ fn acp_request_permission_marks_worker_busy_until_completion() {
         Some(&Value::String("accepted_in_progress".to_string()))
     );
     assert!(
-        wait_for_worker_state(
+        !wait_for_worker_state(
             temporary.path(),
             "bravo",
             "available",
-            Duration::from_secs(2)
+            Duration::from_millis(500)
         ),
-        "worker_state did not converge to available"
+        "worker_state unexpectedly converged to available without permission decision"
+    );
+    assert_eq!(
+        read_worker_state(temporary.path(), "bravo").as_deref(),
+        Some("busy")
     );
 }
 

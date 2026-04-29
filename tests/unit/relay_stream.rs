@@ -66,6 +66,23 @@ coder = "shell"
     configuration_root
 }
 
+fn write_tui_configuration(configuration_root: &Path, policy: &str) {
+    std::fs::write(
+        configuration_root.join("tui.toml"),
+        format!(
+            r#"
+default-bundle = "party"
+default-session = "user"
+
+[[sessions]]
+id = "user"
+policy = "{policy}"
+"#
+        ),
+    )
+    .expect("write tui configuration");
+}
+
 fn spawn_relay_connection(
     configuration_root: &Path,
     bundle_paths: &BundleRuntimePaths,
@@ -294,4 +311,213 @@ fn hello_claim_is_accepted_after_prior_owner_disconnects() {
 
     shutdown_stream(&second_client, "shutdown second client");
     second_handle.join().expect("join second relay thread");
+}
+
+#[test]
+fn permission_decision_rejects_non_ui_stream_submitter() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "party_permission_non_ui";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let (mut client_stream, join_handle) =
+        spawn_relay_connection(&configuration_root, &bundle_paths);
+    let read_stream = client_stream.try_clone().expect("clone stream");
+    let mut reader = BufReader::new(read_stream);
+
+    send_json(
+        &mut client_stream,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "bundle_name": bundle_name,
+            "session_id": "alpha",
+            "client_class": "agent"
+        }),
+    );
+    let hello_ack = read_json(&mut reader);
+    assert_eq!(hello_ack["frame"], "hello_ack");
+
+    send_json(
+        &mut client_stream,
+        json!({
+            "frame": "request",
+            "request_id": "req-1",
+            "request": {
+                "operation": "permission_approve",
+                "permission_request_id": "perm-1"
+            }
+        }),
+    );
+    let response = read_json(&mut reader);
+    assert_eq!(response["frame"], "response");
+    assert_eq!(response["request_id"], "req-1");
+    assert_eq!(response["response"]["kind"], "error");
+    assert_eq!(
+        response["response"]["error"]["code"],
+        "validation_invalid_client_class_for_action"
+    );
+
+    shutdown_stream(&client_stream, "shutdown client stream");
+    join_handle.join().expect("join relay thread");
+}
+
+#[test]
+fn permission_decision_rejects_payload_actor_spoof_field() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "party_permission_actor_spoof";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_root, "default");
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let (mut client_stream, join_handle) =
+        spawn_relay_connection(&configuration_root, &bundle_paths);
+    let read_stream = client_stream.try_clone().expect("clone stream");
+    let mut reader = BufReader::new(read_stream);
+
+    send_json(
+        &mut client_stream,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "bundle_name": bundle_name,
+            "session_id": "user",
+            "client_class": "ui"
+        }),
+    );
+    let hello_ack = read_json(&mut reader);
+    assert_eq!(hello_ack["frame"], "hello_ack");
+
+    send_json(
+        &mut client_stream,
+        json!({
+            "frame": "request",
+            "request_id": "req-1",
+            "request": {
+                "operation": "permission_approve",
+                "permission_request_id": "perm-1",
+                "ui_session_id": "spoofed"
+            }
+        }),
+    );
+    let response = read_json(&mut reader);
+    assert_eq!(response["frame"], "response");
+    assert_eq!(response["request_id"], "req-1");
+    assert_eq!(response["response"]["kind"], "error");
+    assert_eq!(
+        response["response"]["error"]["code"],
+        "validation_invalid_params"
+    );
+
+    shutdown_stream(&client_stream, "shutdown client stream");
+    join_handle.join().expect("join relay thread");
+}
+
+#[test]
+fn permission_decision_denial_uses_grant_capability() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "party_permission_grant_capability";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_root, "default");
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let (mut client_stream, join_handle) =
+        spawn_relay_connection(&configuration_root, &bundle_paths);
+    let read_stream = client_stream.try_clone().expect("clone stream");
+    let mut reader = BufReader::new(read_stream);
+
+    send_json(
+        &mut client_stream,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "bundle_name": bundle_name,
+            "session_id": "user",
+            "client_class": "ui"
+        }),
+    );
+    let hello_ack = read_json(&mut reader);
+    assert_eq!(hello_ack["frame"], "hello_ack");
+
+    send_json(
+        &mut client_stream,
+        json!({
+            "frame": "request",
+            "request_id": "req-1",
+            "request": {
+                "operation": "permission_approve",
+                "permission_request_id": "perm-1"
+            }
+        }),
+    );
+    let response = read_json(&mut reader);
+    assert_eq!(response["frame"], "response");
+    assert_eq!(response["request_id"], "req-1");
+    assert_eq!(response["response"]["kind"], "error");
+    assert_eq!(
+        response["response"]["error"]["code"],
+        "authorization_forbidden"
+    );
+    assert_eq!(
+        response["response"]["error"]["details"]["capability"],
+        "grant"
+    );
+
+    shutdown_stream(&client_stream, "shutdown client stream");
+    join_handle.join().expect("join relay thread");
+}
+
+#[test]
+fn permission_decision_rejects_empty_option_id() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "party_permission_empty_option";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_root, "default");
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let (mut client_stream, join_handle) =
+        spawn_relay_connection(&configuration_root, &bundle_paths);
+    let read_stream = client_stream.try_clone().expect("clone stream");
+    let mut reader = BufReader::new(read_stream);
+
+    send_json(
+        &mut client_stream,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "bundle_name": bundle_name,
+            "session_id": "user",
+            "client_class": "ui"
+        }),
+    );
+    let hello_ack = read_json(&mut reader);
+    assert_eq!(hello_ack["frame"], "hello_ack");
+
+    send_json(
+        &mut client_stream,
+        json!({
+            "frame": "request",
+            "request_id": "req-1",
+            "request": {
+                "operation": "permission_approve",
+                "permission_request_id": "perm-1",
+                "option_id": "   "
+            }
+        }),
+    );
+    let response = read_json(&mut reader);
+    assert_eq!(response["frame"], "response");
+    assert_eq!(response["request_id"], "req-1");
+    assert_eq!(response["response"]["kind"], "error");
+    assert_eq!(
+        response["response"]["error"]["code"],
+        "validation_invalid_params"
+    );
+    assert_eq!(
+        response["response"]["error"]["details"]["field"],
+        "option_id"
+    );
+
+    shutdown_stream(&client_stream, "shutdown client stream");
+    join_handle.join().expect("join relay thread");
 }

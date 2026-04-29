@@ -13,13 +13,16 @@ use crate::{
 };
 
 use super::authorization::{
-    AuthorizationContext, authorize_list, authorize_look, authorize_raww, authorize_send,
-    has_ui_session, ui_session_display_name,
+    AuthorizationContext, authorize_grant, authorize_list, authorize_look, authorize_raww,
+    authorize_send, grant_authorized_ui_sessions, has_ui_session, permission_max_pending,
+    ui_session_display_name,
 };
 use super::delivery::{
-    QuiescenceOptions, acp_session_ready_for_startup, aggregate_chat_status,
-    await_acp_worker_prime_for_look, deliver_one_target, enqueue_async_delivery,
-    enqueue_sync_delivery, load_acp_snapshot_for_look, prompt_batch_settings,
+    PermissionDecisionKind, PermissionDecisionRequest, PermissionEventContext, QuiescenceOptions,
+    acp_session_ready_for_startup, aggregate_chat_status, await_acp_worker_prime_for_look,
+    deliver_one_target, emit_permission_snapshot_then_replay, enqueue_async_delivery,
+    enqueue_sync_delivery, load_acp_snapshot_for_look, map_permission_state_error,
+    prompt_batch_settings, resolve_permission_request,
 };
 use super::lifecycle::{reconcile_loaded_bundle_for_lifecycle, shutdown_bundle_runtime};
 use super::tmux::{capture_pane_tail_lines, resolve_active_pane_target};
@@ -27,8 +30,8 @@ use super::{
     AsyncDeliveryTask, ChatDeliveryMode, ChatOutcome, ChatRequestContext, ChatResult, ChatStatus,
     DeliveryPayloadMode, LifecycleBundleResult, ListedBundle, ListedBundleStartupHealth,
     ListedBundleState, ListedSession, ListedSessionTransport, LookRequestContext,
-    RawwRequestContext, RelayError, RelayRequest, RelayResponse, SCHEMA_VERSION,
-    load_startup_failures, relay_error,
+    PermissionDecisionRequestContext, RawwRequestContext, RelayError, RelayRequest, RelayResponse,
+    RequestPrincipal, SCHEMA_VERSION, load_startup_failures, relay_error,
 };
 
 const LOOK_LINES_DEFAULT: usize = 120;
@@ -68,6 +71,7 @@ pub(super) fn handle_request(
     bundle: &BundleConfiguration,
     authorization: &AuthorizationContext,
     runtime_directory: &Path,
+    principal: Option<RequestPrincipal>,
 ) -> Result<RelayResponse, RelayError> {
     match request {
         RelayRequest::Up => handle_lifecycle_up(bundle, runtime_directory),
@@ -136,6 +140,45 @@ pub(super) fn handle_request(
                 bundle_name: request_bundle_name,
             },
             runtime_directory,
+        ),
+        RelayRequest::PermissionApprove {
+            permission_request_id,
+            option_id,
+            bundle_name: request_bundle_name,
+            ui_session_id,
+        } => handle_permission_decision(
+            bundle,
+            authorization,
+            PermissionDecisionRequestContext {
+                permission_request_id,
+                option_id,
+                reason: None,
+                bundle_name: request_bundle_name,
+                ui_session_id,
+            },
+            PermissionDecisionKind::Approve,
+            runtime_directory,
+            principal,
+        ),
+        RelayRequest::PermissionDeny {
+            permission_request_id,
+            option_id,
+            reason,
+            bundle_name: request_bundle_name,
+            ui_session_id,
+        } => handle_permission_decision(
+            bundle,
+            authorization,
+            PermissionDecisionRequestContext {
+                permission_request_id,
+                option_id,
+                reason,
+                bundle_name: request_bundle_name,
+                ui_session_id,
+            },
+            PermissionDecisionKind::Deny,
+            runtime_directory,
+            principal,
         ),
     }
 }
@@ -403,6 +446,8 @@ fn handle_chat(
         "sender_session",
     )?;
     let sender_member = sender.to_bundle_member();
+    let permission_decider_sessions = grant_authorized_ui_sessions(authorization, bundle);
+    let queue_max_pending = permission_max_pending(authorization);
 
     emit_inscription(
         "relay.chat.request",
@@ -511,6 +556,8 @@ fn handle_chat(
                     completion_sender: None,
                     payload_mode: DeliveryPayloadMode::EnvelopeMessage,
                     append_enter: true,
+                    permission_decider_sessions: permission_decider_sessions.clone(),
+                    permission_max_pending: queue_max_pending,
                 };
                 let result = if task.target_is_ui {
                     deliver_one_target(&task)?
@@ -567,6 +614,8 @@ fn handle_chat(
                     completion_sender: None,
                     payload_mode: DeliveryPayloadMode::EnvelopeMessage,
                     append_enter: true,
+                    permission_decider_sessions: permission_decider_sessions.clone(),
+                    permission_max_pending: queue_max_pending,
                 };
                 enqueue_async_delivery(task)?;
                 emit_inscription(
@@ -908,6 +957,8 @@ fn handle_raww(
     };
     let message_id = Uuid::new_v4().to_string();
     let sender_member = sender.to_bundle_member();
+    let permission_decider_sessions = grant_authorized_ui_sessions(authorization, bundle);
+    let queue_max_pending = permission_max_pending(authorization);
     let task = AsyncDeliveryTask {
         bundle: bundle.clone(),
         sender: sender_member,
@@ -922,6 +973,8 @@ fn handle_raww(
         completion_sender: None,
         payload_mode: DeliveryPayloadMode::RawInput,
         append_enter: !no_enter,
+        permission_decider_sessions,
+        permission_max_pending: queue_max_pending,
     };
 
     let result = match &target_member.target {
@@ -969,6 +1022,188 @@ fn handle_raww(
         request_id,
         message_id: Some(message_id),
         details,
+    })
+}
+
+pub(super) fn emit_permission_snapshot_for_ui_registration(
+    configuration_root: &Path,
+    bundle_name: &str,
+    runtime_directory: &Path,
+    ui_session_id: &str,
+) -> Result<(), RelayError> {
+    let bundle = crate::configuration::load_bundle_configuration(configuration_root, bundle_name)
+        .map_err(super::map_config)?;
+    let authorization =
+        crate::relay::authorization::load_authorization_context(configuration_root, &bundle)?;
+    let authorized_sessions = grant_authorized_ui_sessions(&authorization, &bundle);
+    if !authorized_sessions
+        .iter()
+        .any(|value| value == ui_session_id)
+    {
+        return Ok(());
+    }
+    let context = PermissionEventContext {
+        runtime_directory: runtime_directory.to_path_buf(),
+        bundle_name: bundle.bundle_name.clone(),
+        authorized_ui_sessions: authorized_sessions,
+    };
+    emit_permission_snapshot_then_replay(&context, ui_session_id).map_err(|cause| {
+        let mut error = map_permission_state_error(
+            "runtime_permission_queue_unavailable",
+            "failed to replay permission snapshot for ui session",
+        );
+        error.details = Some(json!({
+            "bundle_name": bundle.bundle_name,
+            "session_id": ui_session_id,
+            "cause": cause,
+        }));
+        error
+    })
+}
+
+fn handle_permission_decision(
+    bundle: &BundleConfiguration,
+    authorization: &AuthorizationContext,
+    request: PermissionDecisionRequestContext,
+    decision: PermissionDecisionKind,
+    runtime_directory: &Path,
+    principal: Option<RequestPrincipal>,
+) -> Result<RelayResponse, RelayError> {
+    let PermissionDecisionRequestContext {
+        permission_request_id,
+        option_id,
+        reason,
+        bundle_name: request_bundle_name,
+        ui_session_id,
+    } = request;
+    if let Some(request_bundle_name) = request_bundle_name.as_deref()
+        && request_bundle_name != bundle.bundle_name
+    {
+        return Err(relay_error(
+            "validation_cross_bundle_unsupported",
+            "permission decisions are limited to the associated bundle in MVP",
+            Some(json!({
+                "associated_bundle_name": bundle.bundle_name,
+                "requested_bundle_name": request_bundle_name,
+            })),
+        ));
+    }
+    if ui_session_id.is_some() {
+        return Err(relay_error(
+            "validation_invalid_params",
+            "caller-supplied ui_session_id is not allowed",
+            Some(json!({
+                "field": "ui_session_id",
+            })),
+        ));
+    }
+    if permission_request_id.trim().is_empty() {
+        return Err(relay_error(
+            "validation_invalid_params",
+            "permission_request_id must be non-empty",
+            Some(json!({
+                "field": "permission_request_id",
+            })),
+        ));
+    }
+    if let Some(option_id) = option_id.as_deref()
+        && option_id.trim().is_empty()
+    {
+        return Err(relay_error(
+            "validation_invalid_params",
+            "option_id must be non-empty when provided",
+            Some(json!({
+                "field": "option_id",
+            })),
+        ));
+    }
+    let principal = principal.ok_or_else(|| {
+        relay_error(
+            "validation_missing_hello",
+            "permission decisions require stream-associated principal identity",
+            None,
+        )
+    })?;
+    if principal.client_class != super::stream::RelayClientClass::Ui {
+        return Err(relay_error(
+            "validation_invalid_client_class_for_action",
+            "permission decision actions require ui client_class",
+            Some(json!({
+                "client_class": format!("{:?}", principal.client_class).to_lowercase(),
+            })),
+        ));
+    }
+    authorize_grant(
+        bundle,
+        authorization,
+        principal.session_id.as_str(),
+        permission_request_id.as_str(),
+    )?;
+    let context = PermissionEventContext {
+        runtime_directory: runtime_directory.to_path_buf(),
+        bundle_name: bundle.bundle_name.clone(),
+        authorized_ui_sessions: grant_authorized_ui_sessions(authorization, bundle),
+    };
+    let outcome = resolve_permission_request(
+        &context,
+        PermissionDecisionRequest {
+            permission_request_id: permission_request_id.clone(),
+            option_id,
+            decision,
+            decided_by: principal.session_id.clone(),
+            reason,
+        },
+    )
+    .map_err(|cause| {
+        if cause == "runtime_permission_request_already_resolved" {
+            relay_error(
+                "runtime_permission_request_already_resolved",
+                "permission request is already resolved",
+                Some(json!({
+                    "permission_request_id": permission_request_id,
+                })),
+            )
+        } else if cause.starts_with("runtime_permission_queue_unavailable") {
+            relay_error(
+                "runtime_permission_queue_unavailable",
+                "permission queue state is unavailable",
+                Some(json!({
+                    "permission_request_id": permission_request_id,
+                })),
+            )
+        } else {
+            relay_error(
+                "internal_unexpected_failure",
+                "failed to resolve permission request",
+                Some(json!({
+                    "permission_request_id": permission_request_id,
+                    "cause": cause,
+                })),
+            )
+        }
+    })?;
+
+    let (outcome_label, reason_code, reason_message) = match outcome {
+        super::delivery::PermissionResolutionOutcome::Approved { .. } => {
+            ("approved".to_string(), None, None)
+        }
+        super::delivery::PermissionResolutionOutcome::Denied { reason, .. } => (
+            "denied".to_string(),
+            Some("runtime_permission_request_denied".to_string()),
+            reason,
+        ),
+        super::delivery::PermissionResolutionOutcome::Cancelled {
+            reason_code,
+            reason,
+        } => ("cancelled".to_string(), Some(reason_code), Some(reason)),
+    };
+    Ok(RelayResponse::PermissionDecision {
+        schema_version: SCHEMA_VERSION.to_string(),
+        status: "resolved".to_string(),
+        permission_request_id,
+        outcome: outcome_label,
+        reason_code,
+        reason: reason_message,
     })
 }
 

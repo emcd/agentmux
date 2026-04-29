@@ -8,10 +8,16 @@ use crate::{
     relay::{POLICIES_FILE, POLICIES_FORMAT_VERSION, RelayError, relay_error},
 };
 
+const RELAY_FILE: &str = "relay.toml";
+const DEFAULT_PERMISSION_MAX_PENDING: usize = 256;
+const MIN_PERMISSION_MAX_PENDING: usize = 1;
+const MAX_PERMISSION_MAX_PENDING: usize = 4096;
+
 #[derive(Clone, Debug)]
 pub(super) struct AuthorizationContext {
     controls_by_session: HashMap<String, PolicyControls>,
     ui_sessions: HashMap<String, UiSessionAuthorization>,
+    permission_max_pending: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,6 +59,7 @@ struct PolicyControls {
     look: PolicyScope,
     send: PolicyScope,
     raww: PolicyScope,
+    grant: PolicyScope,
     do_controls: HashMap<String, PolicyScope>,
 }
 
@@ -69,6 +76,7 @@ impl PolicyControls {
             look: PolicyScope::AllHome,
             send: PolicyScope::AllHome,
             raww: PolicyScope::AllHome,
+            grant: PolicyScope::None,
             do_controls: HashMap::new(),
         }
     }
@@ -93,6 +101,27 @@ struct RawPolicyPreset {
     controls: RawPolicyControls,
 }
 
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct RawRelayFile {
+    #[serde(default)]
+    relay: Option<RawRelaySection>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct RawRelaySection {
+    #[serde(default)]
+    permission: Option<RawRelayPermissionSection>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct RawRelayPermissionSection {
+    #[serde(default)]
+    max_pending: Option<usize>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 struct RawPolicyControls {
@@ -102,12 +131,18 @@ struct RawPolicyControls {
     send: String,
     #[serde(default = "default_raww_policy_scope")]
     raww: String,
+    #[serde(default = "default_grant_policy_scope")]
+    grant: String,
     #[serde(default, rename = "do")]
     do_controls: HashMap<String, String>,
 }
 
 fn default_raww_policy_scope() -> String {
     "all:home".to_string()
+}
+
+fn default_grant_policy_scope() -> String {
+    "none".to_string()
 }
 
 pub(super) fn load_authorization_context(
@@ -189,6 +224,8 @@ pub(super) fn load_authorization_context(
         ));
     }
 
+    let permission_max_pending = load_permission_max_pending(configuration_root)?;
+
     let conservative_default = PolicyControls::conservative_default();
     let mut controls_by_session = HashMap::with_capacity(bundle.members.len());
     for member in &bundle.members {
@@ -255,6 +292,7 @@ pub(super) fn load_authorization_context(
     Ok(AuthorizationContext {
         controls_by_session,
         ui_sessions,
+        permission_max_pending,
     })
 }
 
@@ -270,6 +308,56 @@ pub(super) fn ui_session_display_name<'a>(
         .ui_sessions
         .get(session_id)
         .and_then(|session| session.display_name.as_deref())
+}
+
+pub(super) fn permission_max_pending(authorization: &AuthorizationContext) -> usize {
+    authorization.permission_max_pending
+}
+
+fn load_permission_max_pending(configuration_root: &Path) -> Result<usize, RelayError> {
+    let path = configuration_root.join(RELAY_FILE);
+    if !path.exists() {
+        return Ok(DEFAULT_PERMISSION_MAX_PENDING);
+    }
+    let raw = fs::read_to_string(&path).map_err(|source| {
+        relay_error(
+            "validation_invalid_arguments",
+            "failed to load relay configuration",
+            Some(json!({
+                "path": path.display().to_string(),
+                "cause": source.to_string(),
+            })),
+        )
+    })?;
+    let parsed = toml::from_str::<RawRelayFile>(raw.as_str()).map_err(|source| {
+        relay_error(
+            "validation_invalid_arguments",
+            "failed to parse relay configuration",
+            Some(json!({
+                "path": path.display().to_string(),
+                "cause": source.to_string(),
+            })),
+        )
+    })?;
+    let configured = parsed
+        .relay
+        .and_then(|relay| relay.permission)
+        .and_then(|permission| permission.max_pending)
+        .unwrap_or(DEFAULT_PERMISSION_MAX_PENDING);
+    if (MIN_PERMISSION_MAX_PENDING..=MAX_PERMISSION_MAX_PENDING).contains(&configured) {
+        return Ok(configured);
+    }
+    Err(relay_error(
+        "validation_invalid_arguments",
+        "relay permission max-pending is out of supported range",
+        Some(json!({
+            "path": path.display().to_string(),
+            "field": "relay.permission.max-pending",
+            "value": configured,
+            "minimum": MIN_PERMISSION_MAX_PENDING,
+            "maximum": MAX_PERMISSION_MAX_PENDING,
+        })),
+    ))
 }
 
 fn parse_policy_controls(
@@ -336,6 +424,15 @@ fn parse_policy_controls(
         "validation_invalid_policy_scope",
         "authorization policy raww control uses unsupported scope value",
     )?;
+    let grant = parse_scope_for_control(
+        controls.grant.as_str(),
+        policies_path,
+        policy_id,
+        "grant",
+        &[PolicyScope::None, PolicyScope::AllHome],
+        "validation_invalid_policy_scope",
+        "authorization policy grant control uses unsupported scope value",
+    )?;
     let mut do_controls = HashMap::with_capacity(controls.do_controls.len());
     for (action_id, scope_value) in controls.do_controls {
         let action_id = action_id.trim();
@@ -371,6 +468,7 @@ fn parse_policy_controls(
         look,
         send,
         raww,
+        grant,
         do_controls,
     })
 }
@@ -544,6 +642,53 @@ pub(super) fn authorize_raww(
             targets: None,
         },
     )
+}
+
+pub(super) fn authorize_grant(
+    bundle: &BundleConfiguration,
+    authorization: &AuthorizationContext,
+    requester_session: &str,
+    permission_request_id: &str,
+) -> Result<(), RelayError> {
+    let controls = controls_for_requester(authorization, bundle, requester_session)?;
+    authorize_scope(
+        controls.grant,
+        PolicyScope::AllHome,
+        AuthorizationDecisionContext {
+            capability: "grant",
+            requester_session,
+            bundle_name: bundle.bundle_name.as_str(),
+            reason: "grant policy scope does not allow permission decisions",
+            target_session: None,
+            targets: None,
+        },
+    )
+    .map_err(|mut error| {
+        if let Some(object) = error.details.as_mut().and_then(Value::as_object_mut) {
+            object.insert(
+                "permission_request_id".to_string(),
+                Value::String(permission_request_id.to_string()),
+            );
+        }
+        error
+    })
+}
+
+pub(super) fn grant_authorized_ui_sessions(
+    authorization: &AuthorizationContext,
+    _bundle: &BundleConfiguration,
+) -> Vec<String> {
+    authorization
+        .ui_sessions
+        .keys()
+        .filter(|session_id| {
+            authorization
+                .controls_by_session
+                .get(session_id.as_str())
+                .is_some_and(|controls| controls.grant.allows(PolicyScope::AllHome))
+        })
+        .cloned()
+        .collect()
 }
 
 fn authorize_scope(

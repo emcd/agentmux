@@ -16,6 +16,10 @@ use super::results::{
     delivered_in_progress_result, delivered_result, failed_result, failed_result_with_code,
     timeout_result,
 };
+use super::{
+    PermissionEventContext, PermissionResolutionOutcome, enqueue_permission_request,
+    wait_for_permission_resolution,
+};
 
 use super::super::{AsyncDeliveryTask, ChatResult};
 
@@ -147,6 +151,12 @@ pub(super) fn deliver_one_target_acp(
     let mut first_activity_observed = false;
     let completion_sender = task.completion_sender.clone();
     let mut sync_completion_sent = false;
+    let permission_context = PermissionEventContext {
+        runtime_directory: task.runtime_directory.clone(),
+        bundle_name: task.bundle.bundle_name.clone(),
+        authorized_ui_sessions: task.permission_decider_sessions.clone(),
+    };
+    let mut pending_permission_outcome = None::<PermissionResolutionOutcome>;
     for prompt in prompt_batches {
         let session_id = runtime.session_id.clone();
         let target_session_for_dispatch = target_session.clone();
@@ -182,13 +192,24 @@ pub(super) fn deliver_one_target_acp(
                 snapshot_entries.as_slice(),
             )
         };
+        let mut on_permission_request = |permission_request: &crate::acp::PermissionRequest| {
+            let (response_option_id, outcome) = resolve_acp_permission_request(
+                &permission_context,
+                &message_id,
+                target_member.id.as_str(),
+                permission_request,
+                task.permission_max_pending,
+            );
+            pending_permission_outcome = Some(outcome);
+            response_option_id
+        };
         let prompt_result = runtime.client.prompt(
             session_id.as_str(),
             prompt.as_str(),
             turn_timeout,
             Some(&mut on_dispatched),
             Some(&mut on_replay_entries),
-            None,
+            Some(&mut on_permission_request),
         );
         let _ = runtime.client.take_snapshot_lines();
         let _ = runtime.client.take_replay_entries();
@@ -205,6 +226,35 @@ pub(super) fn deliver_one_target_acp(
                         target_session,
                         message_id,
                         format!("failed to persist ACP worker state: {reason}"),
+                    );
+                }
+                if let Some(PermissionResolutionOutcome::Denied { reason, .. }) =
+                    pending_permission_outcome.clone()
+                {
+                    return failed_result_with_code(
+                        target_session,
+                        message_id,
+                        "runtime_permission_request_denied",
+                        "ACP permission request was denied",
+                        Some(json!({
+                            "target_session": target_member.id,
+                            "reason": reason,
+                        })),
+                    );
+                }
+                if let Some(PermissionResolutionOutcome::Cancelled {
+                    reason_code,
+                    reason,
+                }) = pending_permission_outcome.clone()
+                {
+                    return failed_result_with_code(
+                        target_session,
+                        message_id,
+                        reason_code.as_str(),
+                        reason,
+                        Some(json!({
+                            "target_session": target_member.id,
+                        })),
                     );
                 }
                 match prompt_completion.stop_reason.as_str() {
@@ -302,6 +352,70 @@ pub(super) fn deliver_one_target_acp(
     } else {
         delivered_result(target_session, message_id)
     }
+}
+
+fn resolve_acp_permission_request(
+    permission_context: &PermissionEventContext,
+    message_id: &str,
+    target_session: &str,
+    permission_request: &crate::acp::PermissionRequest,
+    permission_max_pending: usize,
+) -> (Option<String>, PermissionResolutionOutcome) {
+    let requested_details = json!({
+        "tool_call_title": permission_request.tool_call_title.clone(),
+        "options": permission_request.options.clone(),
+        "acp_request_id": permission_request.request_id,
+        "raw": permission_request.requested_details.clone(),
+    });
+    let enqueue = enqueue_permission_request(
+        permission_context,
+        message_id,
+        target_session,
+        permission_request.requested_kind.as_str(),
+        requested_details,
+        permission_request.options.as_slice(),
+        permission_max_pending,
+    );
+    let enqueued = match enqueue {
+        Ok(value) => value,
+        Err(code) if code == "runtime_permission_queue_full" => {
+            return (
+                None,
+                PermissionResolutionOutcome::Cancelled {
+                    reason_code: "runtime_permission_queue_full".to_string(),
+                    reason: "permission queue is full".to_string(),
+                },
+            );
+        }
+        Err(_) => {
+            return (
+                None,
+                PermissionResolutionOutcome::Cancelled {
+                    reason_code: "runtime_permission_queue_unavailable".to_string(),
+                    reason: "failed to enqueue permission request".to_string(),
+                },
+            );
+        }
+    };
+
+    let outcome =
+        wait_for_permission_resolution(permission_context, enqueued.permission_request_id.as_str());
+    let Ok(outcome) = outcome else {
+        return (
+            None,
+            PermissionResolutionOutcome::Cancelled {
+                reason_code: "runtime_permission_request_cancelled".to_string(),
+                reason: "failed while waiting for permission decision".to_string(),
+            },
+        );
+    };
+
+    let response_option_id = match &outcome {
+        PermissionResolutionOutcome::Approved { option_id, .. }
+        | PermissionResolutionOutcome::Denied { option_id, .. } => Some(option_id.clone()),
+        PermissionResolutionOutcome::Cancelled { .. } => None,
+    };
+    (response_option_id, outcome)
 }
 
 fn initialize_persistent_acp_worker_runtime(
