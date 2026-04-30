@@ -37,6 +37,9 @@ Startup behavior:
 - `Esc` in `Message`: snap chat history viewport to latest
 - `F2`: open/close recipient picker
 - `F3`: open/close delivery events overlay
+- `Up` / `Down` in events overlay: select pending permission request
+- `a` in events overlay: approve selected pending permission request
+- `d` in events overlay: deny selected pending permission request
 - `l` in picker: capture look snapshot for selected recipient
 - `w` in picker: dispatch raw write to selected recipient using `Message` field
 - `Esc` in look overlay: close look and return to picker context
@@ -72,3 +75,7 @@ Delivery outcomes:
   acceptance-phase metadata when provided.
 - Terminal outcomes are sourced from relay completion updates keyed by
   `message_id`.
+- Permission requests are rendered from relay `permission.snapshot`,
+  `permission.requested`, and `permission.resolved` events.
+- Replay is at-least-once; the TUI deduplicates pending permission rows by
+  `permission_request_id`.

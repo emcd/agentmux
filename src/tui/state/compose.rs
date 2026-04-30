@@ -44,6 +44,7 @@ impl AppState {
             self.look_overlay_open = false;
             self.look_overlay_restore_picker_on_close = false;
             self.help_overlay_open = false;
+            self.ensure_pending_permission_selection();
         }
     }
 
@@ -89,6 +90,36 @@ impl AppState {
             self.look_overlay_open = false;
             self.look_overlay_restore_picker_on_close = false;
         }
+    }
+
+    pub fn move_pending_permission_selection(&mut self, delta: isize) {
+        if self.pending_permissions.is_empty() {
+            self.pending_permissions_state.select(None);
+            return;
+        }
+        let current = self.pending_permissions_state.selected().unwrap_or(0);
+        let next = wrap_index(current, delta, self.pending_permissions.len());
+        self.pending_permissions_state.select(Some(next));
+    }
+
+    pub fn approve_selected_permission_request(&mut self) -> Result<(), RuntimeError> {
+        let permission_request_id = self.selected_pending_permission_id().ok_or_else(|| {
+            RuntimeError::validation(
+                "validation_unknown_permission_request",
+                "approve requires a selected pending permission request",
+            )
+        })?;
+        self.submit_permission_decision(permission_request_id, true, None)
+    }
+
+    pub fn deny_selected_permission_request(&mut self) -> Result<(), RuntimeError> {
+        let permission_request_id = self.selected_pending_permission_id().ok_or_else(|| {
+            RuntimeError::validation(
+                "validation_unknown_permission_request",
+                "deny requires a selected pending permission request",
+            )
+        })?;
+        self.submit_permission_decision(permission_request_id, false, None)
     }
 
     pub fn insert_picker_selection(&mut self) {
@@ -580,6 +611,84 @@ impl AppState {
             .selected()
             .and_then(|index| self.recipients.get(index))
             .map(|recipient| recipient.session_name.clone())
+    }
+
+    pub(super) fn ensure_pending_permission_selection(&mut self) {
+        if self.pending_permissions.is_empty() {
+            self.pending_permissions_state.select(None);
+            return;
+        }
+        let selected = self
+            .pending_permissions_state
+            .selected()
+            .filter(|index| *index < self.pending_permissions.len())
+            .unwrap_or(0);
+        self.pending_permissions_state.select(Some(selected));
+    }
+
+    fn selected_pending_permission_id(&self) -> Option<String> {
+        self.pending_permissions_state
+            .selected()
+            .and_then(|index| self.pending_permissions.get(index))
+            .map(|entry| entry.permission_request_id.clone())
+    }
+
+    fn submit_permission_decision(
+        &mut self,
+        permission_request_id: String,
+        approved: bool,
+        reason: Option<String>,
+    ) -> Result<(), RuntimeError> {
+        let request = if approved {
+            RelayRequest::PermissionApprove {
+                permission_request_id: permission_request_id.clone(),
+                option_id: None,
+                bundle_name: None,
+                ui_session_id: None,
+            }
+        } else {
+            RelayRequest::PermissionDeny {
+                permission_request_id: permission_request_id.clone(),
+                option_id: None,
+                reason,
+                bundle_name: None,
+                ui_session_id: None,
+            }
+        };
+        match self.request_relay(&request)? {
+            RelayResponse::PermissionDecision {
+                status,
+                permission_request_id,
+                outcome,
+                reason_code,
+                reason,
+                ..
+            } => {
+                let reason_code_label = reason_code.as_deref().unwrap_or("-");
+                if let Some(reason) = reason.as_deref() {
+                    self.push_status(
+                        None,
+                        format!(
+                            "permission decision status={status} id={permission_request_id} outcome={outcome} reason_code={reason_code_label} reason={reason}"
+                        ),
+                    );
+                } else {
+                    self.push_status(
+                        None,
+                        format!(
+                            "permission decision status={status} id={permission_request_id} outcome={outcome} reason_code={reason_code_label}"
+                        ),
+                    );
+                }
+                self.relay_stream_poll_error_reported = false;
+                Ok(())
+            }
+            RelayResponse::Error { error } => Err(map_relay_error(error)),
+            other => Err(RuntimeError::validation(
+                "internal_unexpected_failure",
+                format!("relay returned unexpected response variant: {other:?}"),
+            )),
+        }
     }
 }
 

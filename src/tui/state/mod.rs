@@ -73,6 +73,16 @@ pub(crate) struct Recipient {
     pub display_name: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PendingPermissionEntry {
+    pub permission_request_id: String,
+    pub message_id: Option<String>,
+    pub target_session: Option<String>,
+    pub requested_kind: Option<String>,
+    pub requested_details: Option<serde_json::Value>,
+    pub enqueued_at: Option<String>,
+}
+
 #[derive(Debug)]
 pub(crate) struct AppState {
     pub bundle_name: String,
@@ -101,6 +111,8 @@ pub(crate) struct AppState {
     pub look_overlay_scroll: usize,
     pub status_history: VecDeque<StatusEntry>,
     pub event_history: VecDeque<String>,
+    pub pending_permissions: Vec<PendingPermissionEntry>,
+    pub pending_permissions_state: ListState,
     pub chat_history: VecDeque<ChatHistoryEntry>,
     chat_history_scroll: usize,
     chat_history_viewport_height: usize,
@@ -160,6 +172,8 @@ impl AppState {
                 message: "Ready. Press F1 for help.".to_string(),
             }]),
             event_history: VecDeque::new(),
+            pending_permissions: Vec::new(),
+            pending_permissions_state: ListState::default(),
             chat_history: VecDeque::new(),
             chat_history_scroll: 0,
             chat_history_viewport_height: 10,
@@ -257,7 +271,10 @@ mod tests {
 
     use serde_json::json;
 
-    use crate::relay::{ChatOutcome, ChatResult, ChatStatus, RelayStreamEvent};
+    use crate::{
+        relay::{ChatOutcome, ChatResult, ChatStatus, RelayStreamEvent},
+        runtime::error::RuntimeError,
+    };
 
     use super::{AppState, ChatHistoryDirection, ChatHistoryEntry, Recipient, TuiLaunchOptions};
 
@@ -413,5 +430,101 @@ mod tests {
             }],
         );
         assert_eq!(state.pending_deliveries_count(), 0);
+    }
+
+    #[test]
+    fn permission_snapshot_and_replay_keep_single_pending_row_per_id() {
+        let mut state = make_state();
+        state.record_stream_events(&[RelayStreamEvent {
+            event_type: "permission.snapshot".to_string(),
+            bundle_name: "agentmux".to_string(),
+            target_session: "tui".to_string(),
+            created_at: "2026-04-29T00:00:00Z".to_string(),
+            payload: json!({
+                "pending_count": 1,
+                "permission_request_ids": ["perm-1"],
+            }),
+        }]);
+        assert_eq!(state.pending_permissions.len(), 1);
+        assert_eq!(state.pending_permissions[0].permission_request_id, "perm-1");
+
+        let requested = RelayStreamEvent {
+            event_type: "permission.requested".to_string(),
+            bundle_name: "agentmux".to_string(),
+            target_session: "tui".to_string(),
+            created_at: "2026-04-29T00:00:01Z".to_string(),
+            payload: json!({
+                "message_id": "msg-1",
+                "permission_request_id": "perm-1",
+                "target_session": "acp",
+                "requested_kind": "approval",
+                "requested_details": {"prompt": "run command"},
+                "enqueued_at": "2026-04-29T00:00:01Z",
+            }),
+        };
+        state.record_stream_events(&[requested.clone(), requested]);
+        assert_eq!(state.pending_permissions.len(), 1);
+        let entry = &state.pending_permissions[0];
+        assert_eq!(entry.permission_request_id, "perm-1");
+        assert_eq!(entry.message_id.as_deref(), Some("msg-1"));
+        assert_eq!(entry.target_session.as_deref(), Some("acp"));
+        assert_eq!(entry.requested_kind.as_deref(), Some("approval"));
+    }
+
+    #[test]
+    fn permission_resolved_removes_pending_request() {
+        let mut state = make_state();
+        state.record_stream_events(&[RelayStreamEvent {
+            event_type: "permission.requested".to_string(),
+            bundle_name: "agentmux".to_string(),
+            target_session: "tui".to_string(),
+            created_at: "2026-04-29T00:00:01Z".to_string(),
+            payload: json!({
+                "message_id": "msg-1",
+                "permission_request_id": "perm-1",
+                "target_session": "acp",
+                "requested_kind": "approval",
+                "requested_details": {"prompt": "run command"},
+                "enqueued_at": "2026-04-29T00:00:01Z",
+            }),
+        }]);
+        assert_eq!(state.pending_permissions.len(), 1);
+
+        state.record_stream_events(&[RelayStreamEvent {
+            event_type: "permission.resolved".to_string(),
+            bundle_name: "agentmux".to_string(),
+            target_session: "tui".to_string(),
+            created_at: "2026-04-29T00:00:02Z".to_string(),
+            payload: json!({
+                "message_id": "msg-1",
+                "permission_request_id": "perm-1",
+                "outcome": "approved",
+                "reason_code": null,
+                "decided_by": "user",
+                "reason": null,
+                "resolved_at": "2026-04-29T00:00:02Z",
+            }),
+        }]);
+        assert!(state.pending_permissions.is_empty());
+    }
+
+    #[test]
+    fn approve_or_deny_without_selected_permission_is_validation_error() {
+        let mut state = make_state();
+        let approve = state.approve_selected_permission_request();
+        match approve {
+            Err(RuntimeError::Validation { code, .. }) => {
+                assert_eq!(code, "validation_unknown_permission_request");
+            }
+            other => panic!("unexpected result: {other:?}"),
+        }
+
+        let deny = state.deny_selected_permission_request();
+        match deny {
+            Err(RuntimeError::Validation { code, .. }) => {
+                assert_eq!(code, "validation_unknown_permission_request");
+            }
+            other => panic!("unexpected result: {other:?}"),
+        }
     }
 }

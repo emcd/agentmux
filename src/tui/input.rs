@@ -166,6 +166,20 @@ fn handle_events_overlay_key(state: &mut AppState, key: KeyEvent) -> Result<(), 
             state.toggle_events_overlay();
             state.open_picker();
         }
+        KeyCode::Up => state.move_pending_permission_selection(-1),
+        KeyCode::Down => state.move_pending_permission_selection(1),
+        KeyCode::Char(character)
+            if (character == 'a' || character == 'A')
+                && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
+        {
+            return state.approve_selected_permission_request();
+        }
+        KeyCode::Char(character)
+            if (character == 'd' || character == 'D')
+                && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
+        {
+            return state.deny_selected_permission_request();
+        }
         _ => {}
     }
     Ok(())

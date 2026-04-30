@@ -45,7 +45,7 @@ User-facing usage details and keybindings are documented under
 - overlays:
   - help,
   - recipient picker,
-  - delivery events,
+  - delivery + permission events,
   - look snapshot,
 - picker actions:
   - insert recipient into `To`,
@@ -62,6 +62,10 @@ User-facing usage details and keybindings are documented under
 - stable rendering for validation/runtime error codes,
 - stream reconnect handling with explicit `relay_unavailable` (not reachable)
   and `relay_timeout` (reachable but unresponsive/saturated) status,
+- permission lifecycle handling:
+  - pending queue visibility from relay stream events,
+  - replay-safe dedupe keyed by `permission_request_id`,
+  - deterministic approve/deny dispatch via relay decision operations,
 - startup relay auto-spawn fallback when relay socket is unavailable, using the
   same resolved configuration/state/inscriptions roots as the active TUI
   launch.

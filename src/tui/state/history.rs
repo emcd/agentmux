@@ -7,8 +7,8 @@ use crate::relay::{
 use crate::runtime::error::RuntimeError;
 
 use super::{
-    AppState, ChatHistoryDirection, ChatHistoryEntry, SEEN_STREAM_IDS_MAXIMUM, map_relay_error,
-    merge_tui_targets,
+    AppState, ChatHistoryDirection, ChatHistoryEntry, PendingPermissionEntry,
+    SEEN_STREAM_IDS_MAXIMUM, map_relay_error, merge_tui_targets,
 };
 
 impl AppState {
@@ -327,12 +327,209 @@ impl AppState {
                         self.pending_deliveries_count()
                     ));
                 }
+                "permission.snapshot" => {
+                    let pending_ids = event
+                        .payload
+                        .get("permission_request_ids")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|values| {
+                            values
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    self.apply_permission_snapshot(pending_ids);
+                    self.push_event(format!(
+                        "permission snapshot pending_count={}",
+                        self.pending_permissions.len()
+                    ));
+                }
+                "permission.requested" => {
+                    let Some(permission_request_id) = event
+                        .payload
+                        .get("permission_request_id")
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToString::to_string)
+                    else {
+                        self.push_event(
+                            "permission requested event missing permission_request_id".to_string(),
+                        );
+                        continue;
+                    };
+
+                    let entry = PendingPermissionEntry {
+                        permission_request_id: permission_request_id.clone(),
+                        message_id: event
+                            .payload
+                            .get("message_id")
+                            .and_then(serde_json::Value::as_str)
+                            .map(ToString::to_string),
+                        target_session: event
+                            .payload
+                            .get("target_session")
+                            .and_then(serde_json::Value::as_str)
+                            .map(ToString::to_string),
+                        requested_kind: event
+                            .payload
+                            .get("requested_kind")
+                            .and_then(serde_json::Value::as_str)
+                            .map(ToString::to_string),
+                        requested_details: event.payload.get("requested_details").cloned(),
+                        enqueued_at: event
+                            .payload
+                            .get("enqueued_at")
+                            .and_then(serde_json::Value::as_str)
+                            .map(ToString::to_string),
+                    };
+                    let existed = self.upsert_pending_permission(entry);
+                    self.push_event(format!(
+                        "permission requested id={} target={} kind={} pending={}",
+                        permission_request_id,
+                        event
+                            .payload
+                            .get("target_session")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("-"),
+                        event
+                            .payload
+                            .get("requested_kind")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("-"),
+                        self.pending_permissions.len()
+                    ));
+                    if existed {
+                        self.push_status(
+                            None,
+                            format!(
+                                "permission request replayed id={} (deduped)",
+                                permission_request_id
+                            ),
+                        );
+                    } else {
+                        self.push_status(
+                            None,
+                            format!("permission requested id={permission_request_id}"),
+                        );
+                    }
+                }
+                "permission.resolved" => {
+                    let Some(permission_request_id) = event
+                        .payload
+                        .get("permission_request_id")
+                        .and_then(serde_json::Value::as_str)
+                    else {
+                        self.push_event(
+                            "permission resolved event missing permission_request_id".to_string(),
+                        );
+                        continue;
+                    };
+                    let removed = self.remove_pending_permission(permission_request_id);
+                    let outcome = event
+                        .payload
+                        .get("outcome")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("-");
+                    let reason_code = event
+                        .payload
+                        .get("reason_code")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("-");
+                    self.push_event(format!(
+                        "permission resolved id={} outcome={} reason_code={} pending={}",
+                        permission_request_id,
+                        outcome,
+                        reason_code,
+                        self.pending_permissions.len()
+                    ));
+                    if removed {
+                        self.push_status(
+                            None,
+                            format!(
+                                "permission resolved id={} outcome={}",
+                                permission_request_id, outcome
+                            ),
+                        );
+                    }
+                }
                 _ => self.push_event(format!(
                     "stream event type={} target={}",
                     event.event_type, event.target_session
                 )),
             }
         }
+    }
+
+    fn apply_permission_snapshot(&mut self, permission_request_ids: Vec<String>) {
+        let mut pending = Vec::<PendingPermissionEntry>::new();
+        for permission_request_id in permission_request_ids {
+            if let Some(existing) = self
+                .pending_permissions
+                .iter()
+                .find(|entry| entry.permission_request_id == permission_request_id)
+                .cloned()
+            {
+                pending.push(existing);
+                continue;
+            }
+            pending.push(PendingPermissionEntry {
+                permission_request_id,
+                message_id: None,
+                target_session: None,
+                requested_kind: None,
+                requested_details: None,
+                enqueued_at: None,
+            });
+        }
+        pending.sort_by(|left, right| {
+            match (&left.enqueued_at, &right.enqueued_at) {
+                (Some(left_time), Some(right_time)) => left_time.cmp(right_time),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            }
+            .then(left.permission_request_id.cmp(&right.permission_request_id))
+        });
+        self.pending_permissions = pending;
+        self.ensure_pending_permission_selection();
+    }
+
+    fn upsert_pending_permission(&mut self, entry: PendingPermissionEntry) -> bool {
+        let existing_index = self
+            .pending_permissions
+            .iter()
+            .position(|value| value.permission_request_id == entry.permission_request_id);
+        let existed = existing_index.is_some();
+        if let Some(index) = existing_index {
+            self.pending_permissions[index] = entry;
+        } else {
+            self.pending_permissions.push(entry);
+        }
+        self.pending_permissions.sort_by(|left, right| {
+            match (&left.enqueued_at, &right.enqueued_at) {
+                (Some(left_time), Some(right_time)) => left_time.cmp(right_time),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            }
+            .then(left.permission_request_id.cmp(&right.permission_request_id))
+        });
+        self.ensure_pending_permission_selection();
+        existed
+    }
+
+    fn remove_pending_permission(&mut self, permission_request_id: &str) -> bool {
+        let Some(index) = self
+            .pending_permissions
+            .iter()
+            .position(|entry| entry.permission_request_id == permission_request_id)
+        else {
+            return false;
+        };
+        self.pending_permissions.remove(index);
+        self.ensure_pending_permission_selection();
+        true
     }
 }
 

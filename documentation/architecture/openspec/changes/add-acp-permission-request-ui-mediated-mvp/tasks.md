@@ -27,18 +27,18 @@
 
 ## 4. TUI Contract
 
-- [ ] 4.1 Add TUI pending permission visibility requirements using stable
+- [x] 4.1 Add TUI pending permission visibility requirements using stable
       identifiers and metadata.
-- [ ] 4.2 Add TUI approve/deny action contract keyed by
+- [x] 4.2 Add TUI approve/deny action contract keyed by
       `permission_request_id`.
-- [ ] 4.3 Lock UI dedupe expectation for at-least-once replay.
+- [x] 4.3 Lock UI dedupe expectation for at-least-once replay.
 
 ## 5. Implementation Follow-up (post-approval)
 
 - [x] 5.1 Implement relay queue persistence and lifecycle event emission.
 - [x] 5.2 Implement `grant` policy evaluation for permission decisions.
 - [x] 5.3 Implement ACP permission resolution mapping to transport actions.
-- [ ] 5.4 Implement/adjust TUI pending permissions view and decision actions.
+- [x] 5.4 Implement/adjust TUI pending permissions view and decision actions.
 - [ ] 5.5 Add integration/unit coverage for queue bounds, replay, class gate,
       pending lifecycle, and mapping behavior.
 
