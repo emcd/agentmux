@@ -14,13 +14,22 @@ Existing ACP send contracts already lock:
 
 This change layers deterministic permission handling on top of those contracts.
 
+Normative external reference:
+- ACP Tool Calls: https://agentclientprotocol.com/protocol/tool-calls.md
+
+Implementation guidance:
+- Implementers MUST treat ACP Tool Calls as the source-of-truth for
+  `session/request_permission`, including the outcome contract
+  (`selected` + `optionId`, `cancelled`) and the permission option kind
+  vocabulary (`allow_once`, `allow_always`, `reject_once`, `reject_always`).
+
 ## Goals
 
 - Keep relay authorization and enforcement authoritative.
 - Provide deterministic, machine-consumable permission lifecycle signals.
 - Prevent decision-actor spoofing.
 - Bound queue memory and lock overflow behavior.
-- Keep MVP same-bundle and fail-fast.
+- Keep alpha same-bundle and fail-fast.
 
 ## Non-Goals
 
@@ -32,13 +41,14 @@ This change layers deterministic permission handling on top of those contracts.
 ## Decisions
 
 1. Introduce `grant` policy capability in relay policy controls.
-   - Allowed values (MVP): `none`, `all:home`.
+   - Allowed values (alpha scope): `none`, `all:home`.
    - Default when omitted: `none`.
    - Invalid values (`self`, `all:all`, unknown) fail with
      `validation_invalid_policy_scope`.
 
 2. Lock UI-only decision submitter gate.
-   - Approve/deny actions require associated principal `client_class=ui`.
+   - Permission decision actions require associated principal
+     `client_class=ui`.
    - Non-UI decision attempts fail with
      `validation_invalid_client_class_for_action`.
 
@@ -47,21 +57,28 @@ This change layers deterministic permission handling on top of those contracts.
      fail with `validation_invalid_params`.
 
 4. Use bounded, durable permission queue.
-   - Bundle-scoped global FIFO by `(enqueued_at, permission_request_id)`.
+   - Bundle-scoped global FIFO by monotonic enqueue `sequence`.
    - `max_pending` default `256`, optional override
      `[relay.permission] max-pending` in `1..4096`.
    - Overflow fails with `runtime_permission_queue_full`.
    - Pending queue persists across restart; unrecoverable state fails fast with
      `runtime_permission_queue_unavailable`.
 
-5. Use non-expiring pending semantics for permission requests in MVP.
+5. Use non-expiring pending semantics for permission requests in alpha.
    - Pending permission requests do not auto-expire.
    - Requests remain pending until explicit operator decision or hard terminal
      conditions (session/worker termination, queue state unrecoverable).
    - ACP send turn-timeout semantics remain unchanged and independent from
      permission decision lifecycle.
 
-6. Lock canonical machine lifecycle carrier.
+6. Preserve ACP permission option fidelity end-to-end.
+   - Relay lifecycle payloads include ACP option metadata for operator choice.
+   - Decision actions use ACP-native outcomes:
+     - `selected` with required explicit `option_id`
+     - `cancelled` without `option_id`
+   - Relay MUST NOT infer or auto-select option IDs.
+
+7. Lock canonical machine lifecycle carrier.
    - Relay stream events are authoritative machine channel:
      - `permission.snapshot` (bootstrap parity on UI connect/reconnect),
      - `permission.requested`,
@@ -69,8 +86,8 @@ This change layers deterministic permission handling on top of those contracts.
    - Required correlation keys: `message_id`, `permission_request_id`.
    - Inscriptions are additive only.
 
-7. Lock deterministic enforcement mapping.
-   - Permission outcome maps to ACP allow/deny/abort and sender-visible
+8. Lock deterministic enforcement mapping.
+   - Permission outcome maps to ACP selected/cancelled and sender-visible
      terminal outcome/reason_code with no ambiguity.
    - Sync phase-1 immutability remains unchanged.
 

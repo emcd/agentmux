@@ -13,6 +13,7 @@ request context sufficient for operator decisioning, including:
 - `requested_kind`
 - `requested_details`
 - `enqueued_at`
+- ACP permission `options` for explicit operator selection
 
 #### Scenario: Render pending request from relay permission event
 
@@ -33,21 +34,46 @@ at-least-once replay does not create duplicate pending rows.
 
 ### Requirement: TUI Permission Decision Actions
 
-TUI SHALL expose deterministic approve/deny actions keyed by
+TUI SHALL expose deterministic decision actions keyed by
 `permission_request_id`.
 
 Action payload contract:
 
-- `permission.approve { permission_request_id }`
-- `permission.deny { permission_request_id, reason? }`
+- `permission.resolve { permission_request_id, outcome, option_id? }`
+- allowed outcomes are `selected` and `cancelled`
+- `selected` requires `option_id`
+- `cancelled` must omit `option_id`
 
 TUI SHALL NOT send caller-supplied actor identity fields in action payload.
 
-#### Scenario: Submit approve action without actor spoof fields
+#### Scenario: Submit selected action without actor spoof fields
 
-- **WHEN** operator approves pending permission request
-- **THEN** TUI submits `permission.approve` with only
-  `permission_request_id`
+- **WHEN** operator chooses a permission option from pending request
+- **THEN** TUI submits `permission.resolve` with
+  `permission_request_id`, `outcome=selected`, and explicit `option_id`
+
+#### Scenario: Submit cancelled action without option id
+
+- **WHEN** operator cancels a pending permission request
+- **THEN** TUI submits `permission.resolve` with
+  `permission_request_id` and `outcome=cancelled`
+
+### Requirement: Session-Scoped Permission Workflow
+
+TUI SHALL provide a session-scoped permission workflow in the Look context for
+the active target session.
+
+Workflow contract:
+
+- pending rows in Look are filtered to the active look target session
+- selection for multiple pending requests is deterministic by relay FIFO order
+- action hints and empty-state text are visible in Look context
+
+#### Scenario: Show session-scoped pending requests in Look
+
+- **WHEN** operator opens Look for target session `acp`
+- **AND** pending permissions exist for sessions `acp` and `relay`
+- **THEN** Look permission actions render only pending requests for `acp`
 
 ### Requirement: Permission Terminal State Updates
 
@@ -56,8 +82,7 @@ entries deterministically by `permission_request_id`.
 
 TUI-facing terminal vocabulary SHOULD align to:
 
-- `approved`
-- `denied`
+- `selected`
 - `cancelled`
 
 #### Scenario: Remove pending item on resolved event

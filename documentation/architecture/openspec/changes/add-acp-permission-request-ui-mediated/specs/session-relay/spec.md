@@ -5,7 +5,7 @@
 Relay SHALL evaluate ACP permission-request decision authority using policy
 capability `grant`.
 
-For MVP:
+For alpha scope:
 
 - allowed values: `none`, `all:home`
 - default when omitted: `none`
@@ -24,13 +24,13 @@ For MVP:
 
 ### Requirement: UI-Mediated Decision Submitter Gate
 
-Permission decision actions (`approve`/`deny`) SHALL be accepted only from
+Permission decision actions (`permission.resolve`) SHALL be accepted only from
 associated principals with `client_class=ui`.
 
 #### Scenario: Reject non-ui decision submitter
 
 - **WHEN** an associated principal with `client_class=agent` submits
-  `permission.approve`
+  `permission.resolve`
 - **THEN** relay rejects with `validation_invalid_client_class_for_action`
 
 ### Requirement: Non-Spoofable Decision Actor Identity
@@ -40,12 +40,12 @@ context and SHALL NOT trust caller-supplied identity fields in action payload.
 
 #### Scenario: Reject caller-supplied decision actor field
 
-- **WHEN** `permission.deny` payload includes `ui_session_id`
+- **WHEN** `permission.resolve` payload includes `ui_session_id`
 - **THEN** relay rejects with `validation_invalid_params`
 
 ### Requirement: Same-Bundle Permission Decision Scope
 
-Permission request routing and decisioning SHALL be same-bundle only in MVP.
+Permission request routing and decisioning SHALL be same-bundle only in alpha.
 Cross-bundle routing/decision attempts SHALL be rejected with
 `validation_cross_bundle_unsupported`.
 
@@ -61,7 +61,7 @@ connected.
 
 Queue contract:
 
-- bundle-scoped global FIFO ordering by `(enqueued_at, permission_request_id)`
+- bundle-scoped global FIFO ordering by monotonic enqueue `sequence`
 - `max_pending` default `256`
 - optional `[relay.permission] max-pending` override in `1..4096`
 - enqueue beyond bound SHALL fail with `runtime_permission_queue_full`
@@ -96,19 +96,19 @@ drop pending items.
 - **WHEN** relay startup cannot restore pending permission queue state
 - **THEN** relay fails with `runtime_permission_queue_unavailable`
 
-### Requirement: Non-Expiring Permission Pending Lifecycle (MVP)
+### Requirement: Non-Expiring Permission Pending Lifecycle
 
-MVP permission requests SHALL be non-expiring while relay and worker state
+Alpha permission requests SHALL be non-expiring while relay and worker state
 remain healthy.
 
 Pending requests SHALL remain pending until one of:
 
-- explicit authorized `approve` decision
-- explicit authorized `deny` decision
+- explicit authorized `selected` decision
+- explicit authorized `cancelled` decision
 - hard terminal cancellation condition (for example session/worker termination
   or aborted permission wait)
 
-Relay SHALL NOT apply timer-based auto-expiry for permission requests in MVP.
+Relay SHALL NOT apply timer-based auto-expiry for permission requests in alpha.
 ACP send turn-timeout fields (`acp_turn_timeout_ms`, `[coders.acp] turn-timeout-ms`)
 remain independent from permission decision lifecycle.
 
@@ -156,24 +156,21 @@ ACP action and sender-visible terminal outcome/reason_code.
 
 Mapping:
 
-- `approved` -> send ACP allow; prompt continues under existing ACP stop-reason
-  mapping contract
-- `runtime_permission_request_denied` -> send ACP deny; sender-visible terminal
-  outcome `failed` with `reason_code=runtime_permission_request_denied`
-- `runtime_permission_request_cancelled` -> abort pending ACP wait/turn;
-  sender-visible terminal outcome `failed` with
-  `reason_code=runtime_permission_request_cancelled`
+- `selected` -> send ACP selected outcome with the chosen `option_id`; prompt
+  continues under existing ACP stop-reason mapping contract
+- `cancelled` -> send ACP cancelled outcome; sender-visible terminal outcome
+  `failed` with `reason_code=runtime_permission_request_cancelled`
 
 For sync phase-1 responses already returned with
 `details.delivery_phase = "accepted_in_progress"`, relay SHALL keep phase-1
 response immutable.
 
-#### Scenario: Map denied permission to failed terminal outcome
+#### Scenario: Map cancelled permission to failed terminal outcome
 
-- **WHEN** permission decision resolves to denied
-- **THEN** relay sends ACP deny
+- **WHEN** permission decision resolves to cancelled
+- **THEN** relay sends ACP cancelled
 - **AND** sender-visible terminal outcome is `failed`
-- **AND** `reason_code = runtime_permission_request_denied`
+- **AND** `reason_code = runtime_permission_request_cancelled`
 
 #### Scenario: Keep sync phase-1 response immutable after later permission cancellation
 
@@ -181,6 +178,46 @@ response immutable.
   `details.delivery_phase = "accepted_in_progress"`
 - **AND** permission later resolves to cancelled
 - **THEN** relay does not mutate the earlier phase-1 response
+
+### Requirement: ACP Permission Option Fidelity
+
+Relay SHALL preserve ACP permission-option fidelity for operator decisioning.
+
+Normative reference:
+- ACP Tool Calls: https://agentclientprotocol.com/protocol/tool-calls.md
+
+Conformance note:
+- Implementers MUST read and conform to ACP `session/request_permission`
+  semantics from the Tool Calls spec before modifying relay permission logic.
+
+Decision contract:
+
+- `permission.resolve` SHALL include `outcome`
+- allowed decision outcomes are `selected` and `cancelled`
+- `selected` SHALL include explicit `option_id`
+- `cancelled` SHALL NOT include `option_id`
+- relay MUST reject invalid outcome/option combinations with
+  `validation_invalid_params`
+- relay MUST reject decisions with unknown/non-pending option IDs using
+  deterministic validation/runtime taxonomy
+
+Lifecycle payload contract:
+
+- `permission.requested` payload SHALL include ACP option metadata needed for UI
+  rendering and explicit option selection
+
+#### Scenario: Resolve with explicit option id from UI decision
+
+- **WHEN** UI submits `permission.resolve` with `outcome=selected` and explicit
+  `option_id`
+- **THEN** relay uses the supplied `option_id` for ACP selected outcome
+- **AND** does not transform or substitute the selected option id
+
+#### Scenario: Reject decision missing option id
+
+- **WHEN** UI submits `permission.resolve` with `outcome=selected` and missing
+  `option_id`
+- **THEN** relay rejects with `validation_invalid_params`
 
 ### Requirement: Permission Decision Arbitration
 
@@ -190,7 +227,7 @@ Subsequent decisions on resolved requests SHALL be rejected with
 
 #### Scenario: Reject late decision after prior approval
 
-- **WHEN** a second UI submits decision for already approved request
+- **WHEN** a second UI submits decision for already resolved request
 - **THEN** relay rejects with `runtime_permission_request_already_resolved`
 
 ### Requirement: Permission Decision Denial Schema
