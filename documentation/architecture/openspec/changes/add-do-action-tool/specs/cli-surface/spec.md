@@ -32,7 +32,7 @@ List mode SHALL return available configured actions for the resolved session
 context.
 
 Execute mode SHALL run only configured actions and SHALL reject unknown action
-ids. Execute mode SHALL target the caller's own session in MVP and SHALL NOT
+ids. Execute mode SHALL target the caller's own session in alpha scope and SHALL NOT
 accept target selector arguments.
 
 #### Scenario: List available actions in list mode
@@ -55,13 +55,13 @@ accept target selector arguments.
 
 The CLI SHALL support action metadata query mode for one action.
 
-MVP SHALL express this as `agentmux do --show <action>`.
+alpha scope SHALL express this as `agentmux do --show <action>`.
 
 Show output SHALL include:
 
 - action id
 - description (when configured)
-- parameter model for execution payload (MVP may be empty/none)
+- parameter model for execution payload (alpha scope may be empty/none)
 - self-target policy (`self-only`)
 
 #### Scenario: Show configured action metadata
@@ -74,10 +74,10 @@ Show output SHALL include:
 Action execution SHALL enforce:
 
 - configured action allowlist
-- self-target-only execution in MVP (no target selector arguments)
+- self-target-only execution in alpha scope (no target selector arguments)
 - effective async execution for self-target runs
 
-MVP SHALL NOT introduce broader authorization constraints beyond the `self-only`
+alpha scope SHALL NOT introduce broader authorization constraints beyond the `self-only`
 policy; those are deferred to the existing authorization track.
 
 #### Scenario: Force async semantics for self action run
@@ -86,7 +86,7 @@ policy; those are deferred to the existing authorization track.
 - **THEN** execution uses effective async behavior
 - **AND** does not block waiting for prompt quiescence completion outcome
 
-#### Scenario: Reject target selector argument in MVP
+#### Scenario: Reject target selector argument in alpha scope
 
 - **WHEN** an operator provides target selector arguments to `agentmux do`
 - **THEN** the system rejects with `validation_invalid_arguments`

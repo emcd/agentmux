@@ -15,7 +15,7 @@ Each action definition SHALL include:
 - optional `description`
 - optional `self-only` (default `true`)
 
-In MVP, `self-only` is a forward-compat policy field; non-self targeting is not
+In alpha scope, `self-only` is a forward-compat policy field; non-self targeting is not
 supported yet, so do-run behavior remains self-target-only regardless of this
 field value.
 
@@ -54,7 +54,7 @@ Run mode request contract SHALL include:
 
 - required `mode=run`
 - required `action`
-- no target selector fields in MVP
+- no target selector fields in alpha scope
 
 #### Scenario: Return available actions for list mode
 
@@ -83,17 +83,17 @@ Run mode request contract SHALL include:
 Relay do execution SHALL enforce:
 
 - action allowlist from configuration
-- self-target-only execution in MVP
+- self-target-only execution in alpha scope
 - effective async behavior for self-target actions
 
-MVP SHALL NOT introduce broader authorization constraints beyond `self-only`;
+alpha scope SHALL NOT introduce broader authorization constraints beyond `self-only`;
 those are deferred to the existing authorization track.
 
 Relay SHALL emit action lifecycle inscriptions for observability.
 
 #### Scenario: Force async behavior for self run
 
-- **WHEN** relay receives a valid do run request (self-target by MVP contract)
+- **WHEN** relay receives a valid do run request (self-target by alpha scope contract)
 - **THEN** relay treats dispatch as accepted/queued
 - **AND** does not block waiting for sync completion semantics
 

@@ -14,9 +14,9 @@ operations where synchronous waiting can deadlock.
 
 ## Non-Goals
 
-- Full dynamic `agentmux help` framework in MVP.
+- Full dynamic `agentmux help` framework in alpha scope.
 - Arbitrary prompt execution outside configured actions.
-- Cross-bundle policy expansion in MVP.
+- Cross-bundle policy expansion in alpha scope.
 
 ## Decisions
 
@@ -33,17 +33,17 @@ operations where synchronous waiting can deadlock.
   coder in `coders.toml` under canonical path `[[coders.do-actions]]` so
   action prompts can differ by coder.
 - Decision: action entries include `self-only` with default `true`.
-- Decision: in MVP, `self-only` is forward-compat/reserved because non-self
+- Decision: in alpha scope, `self-only` is forward-compat/reserved because non-self
   targeting is out of scope; runtime behavior is still self-target-only by
   contract.
-- Decision: MVP run execution is self-target only and does not expose target
+- Decision: alpha scope run execution is self-target only and does not expose target
   selector fields in CLI/MCP/relay request contracts.
 - Decision: self-target execution is always effective async; request-level sync
   preference does not override this rule.
 - Decision: `do run` returns one canonical acceptance payload across
   relay/CLI/MCP with required fields: `schema_version`, `bundle_name`,
   `requester_session`, `action`, `status`, `outcome`, `message_id`.
-- Decision: MVP enforces allowlist + `self-only` only; broader authorization
+- Decision: alpha scope enforces allowlist + `self-only` only; broader authorization
   constraints are deferred to the existing authorization track.
 - Decision: action execution emits standard inscriptions for observability.
 

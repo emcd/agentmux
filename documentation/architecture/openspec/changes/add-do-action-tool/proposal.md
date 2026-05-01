@@ -1,4 +1,4 @@
-# Change: Add do Action Command and MCP Tool (MVP)
+# Change: Add do Action Command and MCP Tool (Alpha)
 
 ## Why
 
@@ -17,27 +17,27 @@ safe, standardized actuator for configured maintenance actions.
   - `mode=list` for action discovery
   - `mode=show` for action metadata and parameter shape
   - `mode=run` for action execution
-  - no target selector fields in MVP (`do run` is self-target by contract)
+  - no target selector fields in alpha scope (`do run` is self-target by contract)
 - Add configurable action entries at canonical path
   `[[coders.do-actions]]` in `coders.toml` (kebab-case keys), so prompts can
   vary by coder while keeping action ids stable.
 - Add self-target guardrails:
-  - `do run` is self-target only in MVP (no target selector fields)
+  - `do run` is self-target only in alpha scope (no target selector fields)
   - action entries default to `self-only=true`
   - self-target execution is always async (no sync override)
-  - `self-only` is retained as a forward-compat policy field for post-MVP
+  - `self-only` is retained as a forward-compat policy field for post-alpha
     targeted execution.
 - Defer broader authorization policy (beyond `self-only`) to follow-up work
   under the existing authorization todo/proposal track.
 - Define standard execution envelope/inscriptions for `do` action dispatch.
 - Lock one canonical `do run` acceptance payload shape across relay/CLI/MCP.
 
-## Non-Goals (MVP)
+## Non-Goals (alpha scope)
 
 - Generic `agentmux help` subcommand/tool for all dynamic surfaces.
 - Cross-bundle or cross-user action execution.
 - Arbitrary free-form prompt injection outside configured action allowlist.
-- Targeted/non-self `do run` execution (deferred until post-MVP authorization
+- Targeted/non-self `do run` execution (deferred until post-alpha authorization
   and targeting contract work).
 
 ## Impact

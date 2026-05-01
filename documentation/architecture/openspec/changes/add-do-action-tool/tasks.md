@@ -17,10 +17,10 @@
       - `list`
       - `show`
       - `run`
-      - reject target selector fields in MVP
+      - reject target selector fields in alpha scope
 - [ ] 1.5 Enforce safety semantics:
       - reject unconfigured action id
-      - enforce self-target-only run semantics in MVP
+      - enforce self-target-only run semantics in alpha scope
       - force async execution for self-target runs
       - defer broader authorization policy to follow-up authorization work
 - [ ] 1.6 Lock canonical acceptance payload for `do run` across relay/CLI/MCP:
@@ -40,9 +40,9 @@
       - enforce capability mapping for `do.list`, `do.show`, `do.run`
       - evaluate requester policy using shared scope semantics
         (`none` | `self` | `all:home` | `all:all`)
-      - keep MVP self-target-only behavior for `do run`
+      - keep alpha scope self-target-only behavior for `do run`
       - treat `all:home` / `all:all` as reserved non-operative for current
-        MVP run targeting contract
+        alpha scope run targeting contract
 - [ ] 1.9 Enforce missing `do` action control entry as `none` at runtime:
       - if action id has no explicit `do` scope entry, deny `do run`
       - return canonical `authorization_forbidden` details payload
@@ -55,7 +55,7 @@
       - showing action metadata
       - running configured action
       - rejecting unknown action
-      - rejecting target selector arguments in MVP
+      - rejecting target selector arguments in alpha scope
       - canonical run acceptance payload fields
 - [ ] 2.2 Add MCP integration tests for:
       - `do` tool visibility
@@ -66,7 +66,7 @@
 - [ ] 2.3 Add relay/runtime tests for:
       - configured action lookup
       - forced async for self-run
-      - rejecting target selector fields in MVP
+      - rejecting target selector fields in alpha scope
       - canonical run acceptance payload fields
 - [ ] 2.4 Add authorization-focused `do` tests for:
       - deny when `do.<action>` is missing (implicit `none`)
@@ -77,7 +77,7 @@
 
 ## 3. Validation
 
-- [ ] 3.1 Run `openspec validate add-do-action-tool-mvp --strict`.
+- [ ] 3.1 Run `openspec validate add-do-action-tool --strict`.
 - [ ] 3.2 Run `cargo check --all-targets --all-features`.
 - [ ] 3.3 Run `cargo clippy --all-targets --all-features -- -D warnings`.
 - [ ] 3.4 Run `cargo test --all-features`.

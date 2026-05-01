@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 ### Requirement: MCP Tool Set
 
-The system SHALL expose the following MCP tools for the relay MVP:
+The system SHALL expose the following MCP tools for the relay alpha scope:
 
 - `list`
 - `look`
@@ -29,7 +29,7 @@ The system SHALL expose one MCP tool `do` with mode-based requests:
 `mode=run` and `mode=show` SHALL reject missing `action` with
 `validation_invalid_arguments`.
 
-In MVP, `do` requests SHALL NOT include target selector fields
+In alpha scope, `do` requests SHALL NOT include target selector fields
 (`target_session`, `target_sessions`).
 
 #### Scenario: List actions via MCP do tool
@@ -62,12 +62,12 @@ In MVP, `do` requests SHALL NOT include target selector fields
 ### Requirement: MCP Do Execution Safety
 
 `do` execution SHALL enforce action allowlist and self-target-only execution in
-MVP.
+alpha scope.
 
 `do` execution targeting the sender's own session SHALL always use effective
 async execution semantics.
 
-MVP SHALL NOT introduce broader authorization constraints beyond `self-only`;
+alpha scope SHALL NOT introduce broader authorization constraints beyond `self-only`;
 those are deferred to the existing authorization track.
 
 #### Scenario: Reject unknown do action
