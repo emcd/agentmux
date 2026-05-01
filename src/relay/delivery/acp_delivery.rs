@@ -228,30 +228,18 @@ pub(super) fn deliver_one_target_acp(
                         format!("failed to persist ACP worker state: {reason}"),
                     );
                 }
-                if let Some(PermissionResolutionOutcome::Denied { reason, .. }) =
-                    pending_permission_outcome.clone()
-                {
-                    return failed_result_with_code(
-                        target_session,
-                        message_id,
-                        "runtime_permission_request_denied",
-                        "ACP permission request was denied",
-                        Some(json!({
-                            "target_session": target_member.id,
-                            "reason": reason,
-                        })),
-                    );
-                }
                 if let Some(PermissionResolutionOutcome::Cancelled {
                     reason_code,
                     reason,
+                    ..
                 }) = pending_permission_outcome.clone()
                 {
                     return failed_result_with_code(
                         target_session,
                         message_id,
                         reason_code.as_str(),
-                        reason,
+                        reason
+                            .unwrap_or_else(|| "ACP permission request was cancelled".to_string()),
                         Some(json!({
                             "target_session": target_member.id,
                         })),
@@ -382,8 +370,9 @@ fn resolve_acp_permission_request(
             return (
                 None,
                 PermissionResolutionOutcome::Cancelled {
+                    decided_by: "relay".to_string(),
                     reason_code: "runtime_permission_queue_full".to_string(),
-                    reason: "permission queue is full".to_string(),
+                    reason: Some("permission queue is full".to_string()),
                 },
             );
         }
@@ -391,8 +380,9 @@ fn resolve_acp_permission_request(
             return (
                 None,
                 PermissionResolutionOutcome::Cancelled {
+                    decided_by: "relay".to_string(),
                     reason_code: "runtime_permission_queue_unavailable".to_string(),
-                    reason: "failed to enqueue permission request".to_string(),
+                    reason: Some("failed to enqueue permission request".to_string()),
                 },
             );
         }
@@ -404,15 +394,15 @@ fn resolve_acp_permission_request(
         return (
             None,
             PermissionResolutionOutcome::Cancelled {
+                decided_by: "relay".to_string(),
                 reason_code: "runtime_permission_request_cancelled".to_string(),
-                reason: "failed while waiting for permission decision".to_string(),
+                reason: Some("failed while waiting for permission decision".to_string()),
             },
         );
     };
 
     let response_option_id = match &outcome {
-        PermissionResolutionOutcome::Approved { option_id, .. }
-        | PermissionResolutionOutcome::Denied { option_id, .. } => Some(option_id.clone()),
+        PermissionResolutionOutcome::Selected { option_id, .. } => Some(option_id.clone()),
         PermissionResolutionOutcome::Cancelled { .. } => None,
     };
     (response_option_id, outcome)

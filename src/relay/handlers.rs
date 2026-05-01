@@ -141,8 +141,9 @@ pub(super) fn handle_request(
             },
             runtime_directory,
         ),
-        RelayRequest::PermissionApprove {
+        RelayRequest::PermissionResolve {
             permission_request_id,
+            outcome,
             option_id,
             bundle_name: request_bundle_name,
             ui_session_id,
@@ -151,32 +152,11 @@ pub(super) fn handle_request(
             authorization,
             PermissionDecisionRequestContext {
                 permission_request_id,
+                outcome,
                 option_id,
-                reason: None,
                 bundle_name: request_bundle_name,
                 ui_session_id,
             },
-            PermissionDecisionKind::Approve,
-            runtime_directory,
-            principal,
-        ),
-        RelayRequest::PermissionDeny {
-            permission_request_id,
-            option_id,
-            reason,
-            bundle_name: request_bundle_name,
-            ui_session_id,
-        } => handle_permission_decision(
-            bundle,
-            authorization,
-            PermissionDecisionRequestContext {
-                permission_request_id,
-                option_id,
-                reason,
-                bundle_name: request_bundle_name,
-                ui_session_id,
-            },
-            PermissionDecisionKind::Deny,
             runtime_directory,
             principal,
         ),
@@ -1065,14 +1045,13 @@ fn handle_permission_decision(
     bundle: &BundleConfiguration,
     authorization: &AuthorizationContext,
     request: PermissionDecisionRequestContext,
-    decision: PermissionDecisionKind,
     runtime_directory: &Path,
     principal: Option<RequestPrincipal>,
 ) -> Result<RelayResponse, RelayError> {
     let PermissionDecisionRequestContext {
         permission_request_id,
+        outcome,
         option_id,
-        reason,
         bundle_name: request_bundle_name,
         ui_session_id,
     } = request;
@@ -1117,6 +1096,44 @@ fn handle_permission_decision(
             })),
         ));
     }
+    let decision = match outcome.as_str() {
+        "selected" => {
+            if option_id.is_none() {
+                return Err(relay_error(
+                    "validation_invalid_params",
+                    "selected outcome requires explicit option_id",
+                    Some(json!({
+                        "field": "option_id",
+                        "outcome": "selected",
+                    })),
+                ));
+            }
+            PermissionDecisionKind::Selected
+        }
+        "cancelled" => {
+            if option_id.is_some() {
+                return Err(relay_error(
+                    "validation_invalid_params",
+                    "cancelled outcome must omit option_id",
+                    Some(json!({
+                        "field": "option_id",
+                        "outcome": "cancelled",
+                    })),
+                ));
+            }
+            PermissionDecisionKind::Cancelled
+        }
+        _ => {
+            return Err(relay_error(
+                "validation_invalid_params",
+                "permission decision outcome must be selected or cancelled",
+                Some(json!({
+                    "field": "outcome",
+                    "value": outcome,
+                })),
+            ));
+        }
+    };
     let principal = principal.ok_or_else(|| {
         relay_error(
             "validation_missing_hello",
@@ -1144,14 +1161,14 @@ fn handle_permission_decision(
         bundle_name: bundle.bundle_name.clone(),
         authorized_ui_sessions: grant_authorized_ui_sessions(authorization, bundle),
     };
+    let decision_option_id = option_id.clone();
     let outcome = resolve_permission_request(
         &context,
         PermissionDecisionRequest {
             permission_request_id: permission_request_id.clone(),
-            option_id,
+            option_id: decision_option_id,
             decision,
             decided_by: principal.session_id.clone(),
-            reason,
         },
     )
     .map_err(|cause| {
@@ -1171,6 +1188,19 @@ fn handle_permission_decision(
                     "permission_request_id": permission_request_id,
                 })),
             )
+        } else if cause.starts_with("validation_invalid_params:") {
+            let validation_message = cause
+                .split_once(':')
+                .map(|(_, message)| message.trim().to_string())
+                .unwrap_or_else(|| "invalid permission decision parameters".to_string());
+            relay_error(
+                "validation_invalid_params",
+                validation_message.as_str(),
+                Some(json!({
+                    "field": "option_id",
+                    "value": option_id,
+                })),
+            )
         } else {
             relay_error(
                 "internal_unexpected_failure",
@@ -1184,18 +1214,14 @@ fn handle_permission_decision(
     })?;
 
     let (outcome_label, reason_code, reason_message) = match outcome {
-        super::delivery::PermissionResolutionOutcome::Approved { .. } => {
-            ("approved".to_string(), None, None)
+        super::delivery::PermissionResolutionOutcome::Selected { .. } => {
+            ("selected".to_string(), None, None)
         }
-        super::delivery::PermissionResolutionOutcome::Denied { reason, .. } => (
-            "denied".to_string(),
-            Some("runtime_permission_request_denied".to_string()),
-            reason,
-        ),
         super::delivery::PermissionResolutionOutcome::Cancelled {
             reason_code,
             reason,
-        } => ("cancelled".to_string(), Some(reason_code), Some(reason)),
+            ..
+        } => ("cancelled".to_string(), Some(reason_code), reason),
     };
     Ok(RelayResponse::PermissionDecision {
         schema_version: SCHEMA_VERSION.to_string(),

@@ -346,21 +346,11 @@ pub enum RelayRequest {
         #[serde(default)]
         bundle_name: Option<String>,
     },
-    PermissionApprove {
+    PermissionResolve {
         permission_request_id: String,
+        outcome: String,
         #[serde(default)]
         option_id: Option<String>,
-        #[serde(default)]
-        bundle_name: Option<String>,
-        #[serde(default)]
-        ui_session_id: Option<String>,
-    },
-    PermissionDeny {
-        permission_request_id: String,
-        #[serde(default)]
-        option_id: Option<String>,
-        #[serde(default)]
-        reason: Option<String>,
         #[serde(default)]
         bundle_name: Option<String>,
         #[serde(default)]
@@ -466,8 +456,8 @@ pub(super) struct RawwRequestContext {
 #[derive(Clone, Debug)]
 pub(super) struct PermissionDecisionRequestContext {
     permission_request_id: String,
+    outcome: String,
     option_id: Option<String>,
-    reason: Option<String>,
     bundle_name: Option<String>,
     ui_session_id: Option<String>,
 }

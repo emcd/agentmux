@@ -637,23 +637,38 @@ impl AppState {
         &mut self,
         permission_request_id: String,
         approved: bool,
-        reason: Option<String>,
+        _reason: Option<String>,
     ) -> Result<(), RuntimeError> {
-        let request = if approved {
-            RelayRequest::PermissionApprove {
-                permission_request_id: permission_request_id.clone(),
-                option_id: None,
-                bundle_name: None,
-                ui_session_id: None,
-            }
+        let option_id = if approved {
+            self.pending_permissions
+                .iter()
+                .find(|entry| entry.permission_request_id == permission_request_id)
+                .and_then(|entry| entry.requested_details.as_ref())
+                .and_then(|details| details.get("options"))
+                .and_then(serde_json::Value::as_array)
+                .and_then(|options| options.first())
+                .and_then(|option| option.get("option_id"))
+                .and_then(serde_json::Value::as_str)
+                .map(ToString::to_string)
         } else {
-            RelayRequest::PermissionDeny {
-                permission_request_id: permission_request_id.clone(),
-                option_id: None,
-                reason,
-                bundle_name: None,
-                ui_session_id: None,
-            }
+            None
+        };
+        if approved && option_id.is_none() {
+            return Err(RuntimeError::validation(
+                "validation_invalid_params",
+                "pending permission approval requires explicit option_id".to_string(),
+            ));
+        }
+        let request = RelayRequest::PermissionResolve {
+            permission_request_id: permission_request_id.clone(),
+            outcome: if approved {
+                "selected".to_string()
+            } else {
+                "cancelled".to_string()
+            },
+            option_id,
+            bundle_name: None,
+            ui_session_id: None,
         };
         match self.request_relay(&request)? {
             RelayResponse::PermissionDecision {

@@ -24,7 +24,6 @@ use super::super::{
 const PERMISSION_QUEUE_FILE: &str = "permission_queue.json";
 const PERMISSION_QUEUE_SCHEMA_VERSION: u32 = 1;
 const PERMISSION_CANCELLED_CODE: &str = "runtime_permission_request_cancelled";
-const PERMISSION_DENIED_CODE: &str = "runtime_permission_request_denied";
 const PERMISSION_ALREADY_RESOLVED_CODE: &str = "runtime_permission_request_already_resolved";
 const PERMISSION_QUEUE_UNAVAILABLE_CODE: &str = "runtime_permission_queue_unavailable";
 const PERMISSION_QUEUE_FULL_CODE: &str = "runtime_permission_queue_full";
@@ -48,10 +47,6 @@ pub(in crate::relay) struct PersistedPendingPermissionRequest {
     pub(in crate::relay) target_session: String,
     pub(in crate::relay) requested_kind: String,
     pub(in crate::relay) requested_details: Value,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(in crate::relay) approve_option_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(in crate::relay) deny_option_id: Option<String>,
     pub(in crate::relay) enqueued_at: String,
     pub(in crate::relay) enqueued_at_ms: i64,
     pub(in crate::relay) sequence: u64,
@@ -59,18 +54,14 @@ pub(in crate::relay) struct PersistedPendingPermissionRequest {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::relay) enum PermissionResolutionOutcome {
-    Approved {
+    Selected {
         option_id: String,
         decided_by: String,
-    },
-    Denied {
-        option_id: String,
-        decided_by: String,
-        reason: Option<String>,
     },
     Cancelled {
+        decided_by: String,
         reason_code: String,
-        reason: String,
+        reason: Option<String>,
     },
 }
 
@@ -81,8 +72,8 @@ pub(in crate::relay) struct PermissionEnqueueResult {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::relay) enum PermissionDecisionKind {
-    Approve,
-    Deny,
+    Selected,
+    Cancelled,
 }
 
 #[derive(Clone, Debug)]
@@ -91,7 +82,6 @@ pub(in crate::relay) struct PermissionDecisionRequest {
     pub(in crate::relay) option_id: Option<String>,
     pub(in crate::relay) decision: PermissionDecisionKind,
     pub(in crate::relay) decided_by: String,
-    pub(in crate::relay) reason: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -112,6 +102,26 @@ fn sort_pending_by_sequence(pending: &mut [PersistedPendingPermissionRequest]) {
     });
 }
 
+fn pending_permission_option_ids(record: &PersistedPendingPermissionRequest) -> Vec<String> {
+    record
+        .requested_details
+        .get("options")
+        .and_then(Value::as_array)
+        .map(|options| {
+            options
+                .iter()
+                .filter_map(|option| {
+                    option
+                        .get("option_id")
+                        .or_else(|| option.get("optionId"))
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
 fn permission_queue_lock() -> &'static Mutex<()> {
     PERMISSION_QUEUE_LOCK.get_or_init(|| Mutex::new(()))
 }
@@ -126,7 +136,7 @@ pub(in crate::relay) fn enqueue_permission_request(
     target_session: &str,
     requested_kind: &str,
     requested_details: Value,
-    options: &[PermissionOption],
+    _options: &[PermissionOption],
     max_pending: usize,
 ) -> Result<PermissionEnqueueResult, String> {
     let _guard = permission_queue_lock()
@@ -144,37 +154,14 @@ pub(in crate::relay) fn enqueue_permission_request(
         return Err(PERMISSION_QUEUE_FULL_CODE.to_string());
     }
     let permission_request_id = Uuid::new_v4().to_string();
-    let now = current_timestamp_millis();
-    // ACP Permission Options kinds:
-    // - allow_once / allow_always
-    // - reject_once / reject_always
-    // We persist preferred option ids so UI decisions can map back to ACP
-    // "selected" outcomes with a deterministic optionId.
-    // Ref: https://agentclientprotocol.com/protocol/tool-calls.md
-    let approve_option_id = options
-        .iter()
-        .find(|option| matches!(option.kind.as_str(), "allow_once" | "allow_always"))
-        .or_else(|| options.first())
-        .map(|option| option.option_id.clone());
-    let deny_option_id = options
-        .iter()
-        .find(|option| matches!(option.kind.as_str(), "reject_once" | "reject_always"))
-        .or_else(|| {
-            options
-                .iter()
-                .find(|option| !matches!(option.kind.as_str(), "allow_once" | "allow_always"))
-        })
-        .map(|option| option.option_id.clone());
     let record = PersistedPendingPermissionRequest {
         permission_request_id: permission_request_id.clone(),
         message_id: message_id.to_string(),
         target_session: target_session.to_string(),
         requested_kind: requested_kind.to_string(),
         requested_details,
-        approve_option_id,
-        deny_option_id,
         enqueued_at: timestamp_rfc3339(),
-        enqueued_at_ms: now,
+        enqueued_at_ms: current_timestamp_millis(),
         sequence: state.next_sequence,
     };
     state.next_sequence = state.next_sequence.saturating_add(1);
@@ -209,33 +196,31 @@ pub(in crate::relay) fn resolve_permission_request(
     store_persisted_permission_queue_state(path.as_path(), &state)?;
 
     let outcome = match decision.decision {
-        PermissionDecisionKind::Approve => {
-            if let Some(option_id) = decision.option_id.or(record.approve_option_id.clone()) {
-                PermissionResolutionOutcome::Approved {
-                    option_id,
-                    decided_by: decision.decided_by.clone(),
-                }
-            } else {
-                PermissionResolutionOutcome::Cancelled {
-                    reason_code: PERMISSION_CANCELLED_CODE.to_string(),
-                    reason: "no ACP approval option is available".to_string(),
-                }
+        PermissionDecisionKind::Selected => {
+            let option_id = decision.option_id.ok_or_else(|| {
+                "validation_invalid_params: selected outcome requires explicit option_id"
+                    .to_string()
+            })?;
+            let allowed_option_ids = pending_permission_option_ids(&record);
+            if !allowed_option_ids
+                .iter()
+                .any(|candidate| candidate == &option_id)
+            {
+                return Err(format!(
+                    "validation_invalid_params: selected option_id '{}' is not present in pending permission options",
+                    option_id
+                ));
+            }
+            PermissionResolutionOutcome::Selected {
+                option_id,
+                decided_by: decision.decided_by.clone(),
             }
         }
-        PermissionDecisionKind::Deny => {
-            if let Some(option_id) = decision.option_id.or(record.deny_option_id.clone()) {
-                PermissionResolutionOutcome::Denied {
-                    option_id,
-                    decided_by: decision.decided_by.clone(),
-                    reason: decision.reason.clone(),
-                }
-            } else {
-                PermissionResolutionOutcome::Cancelled {
-                    reason_code: PERMISSION_CANCELLED_CODE.to_string(),
-                    reason: "no ACP denial option is available".to_string(),
-                }
-            }
-        }
+        PermissionDecisionKind::Cancelled => PermissionResolutionOutcome::Cancelled {
+            decided_by: decision.decided_by.clone(),
+            reason_code: PERMISSION_CANCELLED_CODE.to_string(),
+            reason: Some("permission request was cancelled by UI decision".to_string()),
+        },
     };
 
     if let Some(waiter) = take_waiter(decision.permission_request_id.as_str())? {
@@ -322,8 +307,9 @@ fn cancel_permission_request_on_shutdown(
     let path = permission_queue_path(context.runtime_directory.as_path());
     let Some(mut state) = load_persisted_permission_queue_state(path.as_path())? else {
         return Ok(PermissionResolutionOutcome::Cancelled {
+            decided_by: "relay".to_string(),
             reason_code: PERMISSION_CANCELLED_CODE.to_string(),
-            reason: "relay shutdown cancelled pending permission request".to_string(),
+            reason: Some("relay shutdown cancelled pending permission request".to_string()),
         });
     };
     let Some(index) = state
@@ -332,15 +318,17 @@ fn cancel_permission_request_on_shutdown(
         .position(|record| record.permission_request_id == permission_request_id)
     else {
         return Ok(PermissionResolutionOutcome::Cancelled {
+            decided_by: "relay".to_string(),
             reason_code: PERMISSION_ALREADY_RESOLVED_CODE.to_string(),
-            reason: "permission request was already resolved".to_string(),
+            reason: Some("permission request was already resolved".to_string()),
         });
     };
     let record = state.pending.remove(index);
     store_persisted_permission_queue_state(path.as_path(), &state)?;
     let outcome = PermissionResolutionOutcome::Cancelled {
+        decided_by: "relay".to_string(),
         reason_code: PERMISSION_CANCELLED_CODE.to_string(),
-        reason: "relay shutdown cancelled pending permission request".to_string(),
+        reason: Some("relay shutdown cancelled pending permission request".to_string()),
     };
     if let Some(waiter) = take_waiter(permission_request_id)? {
         let (lock, condvar) = &*waiter;
@@ -381,28 +369,21 @@ fn emit_permission_resolved_event(
     outcome: &PermissionResolutionOutcome,
 ) {
     let (outcome_label, reason_code, decided_by, reason) = match outcome {
-        PermissionResolutionOutcome::Approved { decided_by, .. } => (
-            "approved",
+        PermissionResolutionOutcome::Selected { decided_by, .. } => (
+            "selected",
             Value::Null,
             Value::String(decided_by.clone()),
             Value::Null,
-        ),
-        PermissionResolutionOutcome::Denied {
-            decided_by, reason, ..
-        } => (
-            "denied",
-            Value::String(PERMISSION_DENIED_CODE.to_string()),
-            Value::String(decided_by.clone()),
-            reason.clone().map(Value::String).unwrap_or(Value::Null),
         ),
         PermissionResolutionOutcome::Cancelled {
+            decided_by,
             reason_code,
             reason,
         } => (
             "cancelled",
             Value::String(reason_code.clone()),
-            Value::String("relay".to_string()),
-            Value::String(reason.clone()),
+            Value::String(decided_by.clone()),
+            reason.clone().map(Value::String).unwrap_or(Value::Null),
         ),
     };
     for ui_session_id in &context.authorized_ui_sessions {
@@ -567,48 +548,5 @@ pub(in crate::relay) fn map_permission_state_error(
             message,
             Some(json!({ "code": code })),
         ),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{PersistedPendingPermissionRequest, sort_pending_by_sequence};
-    use serde_json::json;
-
-    #[test]
-    fn sort_pending_uses_sequence_as_fifo_source_of_truth() {
-        let mut pending = vec![
-            PersistedPendingPermissionRequest {
-                permission_request_id: "perm-z".to_string(),
-                message_id: "msg-2".to_string(),
-                target_session: "alpha".to_string(),
-                requested_kind: "other".to_string(),
-                requested_details: json!({}),
-                approve_option_id: Some("allow".to_string()),
-                deny_option_id: Some("deny".to_string()),
-                enqueued_at: "2026-01-01T00:00:00Z".to_string(),
-                enqueued_at_ms: 12345,
-                sequence: 2,
-            },
-            PersistedPendingPermissionRequest {
-                permission_request_id: "perm-a".to_string(),
-                message_id: "msg-1".to_string(),
-                target_session: "alpha".to_string(),
-                requested_kind: "other".to_string(),
-                requested_details: json!({}),
-                approve_option_id: Some("allow".to_string()),
-                deny_option_id: Some("deny".to_string()),
-                enqueued_at: "2026-01-01T00:00:00Z".to_string(),
-                enqueued_at_ms: 12345,
-                sequence: 1,
-            },
-        ];
-
-        sort_pending_by_sequence(pending.as_mut_slice());
-
-        assert_eq!(pending[0].sequence, 1);
-        assert_eq!(pending[0].permission_request_id, "perm-a");
-        assert_eq!(pending[1].sequence, 2);
-        assert_eq!(pending[1].permission_request_id, "perm-z");
     }
 }

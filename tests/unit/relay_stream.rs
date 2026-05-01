@@ -83,6 +83,64 @@ policy = "{policy}"
     .expect("write tui configuration");
 }
 
+fn write_policies_with_grant(configuration_root: &Path, grant: &str) {
+    std::fs::write(
+        configuration_root.join("policies.toml"),
+        format!(
+            r#"
+format-version = 1
+default = "default"
+
+[[policies]]
+id = "default"
+
+[policies.controls]
+find = "self"
+grant = "{grant}"
+list = "all:home"
+look = "self"
+send = "all:home"
+"#
+        ),
+    )
+    .expect("write policies configuration");
+}
+
+fn seed_permission_queue(runtime_directory: &Path, permission_request_id: &str, option_id: &str) {
+    std::fs::create_dir_all(runtime_directory).expect("create runtime directory");
+    std::fs::write(
+        runtime_directory.join("permission_queue.json"),
+        format!(
+            r#"{{
+  "schema_version": 1,
+  "next_sequence": 2,
+  "pending": [
+    {{
+      "permission_request_id": "{permission_request_id}",
+      "message_id": "msg-1",
+      "target_session": "alpha",
+      "requested_kind": "execute",
+      "requested_details": {{
+        "tool_call_title": "Run command",
+        "options": [
+          {{
+            "option_id": "{option_id}",
+            "name": "Allow once",
+            "kind": "allow_once"
+          }}
+        ]
+      }},
+      "enqueued_at": "2026-01-01T00:00:00Z",
+      "enqueued_at_ms": 12345,
+      "sequence": 1
+    }}
+  ]
+}}"#
+        ),
+    )
+    .expect("write seeded permission queue");
+}
+
 fn spawn_relay_connection(
     configuration_root: &Path,
     bundle_paths: &BundleRuntimePaths,
@@ -186,7 +244,10 @@ fn stream_hello_acknowledges_and_allows_request() {
             "request": {"operation": "list", "sender_session": "alpha"}
         }),
     );
-    let response = read_json(&mut reader);
+    let mut response = read_json(&mut reader);
+    while response["frame"] != "response" {
+        response = read_json(&mut reader);
+    }
     assert_eq!(response["frame"], "response");
     assert_eq!(response["request_id"], "req-1");
     assert_eq!(response["response"]["kind"], "list");
@@ -344,12 +405,16 @@ fn permission_decision_rejects_non_ui_stream_submitter() {
             "frame": "request",
             "request_id": "req-1",
             "request": {
-                "operation": "permission_approve",
-                "permission_request_id": "perm-1"
+                "operation": "permission_resolve",
+                "permission_request_id": "perm-1",
+                "outcome": "cancelled"
             }
         }),
     );
-    let response = read_json(&mut reader);
+    let mut response = read_json(&mut reader);
+    while response["frame"] != "response" {
+        response = read_json(&mut reader);
+    }
     assert_eq!(response["frame"], "response");
     assert_eq!(response["request_id"], "req-1");
     assert_eq!(response["response"]["kind"], "error");
@@ -394,13 +459,17 @@ fn permission_decision_rejects_payload_actor_spoof_field() {
             "frame": "request",
             "request_id": "req-1",
             "request": {
-                "operation": "permission_approve",
+                "operation": "permission_resolve",
                 "permission_request_id": "perm-1",
+                "outcome": "cancelled",
                 "ui_session_id": "spoofed"
             }
         }),
     );
-    let response = read_json(&mut reader);
+    let mut response = read_json(&mut reader);
+    while response["frame"] != "response" {
+        response = read_json(&mut reader);
+    }
     assert_eq!(response["frame"], "response");
     assert_eq!(response["request_id"], "req-1");
     assert_eq!(response["response"]["kind"], "error");
@@ -445,8 +514,9 @@ fn permission_decision_denial_uses_grant_capability() {
             "frame": "request",
             "request_id": "req-1",
             "request": {
-                "operation": "permission_approve",
-                "permission_request_id": "perm-1"
+                "operation": "permission_resolve",
+                "permission_request_id": "perm-1",
+                "outcome": "cancelled"
             }
         }),
     );
@@ -499,8 +569,9 @@ fn permission_decision_rejects_empty_option_id() {
             "frame": "request",
             "request_id": "req-1",
             "request": {
-                "operation": "permission_approve",
+                "operation": "permission_resolve",
                 "permission_request_id": "perm-1",
+                "outcome": "selected",
                 "option_id": "   "
             }
         }),
@@ -516,6 +587,186 @@ fn permission_decision_rejects_empty_option_id() {
     assert_eq!(
         response["response"]["error"]["details"]["field"],
         "option_id"
+    );
+
+    shutdown_stream(&client_stream, "shutdown client stream");
+    join_handle.join().expect("join relay thread");
+}
+
+#[test]
+fn permission_decision_rejects_selected_without_option_id() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "party_permission_selected_missing_option";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_root, "default");
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let (mut client_stream, join_handle) =
+        spawn_relay_connection(&configuration_root, &bundle_paths);
+    let read_stream = client_stream.try_clone().expect("clone stream");
+    let mut reader = BufReader::new(read_stream);
+
+    send_json(
+        &mut client_stream,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "bundle_name": bundle_name,
+            "session_id": "user",
+            "client_class": "ui"
+        }),
+    );
+    let hello_ack = read_json(&mut reader);
+    assert_eq!(hello_ack["frame"], "hello_ack");
+
+    send_json(
+        &mut client_stream,
+        json!({
+            "frame": "request",
+            "request_id": "req-1",
+            "request": {
+                "operation": "permission_resolve",
+                "permission_request_id": "perm-1",
+                "outcome": "selected"
+            }
+        }),
+    );
+    let response = read_json(&mut reader);
+    assert_eq!(response["frame"], "response");
+    assert_eq!(response["request_id"], "req-1");
+    assert_eq!(response["response"]["kind"], "error");
+    assert_eq!(
+        response["response"]["error"]["code"],
+        "validation_invalid_params"
+    );
+    assert_eq!(
+        response["response"]["error"]["details"]["field"],
+        "option_id"
+    );
+
+    shutdown_stream(&client_stream, "shutdown client stream");
+    join_handle.join().expect("join relay thread");
+}
+
+#[test]
+fn permission_decision_rejects_cancelled_with_option_id() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "party_permission_cancelled_with_option";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_root, "default");
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let (mut client_stream, join_handle) =
+        spawn_relay_connection(&configuration_root, &bundle_paths);
+    let read_stream = client_stream.try_clone().expect("clone stream");
+    let mut reader = BufReader::new(read_stream);
+
+    send_json(
+        &mut client_stream,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "bundle_name": bundle_name,
+            "session_id": "user",
+            "client_class": "ui"
+        }),
+    );
+    let hello_ack = read_json(&mut reader);
+    assert_eq!(hello_ack["frame"], "hello_ack");
+
+    send_json(
+        &mut client_stream,
+        json!({
+            "frame": "request",
+            "request_id": "req-1",
+            "request": {
+                "operation": "permission_resolve",
+                "permission_request_id": "perm-1",
+                "outcome": "cancelled",
+                "option_id": "allow-once"
+            }
+        }),
+    );
+    let response = read_json(&mut reader);
+    assert_eq!(response["frame"], "response");
+    assert_eq!(response["request_id"], "req-1");
+    assert_eq!(response["response"]["kind"], "error");
+    assert_eq!(
+        response["response"]["error"]["code"],
+        "validation_invalid_params"
+    );
+    assert_eq!(
+        response["response"]["error"]["details"]["field"],
+        "option_id"
+    );
+
+    shutdown_stream(&client_stream, "shutdown client stream");
+    join_handle.join().expect("join relay thread");
+}
+
+#[test]
+fn permission_resolve_selected_rejects_unknown_option_id() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "party_permission_unknown_option";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_root, "default");
+    write_policies_with_grant(&configuration_root, "all:home");
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    seed_permission_queue(
+        &bundle_paths.runtime_directory,
+        "perm-unknown-option",
+        "allow-once",
+    );
+    let (mut client_stream, join_handle) =
+        spawn_relay_connection(&configuration_root, &bundle_paths);
+    let read_stream = client_stream.try_clone().expect("clone stream");
+    let mut reader = BufReader::new(read_stream);
+
+    send_json(
+        &mut client_stream,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "bundle_name": bundle_name,
+            "session_id": "user",
+            "client_class": "ui"
+        }),
+    );
+    let hello_ack = read_json(&mut reader);
+    assert_eq!(hello_ack["frame"], "hello_ack");
+
+    send_json(
+        &mut client_stream,
+        json!({
+            "frame": "request",
+            "request_id": "req-1",
+            "request": {
+                "operation": "permission_resolve",
+                "permission_request_id": "perm-unknown-option",
+                "outcome": "selected",
+                "option_id": "not-present"
+            }
+        }),
+    );
+    let mut response = read_json(&mut reader);
+    while response["frame"] != "response" {
+        response = read_json(&mut reader);
+    }
+    assert_eq!(response["frame"], "response");
+    assert_eq!(response["request_id"], "req-1");
+    assert_eq!(response["response"]["kind"], "error");
+    assert_eq!(
+        response["response"]["error"]["code"],
+        "validation_invalid_params"
+    );
+    assert_eq!(
+        response["response"]["error"]["details"]["field"],
+        "option_id"
+    );
+    assert_eq!(
+        response["response"]["error"]["details"]["value"],
+        "not-present"
     );
 
     shutdown_stream(&client_stream, "shutdown client stream");
