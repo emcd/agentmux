@@ -316,6 +316,50 @@ fn list_rejects_ui_sender_with_unknown_policy_reference() {
 }
 
 #[test]
+fn list_degrades_when_acp_startup_state_is_unreadable() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_acp_bundle(&temporary, "party");
+    write_tui_configuration(&config_root, "default");
+    let tmux_socket = temporary.path().join("tmux.sock");
+    let runtime_directory = tmux_socket
+        .parent()
+        .expect("tmux socket parent")
+        .to_path_buf();
+    let state_path = runtime_directory
+        .join("sessions")
+        .join("alpha")
+        .join("state.json");
+    std::fs::create_dir_all(state_path.parent().expect("state parent"))
+        .expect("create acp state directory");
+    std::fs::write(
+        &state_path,
+        r#"{
+  "schema_version": 1,
+  "worker_state": "available",
+  "snapshot_entries": []
+}"#,
+    )
+    .expect("write malformed acp state");
+
+    let response = dispatch_request(
+        RelayRequest::List {
+            sender_session: Some("user".to_string()),
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect("list response should not fail");
+
+    let RelayResponse::List { bundle, .. } = response else {
+        panic!("expected list response");
+    };
+    assert_eq!(bundle.state, ListedBundleState::Down);
+    assert!(bundle.startup_health.is_none());
+    assert_eq!(bundle.sessions.len(), 2);
+}
+
+#[test]
 fn chat_rejects_unknown_target() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");

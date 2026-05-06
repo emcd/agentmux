@@ -285,19 +285,23 @@ fn handle_list(
                 resolve_active_pane_target(tmux_socket.as_path(), member.id.as_str()).is_ok()
             }
             TargetConfiguration::Acp(_) => {
-                acp_session_ready_for_startup(runtime_directory, member.id.as_str()).map_err(
-                    |cause| {
-                        relay_error(
-                            "internal_unexpected_failure",
-                            "failed to evaluate ACP startup readiness",
-                            Some(json!({
+                match acp_session_ready_for_startup(runtime_directory, member.id.as_str()) {
+                    Ok(value) => value,
+                    Err(cause) => {
+                        // The list read path should remain available even if ACP readiness
+                        // state on disk is stale/corrupt; treat readiness as false and
+                        // report diagnostics out-of-band.
+                        emit_inscription(
+                            "relay.list.acp_startup_readiness_error",
+                            &json!({
                                 "bundle_name": bundle.bundle_name,
                                 "session_id": member.id,
                                 "cause": cause,
-                            })),
-                        )
-                    },
-                )?
+                            }),
+                        );
+                        false
+                    }
+                }
             }
         };
         if ready {
