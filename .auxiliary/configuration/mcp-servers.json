@@ -1,22 +1,24 @@
 {
   "mcpServers": {
     "agentmux": {
-      "command": "agentmux",
+      "command": "reloaderoo",
       "args": [
-        "host", "mcp",
-        "--bundle", "agentmux"
+        "--",
+        "cargo", "run", "--bin", "agentmux", "--",
+        "host", "mcp"
       ]
     },
     "context7": {
       "command": "npx",
-      "args": [ "-y", "@upstash/context7-mcp" ]
+      "args": ["-y", "@upstash/context7-mcp"]
     },
     "nb": {
       "command": "nb-mcp",
-      "args": [
-        "--notebook", "agentmux",
-        "--no-commit-signing"
-      ]
+      "args": ["--notebook", "agentmux", "--no-commit-signing"]
+    },
+    "pty-debug": {
+      "command": "npx",
+      "args": ["-y", "@so2liu/pty-mcp-server@1.0.11"]
     }
   }
 }
