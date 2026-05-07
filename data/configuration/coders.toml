@@ -9,8 +9,8 @@ id = "claude"
 [coders.tmux]
 initial-command = "claude"
 resume-command = "claude --resume {coder-session-id}"
-prompt-regex = '(?ms)^[─-]{20,}.*\n❯\s*$\n[─-]{20,}\n.*$'
-prompt-inspect-lines = 4
+prompt-regex = '(?ms)^[─-]{20,}\s+[>❯]\s+[─-]{20,}'
+prompt-inspect-lines = 6
 prompt-idle-column = 2
 
 [[coders]]
