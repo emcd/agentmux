@@ -220,7 +220,7 @@ impl AcpStdioClient {
         timeout: Option<Duration>,
     ) -> Result<Vec<ReplayEntry>, String> {
         self.pending_tool_calls.clear();
-        let mut replay_buffer = std::mem::take(&mut self.replay_buffer);
+        let entries_before_load = self.replay_buffer.len();
         let result = self
             .request(
                 "session/load",
@@ -238,7 +238,7 @@ impl AcpStdioClient {
                     on_replay_entries: None,
                     on_permission_request: None,
                 },
-                Some(&mut replay_buffer),
+                None,
             )
             .map(|value| value.result)
             .map_err(|error| match error {
@@ -248,10 +248,8 @@ impl AcpStdioClient {
                 }
                 AcpRequestError::ConnectionClosed { reason, .. } => reason,
             });
-        let entries = std::mem::take(&mut replay_buffer);
-        self.replay_buffer = replay_buffer;
         result?;
-        Ok(entries)
+        Ok(self.replay_buffer[entries_before_load..].to_vec())
     }
 
     pub fn prompt<'a>(

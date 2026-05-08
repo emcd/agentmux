@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     sync::{
-        Mutex, OnceLock,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicUsize, Ordering},
         mpsc,
     },
@@ -12,13 +12,14 @@ use std::{
 use serde_json::json;
 use time::format_description::well_known::Rfc3339;
 
+use crate::acp::ReplayEntry;
 use crate::configuration::TargetConfiguration;
 use crate::runtime::{inscriptions::emit_inscription, signals::shutdown_requested};
 
 use super::super::stream::{RelayStreamEvent, send_event_to_registered_ui};
 use super::super::{AsyncDeliveryTask, ChatOutcome, ChatResult, RelayError};
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const ASYNC_SHUTDOWN_WAIT_POLL_MS: u64 = 25;
 const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delivery";
@@ -33,6 +34,14 @@ pub(super) struct AsyncWorkerKey {
     pub target_session: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::relay) enum AcpWorkerReadinessState {
+    Initializing,
+    Available,
+    Busy,
+    Unavailable,
+}
+
 #[derive(Default)]
 pub(super) struct AsyncDeliveryRegistry {
     pub workers: Mutex<HashMap<AsyncWorkerKey, AsyncWorkerEntry>>,
@@ -42,6 +51,20 @@ pub(super) struct AsyncWorkerEntry {
     pub sender: mpsc::Sender<AsyncDeliveryTask>,
     pub pending: std::sync::Arc<AtomicUsize>,
     pub bounded_acp_queue: bool,
+    pub acp_state: Option<AcpWorkerReadinessState>,
+    pub acp_snapshot: Option<Arc<Vec<ReplayEntry>>>,
+}
+
+fn build_worker_key(
+    bundle_name: &str,
+    runtime_directory: &Path,
+    target_session: &str,
+) -> AsyncWorkerKey {
+    AsyncWorkerKey {
+        runtime_directory: runtime_directory.to_path_buf(),
+        bundle_name: bundle_name.to_string(),
+        target_session: target_session.to_string(),
+    }
 }
 
 static ASYNC_DELIVERY_REGISTRY: OnceLock<AsyncDeliveryRegistry> = OnceLock::new();
@@ -134,6 +157,8 @@ pub(super) fn register_worker(
                 sender,
                 pending,
                 bounded_acp_queue,
+                acp_state: None,
+                acp_snapshot: None,
             },
         );
     }
@@ -161,9 +186,78 @@ pub(super) fn register_worker_if_absent(
             sender,
             pending,
             bounded_acp_queue,
+            acp_state: None,
+            acp_snapshot: None,
         },
     );
     Ok(true)
+}
+
+pub(in crate::relay) fn set_acp_worker_state(
+    bundle_name: &str,
+    runtime_directory: &Path,
+    target_session: &str,
+    state: AcpWorkerReadinessState,
+) {
+    let key = build_worker_key(bundle_name, runtime_directory, target_session);
+    if let Ok(mut workers) = async_delivery_registry().workers.lock()
+        && let Some(entry) = workers.get_mut(&key)
+    {
+        entry.acp_state = Some(state);
+    }
+}
+
+pub(in crate::relay) fn get_acp_worker_state(
+    bundle_name: &str,
+    runtime_directory: &Path,
+    target_session: &str,
+) -> Option<AcpWorkerReadinessState> {
+    let key = build_worker_key(bundle_name, runtime_directory, target_session);
+    async_delivery_registry()
+        .workers
+        .lock()
+        .ok()?
+        .get(&key)
+        .and_then(|entry| entry.acp_state)
+}
+
+pub(in crate::relay) fn set_acp_worker_snapshot(
+    bundle_name: &str,
+    runtime_directory: &Path,
+    target_session: &str,
+    snapshot: Vec<ReplayEntry>,
+) {
+    let key = build_worker_key(bundle_name, runtime_directory, target_session);
+    if let Ok(mut workers) = async_delivery_registry().workers.lock()
+        && let Some(entry) = workers.get_mut(&key)
+    {
+        entry.acp_snapshot = Some(Arc::new(snapshot));
+    }
+}
+
+pub(in crate::relay) fn get_acp_worker_snapshot(
+    bundle_name: &str,
+    runtime_directory: &Path,
+    target_session: &str,
+) -> Option<Arc<Vec<ReplayEntry>>> {
+    let key = build_worker_key(bundle_name, runtime_directory, target_session);
+    async_delivery_registry()
+        .workers
+        .lock()
+        .ok()?
+        .get(&key)
+        .and_then(|entry| entry.acp_snapshot.clone())
+}
+
+pub(in crate::relay) fn acp_session_ready_for_startup(
+    bundle_name: &str,
+    runtime_directory: &Path,
+    target_session: &str,
+) -> bool {
+    matches!(
+        get_acp_worker_state(bundle_name, runtime_directory, target_session),
+        Some(AcpWorkerReadinessState::Available)
+    )
 }
 
 pub(super) fn unregister_worker(key: &AsyncWorkerKey) {

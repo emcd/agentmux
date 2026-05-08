@@ -8,8 +8,10 @@ mod quiescence;
 mod results;
 mod ui_delivery;
 
-pub(in crate::relay) use self::acp_state::{
-    acp_session_ready_for_startup, load_acp_snapshot_for_look,
+pub(in crate::relay) use self::acp_state::derive_acp_look_snapshot;
+pub(in crate::relay) use self::async_worker::{
+    AcpWorkerReadinessState, acp_session_ready_for_startup, get_acp_worker_snapshot,
+    get_acp_worker_state,
 };
 pub(in crate::relay) use self::dispatch::{
     aggregate_chat_status, await_acp_worker_prime_for_look, deliver_one_target,

@@ -999,6 +999,28 @@ pub fn wait_for_async_delivery_shutdown(timeout: Duration) -> usize {
     delivery::wait_for_async_delivery_shutdown(timeout)
 }
 
+/// Reads the in-memory ACP worker readiness state for an observability check.
+///
+/// Returns one of "initializing", "available", "busy", "unavailable" when a
+/// worker is registered for the (bundle_name, runtime_directory, target_session)
+/// triple, or `None` when no worker is registered or no readiness state has
+/// been recorded yet.
+#[must_use]
+pub fn read_acp_worker_state(
+    bundle_name: &str,
+    runtime_directory: &Path,
+    target_session: &str,
+) -> Option<&'static str> {
+    delivery::get_acp_worker_state(bundle_name, runtime_directory, target_session).map(|state| {
+        match state {
+            delivery::AcpWorkerReadinessState::Initializing => "initializing",
+            delivery::AcpWorkerReadinessState::Available => "available",
+            delivery::AcpWorkerReadinessState::Busy => "busy",
+            delivery::AcpWorkerReadinessState::Unavailable => "unavailable",
+        }
+    })
+}
+
 fn write_response(stream: &mut UnixStream, response: &RelayResponse) -> Result<(), io::Error> {
     let encoded = serde_json::to_string(response).map_err(io::Error::other)?;
     stream.write_all(encoded.as_bytes())?;

@@ -35,7 +35,7 @@ fn acp_send_selects_session_new_without_coder_session_id() {
             .as_str(),
     )
     .expect("parse state json");
-    assert_eq!(persisted["schema_version"], 1);
+    assert_eq!(persisted["schema_version"], 2);
     assert_eq!(persisted["acp_session_id"], "sess-generated");
 
     let log = fs::read_to_string(log_path).expect("read ACP log");

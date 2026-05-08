@@ -20,9 +20,9 @@ use super::authorization::{
 use super::delivery::{
     PermissionDecisionKind, PermissionDecisionRequest, PermissionEventContext, QuiescenceOptions,
     acp_session_ready_for_startup, aggregate_chat_status, await_acp_worker_prime_for_look,
-    deliver_one_target, emit_permission_snapshot_then_replay, enqueue_async_delivery,
-    enqueue_sync_delivery, load_acp_snapshot_for_look, map_permission_state_error,
-    prompt_batch_settings, resolve_permission_request,
+    deliver_one_target, derive_acp_look_snapshot, emit_permission_snapshot_then_replay,
+    enqueue_async_delivery, enqueue_sync_delivery, get_acp_worker_snapshot, get_acp_worker_state,
+    map_permission_state_error, prompt_batch_settings, resolve_permission_request,
 };
 use super::lifecycle::{reconcile_loaded_bundle_for_lifecycle, shutdown_bundle_runtime};
 use super::tmux::{capture_pane_tail_lines, resolve_active_pane_target};
@@ -284,25 +284,11 @@ fn handle_list(
             TargetConfiguration::Tmux(_) => {
                 resolve_active_pane_target(tmux_socket.as_path(), member.id.as_str()).is_ok()
             }
-            TargetConfiguration::Acp(_) => {
-                match acp_session_ready_for_startup(runtime_directory, member.id.as_str()) {
-                    Ok(value) => value,
-                    Err(cause) => {
-                        // The list read path should remain available even if ACP readiness
-                        // state on disk is stale/corrupt; treat readiness as false and
-                        // report diagnostics out-of-band.
-                        emit_inscription(
-                            "relay.list.acp_startup_readiness_error",
-                            &json!({
-                                "bundle_name": bundle.bundle_name,
-                                "session_id": member.id,
-                                "cause": cause,
-                            }),
-                        );
-                        false
-                    }
-                }
-            }
+            TargetConfiguration::Acp(_) => acp_session_ready_for_startup(
+                bundle.bundle_name.as_str(),
+                runtime_directory,
+                member.id.as_str(),
+            ),
         };
         if ready {
             ready_session_count += 1;
@@ -759,19 +745,22 @@ fn handle_look(
                         )
                     },
                 )?;
-            let snapshot = load_acp_snapshot_for_look(
+            let worker_state = get_acp_worker_state(
+                bundle.bundle_name.as_str(),
                 runtime_directory,
                 target.id.as_str(),
+            );
+            let worker_snapshot = get_acp_worker_snapshot(
+                bundle.bundle_name.as_str(),
+                runtime_directory,
+                target.id.as_str(),
+            );
+            let snapshot = derive_acp_look_snapshot(
+                worker_state,
+                worker_snapshot.as_deref().map(Vec::as_slice),
                 requested_lines,
                 prime_timed_out,
-            )
-            .map_err(|reason| {
-                relay_error(
-                    "internal_unexpected_failure",
-                    "failed to load ACP look snapshot",
-                    Some(json!({"target_session": target.id, "cause": reason})),
-                )
-            })?;
+            );
             LookSnapshotPayload::AcpEntriesV1 {
                 snapshot_entries: snapshot.snapshot_entries,
                 freshness: snapshot.freshness,

@@ -2,16 +2,11 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use crate::{
-    acp::{AcpSnapshotEntry, ReplayEntry, replay_entries_to_snapshot_entries},
-    configuration::{AcpTargetConfiguration, BundleMember, TargetConfiguration},
-};
+use crate::configuration::{AcpTargetConfiguration, BundleMember, TargetConfiguration};
 
 use super::acp_client::{AcpRequestError, AcpStdioClient};
-use super::acp_state::{
-    AcpWorkerReadinessState, append_acp_snapshot_entries, load_persisted_acp_session_id,
-    persist_acp_session_id, persist_acp_worker_state, replace_acp_snapshot_entries_from_load,
-};
+use super::acp_state::{load_persisted_acp_session_id, persist_acp_session_id};
+use super::async_worker::{AcpWorkerReadinessState, set_acp_worker_snapshot, set_acp_worker_state};
 use super::results::{
     delivered_in_progress_result, delivered_result, failed_result, failed_result_with_code,
     timeout_result,
@@ -47,8 +42,6 @@ struct AcpCapabilities {
 pub(super) struct PersistentAcpWorkerRuntime {
     pub client: AcpStdioClient,
     pub session_id: String,
-    pub loaded_existing_session: bool,
-    pub bootstrap_load_entries: Vec<ReplayEntry>,
 }
 
 pub(super) fn bootstrap_acp_worker_runtime(
@@ -62,16 +55,8 @@ pub(super) fn bootstrap_acp_worker_runtime(
         return Err("ACP worker bootstrap requires target working directory".to_string());
     };
     let target_session = target_member.id.as_str();
-    persist_acp_worker_state(
-        runtime_directory,
-        target_session,
-        target_member.coder_session_id.as_deref(),
-        AcpWorkerReadinessState::Initializing,
-    )
-    .map_err(|reason| format!("persist ACP worker initializing state failed: {reason}"))?;
-
     let message_id = "acp-worker-bootstrap";
-    let mut runtime = initialize_persistent_acp_worker_runtime(
+    let runtime = initialize_persistent_acp_worker_runtime(
         target_member,
         acp_target,
         working_directory,
@@ -90,30 +75,6 @@ pub(super) fn bootstrap_acp_worker_runtime(
             .unwrap_or_else(|| "ACP worker bootstrap failed".to_string());
         format!("{code}: {reason}")
     })?;
-
-    if runtime.loaded_existing_session {
-        let mut refreshed_entries =
-            replay_entries_to_snapshot_entries(runtime.bootstrap_load_entries.as_slice());
-        if refreshed_entries.is_empty() {
-            let refreshed_lines = runtime.client.take_snapshot_lines();
-            refreshed_entries = text_lines_to_update_entries(refreshed_lines.as_slice());
-        }
-        replace_acp_snapshot_entries_from_load(
-            runtime_directory,
-            target_session,
-            runtime.session_id.as_str(),
-            refreshed_entries.as_slice(),
-        )
-        .map_err(|reason| format!("persist ACP bootstrap snapshot entries failed: {reason}"))?;
-    }
-    runtime.bootstrap_load_entries.clear();
-    persist_acp_worker_state(
-        runtime_directory,
-        target_session,
-        Some(runtime.session_id.as_str()),
-        AcpWorkerReadinessState::Available,
-    )
-    .map_err(|reason| format!("persist ACP worker available state failed: {reason}"))?;
     Ok(runtime)
 }
 
@@ -164,10 +125,10 @@ pub(super) fn deliver_one_target_acp(
         let mut on_dispatched = || {
             if !first_activity_observed {
                 first_activity_observed = true;
-                let _ = persist_acp_worker_state(
+                set_acp_worker_state(
+                    task.bundle.bundle_name.as_str(),
                     runtime_directory,
                     target_member.id.as_str(),
-                    Some(session_id.as_str()),
                     AcpWorkerReadinessState::Busy,
                 );
             }
@@ -182,15 +143,6 @@ pub(super) fn deliver_one_target_acp(
                 target_session_for_dispatch.clone(),
                 message_id_for_dispatch.clone(),
             )));
-        };
-        let mut on_replay_entries = |replay_entries: &[ReplayEntry]| -> Result<(), String> {
-            let snapshot_entries = replay_entries_to_snapshot_entries(replay_entries);
-            append_acp_snapshot_entries(
-                runtime_directory,
-                target_member.id.as_str(),
-                session_id.as_str(),
-                snapshot_entries.as_slice(),
-            )
         };
         let mut on_permission_request = |permission_request: &crate::acp::PermissionRequest| {
             let (response_option_id, outcome) = resolve_acp_permission_request(
@@ -208,26 +160,25 @@ pub(super) fn deliver_one_target_acp(
             prompt.as_str(),
             turn_timeout,
             Some(&mut on_dispatched),
-            Some(&mut on_replay_entries),
+            None,
             Some(&mut on_permission_request),
         );
         let _ = runtime.client.take_snapshot_lines();
-        let _ = runtime.client.take_replay_entries();
+        set_acp_worker_snapshot(
+            task.bundle.bundle_name.as_str(),
+            runtime_directory,
+            target_member.id.as_str(),
+            runtime.client.read_replay_entries(),
+        );
         match prompt_result {
             Ok(prompt_completion) => {
                 first_activity_observed |= prompt_completion.first_activity_observed;
-                if let Err(reason) = persist_acp_worker_state(
+                set_acp_worker_state(
+                    task.bundle.bundle_name.as_str(),
                     runtime_directory,
                     target_member.id.as_str(),
-                    Some(session_id.as_str()),
                     AcpWorkerReadinessState::Available,
-                ) {
-                    return failed_result(
-                        target_session,
-                        message_id,
-                        format!("failed to persist ACP worker state: {reason}"),
-                    );
-                }
+                );
                 if let Some(PermissionResolutionOutcome::Cancelled {
                     reason_code,
                     reason,
@@ -270,10 +221,10 @@ pub(super) fn deliver_one_target_acp(
                 }
             }
             Err(AcpRequestError::Timeout(timeout)) => {
-                let _ = persist_acp_worker_state(
+                set_acp_worker_state(
+                    task.bundle.bundle_name.as_str(),
                     runtime_directory,
                     target_member.id.as_str(),
-                    Some(session_id.as_str()),
                     AcpWorkerReadinessState::Unavailable,
                 );
                 *acp_runtime = None;
@@ -292,10 +243,10 @@ pub(super) fn deliver_one_target_acp(
                 first_activity_observed: observed,
             }) => {
                 first_activity_observed |= observed;
-                let _ = persist_acp_worker_state(
+                set_acp_worker_state(
+                    task.bundle.bundle_name.as_str(),
                     runtime_directory,
                     target_member.id.as_str(),
-                    Some(session_id.as_str()),
                     AcpWorkerReadinessState::Unavailable,
                 );
                 *acp_runtime = None;
@@ -314,10 +265,10 @@ pub(super) fn deliver_one_target_acp(
                 );
             }
             Err(AcpRequestError::Failed(reason)) => {
-                let _ = persist_acp_worker_state(
+                set_acp_worker_state(
+                    task.bundle.bundle_name.as_str(),
                     runtime_directory,
                     target_member.id.as_str(),
-                    Some(session_id.as_str()),
                     AcpWorkerReadinessState::Unavailable,
                 );
                 *acp_runtime = None;
@@ -453,12 +404,6 @@ fn initialize_persistent_acp_worker_runtime(
     let initialize_result = match client.initialize() {
         Ok(value) => value,
         Err(reason) => {
-            let _ = persist_acp_worker_state(
-                runtime_directory,
-                target_member.id.as_str(),
-                None,
-                AcpWorkerReadinessState::Unavailable,
-            );
             return Err(Box::new(failed_result_with_code(
                 target_session.to_string(),
                 message_id.to_string(),
@@ -516,7 +461,6 @@ fn initialize_persistent_acp_worker_runtime(
             (AcpLifecycleSelection::NewSession, String::new())
         };
 
-    let mut bootstrap_load_entries = Vec::<ReplayEntry>::new();
     let session_id = match lifecycle {
         AcpLifecycleSelection::LoadSession => {
             if !capabilities.load_session {
@@ -532,40 +476,26 @@ fn initialize_persistent_acp_worker_runtime(
                     })),
                 )));
             }
-            bootstrap_load_entries =
-                match client.load_session(lifecycle_session_id.as_str(), working_directory) {
-                    Ok(entries) => entries,
-                    Err(reason) => {
-                        let _ = persist_acp_worker_state(
-                            runtime_directory,
-                            target_member.id.as_str(),
-                            Some(lifecycle_session_id.as_str()),
-                            AcpWorkerReadinessState::Unavailable,
-                        );
-                        return Err(Box::new(failed_result_with_code(
-                            target_session.to_string(),
-                            message_id.to_string(),
-                            ACP_ERROR_CODE_SESSION_LOAD_FAILED,
-                            "ACP session/load failed",
-                            Some(json!({
-                                "target_session": target_member.id,
-                                "session_id": lifecycle_session_id,
-                                "reason": reason,
-                            })),
-                        )));
-                    }
-                };
+            if let Err(reason) =
+                client.load_session(lifecycle_session_id.as_str(), working_directory)
+            {
+                return Err(Box::new(failed_result_with_code(
+                    target_session.to_string(),
+                    message_id.to_string(),
+                    ACP_ERROR_CODE_SESSION_LOAD_FAILED,
+                    "ACP session/load failed",
+                    Some(json!({
+                        "target_session": target_member.id,
+                        "session_id": lifecycle_session_id,
+                        "reason": reason,
+                    })),
+                )));
+            }
             lifecycle_session_id
         }
         AcpLifecycleSelection::NewSession => match client.new_session(working_directory) {
             Ok(value) => value,
             Err(reason) => {
-                let _ = persist_acp_worker_state(
-                    runtime_directory,
-                    target_member.id.as_str(),
-                    None,
-                    AcpWorkerReadinessState::Unavailable,
-                );
                 return Err(Box::new(failed_result_with_code(
                     target_session.to_string(),
                     message_id.to_string(),
@@ -606,20 +536,5 @@ fn initialize_persistent_acp_worker_runtime(
         )));
     }
 
-    Ok(PersistentAcpWorkerRuntime {
-        client,
-        session_id,
-        loaded_existing_session: matches!(lifecycle, AcpLifecycleSelection::LoadSession),
-        bootstrap_load_entries,
-    })
-}
-
-fn text_lines_to_update_entries(lines: &[String]) -> Vec<AcpSnapshotEntry> {
-    lines
-        .iter()
-        .map(|line| AcpSnapshotEntry::Update {
-            update_kind: "text".to_string(),
-            lines: vec![line.clone()],
-        })
-        .collect()
+    Ok(PersistentAcpWorkerRuntime { client, session_id })
 }

@@ -501,22 +501,7 @@ pub(super) fn persisted_state_path(root: &Path, target_session: &str) -> PathBuf
 }
 
 pub(super) fn read_worker_state(root: &Path, target_session: &str) -> Option<String> {
-    let path = persisted_state_path(root, target_session);
-    if !path.exists() {
-        return None;
-    }
-    let raw = match fs::read_to_string(path) {
-        Ok(value) => value,
-        Err(_) => return None,
-    };
-    let value: Value = match serde_json::from_str(raw.as_str()) {
-        Ok(value) => value,
-        Err(_) => return None,
-    };
-    value
-        .get("worker_state")
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
+    agentmux::relay::read_acp_worker_state("party", root, target_session).map(ToString::to_string)
 }
 
 pub(super) fn chat_result(response: RelayResponse) -> (ChatStatus, agentmux::relay::ChatResult) {

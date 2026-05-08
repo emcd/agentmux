@@ -6,19 +6,19 @@
 
 ## 2. Relay module changes (second PR): persistence drop and rewiring
 
-- [ ] 2.1 Slim `PersistedAcpSessionState` (`src/relay/delivery/acp_state.rs`); bump `schema_version` to 2; drop `worker_state`, `snapshot_lines`, `snapshot_entries`, `last_acp_frame_observed_at_ms`, `last_snapshot_update_ms`.
-- [ ] 2.2 Make `state.json` reader fail-and-delete on unparseable; recreate via `session/new`.
-- [ ] 2.3 Remove snapshot persistence functions in `acp_state.rs` (`replace_acp_snapshot_entries_from_load` and peers).
-- [ ] 2.4 Introduce `worker_registry::set_state(target, state)` API (`src/relay/worker_registry.rs` or equivalent home).
-- [ ] 2.5 Replace all ~10 `persist_acp_worker_state` call sites in `src/relay/delivery/acp_delivery.rs` with `worker_registry::set_state` calls.
-- [ ] 2.6 Migrate `await_acp_worker_prime_for_look` (`src/relay/delivery/dispatch.rs:59-119`) to in-memory worker-registry query.
-- [ ] 2.7 Migrate `initialize_acp_target_for_startup` startup readiness-poll loop (`src/relay/delivery/dispatch.rs:178-219`) to in-memory worker-registry query.
-- [ ] 2.8 Migrate `handle_list` to `acp_session_ready_for_startup` (`src/relay/handlers.rs:288`) using in-memory worker-registry query.
-- [ ] 2.9 Migrate look handler (`src/relay/handlers.rs`) to read in-memory snapshot from worker via the new accessor.
-- [ ] 2.10 Update `tests/unit/relay.rs:331` (regression test from `8208b3e`).
-- [ ] 2.11 Update `tests/integration/acp/helpers.rs:500` (shared fixture helper); cascade flows through to `recovery.rs`, `worker_state.rs`, `lifecycle.rs`, `look.rs`, `serialization.rs`.
-- [ ] 2.12 Update `tests/integration/cli/look.rs`.
-- [ ] 2.13 Update `tests/integration/mcp/look.rs:144,193` for the new entry shape.
+- [x] 2.1 Slim `PersistedAcpSessionState` (`src/relay/delivery/acp_state.rs`); bump `schema_version` to 2; drop `worker_state`, `snapshot_lines`, `snapshot_entries`, `last_acp_frame_observed_at_ms`, `last_snapshot_update_ms`.
+- [x] 2.2 Make `state.json` reader fail-and-delete on unparseable; recreate via `session/new`.
+- [x] 2.3 Remove snapshot persistence functions in `acp_state.rs` (`replace_acp_snapshot_entries_from_load` and peers).
+- [x] 2.4 Introduce `worker_registry::set_state(target, state)` API (`src/relay/worker_registry.rs` or equivalent home).
+- [x] 2.5 Replace all ~10 `persist_acp_worker_state` call sites in `src/relay/delivery/acp_delivery.rs` with `worker_registry::set_state` calls.
+- [x] 2.6 Migrate `await_acp_worker_prime_for_look` (`src/relay/delivery/dispatch.rs:59-119`) to in-memory worker-registry query.
+- [x] 2.7 Migrate `initialize_acp_target_for_startup` startup readiness-poll loop (`src/relay/delivery/dispatch.rs:178-219`) to in-memory worker-registry query.
+- [x] 2.8 Migrate `handle_list` to `acp_session_ready_for_startup` (`src/relay/handlers.rs:288`) using in-memory worker-registry query.
+- [x] 2.9 Migrate look handler (`src/relay/handlers.rs`) to read in-memory snapshot from worker via the new accessor.
+- [x] 2.10 Update `tests/unit/relay.rs:331` (regression test from `8208b3e`).
+- [x] 2.11 Update `tests/integration/acp/helpers.rs:500` (shared fixture helper); cascade flows through to `recovery.rs`, `worker_state.rs`, `lifecycle.rs`, `look.rs`, `serialization.rs`.
+- [x] 2.12 Update `tests/integration/cli/look.rs`.
+- [x] 2.13 Update `tests/integration/mcp/look.rs:144,193` for the new entry shape.
 
 ## 3. Joint validation
 

@@ -21,9 +21,9 @@ use crate::{
 use super::acp_delivery::{
     PersistentAcpWorkerRuntime, bootstrap_acp_worker_runtime, deliver_one_target_acp,
 };
-use super::acp_state::{
-    ACP_LOOK_PRIME_TIMEOUT_MS, AcpWorkerReadinessState, load_acp_worker_readiness_state,
-    load_persisted_acp_session_id, persist_acp_worker_state,
+use super::acp_state::ACP_LOOK_PRIME_TIMEOUT_MS;
+use super::async_worker::{
+    AcpWorkerReadinessState, get_acp_worker_state, set_acp_worker_snapshot, set_acp_worker_state,
 };
 use super::quiescence::{DeliveryWaitError, wait_for_quiescent_pane};
 use super::ui_delivery::deliver_one_target_ui;
@@ -70,42 +70,15 @@ pub(in crate::relay) fn await_acp_worker_prime_for_look(
         target_session: target_member.id.clone(),
     };
     if !super::async_worker::worker_exists(&key)? {
-        let persisted_session_id =
-            load_persisted_acp_session_id(runtime_directory, target_member.id.as_str()).map_err(
-                |cause| {
-                    super::super::relay_error(
-                        "internal_unexpected_failure",
-                        "failed to load persisted ACP session id",
-                        Some(json!({
-                            "target_session": target_member.id,
-                            "cause": cause,
-                        })),
-                    )
-                },
-            )?;
-        let _ = persist_acp_worker_state(
-            runtime_directory,
-            target_member.id.as_str(),
-            persisted_session_id.as_deref(),
-            AcpWorkerReadinessState::Unavailable,
-        );
         return Ok(false);
     }
     let deadline = Instant::now() + Duration::from_millis(ACP_LOOK_PRIME_TIMEOUT_MS);
     loop {
-        let readiness =
-            load_acp_worker_readiness_state(runtime_directory, target_member.id.as_str()).map_err(
-                |cause| {
-                    super::super::relay_error(
-                        "internal_unexpected_failure",
-                        "failed to load ACP worker readiness state",
-                        Some(json!({
-                            "target_session": target_member.id,
-                            "cause": cause,
-                        })),
-                    )
-                },
-            )?;
+        let readiness = get_acp_worker_state(
+            bundle.bundle_name.as_str(),
+            runtime_directory,
+            target_member.id.as_str(),
+        );
         match readiness {
             Some(AcpWorkerReadinessState::Initializing) | None => {
                 if Instant::now() >= deadline {
@@ -178,18 +151,7 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
     let deadline = Instant::now() + Duration::from_millis(ACP_LOOK_PRIME_TIMEOUT_MS);
     loop {
         let readiness =
-            load_acp_worker_readiness_state(runtime_directory, target_member.id.as_str()).map_err(
-                |cause| {
-                    (
-                        "internal_unexpected_failure".to_string(),
-                        "failed to load ACP worker readiness state".to_string(),
-                        Some(json!({
-                            "target_session": target_member.id,
-                            "cause": cause,
-                        })),
-                    )
-                },
-            )?;
+            get_acp_worker_state(bundle_name, runtime_directory, target_member.id.as_str());
         match readiness {
             Some(AcpWorkerReadinessState::Available | AcpWorkerReadinessState::Busy) => {
                 return Ok(());
@@ -657,12 +619,38 @@ fn spawn_async_delivery_worker(
     thread::spawn(move || {
         let mut acp_runtime = None::<PersistentAcpWorkerRuntime>;
         if let Some(bootstrap) = bootstrap {
+            set_acp_worker_state(
+                key.bundle_name.as_str(),
+                bootstrap.runtime_directory.as_path(),
+                bootstrap.target_member.id.as_str(),
+                AcpWorkerReadinessState::Initializing,
+            );
             match bootstrap_acp_worker_runtime(
                 bootstrap.runtime_directory.as_path(),
                 &bootstrap.target_member,
             ) {
-                Ok(runtime) => acp_runtime = Some(runtime),
+                Ok(runtime) => {
+                    set_acp_worker_snapshot(
+                        key.bundle_name.as_str(),
+                        bootstrap.runtime_directory.as_path(),
+                        bootstrap.target_member.id.as_str(),
+                        runtime.client.read_replay_entries(),
+                    );
+                    set_acp_worker_state(
+                        key.bundle_name.as_str(),
+                        bootstrap.runtime_directory.as_path(),
+                        bootstrap.target_member.id.as_str(),
+                        AcpWorkerReadinessState::Available,
+                    );
+                    acp_runtime = Some(runtime);
+                }
                 Err(reason) => {
+                    set_acp_worker_state(
+                        key.bundle_name.as_str(),
+                        bootstrap.runtime_directory.as_path(),
+                        bootstrap.target_member.id.as_str(),
+                        AcpWorkerReadinessState::Unavailable,
+                    );
                     emit_inscription(
                         "relay.acp.worker.bootstrap_failed",
                         &json!({
