@@ -22,10 +22,10 @@
 
 ## 3. Joint validation
 
-- [ ] 3.1 Cold-start: relay starts with no `state.json`; first `look` returns fresh-but-empty with `stale_reason_code=acp_worker_initializing` until prime completes; subsequent look returns full replay.
-- [ ] 3.2 Warm restart: relay restarts with `state.json` carrying only `acp_session_id`; worker resumes via `session/load`; first `look` returns the upstream-replayed transcript without disk-cached intermediate state.
-- [ ] 3.3 Worker drops: simulated worker unavailability; look returns `stale_reason_code=acp_worker_unavailable`.
-- [ ] 3.4 Look concurrency: multiple concurrent `look` calls during prime do not race on in-memory snapshot reads.
-- [ ] 3.5 List after restart: `handle_list` reports the bundle as `up`/`degraded` correctly via in-memory worker-registry queries; no `state.json` reads in the list path.
-- [ ] 3.6 Surface parity: MCP/CLI/TUI look responses keep all freshness fields; entry shape change verified at `tests/integration/mcp/look.rs:144,193`.
-- [ ] 3.7 `openspec validate refactor-acp-look-snapshot-to-in-memory --strict` passes.
+- [x] 3.1 Cold-start: relay starts with no `state.json`; first `look` returns fresh-but-empty with `stale_reason_code=acp_worker_initializing` until prime completes; subsequent look returns full replay.
+- [x] 3.2 Warm restart: relay restarts with `state.json` carrying only `acp_session_id`; worker resumes via `session/load`; first `look` returns the upstream-replayed transcript without disk-cached intermediate state.
+- [x] 3.3 Worker drops: simulated worker unavailability; look returns `stale_reason_code=acp_worker_unavailable`.
+- [x] 3.4 Look concurrency: multiple concurrent `look` calls during prime do not race on in-memory snapshot reads.
+- [x] 3.5 List after restart: `handle_list` reports the bundle as `up`/`degraded` correctly via in-memory worker-registry queries; no `state.json` reads in the list path.
+- [x] 3.6 Surface parity: MCP/CLI/TUI look responses keep all freshness fields; entry shape change verified at `tests/integration/mcp/look.rs:144,193`.
+- [x] 3.7 `openspec validate refactor-acp-look-snapshot-to-in-memory --strict` passes.
