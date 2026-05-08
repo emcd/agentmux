@@ -44,9 +44,9 @@
 
 - [x] 5.1 Implement relay queue persistence and lifecycle event emission.
 - [x] 5.2 Implement `grant` policy evaluation for permission decisions.
-- [ ] 5.3 Rework ACP permission resolution mapping to ACP-native
+- [x] 5.3 Rework ACP permission resolution mapping to ACP-native
       `selected|cancelled` decision outcomes.
-- [ ] 5.4 Rework TUI decision actions to use ACP-native `permission.resolve`
+- [x] 5.4 Rework TUI decision actions to use ACP-native `permission.resolve`
       (replace approve/deny abstraction).
 - [ ] 5.5 Add integration/unit coverage for queue bounds, replay, class gate,
       pending lifecycle, and mapping behavior.
@@ -54,7 +54,7 @@
       selection.
 - [ ] 5.7 Implement TUI explicit option selection and session-scoped Look
       actions.
-- [ ] 5.9 Remove relay-side approve/deny abstraction and option inference;
+- [x] 5.9 Remove relay-side approve/deny abstraction and option inference;
       enforce `permission.resolve` contract validation.
 - [ ] 5.8 Add manual ACP permission-flow test plan for operator UX validation.
 
