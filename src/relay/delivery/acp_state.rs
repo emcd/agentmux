@@ -17,6 +17,7 @@ const ACP_SESSION_STATE_SCHEMA_VERSION: u32 = 2;
 const ACP_SESSIONS_DIRECTORY: &str = "sessions";
 const ACP_SESSION_STATE_FILE: &str = "state.json";
 pub(in crate::relay) const ACP_LOOK_PRIME_TIMEOUT_MS: u64 = 750;
+pub(in crate::relay) const ACP_STARTUP_PRIME_TIMEOUT_MS: u64 = 10_000;
 pub(in crate::relay) const ACP_STALE_REASON_WORKER_INITIALIZING: &str = "acp_worker_initializing";
 pub(in crate::relay) const ACP_STALE_REASON_WORKER_UNAVAILABLE: &str = "acp_worker_unavailable";
 pub(in crate::relay) const ACP_STALE_REASON_SNAPSHOT_PRIME_TIMEOUT: &str =
