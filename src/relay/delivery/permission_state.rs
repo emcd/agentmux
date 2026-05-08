@@ -113,7 +113,6 @@ fn pending_permission_option_ids(record: &PersistedPendingPermissionRequest) -> 
                 .filter_map(|option| {
                     option
                         .get("option_id")
-                        .or_else(|| option.get("optionId"))
                         .and_then(Value::as_str)
                         .map(ToString::to_string)
                 })
