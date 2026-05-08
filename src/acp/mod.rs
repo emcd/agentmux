@@ -1,7 +1,10 @@
 pub mod client;
 pub mod render;
 
-pub use client::{AcpPromptCompletion, AcpRequestError, AcpRequestResult, AcpStdioClient};
+pub use client::{
+    AcpPromptCompletion, AcpRequestError, AcpRequestResult, AcpStdioClient,
+    REPLAY_BUFFER_MAX_ENTRIES,
+};
 pub use render::{
     AcpSnapshotEntry, replay_entries_to_snapshot_entries, snapshot_entries_to_plain_lines,
 };
@@ -47,6 +50,10 @@ pub fn parse_replay_entries_for_test(
     next_fallback_call_id: &mut u64,
 ) -> Vec<ReplayEntry> {
     client::parse_replay_entries_from_params(params, pending_calls, next_fallback_call_id)
+}
+
+pub fn append_replay_entries_for_test(buffer: &mut Vec<ReplayEntry>, entries: Vec<ReplayEntry>) {
+    client::append_replay_entries(buffer, entries);
 }
 
 #[derive(Debug, Clone)]

@@ -4,6 +4,7 @@ mod lifecycle;
 mod look;
 mod raww;
 mod recovery;
+mod replay_buffer;
 mod serialization;
 mod stop_reason;
 mod worker_state;

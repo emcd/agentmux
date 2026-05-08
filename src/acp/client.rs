@@ -21,6 +21,19 @@ const ACP_LOAD_POST_RESPONSE_DRAIN_TIMEOUT: Duration = Duration::from_millis(200
 // and persisted for look snapshots across slower CI/runtime scheduling.
 const ACP_PROMPT_POST_RESPONSE_DRAIN_TIMEOUT: Duration = Duration::from_millis(250);
 
+pub const REPLAY_BUFFER_MAX_ENTRIES: usize = 1000;
+
+pub(in crate::acp) fn append_replay_entries(
+    buffer: &mut Vec<ReplayEntry>,
+    entries: Vec<ReplayEntry>,
+) {
+    buffer.extend(entries);
+    if buffer.len() > REPLAY_BUFFER_MAX_ENTRIES {
+        let overflow = buffer.len() - REPLAY_BUFFER_MAX_ENTRIES;
+        buffer.drain(0..overflow);
+    }
+}
+
 type DispatchObserver<'a> = &'a mut dyn FnMut();
 type SnapshotObserver<'a> = &'a mut dyn FnMut(&[String]) -> Result<(), String>;
 type ReplayObserver<'a> = &'a mut dyn FnMut(&[ReplayEntry]) -> Result<(), String>;
@@ -293,6 +306,10 @@ impl AcpStdioClient {
 
     pub fn take_replay_entries(&mut self) -> Vec<ReplayEntry> {
         std::mem::take(&mut self.replay_buffer)
+    }
+
+    pub fn read_replay_entries(&self) -> Vec<ReplayEntry> {
+        self.replay_buffer.clone()
     }
 
     pub fn child_stderr(&mut self) -> Option<std::process::ChildStderr> {
@@ -585,7 +602,7 @@ impl AcpStdioClient {
         if let Some(storage) = replay_buffer {
             storage.extend(entries.iter().cloned());
         }
-        self.replay_buffer.extend(entries);
+        append_replay_entries(&mut self.replay_buffer, entries);
         Ok(true)
     }
 
