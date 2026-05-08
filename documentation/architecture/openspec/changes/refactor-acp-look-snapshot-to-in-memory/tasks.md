@@ -1,8 +1,8 @@
 ## 1. ACP module changes (first PR): in-memory replay accessor + buffer cap
 
-- [ ] 1.1 Add non-draining `read_replay_entries` accessor on `AcpStdioClient` (`src/acp/client.rs`). Existing draining `take_replay_entries` retained for the debug TUI.
-- [ ] 1.2 Enforce oldest-evict cap on the live replay buffer at 1000 entries; relocate or share `ACP_LOOK_SNAPSHOT_MAX_ENTRIES` constant.
-- [ ] 1.3 Update unit tests under `tests/integration/acp/` for the new accessor and cap discipline.
+- [x] 1.1 Add non-draining `read_replay_entries` accessor on `AcpStdioClient` (`src/acp/client.rs`). Existing draining `take_replay_entries` retained for the debug TUI.
+- [x] 1.2 Enforce oldest-evict cap on the live replay buffer at 1000 entries; relocate or share `ACP_LOOK_SNAPSHOT_MAX_ENTRIES` constant.
+- [x] 1.3 Update unit tests under `tests/integration/acp/` for the new accessor and cap discipline.
 
 ## 2. Relay module changes (second PR): persistence drop and rewiring
 
