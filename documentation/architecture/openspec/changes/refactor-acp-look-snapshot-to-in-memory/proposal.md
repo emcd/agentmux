@@ -7,7 +7,7 @@ Relay currently persists a structured snapshot of ACP conversation state
 on every replay update so that `look` can render the transcript across relay
 restarts. This duplicates state owned by the upstream ACP server, which is
 already authoritative and provides full replay via `session/load` on
-reconnect. Three concrete costs:
+reconnect. Two concrete costs:
 
 - Schema migration burden. Every change to `AcpSnapshotEntry` becomes a
   serialization-contract change. Recent symptom: parse failures on
@@ -19,21 +19,12 @@ reconnect. Three concrete costs:
 - Two sources of truth. The relay's in-memory snapshot (held by the live
   ACP client) and the on-disk snapshot can drift on partial writes,
   crashes, or aborted sessions.
-- Vestigial fields in the rendered output. `Invocation.call_id` is a
-  transient correlation key the parser uses for live coalescing of
-  `tool_call`/`tool_call_update` pairs; once entries are coalesced
-  (invocation + result grouped structurally), the raw provider id is
-  noise to a human operator.
 
 ## What Changes
 
 - **BREAKING:** Drop persistence of ACP look snapshot data in
   `state.json`. Persisted shape reduces to `schema_version` (bump to 2)
   and `acp_session_id` only.
-- **BREAKING:** Drop `call_id: String` field from
-  `AcpSnapshotEntry::Invocation`. Renderer label becomes
-  `tool_call [<status>]`. Surface lanes (TUI, MCP) confirmed no
-  semantic dependency in `coordination/acp/3`.
 - **BREAKING:** Reconcile snapshot entry vocabulary with the coalesced
   shape in current code: `kind = "invocation"` carries `status` and
   optional `result` inline; separate `kind = "result"` entry is removed
@@ -78,14 +69,13 @@ reconnect. Three concrete costs:
   - `src/relay/handlers.rs` — look path + list path to in-memory
   - `src/relay/worker_registry.rs` (new home) — `set_state` API
   - `src/acp/client.rs` — non-draining accessor, buffer cap-and-evict
-  - `src/acp/render.rs` — drop `call_id` from `Invocation` variant
-  - `src/bin/agentmux_acp.rs`, `src/tui/render.rs` — label format update
   - Tests: `tests/unit/relay.rs`, `tests/integration/acp/helpers.rs`,
     `tests/integration/cli/look.rs`, `tests/integration/mcp/look.rs`
-- Surface confirmations recorded in `coordination/acp/3`: TUI lane
-  (Frontend Engineer), MCP lane (Agents Engineer), relay lane (Backend
-  Engineer second-look). Implementation owner: Backend Engineer for
-  both module-scoped PRs.
+- Surface confirmations recorded in `coordination/acp/3` (TUI, MCP,
+  relay second-look) remain accurate as discovery findings; `call_id`
+  retention on the in-memory invocation entry means those confirmations
+  are no longer gating. Implementation owner: Backend Engineer for both
+  module-scoped PRs.
 
 ## Sequencing
 

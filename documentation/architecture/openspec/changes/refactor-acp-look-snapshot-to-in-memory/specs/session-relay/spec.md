@@ -29,18 +29,14 @@ Canonical ACP snapshot entry vocabulary SHALL be:
 - `kind = "user"` with `lines: string[]`
 - `kind = "agent"` with `lines: string[]`
 - `kind = "cognition"` with `lines: string[]`
-- `kind = "invocation"` with `status: "pending"|"completed"`,
+- `kind = "invocation"` with `call_id: string` (upstream-issued
+  correlation token), `status: "pending"|"completed"`,
   `invocation: object` (pass-through tool-call structure), and optional
   `result: object` (pass-through tool-result structure when status is
   completed). Coalesced form: a single entry carries both the call and
   its result; no separate result entry.
 - `kind = "update"` with `update_kind: string`, `lines: string[]` for
   fallback unknown/unsupported updates (MUST NOT be dropped).
-
-Snapshot entries SHALL NOT include a `call_id` field on the
-`invocation` variant. Coalesced structural grouping (call + result on
-one entry) is the correlation contract; raw provider correlation ids
-remain available in upstream replay logs for diagnostic use.
 
 Relay SHALL NOT inject ANSI/control sequences into ACP snapshot
 entries.

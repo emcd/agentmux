@@ -2,9 +2,7 @@
 
 - [ ] 1.1 Add non-draining `read_replay_entries` accessor on `AcpStdioClient` (`src/acp/client.rs`). Existing draining `take_replay_entries` retained for the debug TUI.
 - [ ] 1.2 Enforce oldest-evict cap on the live replay buffer at 1000 entries; relocate or share `ACP_LOOK_SNAPSHOT_MAX_ENTRIES` constant.
-- [ ] 1.3 Drop `call_id: String` from `AcpSnapshotEntry::Invocation` in `src/acp/render.rs`. Reconcile `Invocation` variant with coalesced shape (status + optional result; no separate Result variant).
-- [ ] 1.4 Update label format to `tool_call [<status>]` in `src/bin/agentmux_acp.rs` and `src/tui/render.rs`.
-- [ ] 1.5 Update unit tests under `tests/integration/acp/` for the new accessor and cap discipline.
+- [ ] 1.3 Update unit tests under `tests/integration/acp/` for the new accessor and cap discipline.
 
 ## 2. Relay module changes (second PR): persistence drop and rewiring
 

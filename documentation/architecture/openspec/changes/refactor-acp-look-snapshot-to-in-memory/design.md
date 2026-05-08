@@ -32,7 +32,7 @@ confirmations and the Backend Engineer second-look sign-off.
     parse failures of the much-shrunken file (tracked separately at
     `issues/relay/11` for relay-lane defensive-coding follow-up).
   - Changes to MCP/CLI/TUI look response semantics beyond the snapshot
-    entry wire-shape change (`call_id` removal).
+    entry vocabulary reconciliation (coalesced `invocation` shape).
 
 ## Decisions
 
@@ -48,13 +48,19 @@ confirmations and the Backend Engineer second-look sign-off.
   - Alternatives considered:
     - `#[serde(default)]` on dropped fields. Rejected: still adds
       compat surface; cost exceeds value at the upgrade moment.
-- Decision: drop `call_id` from `AcpSnapshotEntry::Invocation` variant.
+- Decision: retain `call_id` on `AcpSnapshotEntry::Invocation` in the
+  in-memory snapshot.
+  - Rationale: `call_id` is the upstream-issued correlation token that
+    pairs `tool_call` with its `tool_call_update`. The persistence-drop
+    change does not require dropping the field from the in-memory entry
+    — "stop persisting" is separable from "stop carrying entirely".
+    Keeping `call_id` preserves diagnostic correlation in look output
+    without re-introducing the schema-migration burden, since nothing
+    in-memory crosses a serialization-version boundary.
   - Alternatives considered:
-    - Retain for debug correlation. Rejected: raw provider id is noise;
-      structural grouping (one Invocation entry holding invocation +
-      optional result) is sufficient for coalesced entries; raw replay
-      logs are the right place if diagnostic correlation is ever
-      needed.
+    - Drop the field as part of this change. Rejected: conflates two
+      concerns (persistence layer vs in-memory data shape); loses
+      provider correlation in the rendered transcript.
 - Decision: introduce `worker_registry::set_state` API rather than
   open-coding state transitions across delivery code.
   - Alternatives considered:
