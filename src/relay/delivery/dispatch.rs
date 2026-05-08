@@ -21,7 +21,7 @@ use crate::{
 use super::acp_delivery::{
     PersistentAcpWorkerRuntime, bootstrap_acp_worker_runtime, deliver_one_target_acp,
 };
-use super::acp_state::ACP_LOOK_PRIME_TIMEOUT_MS;
+use super::acp_state::{ACP_LOOK_PRIME_TIMEOUT_MS, ACP_STARTUP_PRIME_TIMEOUT_MS};
 use super::async_worker::{
     AcpWorkerReadinessState, get_acp_worker_state, set_acp_worker_snapshot, set_acp_worker_state,
 };
@@ -148,7 +148,7 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
             spawn_async_delivery_worker(key, receiver, pending, Some(bootstrap));
         }
     }
-    let deadline = Instant::now() + Duration::from_millis(ACP_LOOK_PRIME_TIMEOUT_MS);
+    let deadline = Instant::now() + Duration::from_millis(ACP_STARTUP_PRIME_TIMEOUT_MS);
     loop {
         let readiness =
             get_acp_worker_state(bundle_name, runtime_directory, target_member.id.as_str());
@@ -172,7 +172,7 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
                         "ACP worker did not become ready during startup".to_string(),
                         Some(json!({
                             "target_session": target_member.id,
-                            "timeout_ms": ACP_LOOK_PRIME_TIMEOUT_MS,
+                            "timeout_ms": ACP_STARTUP_PRIME_TIMEOUT_MS,
                         })),
                     ));
                 }
