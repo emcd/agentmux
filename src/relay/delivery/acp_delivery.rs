@@ -9,7 +9,7 @@ use crate::configuration::{AcpTargetConfiguration, BundleMember, TargetConfigura
 
 use super::acp_client::{AcpRequestError, AcpStdioClient};
 use super::acp_state::{load_persisted_acp_session_id, persist_acp_session_id};
-use super::async_worker::{AcpWorkerReadinessState, set_acp_worker_snapshot, set_acp_worker_state};
+use super::async_worker::{AcpWorkerReadinessState, set_acp_worker_state};
 use super::results::{
     delivered_in_progress_result, delivered_result, failed_result, failed_result_with_code,
     timeout_result,
@@ -168,12 +168,6 @@ pub(super) fn deliver_one_target_acp(
             turn_timeout,
             Some(on_dispatched),
             Some(on_permission_request),
-        );
-        set_acp_worker_snapshot(
-            task.bundle.bundle_name.as_str(),
-            runtime_directory,
-            target_member.id.as_str(),
-            runtime.client.read_replay_entries(),
         );
         let pending_permission_outcome = pending_permission_outcome_shared
             .lock()

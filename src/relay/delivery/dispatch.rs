@@ -23,7 +23,8 @@ use super::acp_delivery::{
 };
 use super::acp_state::{ACP_LOOK_PRIME_TIMEOUT_MS, ACP_STARTUP_PRIME_TIMEOUT_MS};
 use super::async_worker::{
-    AcpWorkerReadinessState, get_acp_worker_state, set_acp_worker_snapshot, set_acp_worker_state,
+    AcpWorkerReadinessState, get_acp_worker_state, install_acp_worker_replay_buffer,
+    set_acp_worker_state,
 };
 use super::quiescence::{DeliveryWaitError, wait_for_quiescent_pane};
 use super::ui_delivery::deliver_one_target_ui;
@@ -630,11 +631,11 @@ fn spawn_async_delivery_worker(
                 &bootstrap.target_member,
             ) {
                 Ok(runtime) => {
-                    set_acp_worker_snapshot(
+                    install_acp_worker_replay_buffer(
                         key.bundle_name.as_str(),
                         bootstrap.runtime_directory.as_path(),
                         bootstrap.target_member.id.as_str(),
-                        runtime.client.read_replay_entries(),
+                        runtime.client.replay_buffer_handle(),
                     );
                     set_acp_worker_state(
                         key.bundle_name.as_str(),

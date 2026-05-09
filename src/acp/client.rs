@@ -395,6 +395,10 @@ impl AcpStdioClient {
             .clone()
     }
 
+    pub fn replay_buffer_handle(&self) -> Arc<Mutex<Vec<ReplayEntry>>> {
+        Arc::clone(&self.replay_buffer)
+    }
+
     pub fn replay_entries_since(&self, cursor: usize) -> (Vec<ReplayEntry>, usize) {
         let buffer = self.replay_buffer.lock().expect("replay_buffer mutex");
         let len = buffer.len();
