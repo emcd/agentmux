@@ -1,0 +1,144 @@
+## ADDED Requirements
+
+### Requirement: ACP Background Reader Thread
+
+The shared ACP client module SHALL spawn a dedicated background reader thread
+for each ACP child process immediately after the child is started. The reader
+thread SHALL own the child's stdout fd for the lifetime of the session.
+
+The reader thread SHALL loop using blocking `read_line` on `BufReader<ChildStdout>`
+and dispatch each received JSON-RPC message by type:
+
+- `session/update` notification: parse `ReplayEntry` items, append to the
+  shared in-memory replay buffer in receive order, and record
+  `last_acp_frame_observed_at`.
+- `session/request_permission` request: enqueue the permission request and
+  write the JSON-RPC response to ACP stdin via the shared stdin writer.
+- Response matching the active turn-complete channel: signal turn completion
+  and transition worker state to `Available`.
+- Response matching a pending-request registry entry: send the response value
+  on the registered oneshot channel.
+- Any other notification: log via inscription and discard.
+
+On reader thread exit (EOF, I/O error, or panic), the implementation SHALL:
+1. Transition worker state to `Unavailable`.
+2. Drain the pending-request registry and close all pending oneshot channels
+   with an error.
+3. Close the turn-complete channel if one is set.
+
+#### Scenario: Reader appends session/update entries to replay buffer
+
+- **WHEN** the ACP server sends a `session/update` notification at any time
+- **THEN** the background reader appends the parsed replay entries to the
+  shared in-memory buffer in receive order
+- **AND** `look` on the session reflects the new entries without any
+  additional request being issued
+
+#### Scenario: Reader dispatches session/request_permission
+
+- **WHEN** the ACP server sends a `session/request_permission` request while
+  the worker is idle (no active prompt)
+- **THEN** the background reader enqueues the permission request and emits
+  a `permission.requested` stream event
+- **AND** does not drop the request due to absence of an active `request()` call
+
+#### Scenario: Reader transitions worker to Unavailable on EOF
+
+- **WHEN** the ACP child process exits and stdout is closed
+- **THEN** the reader thread exits
+- **AND** worker state transitions to `Unavailable`
+- **AND** any pending oneshot receivers receive an error
+
+### Requirement: ACP Stdin Writer Serialization
+
+The shared ACP client module SHALL serialize all writes to ACP stdin through a
+single shared `Arc<Mutex<ChildStdin>>`. All write contexts — delivery thread
+(prompt, initialize, session/new, session/load), permission resolution (JSON-RPC
+response to `session/request_permission`), and shutdown — SHALL acquire this
+mutex before writing.
+
+No caller SHALL write to ACP stdin without holding the mutex.
+
+#### Scenario: Concurrent write contexts do not race
+
+- **WHEN** the delivery thread is writing a prompt AND the permission
+  resolution path is writing a `session/request_permission` response
+  concurrently
+- **THEN** one write completes before the other begins
+- **AND** the ACP child process receives both writes without interleaving
+
+#### Scenario: Write failure yields transport_unavailable
+
+- **WHEN** a write to ACP stdin fails with an I/O error
+- **THEN** the operation returns error code `transport_unavailable`
+- **AND** worker state transitions to `Unavailable`
+
+### Requirement: ACP Pending-Request Registry
+
+The ACP background reader SHALL maintain a pending-request registry
+(`HashMap<request_id, oneshot::Sender<Value>>`) for non-prompt requests that
+require synchronous acknowledgment (`initialize`, `session/new`, `session/load`).
+
+Before issuing a non-prompt request, the caller SHALL register its request-id
+in the registry and wait on a oneshot channel. The reader SHALL look up the id
+on receiving any JSON-RPC response and send the value to the waiting caller.
+
+Fire-and-forget applies only to `session/prompt`; the turn-complete signal for
+prompt is routed through a separate channel, not the registry.
+
+#### Scenario: session/load response routed to waiting caller
+
+- **WHEN** the delivery thread sends `session/load` with request-id 42
+  and registers id 42 in the pending-request registry
+- **THEN** the background reader receives the `session/load` response
+- **AND** sends the response value to the caller's oneshot receiver
+- **AND** removes id 42 from the registry
+
+#### Scenario: Registry drained on reader thread exit
+
+- **WHEN** the background reader thread exits (any cause)
+- **THEN** all pending oneshot channels in the registry are closed with an error
+- **AND** waiting callers receive an error indicating the transport is gone
+
+## MODIFIED Requirements
+
+### Requirement: Replay Buffer Accessors
+
+The shared ACP client module SHALL expose two read accessors over the in-memory
+replay buffer. The underlying buffer is a continuous append log populated by the
+background reader thread from `session/update` notifications and by the delivery
+thread on outgoing user prompts.
+
+**Snapshot accessor (non-consuming):** returns all current entries in receive
+order without modifying the buffer. Used by the relay look path, which requires
+repeated reads of the same state without disturbing other consumers.
+
+**Cursor accessor (non-consuming):** takes a cursor position (`usize` offset
+into the buffer) and returns all entries from that offset onward, along with the
+new cursor value. Used by the `agentmux-acp` debug TUI binary to read only
+entries that arrived since the last render iteration. The buffer is not mutated;
+the caller advances its own cursor.
+
+The draining accessor (`take_replay_entries`, which returned and removed
+entries) is removed. All consumers SHALL use one of the two non-consuming
+accessors above.
+
+#### Scenario: Snapshot accessor returns current entries without consumption
+
+- **WHEN** the relay look path calls the snapshot accessor
+- **THEN** the call returns all currently-buffered replay entries in receive order
+- **AND** the underlying buffer state is unchanged after the call
+
+#### Scenario: Cursor accessor returns only entries since last read position
+
+- **WHEN** the debug TUI binary calls the cursor accessor with offset N
+- **THEN** the call returns entries from index N onward and a new cursor M >= N
+- **AND** the underlying buffer is unchanged
+- **AND** a subsequent call with cursor M returns only entries received after M
+
+#### Scenario: Replay buffer updated immediately on outgoing user prompt
+
+- **WHEN** the relay writes a user prompt to ACP stdin
+- **THEN** a `ReplayEntry::User` is appended to the shared buffer immediately
+- **AND** `look` reflects the submitted message before any `session/update`
+  response arrives
