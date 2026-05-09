@@ -47,9 +47,9 @@
 
 ## 7. Error taxonomy
 
-- [ ] 7.1 Add `transport_unavailable` (or `acp_child_unavailable`) error code for ACP child write failure
-- [ ] 7.2 Use `transport_unavailable` instead of `internal_unexpected_failure` on stdin write I/O errors
-- [ ] 7.3 Document in `src/relay/delivery/acp_delivery.rs` failure taxonomy comment
+- [x] 7.1 Add `transport_unavailable` (or `acp_child_unavailable`) error code for ACP child write failure
+- [x] 7.2 Use `transport_unavailable` instead of `internal_unexpected_failure` on stdin write I/O errors
+- [x] 7.3 Document in `src/relay/delivery/acp_delivery.rs` failure taxonomy comment
 
 ## 8. Permission event payload shapes (early — unblocks todos/mcp/24)
 

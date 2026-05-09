@@ -44,6 +44,9 @@ pub enum AcpRequestError {
         reason: String,
         first_activity_observed: bool,
     },
+    TransportUnavailable {
+        reason: String,
+    },
 }
 
 #[derive(Debug)]
@@ -214,6 +217,7 @@ impl AcpStdioClient {
                 format!("ACP initialize timed out after {}ms", timeout.as_millis())
             }
             AcpRequestError::ConnectionClosed { reason, .. } => reason,
+            AcpRequestError::TransportUnavailable { reason } => reason,
         })
     }
 
@@ -233,6 +237,7 @@ impl AcpStdioClient {
                     format!("ACP session/new timed out after {}ms", timeout.as_millis())
                 }
                 AcpRequestError::ConnectionClosed { reason, .. } => reason,
+                AcpRequestError::TransportUnavailable { reason } => reason,
             })?;
         result
             .get("sessionId")
@@ -275,6 +280,7 @@ impl AcpStdioClient {
                 format!("ACP session/load timed out after {}ms", timeout.as_millis())
             }
             AcpRequestError::ConnectionClosed { reason, .. } => reason,
+            AcpRequestError::TransportUnavailable { reason } => reason,
         })?;
         let buffer = self.replay_buffer.lock().expect("replay_buffer mutex");
         Ok(buffer[entries_before_load..].to_vec())
@@ -339,9 +345,9 @@ impl AcpStdioClient {
                 .expect("pending mutex")
                 .remove(&request_id);
             *self.active_prompt.lock().expect("active_prompt mutex") = None;
-            return Err(AcpRequestError::Failed(format!(
-                "write ACP prompt failed: {source}"
-            )));
+            return Err(AcpRequestError::TransportUnavailable {
+                reason: format!("write ACP prompt failed: {source}"),
+            });
         }
 
         if let Some(callback) = on_dispatched {
@@ -447,9 +453,9 @@ impl AcpStdioClient {
                 .lock()
                 .expect("pending mutex")
                 .remove(&request_id);
-            return Err(AcpRequestError::Failed(format!(
-                "write ACP request failed: {source}"
-            )));
+            return Err(AcpRequestError::TransportUnavailable {
+                reason: format!("write ACP request failed: {source}"),
+            });
         }
         let envelope = match timeout {
             Some(deadline) => match rx.recv_timeout(deadline) {

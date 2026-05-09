@@ -21,6 +21,20 @@ use super::{
 
 use super::super::{AsyncDeliveryTask, ChatResult};
 
+// ACP delivery failure taxonomy:
+// - `runtime_acp_initialize_failed` / `_session_new_failed` / `_session_load_failed`:
+//   a logical error returned by the ACP agent during bootstrap (well-formed JSON-RPC
+//   error response or unexpected response shape).
+// - `runtime_acp_prompt_failed`: a logical error returned by the ACP agent during
+//   `session/prompt` (JSON-RPC error response or unsupported `stopReason`).
+// - `runtime_acp_connection_closed`: ACP stdout reached EOF before any first
+//   activity for the active prompt; child likely exited cleanly.
+// - `acp_child_unavailable`: ACP child stdin write failed (broken pipe, child
+//   crashed, transport-level fault). Worker is transitioned to `Unavailable`.
+// - `acp_turn_timeout`: relay-imposed pre-first-activity timeout elapsed.
+// - `acp_stop_cancelled`: prompt completed with `stopReason=cancelled`.
+// - `validation_missing_acp_capability`: agent did not advertise required
+//   capability (`promptSession`, `loadSession`).
 pub(super) const ACP_REASON_CODE_TURN_TIMEOUT: &str = "acp_turn_timeout";
 pub(super) const ACP_REASON_CODE_STOP_CANCELLED: &str = "acp_stop_cancelled";
 pub(super) const ACP_ERROR_CODE_INITIALIZE_FAILED: &str = "runtime_acp_initialize_failed";
@@ -28,6 +42,7 @@ pub(super) const ACP_ERROR_CODE_SESSION_LOAD_FAILED: &str = "runtime_acp_session
 pub(super) const ACP_ERROR_CODE_SESSION_NEW_FAILED: &str = "runtime_acp_session_new_failed";
 pub(super) const ACP_ERROR_CODE_PROMPT_FAILED: &str = "runtime_acp_prompt_failed";
 pub(super) const ACP_ERROR_CODE_CONNECTION_CLOSED: &str = "runtime_acp_connection_closed";
+pub(super) const ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE: &str = "acp_child_unavailable";
 pub(super) const ACP_ERROR_CODE_MISSING_CAPABILITY: &str = "validation_missing_acp_capability";
 
 #[derive(Clone, Copy, Debug)]
@@ -280,6 +295,25 @@ pub(super) fn deliver_one_target_acp(
                     message_id,
                     ACP_ERROR_CODE_PROMPT_FAILED,
                     "ACP session/prompt failed",
+                    Some(json!({
+                        "target_session": target_member.id,
+                        "reason": reason,
+                    })),
+                );
+            }
+            Err(AcpRequestError::TransportUnavailable { reason }) => {
+                set_acp_worker_state(
+                    task.bundle.bundle_name.as_str(),
+                    runtime_directory,
+                    target_member.id.as_str(),
+                    AcpWorkerReadinessState::Unavailable,
+                );
+                *acp_runtime = None;
+                return failed_result_with_code(
+                    target_session,
+                    message_id,
+                    ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE,
+                    "ACP child stdin write failed",
                     Some(json!({
                         "target_session": target_member.id,
                         "reason": reason,
