@@ -1,4 +1,7 @@
-use std::path::Path;
+use std::{
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 use serde_json::{Value, json};
 
@@ -110,66 +113,72 @@ pub(super) fn deliver_one_target_acp(
 
     let turn_timeout = Some(task.quiescence.acp_turn_timeout(acp));
     let mut first_activity_observed = false;
-    let completion_sender = task.completion_sender.clone();
-    let mut sync_completion_sent = false;
     let permission_context = PermissionEventContext {
         runtime_directory: task.runtime_directory.clone(),
         bundle_name: task.bundle.bundle_name.clone(),
         authorized_ui_sessions: task.permission_decider_sessions.clone(),
     };
-    let mut pending_permission_outcome = None::<PermissionResolutionOutcome>;
+    let pending_permission_outcome_shared: Arc<Mutex<Option<PermissionResolutionOutcome>>> =
+        Arc::new(Mutex::new(None));
     for prompt in prompt_batches {
         let session_id = runtime.session_id.clone();
+        let bundle_name = task.bundle.bundle_name.clone();
+        let runtime_directory_owned = task.runtime_directory.clone();
+        let target_member_id = target_member.id.clone();
         let target_session_for_dispatch = target_session.clone();
         let message_id_for_dispatch = message_id.clone();
-        let mut on_dispatched = || {
-            if !first_activity_observed {
-                first_activity_observed = true;
-                set_acp_worker_state(
-                    task.bundle.bundle_name.as_str(),
-                    runtime_directory,
-                    target_member.id.as_str(),
-                    AcpWorkerReadinessState::Busy,
-                );
-            }
-            if sync_completion_sent {
-                return;
-            }
-            let Some(sender) = completion_sender.as_ref() else {
+        let completion_sender_for_handler = task.completion_sender.clone();
+        let on_dispatched: crate::acp::DispatchHandler = Box::new(move || {
+            set_acp_worker_state(
+                bundle_name.as_str(),
+                runtime_directory_owned.as_path(),
+                target_member_id.as_str(),
+                AcpWorkerReadinessState::Busy,
+            );
+            let Some(sender) = completion_sender_for_handler.as_ref() else {
                 return;
             };
-            sync_completion_sent = true;
             let _ = sender.send(Ok(delivered_in_progress_result(
                 target_session_for_dispatch.clone(),
                 message_id_for_dispatch.clone(),
             )));
-        };
-        let mut on_permission_request = |permission_request: &crate::acp::PermissionRequest| {
-            let (response_option_id, outcome) = resolve_acp_permission_request(
-                &permission_context,
-                &message_id,
-                target_member.id.as_str(),
-                permission_request,
-                task.permission_max_pending,
-            );
-            pending_permission_outcome = Some(outcome);
-            response_option_id
-        };
+        });
+        let permission_context_for_handler = permission_context.clone();
+        let message_id_for_handler = message_id.clone();
+        let target_member_id_for_handler = target_member.id.clone();
+        let permission_max_pending = task.permission_max_pending;
+        let pending_permission_outcome_writer = Arc::clone(&pending_permission_outcome_shared);
+        let on_permission_request: crate::acp::PermissionHandler =
+            Box::new(move |permission_request: &crate::acp::PermissionRequest| {
+                let (response_option_id, outcome) = resolve_acp_permission_request(
+                    &permission_context_for_handler,
+                    message_id_for_handler.as_str(),
+                    target_member_id_for_handler.as_str(),
+                    permission_request,
+                    permission_max_pending,
+                );
+                *pending_permission_outcome_writer
+                    .lock()
+                    .expect("pending_permission_outcome mutex") = Some(outcome);
+                response_option_id
+            });
         let prompt_result = runtime.client.prompt(
             session_id.as_str(),
             prompt.as_str(),
             turn_timeout,
-            Some(&mut on_dispatched),
-            None,
-            Some(&mut on_permission_request),
+            Some(on_dispatched),
+            Some(on_permission_request),
         );
-        let _ = runtime.client.take_snapshot_lines();
         set_acp_worker_snapshot(
             task.bundle.bundle_name.as_str(),
             runtime_directory,
             target_member.id.as_str(),
             runtime.client.read_replay_entries(),
         );
+        let pending_permission_outcome = pending_permission_outcome_shared
+            .lock()
+            .expect("pending_permission_outcome mutex")
+            .clone();
         match prompt_result {
             Ok(prompt_completion) => {
                 first_activity_observed |= prompt_completion.first_activity_observed;

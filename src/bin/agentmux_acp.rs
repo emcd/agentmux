@@ -305,19 +305,19 @@ fn run_tui(
                     // Handle prompt synchronously for MVP
                     // (TUI freezes during prompt — acceptable for debugging use case)
                     let session = session_id.to_string();
-                    let mut permission_handler = |req: &PermissionRequest| -> Option<String> {
-                        disable_raw_mode().ok();
-                        let result = show_permission_menu(req);
-                        enable_raw_mode().ok();
-                        result
-                    };
+                    let permission_handler: agentmux::acp::PermissionHandler =
+                        Box::new(|req: &PermissionRequest| -> Option<String> {
+                            disable_raw_mode().ok();
+                            let result = show_permission_menu(req);
+                            enable_raw_mode().ok();
+                            result
+                        });
                     let result = client.prompt(
                         &session,
                         &prompt_text,
                         Some(Duration::from_secs(120)),
                         None,
-                        None,
-                        Some(&mut permission_handler),
+                        Some(permission_handler),
                     );
                     match result {
                         Ok(completion) => {

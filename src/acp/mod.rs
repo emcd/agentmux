@@ -2,7 +2,7 @@ pub mod client;
 pub mod render;
 
 pub use client::{
-    AcpPromptCompletion, AcpRequestError, AcpRequestResult, AcpStdioClient,
+    AcpPromptCompletion, AcpRequestError, AcpStdioClient, DispatchHandler, PermissionHandler,
     REPLAY_BUFFER_MAX_ENTRIES,
 };
 pub use render::{

@@ -1,21 +1,24 @@
 use std::{
     collections::HashMap,
-    io::{self, Read, Write},
-    os::fd::AsRawFd,
+    io::{self, BufRead, BufReader, Write},
     path::Path,
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
-    sync::{Arc, Mutex},
-    thread,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, RecvTimeoutError},
+    },
+    thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 
 use serde_json::{Value, json};
 
 use super::{PROTOCOL_VERSION, PermissionOption, PermissionRequest, ReplayEntry};
+use crate::runtime::inscriptions::emit_inscription;
 
 const ACP_CLIENT_NAME: &str = "agentmux-relay";
 const ACP_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
-const ACP_READ_BUFFER_MAX: usize = 1024 * 1024; // 1 MiB — fail fast on pathological peers
 
 pub const REPLAY_BUFFER_MAX_ENTRIES: usize = 1000;
 
@@ -30,18 +33,8 @@ pub(in crate::acp) fn append_replay_entries(
     }
 }
 
-type DispatchObserver<'a> = &'a mut dyn FnMut();
-type SnapshotObserver<'a> = &'a mut dyn FnMut(&[String]) -> Result<(), String>;
-type ReplayObserver<'a> = &'a mut dyn FnMut(&[ReplayEntry]) -> Result<(), String>;
-pub type PermissionHandler<'a> = &'a mut dyn FnMut(&PermissionRequest) -> Option<String>;
-
-struct RequestObservers<'a> {
-    prompt_session_id: Option<String>,
-    on_dispatched: Option<DispatchObserver<'a>>,
-    on_snapshot_lines: Option<SnapshotObserver<'a>>,
-    on_replay_entries: Option<ReplayObserver<'a>>,
-    on_permission_request: Option<PermissionHandler<'a>>,
-}
+pub type DispatchHandler = Box<dyn FnOnce() + Send + 'static>;
+pub type PermissionHandler = Box<dyn FnMut(&PermissionRequest) -> Option<String> + Send + 'static>;
 
 #[derive(Debug)]
 pub enum AcpRequestError {
@@ -60,23 +53,69 @@ pub struct AcpPromptCompletion {
 }
 
 #[derive(Debug)]
-pub struct AcpRequestResult {
-    pub result: Value,
-    pub first_activity_observed: bool,
+enum ResponseEnvelope {
+    Result(Value),
+    Error(String),
+}
+
+enum RecvOutcome {
+    Timeout(Duration),
+    Disconnected,
 }
 
 pub(in crate::acp) type SharedStdin = Arc<Mutex<ChildStdin>>;
+type SharedReplay = Arc<Mutex<Vec<ReplayEntry>>>;
+type SharedPending = Arc<Mutex<HashMap<u64, mpsc::Sender<ResponseEnvelope>>>>;
+
+struct ActivePrompt {
+    session_id: String,
+    first_activity_observed: AtomicBool,
+    on_permission_request: Mutex<Option<PermissionHandler>>,
+}
+
+type SharedActivePrompt = Arc<Mutex<Option<Arc<ActivePrompt>>>>;
 
 pub struct AcpStdioClient {
     child: Child,
     stdin: SharedStdin,
-    stdout: ChildStdout,
-    read_buffer: Vec<u8>,
+    replay_buffer: SharedReplay,
+    pending_responses: SharedPending,
+    active_prompt: SharedActivePrompt,
+    // Held for shutdown sequencing in slice C; reader exit is observed via
+    // pending-channel disconnect so we only need to keep the handle alive.
+    #[allow(dead_code)]
+    reader_handle: Option<JoinHandle<()>>,
     next_id: u64,
-    snapshot_line_buffer: Vec<String>,
-    replay_buffer: Vec<ReplayEntry>,
-    pending_tool_calls: HashMap<String, ReplayEntry>,
-    next_fallback_call_id: u64,
+}
+
+// Once the bg reader observes first activity for the active prompt session,
+// the relay's turn-timeout no longer applies — the prompt may pend on a
+// permission decision indefinitely. Pre-first-activity, the configured
+// turn timeout caps the wait.
+const PROMPT_RECV_TICK: Duration = Duration::from_millis(50);
+
+fn wait_for_prompt_response(
+    rx: &mpsc::Receiver<ResponseEnvelope>,
+    timeout: Option<Duration>,
+    first_activity_observed: &AtomicBool,
+) -> Result<ResponseEnvelope, RecvOutcome> {
+    let deadline = timeout.map(|value| Instant::now() + value);
+    loop {
+        match rx.recv_timeout(PROMPT_RECV_TICK) {
+            Ok(envelope) => return Ok(envelope),
+            Err(RecvTimeoutError::Disconnected) => return Err(RecvOutcome::Disconnected),
+            Err(RecvTimeoutError::Timeout) => {
+                if first_activity_observed.load(Ordering::Acquire) {
+                    continue;
+                }
+                if let Some(deadline_instant) = deadline
+                    && Instant::now() >= deadline_instant
+                {
+                    return Err(RecvOutcome::Timeout(timeout.unwrap_or_default()));
+                }
+            }
+        }
+    }
 }
 
 fn write_line_to_stdin(stdin: &SharedStdin, payload: &str) -> io::Result<()> {
@@ -125,17 +164,28 @@ impl AcpStdioClient {
             .stdout
             .take()
             .ok_or_else(|| "ACP stdio child stdout unavailable".to_string())?;
-        set_nonblocking(stdout.as_raw_fd(), true)?;
+
+        let stdin = Arc::new(Mutex::new(stdin));
+        let replay_buffer: SharedReplay = Arc::new(Mutex::new(Vec::new()));
+        let pending_responses: SharedPending = Arc::new(Mutex::new(HashMap::new()));
+        let active_prompt: SharedActivePrompt = Arc::new(Mutex::new(None));
+
+        let reader_handle = spawn_reader_thread(
+            BufReader::new(stdout),
+            Arc::clone(&stdin),
+            Arc::clone(&replay_buffer),
+            Arc::clone(&pending_responses),
+            Arc::clone(&active_prompt),
+        );
+
         Ok(Self {
             child,
-            stdin: Arc::new(Mutex::new(stdin)),
-            stdout,
-            read_buffer: Vec::new(),
+            stdin,
+            replay_buffer,
+            pending_responses,
+            active_prompt,
+            reader_handle: Some(reader_handle),
             next_id: 1,
-            snapshot_line_buffer: Vec::new(),
-            replay_buffer: Vec::new(),
-            pending_tool_calls: HashMap::new(),
-            next_fallback_call_id: 0,
         })
     }
 
@@ -157,16 +207,7 @@ impl AcpStdioClient {
                 },
             }),
             None,
-            RequestObservers {
-                prompt_session_id: None,
-                on_dispatched: None,
-                on_snapshot_lines: None,
-                on_replay_entries: None,
-                on_permission_request: None,
-            },
-            None,
         )
-        .map(|value| value.result)
         .map_err(|error| match error {
             AcpRequestError::Failed(reason) => reason,
             AcpRequestError::Timeout(timeout) => {
@@ -185,16 +226,7 @@ impl AcpStdioClient {
                     "mcpServers": [],
                 }),
                 None,
-                RequestObservers {
-                    prompt_session_id: None,
-                    on_dispatched: None,
-                    on_snapshot_lines: None,
-                    on_replay_entries: None,
-                    on_permission_request: None,
-                },
-                None,
             )
-            .map(|value| value.result)
             .map_err(|error| match error {
                 AcpRequestError::Failed(reason) => reason,
                 AcpRequestError::Timeout(timeout) => {
@@ -223,50 +255,62 @@ impl AcpStdioClient {
         working_directory: &Path,
         timeout: Option<Duration>,
     ) -> Result<Vec<ReplayEntry>, String> {
-        self.pending_tool_calls.clear();
-        let entries_before_load = self.replay_buffer.len();
-        let result = self
-            .request(
-                "session/load",
-                json!({
-                    "sessionId": session_id,
-                    "cwd": working_directory.display().to_string(),
-                    "mcpServers": [],
-                }),
-                timeout,
-                RequestObservers {
-                    prompt_session_id: None,
-                    on_dispatched: None,
-                    on_snapshot_lines: None,
-                    on_replay_entries: None,
-                    on_permission_request: None,
-                },
-                None,
-            )
-            .map(|value| value.result)
-            .map_err(|error| match error {
-                AcpRequestError::Failed(reason) => reason,
-                AcpRequestError::Timeout(timeout) => {
-                    format!("ACP session/load timed out after {}ms", timeout.as_millis())
-                }
-                AcpRequestError::ConnectionClosed { reason, .. } => reason,
-            });
-        result?;
-        Ok(self.replay_buffer[entries_before_load..].to_vec())
+        let entries_before_load = self
+            .replay_buffer
+            .lock()
+            .expect("replay_buffer mutex")
+            .len();
+        self.request(
+            "session/load",
+            json!({
+                "sessionId": session_id,
+                "cwd": working_directory.display().to_string(),
+                "mcpServers": [],
+            }),
+            timeout,
+        )
+        .map_err(|error| match error {
+            AcpRequestError::Failed(reason) => reason,
+            AcpRequestError::Timeout(timeout) => {
+                format!("ACP session/load timed out after {}ms", timeout.as_millis())
+            }
+            AcpRequestError::ConnectionClosed { reason, .. } => reason,
+        })?;
+        let buffer = self.replay_buffer.lock().expect("replay_buffer mutex");
+        Ok(buffer[entries_before_load..].to_vec())
     }
 
-    pub fn prompt<'a>(
+    pub fn prompt(
         &mut self,
         session_id: &str,
         prompt: &str,
         timeout: Option<Duration>,
-        on_dispatched: Option<DispatchObserver<'a>>,
-        on_replay_entries: Option<ReplayObserver<'a>>,
-        on_permission_request: Option<PermissionHandler<'a>>,
+        on_dispatched: Option<DispatchHandler>,
+        on_permission_request: Option<PermissionHandler>,
     ) -> Result<AcpPromptCompletion, AcpRequestError> {
-        let result = self.request(
-            "session/prompt",
-            json!({
+        let active = Arc::new(ActivePrompt {
+            session_id: session_id.to_string(),
+            first_activity_observed: AtomicBool::new(false),
+            on_permission_request: Mutex::new(on_permission_request),
+        });
+        {
+            let mut slot = self.active_prompt.lock().expect("active_prompt mutex");
+            *slot = Some(Arc::clone(&active));
+        }
+
+        let request_id = self.next_id;
+        self.next_id = self.next_id.saturating_add(1);
+        let (tx, rx) = mpsc::channel::<ResponseEnvelope>();
+        self.pending_responses
+            .lock()
+            .expect("pending mutex")
+            .insert(request_id, tx);
+
+        let message = match serde_json::to_string(&json!({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "session/prompt",
+            "params": {
                 "sessionId": session_id,
                 "prompt": [
                     {
@@ -274,46 +318,90 @@ impl AcpStdioClient {
                         "text": prompt,
                     }
                 ],
-            }),
-            timeout,
-            RequestObservers {
-                prompt_session_id: Some(session_id.to_string()),
-                on_dispatched,
-                on_snapshot_lines: None,
-                on_replay_entries,
-                on_permission_request,
             },
-            None,
-        )?;
-        result
-            .result
-            .get("stopReason")
-            .and_then(Value::as_str)
-            .map(|stop_reason| AcpPromptCompletion {
-                stop_reason: stop_reason.to_string(),
-                first_activity_observed: result.first_activity_observed,
-            })
-            .ok_or_else(|| {
-                AcpRequestError::Failed(
-                    "ACP session/prompt response missing result.stopReason".to_string(),
-                )
-            })
-    }
+        })) {
+            Ok(message) => message,
+            Err(source) => {
+                self.pending_responses
+                    .lock()
+                    .expect("pending mutex")
+                    .remove(&request_id);
+                *self.active_prompt.lock().expect("active_prompt mutex") = None;
+                return Err(AcpRequestError::Failed(format!(
+                    "serialize ACP prompt failed: {source}"
+                )));
+            }
+        };
 
-    pub fn take_snapshot_lines(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.snapshot_line_buffer)
+        if let Err(source) = write_line_to_stdin(&self.stdin, message.as_str()) {
+            self.pending_responses
+                .lock()
+                .expect("pending mutex")
+                .remove(&request_id);
+            *self.active_prompt.lock().expect("active_prompt mutex") = None;
+            return Err(AcpRequestError::Failed(format!(
+                "write ACP prompt failed: {source}"
+            )));
+        }
+
+        if let Some(callback) = on_dispatched {
+            callback();
+        }
+
+        let envelope_result =
+            wait_for_prompt_response(&rx, timeout, &active.first_activity_observed);
+
+        {
+            let mut slot = self.active_prompt.lock().expect("active_prompt mutex");
+            *slot = None;
+        }
+        let first_activity_observed = active.first_activity_observed.load(Ordering::Acquire);
+
+        match envelope_result {
+            Ok(ResponseEnvelope::Result(value)) => {
+                let stop_reason = value
+                    .get("stopReason")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string);
+                match stop_reason {
+                    Some(stop_reason) => Ok(AcpPromptCompletion {
+                        stop_reason,
+                        first_activity_observed,
+                    }),
+                    None => Err(AcpRequestError::Failed(
+                        "ACP session/prompt response missing result.stopReason".to_string(),
+                    )),
+                }
+            }
+            Ok(ResponseEnvelope::Error(reason)) => Err(AcpRequestError::Failed(reason)),
+            Err(RecvOutcome::Timeout(deadline)) => {
+                self.pending_responses
+                    .lock()
+                    .expect("pending mutex")
+                    .remove(&request_id);
+                Err(AcpRequestError::Timeout(deadline))
+            }
+            Err(RecvOutcome::Disconnected) => Err(AcpRequestError::ConnectionClosed {
+                reason: "ACP transport closed before response".to_string(),
+                first_activity_observed,
+            }),
+        }
     }
 
     pub fn read_replay_entries(&self) -> Vec<ReplayEntry> {
-        self.replay_buffer.clone()
+        self.replay_buffer
+            .lock()
+            .expect("replay_buffer mutex")
+            .clone()
     }
 
     pub fn replay_entries_since(&self, cursor: usize) -> (Vec<ReplayEntry>, usize) {
-        let len = self.replay_buffer.len();
+        let buffer = self.replay_buffer.lock().expect("replay_buffer mutex");
+        let len = buffer.len();
         if cursor >= len {
             return (Vec::new(), len);
         }
-        (self.replay_buffer[cursor..].to_vec(), len)
+        (buffer[cursor..].to_vec(), len)
     }
 
     pub fn child_stderr(&mut self) -> Option<std::process::ChildStderr> {
@@ -329,11 +417,14 @@ impl AcpStdioClient {
         method: &str,
         params: Value,
         timeout: Option<Duration>,
-        mut observers: RequestObservers<'_>,
-        mut replay_buffer: Option<&mut Vec<ReplayEntry>>,
-    ) -> Result<AcpRequestResult, AcpRequestError> {
+    ) -> Result<Value, AcpRequestError> {
         let request_id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
+        let (tx, rx) = mpsc::channel::<ResponseEnvelope>();
+        {
+            let mut pending = self.pending_responses.lock().expect("pending mutex");
+            pending.insert(request_id, tx);
+        }
         let message = serde_json::to_string(&json!({
             "jsonrpc": "2.0",
             "id": request_id,
@@ -341,281 +432,311 @@ impl AcpStdioClient {
             "params": params,
         }))
         .map_err(|source| {
+            self.pending_responses
+                .lock()
+                .expect("pending mutex")
+                .remove(&request_id);
             AcpRequestError::Failed(format!("serialize ACP request failed: {source}"))
         })?;
-        write_line_to_stdin(&self.stdin, message.as_str()).map_err(|source| {
-            AcpRequestError::Failed(format!("write ACP request failed: {source}"))
-        })?;
-        if let Some(callback) = observers.on_dispatched.as_mut() {
-            callback();
+        if let Err(source) = write_line_to_stdin(&self.stdin, message.as_str()) {
+            self.pending_responses
+                .lock()
+                .expect("pending mutex")
+                .remove(&request_id);
+            return Err(AcpRequestError::Failed(format!(
+                "write ACP request failed: {source}"
+            )));
         }
-
-        let mut first_activity_observed = false;
-        let mut read_timeout = timeout;
-        loop {
-            let line = match self.read_response_line(read_timeout) {
-                Ok(line) => line,
-                Err(AcpRequestError::Failed(reason)) => {
+        let envelope = match timeout {
+            Some(deadline) => match rx.recv_timeout(deadline) {
+                Ok(envelope) => envelope,
+                Err(RecvTimeoutError::Timeout) => {
+                    self.pending_responses
+                        .lock()
+                        .expect("pending mutex")
+                        .remove(&request_id);
+                    return Err(AcpRequestError::Timeout(deadline));
+                }
+                Err(RecvTimeoutError::Disconnected) => {
                     return Err(AcpRequestError::ConnectionClosed {
-                        reason,
-                        first_activity_observed,
+                        reason: "ACP transport closed before response".to_string(),
+                        first_activity_observed: false,
                     });
                 }
-                Err(error) => return Err(error),
+            },
+            None => match rx.recv() {
+                Ok(envelope) => envelope,
+                Err(_) => {
+                    return Err(AcpRequestError::ConnectionClosed {
+                        reason: "ACP transport closed before response".to_string(),
+                        first_activity_observed: false,
+                    });
+                }
+            },
+        };
+        match envelope {
+            ResponseEnvelope::Result(value) => Ok(value),
+            ResponseEnvelope::Error(reason) => Err(AcpRequestError::Failed(reason)),
+        }
+    }
+}
+
+fn spawn_reader_thread(
+    reader: BufReader<ChildStdout>,
+    stdin: SharedStdin,
+    replay_buffer: SharedReplay,
+    pending_responses: SharedPending,
+    active_prompt: SharedActivePrompt,
+) -> JoinHandle<()> {
+    thread::Builder::new()
+        .name("acp-reader".to_string())
+        .spawn(move || {
+            run_reader_loop(
+                reader,
+                &stdin,
+                &replay_buffer,
+                &pending_responses,
+                &active_prompt,
+            );
+        })
+        .expect("spawn ACP reader thread")
+}
+
+fn run_reader_loop(
+    mut reader: BufReader<ChildStdout>,
+    stdin: &SharedStdin,
+    replay_buffer: &SharedReplay,
+    pending_responses: &SharedPending,
+    active_prompt: &SharedActivePrompt,
+) {
+    let mut pending_tool_calls: HashMap<String, ReplayEntry> = HashMap::new();
+    let mut next_fallback_call_id: u64 = 0;
+    loop {
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(source) => {
+                emit_inscription(
+                    "acp.reader.read_failed",
+                    &json!({"cause": source.to_string()}),
+                );
+                break;
+            }
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let decoded = match serde_json::from_str::<Value>(trimmed) {
+            Ok(value) => value,
+            Err(source) => {
+                emit_inscription(
+                    "acp.reader.parse_failed",
+                    &json!({"line": trimmed, "cause": source.to_string()}),
+                );
+                continue;
+            }
+        };
+
+        if let Some(method) = decoded.get("method").and_then(Value::as_str) {
+            match method {
+                "session/update" => dispatch_session_update(
+                    &decoded,
+                    replay_buffer,
+                    active_prompt,
+                    &mut pending_tool_calls,
+                    &mut next_fallback_call_id,
+                ),
+                "session/request_permission" => {
+                    dispatch_permission_request(&decoded, active_prompt, stdin)
+                }
+                other => emit_inscription("acp.reader.unknown_method", &json!({"method": other})),
+            }
+            continue;
+        }
+
+        if let Some(id) = decoded.get("id").and_then(Value::as_u64) {
+            let envelope = if let Some(error) = decoded.get("error") {
+                ResponseEnvelope::Error(error.to_string())
+            } else {
+                ResponseEnvelope::Result(decoded.get("result").cloned().unwrap_or(Value::Null))
             };
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            let decoded = serde_json::from_str::<Value>(trimmed).map_err(|source| {
-                AcpRequestError::Failed(format!("parse ACP response failed: {source}"))
-            })?;
-            if decoded.get("id") != Some(&json!(request_id)) {
-                let observed_update = self.capture_update_snapshot_lines(
-                    &decoded,
-                    observers.prompt_session_id.as_deref(),
-                    &mut observers.on_snapshot_lines,
-                )?;
-                let observed_replay = self.capture_replay_from_value(
-                    &decoded,
-                    observers.prompt_session_id.as_deref(),
-                    &mut observers.on_replay_entries,
-                    replay_buffer.as_deref_mut(),
-                )?;
-                let observed_permission = self.handle_permission_request(
-                    &decoded,
-                    observers.prompt_session_id.as_deref(),
-                    &mut observers.on_permission_request,
-                )?;
-                if (observed_update || observed_replay || observed_permission)
-                    && !first_activity_observed
-                {
-                    first_activity_observed = true;
-                    read_timeout = None;
+            let sender = pending_responses.lock().expect("pending mutex").remove(&id);
+            match sender {
+                Some(sender) => {
+                    let _ = sender.send(envelope);
                 }
-                continue;
+                None => emit_inscription("acp.reader.orphan_response", &json!({"id": id})),
             }
-            if let Some(error) = decoded.get("error") {
-                return Err(AcpRequestError::Failed(error.to_string()));
-            }
-            if observers.prompt_session_id.is_some() && !first_activity_observed {
-                first_activity_observed = true;
-            }
-            return Ok(AcpRequestResult {
-                result: decoded.get("result").cloned().unwrap_or(Value::Null),
-                first_activity_observed,
-            });
+            continue;
         }
+
+        emit_inscription("acp.reader.unrecognized_message", &json!({"line": trimmed}));
     }
 
-    fn capture_update_snapshot_lines(
-        &mut self,
-        value: &Value,
-        session_id: Option<&str>,
-        on_snapshot_lines: &mut Option<SnapshotObserver<'_>>,
-    ) -> Result<bool, AcpRequestError> {
-        if value.get("method").and_then(Value::as_str) != Some("session/update") {
-            return Ok(false);
-        }
-        let params = value.get("params").unwrap_or(&Value::Null);
-        if let Some(expected_session_id) = session_id
-            && let Some(observed_session_id) = params.get("sessionId").and_then(Value::as_str)
-            && observed_session_id != expected_session_id
-        {
-            return Ok(false);
-        }
-        let captured_lines = collect_text_lines_from_value(params);
-        if captured_lines.is_empty() {
-            return Ok(true);
-        }
-        self.snapshot_line_buffer
-            .extend(captured_lines.iter().cloned());
-        if let Some(callback) = on_snapshot_lines.as_mut() {
-            callback(captured_lines.as_slice()).map_err(AcpRequestError::Failed)?;
-        }
-        Ok(true)
-    }
+    pending_responses.lock().expect("pending mutex").clear();
+    *active_prompt.lock().expect("active_prompt mutex") = None;
+}
 
-    fn handle_permission_request(
-        &mut self,
-        value: &Value,
-        session_id: Option<&str>,
-        permission_handler: &mut Option<PermissionHandler<'_>>,
-    ) -> Result<bool, AcpRequestError> {
-        if value.get("method").and_then(Value::as_str) != Some("session/request_permission") {
-            return Ok(false);
-        }
-        let params = value.get("params").unwrap_or(&Value::Null);
-        if let Some(expected_session_id) = session_id
-            && let Some(observed_session_id) = params.get("sessionId").and_then(Value::as_str)
-            && observed_session_id != expected_session_id
-        {
-            return Ok(false);
-        }
-        let request_id = match value.get("id").and_then(Value::as_u64) {
-            Some(id) => id,
-            None => return Ok(true), // malformed but treat as observed
-        };
-        let tool_call_title = params
-            .get("toolCall")
-            .and_then(|tc| tc.get("title"))
-            .and_then(Value::as_str)
-            .unwrap_or("unknown tool")
-            .to_string();
-        let options: Vec<PermissionOption> = params
-            .get("options")
-            .and_then(Value::as_array)
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|opt| {
-                        Some(PermissionOption {
-                            option_id: opt.get("optionId")?.as_str()?.to_string(),
-                            name: opt.get("name")?.as_str()?.to_string(),
-                            kind: opt
-                                .get("kind")
-                                .and_then(Value::as_str)
-                                .unwrap_or("")
-                                .to_string(),
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let request = PermissionRequest {
-            request_id,
-            tool_call_title,
-            requested_kind: params
-                .get("kind")
-                .and_then(Value::as_str)
-                // ACP Tool Calls: permission requests use tool kinds and default to "other"
-                // when kind is omitted by the agent payload.
-                // Ref: https://agentclientprotocol.com/protocol/tool-calls.md
-                .unwrap_or("other")
-                .to_string(),
-            requested_details: params.clone(),
-            options: options.clone(),
-        };
-        let selected = if let Some(handler) = permission_handler.as_mut() {
-            handler(&request)
-        } else {
-            None
-        };
-        // ACP Request Permission response contract:
-        // - selected => {"outcome":"selected","optionId":...}
-        // - cancelled => {"outcome":"cancelled"}
-        // Ref: https://agentclientprotocol.com/protocol/tool-calls.md
-        let outcome = match selected {
-            Some(option_id) => json!({ "outcome": "selected", "optionId": option_id }),
-            None => json!({ "outcome": "cancelled" }),
-        };
-        let response = serde_json::to_string(&json!({
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "result": { "outcome": outcome }
-        }))
-        .map_err(|source| {
-            AcpRequestError::Failed(format!("serialize permission response failed: {source}"))
-        })?;
-        write_line_to_stdin(&self.stdin, response.as_str()).map_err(|source| {
-            AcpRequestError::Failed(format!("write permission response failed: {source}"))
-        })?;
-        Ok(true)
+fn dispatch_session_update(
+    decoded: &Value,
+    replay_buffer: &SharedReplay,
+    active_prompt: &SharedActivePrompt,
+    pending_tool_calls: &mut HashMap<String, ReplayEntry>,
+    next_fallback_call_id: &mut u64,
+) {
+    let params = decoded.get("params").unwrap_or(&Value::Null);
+    let session_id = params.get("sessionId").and_then(Value::as_str);
+    let entries =
+        parse_replay_entries_from_params(params, pending_tool_calls, next_fallback_call_id);
+    if !entries.is_empty() {
+        let mut buffer = replay_buffer.lock().expect("replay_buffer mutex");
+        append_replay_entries(&mut buffer, entries);
     }
+    let active_clone = active_prompt
+        .lock()
+        .expect("active_prompt mutex")
+        .as_ref()
+        .map(Arc::clone);
+    if let Some(active) = active_clone {
+        let session_matches = session_id.is_none_or(|sid| sid == active.session_id.as_str());
+        if session_matches {
+            active
+                .first_activity_observed
+                .store(true, Ordering::Release);
+        }
+    }
+}
 
-    fn capture_replay_from_value(
-        &mut self,
-        value: &Value,
-        session_id: Option<&str>,
-        on_replay_entries: &mut Option<ReplayObserver<'_>>,
-        replay_buffer: Option<&mut Vec<ReplayEntry>>,
-    ) -> Result<bool, AcpRequestError> {
-        if value.get("method").and_then(Value::as_str) != Some("session/update") {
-            return Ok(false);
+fn dispatch_permission_request(
+    decoded: &Value,
+    active_prompt: &SharedActivePrompt,
+    stdin: &SharedStdin,
+) {
+    let request_id = match decoded.get("id").and_then(Value::as_u64) {
+        Some(id) => id,
+        None => {
+            emit_inscription("acp.reader.permission_request_missing_id", &json!({}));
+            return;
         }
-        let params = value.get("params").unwrap_or(&Value::Null);
-        if let Some(expected_session_id) = session_id
-            && let Some(observed_session_id) = params.get("sessionId").and_then(Value::as_str)
-            && observed_session_id != expected_session_id
-        {
-            return Ok(false);
+    };
+    let params = decoded.get("params").unwrap_or(&Value::Null);
+    let session_id = params.get("sessionId").and_then(Value::as_str);
+
+    let active_clone = active_prompt
+        .lock()
+        .expect("active_prompt mutex")
+        .as_ref()
+        .map(Arc::clone);
+    let active = match active_clone {
+        Some(active) => active,
+        None => {
+            emit_inscription(
+                "acp.reader.permission_dropped_no_active_prompt",
+                &json!({"id": request_id}),
+            );
+            send_permission_response(stdin, request_id, None);
+            return;
         }
-        let entries = parse_replay_entries_from_params(
-            params,
-            &mut self.pending_tool_calls,
-            &mut self.next_fallback_call_id,
+    };
+
+    if session_id.is_some_and(|sid| sid != active.session_id.as_str()) {
+        emit_inscription(
+            "acp.reader.permission_dropped_session_mismatch",
+            &json!({"id": request_id}),
         );
-        if let Some(callback) = on_replay_entries.as_mut() {
-            callback(entries.as_slice()).map_err(AcpRequestError::Failed)?;
-        }
-        if let Some(storage) = replay_buffer {
-            storage.extend(entries.iter().cloned());
-        }
-        append_replay_entries(&mut self.replay_buffer, entries);
-        Ok(true)
+        send_permission_response(stdin, request_id, None);
+        return;
     }
 
-    fn read_response_line(&mut self, timeout: Option<Duration>) -> Result<String, AcpRequestError> {
-        let deadline = timeout.map(|value| Instant::now() + value);
-        let mut chunk = [0_u8; 4096];
-        loop {
-            if let Some(newline_index) = self.read_buffer.iter().position(|value| *value == b'\n') {
-                let mut line = self.read_buffer.drain(..=newline_index).collect::<Vec<_>>();
-                if matches!(line.last(), Some(b'\n')) {
-                    line.pop();
-                }
-                if matches!(line.last(), Some(b'\r')) {
-                    line.pop();
-                }
-                return String::from_utf8(line).map_err(|source| {
-                    AcpRequestError::Failed(format!("decode ACP response failed: {source}"))
-                });
-            }
+    active
+        .first_activity_observed
+        .store(true, Ordering::Release);
 
-            match self.stdout.read(&mut chunk) {
-                Ok(0) => {
-                    let exit_code = self
-                        .child
-                        .try_wait()
-                        .ok()
-                        .flatten()
-                        .and_then(|status| status.code());
-                    return Err(AcpRequestError::Failed(format!(
-                        "ACP peer closed stdout (exit_code={exit_code:?})"
-                    )));
-                }
-                Ok(count) => {
-                    let end = self.read_buffer.len() + count;
-                    if end > ACP_READ_BUFFER_MAX {
-                        return Err(AcpRequestError::Failed(format!(
-                            "ACP read buffer exceeded {ACP_READ_BUFFER_MAX} bytes — peer may be misbehaving"
-                        )));
-                    }
-                    self.read_buffer.extend_from_slice(&chunk[..count]);
-                }
-                Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
-                    if let Some(limit) = deadline
-                        && Instant::now() >= limit
-                    {
-                        return Err(AcpRequestError::Timeout(
-                            timeout.unwrap_or(Duration::from_millis(0)),
-                        ));
-                    }
-                    if let Ok(Some(status)) = self.child.try_wait() {
-                        return Err(AcpRequestError::Failed(format!(
-                            "ACP peer exited before response (exit_code={:?})",
-                            status.code()
-                        )));
-                    }
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Err(source) if source.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(source) => {
-                    return Err(AcpRequestError::Failed(format!(
-                        "read ACP response failed: {source}"
-                    )));
-                }
-            }
+    let request = build_permission_request_from_params(params, request_id);
+
+    let decision = {
+        let mut handler_slot = active
+            .on_permission_request
+            .lock()
+            .expect("permission mutex");
+        match handler_slot.as_mut() {
+            Some(handler) => handler(&request),
+            None => None,
         }
+    };
+
+    send_permission_response(stdin, request_id, decision);
+}
+
+fn build_permission_request_from_params(params: &Value, request_id: u64) -> PermissionRequest {
+    let tool_call_title = params
+        .get("toolCall")
+        .and_then(|tc| tc.get("title"))
+        .and_then(Value::as_str)
+        .unwrap_or("unknown tool")
+        .to_string();
+    let options: Vec<PermissionOption> = params
+        .get("options")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|opt| {
+                    Some(PermissionOption {
+                        option_id: opt.get("optionId")?.as_str()?.to_string(),
+                        name: opt.get("name")?.as_str()?.to_string(),
+                        kind: opt
+                            .get("kind")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    PermissionRequest {
+        request_id,
+        tool_call_title,
+        requested_kind: params
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("other")
+            .to_string(),
+        requested_details: params.clone(),
+        options,
+    }
+}
+
+fn send_permission_response(
+    stdin: &SharedStdin,
+    request_id: u64,
+    selected_option_id: Option<String>,
+) {
+    let outcome = match selected_option_id {
+        Some(option_id) => json!({"outcome": "selected", "optionId": option_id}),
+        None => json!({"outcome": "cancelled"}),
+    };
+    let response = match serde_json::to_string(&json!({
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "result": {"outcome": outcome},
+    })) {
+        Ok(value) => value,
+        Err(source) => {
+            emit_inscription(
+                "acp.reader.permission_response_serialize_failed",
+                &json!({"cause": source.to_string()}),
+            );
+            return;
+        }
+    };
+    if let Err(source) = write_line_to_stdin(stdin, response.as_str()) {
+        emit_inscription(
+            "acp.reader.permission_response_write_failed",
+            &json!({"cause": source.to_string()}),
+        );
     }
 }
 
@@ -766,24 +887,4 @@ fn append_text_lines(text: &str, output: &mut Vec<String>) {
             output.push(normalized.to_string());
         }
     }
-}
-
-fn set_nonblocking(file_descriptor: i32, enable: bool) -> Result<(), String> {
-    // SAFETY: `fcntl` is called with a live file descriptor owned by this
-    // process. The command and arguments follow libc contract.
-    let flags = unsafe { libc::fcntl(file_descriptor, libc::F_GETFL) };
-    if flags < 0 {
-        return Err(std::io::Error::last_os_error().to_string());
-    }
-    let updated_flags = if enable {
-        flags | libc::O_NONBLOCK
-    } else {
-        flags & !libc::O_NONBLOCK
-    };
-    // SAFETY: `fcntl` receives the same valid descriptor and bitflag payload.
-    let result = unsafe { libc::fcntl(file_descriptor, libc::F_SETFL, updated_flags) };
-    if result < 0 {
-        return Err(std::io::Error::last_os_error().to_string());
-    }
-    Ok(())
 }
