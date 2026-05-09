@@ -41,9 +41,17 @@
 
 ## 6. Reader lifecycle and shutdown
 
-- [ ] 6.1 On worker teardown: close shared `Arc<Mutex<ChildStdin>>` (or send sentinel), drop child process handle
-- [ ] 6.2 `join` the reader thread before releasing per-session state
-- [ ] 6.3 Update `unregister_worker` in `async_worker.rs` to follow the shutdown sequence
+- [x] 6.1 On worker teardown: close shared `Arc<Mutex<ChildStdin>>` (or send sentinel), drop child process handle
+- [x] 6.2 `join` the reader thread before releasing per-session state
+- [x] 6.3 Update `unregister_worker` in `async_worker.rs` to follow the shutdown sequence
+
+  Implementation note: the worker thread owns the `AcpStdioClient` (in `acp_runtime`)
+  and exits when the registry's sender channel disconnects. `unregister_worker`
+  removes the registry entry, dropping the sender; on the worker side, `recv`
+  returns `Disconnected` and the loop breaks, dropping `acp_runtime`. The new
+  `AcpStdioClient::Drop` (via `shutdown()`) kills the child, waits for it,
+  and joins the reader thread before returning. No additional change to
+  `unregister_worker` is needed — the cascade is correct as-is.
 
 ## 7. Error taxonomy
 

@@ -395,7 +395,7 @@ fn run_tui(
         }
     }
 
-    client.kill();
+    client.shutdown();
     Ok(())
 }
 

@@ -84,9 +84,6 @@ pub struct AcpStdioClient {
     replay_buffer: SharedReplay,
     pending_responses: SharedPending,
     active_prompt: SharedActivePrompt,
-    // Held for shutdown sequencing in slice C; reader exit is observed via
-    // pending-channel disconnect so we only need to keep the handle alive.
-    #[allow(dead_code)]
     reader_handle: Option<JoinHandle<()>>,
     next_id: u64,
 }
@@ -418,8 +415,17 @@ impl AcpStdioClient {
         self.child.stderr.take()
     }
 
-    pub fn kill(&mut self) {
+    pub fn shutdown(&mut self) {
+        // Killing the child closes its stdout, which makes the reader's
+        // blocking `read_line` return EOF (Ok(0)) and exit the loop. The
+        // reader then drops its clones of the shared stdin, replay buffer,
+        // and pending-response registry; pending senders dropped in the
+        // registry signal `Disconnected` to any waiters in `prompt`/`request`.
         let _ = self.child.kill();
+        let _ = self.child.wait();
+        if let Some(handle) = self.reader_handle.take() {
+            let _ = handle.join();
+        }
     }
 
     fn request(
@@ -861,7 +867,7 @@ pub(super) fn parse_replay_entries_from_params(
 
 impl Drop for AcpStdioClient {
     fn drop(&mut self) {
-        let _ = self.child.kill();
+        self.shutdown();
     }
 }
 
