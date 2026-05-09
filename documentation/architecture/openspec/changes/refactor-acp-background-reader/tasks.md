@@ -1,15 +1,15 @@
 ## 1. Drain window and draining accessor removal
 
-- [ ] 1.1 Remove `ACP_LOAD_POST_RESPONSE_DRAIN_TIMEOUT` and `ACP_PROMPT_POST_RESPONSE_DRAIN_TIMEOUT` constants from `src/relay/delivery/acp_state.rs` (or wherever they live)
-- [ ] 1.2 Remove `drain_post_response_notifications` function from `src/acp/client.rs`
-- [ ] 1.3 Remove all call sites of the drain function
-- [ ] 1.4 Remove `take_replay_entries` (draining accessor) from `src/acp/client.rs`
-- [ ] 1.5 Update `agentmux-acp` debug TUI binary to use the cursor accessor instead of the draining accessor; thread a `usize` cursor through the render loop
+- [x] 1.1 Remove `ACP_LOAD_POST_RESPONSE_DRAIN_TIMEOUT` and `ACP_PROMPT_POST_RESPONSE_DRAIN_TIMEOUT` constants from `src/relay/delivery/acp_state.rs` (or wherever they live)
+- [x] 1.2 Remove `drain_post_response_notifications` function from `src/acp/client.rs`
+- [x] 1.3 Remove all call sites of the drain function
+- [x] 1.4 Remove `take_replay_entries` (draining accessor) from `src/acp/client.rs`
+- [x] 1.5 Update `agentmux-acp` debug TUI binary to use the cursor accessor instead of the draining accessor; thread a `usize` cursor through the render loop
 
 ## 2. Stdin writer serialization
 
-- [ ] 2.1 Wrap `ChildStdin` in `Arc<Mutex<ChildStdin>>` inside `AcpStdioClient`
-- [ ] 2.2 Update all existing stdin write paths to acquire the mutex before writing
+- [x] 2.1 Wrap `ChildStdin` in `Arc<Mutex<ChildStdin>>` inside `AcpStdioClient`
+- [x] 2.2 Update all existing stdin write paths to acquire the mutex before writing
 - [ ] 2.3 Pass the shared `Arc<Mutex<ChildStdin>>` to the background reader for permission response writes
 
 ## 3. Pending-request registry

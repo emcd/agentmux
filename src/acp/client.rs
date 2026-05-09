@@ -1,9 +1,10 @@
 use std::{
     collections::HashMap,
-    io::{Read, Write},
+    io::{self, Read, Write},
     os::fd::AsRawFd,
     path::Path,
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
+    sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -15,11 +16,6 @@ use super::{PROTOCOL_VERSION, PermissionOption, PermissionRequest, ReplayEntry};
 const ACP_CLIENT_NAME: &str = "agentmux-relay";
 const ACP_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const ACP_READ_BUFFER_MAX: usize = 1024 * 1024; // 1 MiB — fail fast on pathological peers
-const ACP_LOAD_POST_RESPONSE_DRAIN_TIMEOUT: Duration = Duration::from_millis(200);
-// Prompt responses can arrive before follow-on `session/update` notifications.
-// Keep a small post-response drain window so late updates are still observed
-// and persisted for look snapshots across slower CI/runtime scheduling.
-const ACP_PROMPT_POST_RESPONSE_DRAIN_TIMEOUT: Duration = Duration::from_millis(250);
 
 pub const REPLAY_BUFFER_MAX_ENTRIES: usize = 1000;
 
@@ -41,7 +37,6 @@ pub type PermissionHandler<'a> = &'a mut dyn FnMut(&PermissionRequest) -> Option
 
 struct RequestObservers<'a> {
     prompt_session_id: Option<String>,
-    post_response_drain_timeout: Option<Duration>,
     on_dispatched: Option<DispatchObserver<'a>>,
     on_snapshot_lines: Option<SnapshotObserver<'a>>,
     on_replay_entries: Option<ReplayObserver<'a>>,
@@ -70,9 +65,11 @@ pub struct AcpRequestResult {
     pub first_activity_observed: bool,
 }
 
+pub(in crate::acp) type SharedStdin = Arc<Mutex<ChildStdin>>;
+
 pub struct AcpStdioClient {
     child: Child,
-    stdin: ChildStdin,
+    stdin: SharedStdin,
     stdout: ChildStdout,
     read_buffer: Vec<u8>,
     next_id: u64,
@@ -80,6 +77,15 @@ pub struct AcpStdioClient {
     replay_buffer: Vec<ReplayEntry>,
     pending_tool_calls: HashMap<String, ReplayEntry>,
     next_fallback_call_id: u64,
+}
+
+fn write_line_to_stdin(stdin: &SharedStdin, payload: &str) -> io::Result<()> {
+    let mut guard = stdin
+        .lock()
+        .map_err(|_| io::Error::other("ACP stdin mutex poisoned"))?;
+    guard.write_all(payload.as_bytes())?;
+    guard.write_all(b"\n")?;
+    guard.flush()
 }
 
 impl AcpStdioClient {
@@ -122,7 +128,7 @@ impl AcpStdioClient {
         set_nonblocking(stdout.as_raw_fd(), true)?;
         Ok(Self {
             child,
-            stdin,
+            stdin: Arc::new(Mutex::new(stdin)),
             stdout,
             read_buffer: Vec::new(),
             next_id: 1,
@@ -153,7 +159,6 @@ impl AcpStdioClient {
             None,
             RequestObservers {
                 prompt_session_id: None,
-                post_response_drain_timeout: None,
                 on_dispatched: None,
                 on_snapshot_lines: None,
                 on_replay_entries: None,
@@ -182,7 +187,6 @@ impl AcpStdioClient {
                 None,
                 RequestObservers {
                     prompt_session_id: None,
-                    post_response_drain_timeout: Some(ACP_LOAD_POST_RESPONSE_DRAIN_TIMEOUT),
                     on_dispatched: None,
                     on_snapshot_lines: None,
                     on_replay_entries: None,
@@ -232,7 +236,6 @@ impl AcpStdioClient {
                 timeout,
                 RequestObservers {
                     prompt_session_id: None,
-                    post_response_drain_timeout: Some(ACP_LOAD_POST_RESPONSE_DRAIN_TIMEOUT),
                     on_dispatched: None,
                     on_snapshot_lines: None,
                     on_replay_entries: None,
@@ -275,7 +278,6 @@ impl AcpStdioClient {
             timeout,
             RequestObservers {
                 prompt_session_id: Some(session_id.to_string()),
-                post_response_drain_timeout: Some(ACP_PROMPT_POST_RESPONSE_DRAIN_TIMEOUT),
                 on_dispatched,
                 on_snapshot_lines: None,
                 on_replay_entries,
@@ -302,12 +304,16 @@ impl AcpStdioClient {
         std::mem::take(&mut self.snapshot_line_buffer)
     }
 
-    pub fn take_replay_entries(&mut self) -> Vec<ReplayEntry> {
-        std::mem::take(&mut self.replay_buffer)
-    }
-
     pub fn read_replay_entries(&self) -> Vec<ReplayEntry> {
         self.replay_buffer.clone()
+    }
+
+    pub fn replay_entries_since(&self, cursor: usize) -> (Vec<ReplayEntry>, usize) {
+        let len = self.replay_buffer.len();
+        if cursor >= len {
+            return (Vec::new(), len);
+        }
+        (self.replay_buffer[cursor..].to_vec(), len)
     }
 
     pub fn child_stderr(&mut self) -> Option<std::process::ChildStderr> {
@@ -337,13 +343,9 @@ impl AcpStdioClient {
         .map_err(|source| {
             AcpRequestError::Failed(format!("serialize ACP request failed: {source}"))
         })?;
-        self.stdin
-            .write_all(message.as_bytes())
-            .and_then(|_| self.stdin.write_all(b"\n"))
-            .and_then(|_| self.stdin.flush())
-            .map_err(|source| {
-                AcpRequestError::Failed(format!("write ACP request failed: {source}"))
-            })?;
+        write_line_to_stdin(&self.stdin, message.as_str()).map_err(|source| {
+            AcpRequestError::Failed(format!("write ACP request failed: {source}"))
+        })?;
         if let Some(callback) = observers.on_dispatched.as_mut() {
             callback();
         }
@@ -399,59 +401,11 @@ impl AcpStdioClient {
             if observers.prompt_session_id.is_some() && !first_activity_observed {
                 first_activity_observed = true;
             }
-            if let Some(drain_timeout) = observers.post_response_drain_timeout
-                && self.drain_post_response_notifications(
-                    observers.prompt_session_id.as_deref(),
-                    drain_timeout,
-                    &mut observers.on_snapshot_lines,
-                    &mut observers.on_replay_entries,
-                    replay_buffer.as_deref_mut(),
-                    &mut observers.on_permission_request,
-                )?
-            {
-                first_activity_observed = true;
-            }
             return Ok(AcpRequestResult {
                 result: decoded.get("result").cloned().unwrap_or(Value::Null),
                 first_activity_observed,
             });
         }
-    }
-
-    fn drain_post_response_notifications(
-        &mut self,
-        session_id: Option<&str>,
-        timeout: Duration,
-        on_snapshot_lines: &mut Option<SnapshotObserver<'_>>,
-        on_replay_entries: &mut Option<ReplayObserver<'_>>,
-        mut replay_buffer: Option<&mut Vec<ReplayEntry>>,
-        on_permission_request: &mut Option<PermissionHandler<'_>>,
-    ) -> Result<bool, AcpRequestError> {
-        let mut observed = false;
-        while let Ok(line) = self.read_response_line(Some(timeout)) {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            let decoded = match serde_json::from_str::<Value>(trimmed) {
-                Ok(value) => value,
-                Err(_) => continue,
-            };
-            let observed_update =
-                self.capture_update_snapshot_lines(&decoded, session_id, on_snapshot_lines)?;
-            let observed_replay = self.capture_replay_from_value(
-                &decoded,
-                session_id,
-                on_replay_entries,
-                replay_buffer.as_deref_mut(),
-            )?;
-            let observed_permission =
-                self.handle_permission_request(&decoded, session_id, on_permission_request)?;
-            if observed_update || observed_replay || observed_permission {
-                observed = true;
-            }
-        }
-        Ok(observed)
     }
 
     fn capture_update_snapshot_lines(
@@ -562,13 +516,9 @@ impl AcpStdioClient {
         .map_err(|source| {
             AcpRequestError::Failed(format!("serialize permission response failed: {source}"))
         })?;
-        self.stdin
-            .write_all(response.as_bytes())
-            .and_then(|_| self.stdin.write_all(b"\n"))
-            .and_then(|_| self.stdin.flush())
-            .map_err(|source| {
-                AcpRequestError::Failed(format!("write permission response failed: {source}"))
-            })?;
+        write_line_to_stdin(&self.stdin, response.as_str()).map_err(|source| {
+            AcpRequestError::Failed(format!("write permission response failed: {source}"))
+        })?;
         Ok(true)
     }
 

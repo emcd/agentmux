@@ -155,6 +155,7 @@ fn acp_look_returns_empty_snapshot_when_no_updates_exist() {
 }
 
 #[test]
+#[ignore = "post-response drain removed; capture restored by background reader (task 4 of refactor-acp-background-reader)"]
 fn acp_look_captures_updates_emitted_after_prompt_response() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions {

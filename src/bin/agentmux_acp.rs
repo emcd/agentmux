@@ -281,6 +281,8 @@ fn run_tui(
         text: format!("Connected. Session: {session_id}"),
     });
 
+    let (_, mut replay_cursor) = client.replay_entries_since(0);
+
     loop {
         terminal.draw(|frame| draw(frame, &app))?;
 
@@ -319,7 +321,9 @@ fn run_tui(
                     );
                     match result {
                         Ok(completion) => {
-                            let replay_entries = client.take_replay_entries();
+                            let (replay_entries, new_cursor) =
+                                client.replay_entries_since(replay_cursor);
+                            replay_cursor = new_cursor;
                             let replay_messages = replay_entries_to_messages(replay_entries);
                             for msg in replay_messages {
                                 let _ = tx.send(AppEvent::Message(msg));
