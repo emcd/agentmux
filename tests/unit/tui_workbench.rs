@@ -326,31 +326,15 @@ fn ctrl_c_quits_even_when_picker_overlay_is_open() {
 }
 
 #[test]
-fn events_overlay_approve_without_pending_permission_is_validation_error() {
+fn events_overlay_permission_action_keys_are_ignored() {
     let mut state = make_state();
     state
         .dispatch_event(key_event(KeyCode::F(3), KeyModifiers::NONE))
         .expect("f3 should open events overlay");
-    let result = state.dispatch_event(key_event(KeyCode::Char('a'), KeyModifiers::NONE));
-    match result {
-        Err(RuntimeError::Validation { code, .. }) => {
-            assert_eq!(code, "validation_unknown_permission_request")
-        }
-        other => panic!("unexpected result: {other:?}"),
-    }
-}
-
-#[test]
-fn events_overlay_deny_without_pending_permission_is_validation_error() {
-    let mut state = make_state();
     state
-        .dispatch_event(key_event(KeyCode::F(3), KeyModifiers::NONE))
-        .expect("f3 should open events overlay");
-    let result = state.dispatch_event(key_event(KeyCode::Char('d'), KeyModifiers::NONE));
-    match result {
-        Err(RuntimeError::Validation { code, .. }) => {
-            assert_eq!(code, "validation_unknown_permission_request")
-        }
-        other => panic!("unexpected result: {other:?}"),
-    }
+        .dispatch_event(key_event(KeyCode::Char('a'), KeyModifiers::NONE))
+        .expect("a should be ignored in events overlay");
+    state
+        .dispatch_event(key_event(KeyCode::Char('d'), KeyModifiers::NONE))
+        .expect("d should be ignored in events overlay");
 }

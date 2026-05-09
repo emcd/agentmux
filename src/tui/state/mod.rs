@@ -81,6 +81,14 @@ pub(crate) struct PendingPermissionEntry {
     pub requested_kind: Option<String>,
     pub requested_details: Option<serde_json::Value>,
     pub enqueued_at: Option<String>,
+    pub options: Vec<PendingPermissionOption>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PendingPermissionOption {
+    pub option_id: String,
+    pub name: Option<String>,
+    pub kind: Option<String>,
 }
 
 #[derive(Debug)]
@@ -109,6 +117,8 @@ pub(crate) struct AppState {
     pub look_snapshot_lines: Vec<String>,
     pub look_snapshot_entries: Vec<AcpSnapshotEntry>,
     pub look_overlay_scroll: usize,
+    pub(crate) look_permission_request_index: usize,
+    pub(crate) look_permission_option_index: usize,
     pub status_history: VecDeque<StatusEntry>,
     pub event_history: VecDeque<String>,
     pub pending_permissions: Vec<PendingPermissionEntry>,
@@ -167,6 +177,8 @@ impl AppState {
             look_snapshot_lines: Vec::new(),
             look_snapshot_entries: Vec::new(),
             look_overlay_scroll: 0,
+            look_permission_request_index: 0,
+            look_permission_option_index: 0,
             status_history: VecDeque::from([StatusEntry {
                 code: None,
                 message: "Ready. Press F1 for help.".to_string(),
@@ -276,7 +288,10 @@ mod tests {
         runtime::error::RuntimeError,
     };
 
-    use super::{AppState, ChatHistoryDirection, ChatHistoryEntry, Recipient, TuiLaunchOptions};
+    use super::{
+        AppState, ChatHistoryDirection, ChatHistoryEntry, PendingPermissionEntry, Recipient,
+        TuiLaunchOptions,
+    };
 
     fn make_state() -> AppState {
         AppState::new(TuiLaunchOptions {
@@ -458,7 +473,13 @@ mod tests {
                 "permission_request_id": "perm-1",
                 "target_session": "acp",
                 "requested_kind": "approval",
-                "requested_details": {"prompt": "run command"},
+                "requested_details": {
+                    "prompt": "run command",
+                    "options": [
+                        {"option_id": "allow-once", "name": "Allow once", "kind": "allow_once"},
+                        {"option_id": "reject-once", "name": "Reject", "kind": "reject_once"}
+                    ]
+                },
                 "enqueued_at": "2026-04-29T00:00:01Z",
             }),
         };
@@ -469,6 +490,9 @@ mod tests {
         assert_eq!(entry.message_id.as_deref(), Some("msg-1"));
         assert_eq!(entry.target_session.as_deref(), Some("acp"));
         assert_eq!(entry.requested_kind.as_deref(), Some("approval"));
+        assert_eq!(entry.options.len(), 2);
+        assert_eq!(entry.options[0].option_id, "allow-once");
+        assert_eq!(entry.options[1].option_id, "reject-once");
     }
 
     #[test]
@@ -484,7 +508,10 @@ mod tests {
                 "permission_request_id": "perm-1",
                 "target_session": "acp",
                 "requested_kind": "approval",
-                "requested_details": {"prompt": "run command"},
+                "requested_details": {
+                    "prompt": "run command",
+                    "options": [{"option_id": "allow-once", "name": "Allow once", "kind": "allow_once"}]
+                },
                 "enqueued_at": "2026-04-29T00:00:01Z",
             }),
         }]);
@@ -498,7 +525,7 @@ mod tests {
             payload: json!({
                 "message_id": "msg-1",
                 "permission_request_id": "perm-1",
-                "outcome": "approved",
+                "outcome": "selected",
                 "reason_code": null,
                 "decided_by": "user",
                 "reason": null,
@@ -509,22 +536,52 @@ mod tests {
     }
 
     #[test]
-    fn approve_or_deny_without_selected_permission_is_validation_error() {
+    fn look_permission_resolve_without_pending_request_is_validation_error() {
         let mut state = make_state();
-        let approve = state.approve_selected_permission_request();
-        match approve {
+        state.look_target = Some("acp".to_string());
+        let selected = state.resolve_selected_look_permission_selected();
+        match selected {
             Err(RuntimeError::Validation { code, .. }) => {
                 assert_eq!(code, "validation_unknown_permission_request");
             }
             other => panic!("unexpected result: {other:?}"),
         }
 
-        let deny = state.deny_selected_permission_request();
-        match deny {
+        let cancelled = state.resolve_selected_look_permission_cancelled();
+        match cancelled {
             Err(RuntimeError::Validation { code, .. }) => {
                 assert_eq!(code, "validation_unknown_permission_request");
             }
             other => panic!("unexpected result: {other:?}"),
         }
+    }
+
+    #[test]
+    fn look_pending_permissions_filter_by_active_target_session() {
+        let mut state = make_state();
+        state.pending_permissions = vec![
+            PendingPermissionEntry {
+                permission_request_id: "perm-1".to_string(),
+                message_id: Some("msg-1".to_string()),
+                target_session: Some("acp".to_string()),
+                requested_kind: Some("approval".to_string()),
+                requested_details: None,
+                options: vec![],
+                enqueued_at: Some("2026-04-29T00:00:01Z".to_string()),
+            },
+            PendingPermissionEntry {
+                permission_request_id: "perm-2".to_string(),
+                message_id: Some("msg-2".to_string()),
+                target_session: Some("relay".to_string()),
+                requested_kind: Some("approval".to_string()),
+                requested_details: None,
+                options: vec![],
+                enqueued_at: Some("2026-04-29T00:00:02Z".to_string()),
+            },
+        ];
+        state.look_target = Some("acp".to_string());
+        let filtered = state.look_pending_permissions();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].permission_request_id, "perm-1");
     }
 }

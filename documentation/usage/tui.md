@@ -37,12 +37,13 @@ Startup behavior:
 - `Esc` in `Message`: snap chat history viewport to latest
 - `F2`: open/close recipient picker
 - `F3`: open/close delivery events overlay
-- `Up` / `Down` in events overlay: select pending permission request
-- `a` in events overlay: approve selected pending permission request
-- `d` in events overlay: deny selected pending permission request
 - `l` in picker: capture look snapshot for selected recipient
 - `w` in picker: dispatch raw write to selected recipient using `Message` field
-- `Esc` in look overlay: close look and return to picker context
+- `Esc` in look overlay: resolve selected pending permission as cancelled (`outcome=cancelled`) when pending; otherwise close look and return to picker context
+- `Left` / `Right` in look overlay: previous/next pending permission request for look target
+- `Up` / `Down` in look overlay: previous/next ACP permission option
+- `Enter` in look overlay: resolve selected pending permission with selected ACP option (`outcome=selected`)
+- `c` in look overlay: resolve selected pending permission as cancelled (`outcome=cancelled`)
 - `PgUp` / `PgDn`: page chat history viewport backward/forward
 - `Up` / `Down` in picker: move recipient selection
 - `Ctrl+R`: refresh recipients
@@ -79,3 +80,6 @@ Delivery outcomes:
   `permission.requested`, and `permission.resolved` events.
 - Replay is at-least-once; the TUI deduplicates pending permission rows by
   `permission_request_id`.
+- Look-overlay permission decisions are ACP-native and explicit: selected
+  option ids are forwarded verbatim via `permission.resolve`; cancelled decisions
+  omit `option_id`.

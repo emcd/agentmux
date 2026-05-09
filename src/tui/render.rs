@@ -13,6 +13,7 @@ use super::state::{AppState, ChatHistoryDirection, FocusField, LookSnapshotForma
 
 const WORKBENCH_MIN_CHAT_HEIGHT: u16 = 1;
 const WORKBENCH_MIN_COMPOSE_HEIGHT: u16 = 4;
+const WORKBENCH_PERMISSION_PANE_HEIGHT: u16 = 10;
 
 pub(crate) fn render(frame: &mut Frame, state: &mut AppState) {
     let chunks = Layout::default()
@@ -158,7 +159,29 @@ fn visible_cursor_column_count(count: usize, width: u16) -> u16 {
 fn render_workbench_panes(frame: &mut Frame, area: Rect, state: &mut AppState) {
     let rows = split_workbench_rows(area, state);
     render_chat_history(frame, rows[0], state);
-    render_compose(frame, rows[1], state);
+    if should_show_permission_pane(state) {
+        render_permission_pane(frame, rows[1], state);
+    } else {
+        render_compose(frame, rows[1], state);
+    }
+}
+
+fn should_show_permission_pane(state: &AppState) -> bool {
+    state.look_overlay_open && !state.look_pending_permissions().is_empty()
+}
+
+fn render_permission_pane(frame: &mut Frame, area: Rect, state: &AppState) {
+    let inner_width = area.width.saturating_sub(2);
+    let lines = render_look_permission_lines(state, inner_width);
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+        Block::default()
+            .borders(Borders::TOP | Borders::BOTTOM)
+            .title_alignment(Alignment::Center)
+            .title(
+                "  Session Permissions (Left/Right request, Up/Down option, Enter select, c cancel)  ",
+            ),
+    );
+    frame.render_widget(paragraph, area);
 }
 
 fn render_compose(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -370,6 +393,65 @@ fn push_labeled_lines(
     rendered.push(Line::raw(""));
 }
 
+fn render_look_permission_lines(state: &AppState, width: u16) -> Vec<Line<'static>> {
+    let pending = state.look_pending_permissions();
+    if pending.is_empty() {
+        return vec![
+            Line::from("(no pending permission requests for this session)"),
+            Line::from("Press F2 to choose another session."),
+        ];
+    }
+
+    let request_index = state
+        .look_permission_request_index
+        .min(pending.len().saturating_sub(1));
+    let request = pending[request_index];
+    let options = request.options.as_slice();
+    let option_index = state
+        .look_permission_option_index
+        .min(options.len().saturating_sub(1));
+    let mut lines = vec![Line::from(Span::styled(
+        format!(
+            "Request {}/{}: {}",
+            request_index + 1,
+            pending.len(),
+            request.permission_request_id
+        ),
+        Style::default().add_modifier(Modifier::BOLD),
+    ))];
+    lines.push(Line::from(format!(
+        "target={} kind={} enqueued={}",
+        request.target_session.as_deref().unwrap_or("-"),
+        request.requested_kind.as_deref().unwrap_or("-"),
+        request.enqueued_at.as_deref().unwrap_or("-"),
+    )));
+
+    if options.is_empty() {
+        lines.push(Line::from(
+            "No ACP options available; use c to resolve cancelled.",
+        ));
+        return lines;
+    }
+
+    lines.push(Line::from("Options:"));
+    let body_width = width.saturating_sub(4).max(1) as usize;
+    for (index, option) in options.iter().enumerate() {
+        let marker = if index == option_index { ">" } else { " " };
+        let mut descriptor = format!(
+            "{marker} {}  id={}",
+            option.name.as_deref().unwrap_or("(unnamed option)"),
+            option.option_id
+        );
+        if let Some(kind) = option.kind.as_deref() {
+            descriptor.push_str(format!("  kind={kind}").as_str());
+        }
+        for wrapped in wrap_text(descriptor.as_str(), body_width) {
+            lines.push(Line::from(wrapped));
+        }
+    }
+    lines
+}
+
 fn wrap_text(text: &str, width: usize) -> Vec<String> {
     if width == 0 || text.is_empty() {
         return vec![text.to_string()];
@@ -477,7 +559,7 @@ fn render_events_overlay(frame: &mut Frame, state: &mut AppState) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Pending Permissions (a=approve, d=deny)"),
+                .title("Pending Permissions"),
         )
         .highlight_style(Style::default().bg(Color::Blue).fg(Color::White));
     frame.render_stateful_widget(
@@ -539,18 +621,20 @@ fn render_help_overlay(frame: &mut Frame, _state: &AppState) {
             "Look Overlay",
             Style::default().add_modifier(Modifier::BOLD),
         )),
-        Line::from("Esc: Close look and return to picker"),
+        Line::from("Esc: Resolve as cancelled (when pending) or close look"),
         Line::from("F2: Open picker"),
         Line::from("F3: Open events"),
-        Line::from("Up/Down: Scroll look snapshot"),
         Line::from("PgUp/PgDn: Page look snapshot"),
+        Line::from("Left/Right: Previous/next pending request for look target"),
+        Line::from("Up/Down: Previous/next ACP permission option"),
+        Line::from("Enter: Resolve selected option"),
+        Line::from("c: Resolve as cancelled"),
         Line::from(""),
         Line::from(Span::styled(
             "Overlays",
             Style::default().add_modifier(Modifier::BOLD),
         )),
         Line::from("Esc closes active overlay"),
-        Line::from("Events overlay: Up/Down select, a approve, d deny"),
         Line::from(""),
         Line::from(Span::styled(
             "General",
@@ -585,12 +669,17 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 }
 
 fn split_workbench_rows(area: Rect, state: &AppState) -> [Rect; 2] {
-    let compose_height = compute_compose_height(area.width, area.height, state);
+    let bottom_height = if should_show_permission_pane(state) {
+        let max_bottom = area.height.saturating_sub(WORKBENCH_MIN_CHAT_HEIGHT);
+        WORKBENCH_PERMISSION_PANE_HEIGHT.min(max_bottom.max(1))
+    } else {
+        compute_compose_height(area.width, area.height, state)
+    };
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(WORKBENCH_MIN_CHAT_HEIGHT),
-            Constraint::Length(compose_height),
+            Constraint::Length(bottom_height),
         ])
         .split(area);
     [rows[0], rows[1]]
