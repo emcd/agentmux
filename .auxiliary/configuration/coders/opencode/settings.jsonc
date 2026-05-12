@@ -49,14 +49,16 @@
       // "model": "zai-coding-plan/glm-4.7"
       // "model": "deepseek/deepseek-chat"
       // "model": "opencode/big-pickle"
-      "model": "xiaomi-token-plan-sgp/mimo-v2.5-pro"
+      // "model": "xiaomi-token-plan-sgp/mimo-v2.5-pro"
+      "model": "minimax-coding-plan/MiniMax-M2.7"
     },
     "plan": {
       "mode": "primary",
       // "model": "zai-coding-plan/glm-4.7"
       // "model": "deepseek/deepseek-chat"
       // "model": "opencode/big-pickle"
-      "model": "xiaomi-token-plan-sgp/mimo-v2.5-pro"
+      // "model": "xiaomi-token-plan-sgp/mimo-v2.5-pro"
+      "model": "minimax-coding-plan/MiniMax-M2.7"
     }
   },
 
