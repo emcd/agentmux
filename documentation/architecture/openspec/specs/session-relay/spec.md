@@ -1482,58 +1482,6 @@ For `validation_missing_acp_capability`, error details SHALL include:
 - **WHEN** relay cannot complete ACP initialize handshake
 - **THEN** relay fails target processing with `runtime_acp_initialize_failed`
 
-### Requirement: ACP Transport Timeout Semantics
-
-ACP-backed send operations SHALL use turn-wait timeout semantics rather than
-pane-quiescence semantics.
-
-For ACP targets:
-
-- request-level `acp_turn_timeout_ms` SHALL apply as ACP turn-wait timeout
-- coder-level `[coders.acp] turn-timeout-ms` SHALL provide default timeout
-- if neither value is set, system default SHALL be `120000` ms
-- precedence SHALL be:
-  1. request `acp_turn_timeout_ms`
-  2. coder `[coders.acp] turn-timeout-ms`
-  3. system default `120000`
-
-Transport-field validation SHALL be fail-fast:
-
-- ACP target + `quiescence_timeout_ms` =>
-  `validation_invalid_timeout_field_for_transport`
-- tmux target + `acp_turn_timeout_ms` =>
-  `validation_invalid_timeout_field_for_transport`
-- request includes both timeout fields =>
-  `validation_conflicting_timeout_fields`
-
-#### Scenario: Apply request ACP timeout override
-
-- **WHEN** a send request to ACP target includes `acp_turn_timeout_ms`
-- **THEN** relay uses that value as ACP turn-wait timeout for that target
-
-#### Scenario: Fall back to coder ACP timeout default
-
-- **WHEN** a send request to ACP target omits `acp_turn_timeout_ms`
-- **AND** coder defines `[coders.acp] turn-timeout-ms`
-- **THEN** relay uses coder timeout value for that target
-
-#### Scenario: Reject quiescence timeout for ACP target
-
-- **WHEN** request targets ACP transport
-- **AND** request includes `quiescence_timeout_ms`
-- **THEN** relay returns `validation_invalid_timeout_field_for_transport`
-
-#### Scenario: Reject ACP timeout for tmux target
-
-- **WHEN** request targets tmux transport
-- **AND** request includes `acp_turn_timeout_ms`
-- **THEN** relay returns `validation_invalid_timeout_field_for_transport`
-
-#### Scenario: Reject conflicting timeout fields
-
-- **WHEN** request includes `quiescence_timeout_ms` and `acp_turn_timeout_ms`
-- **THEN** relay returns `validation_conflicting_timeout_fields`
-
 ### Requirement: ACP Stop-Reason Outcome Mapping
 
 Relay SHALL map ACP prompt terminal states into canonical send outcomes with
@@ -1574,34 +1522,43 @@ For `delivery_mode=sync` and ACP targets, relay SHALL use a two-phase contract.
 
 Phase 1 (delivery acknowledgment):
 
-- relay SHALL report target `outcome=delivered` when first ACP activity is
-  observed (`session/update` notification or prompt result)
+- relay SHALL report target `outcome=delivered` when the prompt write to ACP
+  stdin succeeds (write-success equals delivery on a local stdio pipe)
 - phase-1 response SHALL include
   `details.delivery_phase = "accepted_in_progress"`
+- relay SHALL NOT wait for any `session/update` or other first-activity signal
+  before returning phase-1
+
+Wire-level phase tokens (`accepted_in_progress`, `accepted_dispatched`) are
+unchanged.
 
 Phase 2 (terminal completion):
 
 - terminal prompt completion SHALL drive relay-internal worker readiness state
+- phase-2 is signaled by the background reader when it receives the JSON-RPC
+  response matching the prompt request-id
 - phase-2 completion SHALL NOT retroactively mutate phase-1 sync response
 - phase-2 completion SHALL NOT be required sender-facing `send` output in MVP
 
-#### Scenario: Return delivered on first ACP activity
+#### Scenario: Return delivered on prompt write success
 
 - **WHEN** sync send targets ACP session
-- **AND** relay observes first ACP activity before terminal completion
+- **AND** relay successfully writes the prompt to ACP stdin
 - **THEN** relay returns target `outcome=delivered`
 - **AND** includes `details.delivery_phase = "accepted_in_progress"`
+- **AND** does not wait for session/update or any other activity signal
 
-#### Scenario: Fail before first ACP activity
+#### Scenario: Fail on stdin write failure
 
 - **WHEN** sync send targets ACP session
-- **AND** ACP transport fails before first activity is observed
-- **THEN** relay returns terminal failure/timeout outcome for that target
+- **AND** ACP stdin write fails with an I/O error
+- **THEN** relay returns terminal failure outcome with `transport_unavailable`
+  error code for that target
 
 ### Requirement: ACP Terminal Readiness Tracking
 
-Relay SHALL use ACP terminal completion signals to maintain internal worker
-readiness state for scheduling.
+Relay SHALL use ACP terminal completion signals from the background reader to
+maintain internal worker readiness state for scheduling.
 
 MVP state model:
 
@@ -1611,20 +1568,36 @@ MVP state model:
 
 Transition contract:
 
-- first ACP activity observed => `busy`
-- terminal stopReason observed => `available`
-- disconnect/error requiring restart => `unavailable`
+- successful prompt write to ACP stdin => `busy`
+- background reader observes terminal `stopReason` in prompt response => `available`
+- stdin write failure OR reader thread exit (any cause) => `unavailable`
+
+The `busy` transition now occurs on write-success, not on first `session/update`
+observation. Reader thread exit is an additional `unavailable` trigger,
+mirroring the write-failure path.
 
 MVP sender-surface contract:
 
 - these transitions SHALL NOT require additional sender-facing `send` outputs
 - send success semantics remain phase-1 delivery acknowledgment only
 
+#### Scenario: Mark worker busy on prompt write success
+
+- **WHEN** relay successfully writes a prompt to ACP stdin
+- **THEN** relay marks worker state as `busy`
+
 #### Scenario: Mark worker available on terminal stopReason
 
-- **WHEN** ACP worker reports terminal stopReason for in-progress prompt
+- **WHEN** ACP background reader receives JSON-RPC response to the prompt
+  request-id with a terminal `stopReason`
 - **THEN** relay marks worker state as `available`
 - **AND** subsequent sends MAY be admitted for that target
+
+#### Scenario: Mark worker unavailable on reader thread exit
+
+- **WHEN** the ACP background reader thread exits (EOF, I/O error, or panic)
+- **THEN** relay marks worker state as `unavailable`
+- **AND** pending requests are drained with an error
 
 ### Requirement: ACP Persistent Worker Lifecycle
 
@@ -1633,7 +1606,7 @@ snapshot ingestion.
 
 Worker model SHALL be:
 
-- one worker per target session
+- one worker per target session (one child process, one background reader thread)
 - serialized request queue per worker
 - fixed MVP queue bound `max_pending = 64`
 - initialized during bundle startup/session startup pass for hosted bundles
@@ -1641,23 +1614,31 @@ Worker model SHALL be:
   transport semantics
 - never lazily created by ACP send/look request handlers
 
+Worker startup sequence SHALL be:
+
+1. spawn ACP child process
+2. start background reader thread (owns child stdout)
+3. initialize (register request-id, write to stdin, wait on oneshot)
+4. select lifecycle (`session/load` when identity exists, else `session/new`)
+5. worker transitions to `available` and accepts prompts
+
+Worker shutdown sequence SHALL be:
+
+1. close shared `Arc<Mutex<ChildStdin>>` (signal EOF to child)
+2. drop child process handle
+3. `join` background reader thread
+4. release per-session state (replay buffer, pending-request registry)
+
 Backpressure contract:
 
 - enqueue beyond bound SHALL fail with `runtime_acp_queue_full`
 
 Disconnect/restart contract:
 
-- disconnect before phase-1 acknowledgment =>
+- stdin write failure before phase-1 acknowledgment =>
   `runtime_acp_connection_closed`
-- disconnect after phase-1 acknowledgment SHALL keep response immutable and
-  transition worker to `unavailable` for recovery
-
-Restart sequence SHALL be:
-
-1. spawn ACP process
-2. initialize
-3. select lifecycle (`session/load` when identity exists, else `session/new`)
-4. prompt
+- reader thread exit after phase-1 acknowledgment SHALL keep response
+  immutable and transition worker to `unavailable` for recovery
 
 Failure taxonomy SHALL include:
 
@@ -1667,6 +1648,7 @@ Failure taxonomy SHALL include:
 - `runtime_acp_prompt_failed`
 - `acp_turn_timeout`
 - `runtime_acp_worker_unavailable`
+- `transport_unavailable` (ACP child write failure or reader thread exit)
 
 #### Scenario: Keep one authoritative worker for ACP send and look ingestion
 
@@ -1688,6 +1670,13 @@ Failure taxonomy SHALL include:
 - **AND** send returns failure with `runtime_acp_worker_unavailable`
 - **AND** look returns stale metadata with
   `stale_reason_code=acp_worker_unavailable`
+
+#### Scenario: Worker teardown joins reader thread before releasing state
+
+- **WHEN** an ACP worker is torn down (idle timeout, target removed, bundle stop)
+- **THEN** relay closes child stdin, drops child process handle, and joins the
+  reader thread before releasing per-session state
+- **AND** no per-session state is accessed after join completes
 
 ### Requirement: ACP Permission Request Readiness Signal (MVP)
 
@@ -1912,7 +1901,8 @@ MVP deterministic thresholds:
 - `acp_stream_stalled_after_ms = 5000`
 
 Authoritative age source precedence SHALL be:
-1. `last_acp_frame_observed_at_ms`
+1. `last_acp_frame_observed_at_ms` (updated by background reader on each
+   `session/update` notification)
 2. `last_snapshot_update_ms`
 3. age unavailable (omit `snapshot_age_ms`)
 
@@ -1930,6 +1920,15 @@ Freshness predicate order SHALL be:
    - `worker_state=available` => `freshness=stale` with
      `stale_reason_code=acp_stream_stalled` only when stalled threshold is
      exceeded using authoritative age source precedence.
+
+Freshness vocabulary semantics under continuous-reader model:
+
+- `LiveBuffer` means "background reader thread is alive and feeding updates"
+  (previously: "served from in-memory after request-scoped drain")
+- `acp_stream_stalled` means "reader alive but observed N seconds of silence
+  on the ACP stream" (previously: "drain window saw nothing")
+
+Wire tokens (`Fresh`/`Stale`, `LiveBuffer`/`None`) are unchanged.
 
 Relay SHALL treat machine freshness status as response-visible state for ACP
 look.
@@ -1957,6 +1956,12 @@ but SHALL NOT be the sole machine carrier.
   authoritative age-source precedence
 - **THEN** relay returns success with `freshness=stale`
 - **AND** `stale_reason_code=acp_stream_stalled`
+
+#### Scenario: Background reader updates last_acp_frame_observed_at on each update
+
+- **WHEN** background reader receives a `session/update` notification
+- **THEN** `last_acp_frame_observed_at_ms` is updated to the current time
+- **AND** freshness stalled threshold uses this timestamp as authoritative age
 
 ### Requirement: Relay raww operation contract
 
@@ -2103,4 +2108,32 @@ larger than 32 KiB (UTF-8 bytes) with `validation_invalid_params`.
 
 - **WHEN** raww `text` exceeds 32 KiB UTF-8 bytes
 - **THEN** relay rejects with `validation_invalid_params`
+
+### Requirement: ACP Transport Error Code
+
+Relay SHALL use dedicated error code `transport_unavailable` (in ACP context:
+`acp_child_unavailable`) for failures caused by ACP child process write
+failures or reader thread exit. This code SHALL be distinguishable from
+`internal_unexpected_failure` which covers relay-internal logic errors.
+
+Error code taxonomy addendum:
+
+- `transport_unavailable` — ACP stdin write failure (child process dead or
+  pipe broken); caller can retry by requesting a worker reconnect
+- `internal_unexpected_failure` — relay-internal logic or lock failure;
+  not a transport concern
+
+#### Scenario: ACP stdin write failure returns transport_unavailable
+
+- **WHEN** relay attempts to write a prompt to ACP stdin
+- **AND** the write fails with an I/O error
+- **THEN** relay returns error code `transport_unavailable`
+- **AND** does not return `internal_unexpected_failure`
+
+#### Scenario: transport_unavailable is distinguishable by MCP consumers
+
+- **WHEN** MCP consumer receives an error response for an ACP send
+- **AND** error code is `transport_unavailable`
+- **THEN** consumer can infer the ACP process is gone and may retry/reattach
+- **AND** can distinguish this from a non-retryable relay-internal failure
 

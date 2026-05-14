@@ -106,7 +106,7 @@ prompt is routed through a separate channel, not the registry.
 
 ## MODIFIED Requirements
 
-### Requirement: Replay Buffer Accessors
+### Requirement: Non-Draining Replay Buffer Accessor
 
 The shared ACP client module SHALL expose two read accessors over the in-memory
 replay buffer. The underlying buffer is a continuous append log populated by the

@@ -267,7 +267,7 @@ but SHALL NOT be the sole machine carrier.
 
 ## REMOVED Requirements
 
-### Requirement: ACP Transport Timeout Semantics (drain window clause)
+### Requirement: ACP Transport Timeout Semantics
 
 **Reason**: The post-response drain window (`ACP_LOAD_POST_RESPONSE_DRAIN_TIMEOUT`,
 `ACP_PROMPT_POST_RESPONSE_DRAIN_TIMEOUT`) and `drain_post_response_notifications`

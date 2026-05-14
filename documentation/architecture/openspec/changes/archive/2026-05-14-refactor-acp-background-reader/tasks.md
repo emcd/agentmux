@@ -121,6 +121,6 @@
 
 ## 10. Validation
 
-- [ ] 10.1 `openspec validate refactor-acp-background-reader --strict`
-- [ ] 10.2 Run `cargo test` integration suite
-- [ ] 10.3 Manual ACP e2e: relay restart → `look` on ACP session shows history; tool call triggers permission pane
+- [x] 10.1 `openspec validate refactor-acp-background-reader --strict`
+- [x] 10.2 Run `cargo test` integration suite
+- [x] 10.3 Manual ACP e2e: relay restart → `look` on ACP session shows history; tool call triggers permission pane
