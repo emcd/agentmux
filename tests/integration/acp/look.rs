@@ -72,12 +72,12 @@ fn acp_look_returns_oldest_to_newest_session_update_lines() {
         |lines| lines.len() == 3,
     );
     let snapshot = expect_acp_snapshot(look);
-    assert!(snapshot.entries.iter().all(|entry| {
-        matches!(
-            entry,
-            agentmux::acp::AcpSnapshotEntry::Update { update_kind, .. } if update_kind == "text"
-        )
-    }));
+    assert!(
+        snapshot
+            .entries
+            .iter()
+            .all(|entry| { matches!(entry, agentmux::acp::AcpSnapshotEntry::Agent { .. }) })
+    );
     assert_eq!(
         snapshot.lines,
         vec!["ACP-LINE-1", "ACP-LINE-2", "ACP-LINE-3"]
