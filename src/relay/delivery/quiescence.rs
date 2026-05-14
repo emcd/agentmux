@@ -18,6 +18,12 @@ use super::super::tmux::{
 
 const QUIET_WINDOW_MS_DEFAULT: u64 = 750;
 const QUIESCENCE_TIMEOUT_MS_DEFAULT: u64 = 30_000;
+// TODO(refactor-acp-background-reader follow-up): drop this constant and the
+// `acp_turn_timeout_ms` param plumbing entirely. The relay no longer
+// enforces a turn timeout for ACP prompts (fire-and-forget; agent death
+// detected via reader EOF). Kept for API back-compat until the MCP param
+// surface is updated.
+#[allow(dead_code)]
 const ACP_TURN_TIMEOUT_MS_DEFAULT: u64 = 120_000;
 const PROMPT_INSPECT_LINES_DEFAULT: usize = 3;
 const PROMPT_INSPECT_LINES_MAX: usize = 40;
@@ -26,6 +32,9 @@ const PROMPT_INSPECT_LINES_MAX: usize = 40;
 pub(in crate::relay) struct QuiescenceOptions {
     pub quiet_window: Duration,
     pub quiescence_timeout: Option<Duration>,
+    // TODO(refactor-acp-background-reader follow-up): field is now a no-op.
+    // Drop it together with the `acp_turn_timeout_ms` MCP/CLI param.
+    #[allow(dead_code)]
     pub acp_turn_timeout_override: Option<Duration>,
 }
 
@@ -82,6 +91,9 @@ impl QuiescenceOptions {
         }
     }
 
+    // TODO(refactor-acp-background-reader follow-up): no callers remain.
+    // Drop together with the `acp_turn_timeout_ms` MCP/CLI param.
+    #[allow(dead_code)]
     pub(super) fn acp_turn_timeout(
         &self,
         acp: &crate::configuration::AcpTargetConfiguration,

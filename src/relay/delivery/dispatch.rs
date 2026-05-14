@@ -691,6 +691,15 @@ fn spawn_async_delivery_worker(
             let outcome = deliver_one_target_with_worker_state(&task, &mut acp_runtime);
             super::async_worker::complete_task_outcome(&task, outcome);
             super::async_worker::release_pending_slot(pending.as_ref());
+
+            // Per-target ACP single-flight: block until the previous prompt
+            // is fully complete (background reader fired `on_completion`, or
+            // synchronous dispatch failure already cleared the slot) before
+            // pulling the next task. `wait_for_prompt_complete()` returns
+            // immediately if no prompt was dispatched.
+            if let Some(runtime) = acp_runtime.as_ref() {
+                runtime.client.wait_for_prompt_complete();
+            }
         }
         super::async_worker::unregister_worker(&key);
     });

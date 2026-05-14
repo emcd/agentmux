@@ -34,10 +34,37 @@
 
 ## 5. Fire-and-forget prompt dispatch
 
-- [ ] 5.1 In `deliver_one_target_acp`: write prompt to ACP stdin, append outgoing `ReplayEntry::User` to replay buffer, return `submitted`/`accepted_in_progress` immediately on write-success
-- [ ] 5.2 Set turn-complete channel in the shared reader state before writing prompt
-- [ ] 5.3 Worker state transition on write: `Initializing`/`Available` → `Busy`; write failure → `Unavailable`
-- [ ] 5.4 Background reader signals `Available` on turn-complete response; delivery completion event emitted at that point
+- [x] 5.1 In `deliver_one_target_acp`: write prompt to ACP stdin, return `submitted`/`accepted_in_progress` immediately on write-success
+- [x] 5.2 Set turn-complete channel in the shared reader state before writing prompt
+- [x] 5.3 Worker state transition on write: `Initializing`/`Available` → `Busy`; write failure → `Unavailable`
+- [x] 5.4 Background reader signals `Available` on turn-complete response; delivery completion event emitted at that point
+
+  Design refinements (aligned with Eric 2026-05-09; design note at
+  `agentmux:decisions/2`):
+
+  - **D2** ACP is single-batch only; `deliver_one_target_acp` `debug_assert`s
+    `prompt_batches.len() == 1`. Multi-batch is a tmux concept and is not
+    plumbed for ACP.
+  - **D3** No runtime invalidation flag. `*acp_runtime = None` lines removed
+    (request-scoped vestige). The persistent worker stays alive with its
+    `AcpStdioClient`; subsequent sends to an `Unavailable` worker fail-fast
+    via a pre-task state check (`get_acp_worker_state`).
+  - **D4** No relay-side turn timeout for `prompt()`. Long agent prompts
+    (model thinking, retries) are first-class; agent death is detected via
+    bg-reader EOF (`PromptCompletion::ConnectionClosed`). `request()`
+    (initialize/load/new) retains its timeout. Vestigial timeout code is
+    `#[allow(dead_code)]` with TODO markers; full cleanup is a separate
+    follow-up once the `acp_turn_timeout_ms` MCP param is dropped.
+  - **D8 (deferred)** Worker auto-respawn (worker exits on `Unavailable`,
+    registry GCs entry, next `try_existing_worker` respawns fresh child) was
+    designed but deferred. Filed as `agentmux:todos/acp/14`. The pre-task
+    fail-fast preserves the existing integration-test contract; auto-respawn
+    will replace it in the follow-up.
+
+  Per-target ACP single-flight is preserved by a new
+  `AcpStdioClient::wait_for_prompt_complete()` method: the worker thread
+  blocks on a dropped-sender signal between tasks so the next dispatch
+  cannot violate the "one in-flight prompt per session" invariant.
 
 ## 6. Reader lifecycle and shutdown
 
@@ -67,10 +94,36 @@
 
 ## 9. Integration test updates
 
-- [ ] 9.1 Update `tests/integration/acp/lifecycle.rs` — remove drain-timing dependencies
-- [ ] 9.2 Update `tests/integration/acp/look.rs` — assert look freshness from background reader
-- [ ] 9.3 Update `tests/integration/acp/send.rs` — assert fire-and-forget delivery contract
-- [ ] 9.4 Update `tests/integration/acp/permissions.rs` — assert permission dispatch from reader
+- [x] 9.1 Update `tests/integration/acp/lifecycle.rs` — remove drain-timing dependencies
+
+  Drain timings were already removed in slice A. Lifecycle tests
+  (`acp_disconnect_after_first_activity_preserves_accepted_response`,
+  `acp_disconnect_before_first_activity_does_not_block_sync_dispatch_ack`,
+  `acp_send_uses_persisted_session_id_when_config_id_is_absent`) all pass
+  with the C-5 contract (sync returns `accepted_in_progress`; subsequent
+  sends after `Unavailable` fail-fast).
+- [x] 9.2 Update `tests/integration/acp/look.rs` — assert look freshness from background reader
+
+  Done in slice C-1: worker registry now stores the bg reader's
+  `Arc<Mutex<Vec<ReplayEntry>>>` directly, so `get_acp_worker_snapshot`
+  always returns live state. `acp_look_captures_updates_emitted_after_prompt_response`
+  un-ignored. The remaining ignored test
+  `acp_look_marks_snapshot_stale_when_updates_are_stalled` is gated on
+  snapshot timestamp tracking (separate work item beyond this change).
+- [x] 9.3 Update `tests/integration/acp/send.rs` — assert fire-and-forget delivery contract
+
+  All existing send tests pass under the new contract. The "Delivered"
+  outcome with `delivery_phase: "accepted_in_progress"` is now the
+  synchronous return for sync sends; terminal completion arrives via the
+  stream (already covered by `relay_async_chat_emits_terminal_delivery_outcome_to_sender_ui_stream`).
+
+- [x] 9.4 Update `tests/integration/acp/permissions.rs` — assert permission dispatch from reader
+
+  Permission tests already validate dispatch from the background reader
+  (`acp_request_permission_keeps_worker_busy_while_pending_decision`).
+  The repurposed `acp_worker_state_stays_available_after_protocol_error`
+  validates the new "logical error from agent keeps worker healthy"
+  semantic.
 
 ## 10. Validation
 

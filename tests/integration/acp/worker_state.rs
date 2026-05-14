@@ -103,7 +103,12 @@ fn acp_request_permission_keeps_worker_busy_while_pending_decision() {
 }
 
 #[test]
-fn acp_worker_state_transitions_to_unavailable_on_prompt_failure() {
+fn acp_worker_state_stays_available_after_protocol_error() {
+    // A JSON-RPC error response to session/prompt is a logical error from
+    // a still-responsive agent. Under the fire-and-forget design, the
+    // persistent worker stays alive (Available) for subsequent prompts.
+    // Only transport-level failures (broken pipe write, reader EOF) mark
+    // the worker Unavailable.
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions {
         fail_prompt: true,
@@ -129,10 +134,19 @@ fn acp_worker_state_transitions_to_unavailable_on_prompt_failure() {
         wait_for_worker_state(
             temporary.path(),
             "bravo",
-            "unavailable",
+            "available",
             Duration::from_secs(2)
         ),
-        "worker_state did not converge to unavailable"
+        "worker_state did not converge to available after protocol error"
+    );
+    assert!(
+        !wait_for_worker_state(
+            temporary.path(),
+            "bravo",
+            "unavailable",
+            Duration::from_millis(200)
+        ),
+        "worker_state unexpectedly converged to unavailable on a JSON-RPC error response"
     );
 }
 
