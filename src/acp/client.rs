@@ -322,6 +322,13 @@ impl AcpStdioClient {
             };
         }
 
+        let mut user_lines: Vec<String> = Vec::new();
+        append_text_lines(prompt, &mut user_lines);
+        if !user_lines.is_empty() {
+            let mut buffer = self.replay_buffer.lock().expect("replay_buffer mutex");
+            append_replay_entries(&mut buffer, vec![ReplayEntry::User { lines: user_lines }]);
+        }
+
         if let Some(callback) = on_dispatched {
             callback();
         }

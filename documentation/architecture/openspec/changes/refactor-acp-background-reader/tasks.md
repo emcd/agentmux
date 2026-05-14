@@ -34,7 +34,7 @@
 
 ## 5. Fire-and-forget prompt dispatch
 
-- [x] 5.1 In `deliver_one_target_acp`: write prompt to ACP stdin, return `submitted`/`accepted_in_progress` immediately on write-success
+- [x] 5.1 In `deliver_one_target_acp`: write prompt to ACP stdin, return `submitted`/`accepted_in_progress` immediately on write-success; on write-success, also append a `ReplayEntry::User` for the prompt text to the shared replay buffer so `look` reflects the submitted message before any `session/update` arrives (implemented inside `AcpStdioClient::prompt` so all `prompt()` callers — relay delivery and the `agentmux_acp` debug binary — get the invariant)
 - [x] 5.2 Set turn-complete channel in the shared reader state before writing prompt
 - [x] 5.3 Worker state transition on write: `Initializing`/`Available` → `Busy`; write failure → `Unavailable`
 - [x] 5.4 Background reader signals `Available` on turn-complete response; delivery completion event emitted at that point
