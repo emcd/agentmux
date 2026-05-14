@@ -281,6 +281,8 @@ fn run_tui(
         text: format!("Connected. Session: {session_id}"),
     });
 
+    let (_, mut replay_cursor) = client.replay_entries_since(0);
+
     loop {
         terminal.draw(|frame| draw(frame, &app))?;
 
@@ -303,31 +305,57 @@ fn run_tui(
                     // Handle prompt synchronously for MVP
                     // (TUI freezes during prompt — acceptable for debugging use case)
                     let session = session_id.to_string();
-                    let mut permission_handler = |req: &PermissionRequest| -> Option<String> {
-                        disable_raw_mode().ok();
-                        let result = show_permission_menu(req);
-                        enable_raw_mode().ok();
-                        result
-                    };
-                    let result = client.prompt(
+                    let permission_handler: agentmux::acp::PermissionHandler =
+                        Box::new(|req: &PermissionRequest| -> Option<String> {
+                            disable_raw_mode().ok();
+                            let result = show_permission_menu(req);
+                            enable_raw_mode().ok();
+                            result
+                        });
+                    let (completion_tx, completion_rx) =
+                        std::sync::mpsc::channel::<agentmux::acp::PromptCompletion>();
+                    let on_completion: agentmux::acp::PromptCompletionHandler =
+                        Box::new(move |completion| {
+                            let _ = completion_tx.send(completion);
+                        });
+                    let dispatch_outcome = client.prompt(
                         &session,
                         &prompt_text,
-                        Some(Duration::from_secs(120)),
                         None,
-                        None,
-                        Some(&mut permission_handler),
+                        Some(permission_handler),
+                        on_completion,
                     );
-                    match result {
-                        Ok(completion) => {
-                            let replay_entries = client.take_replay_entries();
-                            let replay_messages = replay_entries_to_messages(replay_entries);
-                            for msg in replay_messages {
-                                let _ = tx.send(AppEvent::Message(msg));
+                    match dispatch_outcome {
+                        agentmux::acp::PromptDispatchOutcome::Submitted => match completion_rx
+                            .recv()
+                        {
+                            Ok(agentmux::acp::PromptCompletion::Completed { stop_reason }) => {
+                                let (replay_entries, new_cursor) =
+                                    client.replay_entries_since(replay_cursor);
+                                replay_cursor = new_cursor;
+                                let replay_messages = replay_entries_to_messages(replay_entries);
+                                for msg in replay_messages {
+                                    let _ = tx.send(AppEvent::Message(msg));
+                                }
+                                let _ = tx.send(AppEvent::PromptComplete(stop_reason));
                             }
-                            let _ = tx.send(AppEvent::PromptComplete(completion.stop_reason));
+                            Ok(agentmux::acp::PromptCompletion::ProtocolError(reason)) => {
+                                let _ = tx.send(AppEvent::Error(reason));
+                            }
+                            Ok(agentmux::acp::PromptCompletion::ConnectionClosed { reason }) => {
+                                let _ = tx.send(AppEvent::Error(reason));
+                            }
+                            Err(_) => {
+                                let _ = tx.send(AppEvent::Error(
+                                    "ACP completion channel disconnected".to_string(),
+                                ));
+                            }
+                        },
+                        agentmux::acp::PromptDispatchOutcome::TransportUnavailable { reason } => {
+                            let _ = tx.send(AppEvent::Error(reason));
                         }
-                        Err(e) => {
-                            let _ = tx.send(AppEvent::Error(format!("{e:?}")));
+                        agentmux::acp::PromptDispatchOutcome::SerializationFailed(reason) => {
+                            let _ = tx.send(AppEvent::Error(reason));
                         }
                     }
                     let _ = terminal.draw(|frame| draw(frame, &app));
@@ -391,7 +419,7 @@ fn run_tui(
         }
     }
 
-    client.kill();
+    client.shutdown();
     Ok(())
 }
 

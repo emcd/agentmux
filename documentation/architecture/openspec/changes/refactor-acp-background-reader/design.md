@@ -8,8 +8,11 @@ compensates but loses notifications sent outside the call window.
 This design covers the refactor to a persistent background reader thread,
 fire-and-forget prompt dispatch, and the associated invariants.
 
-Stakeholders: relay specialist (implementer), mcp specialist (permission event
-consumer surface), coordinator (proposal author).
+Stakeholders: relay specialist (implementer), coordinator (proposal author).
+
+The MCP-facing permission-event payload contract that originally accompanied
+this change has been split out and is tracked under `agentmux:todos/acp/15`
+so this refactor can close on internal mechanics alone.
 
 ## Goals / Non-Goals
 
@@ -96,9 +99,8 @@ pending oneshot channels receive an error.
    write-success).
 3. Remove drain loop and drain constants.
 4. Update worker state transitions in `acp_delivery.rs`.
-5. Update permission dispatch path in `permission_state.rs`.
-6. Update integration tests (remove drain-timing dependencies).
-7. Validate with `openspec validate refactor-acp-background-reader --strict`.
+5. Update integration tests (remove drain-timing dependencies).
+6. Validate with `openspec validate refactor-acp-background-reader --strict`.
 
 ## Open Questions
 

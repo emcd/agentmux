@@ -63,6 +63,9 @@ pub(super) fn failed_result_with_code(
     }
 }
 
+// TODO(refactor-acp-background-reader follow-up): no callers after task 5.
+// Drop together with the rest of the relay-side timeout vestiges.
+#[allow(dead_code)]
 pub(super) fn timeout_result(
     target_session: String,
     message_id: String,

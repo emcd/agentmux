@@ -155,6 +155,45 @@ fn acp_look_returns_empty_snapshot_when_no_updates_exist() {
 }
 
 #[test]
+fn acp_look_reflects_outgoing_user_prompt_before_session_updates_arrive() {
+    // Spec scenario (acp-client/spec.md, "Replay buffer updated immediately on
+    // outgoing user prompt"): when relay writes a user prompt to ACP stdin,
+    // the prompt SHALL be appended to the shared replay buffer as a
+    // ReplayEntry::User immediately, so look reflects the submitted message
+    // before any session/update response arrives.
+    let temporary = TempDir::new().expect("temporary");
+    let options = AcpStubOptions {
+        update_count: 0,
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let tmux_socket = temporary.path().join("tmux.sock");
+    let response = dispatch_send(&config_root, &tmux_socket, Some(1_000));
+    let (status, result) = chat_result(response);
+    assert_eq!(status, ChatStatus::Success);
+    assert_eq!(result.outcome, ChatOutcome::Delivered);
+
+    let look = wait_for_look(
+        &config_root,
+        &tmux_socket,
+        "bravo",
+        "bravo",
+        None,
+        |lines| lines.iter().any(|line| line == "status?"),
+    );
+    let snapshot = expect_acp_snapshot(look);
+    assert!(
+        snapshot.entries.iter().any(|entry| matches!(
+            entry,
+            agentmux::acp::AcpSnapshotEntry::User { lines }
+                if lines.iter().any(|line| line == "status?")
+        )),
+        "expected an AcpSnapshotEntry::User with the submitted prompt text, got {:?}",
+        snapshot.entries,
+    );
+}
+
+#[test]
 fn acp_look_captures_updates_emitted_after_prompt_response() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions {

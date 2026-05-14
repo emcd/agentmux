@@ -52,7 +52,7 @@ pub(super) struct AsyncWorkerEntry {
     pub pending: std::sync::Arc<AtomicUsize>,
     pub bounded_acp_queue: bool,
     pub acp_state: Option<AcpWorkerReadinessState>,
-    pub acp_snapshot: Option<Arc<Vec<ReplayEntry>>>,
+    pub acp_snapshot: Option<Arc<Mutex<Vec<ReplayEntry>>>>,
 }
 
 fn build_worker_key(
@@ -221,17 +221,17 @@ pub(in crate::relay) fn get_acp_worker_state(
         .and_then(|entry| entry.acp_state)
 }
 
-pub(in crate::relay) fn set_acp_worker_snapshot(
+pub(in crate::relay) fn install_acp_worker_replay_buffer(
     bundle_name: &str,
     runtime_directory: &Path,
     target_session: &str,
-    snapshot: Vec<ReplayEntry>,
+    buffer: Arc<Mutex<Vec<ReplayEntry>>>,
 ) {
     let key = build_worker_key(bundle_name, runtime_directory, target_session);
     if let Ok(mut workers) = async_delivery_registry().workers.lock()
         && let Some(entry) = workers.get_mut(&key)
     {
-        entry.acp_snapshot = Some(Arc::new(snapshot));
+        entry.acp_snapshot = Some(buffer);
     }
 }
 
@@ -241,12 +241,14 @@ pub(in crate::relay) fn get_acp_worker_snapshot(
     target_session: &str,
 ) -> Option<Arc<Vec<ReplayEntry>>> {
     let key = build_worker_key(bundle_name, runtime_directory, target_session);
-    async_delivery_registry()
+    let buffer = async_delivery_registry()
         .workers
         .lock()
         .ok()?
         .get(&key)
-        .and_then(|entry| entry.acp_snapshot.clone())
+        .and_then(|entry| entry.acp_snapshot.clone())?;
+    let snapshot = buffer.lock().ok()?.clone();
+    Some(Arc::new(snapshot))
 }
 
 pub(in crate::relay) fn acp_session_ready_for_startup(

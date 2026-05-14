@@ -38,9 +38,13 @@ On reader thread exit (EOF, I/O error, or panic), the implementation SHALL:
 
 - **WHEN** the ACP server sends a `session/request_permission` request while
   the worker is idle (no active prompt)
-- **THEN** the background reader enqueues the permission request and emits
-  a `permission.requested` stream event
+- **THEN** the background reader hands the request to the permission
+  resolution path so a decision can be returned via the shared stdin writer
 - **AND** does not drop the request due to absence of an active `request()` call
+
+The public stream-event payload shape used by MCP consumer surfaces is
+intentionally out of scope for this change and is tracked separately under
+`agentmux:todos/acp/15`.
 
 #### Scenario: Reader transitions worker to Unavailable on EOF
 

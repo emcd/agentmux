@@ -70,10 +70,6 @@ Consequences of the current model:
 - **ADDED** Reader lifecycle/shutdown sequence: close child stdin → drop child
   process handle → `join` reader thread → release per-session state.
 
-- **ADDED** Permission event payload shapes and approve/deny request shapes
-  published as a sub-spec (see `specs/session-relay/spec.md`) so MCP consumer
-  surface can be designed in parallel.
-
 ## Impact
 
 - Affected specs: `acp-client`, `session-relay`
@@ -81,7 +77,6 @@ Consequences of the current model:
   - `src/acp/client.rs` — core rewrite of I/O model
   - `src/relay/delivery/acp_delivery.rs` — fire-and-forget dispatch; worker state transitions
   - `src/relay/delivery/async_worker.rs` — background reader spawn/shutdown lifecycle
-  - `src/relay/delivery/permission_state.rs` — permission dispatch via background reader
   - `src/relay/delivery/acp_state.rs` — remove drain timeout constants (dead code)
   - `src/relay/handlers.rs` — verify `handle_look` snapshot derivation post-change
   - `tests/integration/acp/{lifecycle,look,send,permissions}.rs` — adjust for drain-timing removal

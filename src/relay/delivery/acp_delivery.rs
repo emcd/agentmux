@@ -1,15 +1,17 @@
-use std::path::Path;
+use std::{
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 use serde_json::{Value, json};
 
 use crate::configuration::{AcpTargetConfiguration, BundleMember, TargetConfiguration};
 
-use super::acp_client::{AcpRequestError, AcpStdioClient};
+use super::acp_client::{AcpStdioClient, PromptCompletion, PromptDispatchOutcome};
 use super::acp_state::{load_persisted_acp_session_id, persist_acp_session_id};
-use super::async_worker::{AcpWorkerReadinessState, set_acp_worker_snapshot, set_acp_worker_state};
+use super::async_worker::{AcpWorkerReadinessState, get_acp_worker_state, set_acp_worker_state};
 use super::results::{
     delivered_in_progress_result, delivered_result, failed_result, failed_result_with_code,
-    timeout_result,
 };
 use super::{
     PermissionEventContext, PermissionResolutionOutcome, enqueue_permission_request,
@@ -18,6 +20,24 @@ use super::{
 
 use super::super::{AsyncDeliveryTask, ChatResult};
 
+// ACP delivery failure taxonomy:
+// - `runtime_acp_initialize_failed` / `_session_new_failed` / `_session_load_failed`:
+//   a logical error returned by the ACP agent during bootstrap (well-formed JSON-RPC
+//   error response or unexpected response shape).
+// - `runtime_acp_prompt_failed`: a logical error returned by the ACP agent during
+//   `session/prompt` (JSON-RPC error response or unsupported `stopReason`).
+// - `runtime_acp_connection_closed`: ACP stdout reached EOF before any first
+//   activity for the active prompt; child likely exited cleanly.
+// - `acp_child_unavailable`: ACP child stdin write failed (broken pipe, child
+//   crashed, transport-level fault). Worker is transitioned to `Unavailable`.
+// - `acp_turn_timeout`: relay-imposed pre-first-activity timeout elapsed.
+// - `acp_stop_cancelled`: prompt completed with `stopReason=cancelled`.
+// - `validation_missing_acp_capability`: agent did not advertise required
+//   capability (`promptSession`, `loadSession`).
+// TODO(refactor-acp-background-reader follow-up): `acp_turn_timeout` is no
+// longer emitted; relay-side turn timeout is removed (D4). Kept declared
+// only so external consumers reading reason codes still have a reference.
+#[allow(dead_code)]
 pub(super) const ACP_REASON_CODE_TURN_TIMEOUT: &str = "acp_turn_timeout";
 pub(super) const ACP_REASON_CODE_STOP_CANCELLED: &str = "acp_stop_cancelled";
 pub(super) const ACP_ERROR_CODE_INITIALIZE_FAILED: &str = "runtime_acp_initialize_failed";
@@ -25,6 +45,7 @@ pub(super) const ACP_ERROR_CODE_SESSION_LOAD_FAILED: &str = "runtime_acp_session
 pub(super) const ACP_ERROR_CODE_SESSION_NEW_FAILED: &str = "runtime_acp_session_new_failed";
 pub(super) const ACP_ERROR_CODE_PROMPT_FAILED: &str = "runtime_acp_prompt_failed";
 pub(super) const ACP_ERROR_CODE_CONNECTION_CLOSED: &str = "runtime_acp_connection_closed";
+pub(super) const ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE: &str = "acp_child_unavailable";
 pub(super) const ACP_ERROR_CODE_MISSING_CAPABILITY: &str = "validation_missing_acp_capability";
 
 #[derive(Clone, Copy, Debug)]
@@ -81,7 +102,7 @@ pub(super) fn bootstrap_acp_worker_runtime(
 pub(super) fn deliver_one_target_acp(
     task: &AsyncDeliveryTask,
     target_member: &BundleMember,
-    acp: &AcpTargetConfiguration,
+    _acp: &AcpTargetConfiguration,
     prompt_batches: Vec<String>,
     target_session: String,
     message_id: String,
@@ -96,6 +117,30 @@ pub(super) fn deliver_one_target_acp(
     }
     let runtime_directory = task.runtime_directory.as_path();
 
+    // Fail fast if the background reader already observed a transport
+    // failure (Unavailable state). Without this, a dispatch would proceed
+    // to write to a dead pipe and bubble up as `acp_child_unavailable`,
+    // muddling the "worker is broken" signal. TODO(acp): consider
+    // graceful auto-respawn here; see todos/acp/auto_respawn_after_transport_failure.
+    if matches!(
+        get_acp_worker_state(
+            task.bundle.bundle_name.as_str(),
+            runtime_directory,
+            target_member.id.as_str(),
+        ),
+        Some(AcpWorkerReadinessState::Unavailable)
+    ) {
+        return failed_result_with_code(
+            target_session,
+            message_id,
+            "runtime_acp_worker_unavailable",
+            "ACP worker is unavailable for target session",
+            Some(json!({
+                "target_session": target_member.id,
+            })),
+        );
+    }
+
     let Some(runtime) = acp_runtime.as_mut() else {
         return failed_result_with_code(
             target_session,
@@ -108,188 +153,222 @@ pub(super) fn deliver_one_target_acp(
         );
     };
 
-    let turn_timeout = Some(task.quiescence.acp_turn_timeout(acp));
-    let mut first_activity_observed = false;
-    let completion_sender = task.completion_sender.clone();
-    let mut sync_completion_sent = false;
+    debug_assert!(
+        prompt_batches.len() == 1,
+        "ACP delivery expects exactly one prompt batch; multi-batch requires chaining via on_completion (not implemented)"
+    );
+    let Some(prompt) = prompt_batches.into_iter().next() else {
+        return failed_result(
+            target_session,
+            message_id,
+            "ACP delivery received no prompt batch",
+        );
+    };
+
     let permission_context = PermissionEventContext {
         runtime_directory: task.runtime_directory.clone(),
         bundle_name: task.bundle.bundle_name.clone(),
         authorized_ui_sessions: task.permission_decider_sessions.clone(),
     };
-    let mut pending_permission_outcome = None::<PermissionResolutionOutcome>;
-    for prompt in prompt_batches {
-        let session_id = runtime.session_id.clone();
-        let target_session_for_dispatch = target_session.clone();
-        let message_id_for_dispatch = message_id.clone();
-        let mut on_dispatched = || {
-            if !first_activity_observed {
-                first_activity_observed = true;
-                set_acp_worker_state(
-                    task.bundle.bundle_name.as_str(),
-                    runtime_directory,
-                    target_member.id.as_str(),
-                    AcpWorkerReadinessState::Busy,
-                );
-            }
-            if sync_completion_sent {
-                return;
-            }
-            let Some(sender) = completion_sender.as_ref() else {
-                return;
-            };
-            sync_completion_sent = true;
-            let _ = sender.send(Ok(delivered_in_progress_result(
-                target_session_for_dispatch.clone(),
-                message_id_for_dispatch.clone(),
-            )));
-        };
-        let mut on_permission_request = |permission_request: &crate::acp::PermissionRequest| {
+    let pending_permission_outcome_shared: Arc<Mutex<Option<PermissionResolutionOutcome>>> =
+        Arc::new(Mutex::new(None));
+
+    let bundle_name = task.bundle.bundle_name.clone();
+    let runtime_directory_owned = task.runtime_directory.clone();
+    let target_member_id = target_member.id.clone();
+    let session_id = runtime.session_id.clone();
+
+    let dispatch_bundle_name = bundle_name.clone();
+    let dispatch_runtime_directory = runtime_directory_owned.clone();
+    let dispatch_target_member_id = target_member_id.clone();
+    let on_dispatched: crate::acp::DispatchHandler = Box::new(move || {
+        set_acp_worker_state(
+            dispatch_bundle_name.as_str(),
+            dispatch_runtime_directory.as_path(),
+            dispatch_target_member_id.as_str(),
+            AcpWorkerReadinessState::Busy,
+        );
+    });
+
+    let permission_context_for_handler = permission_context.clone();
+    let message_id_for_handler = message_id.clone();
+    let permission_target_member_id = target_member_id.clone();
+    let permission_max_pending = task.permission_max_pending;
+    let pending_permission_outcome_writer = Arc::clone(&pending_permission_outcome_shared);
+    let on_permission_request: crate::acp::PermissionHandler =
+        Box::new(move |permission_request: &crate::acp::PermissionRequest| {
             let (response_option_id, outcome) = resolve_acp_permission_request(
-                &permission_context,
-                &message_id,
-                target_member.id.as_str(),
+                &permission_context_for_handler,
+                message_id_for_handler.as_str(),
+                permission_target_member_id.as_str(),
                 permission_request,
-                task.permission_max_pending,
+                permission_max_pending,
             );
-            pending_permission_outcome = Some(outcome);
+            *pending_permission_outcome_writer
+                .lock()
+                .expect("pending_permission_outcome mutex") = Some(outcome);
             response_option_id
-        };
-        let prompt_result = runtime.client.prompt(
-            session_id.as_str(),
-            prompt.as_str(),
-            turn_timeout,
-            Some(&mut on_dispatched),
-            None,
-            Some(&mut on_permission_request),
+        });
+
+    let completion_bundle_name = bundle_name.clone();
+    let completion_runtime_directory = runtime_directory_owned.clone();
+    let completion_target_member_id = target_member_id.clone();
+    let completion_target_session = target_session.clone();
+    let completion_message_id = message_id.clone();
+    let completion_sender = task.completion_sender.clone();
+    let pending_permission_outcome_reader = Arc::clone(&pending_permission_outcome_shared);
+    let on_completion: crate::acp::PromptCompletionHandler = Box::new(move |completion| {
+        let pending_permission_outcome = pending_permission_outcome_reader
+            .lock()
+            .expect("pending_permission_outcome mutex")
+            .clone();
+        let (final_state, final_result) = build_acp_completion_result(
+            completion,
+            pending_permission_outcome,
+            completion_target_session.clone(),
+            completion_message_id.clone(),
+            completion_target_member_id.as_str(),
         );
-        let _ = runtime.client.take_snapshot_lines();
-        set_acp_worker_snapshot(
-            task.bundle.bundle_name.as_str(),
-            runtime_directory,
-            target_member.id.as_str(),
-            runtime.client.read_replay_entries(),
+        set_acp_worker_state(
+            completion_bundle_name.as_str(),
+            completion_runtime_directory.as_path(),
+            completion_target_member_id.as_str(),
+            final_state,
         );
-        match prompt_result {
-            Ok(prompt_completion) => {
-                first_activity_observed |= prompt_completion.first_activity_observed;
-                set_acp_worker_state(
-                    task.bundle.bundle_name.as_str(),
-                    runtime_directory,
-                    target_member.id.as_str(),
-                    AcpWorkerReadinessState::Available,
-                );
-                if let Some(PermissionResolutionOutcome::Cancelled {
-                    reason_code,
-                    reason,
-                    ..
-                }) = pending_permission_outcome.clone()
-                {
-                    return failed_result_with_code(
-                        target_session,
-                        message_id,
-                        reason_code.as_str(),
-                        reason
-                            .unwrap_or_else(|| "ACP permission request was cancelled".to_string()),
-                        Some(json!({
-                            "target_session": target_member.id,
-                        })),
-                    );
-                }
-                match prompt_completion.stop_reason.as_str() {
-                    "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" => {}
-                    "cancelled" => {
-                        return failed_result_with_code(
-                            target_session,
-                            message_id,
-                            ACP_REASON_CODE_STOP_CANCELLED,
-                            "ACP turn completed with stopReason=cancelled",
-                            None,
-                        );
-                    }
-                    _ => {
-                        *acp_runtime = None;
-                        return failed_result(
-                            target_session,
-                            message_id,
-                            format!(
-                                "ACP returned unsupported stopReason '{}'",
-                                prompt_completion.stop_reason
-                            ),
-                        );
-                    }
-                }
-            }
-            Err(AcpRequestError::Timeout(timeout)) => {
-                set_acp_worker_state(
-                    task.bundle.bundle_name.as_str(),
-                    runtime_directory,
-                    target_member.id.as_str(),
-                    AcpWorkerReadinessState::Unavailable,
-                );
-                *acp_runtime = None;
-                return timeout_result(
-                    target_session,
-                    message_id,
-                    Some(ACP_REASON_CODE_TURN_TIMEOUT),
-                    format!(
-                        "ACP session/prompt timed out after {}ms",
-                        timeout.as_millis()
-                    ),
-                );
-            }
-            Err(AcpRequestError::ConnectionClosed {
-                reason,
-                first_activity_observed: observed,
-            }) => {
-                first_activity_observed |= observed;
-                set_acp_worker_state(
-                    task.bundle.bundle_name.as_str(),
-                    runtime_directory,
-                    target_member.id.as_str(),
-                    AcpWorkerReadinessState::Unavailable,
-                );
-                *acp_runtime = None;
-                if first_activity_observed {
-                    return delivered_in_progress_result(target_session, message_id);
-                }
-                return failed_result_with_code(
-                    target_session,
-                    message_id,
-                    ACP_ERROR_CODE_CONNECTION_CLOSED,
-                    "ACP connection closed before first activity",
-                    Some(json!({
-                        "target_session": target_member.id,
-                        "reason": reason,
-                    })),
-                );
-            }
-            Err(AcpRequestError::Failed(reason)) => {
-                set_acp_worker_state(
-                    task.bundle.bundle_name.as_str(),
-                    runtime_directory,
-                    target_member.id.as_str(),
-                    AcpWorkerReadinessState::Unavailable,
-                );
-                *acp_runtime = None;
-                return failed_result_with_code(
-                    target_session,
-                    message_id,
-                    ACP_ERROR_CODE_PROMPT_FAILED,
-                    "ACP session/prompt failed",
-                    Some(json!({
-                        "target_session": target_member.id,
-                        "reason": reason,
-                    })),
-                );
-            }
+        if let Some(sender) = completion_sender.as_ref() {
+            let _ = sender.send(Ok(final_result));
+        }
+    });
+
+    let outcome = runtime.client.prompt(
+        session_id.as_str(),
+        prompt.as_str(),
+        Some(on_dispatched),
+        Some(on_permission_request),
+        on_completion,
+    );
+
+    match outcome {
+        PromptDispatchOutcome::Submitted => {
+            delivered_in_progress_result(target_session, message_id)
+        }
+        PromptDispatchOutcome::TransportUnavailable { reason } => {
+            set_acp_worker_state(
+                bundle_name.as_str(),
+                runtime_directory,
+                target_member.id.as_str(),
+                AcpWorkerReadinessState::Unavailable,
+            );
+            failed_result_with_code(
+                target_session,
+                message_id,
+                ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE,
+                "ACP child stdin write failed",
+                Some(json!({
+                    "target_session": target_member.id,
+                    "reason": reason,
+                })),
+            )
+        }
+        PromptDispatchOutcome::SerializationFailed(reason) => {
+            set_acp_worker_state(
+                bundle_name.as_str(),
+                runtime_directory,
+                target_member.id.as_str(),
+                AcpWorkerReadinessState::Unavailable,
+            );
+            failed_result_with_code(
+                target_session,
+                message_id,
+                ACP_ERROR_CODE_PROMPT_FAILED,
+                "ACP session/prompt dispatch failed",
+                Some(json!({
+                    "target_session": target_member.id,
+                    "reason": reason,
+                })),
+            )
         }
     }
+}
 
-    if first_activity_observed {
-        delivered_in_progress_result(target_session, message_id)
-    } else {
-        delivered_result(target_session, message_id)
+fn build_acp_completion_result(
+    completion: PromptCompletion,
+    pending_permission_outcome: Option<PermissionResolutionOutcome>,
+    target_session: String,
+    message_id: String,
+    target_member_id: &str,
+) -> (AcpWorkerReadinessState, ChatResult) {
+    if let Some(PermissionResolutionOutcome::Cancelled {
+        reason_code,
+        reason,
+        ..
+    }) = pending_permission_outcome
+    {
+        return (
+            AcpWorkerReadinessState::Available,
+            failed_result_with_code(
+                target_session,
+                message_id,
+                reason_code.as_str(),
+                reason.unwrap_or_else(|| "ACP permission request was cancelled".to_string()),
+                Some(json!({
+                    "target_session": target_member_id,
+                })),
+            ),
+        );
+    }
+
+    match completion {
+        PromptCompletion::Completed { stop_reason } => match stop_reason.as_str() {
+            "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" => (
+                AcpWorkerReadinessState::Available,
+                delivered_result(target_session, message_id),
+            ),
+            "cancelled" => (
+                AcpWorkerReadinessState::Available,
+                failed_result_with_code(
+                    target_session,
+                    message_id,
+                    ACP_REASON_CODE_STOP_CANCELLED,
+                    "ACP turn completed with stopReason=cancelled",
+                    None,
+                ),
+            ),
+            other => (
+                AcpWorkerReadinessState::Available,
+                failed_result(
+                    target_session,
+                    message_id,
+                    format!("ACP returned unsupported stopReason '{other}'"),
+                ),
+            ),
+        },
+        PromptCompletion::ProtocolError(reason) => (
+            AcpWorkerReadinessState::Available,
+            failed_result_with_code(
+                target_session,
+                message_id,
+                ACP_ERROR_CODE_PROMPT_FAILED,
+                "ACP session/prompt failed",
+                Some(json!({
+                    "target_session": target_member_id,
+                    "reason": reason,
+                })),
+            ),
+        ),
+        PromptCompletion::ConnectionClosed { reason } => (
+            AcpWorkerReadinessState::Unavailable,
+            failed_result_with_code(
+                target_session,
+                message_id,
+                ACP_ERROR_CODE_CONNECTION_CLOSED,
+                "ACP connection closed before prompt response",
+                Some(json!({
+                    "target_session": target_member_id,
+                    "reason": reason,
+                })),
+            ),
+        ),
     }
 }
 
