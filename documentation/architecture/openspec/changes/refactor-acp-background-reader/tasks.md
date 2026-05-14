@@ -86,12 +86,6 @@
 - [x] 7.2 Use `transport_unavailable` instead of `internal_unexpected_failure` on stdin write I/O errors
 - [x] 7.3 Document in `src/relay/delivery/acp_delivery.rs` failure taxonomy comment
 
-## 8. Permission event payload shapes (early — unblocks todos/mcp/24)
-
-- [ ] 8.1 Define `permission.requested` stream event payload shape in spec delta
-- [ ] 8.2 Define approve/deny request shape for relay permission resolution endpoint
-- [ ] 8.3 Update `src/relay/delivery/permission_state.rs` to emit `permission.requested` from reader dispatch path (if not already done)
-
 ## 9. Integration test updates
 
 - [x] 9.1 Update `tests/integration/acp/lifecycle.rs` — remove drain-timing dependencies
