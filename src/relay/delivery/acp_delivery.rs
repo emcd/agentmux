@@ -391,7 +391,6 @@ fn resolve_acp_permission_request(
         target_session,
         permission_request.requested_kind.as_str(),
         requested_details,
-        permission_request.options.as_slice(),
         permission_max_pending,
     );
     let enqueued = match enqueue {

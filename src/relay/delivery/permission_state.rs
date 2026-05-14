@@ -11,10 +11,7 @@ use serde_json::{Value, json};
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
-use crate::{
-    acp::PermissionOption,
-    runtime::{inscriptions::emit_inscription, signals::shutdown_requested},
-};
+use crate::runtime::{inscriptions::emit_inscription, signals::shutdown_requested};
 
 use super::super::{
     relay_error,
@@ -135,7 +132,6 @@ pub(in crate::relay) fn enqueue_permission_request(
     target_session: &str,
     requested_kind: &str,
     requested_details: Value,
-    _options: &[PermissionOption],
     max_pending: usize,
 ) -> Result<PermissionEnqueueResult, String> {
     let _guard = permission_queue_lock()

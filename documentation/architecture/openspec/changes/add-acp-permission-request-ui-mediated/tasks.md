@@ -48,9 +48,9 @@
       `selected|cancelled` decision outcomes.
 - [x] 5.4 Rework TUI decision actions to use ACP-native `permission.resolve`
       (replace approve/deny abstraction).
-- [ ] 5.5 Add integration/unit coverage for queue bounds, replay, class gate,
+- [x] 5.5 Add integration/unit coverage for queue bounds, replay, class gate,
       pending lifecycle, and mapping behavior.
-- [ ] 5.6 Implement relay event payload option metadata for explicit operator
+- [x] 5.6 Implement relay event payload option metadata for explicit operator
       selection.
 - [ ] 5.7 Implement TUI explicit option selection and session-scoped Look
       actions.
