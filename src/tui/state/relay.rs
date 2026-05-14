@@ -46,21 +46,25 @@ impl AppState {
         }
     }
 
-    pub fn poll_relay_events(&mut self) {
+    pub fn poll_relay_events(&mut self) -> bool {
         match self.relay_stream.poll_events() {
             Ok(events) => {
-                if self.relay_stream_poll_error_reported {
+                let reconnected = self.relay_stream_poll_error_reported;
+                if reconnected {
                     self.push_status(None, "relay stream reconnected");
                 }
                 self.relay_stream_poll_error_reported = false;
+                let had_events = !events.is_empty();
                 self.record_stream_events(&events);
+                reconnected || had_events
             }
             Err(source) => {
                 if self.relay_stream_poll_error_reported {
-                    return;
+                    return false;
                 }
                 self.relay_stream_poll_error_reported = true;
                 self.push_runtime_error(map_relay_request_failure(&self.relay_socket, source));
+                true
             }
         }
     }
