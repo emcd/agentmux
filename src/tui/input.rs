@@ -173,13 +173,7 @@ fn handle_events_overlay_key(state: &mut AppState, key: KeyEvent) -> Result<(), 
 
 fn handle_look_overlay_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
     match key.code {
-        KeyCode::Esc => {
-            if state.look_pending_permissions().is_empty() {
-                state.close_look_overlay();
-            } else {
-                return state.resolve_selected_look_permission_cancelled();
-            }
-        }
+        KeyCode::Esc => state.close_look_overlay(),
         KeyCode::Left => state.move_look_permission_request_selection(-1),
         KeyCode::Right => state.move_look_permission_request_selection(1),
         KeyCode::Up => {

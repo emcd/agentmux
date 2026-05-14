@@ -13,7 +13,7 @@ use super::state::{AppState, ChatHistoryDirection, FocusField, LookSnapshotForma
 
 const WORKBENCH_MIN_CHAT_HEIGHT: u16 = 1;
 const WORKBENCH_MIN_COMPOSE_HEIGHT: u16 = 4;
-const WORKBENCH_PERMISSION_PANE_HEIGHT: u16 = 10;
+const LOOK_PERMISSION_SECTION_HEIGHT: u16 = 12;
 
 pub(crate) fn render(frame: &mut Frame, state: &mut AppState) {
     let chunks = Layout::default()
@@ -159,29 +159,7 @@ fn visible_cursor_column_count(count: usize, width: u16) -> u16 {
 fn render_workbench_panes(frame: &mut Frame, area: Rect, state: &mut AppState) {
     let rows = split_workbench_rows(area, state);
     render_chat_history(frame, rows[0], state);
-    if should_show_permission_pane(state) {
-        render_permission_pane(frame, rows[1], state);
-    } else {
-        render_compose(frame, rows[1], state);
-    }
-}
-
-fn should_show_permission_pane(state: &AppState) -> bool {
-    state.look_overlay_open && !state.look_pending_permissions().is_empty()
-}
-
-fn render_permission_pane(frame: &mut Frame, area: Rect, state: &AppState) {
-    let inner_width = area.width.saturating_sub(2);
-    let lines = render_look_permission_lines(state, inner_width);
-    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
-        Block::default()
-            .borders(Borders::TOP | Borders::BOTTOM)
-            .title_alignment(Alignment::Center)
-            .title(
-                "  Session Permissions (Left/Right request, Up/Down option, Enter select, c cancel)  ",
-            ),
-    );
-    frame.render_widget(paragraph, area);
+    render_compose(frame, rows[1], state);
 }
 
 fn render_compose(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -255,8 +233,28 @@ fn render_chat_history(frame: &mut Frame, area: Rect, state: &mut AppState) {
 }
 
 fn render_look_overlay(frame: &mut Frame, state: &AppState) {
-    let popup = centered_rect(90, 80, frame.area());
+    let popup = frame.area();
     frame.render_widget(Clear, popup);
+
+    let has_pending = !state.look_pending_permissions().is_empty();
+    let (snapshot_area, permission_area) = if has_pending {
+        let pane_height = LOOK_PERMISSION_SECTION_HEIGHT.min(popup.height.saturating_sub(3).max(1));
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(3), Constraint::Length(pane_height)])
+            .split(popup);
+        (rows[0], Some(rows[1]))
+    } else {
+        (popup, None)
+    };
+
+    render_look_snapshot(frame, snapshot_area, state);
+    if let Some(area) = permission_area {
+        render_look_permission_section(frame, area, state);
+    }
+}
+
+fn render_look_snapshot(frame: &mut Frame, area: Rect, state: &AppState) {
     let base_title = match (&state.look_target, &state.look_captured_at) {
         (Some(target), Some(captured_at)) => {
             format!(
@@ -267,7 +265,7 @@ fn render_look_overlay(frame: &mut Frame, state: &AppState) {
         (Some(target), None) => format!("Look Snapshot target={}", target),
         _ => "Look Snapshot".to_string(),
     };
-    let content_width = popup.width.saturating_sub(2) as usize;
+    let content_width = area.width.saturating_sub(2) as usize;
     let all_lines = match state.look_snapshot_format {
         Some(LookSnapshotFormat::AcpEntriesV1) => {
             let rendered =
@@ -292,7 +290,7 @@ fn render_look_overlay(frame: &mut Frame, state: &AppState) {
             }
         }
     };
-    let viewport_height = popup.height.saturating_sub(2) as usize;
+    let viewport_height = area.height.saturating_sub(2) as usize;
     let effective_scroll = if all_lines.is_empty() {
         0
     } else {
@@ -311,7 +309,19 @@ fn render_look_overlay(frame: &mut Frame, state: &AppState) {
     let paragraph = Paragraph::new(visible_lines)
         .wrap(Wrap { trim: false })
         .block(Block::default().borders(Borders::ALL).title(title));
-    frame.render_widget(paragraph, popup);
+    frame.render_widget(paragraph, area);
+}
+
+fn render_look_permission_section(frame: &mut Frame, area: Rect, state: &AppState) {
+    let inner_width = area.width.saturating_sub(2);
+    let lines = render_look_permission_lines(state, inner_width);
+    let paragraph =
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(Block::default().borders(Borders::ALL).title(
+            "  Session Permissions (Left/Right request, Up/Down option, Enter select, c cancel)  ",
+        ));
+    frame.render_widget(paragraph, area);
 }
 
 fn render_acp_snapshot_entries(entries: &[AcpSnapshotEntry], width: usize) -> Vec<Line<'static>> {
@@ -621,7 +631,7 @@ fn render_help_overlay(frame: &mut Frame, _state: &AppState) {
             "Look Overlay",
             Style::default().add_modifier(Modifier::BOLD),
         )),
-        Line::from("Esc: Resolve as cancelled (when pending) or close look"),
+        Line::from("Esc: Close look overlay"),
         Line::from("F2: Open picker"),
         Line::from("F3: Open events"),
         Line::from("PgUp/PgDn: Page look snapshot"),
@@ -669,12 +679,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 }
 
 fn split_workbench_rows(area: Rect, state: &AppState) -> [Rect; 2] {
-    let bottom_height = if should_show_permission_pane(state) {
-        let max_bottom = area.height.saturating_sub(WORKBENCH_MIN_CHAT_HEIGHT);
-        WORKBENCH_PERMISSION_PANE_HEIGHT.min(max_bottom.max(1))
-    } else {
-        compute_compose_height(area.width, area.height, state)
-    };
+    let bottom_height = compute_compose_height(area.width, area.height, state);
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
