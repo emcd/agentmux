@@ -47,9 +47,8 @@ use std::collections::HashMap;
 pub fn parse_replay_entries_for_test(
     params: &Value,
     pending_calls: &mut HashMap<String, ReplayEntry>,
-    next_fallback_call_id: &mut u64,
 ) -> Vec<ReplayEntry> {
-    client::parse_replay_entries_from_params(params, pending_calls, next_fallback_call_id)
+    client::parse_replay_entries_from_params(params, pending_calls)
 }
 
 pub fn append_replay_entries_for_test(buffer: &mut Vec<ReplayEntry>, entries: Vec<ReplayEntry>) {

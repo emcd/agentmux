@@ -109,7 +109,7 @@ while IFS= read -r line; do
       else
         count=1
         while [ "$count" -le "$load_replay_count" ]; do
-          printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"%s","update":[{"type":"text","text":"%s-LINE-%s"}]}}\n' \
+          printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"%s","update":[{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"%s-LINE-%s"}}]}}\n' \
             "$new_session_id" "$load_replay_line_prefix" "$count"
           count=$((count + 1))
         done
@@ -143,7 +143,7 @@ while IFS= read -r line; do
       emit_updates() {
         count=1
         while [ "$count" -le "$update_count" ]; do
-          printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"%s","update":[{"type":"text","text":"%s-LINE-%s"}]}}\n' \
+          printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"%s","update":[{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"%s-LINE-%s"}}]}}\n' \
             "$prompt_session_id" "$update_line_prefix" "$count"
           count=$((count + 1))
         done

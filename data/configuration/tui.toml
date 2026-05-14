@@ -5,4 +5,4 @@ default-session = "user"
 [[sessions]]
 id = "user"
 name = "Operator"
-policy = "default"
+policy = "operator"

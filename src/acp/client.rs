@@ -487,7 +487,6 @@ fn run_reader_loop(
     active_prompt: &SharedActivePrompt,
 ) {
     let mut pending_tool_calls: HashMap<String, ReplayEntry> = HashMap::new();
-    let mut next_fallback_call_id: u64 = 0;
     loop {
         let mut line = String::new();
         match reader.read_line(&mut line) {
@@ -518,12 +517,9 @@ fn run_reader_loop(
 
         if let Some(method) = decoded.get("method").and_then(Value::as_str) {
             match method {
-                "session/update" => dispatch_session_update(
-                    &decoded,
-                    replay_buffer,
-                    &mut pending_tool_calls,
-                    &mut next_fallback_call_id,
-                ),
+                "session/update" => {
+                    dispatch_session_update(&decoded, replay_buffer, &mut pending_tool_calls)
+                }
                 "session/request_permission" => {
                     dispatch_permission_request(&decoded, active_prompt, stdin)
                 }
@@ -616,11 +612,9 @@ fn dispatch_session_update(
     decoded: &Value,
     replay_buffer: &SharedReplay,
     pending_tool_calls: &mut HashMap<String, ReplayEntry>,
-    next_fallback_call_id: &mut u64,
 ) {
     let params = decoded.get("params").unwrap_or(&Value::Null);
-    let entries =
-        parse_replay_entries_from_params(params, pending_tool_calls, next_fallback_call_id);
+    let entries = parse_replay_entries_from_params(params, pending_tool_calls);
     if !entries.is_empty() {
         let mut buffer = replay_buffer.lock().expect("replay_buffer mutex");
         append_replay_entries(&mut buffer, entries);
@@ -757,7 +751,6 @@ fn send_permission_response(
 pub(super) fn parse_replay_entries_from_params(
     params: &Value,
     pending_calls: &mut HashMap<String, ReplayEntry>,
-    next_fallback_call_id: &mut u64,
 ) -> Vec<ReplayEntry> {
     let update_field = params.get("update").unwrap_or(&Value::Null);
     let updates: Vec<&Value> = match update_field.as_array() {
@@ -767,12 +760,17 @@ pub(super) fn parse_replay_entries_from_params(
     };
     let mut entries = Vec::with_capacity(updates.len());
     for update in updates {
-        let update_kind = update
+        let Some(update_kind) = update
             .get("sessionUpdate")
             .and_then(Value::as_str)
-            .or_else(|| update.get("type").and_then(Value::as_str))
-            .unwrap_or("unknown")
-            .to_string();
+            .map(String::from)
+        else {
+            emit_inscription(
+                "acp.reader.session_update_missing_kind",
+                &json!({"update": update}),
+            );
+            continue;
+        };
         match update_kind.as_str() {
             "user_message_chunk" => {
                 let lines = collect_text_lines_from_value(update);
@@ -793,16 +791,17 @@ pub(super) fn parse_replay_entries_from_params(
                 }
             }
             "tool_call" => {
-                let call_id = update
-                    .get("id")
-                    .or_else(|| update.get("call_id"))
-                    .and_then(|v| v.as_str())
+                let Some(call_id) = update
+                    .get("toolCallId")
+                    .and_then(Value::as_str)
                     .map(String::from)
-                    .unwrap_or_else(|| {
-                        let id = *next_fallback_call_id;
-                        *next_fallback_call_id += 1;
-                        format!("call_{}", id)
-                    });
+                else {
+                    emit_inscription(
+                        "acp.reader.tool_call_missing_id",
+                        &json!({"update": update}),
+                    );
+                    continue;
+                };
                 let invocation = update.clone();
                 entries.push(ReplayEntry::Invocation {
                     call_id: call_id.clone(),
@@ -813,41 +812,38 @@ pub(super) fn parse_replay_entries_from_params(
                 pending_calls.insert(call_id, entries.last().unwrap().clone());
             }
             "tool_call_update" => {
-                let call_id = update
-                    .get("id")
-                    .or_else(|| update.get("call_id"))
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
+                let Some(call_id) = update
+                    .get("toolCallId")
+                    .and_then(Value::as_str)
+                    .map(String::from)
+                else {
+                    emit_inscription(
+                        "acp.reader.tool_call_update_missing_id",
+                        &json!({"update": update}),
+                    );
+                    continue;
+                };
                 let result = update.clone();
-                if let Some(cid) = call_id {
-                    if let Some(ReplayEntry::Invocation {
-                        status,
-                        result: existing_result,
-                        call_id,
-                        invocation,
-                    }) = pending_calls.get_mut(&cid)
-                    {
-                        *status = super::ToolCallStatus::Completed;
-                        let result_clone = result.clone();
-                        *existing_result = Some(result_clone);
-                        let completed = ReplayEntry::Invocation {
-                            call_id: call_id.clone(),
-                            status: super::ToolCallStatus::Completed,
-                            invocation: invocation.clone(),
-                            result: Some(result),
-                        };
-                        entries.push(completed);
-                    } else {
-                        entries.push(ReplayEntry::Invocation {
-                            call_id: cid,
-                            status: super::ToolCallStatus::Completed,
-                            invocation: serde_json::json!({}),
-                            result: Some(result),
-                        });
-                    }
+                if let Some(ReplayEntry::Invocation {
+                    status,
+                    result: existing_result,
+                    call_id: existing_call_id,
+                    invocation,
+                }) = pending_calls.get_mut(&call_id)
+                {
+                    *status = super::ToolCallStatus::Completed;
+                    let result_clone = result.clone();
+                    *existing_result = Some(result_clone);
+                    let completed = ReplayEntry::Invocation {
+                        call_id: existing_call_id.clone(),
+                        status: super::ToolCallStatus::Completed,
+                        invocation: invocation.clone(),
+                        result: Some(result),
+                    };
+                    entries.push(completed);
                 } else {
                     entries.push(ReplayEntry::Invocation {
-                        call_id: "unknown".to_string(),
+                        call_id,
                         status: super::ToolCallStatus::Completed,
                         invocation: serde_json::json!({}),
                         result: Some(result),
