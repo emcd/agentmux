@@ -171,6 +171,7 @@ send = "all:home"
 "#,
     )
     .expect("write policies config");
+    fs::write(config_root.join("tui.toml"), "").expect("write tui config");
 
     let mut bundle_toml = String::from("format-version = 1\nautostart = true\n");
     for session in sessions {

@@ -13,3 +13,15 @@ look = 'all:home'
 send = 'all:home'
 raww = 'all:home'
 grant = 'none'
+
+[[policies]]
+id = 'operator'
+description = 'Operator policy with permission-grant capability over home.'
+
+[policies.controls]
+find = 'self'
+list = 'all:home'
+look = 'all:home'
+send = 'all:home'
+raww = 'all:home'
+grant = 'all:home'
