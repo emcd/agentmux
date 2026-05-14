@@ -309,6 +309,21 @@ case "${{command_name}}" in
   send-keys)
     :
     ;;
+  load-buffer)
+    buffer_name=""
+    i=0
+    while [[ $i -lt ${{#args[@]}} ]]; do
+      if [[ "${{args[$i]}}" == "-b" ]]; then
+        buffer_name="${{args[$((i+1))]}}"
+        break
+      fi
+      i=$((i+1))
+    done
+    cat - > "${{LOG_FILE}}.buffer.${{buffer_name}}"
+    ;;
+  paste-buffer)
+    :
+    ;;
   new-session)
     count="$(cat "${{ATTEMPTS_FILE}}" 2>/dev/null || true)"
     if [[ -z "${{count}}" ]]; then count=0; fi

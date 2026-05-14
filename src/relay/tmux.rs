@@ -1,12 +1,20 @@
-use std::{ffi::OsStr, path::Path, process::Command};
+use std::{
+    ffi::OsStr,
+    io::Write,
+    path::Path,
+    process::{Command, Stdio},
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use serde_json::Value;
 
 use crate::runtime::inscriptions::emit_inscription;
 
 const DELIVERY_DIAGNOSTICS_ENVVAR: &str = "AGENTMUX_RELAY_DELIVERY_DIAGNOSTICS";
-const SEND_KEYS_CHUNK_BYTES: usize = 1024;
+const PASTE_BUFFER_NAME_PREFIX: &str = "agentmux-relay";
 const LOOK_LINES_MAX: usize = 1000;
+
+static PASTE_BUFFER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub(super) fn resolve_active_pane_target(
     tmux_socket: &Path,
@@ -210,10 +218,20 @@ pub(super) fn inject_literal_text(
     text: &str,
     append_enter: bool,
 ) -> Result<(), String> {
-    for chunk in split_send_keys_chunks(text, SEND_KEYS_CHUNK_BYTES) {
+    if !text.is_empty() {
+        let buffer_name = next_paste_buffer_name();
+        load_tmux_buffer(tmux_socket, &buffer_name, text)?;
         run_tmux_command(
             tmux_socket,
-            &["send-keys", "-l", "-t", pane_target, "--", chunk.as_str()],
+            &[
+                "paste-buffer",
+                "-d",
+                "-p",
+                "-b",
+                buffer_name.as_str(),
+                "-t",
+                pane_target,
+            ],
         )?;
     }
     if append_enter {
@@ -222,27 +240,44 @@ pub(super) fn inject_literal_text(
     Ok(())
 }
 
-fn split_send_keys_chunks(text: &str, max_bytes: usize) -> Vec<String> {
-    if text.is_empty() {
-        return Vec::new();
+fn next_paste_buffer_name() -> String {
+    let sequence = PASTE_BUFFER_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!(
+        "{PASTE_BUFFER_NAME_PREFIX}-{pid}-{sequence}",
+        pid = std::process::id()
+    )
+}
+
+fn load_tmux_buffer(tmux_socket: &Path, buffer_name: &str, text: &str) -> Result<(), String> {
+    let mut command = Command::new(tmux_program());
+    command
+        .arg("-S")
+        .arg(tmux_socket)
+        .args(["load-buffer", "-b", buffer_name, "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(|source| source.to_string())?;
+    {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "failed to capture tmux load-buffer stdin".to_string())?;
+        stdin
+            .write_all(text.as_bytes())
+            .map_err(|source| source.to_string())?;
     }
-    let max_bytes = max_bytes.max(1);
-    let mut chunks = Vec::new();
-    let mut start = 0usize;
-    let mut current_bytes = 0usize;
-    for (index, ch) in text.char_indices() {
-        let ch_bytes = ch.len_utf8();
-        if current_bytes != 0 && current_bytes + ch_bytes > max_bytes {
-            chunks.push(text[start..index].to_string());
-            start = index;
-            current_bytes = 0;
-        }
-        current_bytes += ch_bytes;
+    let output = child
+        .wait_with_output()
+        .map_err(|source| source.to_string())?;
+    if output.status.success() {
+        return Ok(());
     }
-    if start < text.len() {
-        chunks.push(text[start..].to_string());
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if stderr.is_empty() {
+        return Err("tmux load-buffer failed".to_string());
     }
-    chunks
+    Err(stderr)
 }
 
 pub(super) fn run_tmux_command(

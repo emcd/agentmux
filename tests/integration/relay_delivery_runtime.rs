@@ -2,6 +2,7 @@ use std::{
     fs,
     io::{BufRead, BufReader},
     os::unix::net::UnixStream,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
@@ -546,73 +547,58 @@ async fn relay_sync_delivery_sends_submit_in_separate_tmux_command() {
     let _ = child.wait().await;
 
     let log = fs::read_to_string(&log_file).expect("read fake tmux log");
-    assert!(
-        log.contains("Message-Id:"),
-        "expected pane envelope to include Message-Id header, log={log:?}"
-    );
-    assert!(
-        log.contains("Date:"),
-        "expected pane envelope to include Date header, log={log:?}"
-    );
-    assert!(
-        log.contains("From:"),
-        "expected pane envelope to include From header, log={log:?}"
-    );
-    assert!(
-        log.contains("To:"),
-        "expected pane envelope to include To header, log={log:?}"
-    );
-    assert!(
-        log.contains("--agentmux-"),
-        "expected pane envelope boundary marker, log={log:?}"
-    );
-    assert!(
-        !log.contains("Envelope-Version:"),
-        "pane envelope must omit Envelope-Version header, log={log:?}"
-    );
-    assert!(
-        !log.contains("multipart/mixed; boundary="),
-        "pane envelope must omit top-level multipart header, log={log:?}"
-    );
-    assert!(
-        !log.contains("Content-Transfer-Encoding:"),
-        "pane envelope must omit per-part transfer encoding header, log={log:?}"
-    );
-    let send_keys_lines = log
-        .lines()
-        .filter(|line| line.contains(" send-keys "))
-        .collect::<Vec<_>>();
-    let prompt_indexes = send_keys_lines
+    let log_lines: Vec<&str> = log.lines().collect();
+    let paste_indexes: Vec<usize> = log_lines
         .iter()
         .enumerate()
-        .filter(|(_, line)| line.contains("send-keys -l -t %1 --"))
+        .filter(|(_, line)| line.contains(" paste-buffer ") && line.contains("-t %1"))
         .map(|(index, _)| index)
-        .collect::<Vec<_>>();
+        .collect();
+    assert_eq!(
+        paste_indexes.len(),
+        1,
+        "expected exactly one paste-buffer command for large payload, log={log:?}"
+    );
+    let buffer_content = read_paste_buffer_content(&log_file, log_lines[paste_indexes[0]]);
     assert!(
-        !prompt_indexes.is_empty(),
-        "expected at least one prompt send-keys command, log={log:?}"
+        buffer_content.contains("Message-Id:"),
+        "expected pane envelope to include Message-Id header, content={buffer_content:?}"
     );
     assert!(
-        prompt_indexes.len() > 1,
-        "expected chunked prompt send-keys commands for large payload, log={log:?}"
+        buffer_content.contains("Date:"),
+        "expected pane envelope to include Date header, content={buffer_content:?}"
     );
-    let first_prompt_index = *prompt_indexes
-        .first()
-        .expect("expected at least one prompt command");
     assert!(
-        send_keys_lines[first_prompt_index].contains("send-keys -l -t %1 -- --agentmux-"),
-        "expected first prompt chunk to begin with leading boundary fence, log={log:?}"
+        buffer_content.contains("From:"),
+        "expected pane envelope to include From header, content={buffer_content:?}"
     );
-    let enter_index = send_keys_lines
+    assert!(
+        buffer_content.contains("To:"),
+        "expected pane envelope to include To header, content={buffer_content:?}"
+    );
+    assert!(
+        buffer_content.starts_with("--agentmux-"),
+        "expected paste buffer to begin with leading boundary fence, content={buffer_content:?}"
+    );
+    assert!(
+        !buffer_content.contains("Envelope-Version:"),
+        "pane envelope must omit Envelope-Version header, content={buffer_content:?}"
+    );
+    assert!(
+        !buffer_content.contains("multipart/mixed; boundary="),
+        "pane envelope must omit top-level multipart header, content={buffer_content:?}"
+    );
+    assert!(
+        !buffer_content.contains("Content-Transfer-Encoding:"),
+        "pane envelope must omit per-part transfer encoding header, content={buffer_content:?}"
+    );
+    let enter_index = log_lines
         .iter()
-        .position(|line| line.ends_with("send-keys -t %1 Enter"))
+        .position(|line| line.contains("send-keys -t %1 Enter"))
         .expect("expected separate Enter send-keys command");
-    let last_prompt_index = *prompt_indexes
-        .last()
-        .expect("expected at least one prompt command");
     assert!(
-        last_prompt_index < enter_index,
-        "expected prompt command before Enter command, log={log:?}"
+        paste_indexes[0] < enter_index,
+        "expected paste-buffer command before Enter command, log={log:?}"
     );
 
     let inscriptions = fs::read_to_string(
@@ -767,9 +753,14 @@ async fn relay_raww_tmux_default_appends_enter_and_reports_dispatched_phase() {
     let _ = child.wait().await;
 
     let log = fs::read_to_string(&log_file).expect("read fake tmux log");
-    assert!(
-        log.contains("send-keys -l -t %1 -- hello from raww"),
-        "expected literal raww send-keys command, log={log:?}"
+    let paste_line = log
+        .lines()
+        .find(|line| line.contains(" paste-buffer ") && line.contains("-t %1"))
+        .expect("expected paste-buffer command in fake tmux log");
+    let buffer_content = read_paste_buffer_content(&log_file, paste_line);
+    assert_eq!(
+        buffer_content, "hello from raww",
+        "expected paste buffer to carry literal raww text, content={buffer_content:?}"
     );
     assert!(
         log.contains("send-keys -t %1 Enter"),
@@ -842,12 +833,29 @@ async fn relay_raww_tmux_no_enter_omits_enter_command() {
     let _ = child.wait().await;
 
     let log = fs::read_to_string(&log_file).expect("read fake tmux log");
-    assert!(
-        log.contains("send-keys -l -t %1 -- hello without enter"),
-        "expected literal raww send-keys command, log={log:?}"
+    let paste_line = log
+        .lines()
+        .find(|line| line.contains(" paste-buffer ") && line.contains("-t %1"))
+        .expect("expected paste-buffer command in fake tmux log");
+    let buffer_content = read_paste_buffer_content(&log_file, paste_line);
+    assert_eq!(
+        buffer_content, "hello without enter",
+        "expected paste buffer to carry literal raww text, content={buffer_content:?}"
     );
     assert!(
         !log.contains("send-keys -t %1 Enter"),
         "did not expect Enter command when no_enter=true, log={log:?}"
     );
+}
+
+fn read_paste_buffer_content(log_file: &Path, paste_line: &str) -> String {
+    let mut tokens = paste_line.split_whitespace();
+    let buffer_name = tokens
+        .by_ref()
+        .skip_while(|token| *token != "-b")
+        .nth(1)
+        .expect("paste-buffer command should include -b NAME");
+    let buffer_path = PathBuf::from(format!("{}.buffer.{buffer_name}", log_file.display()));
+    fs::read_to_string(&buffer_path)
+        .unwrap_or_else(|error| panic!("read paste buffer file {}: {error}", buffer_path.display()))
 }
