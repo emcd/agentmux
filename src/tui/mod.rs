@@ -39,13 +39,19 @@ fn run_loop(terminal: &mut DefaultTerminal, options: TuiLaunchOptions) -> Result
     if let Err(error) = state.refresh_recipients() {
         state.push_runtime_error(error);
     }
+    let mut needs_redraw = true;
 
     while !state.should_quit && !shutdown_requested() {
-        state.poll_relay_events();
+        if state.poll_relay_events() {
+            needs_redraw = true;
+        }
 
-        terminal
-            .draw(|frame| render::render(frame, &mut state))
-            .map_err(|source| RuntimeError::io("render tui frame", source))?;
+        if needs_redraw {
+            terminal
+                .draw(|frame| render::render(frame, &mut state))
+                .map_err(|source| RuntimeError::io("render tui frame", source))?;
+            needs_redraw = false;
+        }
 
         if !event::poll(Duration::from_millis(80))
             .map_err(|source| RuntimeError::io("poll terminal events", source))?
@@ -55,6 +61,7 @@ fn run_loop(terminal: &mut DefaultTerminal, options: TuiLaunchOptions) -> Result
 
         let event =
             event::read().map_err(|source| RuntimeError::io("read terminal event", source))?;
+        needs_redraw = true;
         if matches!(event, Event::Resize(_, _)) {
             continue;
         }
