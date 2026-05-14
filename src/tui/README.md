@@ -65,7 +65,8 @@ User-facing usage details and keybindings are documented under
 - permission lifecycle handling:
   - pending queue visibility from relay stream events,
   - replay-safe dedupe keyed by `permission_request_id`,
-  - deterministic approve/deny dispatch via relay decision operations,
+  - session-scoped Look-overlay resolution using ACP-native
+    `permission.resolve` (`selected` with explicit `option_id` or `cancelled`),
 - startup relay auto-spawn fallback when relay socket is unavailable, using the
   same resolved configuration/state/inscriptions roots as the active TUI
   launch.

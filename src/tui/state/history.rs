@@ -8,7 +8,7 @@ use crate::runtime::error::RuntimeError;
 
 use super::{
     AppState, ChatHistoryDirection, ChatHistoryEntry, PendingPermissionEntry,
-    SEEN_STREAM_IDS_MAXIMUM, map_relay_error, merge_tui_targets,
+    PendingPermissionOption, SEEN_STREAM_IDS_MAXIMUM, map_relay_error, merge_tui_targets,
 };
 
 impl AppState {
@@ -377,6 +377,7 @@ impl AppState {
                             .and_then(serde_json::Value::as_str)
                             .map(ToString::to_string),
                         requested_details: event.payload.get("requested_details").cloned(),
+                        options: parse_permission_options(&event.payload),
                         enqueued_at: event
                             .payload
                             .get("enqueued_at")
@@ -479,6 +480,7 @@ impl AppState {
                 target_session: None,
                 requested_kind: None,
                 requested_details: None,
+                options: Vec::new(),
                 enqueued_at: None,
             });
         }
@@ -561,4 +563,37 @@ fn map_stream_outcome<'a>(
         "success" | "timeout" | "failed" => (outcome, reason_code),
         _ => ("<unknown>", reason_code),
     }
+}
+
+fn parse_permission_options(payload: &serde_json::Value) -> Vec<PendingPermissionOption> {
+    payload
+        .get("requested_details")
+        .and_then(|value| value.get("options"))
+        .and_then(serde_json::Value::as_array)
+        .map(|options| {
+            options
+                .iter()
+                .filter_map(|option| {
+                    // Relay event payloads serialize PermissionOption (snake_case
+                    // Rust struct) into requested_details.options; raw upstream
+                    // ACP camelCase lives separately under requested_details.raw.
+                    let option_id = option
+                        .get("option_id")
+                        .and_then(serde_json::Value::as_str)?
+                        .to_string();
+                    Some(PendingPermissionOption {
+                        option_id,
+                        name: option
+                            .get("name")
+                            .and_then(serde_json::Value::as_str)
+                            .map(ToString::to_string),
+                        kind: option
+                            .get("kind")
+                            .and_then(serde_json::Value::as_str)
+                            .map(ToString::to_string),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
 }

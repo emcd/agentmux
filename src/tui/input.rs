@@ -166,20 +166,6 @@ fn handle_events_overlay_key(state: &mut AppState, key: KeyEvent) -> Result<(), 
             state.toggle_events_overlay();
             state.open_picker();
         }
-        KeyCode::Up => state.move_pending_permission_selection(-1),
-        KeyCode::Down => state.move_pending_permission_selection(1),
-        KeyCode::Char(character)
-            if (character == 'a' || character == 'A')
-                && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
-        {
-            return state.approve_selected_permission_request();
-        }
-        KeyCode::Char(character)
-            if (character == 'd' || character == 'D')
-                && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
-        {
-            return state.deny_selected_permission_request();
-        }
         _ => {}
     }
     Ok(())
@@ -188,8 +174,33 @@ fn handle_events_overlay_key(state: &mut AppState, key: KeyEvent) -> Result<(), 
 fn handle_look_overlay_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
     match key.code {
         KeyCode::Esc => state.close_look_overlay(),
-        KeyCode::Up => state.scroll_look_overlay_up(),
-        KeyCode::Down => state.scroll_look_overlay_down(),
+        KeyCode::Left => state.move_look_permission_request_selection(-1),
+        KeyCode::Right => state.move_look_permission_request_selection(1),
+        KeyCode::Up => {
+            if !state.look_pending_permissions().is_empty() {
+                state.move_look_permission_option_selection(-1);
+            } else {
+                state.scroll_look_overlay_up();
+            }
+        }
+        KeyCode::Down => {
+            if !state.look_pending_permissions().is_empty() {
+                state.move_look_permission_option_selection(1);
+            } else {
+                state.scroll_look_overlay_down();
+            }
+        }
+        KeyCode::Char('[') => state.move_look_permission_request_selection(-1),
+        KeyCode::Char(']') => state.move_look_permission_request_selection(1),
+        KeyCode::Char(',') => state.move_look_permission_option_selection(-1),
+        KeyCode::Char('.') => state.move_look_permission_option_selection(1),
+        KeyCode::Char(character)
+            if (character == 'c' || character == 'C')
+                && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
+        {
+            return state.resolve_selected_look_permission_cancelled();
+        }
+        KeyCode::Enter => return state.resolve_selected_look_permission_selected(),
         KeyCode::PageUp => state.scroll_look_overlay_page_up(),
         KeyCode::PageDown => state.scroll_look_overlay_page_down(),
         KeyCode::F(2) => {

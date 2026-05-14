@@ -4,8 +4,9 @@ use crate::{
 };
 
 use super::{
-    AppState, FocusField, LookSnapshotFormat, ToCompletionState, append_recipient_token,
-    current_recipient_token_context, map_relay_error, matching_recipient_candidates,
+    AppState, FocusField, LookSnapshotFormat, PendingPermissionOption, ToCompletionState,
+    append_recipient_token, current_recipient_token_context, map_relay_error,
+    matching_recipient_candidates,
 };
 
 impl AppState {
@@ -52,6 +53,8 @@ impl AppState {
         self.look_overlay_restore_picker_on_close = self.picker_open;
         self.look_overlay_open = true;
         self.look_overlay_scroll = 0;
+        self.look_permission_request_index = 0;
+        self.look_permission_option_index = 0;
         self.picker_open = false;
         self.events_overlay_open = false;
         self.help_overlay_open = false;
@@ -92,34 +95,65 @@ impl AppState {
         }
     }
 
-    pub fn move_pending_permission_selection(&mut self, delta: isize) {
-        if self.pending_permissions.is_empty() {
-            self.pending_permissions_state.select(None);
+    pub fn move_look_permission_request_selection(&mut self, delta: isize) {
+        let entries = self.look_pending_permissions();
+        if entries.is_empty() {
+            self.look_permission_request_index = 0;
+            self.look_permission_option_index = 0;
             return;
         }
-        let current = self.pending_permissions_state.selected().unwrap_or(0);
-        let next = wrap_index(current, delta, self.pending_permissions.len());
-        self.pending_permissions_state.select(Some(next));
+        self.look_permission_request_index =
+            wrap_index(self.look_permission_request_index, delta, entries.len());
+        self.look_permission_option_index = 0;
     }
 
-    pub fn approve_selected_permission_request(&mut self) -> Result<(), RuntimeError> {
-        let permission_request_id = self.selected_pending_permission_id().ok_or_else(|| {
-            RuntimeError::validation(
-                "validation_unknown_permission_request",
-                "approve requires a selected pending permission request",
-            )
-        })?;
-        self.submit_permission_decision(permission_request_id, true, None)
+    pub fn move_look_permission_option_selection(&mut self, delta: isize) {
+        let Some(entry) = self.selected_look_permission() else {
+            self.look_permission_option_index = 0;
+            return;
+        };
+        if entry.options.is_empty() {
+            self.look_permission_option_index = 0;
+            return;
+        }
+        self.look_permission_option_index = wrap_index(
+            self.look_permission_option_index,
+            delta,
+            entry.options.len(),
+        );
     }
 
-    pub fn deny_selected_permission_request(&mut self) -> Result<(), RuntimeError> {
-        let permission_request_id = self.selected_pending_permission_id().ok_or_else(|| {
+    pub fn resolve_selected_look_permission_selected(&mut self) -> Result<(), RuntimeError> {
+        let Some(entry) = self.selected_look_permission() else {
+            return Err(RuntimeError::validation(
+                "validation_unknown_permission_request",
+                "selected outcome requires a pending permission request for the current look target",
+            ));
+        };
+        let Some(option) = self.selected_look_permission_option() else {
+            return Err(RuntimeError::validation(
+                "validation_invalid_params",
+                "selected outcome requires explicit option selection",
+            ));
+        };
+        self.submit_permission_decision(
+            entry.permission_request_id.clone(),
+            "selected",
+            Some(option.option_id.clone()),
+        )
+    }
+
+    pub fn resolve_selected_look_permission_cancelled(&mut self) -> Result<(), RuntimeError> {
+        let permission_request_id = self
+            .selected_look_permission()
+            .map(|entry| entry.permission_request_id.clone())
+            .ok_or_else(|| {
             RuntimeError::validation(
                 "validation_unknown_permission_request",
-                "deny requires a selected pending permission request",
+                "cancelled outcome requires a pending permission request for the current look target",
             )
         })?;
-        self.submit_permission_decision(permission_request_id, false, None)
+        self.submit_permission_decision(permission_request_id, "cancelled", None)
     }
 
     pub fn insert_picker_selection(&mut self) {
@@ -626,46 +660,27 @@ impl AppState {
         self.pending_permissions_state.select(Some(selected));
     }
 
-    fn selected_pending_permission_id(&self) -> Option<String> {
-        self.pending_permissions_state
-            .selected()
-            .and_then(|index| self.pending_permissions.get(index))
-            .map(|entry| entry.permission_request_id.clone())
-    }
-
     fn submit_permission_decision(
         &mut self,
         permission_request_id: String,
-        approved: bool,
-        _reason: Option<String>,
+        outcome: &str,
+        option_id: Option<String>,
     ) -> Result<(), RuntimeError> {
-        let option_id = if approved {
-            self.pending_permissions
-                .iter()
-                .find(|entry| entry.permission_request_id == permission_request_id)
-                .and_then(|entry| entry.requested_details.as_ref())
-                .and_then(|details| details.get("options"))
-                .and_then(serde_json::Value::as_array)
-                .and_then(|options| options.first())
-                .and_then(|option| option.get("option_id"))
-                .and_then(serde_json::Value::as_str)
-                .map(ToString::to_string)
-        } else {
-            None
-        };
-        if approved && option_id.is_none() {
+        if outcome == "selected" && option_id.is_none() {
             return Err(RuntimeError::validation(
                 "validation_invalid_params",
-                "pending permission approval requires explicit option_id".to_string(),
+                "selected outcome requires explicit option_id",
+            ));
+        }
+        if outcome == "cancelled" && option_id.is_some() {
+            return Err(RuntimeError::validation(
+                "validation_invalid_params",
+                "cancelled outcome must omit option_id",
             ));
         }
         let request = RelayRequest::PermissionResolve {
             permission_request_id: permission_request_id.clone(),
-            outcome: if approved {
-                "selected".to_string()
-            } else {
-                "cancelled".to_string()
-            },
+            outcome: outcome.to_string(),
             option_id,
             bundle_name: None,
             ui_session_id: None,
@@ -704,6 +719,40 @@ impl AppState {
                 format!("relay returned unexpected response variant: {other:?}"),
             )),
         }
+    }
+
+    pub(crate) fn look_pending_permissions(&self) -> Vec<&super::PendingPermissionEntry> {
+        let Some(look_target) = self.look_target.as_deref() else {
+            return Vec::new();
+        };
+        self.pending_permissions
+            .iter()
+            .filter(|entry| entry.target_session.as_deref() == Some(look_target))
+            .collect::<Vec<_>>()
+    }
+
+    pub(super) fn selected_look_permission(&self) -> Option<&super::PendingPermissionEntry> {
+        let entries = self.look_pending_permissions();
+        if entries.is_empty() {
+            return None;
+        }
+        entries
+            .get(
+                self.look_permission_request_index
+                    .min(entries.len().saturating_sub(1)),
+            )
+            .copied()
+    }
+
+    pub(super) fn selected_look_permission_option(&self) -> Option<&PendingPermissionOption> {
+        let entry = self.selected_look_permission()?;
+        if entry.options.is_empty() {
+            return None;
+        }
+        entry.options.get(
+            self.look_permission_option_index
+                .min(entry.options.len().saturating_sub(1)),
+        )
     }
 }
 

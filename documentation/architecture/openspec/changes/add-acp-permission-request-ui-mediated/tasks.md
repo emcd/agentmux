@@ -35,7 +35,7 @@
 - [x] 4.2 Relock TUI decision-action contract to ACP-native
       `permission.resolve` keyed by `permission_request_id`.
 - [x] 4.3 Lock UI dedupe expectation for at-least-once replay.
-- [ ] 4.4 Add session-scoped Look workflow requirements for permission
+- [x] 4.4 Add session-scoped Look workflow requirements for permission
       decisioning (filtering, deterministic selection, key hints).
 - [x] 4.5 Add explicit permission-option selection requirements for TUI actions
       (`option_id` support).
@@ -52,7 +52,7 @@
       pending lifecycle, and mapping behavior.
 - [x] 5.6 Implement relay event payload option metadata for explicit operator
       selection.
-- [ ] 5.7 Implement TUI explicit option selection and session-scoped Look
+- [x] 5.7 Implement TUI explicit option selection and session-scoped Look
       actions.
 - [x] 5.9 Remove relay-side approve/deny abstraction and option inference;
       enforce `permission.resolve` contract validation.
