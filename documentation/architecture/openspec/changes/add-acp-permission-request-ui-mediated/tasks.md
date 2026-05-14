@@ -20,11 +20,11 @@
 
 - [x] 3.1 Lock non-expiring pending lifecycle for permission requests in alpha
       (no auto-expiry timer).
-- [ ] 3.2 Relock deterministic terminal reason taxonomy for
+- [x] 3.2 Relock deterministic terminal reason taxonomy for
       selected/cancelled/already-resolved.
-- [ ] 3.3 Relock deterministic mapping table from permission terminal outcomes to
+- [x] 3.3 Relock deterministic mapping table from permission terminal outcomes to
       ACP action and sender-visible terminal outcome/reason_code.
-- [ ] 3.4 Lock ACP-native decision contract:
+- [x] 3.4 Lock ACP-native decision contract:
       `permission.resolve` with outcomes `selected|cancelled`, explicit
       `option_id` required only for `selected`, and no relay fallback inference.
 
@@ -32,12 +32,12 @@
 
 - [x] 4.1 Add TUI pending permission visibility requirements using stable
       identifiers and metadata.
-- [ ] 4.2 Relock TUI decision-action contract to ACP-native
+- [x] 4.2 Relock TUI decision-action contract to ACP-native
       `permission.resolve` keyed by `permission_request_id`.
 - [x] 4.3 Lock UI dedupe expectation for at-least-once replay.
 - [ ] 4.4 Add session-scoped Look workflow requirements for permission
       decisioning (filtering, deterministic selection, key hints).
-- [ ] 4.5 Add explicit permission-option selection requirements for TUI actions
+- [x] 4.5 Add explicit permission-option selection requirements for TUI actions
       (`option_id` support).
 
 ## 5. Implementation Follow-up (post-approval)
@@ -56,7 +56,7 @@
       actions.
 - [x] 5.9 Remove relay-side approve/deny abstraction and option inference;
       enforce `permission.resolve` contract validation.
-- [ ] 5.8 Add manual ACP permission-flow test plan for operator UX validation.
+- [x] 5.8 Add manual ACP permission-flow test plan for operator UX validation.
 
 ## 6. Validation
 

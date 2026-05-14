@@ -1678,7 +1678,7 @@ Failure taxonomy SHALL include:
   reader thread before releasing per-session state
 - **AND** no per-session state is accessed after join completes
 
-### Requirement: ACP Permission Request Readiness Signal (MVP)
+### Requirement: ACP Permission Request Readiness Signal
 
 Relay SHALL treat ACP `session/request_permission` as in-progress turn activity
 for ACP readiness tracking in MVP.

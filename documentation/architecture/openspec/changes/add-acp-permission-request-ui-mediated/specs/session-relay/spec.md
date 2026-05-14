@@ -248,3 +248,31 @@ Optional additive details MAY include `target_session`, `targets`,
 - **WHEN** UI principal lacks `grant` permission
 - **THEN** relay returns `authorization_forbidden`
 - **AND** denial details include canonical required fields
+
+## MODIFIED Requirements
+
+### Requirement: ACP Permission Request Readiness Signal
+
+Relay SHALL treat ACP `session/request_permission` as in-progress turn activity
+for ACP readiness tracking in MVP.
+
+MVP behavior contract:
+
+- `session/request_permission` observed before terminal completion SHALL count
+  as first activity for two-phase sync acknowledgment semantics
+- worker readiness SHALL transition to `busy` while turn completion remains
+  pending
+- terminal stopReason completion SHALL transition readiness to `available`
+
+#### Scenario: Treat permission request as first ACP activity
+
+- **WHEN** relay observes ACP `session/request_permission` before prompt result
+- **THEN** sync send MAY return phase-1 `outcome=delivered`
+- **AND** includes `details.delivery_phase = "accepted_in_progress"`
+
+#### Scenario: Keep worker non-ready while permission turn is in progress
+
+- **WHEN** ACP `session/request_permission` is observed mid-turn
+- **THEN** relay marks worker state `busy`
+- **AND** relay does not consider that worker ready for next delivery until
+  terminal stopReason is observed
