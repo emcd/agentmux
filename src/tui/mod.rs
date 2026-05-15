@@ -42,10 +42,6 @@ fn run_loop(terminal: &mut DefaultTerminal, options: TuiLaunchOptions) -> Result
     let mut needs_redraw = true;
 
     while !state.should_quit && !shutdown_requested() {
-        if state.poll_relay_events() {
-            needs_redraw = true;
-        }
-
         if needs_redraw {
             terminal
                 .draw(|frame| render::render(frame, &mut state))
@@ -53,21 +49,36 @@ fn run_loop(terminal: &mut DefaultTerminal, options: TuiLaunchOptions) -> Result
             needs_redraw = false;
         }
 
-        if !event::poll(Duration::from_millis(80))
+        // Drain all buffered terminal input before polling the relay. A relay
+        // poll can stall (e.g. the hello-ack timeout when the relay is
+        // unresponsive); handling input first keeps keystrokes from queueing
+        // behind that stall.
+        let mut handled_input = false;
+        while event::poll(Duration::ZERO)
             .map_err(|source| RuntimeError::io("poll terminal events", source))?
         {
+            let event =
+                event::read().map_err(|source| RuntimeError::io("read terminal event", source))?;
+            handled_input = true;
+            needs_redraw = true;
+            if matches!(event, Event::Resize(_, _)) {
+                continue;
+            }
+            if let Err(error) = input::handle_event(&mut state, event) {
+                state.push_runtime_error(error);
+            }
+        }
+        if handled_input {
             continue;
         }
 
-        let event =
-            event::read().map_err(|source| RuntimeError::io("read terminal event", source))?;
-        needs_redraw = true;
-        if matches!(event, Event::Resize(_, _)) {
+        if state.poll_relay_events() {
+            needs_redraw = true;
             continue;
         }
-        if let Err(error) = input::handle_event(&mut state, event) {
-            state.push_runtime_error(error);
-        }
+
+        event::poll(Duration::from_millis(80))
+            .map_err(|source| RuntimeError::io("poll terminal events", source))?;
     }
     Ok(())
 }

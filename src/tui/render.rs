@@ -9,11 +9,14 @@ use serde_json::Value;
 
 use crate::acp::AcpSnapshotEntry;
 
-use super::state::{AppState, ChatHistoryDirection, FocusField, LookSnapshotFormat, StatusEntry};
+use super::state::{
+    AppState, ChatHistoryDirection, FocusField, LookSnapshotFormat, ScreenMode, StatusEntry,
+};
 
 const WORKBENCH_MIN_CHAT_HEIGHT: u16 = 1;
 const WORKBENCH_MIN_COMPOSE_HEIGHT: u16 = 4;
-const LOOK_PERMISSION_SECTION_HEIGHT: u16 = 12;
+const INTERACTION_RAWW_PANE_HEIGHT: u16 = 8;
+const INTERACTION_TARGET_HEADER_HEIGHT: u16 = 1;
 
 pub(crate) fn render(frame: &mut Frame, state: &mut AppState) {
     let chunks = Layout::default()
@@ -28,7 +31,7 @@ pub(crate) fn render(frame: &mut Frame, state: &mut AppState) {
     render_header(frame, chunks[0], state);
     render_main(frame, chunks[1], state);
     render_footer(frame, chunks[2], state);
-    render_compose_cursor(frame, chunks[1], state);
+    render_active_cursor(frame, chunks[1], state);
 
     if state.help_overlay_open {
         render_help_overlay(frame, state);
@@ -38,9 +41,6 @@ pub(crate) fn render(frame: &mut Frame, state: &mut AppState) {
     }
     if state.events_overlay_open {
         render_events_overlay(frame, state);
-    }
-    if state.look_overlay_open {
-        render_look_overlay(frame, state);
     }
 }
 
@@ -64,23 +64,47 @@ fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
 }
 
 fn render_main(frame: &mut Frame, area: Rect, state: &mut AppState) {
-    render_workbench_panes(frame, area, state);
+    match state.mode {
+        ScreenMode::Communication => render_communication_mode(frame, area, state),
+        ScreenMode::Interaction => render_interaction_mode(frame, area, state),
+    }
+}
+
+fn render_active_cursor(frame: &mut Frame, area: Rect, state: &AppState) {
+    if state.help_overlay_open || state.picker_open || state.events_overlay_open {
+        return;
+    }
+    match state.mode {
+        ScreenMode::Communication => render_compose_cursor(frame, area, state),
+        ScreenMode::Interaction => render_raww_cursor(frame, area, state),
+    }
 }
 
 fn render_compose_cursor(frame: &mut Frame, area: Rect, state: &AppState) {
-    if state.help_overlay_open
-        || state.picker_open
-        || state.events_overlay_open
-        || state.look_overlay_open
-    {
-        return;
-    }
     let rows = split_workbench_rows(area, state);
     let compose_inner = compose_titled_block("  Compose  ").inner(rows[1]);
     let Some((x, y)) = compose_cursor_position(compose_inner, state) else {
         return;
     };
     frame.set_cursor_position((x, y));
+}
+
+fn render_raww_cursor(frame: &mut Frame, area: Rect, state: &AppState) {
+    if !state.interaction_raww_region_visible() {
+        return;
+    }
+    let raww_area = interaction_raww_pane_area(area);
+    let inner = raww_titled_block("  Raww  ").inner(raww_area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let (cursor_line, cursor_column) = state.raww_cursor_line_and_column();
+    let visible_x = (cursor_column as u16).min(inner.width.saturating_sub(1));
+    let visible_y = (cursor_line as u16).min(inner.height.saturating_sub(1));
+    frame.set_cursor_position((
+        inner.x.saturating_add(visible_x),
+        inner.y.saturating_add(visible_y),
+    ));
 }
 
 fn compose_cursor_position(inner_area: Rect, state: &AppState) -> Option<(u16, u16)> {
@@ -156,10 +180,103 @@ fn visible_cursor_column_count(count: usize, width: u16) -> u16 {
     (count as u16).min(width.saturating_sub(1))
 }
 
-fn render_workbench_panes(frame: &mut Frame, area: Rect, state: &mut AppState) {
+fn render_communication_mode(frame: &mut Frame, area: Rect, state: &mut AppState) {
     let rows = split_workbench_rows(area, state);
     render_chat_history(frame, rows[0], state);
     render_compose(frame, rows[1], state);
+}
+
+fn render_interaction_mode(frame: &mut Frame, area: Rect, state: &mut AppState) {
+    let raww_visible = state.interaction_raww_region_visible();
+    let region_height = if raww_visible {
+        INTERACTION_RAWW_PANE_HEIGHT
+    } else {
+        interaction_permission_pane_height(area.height)
+    };
+    let region_height = region_height.min(area.height.saturating_sub(2).max(1));
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(INTERACTION_TARGET_HEADER_HEIGHT),
+            Constraint::Min(3),
+            Constraint::Length(region_height),
+        ])
+        .split(area);
+
+    render_interaction_target_header(frame, rows[0], state);
+    render_look_snapshot(frame, rows[1], state);
+    if raww_visible {
+        render_interaction_raww_pane(frame, rows[2], state);
+    } else {
+        render_look_permission_section(frame, rows[2], state);
+    }
+}
+
+fn interaction_permission_pane_height(available_height: u16) -> u16 {
+    12u16.min(available_height.saturating_sub(3).max(1))
+}
+
+fn interaction_raww_pane_area(area: Rect) -> Rect {
+    let raww_height = INTERACTION_RAWW_PANE_HEIGHT.min(area.height.saturating_sub(2).max(1));
+    let raww_y = area
+        .y
+        .saturating_add(area.height)
+        .saturating_sub(raww_height);
+    Rect {
+        x: area.x,
+        y: raww_y,
+        width: area.width,
+        height: raww_height,
+    }
+}
+
+fn render_interaction_target_header(frame: &mut Frame, area: Rect, state: &AppState) {
+    let label = match state.look_target.as_deref() {
+        Some(target) => format!("  Interaction target: {target}  "),
+        None => {
+            "  Interaction target: (none) — press F2 to choose a session, then l or w  ".to_string()
+        }
+    };
+    let paragraph = Paragraph::new(Line::from(Span::styled(
+        label,
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )));
+    frame.render_widget(paragraph, area);
+}
+
+fn render_interaction_raww_pane(frame: &mut Frame, area: Rect, state: &AppState) {
+    let block = raww_titled_block("  Raww  ");
+    let inner = block.inner(area);
+    let lines: Vec<Line<'static>> = if state.raww_draft.is_empty() {
+        vec![Line::from(Span::styled(
+            "(type to compose raww; Enter dispatches, Ctrl+J inserts newline)",
+            Style::default().fg(Color::DarkGray),
+        ))]
+    } else {
+        state
+            .raww_draft
+            .split('\n')
+            .map(|line| Line::from(Span::raw(line.to_string())))
+            .collect()
+    };
+    let viewport_height = inner.height as usize;
+    let visible = if lines.len() > viewport_height {
+        lines[lines.len().saturating_sub(viewport_height)..].to_vec()
+    } else {
+        lines
+    };
+    let paragraph = Paragraph::new(visible).block(block);
+    frame.render_widget(paragraph, area);
+}
+
+fn raww_titled_block(title: &'static str) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .title_alignment(Alignment::Center)
 }
 
 fn render_compose(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -230,28 +347,6 @@ fn render_chat_history(frame: &mut Frame, area: Rect, state: &mut AppState) {
         .wrap(Wrap { trim: false })
         .block(workbench_titled_block("  Chat History  "));
     frame.render_widget(paragraph, area);
-}
-
-fn render_look_overlay(frame: &mut Frame, state: &AppState) {
-    let popup = frame.area();
-    frame.render_widget(Clear, popup);
-
-    let has_pending = !state.look_pending_permissions().is_empty();
-    let (snapshot_area, permission_area) = if has_pending {
-        let pane_height = LOOK_PERMISSION_SECTION_HEIGHT.min(popup.height.saturating_sub(3).max(1));
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(3), Constraint::Length(pane_height)])
-            .split(popup);
-        (rows[0], Some(rows[1]))
-    } else {
-        (popup, None)
-    };
-
-    render_look_snapshot(frame, snapshot_area, state);
-    if let Some(area) = permission_area {
-        render_look_permission_section(frame, area, state);
-    }
 }
 
 fn render_look_snapshot(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -408,7 +503,7 @@ fn render_look_permission_lines(state: &AppState, width: u16) -> Vec<Line<'stati
     if pending.is_empty() {
         return vec![
             Line::from("(no pending permission requests for this session)"),
-            Line::from("Press F2 to choose another session."),
+            Line::from("Press F2 to choose another session, or F4 for Communication."),
         ];
     }
 
@@ -488,12 +583,26 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 }
 
 fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
-    let line = state
+    let mode_label = match state.mode {
+        ScreenMode::Communication => "[Communication]",
+        ScreenMode::Interaction => "[Interaction]",
+    };
+    let status_line = state
         .status_history
         .front()
         .map(render_status_line)
         .unwrap_or_else(|| Line::from("Ready."));
-    let footer = Paragraph::new(vec![line])
+    let mut spans = vec![
+        Span::styled(
+            mode_label,
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+    ];
+    spans.extend(status_line.spans);
+    let footer = Paragraph::new(Line::from(spans))
         .wrap(Wrap { trim: false })
         .style(Style::default().bg(Color::DarkGray));
     frame.render_widget(footer, area);
@@ -594,68 +703,76 @@ fn render_events_overlay(frame: &mut Frame, state: &mut AppState) {
     frame.render_widget(paragraph, sections[1]);
 }
 
+fn help_section_heading(text: &'static str) -> Line<'static> {
+    Line::from(Span::styled(
+        text,
+        Style::default().add_modifier(Modifier::BOLD),
+    ))
+}
+
 fn render_help_overlay(frame: &mut Frame, _state: &AppState) {
     let popup = centered_rect(72, 70, frame.area());
     frame.render_widget(Clear, popup);
-    let lines = vec![
-        Line::from(Span::styled(
-            "Main Screen",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
+    let block = Block::default().borders(Borders::ALL).title("Help");
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(inner);
+
+    let left_lines = vec![
+        help_section_heading("Modes"),
+        Line::from("F4: Toggle Communication / Interaction"),
         Line::from("F1: Toggle help"),
         Line::from("F2: Open recipient picker"),
-        Line::from("F3: Open events"),
+        Line::from("F3: Open events overlay"),
         Line::from("Ctrl+R: Refresh recipients"),
+        Line::from("Ctrl+C: Quit from anywhere"),
+        Line::from(""),
+        help_section_heading("Communication Mode (default)"),
         Line::from("Tab / Shift+Tab: Focus next/previous"),
-        Line::from("Ctrl+Space: Trigger recipient completion in To"),
-        Line::from("Up/Down in To: Navigate active completion"),
+        Line::from("Ctrl+Space: Trigger completion in To"),
+        Line::from("Up/Down in To: Navigate completion"),
         Line::from("Arrows/Home/End in Message: Move cursor"),
-        Line::from("Ctrl+A/Ctrl+E in Message: Move to line start/end"),
-        Line::from("Enter: Accept completion in To (adds ', ') / send in Message"),
+        Line::from("Ctrl+A/Ctrl+E in Message: Line start/end"),
+        Line::from("Enter: Accept completion / send"),
         Line::from("Ctrl+J: Insert newline in Message"),
         Line::from("Esc in Message: Snap history to latest"),
         Line::from("PgUp/PgDn: Scroll chat history"),
         Line::from("Mouse wheel: Scroll chat history"),
+    ];
+    let right_lines = vec![
+        help_section_heading("Interaction Mode"),
+        Line::from("PgUp/PgDn: Scroll look snapshot"),
+        Line::from("Raww input (raww has text or no pending):"),
+        Line::from("  Arrows/Home/End: Move raww cursor"),
+        Line::from("  Enter: Dispatch raww to active target"),
+        Line::from("  Ctrl+J: Insert newline"),
+        Line::from("  Backspace: Backspace raww input"),
+        Line::from("Permission (raww empty and pending exists):"),
+        Line::from("  Left/Right: Previous/next request"),
+        Line::from("  Up/Down: Previous/next ACP option"),
+        Line::from("  Enter: Resolve selected option"),
+        Line::from("  c: Resolve as cancelled"),
         Line::from(""),
-        Line::from(Span::styled(
-            "Session Picker",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Line::from("Enter: Choose selected recipient into To"),
-        Line::from("l: Capture look snapshot for selected recipient"),
-        Line::from("w: Dispatch raw write using Message field"),
+        help_section_heading("Session Picker (F2)"),
+        Line::from("Enter: Choose recipient into To"),
+        Line::from("l: Set target, switch to Interaction"),
+        Line::from("w: Set target, switch, focus raww"),
         Line::from("Esc / F2: Close picker"),
         Line::from("Up/Down: Move picker selection"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Look Overlay",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Line::from("Esc: Close look overlay"),
-        Line::from("F2: Open picker"),
-        Line::from("F3: Open events"),
-        Line::from("PgUp/PgDn: Page look snapshot"),
-        Line::from("Left/Right: Previous/next pending request for look target"),
-        Line::from("Up/Down: Previous/next ACP permission option"),
-        Line::from("Enter: Resolve selected option"),
-        Line::from("c: Resolve as cancelled"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Overlays",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Line::from("Esc closes active overlay"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "General",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Line::from("Ctrl+C: Quit from anywhere"),
     ];
-    let paragraph = Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .block(Block::default().borders(Borders::ALL).title("Help"));
-    frame.render_widget(paragraph, popup);
+
+    frame.render_widget(
+        Paragraph::new(left_lines).wrap(Wrap { trim: false }),
+        columns[0],
+    );
+    frame.render_widget(
+        Paragraph::new(right_lines).wrap(Wrap { trim: false }),
+        columns[1],
+    );
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {

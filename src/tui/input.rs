@@ -2,7 +2,7 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, Mou
 
 use crate::runtime::error::RuntimeError;
 
-use super::state::{AppState, FocusField};
+use super::state::{AppState, FocusField, ScreenMode};
 
 pub(crate) fn handle_event(state: &mut AppState, event: Event) -> Result<(), RuntimeError> {
     match event {
@@ -16,7 +16,7 @@ pub(crate) fn handle_event(state: &mut AppState, event: Event) -> Result<(), Run
             Ok(())
         }
         Event::Paste(text) => {
-            state.insert_text(text.as_str());
+            insert_text_for_active_mode(state, text.as_str());
             Ok(())
         }
         _ => Ok(()),
@@ -44,13 +44,22 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
     if state.events_overlay_open {
         return handle_events_overlay_key(state, key);
     }
-    if state.look_overlay_open {
-        return handle_look_overlay_key(state, key);
-    }
     if state.help_overlay_open {
         return handle_help_overlay_key(state, key);
     }
 
+    if key.code == KeyCode::F(4) {
+        state.toggle_mode();
+        return Ok(());
+    }
+
+    match state.mode {
+        ScreenMode::Communication => handle_communication_mode_key(state, key),
+        ScreenMode::Interaction => handle_interaction_mode_key(state, key),
+    }
+}
+
+fn handle_communication_mode_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
             KeyCode::Char('a') if state.focus == FocusField::Message => {
@@ -132,12 +141,111 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
     Ok(())
 }
 
+fn handle_interaction_mode_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        match key.code {
+            KeyCode::Char('j') => {
+                state.insert_newline_in_raww();
+                return Ok(());
+            }
+            KeyCode::Char('r') => return state.refresh_recipients(),
+            _ => {}
+        }
+    }
+
+    match key.code {
+        KeyCode::F(2) => state.open_picker(),
+        KeyCode::F(3) => state.toggle_events_overlay(),
+        KeyCode::PageUp => state.scroll_interaction_snapshot_page_up(),
+        KeyCode::PageDown => state.scroll_interaction_snapshot_page_down(),
+        KeyCode::Left => {
+            if interaction_permission_active(state) {
+                state.move_look_permission_request_selection(-1);
+            } else {
+                state.move_raww_cursor_left();
+            }
+        }
+        KeyCode::Right => {
+            if interaction_permission_active(state) {
+                state.move_look_permission_request_selection(1);
+            } else {
+                state.move_raww_cursor_right();
+            }
+        }
+        KeyCode::Up => {
+            if interaction_permission_active(state) {
+                state.move_look_permission_option_selection(-1);
+            } else if !state.raww_draft.is_empty() {
+                state.move_raww_cursor_up();
+            } else {
+                state.scroll_interaction_snapshot_up();
+            }
+        }
+        KeyCode::Down => {
+            if interaction_permission_active(state) {
+                state.move_look_permission_option_selection(1);
+            } else if !state.raww_draft.is_empty() {
+                state.move_raww_cursor_down();
+            } else {
+                state.scroll_interaction_snapshot_down();
+            }
+        }
+        KeyCode::Home if !interaction_permission_active(state) => {
+            state.move_raww_cursor_home();
+        }
+        KeyCode::End if !interaction_permission_active(state) => {
+            state.move_raww_cursor_end();
+        }
+        KeyCode::Enter => {
+            if interaction_permission_active(state) {
+                return state.resolve_selected_look_permission_selected();
+            }
+            return state.dispatch_raww_from_interaction();
+        }
+        KeyCode::Backspace => state.backspace_raww(),
+        KeyCode::Char(character)
+            if interaction_permission_active(state)
+                && (character == 'c' || character == 'C')
+                && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
+        {
+            return state.resolve_selected_look_permission_cancelled();
+        }
+        KeyCode::Char(character)
+            if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+        {
+            state.insert_character_in_raww(character);
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
+fn interaction_permission_active(state: &AppState) -> bool {
+    state.raww_draft.is_empty() && !state.look_pending_permissions().is_empty()
+}
+
+fn insert_text_for_active_mode(state: &mut AppState, text: &str) {
+    match state.mode {
+        ScreenMode::Communication => state.insert_text(text),
+        ScreenMode::Interaction => {
+            for character in text.chars() {
+                state.insert_character_in_raww(character);
+            }
+        }
+    }
+}
+
 fn handle_picker_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
     match key.code {
         KeyCode::Esc | KeyCode::F(2) => state.close_picker(),
         KeyCode::F(3) => {
             state.close_picker();
             state.toggle_events_overlay();
+        }
+        KeyCode::F(4) => {
+            state.close_picker();
+            state.toggle_mode();
         }
         KeyCode::Down => state.move_picker_selection(1),
         KeyCode::Up => state.move_picker_selection(-1),
@@ -166,50 +274,9 @@ fn handle_events_overlay_key(state: &mut AppState, key: KeyEvent) -> Result<(), 
             state.toggle_events_overlay();
             state.open_picker();
         }
-        _ => {}
-    }
-    Ok(())
-}
-
-fn handle_look_overlay_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
-    match key.code {
-        KeyCode::Esc => state.close_look_overlay(),
-        KeyCode::Left => state.move_look_permission_request_selection(-1),
-        KeyCode::Right => state.move_look_permission_request_selection(1),
-        KeyCode::Up => {
-            if !state.look_pending_permissions().is_empty() {
-                state.move_look_permission_option_selection(-1);
-            } else {
-                state.scroll_look_overlay_up();
-            }
-        }
-        KeyCode::Down => {
-            if !state.look_pending_permissions().is_empty() {
-                state.move_look_permission_option_selection(1);
-            } else {
-                state.scroll_look_overlay_down();
-            }
-        }
-        KeyCode::Char('[') => state.move_look_permission_request_selection(-1),
-        KeyCode::Char(']') => state.move_look_permission_request_selection(1),
-        KeyCode::Char(',') => state.move_look_permission_option_selection(-1),
-        KeyCode::Char('.') => state.move_look_permission_option_selection(1),
-        KeyCode::Char(character)
-            if (character == 'c' || character == 'C')
-                && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
-        {
-            return state.resolve_selected_look_permission_cancelled();
-        }
-        KeyCode::Enter => return state.resolve_selected_look_permission_selected(),
-        KeyCode::PageUp => state.scroll_look_overlay_page_up(),
-        KeyCode::PageDown => state.scroll_look_overlay_page_down(),
-        KeyCode::F(2) => {
-            state.close_look_overlay();
-            state.open_picker();
-        }
-        KeyCode::F(3) => {
-            state.close_look_overlay();
+        KeyCode::F(4) => {
             state.toggle_events_overlay();
+            state.toggle_mode();
         }
         _ => {}
     }
@@ -226,6 +293,10 @@ fn handle_help_overlay_key(state: &mut AppState, key: KeyEvent) -> Result<(), Ru
         KeyCode::F(3) => {
             state.toggle_help_overlay();
             state.toggle_events_overlay();
+        }
+        KeyCode::F(4) => {
+            state.toggle_help_overlay();
+            state.toggle_mode();
         }
         _ => {}
     }
