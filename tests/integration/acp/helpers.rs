@@ -2,6 +2,7 @@ use std::{
     fs,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
+    sync::OnceLock,
 };
 
 pub(super) use agentmux::relay::ChatDeliveryMode;
@@ -466,9 +467,23 @@ fn startup_bundle(
     config_root: &Path,
     tmux_socket: &Path,
 ) -> Result<(), agentmux::relay::RelayError> {
+    ensure_fast_respawn_for_tests();
     let runtime_directory = tmux_socket.parent().unwrap_or_else(|| Path::new("."));
     let _ = agentmux::relay::startup_bundle(config_root, "party", runtime_directory)?;
     Ok(())
+}
+
+static FAST_RESPAWN_INIT: OnceLock<()> = OnceLock::new();
+
+// Shrinks the ACP respawn backoff cap so integration tests do not have to
+// wait the full 1s initial backoff. Idempotent via OnceLock; the `unsafe`
+// block is required by Rust 2024's `std::env::set_var` signature, and the
+// OnceLock guard ensures this runs before any worker thread consults the
+// variable on a respawn path.
+fn ensure_fast_respawn_for_tests() {
+    FAST_RESPAWN_INIT.get_or_init(|| unsafe {
+        std::env::set_var("AGENTMUX_RELAY_ACP_RESPAWN_BACKOFF_MAX_MS", "50");
+    });
 }
 
 pub(super) fn read_request_log(path: &Path) -> Vec<Value> {

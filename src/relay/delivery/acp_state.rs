@@ -20,6 +20,7 @@ pub(in crate::relay) const ACP_LOOK_PRIME_TIMEOUT_MS: u64 = 750;
 pub(in crate::relay) const ACP_STARTUP_PRIME_TIMEOUT_MS: u64 = 10_000;
 pub(in crate::relay) const ACP_STALE_REASON_WORKER_INITIALIZING: &str = "acp_worker_initializing";
 pub(in crate::relay) const ACP_STALE_REASON_WORKER_UNAVAILABLE: &str = "acp_worker_unavailable";
+pub(in crate::relay) const ACP_STALE_REASON_WORKER_RECOVERING: &str = "acp_worker_recovering";
 pub(in crate::relay) const ACP_STALE_REASON_SNAPSHOT_PRIME_TIMEOUT: &str =
     "acp_snapshot_prime_timeout";
 
@@ -119,6 +120,16 @@ pub(in crate::relay) fn derive_acp_look_snapshot(
         };
     }
 
+    if matches!(worker_state, Some(AcpWorkerReadinessState::Recovering)) {
+        return AcpLookSnapshot {
+            snapshot_entries,
+            freshness: AcpLookFreshness::Stale,
+            snapshot_source,
+            stale_reason_code: Some(ACP_STALE_REASON_WORKER_RECOVERING.to_string()),
+            snapshot_age_ms: None,
+        };
+    }
+
     if !has_snapshot {
         let stale_reason = if prime_timed_out {
             ACP_STALE_REASON_SNAPSHOT_PRIME_TIMEOUT
@@ -138,6 +149,9 @@ pub(in crate::relay) fn derive_acp_look_snapshot(
         Some(AcpWorkerReadinessState::Busy) | Some(AcpWorkerReadinessState::Available) => None,
         Some(AcpWorkerReadinessState::Initializing) => {
             Some(ACP_STALE_REASON_WORKER_INITIALIZING.to_string())
+        }
+        Some(AcpWorkerReadinessState::Recovering) => {
+            Some(ACP_STALE_REASON_WORKER_RECOVERING.to_string())
         }
         Some(AcpWorkerReadinessState::Unavailable) | None => {
             Some(ACP_STALE_REASON_WORKER_UNAVAILABLE.to_string())

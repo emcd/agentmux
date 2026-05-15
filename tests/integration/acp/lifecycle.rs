@@ -154,28 +154,35 @@ fn acp_send_uses_persisted_session_id_when_config_id_is_absent() {
     let tmux_socket = temporary.path().join("tmux.sock");
 
     let first = dispatch_send(&config_root, &tmux_socket, Some(1_000));
-    let second = dispatch_send(&config_root, &tmux_socket, Some(1_000));
     let (first_status, first_result) = chat_result(first);
-    let (second_status, second_result) = chat_result(second);
     assert_eq!(first_status, ChatStatus::Success);
-    assert_eq!(second_status, ChatStatus::Failure);
     assert_eq!(first_result.outcome, ChatOutcome::Delivered);
-    assert_eq!(second_result.outcome, ChatOutcome::Failed);
-    assert_eq!(
-        second_result.reason_code.as_deref(),
-        Some("runtime_acp_worker_unavailable")
+
+    // After bravo's disconnect, auto-respawn rebuilds the worker using the
+    // session id persisted by the first bootstrap. Wait until the respawn
+    // actually issues session/load before asserting; the log is shared with
+    // alpha's stub so we wait on a content signal rather than worker state.
+    assert!(
+        wait_for_log_match(
+            &log_path,
+            "\"method\":\"session/load\"",
+            Duration::from_secs(3),
+        ),
+        "respawn did not issue session/load within timeout"
     );
 
     let log = fs::read_to_string(log_path).expect("read ACP log");
+    // Two session/new from initial bootstrap (alpha + bravo, sharing the
+    // stub script), zero additional new from the respawn path.
     assert_eq!(
         log.matches("\"method\":\"session/new\"").count(),
         2,
-        "log={log}"
+        "expected one session/new per initial bootstrap (alpha+bravo), log={log}"
     );
     assert_eq!(
         log.matches("\"method\":\"session/load\"").count(),
-        0,
-        "log={log}"
+        1,
+        "expected respawn to issue exactly one session/load using the persisted id, log={log}"
     );
 }
 
@@ -366,14 +373,18 @@ fn acp_disconnect_before_first_activity_does_not_block_sync_dispatch_ack() {
             .and_then(|value| value.get("delivery_phase")),
         Some(&Value::String("accepted_in_progress".to_string()))
     );
+    // Auto-respawn pulls the worker out of `unavailable` as soon as it
+    // observes the ConnectionClosed transition; assert that the worker
+    // transitions through the recovery path (or settles back at available)
+    // rather than staying terminally unavailable.
     assert!(
-        wait_for_worker_state(
+        wait_for_any_worker_state(
             temporary.path(),
             "bravo",
-            "unavailable",
-            Duration::from_secs(1)
+            &["recovering", "available", "busy"],
+            Duration::from_secs(3),
         ),
-        "worker_state did not converge to unavailable"
+        "worker_state did not engage auto-respawn after disconnect"
     );
 }
 
@@ -403,25 +414,40 @@ fn acp_disconnect_after_first_activity_preserves_accepted_response() {
         Some(&Value::String("accepted_in_progress".to_string()))
     );
     assert!(
-        wait_for_worker_state(
+        wait_for_any_worker_state(
             temporary.path(),
             "bravo",
-            "unavailable",
-            Duration::from_secs(1)
+            &["recovering", "available", "busy"],
+            Duration::from_secs(3),
         ),
-        "worker_state did not converge to unavailable"
+        "worker_state did not engage auto-respawn after disconnect"
     );
 }
 
-fn wait_for_worker_state(
+fn wait_for_any_worker_state(
     root: &std::path::Path,
     target_session: &str,
-    expected: &str,
+    expected: &[&str],
     timeout: Duration,
 ) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if read_worker_state(root, target_session).as_deref() == Some(expected) {
+        if let Some(state) = read_worker_state(root, target_session)
+            && expected.iter().any(|candidate| state == *candidate)
+        {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    false
+}
+
+fn wait_for_log_match(log_path: &std::path::Path, needle: &str, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if let Ok(contents) = fs::read_to_string(log_path)
+            && contents.contains(needle)
+        {
             return true;
         }
         thread::sleep(Duration::from_millis(20));

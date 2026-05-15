@@ -65,19 +65,40 @@ pub(super) struct PersistentAcpWorkerRuntime {
     pub session_id: String,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct AcpBootstrapError {
+    pub code: String,
+    pub reason: String,
+}
+
+impl AcpBootstrapError {
+    // Permanent bootstrap failures are conditions that respawn cannot resolve.
+    // Capability gaps mean the agent fundamentally cannot host the session,
+    // so retrying with the same binary would just reproduce the failure.
+    pub fn is_permanent(&self) -> bool {
+        self.code == ACP_ERROR_CODE_MISSING_CAPABILITY
+    }
+}
+
 pub(super) fn bootstrap_acp_worker_runtime(
     runtime_directory: &Path,
     target_member: &BundleMember,
-) -> Result<PersistentAcpWorkerRuntime, String> {
+) -> Result<PersistentAcpWorkerRuntime, AcpBootstrapError> {
     let TargetConfiguration::Acp(acp_target) = &target_member.target else {
-        return Err("ACP worker bootstrap requires ACP target".to_string());
+        return Err(AcpBootstrapError {
+            code: "runtime_startup_failed".to_string(),
+            reason: "ACP worker bootstrap requires ACP target".to_string(),
+        });
     };
     let Some(working_directory) = target_member.working_directory.as_ref() else {
-        return Err("ACP worker bootstrap requires target working directory".to_string());
+        return Err(AcpBootstrapError {
+            code: "runtime_startup_failed".to_string(),
+            reason: "ACP worker bootstrap requires target working directory".to_string(),
+        });
     };
     let target_session = target_member.id.as_str();
     let message_id = "acp-worker-bootstrap";
-    let runtime = initialize_persistent_acp_worker_runtime(
+    initialize_persistent_acp_worker_runtime(
         target_member,
         acp_target,
         working_directory,
@@ -85,17 +106,35 @@ pub(super) fn bootstrap_acp_worker_runtime(
         target_session,
         message_id,
     )
-    .map_err(|result| {
-        let code = result
+    .map_err(|result| AcpBootstrapError {
+        code: result
             .reason_code
             .clone()
-            .unwrap_or_else(|| "runtime_startup_failed".to_string());
-        let reason = result
+            .unwrap_or_else(|| "runtime_startup_failed".to_string()),
+        reason: result
             .reason
             .clone()
-            .unwrap_or_else(|| "ACP worker bootstrap failed".to_string());
-        format!("{code}: {reason}")
-    })?;
+            .unwrap_or_else(|| "ACP worker bootstrap failed".to_string()),
+    })
+}
+
+// Rebuilds the per-target ACP runtime after a transport failure and refreshes
+// the worker registry's replay buffer handle so future Look queries observe
+// the new child's stream rather than the dead one. Surfacing the structured
+// `AcpBootstrapError` lets the worker loop decide whether to keep retrying or
+// give up permanently.
+pub(super) fn respawn_acp_worker_runtime(
+    bundle_name: &str,
+    runtime_directory: &Path,
+    target_member: &BundleMember,
+) -> Result<PersistentAcpWorkerRuntime, AcpBootstrapError> {
+    let runtime = bootstrap_acp_worker_runtime(runtime_directory, target_member)?;
+    super::async_worker::install_acp_worker_replay_buffer(
+        bundle_name,
+        runtime_directory,
+        target_member.id.as_str(),
+        runtime.client.replay_buffer_handle(),
+    );
     Ok(runtime)
 }
 
