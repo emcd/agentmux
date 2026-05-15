@@ -1,41 +1,49 @@
 # agentmux coder definitions
 format-version = 1
-# Sample default authorization scopes are defined in
-# `data/configuration/policies.toml` (`look = "all:home"`).
 
 [[coders]]
-id = "claude"
+id = 'claude'
 
 [coders.tmux]
-initial-command = "claude"
-resume-command = "claude --resume {coder-session-id}"
+initial-command = 'claude'
+resume-command = 'claude --resume {coder-session-id}'
 prompt-regex = '(?ms)^[─-]{20,}\s+[>❯]\s+[─-]{20,}'
 prompt-inspect-lines = 6
 prompt-idle-column = 2
 
 [[coders]]
-id = "codex"
+id = 'codex'
 
 [coders.tmux]
-initial-command = "codex"
-resume-command = "codex resume {coder-session-id}"
+initial-command = 'codex'
+resume-command = 'codex resume {coder-session-id}'
 prompt-regex = '(?ms)^›.*\n\s*\n.*$'
 prompt-inspect-lines = 3
 prompt-idle-column = 2
 
 [[coders]]
-id = "gemini"
+id = 'gemini'
 
 [coders.tmux]
-initial-command = "gemini"
-resume-command = "gemini --resume {coder-session-id}"
+initial-command = 'gemini'
+resume-command = 'gemini --resume {coder-session-id}'
 prompt-regex = '(?ms)^\s*>\s+Type your message.*\n[▄]{20,}\n.*$'
 prompt-inspect-lines = 3
 prompt-idle-column = 3
 
 [[coders]]
-id = "opencode"
+id = 'opencode'
+
+[coders.tmux]
+initial-command = 'opencode'
+resume-command = 'opencode --session {coder-session-id}'
+prompt-regex = '(?ms)^\s*┃\s*\n\s*┃\s*\n(?:\s*┃.*\n)*\s*┃\s+\S.*\n\s*╹▀{20,}\n\s+.*\bctrl\+p commands(?:\s+•\s+OpenCode\s+[\d.]+)?$'
+prompt-inspect-lines = 8
+prompt-idle-column = 5
+
+[[coders]]
+id = 'opencode-acp'
 
 [coders.acp]
-channel = "stdio"
-command = "opencode acp"
+channel = 'stdio'
+command = 'opencode acp'
