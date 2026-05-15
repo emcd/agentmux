@@ -39,6 +39,7 @@ pub(in crate::relay) enum AcpWorkerReadinessState {
     Initializing,
     Available,
     Busy,
+    Recovering,
     Unavailable,
 }
 

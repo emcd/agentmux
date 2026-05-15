@@ -21,6 +21,8 @@ use super::super::{
 const PERMISSION_QUEUE_FILE: &str = "permission_queue.json";
 const PERMISSION_QUEUE_SCHEMA_VERSION: u32 = 1;
 const PERMISSION_CANCELLED_CODE: &str = "runtime_permission_request_cancelled";
+const PERMISSION_INVALIDATED_BY_RESPAWN_CODE: &str =
+    "runtime_permission_request_invalidated_by_respawn";
 const PERMISSION_ALREADY_RESOLVED_CODE: &str = "runtime_permission_request_already_resolved";
 const PERMISSION_QUEUE_UNAVAILABLE_CODE: &str = "runtime_permission_queue_unavailable";
 const PERMISSION_QUEUE_FULL_CODE: &str = "runtime_permission_queue_full";
@@ -279,6 +281,72 @@ pub(in crate::relay) fn emit_permission_snapshot_then_replay(
         let _ = send_event_to_registered_ui(context.bundle_name.as_str(), ui_session_id, &event);
     }
     Ok(())
+}
+
+// Cancels every pending permission request tied to `target_session` with the
+// `runtime_permission_request_invalidated_by_respawn` reason code. Used when
+// the ACP worker for that session is being respawned; the dying ACP child can
+// no longer accept the operator decision, so the request must be cleared
+// before the new child runs `session/load`. Returns the number of records
+// invalidated.
+pub(in crate::relay) fn invalidate_pending_for_respawn(
+    context: &PermissionEventContext,
+    target_session: &str,
+) -> Result<usize, String> {
+    let _guard = permission_queue_lock()
+        .lock()
+        .map_err(|_| "failed to lock permission queue state".to_string())?;
+    let path = permission_queue_path(context.runtime_directory.as_path());
+    let Some(mut state) = load_persisted_permission_queue_state(path.as_path())? else {
+        return Ok(0);
+    };
+
+    let mut invalidated_records: Vec<PersistedPendingPermissionRequest> = Vec::new();
+    state.pending.retain(|record| {
+        if record.target_session == target_session {
+            invalidated_records.push(record.clone());
+            false
+        } else {
+            true
+        }
+    });
+    if invalidated_records.is_empty() {
+        return Ok(0);
+    }
+    store_persisted_permission_queue_state(path.as_path(), &state)?;
+
+    for record in &invalidated_records {
+        let outcome = PermissionResolutionOutcome::Cancelled {
+            decided_by: "relay".to_string(),
+            reason_code: PERMISSION_INVALIDATED_BY_RESPAWN_CODE.to_string(),
+            reason: Some(
+                "ACP worker respawn invalidated the pending permission request".to_string(),
+            ),
+        };
+        let had_pending_waiter = match take_waiter(record.permission_request_id.as_str())? {
+            Some(waiter) => {
+                let (lock, condvar) = &*waiter;
+                if let Ok(mut value) = lock.lock() {
+                    *value = Some(outcome.clone());
+                    condvar.notify_all();
+                }
+                true
+            }
+            None => false,
+        };
+        emit_permission_resolved_event(context, record, &outcome);
+        emit_inscription(
+            "relay.acp.respawn.permission_invalidated",
+            &json!({
+                "bundle_name": context.bundle_name,
+                "permission_request_id": record.permission_request_id,
+                "message_id": record.message_id,
+                "target_session": record.target_session,
+                "had_pending_waiter": had_pending_waiter,
+            }),
+        );
+    }
+    Ok(invalidated_records.len())
 }
 
 pub(in crate::relay) fn list_pending_permission_requests(

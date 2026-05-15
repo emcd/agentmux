@@ -1001,10 +1001,13 @@ pub fn wait_for_async_delivery_shutdown(timeout: Duration) -> usize {
 
 /// Reads the in-memory ACP worker readiness state for an observability check.
 ///
-/// Returns one of "initializing", "available", "busy", "unavailable" when a
-/// worker is registered for the (bundle_name, runtime_directory, target_session)
-/// triple, or `None` when no worker is registered or no readiness state has
-/// been recorded yet.
+/// Returns one of "initializing", "available", "busy", "recovering",
+/// "unavailable" when a worker is registered for the (bundle_name,
+/// runtime_directory, target_session) triple, or `None` when no worker is
+/// registered or no readiness state has been recorded yet. The "recovering"
+/// value indicates the worker observed a transport failure and is rebuilding
+/// the ACP child process; clients that do not recognize the value should
+/// treat it as non-ready.
 #[must_use]
 pub fn read_acp_worker_state(
     bundle_name: &str,
@@ -1016,6 +1019,7 @@ pub fn read_acp_worker_state(
             delivery::AcpWorkerReadinessState::Initializing => "initializing",
             delivery::AcpWorkerReadinessState::Available => "available",
             delivery::AcpWorkerReadinessState::Busy => "busy",
+            delivery::AcpWorkerReadinessState::Recovering => "recovering",
             delivery::AcpWorkerReadinessState::Unavailable => "unavailable",
         }
     })

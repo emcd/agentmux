@@ -250,6 +250,71 @@ pub(super) enum StreamEventSendOutcome {
     Disconnected,
 }
 
+// Returns the session ids of UI-class subscribers currently registered for
+// the bundle. Used by the worker thread at respawn time to construct a
+// `PermissionEventContext` without an in-flight task.
+pub(super) fn list_registered_ui_sessions_for_bundle(bundle_name: &str) -> Vec<String> {
+    let registry = stream_registry();
+    let Ok(entries) = registry.entries.lock() else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|(key, entry)| {
+            if key.bundle_name != bundle_name {
+                return None;
+            }
+            if entry.client_class != RelayClientClass::Ui {
+                return None;
+            }
+            entry.writer.as_ref()?;
+            Some(key.session_id.clone())
+        })
+        .collect()
+}
+
+// Fans an event out to every UI-class subscriber registered for the bundle.
+// Used for worker-scoped notifications that are not tied to a specific
+// operator session (e.g. ACP respawn lifecycle). The per-recipient event is
+// cloned with `target_session` rewritten to the recipient's UI session id so
+// existing per-session filtering still works.
+pub(super) fn broadcast_event_to_bundle_ui(
+    bundle_name: &str,
+    template: &RelayStreamEvent,
+) -> Vec<String> {
+    let registry = stream_registry();
+    let ui_session_ids: Vec<String> = {
+        let Ok(entries) = registry.entries.lock() else {
+            return Vec::new();
+        };
+        entries
+            .iter()
+            .filter_map(|(key, entry)| {
+                if key.bundle_name != bundle_name {
+                    return None;
+                }
+                if entry.client_class != RelayClientClass::Ui {
+                    return None;
+                }
+                entry.writer.as_ref()?;
+                Some(key.session_id.clone())
+            })
+            .collect()
+    };
+    let mut delivered = Vec::new();
+    for ui_session_id in ui_session_ids {
+        let mut event = template.clone();
+        event.target_session = ui_session_id.clone();
+        if matches!(
+            send_event_to_registered_ui(bundle_name, ui_session_id.as_str(), &event),
+            Ok(StreamEventSendOutcome::Delivered)
+        ) {
+            delivered.push(ui_session_id);
+        }
+    }
+    delivered
+}
+
 pub(super) fn send_event_to_registered_ui(
     bundle_name: &str,
     session_id: &str,
