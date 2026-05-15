@@ -4,8 +4,8 @@ use crate::{
 };
 
 use super::{
-    AppState, FocusField, LookSnapshotFormat, PendingPermissionOption, ToCompletionState,
-    append_recipient_token, current_recipient_token_context, map_relay_error,
+    AppState, FocusField, LookSnapshotFormat, PendingPermissionOption, ScreenMode,
+    ToCompletionState, append_recipient_token, current_recipient_token_context, map_relay_error,
     matching_recipient_candidates,
 };
 
@@ -23,8 +23,6 @@ impl AppState {
     pub fn open_picker(&mut self) {
         self.picker_open = true;
         self.events_overlay_open = false;
-        self.look_overlay_open = false;
-        self.look_overlay_restore_picker_on_close = false;
         self.help_overlay_open = false;
         if self.recipients.is_empty() {
             self.picker_state.select(None);
@@ -42,46 +40,35 @@ impl AppState {
         self.events_overlay_open = !self.events_overlay_open;
         if self.events_overlay_open {
             self.picker_open = false;
-            self.look_overlay_open = false;
-            self.look_overlay_restore_picker_on_close = false;
             self.help_overlay_open = false;
             self.ensure_pending_permission_selection();
         }
     }
 
-    pub fn open_look_overlay(&mut self) {
-        self.look_overlay_restore_picker_on_close = self.picker_open;
-        self.look_overlay_open = true;
-        self.look_overlay_scroll = 0;
-        self.look_permission_request_index = 0;
-        self.look_permission_option_index = 0;
-        self.picker_open = false;
-        self.events_overlay_open = false;
-        self.help_overlay_open = false;
+    pub fn toggle_mode(&mut self) {
+        self.mode = match self.mode {
+            ScreenMode::Communication => ScreenMode::Interaction,
+            ScreenMode::Interaction => ScreenMode::Communication,
+        };
     }
 
-    pub fn close_look_overlay(&mut self) {
-        self.look_overlay_open = false;
-        let restore_picker = self.look_overlay_restore_picker_on_close;
-        self.look_overlay_restore_picker_on_close = false;
-        if restore_picker {
-            self.open_picker();
-        }
+    pub fn enter_interaction_mode(&mut self) {
+        self.mode = ScreenMode::Interaction;
     }
 
-    pub fn scroll_look_overlay_up(&mut self) {
+    pub fn scroll_interaction_snapshot_up(&mut self) {
         self.look_overlay_scroll = self.look_overlay_scroll.saturating_add(1);
     }
 
-    pub fn scroll_look_overlay_down(&mut self) {
+    pub fn scroll_interaction_snapshot_down(&mut self) {
         self.look_overlay_scroll = self.look_overlay_scroll.saturating_sub(1);
     }
 
-    pub fn scroll_look_overlay_page_up(&mut self) {
+    pub fn scroll_interaction_snapshot_page_up(&mut self) {
         self.look_overlay_scroll = self.look_overlay_scroll.saturating_add(10);
     }
 
-    pub fn scroll_look_overlay_page_down(&mut self) {
+    pub fn scroll_interaction_snapshot_page_down(&mut self) {
         self.look_overlay_scroll = self.look_overlay_scroll.saturating_sub(10);
     }
 
@@ -90,8 +77,6 @@ impl AppState {
         if self.help_overlay_open {
             self.picker_open = false;
             self.events_overlay_open = false;
-            self.look_overlay_open = false;
-            self.look_overlay_restore_picker_on_close = false;
         }
     }
 
@@ -549,12 +534,13 @@ impl AppState {
             } => {
                 let (look_snapshot_format, look_snapshot_lines, look_snapshot_entries) =
                     overlay_snapshot_from_payload(snapshot);
-                self.look_target = Some(target_session.clone());
+                self.set_interaction_target(target_session.clone());
                 self.look_captured_at = Some(captured_at);
                 self.look_snapshot_format = Some(look_snapshot_format);
                 self.look_snapshot_lines = look_snapshot_lines;
                 self.look_snapshot_entries = look_snapshot_entries;
-                self.open_look_overlay();
+                self.picker_open = false;
+                self.enter_interaction_mode();
                 self.push_status(None, format!("look captured target={target_session}"));
                 self.relay_stream_poll_error_reported = false;
                 Ok(())
@@ -574,14 +560,27 @@ impl AppState {
                 "raww requires a selected recipient in picker",
             )
         })?;
-        if self.message_field.trim().is_empty() {
+        self.set_interaction_target(target);
+        self.picker_open = false;
+        self.enter_interaction_mode();
+        Ok(())
+    }
+
+    pub fn dispatch_raww_from_interaction(&mut self) -> Result<(), RuntimeError> {
+        let Some(target) = self.look_target.clone() else {
+            return Err(RuntimeError::validation(
+                "validation_unknown_target",
+                "raww requires an active interaction target",
+            ));
+        };
+        if self.raww_draft.trim().is_empty() {
             return Err(RuntimeError::validation(
                 "validation_missing_message_input",
-                "raww text is required from Message field",
+                "raww text is required from raww input pane",
             ));
         }
 
-        let text = self.message_field.clone();
+        let text = self.raww_draft.clone();
         let response = self.request_relay(&RelayRequest::Raww {
             request_id: None,
             sender_session: self.sender_session.clone(),
@@ -629,6 +628,7 @@ impl AppState {
                         "raww target={target_session} status={status} transport={transport_label} message_id={message_id_label}"
                     ));
                 }
+                self.clear_raww_draft();
                 self.relay_stream_poll_error_reported = false;
                 Ok(())
             }
@@ -638,6 +638,110 @@ impl AppState {
                 format!("relay returned unexpected response variant: {other:?}"),
             )),
         }
+    }
+
+    fn set_interaction_target(&mut self, target: String) {
+        let target_changed = self.look_target.as_deref() != Some(target.as_str());
+        self.look_target = Some(target);
+        if target_changed {
+            self.look_overlay_scroll = 0;
+            self.look_permission_request_index = 0;
+            self.look_permission_option_index = 0;
+        }
+    }
+
+    pub fn insert_character_in_raww(&mut self, character: char) {
+        self.raww_draft.insert(self.raww_cursor_index, character);
+        self.raww_cursor_index += character.len_utf8();
+        self.raww_cursor_preferred_column = None;
+    }
+
+    pub fn insert_newline_in_raww(&mut self) {
+        self.insert_character_in_raww('\n');
+    }
+
+    pub fn backspace_raww(&mut self) {
+        if self.raww_cursor_index == 0 {
+            return;
+        }
+        let next_cursor = previous_char_boundary(self.raww_draft.as_str(), self.raww_cursor_index);
+        self.raww_draft
+            .replace_range(next_cursor..self.raww_cursor_index, "");
+        self.raww_cursor_index = next_cursor;
+        self.raww_cursor_preferred_column = None;
+    }
+
+    pub fn move_raww_cursor_left(&mut self) {
+        if self.raww_cursor_index == 0 {
+            return;
+        }
+        self.raww_cursor_index =
+            previous_char_boundary(self.raww_draft.as_str(), self.raww_cursor_index);
+        self.raww_cursor_preferred_column = None;
+    }
+
+    pub fn move_raww_cursor_right(&mut self) {
+        if self.raww_cursor_index >= self.raww_draft.len() {
+            return;
+        }
+        self.raww_cursor_index =
+            next_char_boundary(self.raww_draft.as_str(), self.raww_cursor_index);
+        self.raww_cursor_preferred_column = None;
+    }
+
+    pub fn move_raww_cursor_home(&mut self) {
+        let (line_start, _) =
+            line_range_for_cursor(self.raww_draft.as_str(), self.raww_cursor_index);
+        self.raww_cursor_index = line_start;
+        self.raww_cursor_preferred_column = None;
+    }
+
+    pub fn move_raww_cursor_end(&mut self) {
+        let (_, line_end) = line_range_for_cursor(self.raww_draft.as_str(), self.raww_cursor_index);
+        self.raww_cursor_index = line_end;
+        self.raww_cursor_preferred_column = None;
+    }
+
+    pub fn move_raww_cursor_up(&mut self) {
+        self.move_raww_cursor_vertical(-1);
+    }
+
+    pub fn move_raww_cursor_down(&mut self) {
+        self.move_raww_cursor_vertical(1);
+    }
+
+    fn move_raww_cursor_vertical(&mut self, delta: isize) {
+        let line_ranges = line_ranges(self.raww_draft.as_str());
+        if line_ranges.is_empty() {
+            return;
+        }
+        let (current_line, current_column) =
+            line_and_column_for_index(self.raww_draft.as_str(), self.raww_cursor_index);
+        let target_line = if delta.is_negative() {
+            current_line.saturating_sub(delta.unsigned_abs())
+        } else {
+            (current_line + delta as usize).min(line_ranges.len().saturating_sub(1))
+        };
+        if target_line == current_line {
+            return;
+        }
+        let preferred_column = self.raww_cursor_preferred_column.unwrap_or(current_column);
+        self.raww_cursor_index = cursor_index_for_line_column(
+            self.raww_draft.as_str(),
+            line_ranges[target_line],
+            preferred_column,
+        );
+        self.raww_cursor_preferred_column = Some(preferred_column);
+    }
+
+    pub fn raww_cursor_line_and_column(&self) -> (usize, usize) {
+        line_and_column_for_index(self.raww_draft.as_str(), self.raww_cursor_index)
+    }
+
+    pub fn clear_raww_draft(&mut self) {
+        self.raww_draft.clear();
+        self.raww_cursor_index = 0;
+        self.raww_cursor_preferred_column = None;
     }
 
     fn selected_picker_recipient_id(&self) -> Option<String> {
@@ -719,6 +823,10 @@ impl AppState {
                 format!("relay returned unexpected response variant: {other:?}"),
             )),
         }
+    }
+
+    pub(crate) fn interaction_raww_region_visible(&self) -> bool {
+        !self.raww_draft.is_empty() || self.look_pending_permissions().is_empty()
     }
 
     pub(crate) fn look_pending_permissions(&self) -> Vec<&super::PendingPermissionEntry> {

@@ -6,7 +6,7 @@ use agentmux::{
     runtime::error::RuntimeError,
     tui::{
         TuiLaunchOptions,
-        workbench::{Workbench, WorkbenchField},
+        workbench::{Workbench, WorkbenchField, WorkbenchMode},
     },
 };
 
@@ -233,13 +233,73 @@ fn message_cursor_supports_readline_ctrl_a_ctrl_e_navigation() {
 }
 
 #[test]
-fn f4_is_not_bound_on_main_workbench_surface() {
+fn f4_toggles_screen_mode() {
     let mut state = make_state();
-    state.insert_text("master");
+    assert_eq!(state.mode(), WorkbenchMode::Communication);
     state
         .dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE))
-        .expect("f4 should be ignored on main surface");
-    assert_eq!(state.to_field(), "master");
+        .expect("f4 should toggle mode");
+    assert_eq!(state.mode(), WorkbenchMode::Interaction);
+    state
+        .dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE))
+        .expect("f4 should toggle mode back");
+    assert_eq!(state.mode(), WorkbenchMode::Communication);
+}
+
+#[test]
+fn f4_preserves_per_mode_drafts_across_switches() {
+    let mut state = make_state();
+    state.set_focus(WorkbenchField::Message);
+    state.insert_text("hello");
+
+    state
+        .dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE))
+        .expect("f4 should switch to interaction");
+    for character in "echo".chars() {
+        state
+            .dispatch_event(key_event(KeyCode::Char(character), KeyModifiers::NONE))
+            .expect("raww typing should be handled");
+    }
+    assert_eq!(state.raww_draft(), "echo");
+
+    state
+        .dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE))
+        .expect("f4 should switch back to communication");
+    assert_eq!(state.message_field(), "hello");
+
+    state
+        .dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE))
+        .expect("f4 should switch to interaction again");
+    assert_eq!(state.raww_draft(), "echo");
+}
+
+#[test]
+fn interaction_mode_typing_updates_raww_draft() {
+    let mut state = make_state();
+    state
+        .dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE))
+        .expect("f4 should switch to interaction");
+    for character in "ls".chars() {
+        state
+            .dispatch_event(key_event(KeyCode::Char(character), KeyModifiers::NONE))
+            .expect("raww typing should be handled");
+    }
+    assert_eq!(state.raww_draft(), "ls");
+}
+
+#[test]
+fn interaction_mode_enter_without_target_is_validation_error() {
+    let mut state = make_state();
+    state
+        .dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE))
+        .expect("f4 should switch to interaction");
+    let result = state.dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE));
+    match result {
+        Err(RuntimeError::Validation { code, .. }) => {
+            assert_eq!(code, "validation_unknown_target")
+        }
+        other => panic!("unexpected result: {other:?}"),
+    }
 }
 
 #[test]
@@ -277,40 +337,64 @@ fn picker_look_uses_selected_recipient_target() {
 }
 
 #[test]
-fn picker_raww_requires_non_empty_message_field() {
+fn picker_raww_requires_selected_recipient() {
     let mut state = make_state();
-    state.set_recipients(&["master"]);
     state
         .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
         .expect("f2 should open picker");
     let result = state.dispatch_event(key_event(KeyCode::Char('w'), KeyModifiers::NONE));
     match result {
         Err(RuntimeError::Validation { code, .. }) => {
-            assert_eq!(code, "validation_missing_message_input")
+            assert_eq!(code, "validation_unknown_target")
         }
         other => panic!("unexpected result: {other:?}"),
     }
 }
 
 #[test]
-fn picker_raww_uses_selected_recipient_target() {
+fn picker_raww_enters_interaction_mode_with_target() {
     let mut state = make_state();
-    state.set_focus(WorkbenchField::Message);
-    state.insert_text("echo from picker");
     state.set_recipients(&["master"]);
     state
         .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
         .expect("f2 should open picker");
-    let result = state.dispatch_event(key_event(KeyCode::Char('w'), KeyModifiers::NONE));
-    match result {
-        Err(RuntimeError::Validation { code, .. }) => {
-            assert_eq!(code, "relay_unavailable")
-        }
-        Err(RuntimeError::Io { source, .. }) => {
-            assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied)
-        }
-        other => panic!("unexpected result: {other:?}"),
-    }
+    state
+        .dispatch_event(key_event(KeyCode::Char('w'), KeyModifiers::NONE))
+        .expect("picker w should set interaction target and switch mode");
+    assert_eq!(state.mode(), WorkbenchMode::Interaction);
+    assert_eq!(state.interaction_target(), Some("master"));
+    assert!(!state.picker_open());
+}
+
+#[test]
+fn interaction_region_swaps_between_raww_and_permission_pane() {
+    let mut state = make_state();
+    state.set_recipients(&["master"]);
+    state
+        .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
+        .expect("f2 should open picker");
+    state
+        .dispatch_event(key_event(KeyCode::Char('w'), KeyModifiers::NONE))
+        .expect("picker w should enter interaction mode");
+
+    assert!(
+        state.interaction_shows_raww(),
+        "raww region shows when no pending requests exist"
+    );
+
+    state.inject_pending_permission("master");
+    assert!(
+        !state.interaction_shows_raww(),
+        "permission pane replaces raww region when raww empty and pending exists"
+    );
+
+    state
+        .dispatch_event(key_event(KeyCode::Char('x'), KeyModifiers::NONE))
+        .expect("raww typing should be handled");
+    assert!(
+        state.interaction_shows_raww(),
+        "raww region reclaims the region once raww input is non-empty"
+    );
 }
 
 #[test]

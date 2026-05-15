@@ -61,6 +61,13 @@ pub(crate) enum FocusField {
     Message,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum ScreenMode {
+    #[default]
+    Communication,
+    Interaction,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct StatusEntry {
     pub code: Option<String>,
@@ -102,15 +109,17 @@ pub(crate) struct AppState {
     pub recipients_state: ListState,
     pub picker_open: bool,
     pub events_overlay_open: bool,
-    pub look_overlay_open: bool,
-    look_overlay_restore_picker_on_close: bool,
     pub help_overlay_open: bool,
     pub picker_state: ListState,
+    pub mode: ScreenMode,
     pub focus: FocusField,
     pub to_field: String,
     pub message_field: String,
     message_cursor_index: usize,
     message_cursor_preferred_column: Option<usize>,
+    pub raww_draft: String,
+    pub(crate) raww_cursor_index: usize,
+    raww_cursor_preferred_column: Option<usize>,
     pub look_target: Option<String>,
     pub look_captured_at: Option<String>,
     pub look_snapshot_format: Option<LookSnapshotFormat>,
@@ -162,15 +171,17 @@ impl AppState {
             recipients_state: ListState::default(),
             picker_open: false,
             events_overlay_open: false,
-            look_overlay_open: false,
-            look_overlay_restore_picker_on_close: false,
             help_overlay_open: false,
             picker_state: ListState::default(),
+            mode: ScreenMode::Communication,
             focus: FocusField::To,
             to_field: String::new(),
             message_field: String::new(),
             message_cursor_index: 0,
             message_cursor_preferred_column: None,
+            raww_draft: String::new(),
+            raww_cursor_index: 0,
+            raww_cursor_preferred_column: None,
             look_target: None,
             look_captured_at: None,
             look_snapshot_format: None,
@@ -289,8 +300,7 @@ mod tests {
     };
 
     use super::{
-        AppState, ChatHistoryDirection, ChatHistoryEntry, PendingPermissionEntry, Recipient,
-        TuiLaunchOptions,
+        AppState, ChatHistoryDirection, ChatHistoryEntry, PendingPermissionEntry, TuiLaunchOptions,
     };
 
     fn make_state() -> AppState {
@@ -356,35 +366,34 @@ mod tests {
     }
 
     #[test]
-    fn closing_look_overlay_restores_picker_when_opened_from_picker() {
-        let mut state = make_state();
-        state.recipients = vec![Recipient {
-            session_name: "master".to_string(),
-            display_name: None,
-        }];
-        state.recipients_state.select(Some(0));
-        state.open_picker();
-        assert!(state.picker_open);
-        state.open_look_overlay();
-        assert!(state.look_overlay_open);
-        assert!(!state.picker_open);
-
-        state.close_look_overlay();
-        assert!(!state.look_overlay_open);
-        assert!(state.picker_open);
+    fn tui_starts_in_communication_mode() {
+        let state = make_state();
+        assert_eq!(state.mode, super::ScreenMode::Communication);
     }
 
     #[test]
-    fn closing_look_overlay_without_picker_context_does_not_open_picker() {
+    fn toggle_mode_switches_between_communication_and_interaction() {
         let mut state = make_state();
-        assert!(!state.picker_open);
-        state.open_look_overlay();
-        assert!(state.look_overlay_open);
-        assert!(!state.picker_open);
+        assert_eq!(state.mode, super::ScreenMode::Communication);
+        state.toggle_mode();
+        assert_eq!(state.mode, super::ScreenMode::Interaction);
+        state.toggle_mode();
+        assert_eq!(state.mode, super::ScreenMode::Communication);
+    }
 
-        state.close_look_overlay();
-        assert!(!state.look_overlay_open);
-        assert!(!state.picker_open);
+    #[test]
+    fn mode_switch_preserves_compose_and_raww_drafts() {
+        let mut state = make_state();
+        state.to_field = "user".to_string();
+        state.message_field = "hello".to_string();
+        state.raww_draft = "echo".to_string();
+        state.raww_cursor_index = state.raww_draft.len();
+        state.toggle_mode();
+        state.toggle_mode();
+        assert_eq!(state.to_field, "user");
+        assert_eq!(state.message_field, "hello");
+        assert_eq!(state.raww_draft, "echo");
+        assert_eq!(state.raww_cursor_index, 4);
     }
 
     #[test]

@@ -7,7 +7,8 @@ use crate::runtime::error::RuntimeError;
 use super::{
     input,
     state::{
-        AppState, ChatHistoryDirection, ChatHistoryEntry, FocusField, Recipient, TuiLaunchOptions,
+        AppState, ChatHistoryDirection, ChatHistoryEntry, FocusField, PendingPermissionEntry,
+        Recipient, ScreenMode, TuiLaunchOptions,
     },
 };
 
@@ -15,6 +16,12 @@ use super::{
 pub enum WorkbenchField {
     To,
     Message,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkbenchMode {
+    Communication,
+    Interaction,
 }
 
 pub struct Workbench {
@@ -99,5 +106,40 @@ impl Workbench {
 
     pub fn should_quit(&self) -> bool {
         self.state.should_quit
+    }
+
+    pub fn mode(&self) -> WorkbenchMode {
+        match self.state.mode {
+            ScreenMode::Communication => WorkbenchMode::Communication,
+            ScreenMode::Interaction => WorkbenchMode::Interaction,
+        }
+    }
+
+    pub fn interaction_target(&self) -> Option<&str> {
+        self.state.look_target.as_deref()
+    }
+
+    pub fn raww_draft(&self) -> &str {
+        self.state.raww_draft.as_str()
+    }
+
+    pub fn interaction_shows_raww(&self) -> bool {
+        self.state.interaction_raww_region_visible()
+    }
+
+    pub fn picker_open(&self) -> bool {
+        self.state.picker_open
+    }
+
+    pub fn inject_pending_permission(&mut self, target: &str) {
+        self.state.pending_permissions.push(PendingPermissionEntry {
+            permission_request_id: format!("perm-{target}"),
+            message_id: None,
+            target_session: Some(target.to_string()),
+            requested_kind: Some("approval".to_string()),
+            requested_details: None,
+            enqueued_at: None,
+            options: Vec::new(),
+        });
     }
 }
