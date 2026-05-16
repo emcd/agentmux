@@ -98,7 +98,8 @@ enum RelayConnectionDispatchOutcome {
 }
 
 const RELAY_CONNECTION_WORKER_MIN: usize = 2;
-const RELAY_CONNECTION_WORKER_MAX: usize = 8;
+const RELAY_CONNECTION_WORKER_MAX: usize = 64;
+const RELAY_CONNECTION_WORKER_STACK_SIZE: usize = 512 * 1024;
 const RELAY_CONNECTION_QUEUE_CAPACITY: usize = 64;
 const RELAY_PRE_HELLO_IDLE_TIMEOUT_MS: u64 = 2_000;
 
@@ -416,13 +417,14 @@ fn run_relay_listener_worker(
 }
 
 fn relay_connection_worker_count() -> usize {
+    // Connection workers are IO-bound (blocked on read_line between frames),
+    // so available_parallelism() is the wrong heuristic. Default to the max
+    // so persistent-connection clients (TUI, per-agent MCP streams) do not
+    // exhaust the pool. Override with AGENTMUX_RELAY_CONNECTION_WORKERS.
     if let Some(override_count) = parse_env_positive_usize("AGENTMUX_RELAY_CONNECTION_WORKERS") {
         return override_count;
     }
-    thread::available_parallelism()
-        .map(|count| count.get())
-        .unwrap_or(RELAY_CONNECTION_WORKER_MIN)
-        .clamp(RELAY_CONNECTION_WORKER_MIN, RELAY_CONNECTION_WORKER_MAX)
+    RELAY_CONNECTION_WORKER_MAX.max(RELAY_CONNECTION_WORKER_MIN)
 }
 
 fn relay_connection_queue_capacity() -> usize {
@@ -470,15 +472,18 @@ fn spawn_relay_connection_worker(
     metrics: Arc<RelayConnectionPoolMetrics>,
 ) -> RelayConnectionWorker {
     let (sender, receiver) = mpsc::sync_channel::<UnixStream>(relay_connection_queue_capacity());
-    let join_handle = thread::spawn(move || {
-        run_relay_connection_worker(
-            configuration_root,
-            bundle_paths,
-            stop_requested,
-            receiver,
-            metrics,
-        );
-    });
+    let join_handle = thread::Builder::new()
+        .stack_size(RELAY_CONNECTION_WORKER_STACK_SIZE)
+        .spawn(move || {
+            run_relay_connection_worker(
+                configuration_root,
+                bundle_paths,
+                stop_requested,
+                receiver,
+                metrics,
+            );
+        })
+        .expect("spawn relay connection worker thread");
     RelayConnectionWorker {
         sender,
         join_handle,
