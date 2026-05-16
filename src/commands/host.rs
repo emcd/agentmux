@@ -363,6 +363,11 @@ fn run_relay_listener_worker(
                         break;
                     }
                 }
+                emit_connection_pool_metrics(
+                    &hosted_bundle.paths,
+                    connection_workers.len(),
+                    &metrics,
+                );
             }
             Err(source) if source.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(source) => {
@@ -593,6 +598,26 @@ fn reject_overloaded_connection(
         let _ = stream.flush();
     }
     let _ = stream.shutdown(Shutdown::Both);
+}
+
+// Emits a snapshot of connection-pool occupancy on each accept so worker
+// saturation is observable: `active_connections` at `connection_worker_count`
+// with a non-zero `queued_connections` is the pool-exhaustion signal.
+fn emit_connection_pool_metrics(
+    bundle_paths: &BundleRuntimePaths,
+    connection_worker_count: usize,
+    metrics: &RelayConnectionPoolMetrics,
+) {
+    emit_inscription(
+        "relay.connection_pool.metrics",
+        &json!({
+            "bundle_name": bundle_paths.bundle_name,
+            "connection_worker_count": connection_worker_count,
+            "queued_connections": metrics.queued_connections.load(Ordering::SeqCst),
+            "active_connections": metrics.active_connections.load(Ordering::SeqCst),
+            "rejected_connections": metrics.rejected_connections.load(Ordering::SeqCst),
+        }),
+    );
 }
 
 fn wake_listener(socket_path: &Path) {

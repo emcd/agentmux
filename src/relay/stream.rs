@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::runtime::inscriptions::emit_inscription;
+
 use super::{RelayRequest, RelayResponse};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
@@ -364,11 +366,29 @@ pub(super) fn write_stream_frame(
     stream: &mut UnixStream,
     frame: OutgoingFrame<'_>,
 ) -> Result<(), io::Error> {
-    let encoded = encode_outgoing_frame(frame)?;
     use std::io::Write;
-    stream.write_all(encoded.as_bytes())?;
-    stream.write_all(b"\n")?;
-    stream.flush()
+    let encoded = encode_outgoing_frame(frame)?;
+    stream
+        .write_all(encoded.as_bytes())
+        .and_then(|()| stream.write_all(b"\n"))
+        .and_then(|()| stream.flush())
+        .inspect_err(note_write_timeout)
+}
+
+// Records an inscription when a relay-to-client write failed because the write
+// timeout fired. A stalled client (full socket buffer) surfaces here as a
+// `WouldBlock` or `TimedOut` error; capturing it makes connection-pool and
+// delivery-worker saturation traceable to the offending client.
+pub(super) fn note_write_timeout(error: &io::Error) {
+    if matches!(
+        error.kind(),
+        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+    ) {
+        emit_inscription(
+            "relay.connection.write_timeout",
+            &serde_json::json!({ "cause": error.to_string() }),
+        );
+    }
 }
 
 pub(super) fn write_stream_frame_to_writer(
