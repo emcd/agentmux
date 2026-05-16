@@ -13,16 +13,18 @@ use crate::{
 };
 
 use super::authorization::{
-    AuthorizationContext, authorize_grant, authorize_list, authorize_look, authorize_raww,
-    authorize_send, grant_authorized_ui_sessions, has_ui_session, permission_max_pending,
-    ui_session_display_name,
+    AuthorizationContext, authorize_grant, authorize_grant_for_list, authorize_list,
+    authorize_look, authorize_raww, authorize_send, grant_authorized_ui_sessions, has_ui_session,
+    permission_max_pending, ui_session_display_name,
 };
 use super::delivery::{
-    PermissionDecisionKind, PermissionDecisionRequest, PermissionEventContext, QuiescenceOptions,
-    acp_session_ready_for_startup, aggregate_chat_status, await_acp_worker_prime_for_look,
-    deliver_one_target, derive_acp_look_snapshot, emit_permission_snapshot_then_replay,
-    enqueue_async_delivery, enqueue_sync_delivery, get_acp_worker_snapshot, get_acp_worker_state,
-    map_permission_state_error, prompt_batch_settings, resolve_permission_request,
+    PermissionDecisionKind, PermissionDecisionRequest, PermissionEventContext,
+    PersistedPendingPermissionRequest, QuiescenceOptions, acp_session_ready_for_startup,
+    aggregate_chat_status, await_acp_worker_prime_for_look, deliver_one_target,
+    derive_acp_look_snapshot, emit_permission_snapshot_then_replay, enqueue_async_delivery,
+    enqueue_sync_delivery, get_acp_worker_snapshot, get_acp_worker_state,
+    list_pending_permission_requests, map_permission_state_error, prompt_batch_settings,
+    resolve_permission_request,
 };
 use super::lifecycle::{reconcile_loaded_bundle_for_lifecycle, shutdown_bundle_runtime};
 use super::tmux::{capture_pane_tail_lines, resolve_active_pane_target};
@@ -30,8 +32,9 @@ use super::{
     AsyncDeliveryTask, ChatDeliveryMode, ChatOutcome, ChatRequestContext, ChatResult, ChatStatus,
     DeliveryPayloadMode, LifecycleBundleResult, ListedBundle, ListedBundleStartupHealth,
     ListedBundleState, ListedSession, ListedSessionTransport, LookRequestContext,
-    PermissionDecisionRequestContext, RawwRequestContext, RelayError, RelayRequest, RelayResponse,
-    RequestPrincipal, SCHEMA_VERSION, load_startup_failures, relay_error,
+    PendingPermissionEntry, PermissionDecisionRequestContext, RawwRequestContext, RelayError,
+    RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION, load_startup_failures,
+    relay_error,
 };
 
 const LOOK_LINES_DEFAULT: usize = 120;
@@ -157,6 +160,15 @@ pub(super) fn handle_request(
                 bundle_name: request_bundle_name,
                 ui_session_id,
             },
+            runtime_directory,
+            principal,
+        ),
+        RelayRequest::PermissionList {
+            bundle_name: request_bundle_name,
+        } => handle_permission_list(
+            bundle,
+            authorization,
+            request_bundle_name,
             runtime_directory,
             principal,
         ),
@@ -1134,10 +1146,13 @@ fn handle_permission_decision(
             None,
         )
     })?;
-    if principal.client_class != super::stream::RelayClientClass::Ui {
+    if !matches!(
+        principal.client_class,
+        super::stream::RelayClientClass::Ui | super::stream::RelayClientClass::Operator
+    ) {
         return Err(relay_error(
             "validation_invalid_client_class_for_action",
-            "permission decision actions require ui client_class",
+            "permission decision actions require ui or operator client_class",
             Some(json!({
                 "client_class": format!("{:?}", principal.client_class).to_lowercase(),
             })),
@@ -1224,6 +1239,93 @@ fn handle_permission_decision(
         reason_code,
         reason: reason_message,
     })
+}
+
+fn handle_permission_list(
+    bundle: &BundleConfiguration,
+    authorization: &AuthorizationContext,
+    request_bundle_name: Option<String>,
+    runtime_directory: &Path,
+    principal: Option<RequestPrincipal>,
+) -> Result<RelayResponse, RelayError> {
+    if let Some(request_bundle_name) = request_bundle_name.as_deref()
+        && request_bundle_name != bundle.bundle_name
+    {
+        return Err(relay_error(
+            "validation_cross_bundle_unsupported",
+            "permission list is limited to the associated bundle",
+            Some(json!({
+                "associated_bundle_name": bundle.bundle_name,
+                "requested_bundle_name": request_bundle_name,
+            })),
+        ));
+    }
+    let principal = principal.ok_or_else(|| {
+        relay_error(
+            "validation_missing_hello",
+            "permission list requires stream-associated principal identity",
+            None,
+        )
+    })?;
+    if !matches!(
+        principal.client_class,
+        super::stream::RelayClientClass::Ui | super::stream::RelayClientClass::Operator
+    ) {
+        return Err(relay_error(
+            "validation_invalid_client_class_for_action",
+            "permission list requires ui or operator client_class",
+            Some(json!({
+                "client_class": format!("{:?}", principal.client_class).to_lowercase(),
+            })),
+        ));
+    }
+    authorize_grant_for_list(bundle, authorization, principal.session_id.as_str())?;
+    let pending = list_pending_permission_requests(runtime_directory).map_err(|cause| {
+        if cause.starts_with("runtime_permission_queue_unavailable") {
+            relay_error(
+                "runtime_permission_queue_unavailable",
+                "permission queue state is unavailable",
+                None,
+            )
+        } else {
+            relay_error(
+                "internal_unexpected_failure",
+                "failed to list pending permission requests",
+                Some(json!({ "cause": cause })),
+            )
+        }
+    })?;
+    let pending_requests = pending
+        .into_iter()
+        .map(pending_permission_entry_from_record)
+        .collect();
+    Ok(RelayResponse::PermissionList {
+        schema_version: SCHEMA_VERSION.to_string(),
+        bundle_name: bundle.bundle_name.clone(),
+        pending_requests,
+    })
+}
+
+fn pending_permission_entry_from_record(
+    record: PersistedPendingPermissionRequest,
+) -> PendingPermissionEntry {
+    let PersistedPendingPermissionRequest {
+        message_id,
+        permission_request_id,
+        target_session,
+        requested_kind,
+        requested_details,
+        enqueued_at,
+        ..
+    } = record;
+    PendingPermissionEntry {
+        message_id,
+        permission_request_id,
+        target_session,
+        requested_kind,
+        requested_details,
+        enqueued_at,
+    }
 }
 
 fn resolve_sender_identity(

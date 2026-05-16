@@ -8,6 +8,7 @@ This module implements the MCP stdio server for `agentmux`.
   - `list` (MVP requires `command="sessions"`)
   - `help`
   - `look`
+  - `grant` (requires `command="list"` or `command="resolve"`)
   - `raww`
   - `send`
 - Preserve canonical relay `look` success payloads without adapter reshaping:
@@ -20,17 +21,38 @@ This module implements the MCP stdio server for `agentmux`.
 
 ## Data Flow
 
-1. MCP client calls `list`, `look`, `raww`, or `send`.
+1. MCP client calls `list`, `look`, `grant`, `raww`, or `send`.
 2. MCP client can call `help` to discover tool/command schemas.
 3. `src/mcp/mod.rs` validates parameter shape and transport-compatible options.
 4. Request is forwarded as relay contract:
    - `list` (`command="sessions"`) -> one-shot `request_relay` probes (`RelayRequest::List`)
    - `look` -> `RelayStreamSession` (`RelayRequest::Look`)
+   - `grant` (`command="list"`) -> one-shot `request_relay` probe
+     (`RelayRequest::PermissionList`)
+   - `grant` (`command="resolve"`) -> one-shot `request_relay` probe
+     (`RelayRequest::PermissionResolve`)
    - `raww` -> `RelayStreamSession` (`RelayRequest::Raww`)
    - `send` -> `RelayStreamSession` (`RelayRequest::Chat`)
 5. For `all=true`, MCP performs adapter fanout across bundle relays in
    deterministic lexicographic order.
 6. Relay response is mapped back to MCP JSON payload.
+
+## Permission Granting
+
+- The `grant` tool exposes the relay ACP permission queue:
+  - `command="list"` polls the bundle-scoped pending-request set; the response
+    payload mirrors the `permission.requested` event fields exactly.
+  - `command="resolve"` submits a decision (`outcome="selected"` requires
+    `option_id`; `outcome="cancelled"` rejects `option_id`).
+- MCP rejects decider-identity fields (`decided_by`, `ui_session_id`,
+  `operator_session_id`) before relay submission; the deciding identity is
+  association-derived and relay-stamped.
+- Both subcommands require the MCP server's relay stream to hold
+  `client_class ∈ {ui, operator}` plus the `grant` policy capability. The MCP
+  server claims `operator` at startup only when
+  `is_session_operator_class_authorized` confirms the sender session's bundle
+  policy preset enables `operator-class`; otherwise it registers as `agent`
+  and `grant` calls return the relay submitter-gate rejection.
 
 ## Key Types
 
