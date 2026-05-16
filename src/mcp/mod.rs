@@ -9,7 +9,6 @@ use std::{
 use anyhow::Result;
 use rmcp::{
     ErrorData as McpError, ServiceExt,
-    handler::server::router::tool::ToolRouter,
     handler::server::wrapper::Parameters,
     model::{CallToolResult, Content, ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router,
@@ -44,7 +43,6 @@ pub struct McpConfiguration {
 #[derive(Clone, Debug)]
 struct McpServer {
     state: Arc<McpState>,
-    tool_router: ToolRouter<Self>,
 }
 
 #[derive(Debug)]
@@ -239,7 +237,6 @@ impl McpServer {
                 configuration,
                 relay_stream: Mutex::new(relay_stream),
             }),
-            tool_router: Self::tool_router(),
         }
     }
 

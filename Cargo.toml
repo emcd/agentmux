@@ -25,7 +25,7 @@ anyhow = "1.0.97"
 crossterm = "0.28.1"
 libc = "0.2.171"
 ratatui = "0.29.0"
-rmcp = { version = "1.1.0", features = ["transport-io"] }
+rmcp = { version = "1.7.0", features = ["transport-io"] }
 regex = "1.11.1"
 schemars = "1.0.4"
 serde = { version = "1.0.219", features = ["derive"] }
