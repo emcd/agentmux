@@ -33,9 +33,9 @@ use self::authorization::{is_operator_class_authorized, load_authorization_conte
 use self::delivery::QuiescenceOptions;
 use self::stream::{
     HelloFrame, IncomingFrame, OutgoingFrame, RegisterStreamOutcome, RelayClientClass,
-    StreamRegistration, clone_stream_writer, parse_incoming_frame, register_stream,
-    registration_is_current, resolve_registered_client_class, unregister_stream,
-    write_stream_frame_to_writer,
+    SharedStreamWriter, StreamRegistration, clone_stream_writer, note_write_timeout,
+    parse_incoming_frame, register_stream, registration_is_current,
+    resolve_registered_client_class, unregister_stream, write_stream_frame_to_writer,
 };
 
 const SCHEMA_VERSION: &str = ENVELOPE_SCHEMA_VERSION;
@@ -44,6 +44,7 @@ const POLICIES_FORMAT_VERSION: u32 = 1;
 const RELAY_STREAM_HELLO_ACK_TIMEOUT: Duration = Duration::from_secs(2);
 const RELAY_STREAM_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 const RELAY_STREAM_READ_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const RELAY_CONNECTION_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const HELLO_CONFLICT_RETRY_INTERVAL_MS: u64 = 50;
 const HELLO_CONFLICT_RETRY_TIMEOUT_MS: u64 = 1_000;
 
@@ -510,17 +511,63 @@ pub(super) struct AsyncDeliveryTask {
     permission_max_pending: usize,
 }
 
+/// Resolves the relay-side write timeout for client connections.
+///
+/// A stalled client whose receive buffer is full must not pin a connection-pool
+/// worker (or, via registered event writers, a delivery worker) indefinitely;
+/// this timeout bounds every relay-to-client write. Override with
+/// `AGENTMUX_RELAY_CONNECTION_WRITE_TIMEOUT_MS`.
+fn relay_connection_write_timeout() -> Duration {
+    std::env::var("AGENTMUX_RELAY_CONNECTION_WRITE_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .map(Duration::from_millis)
+        .unwrap_or(RELAY_CONNECTION_WRITE_TIMEOUT)
+}
+
 /// Handles one relay socket request/response exchange on a connected stream.
 pub fn serve_connection(
     stream: &mut UnixStream,
     configuration_root: &Path,
     bundle_paths: &BundleRuntimePaths,
 ) -> Result<(), io::Error> {
+    stream.set_write_timeout(Some(relay_connection_write_timeout()))?;
     let writer = clone_stream_writer(stream)?;
     let mut reader = BufReader::new(stream.try_clone()?);
-    let mut line = String::new();
     let mut registration = None::<StreamRegistration>;
 
+    let outcome = serve_connection_frames(
+        stream,
+        writer,
+        &mut reader,
+        &mut registration,
+        configuration_root,
+        bundle_paths,
+    );
+
+    // Always release the registry entry, including on the error-return paths
+    // (write timeout, invalid frame bytes). A leaked entry would force every
+    // subsequent reconnect with the same identity into an identity-claim
+    // conflict until an event write incidentally cleared it.
+    if let Some(registration) = registration.as_ref()
+        && let Err(source) = unregister_stream(registration)
+        && outcome.is_ok()
+    {
+        return Err(source);
+    }
+    outcome
+}
+
+fn serve_connection_frames(
+    stream: &mut UnixStream,
+    writer: SharedStreamWriter,
+    reader: &mut BufReader<UnixStream>,
+    registration: &mut Option<StreamRegistration>,
+    configuration_root: &Path,
+    bundle_paths: &BundleRuntimePaths,
+) -> Result<(), io::Error> {
+    let mut line = String::new();
     loop {
         line.clear();
         let read = match reader.read_line(&mut line) {
@@ -573,7 +620,7 @@ pub fn serve_connection(
                         stream.set_read_timeout(None)?;
                         match register_stream(&hello, writer.clone())? {
                             RegisterStreamOutcome::Registered(value) => {
-                                registration = Some(value);
+                                *registration = Some(value);
                             }
                             RegisterStreamOutcome::IdentityClaimConflict {
                                 existing_connection_id,
@@ -712,9 +759,6 @@ pub fn serve_connection(
         }
     }
 
-    if let Some(registration) = registration.as_ref() {
-        unregister_stream(registration)?;
-    }
     Ok(())
 }
 
@@ -1050,9 +1094,11 @@ pub fn read_acp_worker_state(
 
 fn write_response(stream: &mut UnixStream, response: &RelayResponse) -> Result<(), io::Error> {
     let encoded = serde_json::to_string(response).map_err(io::Error::other)?;
-    stream.write_all(encoded.as_bytes())?;
-    stream.write_all(b"\n")?;
-    stream.flush()
+    stream
+        .write_all(encoded.as_bytes())
+        .and_then(|()| stream.write_all(b"\n"))
+        .and_then(|()| stream.flush())
+        .inspect_err(note_write_timeout)
 }
 
 fn send_stream_client_frame(
