@@ -410,3 +410,248 @@ fn relay_async_chat_emits_terminal_delivery_outcome_to_sender_ui_stream() {
         .expect("shutdown sender stream");
     sender_handle.join().expect("join sender relay stream");
 }
+
+// ---------------------------------------------------------------------------
+// Operator-class registration and permission list polling
+// ---------------------------------------------------------------------------
+
+fn write_operator_bundle_configuration(temporary: &TempDir, bundle_name: &str) -> PathBuf {
+    let configuration_root = temporary.path().join("config");
+    let bundles_directory = configuration_root.join("bundles");
+    std::fs::create_dir_all(&bundles_directory).expect("create bundles directory");
+    std::fs::write(
+        configuration_root.join("coders.toml"),
+        r#"
+format-version = 1
+
+[[coders]]
+id = "shell"
+
+[coders.tmux]
+initial-command = "sh -lc 'exec sleep 45'"
+resume-command = "sh -lc 'exec sleep 45'"
+"#,
+    )
+    .expect("write coders configuration");
+    std::fs::write(
+        configuration_root.join("policies.toml"),
+        r#"
+format-version = 1
+default = "default"
+
+[[policies]]
+id = "default"
+
+[policies.controls]
+find = "self"
+list = "all:home"
+look = "self"
+send = "all:home"
+grant = "none"
+
+[[policies]]
+id = "operator"
+
+[policies.controls]
+find = "self"
+list = "all:home"
+look = "all:home"
+send = "all:home"
+grant = "all:home"
+operator-class = true
+"#,
+    )
+    .expect("write policies configuration");
+    std::fs::write(
+        configuration_root.join("tui.toml"),
+        r#"
+default-bundle = "example"
+default-session = "user"
+
+[[sessions]]
+id = "user"
+policy = "default"
+"#,
+    )
+    .expect("write tui configuration");
+    std::fs::write(
+        bundles_directory.join(format!("{bundle_name}.toml")),
+        r#"
+format-version = 1
+
+[[sessions]]
+id = "alpha"
+name = "Alpha"
+directory = "/tmp"
+coder = "shell"
+policy = "operator"
+
+[[sessions]]
+id = "bravo"
+name = "Bravo"
+directory = "/tmp"
+coder = "shell"
+"#,
+    )
+    .expect("write bundle configuration");
+    configuration_root
+}
+
+fn typed_hello_payload(bundle_name: &str, session_id: &str, client_class: &str) -> Value {
+    json!({
+        "frame": "hello",
+        "schema_version": "1",
+        "bundle_name": bundle_name,
+        "session_id": session_id,
+        "client_class": client_class,
+    })
+}
+
+#[test]
+fn relay_accepts_operator_hello_when_policy_authorizes_operator_class() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = format!("party-{}", Uuid::new_v4().simple());
+    let configuration_root = write_operator_bundle_configuration(&temporary, &bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths =
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+    let (mut client, handle) = spawn_relay_stream(&configuration_root, &bundle_paths);
+    let reader_stream = client.try_clone().expect("clone stream");
+    let mut reader = BufReader::new(reader_stream);
+
+    send_json(
+        &mut client,
+        typed_hello_payload(bundle_name.as_str(), "alpha", "operator"),
+    );
+    let hello_ack = read_json(&mut reader);
+    assert_eq!(hello_ack["frame"], "hello_ack");
+    assert_eq!(hello_ack["client_class"], "operator");
+    assert_eq!(hello_ack["session_id"], "alpha");
+
+    client
+        .shutdown(std::net::Shutdown::Both)
+        .expect("shutdown stream");
+    handle.join().expect("join relay stream");
+}
+
+#[test]
+fn relay_rejects_operator_hello_when_policy_lacks_operator_class() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = format!("party-{}", Uuid::new_v4().simple());
+    let configuration_root = write_bundle_configuration(&temporary, &bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths =
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+    let (mut client, handle) = spawn_relay_stream(&configuration_root, &bundle_paths);
+    let reader_stream = client.try_clone().expect("clone stream");
+    let mut reader = BufReader::new(reader_stream);
+
+    send_json(
+        &mut client,
+        typed_hello_payload(bundle_name.as_str(), "alpha", "operator"),
+    );
+    let error_frame = read_json(&mut reader);
+    assert_eq!(error_frame["frame"], "response");
+    assert_eq!(error_frame["response"]["kind"], "error");
+    assert_eq!(
+        error_frame["response"]["error"]["code"],
+        "validation_invalid_client_class_for_hello"
+    );
+
+    client
+        .shutdown(std::net::Shutdown::Both)
+        .expect("shutdown stream");
+    handle.join().expect("join relay stream");
+}
+
+#[test]
+fn relay_permission_list_succeeds_for_operator_principal_with_grant() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = format!("party-{}", Uuid::new_v4().simple());
+    let configuration_root = write_operator_bundle_configuration(&temporary, &bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths =
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+    std::fs::create_dir_all(&bundle_paths.runtime_directory).expect("create runtime directory");
+
+    let (mut client, handle) = spawn_relay_stream(&configuration_root, &bundle_paths);
+    let reader_stream = client.try_clone().expect("clone stream");
+    let mut reader = BufReader::new(reader_stream);
+
+    send_json(
+        &mut client,
+        typed_hello_payload(bundle_name.as_str(), "alpha", "operator"),
+    );
+    let hello_ack = read_json(&mut reader);
+    assert_eq!(hello_ack["frame"], "hello_ack");
+
+    let request_id = format!("req-{}", Uuid::new_v4().simple());
+    send_json(
+        &mut client,
+        json!({
+            "frame": "request",
+            "request_id": request_id,
+            "request": {"operation": "permission_list"},
+        }),
+    );
+    let response = read_json(&mut reader);
+    assert_eq!(response["frame"], "response");
+    assert_eq!(response["request_id"], request_id);
+    assert_eq!(response["response"]["kind"], "permission_list");
+    assert_eq!(response["response"]["bundle_name"], bundle_name);
+    let entries = response["response"]["pending_requests"]
+        .as_array()
+        .expect("pending_requests array");
+    assert!(entries.is_empty(), "no requests have been queued yet");
+
+    client
+        .shutdown(std::net::Shutdown::Both)
+        .expect("shutdown stream");
+    handle.join().expect("join relay stream");
+}
+
+#[test]
+fn relay_permission_resolve_rejects_agent_class_submitter() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = format!("party-{}", Uuid::new_v4().simple());
+    let configuration_root = write_bundle_configuration(&temporary, &bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths =
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+    let (mut client, handle) = spawn_relay_stream(&configuration_root, &bundle_paths);
+    let reader_stream = client.try_clone().expect("clone stream");
+    let mut reader = BufReader::new(reader_stream);
+
+    send_json(
+        &mut client,
+        typed_hello_payload(bundle_name.as_str(), "alpha", "agent"),
+    );
+    let hello_ack = read_json(&mut reader);
+    assert_eq!(hello_ack["frame"], "hello_ack");
+
+    let request_id = format!("req-{}", Uuid::new_v4().simple());
+    send_json(
+        &mut client,
+        json!({
+            "frame": "request",
+            "request_id": request_id,
+            "request": {
+                "operation": "permission_resolve",
+                "permission_request_id": "perm-1",
+                "outcome": "cancelled",
+            },
+        }),
+    );
+    let response = read_json(&mut reader);
+    assert_eq!(response["frame"], "response");
+    assert_eq!(response["response"]["kind"], "error");
+    assert_eq!(
+        response["response"]["error"]["code"],
+        "validation_invalid_client_class_for_action"
+    );
+
+    client
+        .shutdown(std::net::Shutdown::Both)
+        .expect("shutdown stream");
+    handle.join().expect("join relay stream");
+}

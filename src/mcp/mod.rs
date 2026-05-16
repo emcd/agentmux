@@ -26,7 +26,7 @@ use crate::configuration::{
 use crate::relay::{
     ChatDeliveryMode, ListedBundle, ListedBundleState, ListedSession, ListedSessionTransport,
     LookSnapshotPayload, RelayError, RelayRequest, RelayResponse, RelayStreamClientClass,
-    RelayStreamSession, load_startup_failures, request_relay,
+    RelayStreamSession, is_session_operator_class_authorized, load_startup_failures, request_relay,
 };
 use crate::runtime::error::RuntimeError;
 use crate::runtime::inscriptions::emit_inscription;
@@ -117,6 +117,48 @@ struct LookParams {
     lines: Option<u64>,
 }
 
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+struct GrantParams {
+    /// Grant subcommand selector. Required; allowed values: `list`, `resolve`.
+    #[serde(default)]
+    command: Option<String>,
+    /// Command-scoped arguments.
+    #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
+    #[serde(default)]
+    args: Value,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+struct GrantListArgs {
+    /// Optional bundle selector. When present must equal the associated bundle.
+    #[serde(default)]
+    bundle_name: Option<String>,
+    /// Unknown fields captured for explicit validation.
+    #[serde(flatten, default)]
+    #[schemars(skip)]
+    extra_fields: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+struct GrantResolveArgs {
+    /// Required permission request identifier returned by `grant list`.
+    #[serde(default)]
+    permission_request_id: Option<String>,
+    /// Required decision outcome (`selected` or `cancelled`).
+    #[serde(default)]
+    outcome: Option<String>,
+    /// Required option_id when outcome is `selected`; forbidden when `cancelled`.
+    #[serde(default)]
+    option_id: Option<String>,
+    /// Optional bundle selector. When present must equal the associated bundle.
+    #[serde(default)]
+    bundle_name: Option<String>,
+    /// Unknown fields captured for explicit validation.
+    #[serde(flatten, default)]
+    #[schemars(skip)]
+    extra_fields: BTreeMap<String, Value>,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 struct RawwParams {
     /// Session identifier to write to.
@@ -161,6 +203,11 @@ const TOOL_LIST: &str = "list";
 const TOOL_LOOK: &str = "look";
 const TOOL_RAWW: &str = "raww";
 const TOOL_SEND: &str = "send";
+const TOOL_GRANT: &str = "grant";
+const GRANT_COMMAND_LIST: &str = "list";
+const GRANT_COMMAND_RESOLVE: &str = "resolve";
+const GRANT_OUTCOME_SELECTED: &str = "selected";
+const GRANT_OUTCOME_CANCELLED: &str = "cancelled";
 const NAMESPACE_AGENTMUX: &str = "agentmux";
 
 #[tool_router]
@@ -171,11 +218,20 @@ impl McpServer {
             .as_ref()
             .zip(configuration.associated_bundle_paths.as_ref())
             .map(|(sender_session, bundle_paths)| {
+                let client_class = if is_session_operator_class_authorized(
+                    configuration.configuration_root.as_path(),
+                    bundle_paths.bundle_name.as_str(),
+                    sender_session.as_str(),
+                ) {
+                    RelayStreamClientClass::Operator
+                } else {
+                    RelayStreamClientClass::Agent
+                };
                 RelayStreamSession::new(
                     bundle_paths.relay_socket.clone(),
                     bundle_paths.bundle_name.clone(),
                     sender_session.clone(),
-                    RelayStreamClientClass::Agent,
+                    client_class,
                 )
             });
         Self {
@@ -606,6 +662,210 @@ impl McpServer {
         }
     }
 
+    #[tool(
+        description = "Inspect or resolve pending ACP permission requests. Use command=\"list\" to enumerate pending requests, command=\"resolve\" to decide one."
+    )]
+    async fn grant(
+        &self,
+        Parameters(params): Parameters<GrantParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let command = params
+            .command
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                validation_tool_error(
+                    "validation_invalid_params",
+                    "command is required; allowed values are \"list\" or \"resolve\"",
+                    None,
+                )
+            })?;
+        match command {
+            GRANT_COMMAND_LIST => {
+                let args = parse_meta_tool_args::<GrantListArgs>(params.args.clone())
+                    .map_err(|reason| {
+                        validation_tool_error(
+                            "validation_invalid_params",
+                            "invalid args for grant list command",
+                            Some(json!({
+                                "reason": reason,
+                                "hint": "pass args as a JSON object; use help query 'grant.list' for exact schema",
+                            })),
+                        )
+                    })?;
+                self.grant_list(args)
+            }
+            GRANT_COMMAND_RESOLVE => {
+                let args = parse_meta_tool_args::<GrantResolveArgs>(params.args.clone())
+                    .map_err(|reason| {
+                        validation_tool_error(
+                            "validation_invalid_params",
+                            "invalid args for grant resolve command",
+                            Some(json!({
+                                "reason": reason,
+                                "hint": "pass args as a JSON object; use help query 'grant.resolve' for exact schema",
+                            })),
+                        )
+                    })?;
+                self.grant_resolve(args)
+            }
+            other => Err(validation_tool_error(
+                "validation_invalid_params",
+                "grant command must be \"list\" or \"resolve\"",
+                Some(json!({"command": other})),
+            )),
+        }
+    }
+
+    fn grant_list(&self, args: GrantListArgs) -> Result<CallToolResult, McpError> {
+        validate_grant_list_args(&args)?;
+        emit_inscription(
+            "mcp.tool.grant.list.request",
+            &json!({
+                "bundle_name": self.associated_bundle_name(),
+            }),
+        );
+        let request = RelayRequest::PermissionList {
+            bundle_name: args.bundle_name.clone(),
+        };
+        match self.request_relay(&request) {
+            Ok(RelayResponse::PermissionList {
+                schema_version,
+                bundle_name,
+                pending_requests,
+            }) => {
+                let pending_count = pending_requests.len();
+                let response = json!({
+                    "schema_version": schema_version,
+                    "bundle_name": bundle_name,
+                    "pending_requests": pending_requests,
+                });
+                emit_inscription(
+                    "mcp.tool.grant.list.success",
+                    &json!({
+                        "bundle_name": response["bundle_name"],
+                        "pending_count": pending_count,
+                    }),
+                );
+                Ok(CallToolResult::success(vec![Content::json(response)?]))
+            }
+            Ok(RelayResponse::Error { error }) => {
+                emit_inscription(
+                    "mcp.tool.grant.list.relay_error",
+                    &json!({
+                        "code": error.code.clone(),
+                        "message": error.message.clone(),
+                        "details": error.details.clone(),
+                    }),
+                );
+                Err(map_relay_error(error))
+            }
+            Ok(other) => {
+                emit_inscription(
+                    "mcp.tool.grant.list.unexpected_response",
+                    &json!({"response": other}),
+                );
+                Err(internal_tool_error(
+                    "internal_unexpected_failure",
+                    "relay returned unexpected response variant",
+                    Some(json!({"response": other})),
+                ))
+            }
+            Err(source) => {
+                Err(self.map_relay_stream_failure("mcp.tool.grant.list.io_error", source))
+            }
+        }
+    }
+
+    fn grant_resolve(&self, args: GrantResolveArgs) -> Result<CallToolResult, McpError> {
+        validate_grant_resolve_args(&args)?;
+        let permission_request_id = args
+            .permission_request_id
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .unwrap_or_default();
+        let outcome = args
+            .outcome
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .unwrap_or_default();
+        let option_id = args
+            .option_id
+            .as_ref()
+            .map(|value| value.trim().to_string());
+        emit_inscription(
+            "mcp.tool.grant.resolve.request",
+            &json!({
+                "bundle_name": self.associated_bundle_name(),
+                "permission_request_id": permission_request_id,
+                "outcome": outcome,
+                "has_option_id": option_id.is_some(),
+            }),
+        );
+        let request = RelayRequest::PermissionResolve {
+            permission_request_id: permission_request_id.clone(),
+            outcome: outcome.clone(),
+            option_id: option_id.clone(),
+            bundle_name: args.bundle_name.clone(),
+            ui_session_id: None,
+        };
+        match self.request_relay(&request) {
+            Ok(RelayResponse::PermissionDecision {
+                schema_version,
+                status,
+                permission_request_id,
+                outcome,
+                reason_code,
+                reason,
+            }) => {
+                let response = json!({
+                    "schema_version": schema_version,
+                    "status": status,
+                    "permission_request_id": permission_request_id,
+                    "outcome": outcome,
+                    "reason_code": reason_code,
+                    "reason": reason,
+                });
+                emit_inscription(
+                    "mcp.tool.grant.resolve.success",
+                    &json!({
+                        "bundle_name": self.associated_bundle_name(),
+                        "permission_request_id": response["permission_request_id"],
+                        "status": response["status"],
+                        "outcome": response["outcome"],
+                    }),
+                );
+                Ok(CallToolResult::success(vec![Content::json(response)?]))
+            }
+            Ok(RelayResponse::Error { error }) => {
+                emit_inscription(
+                    "mcp.tool.grant.resolve.relay_error",
+                    &json!({
+                        "code": error.code.clone(),
+                        "message": error.message.clone(),
+                        "details": error.details.clone(),
+                    }),
+                );
+                Err(map_relay_error(error))
+            }
+            Ok(other) => {
+                emit_inscription(
+                    "mcp.tool.grant.resolve.unexpected_response",
+                    &json!({"response": other}),
+                );
+                Err(internal_tool_error(
+                    "internal_unexpected_failure",
+                    "relay returned unexpected response variant",
+                    Some(json!({"response": other})),
+                ))
+            }
+            Err(source) => {
+                Err(self.map_relay_stream_failure("mcp.tool.grant.resolve.io_error", source))
+            }
+        }
+    }
+
     fn list_sessions_single_bundle(
         &self,
         bundle_name: &str,
@@ -860,8 +1120,8 @@ fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpError> {
         "" | NAMESPACE_AGENTMUX => Ok(json!({
             "namespace": NAMESPACE_AGENTMUX,
             "shape_hints": [
-                "Call help with query='list' for meta-tool command list.",
-                "Call help with query='list.sessions' for list command args schema.",
+                "Call help with query='list' or 'grant' for meta-tool command lists.",
+                "Call help with query='list.sessions', 'grant.list', or 'grant.resolve' for command args schemas.",
                 "Call help with query='send', 'look', or 'raww' for exact tool args schemas."
             ],
             "tools": [
@@ -869,6 +1129,7 @@ fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpError> {
                 {"tool": TOOL_SEND, "kind": "tool", "description": "Submit a message to explicit targets or broadcast."},
                 {"tool": TOOL_LOOK, "kind": "tool", "description": "Inspect a target session pane snapshot for this bundle."},
                 {"tool": TOOL_RAWW, "kind": "tool", "description": "Write raw text directly to one target session."},
+                {"tool": TOOL_GRANT, "kind": "meta_tool", "description": "Inspect or resolve pending ACP permission requests."},
                 {"tool": TOOL_HELP, "kind": "tool", "description": "Return tool/command help and JSON schemas."}
             ],
             "invoke": {
@@ -942,9 +1203,59 @@ fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpError> {
                 "params": {}
             }),
         )),
+        TOOL_GRANT => Ok(json!({
+            "tool": TOOL_GRANT,
+            "kind": "meta_tool",
+            "description": "Inspect or resolve pending ACP permission requests.",
+            "commands": [
+                {
+                    "command": "grant.list",
+                    "description": "List pending ACP permission requests for the associated bundle."
+                },
+                {
+                    "command": "grant.resolve",
+                    "description": "Submit an ACP-native decision on a pending permission request."
+                }
+            ],
+            "invoke": {
+                "tool": TOOL_GRANT,
+                "params": {
+                    "command": GRANT_COMMAND_LIST,
+                    "args": {}
+                }
+            }
+        })),
+        "grant.list" => Ok(command_help(
+            "grant.list",
+            "List pending ACP permission requests for the associated bundle.",
+            json_schema_for::<GrantListArgs>(),
+            json!({
+                "tool": TOOL_GRANT,
+                "params": {
+                    "command": GRANT_COMMAND_LIST,
+                    "args": {}
+                }
+            }),
+        )),
+        "grant.resolve" => Ok(command_help(
+            "grant.resolve",
+            "Submit an ACP-native decision on a pending permission request.",
+            json_schema_for::<GrantResolveArgs>(),
+            json!({
+                "tool": TOOL_GRANT,
+                "params": {
+                    "command": GRANT_COMMAND_RESOLVE,
+                    "args": {
+                        "permission_request_id": "<uuid>",
+                        "outcome": GRANT_OUTCOME_SELECTED,
+                        "option_id": "<option-id>"
+                    }
+                }
+            }),
+        )),
         _ => Err(validation_tool_error(
             "validation_invalid_params",
-            "unknown help query; try empty query, 'agentmux', 'list', 'list.sessions', 'send', 'look', or 'raww'",
+            "unknown help query; try empty query, 'agentmux', 'list', 'list.sessions', 'send', 'look', 'raww', 'grant', 'grant.list', or 'grant.resolve'",
             Some(json!({"query": query})),
         )),
     }
@@ -1087,6 +1398,132 @@ fn is_sender_like_field(field: &str) -> bool {
             | "requester_session_id"
             | "as_session"
     )
+}
+
+fn is_grant_decider_field(field: &str) -> bool {
+    matches!(
+        field,
+        "decided_by" | "ui_session_id" | "operator_session_id" | "decider" | "decider_session"
+    )
+}
+
+fn validate_grant_list_args(args: &GrantListArgs) -> Result<(), McpError> {
+    if let Some(bundle_name) = args.bundle_name.as_ref()
+        && bundle_name.trim().is_empty()
+    {
+        return Err(validation_tool_error(
+            "validation_invalid_params",
+            "bundle_name must be non-empty when provided",
+            None,
+        ));
+    }
+    let mut provided_fields = args.extra_fields.keys().cloned().collect::<Vec<_>>();
+    provided_fields.sort();
+    if !provided_fields.is_empty() {
+        return Err(validation_tool_error(
+            "validation_invalid_params",
+            "unknown parameter(s) for grant list command",
+            Some(json!({"fields": provided_fields})),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_grant_resolve_args(args: &GrantResolveArgs) -> Result<(), McpError> {
+    let permission_request_id = args
+        .permission_request_id
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            validation_tool_error(
+                "validation_invalid_params",
+                "permission_request_id must be a non-empty string",
+                Some(json!({"field": "permission_request_id"})),
+            )
+        })?;
+    let _ = permission_request_id;
+    let outcome = args
+        .outcome
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            validation_tool_error(
+                "validation_invalid_params",
+                "outcome must be \"selected\" or \"cancelled\"",
+                Some(json!({"field": "outcome"})),
+            )
+        })?;
+    match outcome {
+        GRANT_OUTCOME_SELECTED => {
+            let option_id = args
+                .option_id
+                .as_ref()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty());
+            if option_id.is_none() {
+                return Err(validation_tool_error(
+                    "validation_invalid_params",
+                    "selected outcome requires explicit non-empty option_id",
+                    Some(json!({
+                        "field": "option_id",
+                        "outcome": GRANT_OUTCOME_SELECTED,
+                    })),
+                ));
+            }
+        }
+        GRANT_OUTCOME_CANCELLED => {
+            if args.option_id.is_some() {
+                return Err(validation_tool_error(
+                    "validation_invalid_params",
+                    "cancelled outcome must omit option_id",
+                    Some(json!({
+                        "field": "option_id",
+                        "outcome": GRANT_OUTCOME_CANCELLED,
+                    })),
+                ));
+            }
+        }
+        other => {
+            return Err(validation_tool_error(
+                "validation_invalid_params",
+                "outcome must be \"selected\" or \"cancelled\"",
+                Some(json!({"field": "outcome", "value": other})),
+            ));
+        }
+    }
+    if let Some(bundle_name) = args.bundle_name.as_ref()
+        && bundle_name.trim().is_empty()
+    {
+        return Err(validation_tool_error(
+            "validation_invalid_params",
+            "bundle_name must be non-empty when provided",
+            None,
+        ));
+    }
+    let mut provided_fields = args.extra_fields.keys().cloned().collect::<Vec<_>>();
+    provided_fields.sort();
+    if !provided_fields.is_empty() {
+        let decider_like = provided_fields
+            .iter()
+            .filter(|field| is_grant_decider_field(field.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !decider_like.is_empty() {
+            return Err(validation_tool_error(
+                "validation_invalid_params",
+                "decider-identity fields are not allowed; decided_by is association-derived",
+                Some(json!({"fields": decider_like})),
+            ));
+        }
+        return Err(validation_tool_error(
+            "validation_invalid_params",
+            "unknown parameter(s) for grant resolve command",
+            Some(json!({"fields": provided_fields})),
+        ));
+    }
+    Ok(())
 }
 
 fn map_relay_error(error: RelayError) -> McpError {

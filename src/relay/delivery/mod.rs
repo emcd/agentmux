@@ -20,7 +20,9 @@ pub(in crate::relay) use self::dispatch::{
 };
 pub(in crate::relay) use self::permission_state::{
     PermissionDecisionKind, PermissionDecisionRequest, PermissionEventContext,
-    PermissionResolutionOutcome, emit_permission_snapshot_then_replay, enqueue_permission_request,
-    map_permission_state_error, resolve_permission_request, wait_for_permission_resolution,
+    PermissionResolutionOutcome, PersistedPendingPermissionRequest,
+    emit_permission_snapshot_then_replay, enqueue_permission_request,
+    list_pending_permission_requests, map_permission_state_error, resolve_permission_request,
+    wait_for_permission_resolution,
 };
 pub(in crate::relay) use self::quiescence::QuiescenceOptions;

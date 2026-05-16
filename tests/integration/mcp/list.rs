@@ -92,6 +92,7 @@ async fn tool_catalog_contains_list_sessions_send_look_and_raww() {
     assert_eq!(
         names,
         BTreeSet::from([
+            "grant".to_string(),
             "help".to_string(),
             "list".to_string(),
             "look".to_string(),

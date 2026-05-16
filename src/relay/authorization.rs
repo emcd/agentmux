@@ -60,6 +60,7 @@ struct PolicyControls {
     send: PolicyScope,
     raww: PolicyScope,
     grant: PolicyScope,
+    operator_class: bool,
     do_controls: HashMap<String, PolicyScope>,
 }
 
@@ -77,6 +78,7 @@ impl PolicyControls {
             send: PolicyScope::AllHome,
             raww: PolicyScope::AllHome,
             grant: PolicyScope::None,
+            operator_class: false,
             do_controls: HashMap::new(),
         }
     }
@@ -133,6 +135,8 @@ struct RawPolicyControls {
     raww: String,
     #[serde(default = "default_grant_policy_scope")]
     grant: String,
+    #[serde(default)]
+    operator_class: bool,
     #[serde(default, rename = "do")]
     do_controls: HashMap<String, String>,
 }
@@ -469,6 +473,7 @@ fn parse_policy_controls(
         send,
         raww,
         grant,
+        operator_class: controls.operator_class,
         do_controls,
     })
 }
@@ -672,6 +677,36 @@ pub(super) fn authorize_grant(
         }
         error
     })
+}
+
+pub(super) fn authorize_grant_for_list(
+    bundle: &BundleConfiguration,
+    authorization: &AuthorizationContext,
+    requester_session: &str,
+) -> Result<(), RelayError> {
+    let controls = controls_for_requester(authorization, bundle, requester_session)?;
+    authorize_scope(
+        controls.grant,
+        PolicyScope::AllHome,
+        AuthorizationDecisionContext {
+            capability: "grant",
+            requester_session,
+            bundle_name: bundle.bundle_name.as_str(),
+            reason: "grant policy scope does not allow permission list",
+            target_session: None,
+            targets: None,
+        },
+    )
+}
+
+pub(super) fn is_operator_class_authorized(
+    authorization: &AuthorizationContext,
+    session_id: &str,
+) -> bool {
+    authorization
+        .controls_by_session
+        .get(session_id)
+        .is_some_and(|controls| controls.operator_class)
 }
 
 pub(super) fn grant_authorized_ui_sessions(

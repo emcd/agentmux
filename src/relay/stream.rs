@@ -16,6 +16,7 @@ use super::{RelayRequest, RelayResponse};
 pub(super) enum RelayClientClass {
     Agent,
     Ui,
+    Operator,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

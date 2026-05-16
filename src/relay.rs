@@ -29,7 +29,7 @@ mod startup_state;
 mod stream;
 mod tmux;
 
-use self::authorization::load_authorization_context;
+use self::authorization::{is_operator_class_authorized, load_authorization_context};
 use self::delivery::QuiescenceOptions;
 use self::stream::{
     HelloFrame, IncomingFrame, OutgoingFrame, RegisterStreamOutcome, RelayClientClass,
@@ -233,6 +233,7 @@ pub struct RelayError {
 pub enum RelayStreamClientClass {
     Agent,
     Ui,
+    Operator,
 }
 
 /// Relay-pushed stream event payload.
@@ -356,6 +357,10 @@ pub enum RelayRequest {
         #[serde(default)]
         ui_session_id: Option<String>,
     },
+    PermissionList {
+        #[serde(default)]
+        bundle_name: Option<String>,
+    },
 }
 
 /// Relay response protocol.
@@ -417,9 +422,27 @@ pub enum RelayResponse {
         #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
+    PermissionList {
+        schema_version: String,
+        bundle_name: String,
+        pending_requests: Vec<PendingPermissionEntry>,
+    },
     Error {
         error: RelayError,
     },
+}
+
+/// One pending permission request entry returned by `RelayResponse::PermissionList`.
+///
+/// Field set mirrors the `permission.requested` stream event payload.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct PendingPermissionEntry {
+    pub message_id: String,
+    pub permission_request_id: String,
+    pub target_session: String,
+    pub requested_kind: String,
+    pub requested_details: Value,
+    pub enqueued_at: String,
 }
 
 #[derive(Clone, Debug)]
@@ -1290,6 +1313,37 @@ fn handle_hello_frame(
                 })),
             ))
         }
+        RelayClientClass::Operator => {
+            let bundle = load_bundle_configuration(configuration_root, &bundle_paths.bundle_name)
+                .map_err(map_config)?;
+            if !bundle
+                .members
+                .iter()
+                .any(|member| member.id == hello.session_id)
+            {
+                return Err(relay_error(
+                    "validation_unknown_sender",
+                    "hello session_id is not configured in associated bundle",
+                    Some(json!({
+                        "bundle_name": bundle.bundle_name,
+                        "session_id": hello.session_id,
+                    })),
+                ));
+            }
+            let authorization = load_authorization_context(configuration_root, &bundle)?;
+            if is_operator_class_authorized(&authorization, hello.session_id.as_str()) {
+                return Ok(());
+            }
+            Err(relay_error(
+                "validation_invalid_client_class_for_hello",
+                "operator client class is not authorized for this session",
+                Some(json!({
+                    "bundle_name": bundle.bundle_name,
+                    "session_id": hello.session_id,
+                    "client_class": "operator",
+                })),
+            ))
+        }
     }
 }
 
@@ -1357,6 +1411,28 @@ fn map_tui_config(error: ConfigurationError) -> RelayError {
             Some(json!({"cause": other.to_string()})),
         ),
     }
+}
+
+/// Reports whether the given session is authorized to claim
+/// `client_class=operator` under the bundle's resolved policy controls.
+///
+/// Returns `false` on any configuration/authorization error so callers can
+/// fall back to a more conservative claim. Use this from non-relay crates
+/// (for example MCP startup) to decide whether to send `client_class=operator`
+/// in the hello frame.
+#[must_use]
+pub fn is_session_operator_class_authorized(
+    configuration_root: &Path,
+    bundle_name: &str,
+    session_id: &str,
+) -> bool {
+    let Ok(bundle) = load_bundle_configuration(configuration_root, bundle_name) else {
+        return false;
+    };
+    let Ok(authorization) = load_authorization_context(configuration_root, &bundle) else {
+        return false;
+    };
+    is_operator_class_authorized(&authorization, session_id)
 }
 
 /// Sends one request to relay socket and returns the parsed response.
