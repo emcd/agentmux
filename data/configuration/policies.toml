@@ -14,11 +14,10 @@ send = 'all:home'
 raww = 'all:home'
 grant = 'none'
 
-# The `operator` preset is the only preset that enables `operator-class`.
-# Sessions referencing it (via `policy = 'operator'` in their bundle entry)
-# may register with relay `client_class = operator` and use the MCP
-# `grant` tool to poll and resolve ACP permission requests. Assign it
-# only to coordination/decisioning lanes (for example `master` and `mcp`).
+# The `operator` preset grants the `grant` capability. Any session whose
+# policy enables `grant` may resolve ACP permission requests through the MCP
+# `grant` tool. Assign it only to coordination/decisioning lanes (for example
+# `master` and `mcp`).
 [[policies]]
 id = 'operator'
 description = 'Operator policy with permission-grant capability over home.'
@@ -30,4 +29,3 @@ look = 'all:home'
 send = 'all:home'
 raww = 'all:home'
 grant = 'all:home'
-operator-class = true

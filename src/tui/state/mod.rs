@@ -8,7 +8,7 @@ use ratatui::widgets::ListState;
 
 use crate::{
     acp::AcpSnapshotEntry,
-    relay::{RelayError, RelayStreamClientClass, RelayStreamSession},
+    relay::{RelayError, RelayStreamSession},
     runtime::error::RuntimeError,
 };
 
@@ -159,7 +159,6 @@ impl AppState {
             relay_socket.clone(),
             bundle_name.clone(),
             sender_session.clone(),
-            RelayStreamClientClass::Ui,
         );
         Self {
             bundle_name,

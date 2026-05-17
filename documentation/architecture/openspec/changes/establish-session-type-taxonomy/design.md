@@ -18,8 +18,10 @@ two problems:
 ## Goals / Non-Goals
 
 - **Goals**:
-  - Replace hello `client_class` with session-type config subtable
-    (`{tmux, acp, ui, pubsub}`).
+  - Replace hello `client_class` with config declaration: coder-backed
+    sessions carry a `coder` reference (transport derived from the coder);
+    coder-less sessions declare a `[sessions.ui]` or `[sessions.pubsub]`
+    marker subtable.
   - Establish `session@bundle` as the canonical identity everywhere on the wire
     and in internal state.
   - Gate permission decisions on `authorize_grant` alone.
@@ -35,27 +37,31 @@ two problems:
 
 ### Session type as config declaration
 
-Session type is the single subtable present on a `[[sessions]]` entry:
-`[sessions.tmux]`, `[sessions.acp]`, `[sessions.ui]`, or
-`[sessions.pubsub]`. Exactly one subtable is required; multiple or zero are
-config errors.
+A `[[sessions]]` entry is either coder-backed or coder-less:
+
+- **Coder-backed**: the entry carries a `coder` reference (and optional
+  `coder-session-id`). Its transport — tmux pane injection or ACP worker
+  delivery — is derived from the referenced coder's descriptor
+  (`[coders.tmux]` vs `[coders.acp]`).
+- **Coder-less**: the entry declares exactly one of the `[sessions.ui]` or
+  `[sessions.pubsub]` marker subtables.
+
+A session must declare exactly one shape: a `coder` reference, or one
+coder-less marker. Zero or multiple are config errors.
 
 **Why**: Transport behavior is fixed at operator configuration time. Asserting
-it dynamically at connect time is redundant and spoofable.
+it dynamically at connect time is redundant and spoofable. The genuine axis
+the taxonomy distinguishes is coder-backed vs. coder-less; the tmux/acp split
+is a property of the *coder*, not the session, so the session does not
+restate it.
 
-**Alternatives considered**: Keep `client_class` in hello but cross-validate
-against config. Rejected — dual sources of truth for the same fact; adds
-parsing complexity for zero behavioral gain.
-
-### Session-coder type consistency
-
-`[sessions.tmux]` requires the referenced coder to have a `[coders.tmux]`
-descriptor; `[sessions.acp]` requires `[coders.acp]`. Mismatch is a fail-fast
-config error. `ui` and `pubsub` sessions carry no coder reference.
-
-**Why**: A tmux session backed by an ACP coder or vice versa is an operator
-misconfiguration that will manifest at runtime as a crash or silent
-misbehavior. Catching it at load time is strictly better.
+**Alternatives considered**:
+- Keep `client_class` in hello but cross-validate against config. Rejected —
+  dual sources of truth for the same fact.
+- Give every session a `[sessions.{tmux,acp,ui,pubsub}]` subtable. Rejected —
+  `[sessions.tmux]` vs `[sessions.acp]` duplicates the referenced coder's
+  transport, requiring a session-coder consistency check that exists only to
+  catch the contradiction the duplication makes possible.
 
 ### Canonical identity: `session@bundle`
 

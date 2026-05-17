@@ -96,7 +96,7 @@ fn raww_forwards_no_enter_and_preserves_json_contract() {
     let requests = request_log.lock().expect("request log lock");
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0]["operation"], "raww");
-    assert_eq!(requests[0]["sender_session"], "user");
+    assert_eq!(requests[0]["sender_session"], "user@GLOBAL");
     assert_eq!(requests[0]["target_session"], "bravo");
     assert_eq!(requests[0]["text"], "echo test");
     assert_eq!(requests[0]["no_enter"], true);

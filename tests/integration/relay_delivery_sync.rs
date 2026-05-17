@@ -137,12 +137,12 @@ fn relay_chat_reports_timeout_for_noisy_target_with_partial_status() {
     assert_eq!(status, ChatStatus::Partial);
     let bravo = results
         .iter()
-        .find(|result| result.target_session == "bravo")
+        .find(|result| result.target_session == "bravo@party")
         .expect("bravo result");
     assert_eq!(bravo.outcome, ChatOutcome::Delivered);
     let charlie = results
         .iter()
-        .find(|result| result.target_session == "charlie")
+        .find(|result| result.target_session == "charlie@party")
         .expect("charlie result");
     assert_eq!(charlie.outcome, ChatOutcome::Timeout);
     assert!(

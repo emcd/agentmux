@@ -8,6 +8,7 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::runtime::signals::shutdown_requested;
 
+use super::super::canonical_session_id;
 use super::super::stream::{RelayStreamEvent, StreamEventSendOutcome, send_event_to_registered_ui};
 use super::super::{AsyncDeliveryTask, ChatOutcome, ChatResult};
 
@@ -54,12 +55,17 @@ pub(super) fn deliver_one_target_ui(
             created_at: timestamp_rfc3339(),
             payload: json!({
                 "message_id": message_id.clone(),
-                "sender_session": sender_session,
+                "sender_session": canonical_session_id(sender_session, bundle_name),
                 "body": message,
                 "cc_sessions": if cc_sessions.is_empty() {
                     Value::Null
                 } else {
-                    json!(cc_sessions)
+                    json!(
+                        cc_sessions
+                            .iter()
+                            .map(|cc| canonical_session_id(cc, bundle_name))
+                            .collect::<Vec<_>>()
+                    )
                 },
             }),
         };

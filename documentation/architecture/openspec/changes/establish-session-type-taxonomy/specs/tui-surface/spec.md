@@ -70,7 +70,7 @@ with an incompatible delivery model.
 #### Scenario: Reject --as-session with non-ui session type
 
 - **WHEN** operator starts TUI with `--as-session relay`
-- **AND** session `relay` is configured with `[sessions.tmux]`
+- **AND** session `relay` is a coder-backed session (resolved type `tmux`)
 - **THEN** startup fails with a structured validation error indicating type
   mismatch
 

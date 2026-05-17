@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use agentmux::relay::{RelayStreamClientClass, RelayStreamSession};
+use agentmux::relay::RelayStreamSession;
 use serde_json::{Value, json};
 static SOCKET_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -63,13 +63,11 @@ fn assert_and_ack_hello(
     stream: &mut std::os::unix::net::UnixStream,
     bundle_name: &str,
     session_id: &str,
-    client_class: &str,
 ) {
     let hello_payload = read_json_line(reader);
     assert_eq!(hello_payload["frame"], "hello");
     assert_eq!(hello_payload["bundle_name"], bundle_name);
     assert_eq!(hello_payload["session_id"], session_id);
-    assert_eq!(hello_payload["client_class"], client_class);
     write_json_line(
         stream,
         &json!({
@@ -77,7 +75,6 @@ fn assert_and_ack_hello(
             "schema_version": "1",
             "bundle_name": bundle_name,
             "session_id": session_id,
-            "client_class": client_class,
         }),
     );
 }
@@ -89,7 +86,7 @@ fn stream_client_poll_events_returns_pending_event_frames() {
     let server = thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("accept client");
         let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
-        assert_and_ack_hello(&mut reader, &mut stream, "party", "alpha", "ui");
+        assert_and_ack_hello(&mut reader, &mut stream, "party", "alpha");
 
         thread::sleep(Duration::from_millis(80));
         let event = json!({
@@ -114,12 +111,8 @@ fn stream_client_poll_events_returns_pending_event_frames() {
         thread::sleep(Duration::from_millis(200));
     });
 
-    let mut session = RelayStreamSession::new(
-        socket_path,
-        "party".to_string(),
-        "alpha".to_string(),
-        RelayStreamClientClass::Ui,
-    );
+    let mut session =
+        RelayStreamSession::new(socket_path, "party".to_string(), "alpha".to_string());
 
     let deadline = Instant::now() + Duration::from_millis(750);
     let received = loop {
@@ -150,7 +143,7 @@ fn stream_client_does_not_auto_retry_request_after_disconnect() {
         // First stream: accept hello + request, then close before response.
         let (mut first_stream, _) = listener.accept().expect("accept first client");
         let mut first_reader = BufReader::new(first_stream.try_clone().expect("clone first"));
-        assert_and_ack_hello(&mut first_reader, &mut first_stream, "party", "alpha", "ui");
+        assert_and_ack_hello(&mut first_reader, &mut first_stream, "party", "alpha");
         let first_request = read_json_line(&mut first_reader);
         assert_eq!(first_request["frame"], "request");
         assert_eq!(first_request["request"]["operation"], "list");
@@ -159,13 +152,7 @@ fn stream_client_does_not_auto_retry_request_after_disconnect() {
         // Second stream: fresh hello + request, then normal response.
         let (mut second_stream, _) = listener.accept().expect("accept second client");
         let mut second_reader = BufReader::new(second_stream.try_clone().expect("clone second"));
-        assert_and_ack_hello(
-            &mut second_reader,
-            &mut second_stream,
-            "party",
-            "alpha",
-            "ui",
-        );
+        assert_and_ack_hello(&mut second_reader, &mut second_stream, "party", "alpha");
         let second_request = read_json_line(&mut second_reader);
         assert_eq!(second_request["frame"], "request");
         assert_eq!(second_request["request"]["operation"], "list");
@@ -195,12 +182,8 @@ fn stream_client_does_not_auto_retry_request_after_disconnect() {
         );
     });
 
-    let mut session = RelayStreamSession::new(
-        socket_path,
-        "party".to_string(),
-        "alpha".to_string(),
-        RelayStreamClientClass::Ui,
-    );
+    let mut session =
+        RelayStreamSession::new(socket_path, "party".to_string(), "alpha".to_string());
     let first_error = session
         .request_with_events(&agentmux::relay::RelayRequest::List {
             sender_session: Some("alpha".to_string()),
@@ -251,7 +234,7 @@ fn stream_client_retries_hello_after_identity_claim_conflict() {
 
         let (mut stream, _) = listener.accept().expect("accept retry client");
         let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
-        assert_and_ack_hello(&mut reader, &mut stream, "party", "alpha", "ui");
+        assert_and_ack_hello(&mut reader, &mut stream, "party", "alpha");
 
         let request = read_json_line(&mut reader);
         assert_eq!(request["frame"], "request");
@@ -281,12 +264,8 @@ fn stream_client_retries_hello_after_identity_claim_conflict() {
         );
     });
 
-    let mut session = RelayStreamSession::new(
-        socket_path,
-        "party".to_string(),
-        "alpha".to_string(),
-        RelayStreamClientClass::Ui,
-    );
+    let mut session =
+        RelayStreamSession::new(socket_path, "party".to_string(), "alpha".to_string());
     let (response, events) = session
         .request_with_events(&agentmux::relay::RelayRequest::List {
             sender_session: Some("alpha".to_string()),

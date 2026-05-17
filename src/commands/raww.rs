@@ -185,6 +185,8 @@ fn render_transport(transport: &ListedSessionTransport) -> &'static str {
     match transport {
         ListedSessionTransport::Tmux => "tmux",
         ListedSessionTransport::Acp => "acp",
+        ListedSessionTransport::Ui => "ui",
+        ListedSessionTransport::Pubsub => "pubsub",
     }
 }
 

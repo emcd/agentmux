@@ -60,7 +60,6 @@ struct PolicyControls {
     send: PolicyScope,
     raww: PolicyScope,
     grant: PolicyScope,
-    operator_class: bool,
     do_controls: HashMap<String, PolicyScope>,
 }
 
@@ -78,7 +77,6 @@ impl PolicyControls {
             send: PolicyScope::AllHome,
             raww: PolicyScope::AllHome,
             grant: PolicyScope::None,
-            operator_class: false,
             do_controls: HashMap::new(),
         }
     }
@@ -135,8 +133,6 @@ struct RawPolicyControls {
     raww: String,
     #[serde(default = "default_grant_policy_scope")]
     grant: String,
-    #[serde(default)]
-    operator_class: bool,
     #[serde(default, rename = "do")]
     do_controls: HashMap<String, String>,
 }
@@ -248,7 +244,7 @@ pub(super) fn load_authorization_context(
     {
         for session in tui_configuration.sessions {
             let session_id = session.id.clone();
-            let policy_id = normalize_policy_id(session.policy_id.as_str()).ok_or_else(|| {
+            let policy_id = normalize_policy_id(session.policy.as_str()).ok_or_else(|| {
                 relay_error(
                     "validation_unknown_policy",
                     "ui session policy reference is empty",
@@ -473,7 +469,6 @@ fn parse_policy_controls(
         send,
         raww,
         grant,
-        operator_class: controls.operator_class,
         do_controls,
     })
 }
@@ -697,16 +692,6 @@ pub(super) fn authorize_grant_for_list(
             targets: None,
         },
     )
-}
-
-pub(super) fn is_operator_class_authorized(
-    authorization: &AuthorizationContext,
-    session_id: &str,
-) -> bool {
-    authorization
-        .controls_by_session
-        .get(session_id)
-        .is_some_and(|controls| controls.operator_class)
 }
 
 pub(super) fn grant_authorized_ui_sessions(

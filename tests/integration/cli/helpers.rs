@@ -61,7 +61,7 @@ send = "all:home"
 "#,
     )
     .expect("write policies config");
-    fs::write(config_root.join("tui.toml"), "").expect("write tui config");
+    fs::write(config_root.join("users.toml"), "").expect("write users config");
     let mut bundle = String::from("format-version = 1\n");
     if let Some(autostart) = autostart {
         bundle.push_str(format!("autostart = {autostart}\n").as_str());
@@ -158,6 +158,15 @@ send = "all:home"
     .expect("write bundle config");
 }
 
+/// Qualifies a bare user selector into canonical `session@GLOBAL` form.
+fn qualify_global(id: &str) -> String {
+    if id.ends_with("@GLOBAL") {
+        id.to_string()
+    } else {
+        format!("{id}@GLOBAL")
+    }
+}
+
 pub(super) fn write_tui_configuration(
     config_root: &Path,
     default_bundle: Option<&str>,
@@ -169,17 +178,28 @@ pub(super) fn write_tui_configuration(
         body.push_str(format!("default-bundle = \"{default_bundle}\"\n").as_str());
     }
     if let Some(default_session) = default_session {
-        body.push_str(format!("default-session = \"{default_session}\"\n").as_str());
+        body.push_str(
+            format!(
+                "default-session = \"{}\"\n",
+                qualify_global(default_session)
+            )
+            .as_str(),
+        );
     }
     for (id, policy_id, name) in sessions {
         body.push_str(
-            format!("\n[[sessions]]\nid = \"{id}\"\npolicy = \"{policy_id}\"\n").as_str(),
+            format!(
+                "\n[[sessions]]\nid = \"{}\"\npolicy = \"{policy_id}\"\n",
+                qualify_global(id)
+            )
+            .as_str(),
         );
         if let Some(name) = name {
             body.push_str(format!("name = \"{name}\"\n").as_str());
         }
+        body.push_str("\n[sessions.ui]\n");
     }
-    fs::write(config_root.join("tui.toml"), body).expect("write tui config");
+    fs::write(config_root.join("users.toml"), body).expect("write users config");
 }
 
 pub(super) fn parse_summary_json_line(stdout: &[u8]) -> Value {

@@ -10,27 +10,29 @@ fn loads_global_tui_configuration() {
     let root = temporary.path().join("config");
     fs::create_dir_all(&root).expect("create config root");
     fs::write(
-        root.join("tui.toml"),
+        root.join("users.toml"),
         r#"
 default-bundle = "agentmux"
-default-session = "user"
+default-session = "user@GLOBAL"
 
 [[sessions]]
-id = "user"
+id = "user@GLOBAL"
 name = "Operator"
 policy = "default"
+
+[sessions.ui]
 "#,
     )
-    .expect("write tui.toml");
+    .expect("write users.toml");
 
     let loaded = load_tui_configuration(&root)
         .expect("load tui configuration")
         .expect("existing config");
     assert_eq!(loaded.default_bundle.as_deref(), Some("agentmux"));
-    assert_eq!(loaded.default_session.as_deref(), Some("user"));
+    assert_eq!(loaded.default_session.as_deref(), Some("user@GLOBAL"));
     assert_eq!(loaded.sessions.len(), 1);
-    assert_eq!(loaded.sessions[0].id, "user");
-    assert_eq!(loaded.sessions[0].policy_id, "default");
+    assert_eq!(loaded.sessions[0].id, "user@GLOBAL");
+    assert_eq!(loaded.sessions[0].policy, "default");
 }
 
 #[test]
@@ -48,21 +50,25 @@ fn rejects_duplicate_tui_session_ids() {
     let root = temporary.path().join("config");
     fs::create_dir_all(&root).expect("create config root");
     fs::write(
-        root.join("tui.toml"),
+        root.join("users.toml"),
         r#"
 [[sessions]]
-id = "user"
+id = "user@GLOBAL"
 policy = "default"
+
+[sessions.ui]
 
 [[sessions]]
-id = "user"
+id = "user@GLOBAL"
 policy = "default"
+
+[sessions.ui]
 "#,
     )
-    .expect("write tui.toml");
+    .expect("write users.toml");
 
     let error = load_tui_configuration(&root).expect_err("duplicate selector should fail");
-    assert!(error.to_string().contains("duplicate tui session id"));
+    assert!(error.to_string().contains("duplicate users session id"));
 }
 
 #[test]

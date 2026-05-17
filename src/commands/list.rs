@@ -4,12 +4,11 @@ use serde_json::{Value, json};
 
 use crate::{
     configuration::{
-        BundleConfiguration, TargetConfiguration, load_bundle_configuration,
-        load_bundle_group_memberships,
+        BundleConfiguration, load_bundle_configuration, load_bundle_group_memberships,
     },
     relay::{
-        ListedBundle, ListedBundleState, ListedSession, ListedSessionTransport, RelayRequest,
-        RelayResponse, load_startup_failures, request_relay,
+        ListedBundle, ListedBundleState, ListedSession, RelayRequest, RelayResponse,
+        load_startup_failures, request_relay,
     },
     runtime::{
         association::WorkspaceContext, error::RuntimeError, paths::BundleRuntimePaths,
@@ -266,10 +265,7 @@ fn synthesize_unreachable_bundle(
             .map(|member| ListedSession {
                 id: member.id.clone(),
                 name: member.name.clone(),
-                transport: match &member.target {
-                    TargetConfiguration::Tmux(_) => ListedSessionTransport::Tmux,
-                    TargetConfiguration::Acp(_) => ListedSessionTransport::Acp,
-                },
+                transport: member.target.session_type().into(),
             })
             .collect::<Vec<_>>(),
     }

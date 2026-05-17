@@ -11,7 +11,7 @@ use super::error::RuntimeError;
 const BUNDLES_DIRECTORY: &str = "bundles";
 const CODERS_FILE: &str = "coders.toml";
 const POLICIES_FILE: &str = "policies.toml";
-const TUI_FILE: &str = "tui.toml";
+const USERS_FILE: &str = "users.toml";
 const EXAMPLE_BUNDLE_FILE: &str = "example.toml";
 
 const CODERS_TEMPLATE: &str = include_str!(concat!(
@@ -27,9 +27,9 @@ const POLICIES_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/data/configuration/policies.toml"
 ));
-const TUI_TEMPLATE: &str = include_str!(concat!(
+const USERS_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/data/configuration/tui.toml"
+    "/data/configuration/users.toml"
 ));
 
 /// Ensures starter configuration files exist without overwriting user config.
@@ -43,7 +43,7 @@ pub fn ensure_starter_configuration_layout(configuration_root: &Path) -> Result<
     ensure_directory(&bundles_directory)?;
     ensure_template_file(&configuration_root.join(CODERS_FILE), CODERS_TEMPLATE)?;
     ensure_template_file(&configuration_root.join(POLICIES_FILE), POLICIES_TEMPLATE)?;
-    ensure_template_file(&configuration_root.join(TUI_FILE), TUI_TEMPLATE)?;
+    ensure_template_file(&configuration_root.join(USERS_FILE), USERS_TEMPLATE)?;
     ensure_template_file(
         &bundles_directory.join(EXAMPLE_BUNDLE_FILE),
         BUNDLE_TEMPLATE,

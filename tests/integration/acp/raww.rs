@@ -36,7 +36,7 @@ fn acp_raww_returns_accepted_in_progress_phase() {
         panic!("expected raww response");
     };
     assert_eq!(status, "accepted");
-    assert_eq!(target_session, "bravo");
+    assert_eq!(target_session, "bravo@party");
     assert_eq!(transport, ListedSessionTransport::Acp);
     assert_eq!(request_id.as_deref(), Some("req-acp-raww"));
     assert!(message_id.is_some(), "message_id should be present");

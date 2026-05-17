@@ -19,13 +19,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::configuration::{
-    BundleConfiguration, ConfigurationError, TargetConfiguration, load_bundle_configuration,
+    BundleConfiguration, ConfigurationError, load_bundle_configuration,
     load_bundle_group_memberships,
 };
 use crate::relay::{
-    ChatDeliveryMode, ListedBundle, ListedBundleState, ListedSession, ListedSessionTransport,
-    LookSnapshotPayload, RelayError, RelayRequest, RelayResponse, RelayStreamClientClass,
-    RelayStreamSession, is_session_operator_class_authorized, load_startup_failures, request_relay,
+    ChatDeliveryMode, ListedBundle, ListedBundleState, ListedSession, LookSnapshotPayload,
+    RelayError, RelayRequest, RelayResponse, RelayStreamSession, load_startup_failures,
+    request_relay,
 };
 use crate::runtime::error::RuntimeError;
 use crate::runtime::inscriptions::emit_inscription;
@@ -216,20 +216,10 @@ impl McpServer {
             .as_ref()
             .zip(configuration.associated_bundle_paths.as_ref())
             .map(|(sender_session, bundle_paths)| {
-                let client_class = if is_session_operator_class_authorized(
-                    configuration.configuration_root.as_path(),
-                    bundle_paths.bundle_name.as_str(),
-                    sender_session.as_str(),
-                ) {
-                    RelayStreamClientClass::Operator
-                } else {
-                    RelayStreamClientClass::Agent
-                };
                 RelayStreamSession::new(
                     bundle_paths.relay_socket.clone(),
                     bundle_paths.bundle_name.clone(),
                     sender_session.clone(),
-                    client_class,
                 )
             });
         Self {
@@ -1023,10 +1013,7 @@ fn list_sessions_from_bundle_configuration(bundle: &BundleConfiguration) -> Vec<
         .map(|member| ListedSession {
             id: member.id.clone(),
             name: member.name.clone(),
-            transport: match member.target {
-                TargetConfiguration::Tmux(_) => ListedSessionTransport::Tmux,
-                TargetConfiguration::Acp(_) => ListedSessionTransport::Acp,
-            },
+            transport: member.target.session_type().into(),
         })
         .collect::<Vec<_>>()
 }

@@ -237,7 +237,7 @@ fn send_preserves_valid_explicit_session_in_relay_request() {
             "--bundle",
             "agentmux",
             "--as-session",
-            "user",
+            "user@GLOBAL",
             "--target",
             "bravo",
             "--json",
@@ -267,7 +267,7 @@ fn send_preserves_valid_explicit_session_in_relay_request() {
     let requests = request_log.lock().expect("request log lock");
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0]["operation"], "chat");
-    assert_eq!(requests[0]["sender_session"], "user");
+    assert_eq!(requests[0]["sender_session"], "user@GLOBAL");
 }
 
 #[test]
@@ -435,5 +435,5 @@ fn send_uses_tui_defaults_for_bundle_and_session() {
     let requests = request_log.lock().expect("request log lock");
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0]["operation"], "chat");
-    assert_eq!(requests[0]["sender_session"], "user");
+    assert_eq!(requests[0]["sender_session"], "user@GLOBAL");
 }
