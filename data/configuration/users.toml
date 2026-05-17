@@ -1,5 +1,5 @@
 # agentmux global user sessions
-default-bundle = "example"
+# default-bundle = "example"
 default-session = "user@GLOBAL"
 
 # Global user `id` values are canonical `session@GLOBAL` identities.
