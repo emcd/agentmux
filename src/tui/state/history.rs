@@ -69,6 +69,26 @@ impl AppState {
         self.clamp_chat_history_scroll();
     }
 
+    pub fn set_chat_history_total_lines(&mut self, total_lines: usize) {
+        self.chat_history_total_lines = total_lines;
+        self.clamp_chat_history_scroll();
+    }
+
+    pub fn chat_history_scroll(&self) -> usize {
+        self.chat_history_scroll
+    }
+
+    /// Window of rendered chat-history lines (`start..end`, oldest-to-newest)
+    /// that the viewport should display for the current scroll offset.
+    pub fn chat_history_line_window(&self) -> (usize, usize) {
+        let viewport = self.chat_history_viewport_height.max(1);
+        let total = self.chat_history_total_lines;
+        let scroll = self.chat_history_scroll.min(total.saturating_sub(viewport));
+        let end = total.saturating_sub(scroll);
+        let start = end.saturating_sub(viewport);
+        (start, end)
+    }
+
     pub fn scroll_chat_history_page_up(&mut self) {
         let page = self.chat_history_viewport_height.max(1);
         let max_scroll = self.max_chat_history_scroll();
@@ -91,19 +111,6 @@ impl AppState {
 
     pub fn snap_chat_history_to_latest(&mut self) {
         self.chat_history_scroll = 0;
-    }
-
-    pub fn visible_chat_history_entries(&self) -> Vec<ChatHistoryEntry> {
-        let max_items = self.chat_history_viewport_height.max(1);
-        let mut visible = self
-            .chat_history
-            .iter()
-            .skip(self.chat_history_scroll)
-            .take(max_items)
-            .cloned()
-            .collect::<Vec<_>>();
-        visible.reverse();
-        visible
     }
 
     pub fn pending_deliveries_count(&self) -> usize {
@@ -131,27 +138,20 @@ impl AppState {
             direction: ChatHistoryDirection::Outgoing,
             peer_session,
             body: body.trim_end_matches('\n').to_string(),
-            message_id: None,
         });
     }
 
-    fn push_incoming_chat_history(
-        &mut self,
-        sender_session: &str,
-        body: &str,
-        message_id: Option<&str>,
-    ) {
+    fn push_incoming_chat_history(&mut self, sender_session: &str, body: &str) {
         self.push_chat_history_entry(ChatHistoryEntry {
             direction: ChatHistoryDirection::Incoming,
             peer_session: sender_session.to_string(),
             body: body.to_string(),
-            message_id: message_id.map(ToString::to_string),
         });
     }
 
     fn max_chat_history_scroll(&self) -> usize {
         let visible = self.chat_history_viewport_height.max(1);
-        self.chat_history.len().saturating_sub(visible)
+        self.chat_history_total_lines.saturating_sub(visible)
     }
 
     fn clamp_chat_history_scroll(&mut self) {
@@ -257,7 +257,7 @@ impl AppState {
                     {
                         continue;
                     }
-                    self.push_incoming_chat_history(sender_session, body, Some(message_id));
+                    self.push_incoming_chat_history(sender_session, body);
                     self.push_event(format!(
                         "incoming target={} sender={} message_id={}",
                         event.target_session, sender_session, message_id

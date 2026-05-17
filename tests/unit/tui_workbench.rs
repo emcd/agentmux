@@ -77,13 +77,14 @@ fn esc_in_message_snaps_history_to_latest() {
     state.set_focus(WorkbenchField::Message);
     state.inject_outgoing_history_entry("oldest");
     state.inject_outgoing_history_entry("newest");
-    state.set_chat_history_viewport_height(1);
+    state.set_chat_history_viewport_height(2);
+    state.set_chat_history_total_lines(8);
     state.scroll_chat_history_page_up();
-    assert_eq!(state.visible_chat_history_bodies(), vec!["oldest"]);
+    assert!(state.chat_history_scroll() > 0);
     state
         .dispatch_event(key_event(KeyCode::Esc, KeyModifiers::NONE))
         .expect("esc should be handled");
-    assert_eq!(state.visible_chat_history_bodies(), vec!["newest"]);
+    assert_eq!(state.chat_history_scroll(), 0);
 }
 
 #[test]
@@ -91,7 +92,8 @@ fn mouse_wheel_scrolls_history() {
     let mut state = make_state();
     state.inject_outgoing_history_entry("oldest");
     state.inject_outgoing_history_entry("newest");
-    state.set_chat_history_viewport_height(1);
+    state.set_chat_history_viewport_height(2);
+    state.set_chat_history_total_lines(8);
 
     let scroll_up = Event::Mouse(MouseEvent {
         kind: MouseEventKind::ScrollUp,
@@ -100,7 +102,7 @@ fn mouse_wheel_scrolls_history() {
         modifiers: KeyModifiers::NONE,
     });
     state.dispatch_event(scroll_up).expect("scroll up");
-    assert_eq!(state.visible_chat_history_bodies(), vec!["oldest"]);
+    assert_eq!(state.chat_history_scroll(), 1);
 
     let scroll_down = Event::Mouse(MouseEvent {
         kind: MouseEventKind::ScrollDown,
@@ -109,7 +111,7 @@ fn mouse_wheel_scrolls_history() {
         modifiers: KeyModifiers::NONE,
     });
     state.dispatch_event(scroll_down).expect("scroll down");
-    assert_eq!(state.visible_chat_history_bodies(), vec!["newest"]);
+    assert_eq!(state.chat_history_scroll(), 0);
 }
 
 #[test]

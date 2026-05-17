@@ -37,7 +37,6 @@ pub(crate) struct ChatHistoryEntry {
     pub direction: ChatHistoryDirection,
     pub peer_session: String,
     pub body: String,
-    pub message_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -135,6 +134,7 @@ pub(crate) struct AppState {
     pub chat_history: VecDeque<ChatHistoryEntry>,
     chat_history_scroll: usize,
     chat_history_viewport_height: usize,
+    chat_history_total_lines: usize,
     pending_delivery_ids: HashSet<String>,
     terminal_delivery_message_ids: HashSet<String>,
     terminal_delivery_message_order: VecDeque<String>,
@@ -199,6 +199,7 @@ impl AppState {
             chat_history: VecDeque::new(),
             chat_history_scroll: 0,
             chat_history_viewport_height: 10,
+            chat_history_total_lines: 0,
             pending_delivery_ids: HashSet::new(),
             terminal_delivery_message_ids: HashSet::new(),
             terminal_delivery_message_order: VecDeque::new(),
@@ -298,9 +299,7 @@ mod tests {
         runtime::error::RuntimeError,
     };
 
-    use super::{
-        AppState, ChatHistoryDirection, ChatHistoryEntry, PendingPermissionEntry, TuiLaunchOptions,
-    };
+    use super::{AppState, PendingPermissionEntry, TuiLaunchOptions};
 
     fn make_state() -> AppState {
         AppState::new(TuiLaunchOptions {
@@ -312,32 +311,22 @@ mod tests {
     }
 
     #[test]
-    fn chat_history_viewport_pages_oldest_to_newest() {
+    fn chat_history_scroll_paging_uses_line_units() {
         let mut state = make_state();
-        for index in 0..6 {
-            state.push_chat_history_entry(ChatHistoryEntry {
-                direction: ChatHistoryDirection::Outgoing,
-                peer_session: "relay".to_string(),
-                body: format!("message-{index}"),
-                message_id: None,
-            });
-        }
-
-        state.set_chat_history_viewport_height(3);
-        let first_page = state.visible_chat_history_entries();
-        let first_bodies = first_page
-            .iter()
-            .map(|entry| entry.body.clone())
-            .collect::<Vec<_>>();
-        assert_eq!(first_bodies, vec!["message-3", "message-4", "message-5"]);
+        state.set_chat_history_viewport_height(4);
+        state.set_chat_history_total_lines(10);
 
         state.scroll_chat_history_page_up();
-        let second_page = state.visible_chat_history_entries();
-        let second_bodies = second_page
-            .iter()
-            .map(|entry| entry.body.clone())
-            .collect::<Vec<_>>();
-        assert_eq!(second_bodies, vec!["message-0", "message-1", "message-2"]);
+        assert_eq!(state.chat_history_scroll(), 4);
+
+        state.scroll_chat_history_page_up();
+        assert_eq!(state.chat_history_scroll(), 6);
+
+        state.scroll_chat_history_page_down();
+        assert_eq!(state.chat_history_scroll(), 2);
+
+        state.snap_chat_history_to_latest();
+        assert_eq!(state.chat_history_scroll(), 0);
     }
 
     #[test]

@@ -84,7 +84,6 @@ impl Workbench {
             direction: ChatHistoryDirection::Outgoing,
             peer_session: "relay".to_string(),
             body: body.to_string(),
-            message_id: None,
         });
     }
 
@@ -92,16 +91,16 @@ impl Workbench {
         self.state.set_chat_history_viewport_height(height);
     }
 
+    pub fn set_chat_history_total_lines(&mut self, total_lines: usize) {
+        self.state.set_chat_history_total_lines(total_lines);
+    }
+
     pub fn scroll_chat_history_page_up(&mut self) {
         self.state.scroll_chat_history_page_up();
     }
 
-    pub fn visible_chat_history_bodies(&self) -> Vec<String> {
-        self.state
-            .visible_chat_history_entries()
-            .into_iter()
-            .map(|entry| entry.body)
-            .collect::<Vec<_>>()
+    pub fn chat_history_scroll(&self) -> usize {
+        self.state.chat_history_scroll()
     }
 
     pub fn should_quit(&self) -> bool {
