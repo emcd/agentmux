@@ -8,7 +8,7 @@ use std::{
 
 use agentmux::relay::{
     ChatDeliveryMode, ChatOutcome, ChatStatus, ListedSessionTransport, RelayRequest, RelayResponse,
-    RelayStreamClientClass, RelayStreamSession, request_relay,
+    RelayStreamSession, request_relay,
 };
 use tempfile::TempDir;
 use tokio::time::{sleep, timeout};
@@ -257,7 +257,6 @@ async fn relay_sigint_exits_with_active_stream_connection() {
         relay_socket.clone(),
         bundle_name.to_string(),
         "alpha".to_string(),
-        RelayStreamClientClass::Agent,
     );
     let stream_list_response = stream_session
         .request(&RelayRequest::List {
@@ -322,7 +321,6 @@ async fn relay_accepts_new_connections_while_registered_stream_stays_open() {
         relay_socket.clone(),
         bundle_name.to_string(),
         "alpha".to_string(),
-        RelayStreamClientClass::Agent,
     );
     let stream_list_response = stream_session
         .request(&RelayRequest::List {
@@ -391,7 +389,6 @@ async fn relay_rejects_connections_when_worker_queue_is_full() {
         relay_socket.clone(),
         bundle_name.to_string(),
         "alpha".to_string(),
-        RelayStreamClientClass::Agent,
     );
     let first_response = stream_session
         .request(&RelayRequest::List {
@@ -737,7 +734,7 @@ async fn relay_raww_tmux_default_appends_enter_and_reports_dispatched_phase() {
         panic!("expected raww response");
     };
     assert_eq!(status, "accepted");
-    assert_eq!(target_session, "alpha");
+    assert_eq!(target_session, "alpha@party");
     assert_eq!(transport, ListedSessionTransport::Tmux);
     assert_eq!(request_id.as_deref(), Some("req-raww-default-enter"));
     assert!(message_id.is_some(), "message_id should be present");
@@ -818,7 +815,7 @@ async fn relay_raww_tmux_no_enter_omits_enter_command() {
         panic!("expected raww response");
     };
     assert_eq!(status, "accepted");
-    assert_eq!(target_session, "alpha");
+    assert_eq!(target_session, "alpha@party");
     assert_eq!(transport, ListedSessionTransport::Tmux);
     assert_eq!(request_id.as_deref(), Some("req-raww-no-enter"));
     assert_eq!(

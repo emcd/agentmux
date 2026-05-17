@@ -9,24 +9,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::configuration::SessionType;
 use crate::runtime::inscriptions::emit_inscription;
 
 use super::{RelayRequest, RelayResponse};
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum RelayClientClass {
-    Agent,
-    Ui,
-    Operator,
-}
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(super) struct HelloFrame {
     pub(super) schema_version: String,
     pub(super) bundle_name: String,
     pub(super) session_id: String,
-    pub(super) client_class: RelayClientClass,
 }
 
 #[derive(Clone, Debug)]
@@ -55,7 +47,6 @@ enum IncomingEnvelope {
         schema_version: String,
         bundle_name: String,
         session_id: String,
-        client_class: RelayClientClass,
     },
     Request {
         #[serde(default)]
@@ -71,7 +62,6 @@ pub(super) enum OutgoingFrame<'a> {
         schema_version: &'a str,
         bundle_name: &'a str,
         session_id: &'a str,
-        client_class: RelayClientClass,
     },
     Response {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -101,7 +91,7 @@ struct IdentityKey {
 #[derive(Clone, Debug)]
 struct RegistryEntry {
     stream_id: Option<String>,
-    client_class: RelayClientClass,
+    session_type: SessionType,
     writer: Option<SharedStreamWriter>,
 }
 
@@ -118,12 +108,10 @@ pub(super) fn parse_incoming_frame(line: &str) -> Result<IncomingFrame, io::Erro
             schema_version,
             bundle_name,
             session_id,
-            client_class,
         }) => Ok(IncomingFrame::Hello(HelloFrame {
             schema_version,
             bundle_name,
             session_id,
-            client_class,
         })),
         Ok(IncomingEnvelope::Request {
             request_id,
@@ -148,6 +136,7 @@ pub(super) fn clone_stream_writer(stream: &UnixStream) -> Result<SharedStreamWri
 
 pub(super) fn register_stream(
     hello: &HelloFrame,
+    session_type: SessionType,
     writer: SharedStreamWriter,
 ) -> Result<RegisterStreamOutcome, io::Error> {
     let registry = stream_registry();
@@ -172,7 +161,7 @@ pub(super) fn register_stream(
         key,
         RegistryEntry {
             stream_id: Some(stream_id.clone()),
-            client_class: hello.client_class,
+            session_type,
             writer: Some(writer),
         },
     );
@@ -230,10 +219,10 @@ pub(super) fn unregister_stream(registration: &StreamRegistration) -> Result<(),
     Ok(())
 }
 
-pub(super) fn resolve_registered_client_class(
+pub(super) fn resolve_registered_session_type(
     bundle_name: &str,
     session_id: &str,
-) -> Result<Option<RelayClientClass>, io::Error> {
+) -> Result<Option<SessionType>, io::Error> {
     let registry = stream_registry();
     let entries = registry
         .entries
@@ -243,7 +232,7 @@ pub(super) fn resolve_registered_client_class(
         bundle_name: bundle_name.to_string(),
         session_id: session_id.to_string(),
     };
-    Ok(entries.get(&key).map(|entry| entry.client_class))
+    Ok(entries.get(&key).map(|entry| entry.session_type))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -267,7 +256,7 @@ pub(super) fn list_registered_ui_sessions_for_bundle(bundle_name: &str) -> Vec<S
             if key.bundle_name != bundle_name {
                 return None;
             }
-            if entry.client_class != RelayClientClass::Ui {
+            if entry.session_type != SessionType::Ui {
                 return None;
             }
             entry.writer.as_ref()?;
@@ -296,7 +285,7 @@ pub(super) fn broadcast_event_to_bundle_ui(
                 if key.bundle_name != bundle_name {
                     return None;
                 }
-                if entry.client_class != RelayClientClass::Ui {
+                if entry.session_type != SessionType::Ui {
                     return None;
                 }
                 entry.writer.as_ref()?;
@@ -324,7 +313,7 @@ pub(super) fn send_event_to_registered_ui(
     event: &RelayStreamEvent,
 ) -> Result<StreamEventSendOutcome, io::Error> {
     let registry = stream_registry();
-    let (client_class, writer) = {
+    let (session_type, writer) = {
         let entries = registry
             .entries
             .lock()
@@ -336,9 +325,9 @@ pub(super) fn send_event_to_registered_ui(
         let Some(entry) = entries.get(&key) else {
             return Ok(StreamEventSendOutcome::NoUiEndpoint);
         };
-        (entry.client_class, entry.writer.clone())
+        (entry.session_type, entry.writer.clone())
     };
-    if client_class != RelayClientClass::Ui {
+    if session_type != SessionType::Ui {
         return Ok(StreamEventSendOutcome::NoUiEndpoint);
     }
     let Some(writer) = writer else {

@@ -968,5 +968,7 @@ fn render_transport_label(transport: ListedSessionTransport) -> &'static str {
     match transport {
         ListedSessionTransport::Tmux => "tmux",
         ListedSessionTransport::Acp => "acp",
+        ListedSessionTransport::Ui => "ui",
+        ListedSessionTransport::Pubsub => "pubsub",
     }
 }

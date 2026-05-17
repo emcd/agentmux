@@ -69,35 +69,37 @@ files with kebab-case keys:
 
 Each bundle file SHALL include:
 
-- `format-version` (supported value for this schema: `2`)
+- `format-version` (supported value for this schema: `1`)
 - `[[sessions]]` entries with:
   - `id`
   - optional `name` (human-readable recipient name)
   - `directory`
-  - exactly one session-type subtable from the closed set
-    `{[sessions.tmux], [sessions.acp], [sessions.ui], [sessions.pubsub]}`
+  - exactly one session shape: a coder-backed shape (a flat `coder` reference,
+    with optional `coder-session-id`) or a coder-less shape (exactly one
+    `[sessions.ui]` or `[sessions.pubsub]` marker subtable)
 
 Session membership invariants SHALL remain enforced:
 
 - session `id` values are unique within one bundle
 - optional session `name` values are unique within one bundle when present
 
-`[sessions.tmux]` subtable fields SHALL be:
+A coder-backed `[[sessions]]` entry SHALL carry:
 
-- required `coder` reference (must resolve to a `[coders.tmux]` coder)
+- required `coder` reference (must resolve to a `[[coders]]` entry)
 - optional `coder-session-id`
 
-`[sessions.acp]` subtable fields SHALL be:
+The session's transport (tmux pane injection vs. ACP worker delivery) SHALL be
+derived from the referenced coder's descriptor (`[coders.tmux]` vs.
+`[coders.acp]`); the session entry SHALL NOT restate the transport.
 
-- required `coder` reference (must resolve to a `[coders.acp]` coder)
-- optional `coder-session-id`
-
-`[sessions.ui]` and `[sessions.pubsub]` subtables SHALL carry no required
-fields (empty body is valid).
+A coder-less `[[sessions]]` entry SHALL declare exactly one `[sessions.ui]` or
+`[sessions.pubsub]` marker subtable, which SHALL carry no required fields
+(empty body is valid). A coder-less entry SHALL NOT carry a `coder` or
+`coder-session-id` field.
 
 Coder definitions SHALL include target descriptors in `coders.toml`:
 
-- `format-version` (supported value for this schema: `2`)
+- `format-version` (supported value for this schema: `1`)
 - `[[coders]]` entries with:
   - `id`
   - exactly one target descriptor table:
@@ -130,30 +132,33 @@ ACP lifecycle selection constraints:
 Routing and delivery SHALL use session `id` values.
 Bundle identity SHALL be derived from bundle filename (`<bundle-id>.toml`).
 
-#### Scenario: Load valid v2 tmux-type session configuration
+#### Scenario: Load valid tmux-backed session configuration
 
-- **WHEN** bundle file uses `format-version = 2`
-- **AND** a session entry declares `[sessions.tmux]` with a valid coder
-  reference
+- **WHEN** bundle and coders files use `format-version = 1`
+- **AND** a session entry declares a flat `coder` reference
 - **AND** the referenced coder defines `[coders.tmux]`
 - **THEN** the system loads configuration successfully
+- **AND** the session is routed via the tmux transport
 
-#### Scenario: Load valid v2 ACP-type session configuration
+#### Scenario: Load valid ACP-backed session configuration
 
-- **WHEN** bundle and coders files use `format-version = 2`
-- **AND** a session entry declares `[sessions.acp]` with `coder-session-id`
+- **WHEN** bundle and coders files use `format-version = 1`
+- **AND** a session entry declares a flat `coder` reference with
+  `coder-session-id`
 - **AND** the referenced coder defines `[coders.acp]` with `channel = "stdio"`
 - **THEN** the system loads configuration successfully
+- **AND** the session is routed via the ACP transport
 
-#### Scenario: Reject session with no session-type subtable
+#### Scenario: Reject session with neither coder nor marker
 
-- **WHEN** a bundle session entry has no `[sessions.tmux]`, `[sessions.acp]`,
-  `[sessions.ui]`, or `[sessions.pubsub]` subtable
+- **WHEN** a bundle session entry declares no `coder` reference and no
+  `[sessions.ui]` or `[sessions.pubsub]` marker subtable
 - **THEN** relay rejects configuration with a structured config error
 
-#### Scenario: Reject session with multiple session-type subtables
+#### Scenario: Reject session declaring both coder and marker
 
-- **WHEN** a bundle session entry declares more than one session-type subtable
+- **WHEN** a bundle session entry declares a `coder` reference and also a
+  `[sessions.ui]` or `[sessions.pubsub]` marker subtable
 - **THEN** relay rejects configuration with a structured config error
 
 ### Requirement: Session Routing Primitive
@@ -206,15 +211,19 @@ action payload.
 
 ### Requirement: Session Type Taxonomy
 
-The relay SHALL recognize exactly four session types, declared by subtable in
-each `[[sessions]]` config entry:
+The relay SHALL recognize exactly four session types, resolved from config:
 
-| Type | Delivery binding | Notes |
-|---|---|---|
-| `tmux` | tmux pane prompt injection + quiescence gating | MCP server socket; request/reply |
-| `acp` | ACP prompt via relay-spawned worker | Bidirectional; relay drives channel |
-| `ui` | live relay stream push events | Bare marker subtable; no required fields |
-| `pubsub` | embedded callback; envelope as prompt | In-process tool calls |
+| Type | Origin | Delivery binding | Notes |
+|---|---|---|---|
+| `tmux` | coder-backed; coder defines `[coders.tmux]` | tmux pane prompt injection + quiescence gating | MCP server socket; request/reply |
+| `acp` | coder-backed; coder defines `[coders.acp]` | ACP prompt via relay-spawned worker | Bidirectional; relay drives channel |
+| `ui` | coder-less `[sessions.ui]` marker | live relay stream push events | Bare marker subtable; no required fields |
+| `pubsub` | coder-less `[sessions.pubsub]` marker | embedded callback; envelope as prompt | In-process tool calls |
+
+A coder-backed session's type (`tmux` or `acp`) SHALL be derived from the
+referenced coder's descriptor; the session entry SHALL NOT restate it. A
+coder-less session's type (`ui` or `pubsub`) SHALL be its declared marker
+subtable.
 
 Session type SHALL be determined solely from config. Hello frames SHALL NOT
 carry or assert session type.
@@ -224,20 +233,23 @@ Sessions of these types SHALL be excluded from active routing at startup with a
 structured `runtime_session_type_not_implemented` failure rather than a parse
 error, until delivery is implemented.
 
-#### Scenario: Recognize tmux session type from config
+#### Scenario: Derive tmux session type from referenced coder
 
-- **WHEN** a session entry declares `[sessions.tmux]`
+- **WHEN** a session entry references a coder whose descriptor is
+  `[coders.tmux]`
 - **AND** the relay starts up
 - **THEN** relay routes messages to that session via prompt injection
 
-#### Scenario: Recognize acp session type from config
+#### Scenario: Derive acp session type from referenced coder
 
-- **WHEN** a session entry declares `[sessions.acp]`
+- **WHEN** a session entry references a coder whose descriptor is
+  `[coders.acp]`
 - **THEN** relay delivers to that session via the ACP worker path
 
 #### Scenario: Fail fast for unimplemented session type
 
-- **WHEN** a session entry declares `[sessions.ui]` or `[sessions.pubsub]`
+- **WHEN** a session entry declares a `[sessions.ui]` or `[sessions.pubsub]`
+  marker subtable
 - **THEN** relay emits `runtime_session_type_not_implemented` for that session
 - **AND** excludes it from routing without aborting other session startup
 
@@ -267,30 +279,3 @@ their canonical form is their configured `id` unchanged.
 
 - **WHEN** relay delivers a message to session `"relay"` in bundle `"agentmux"`
 - **THEN** delivery event includes `target_session = "relay@agentmux"`
-
-### Requirement: Session-Coder Type Consistency
-
-The relay SHALL enforce type consistency between session and coder at config
-load time:
-
-- A `[sessions.tmux]` entry SHALL reference a coder with a `[coders.tmux]`
-  descriptor.
-- A `[sessions.acp]` entry SHALL reference a coder with a `[coders.acp]`
-  descriptor.
-- `[sessions.ui]` and `[sessions.pubsub]` entries SHALL carry no coder
-  reference; a coder reference on these types is a config error.
-
-Mismatches SHALL fail fast with a structured config validation error.
-
-#### Scenario: Reject tmux session with acp coder
-
-- **WHEN** a session entry declares `[sessions.tmux]`
-- **AND** the referenced coder defines `[coders.acp]`
-- **THEN** relay rejects configuration with a structured session-coder type
-  mismatch error
-
-#### Scenario: Reject ui session with any coder reference
-
-- **WHEN** a session entry declares `[sessions.ui]`
-- **AND** the entry includes a `coder` field
-- **THEN** relay rejects configuration with a structured config error

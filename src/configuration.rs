@@ -11,14 +11,30 @@ use std::{
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-const FORMAT_VERSION: u32 = 1;
+const BUNDLE_SCHEMA_VERSION: u32 = 1;
+const POLICIES_SCHEMA_VERSION: u32 = 1;
 const CODERS_FILE: &str = "coders.toml";
 const BUNDLES_DIRECTORY: &str = "bundles";
 const BUNDLE_EXTENSION: &str = "toml";
-const TUI_FILE: &str = "tui.toml";
+const USERS_FILE: &str = "users.toml";
 const POLICIES_FILE: &str = "policies.toml";
 const SESSION_ID_LENGTH_MAX: usize = 31;
+const GLOBAL_SESSION_SUFFIX: &str = "@GLOBAL";
 pub const RESERVED_GROUP_ALL: &str = "ALL";
+
+/// Declared session type for one configured session entry.
+///
+/// The session type is fixed at operator configuration time by the single
+/// session-type subtable on a `[[sessions]]` entry. It is never asserted by a
+/// client at connect time.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionType {
+    Tmux,
+    Acp,
+    Ui,
+    Pubsub,
+}
 
 /// One configured bundle member.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -30,9 +46,10 @@ pub struct BundleMember {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub working_directory: Option<PathBuf>,
+    /// Declared session type and its delivery target configuration.
     pub target: TargetConfiguration,
-    /// Optional persistent agent session handle sourced from
-    /// `[[sessions]].coder-session-id` (not from `[[coders]]`).
+    /// Optional persistent agent session handle sourced from the active
+    /// session-type subtable's `coder-session-id` (not from `[[coders]]`).
     /// ACP delivery uses this to select `session/load` vs `session/new`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coder_session_id: Option<String>,
@@ -50,12 +67,30 @@ pub struct PromptReadinessTemplate {
     pub input_idle_cursor_column: Option<usize>,
 }
 
-/// Validated runtime target configuration for one bundle member.
+/// Validated session type and delivery target configuration for one member.
+///
+/// `Tmux` and `Acp` carry transport configuration; `Ui` and `Pubsub` are bare
+/// markers whose delivery paths are not yet implemented.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "transport", content = "config")]
 pub enum TargetConfiguration {
     Tmux(TmuxTargetConfiguration),
     Acp(AcpTargetConfiguration),
+    Ui,
+    Pubsub,
+}
+
+impl TargetConfiguration {
+    /// Reports the declared session type for this target.
+    #[must_use]
+    pub fn session_type(&self) -> SessionType {
+        match self {
+            Self::Tmux(_) => SessionType::Tmux,
+            Self::Acp(_) => SessionType::Acp,
+            Self::Ui => SessionType::Ui,
+            Self::Pubsub => SessionType::Pubsub,
+        }
+    }
 }
 
 /// Tmux transport configuration for one bundle member.
@@ -100,19 +135,21 @@ pub struct BundleGroupMembership {
     pub groups: Vec<String>,
 }
 
-/// One global TUI session entry from `tui.toml`.
+/// One global user session entry from `users.toml`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct TuiSession {
-    /// Selector identity used by CLI (`--as-session`).
+    /// Canonical global identity in `session@GLOBAL` form.
     pub id: String,
     /// Optional operator-facing label.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Policy preset reference.
-    pub policy_id: String,
+    pub policy: String,
+    /// Declared session type for this global user entry.
+    pub session_type: SessionType,
 }
 
-/// Global TUI configuration loaded from `tui.toml`.
+/// Global user configuration loaded from `users.toml`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct TuiConfiguration {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -235,22 +272,26 @@ struct RawBundleFile {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
-struct RawTuiFile {
+struct RawUsersFile {
     #[serde(default)]
     default_bundle: Option<String>,
     #[serde(default)]
     default_session: Option<String>,
     #[serde(default)]
-    sessions: Vec<RawTuiSession>,
+    sessions: Vec<RawUsersSession>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
-struct RawTuiSession {
+struct RawUsersSession {
     id: String,
     #[serde(default)]
     name: Option<String>,
     policy: String,
+    #[serde(default)]
+    ui: Option<RawSessionMarker>,
+    #[serde(default)]
+    pubsub: Option<RawSessionMarker>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -280,12 +321,22 @@ struct RawSession {
     #[serde(default)]
     name: Option<String>,
     directory: PathBuf,
-    coder: String,
+    #[serde(default)]
+    policy: Option<String>,
+    #[serde(default)]
+    coder: Option<String>,
     #[serde(default)]
     coder_session_id: Option<String>,
     #[serde(default)]
-    policy: Option<String>,
+    ui: Option<RawSessionMarker>,
+    #[serde(default)]
+    pubsub: Option<RawSessionMarker>,
 }
+
+/// A `[sessions.ui]` or `[sessions.pubsub]` subtable; an empty body is valid.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawSessionMarker {}
 
 /// Configuration load/validation failures.
 #[derive(Debug)]
@@ -321,6 +372,13 @@ impl ConfigurationError {
         Self::Io {
             context: context.into(),
             source,
+        }
+    }
+
+    fn invalid(path: &Path, message: impl Into<String>) -> Self {
+        Self::InvalidConfiguration {
+            path: path.to_path_buf(),
+            message: message.into(),
         }
     }
 }
@@ -389,9 +447,9 @@ pub fn bundle_configuration_path(configuration_root: &Path, bundle_name: &str) -
         .join(format!("{bundle_name}.{BUNDLE_EXTENSION}"))
 }
 
-/// Resolves path to global TUI configuration file.
+/// Resolves path to global user configuration file (`users.toml`).
 pub fn tui_configuration_path(configuration_root: &Path) -> PathBuf {
-    configuration_root.join(TUI_FILE)
+    configuration_root.join(USERS_FILE)
 }
 
 /// Resolves path to authorization policy presets file.
@@ -438,7 +496,11 @@ pub fn load_bundle_group_memberships(
                 message: source.to_string(),
             }
         })?;
-        validate_format_version(bundle_file.format_version, &bundle_path)?;
+        validate_format_version(
+            bundle_file.format_version,
+            BUNDLE_SCHEMA_VERSION,
+            &bundle_path,
+        )?;
         if bundle_file.sessions.is_empty() {
             continue;
         }
@@ -500,7 +562,7 @@ pub fn load_bundle_configuration(
     )
 }
 
-/// Loads global TUI configuration from `<config-root>/tui.toml`.
+/// Loads global user configuration from `<config-root>/users.toml`.
 ///
 /// # Errors
 ///
@@ -511,7 +573,7 @@ pub fn load_tui_configuration(
     load_tui_configuration_file(&tui_configuration_path(configuration_root))
 }
 
-/// Loads global TUI configuration from an explicit file path.
+/// Loads global user configuration from an explicit file path.
 ///
 /// # Errors
 ///
@@ -524,7 +586,7 @@ pub fn load_tui_configuration_file(
     }
     let raw = fs::read_to_string(path)
         .map_err(|source| ConfigurationError::io(format!("read {}", path.display()), source))?;
-    let parsed = toml::from_str::<RawTuiFile>(&raw).map_err(|source| {
+    let parsed = toml::from_str::<RawUsersFile>(&raw).map_err(|source| {
         ConfigurationError::InvalidConfiguration {
             path: path.to_path_buf(),
             message: source.to_string(),
@@ -567,22 +629,22 @@ pub fn load_policy_ids(configuration_root: &Path) -> Result<HashSet<String>, Con
             message: source.to_string(),
         }
     })?;
-    validate_format_version(parsed.format_version, &path)?;
+    validate_format_version(parsed.format_version, POLICIES_SCHEMA_VERSION, &path)?;
 
     let mut unique = HashSet::<String>::new();
     for policy in parsed.policies {
         let policy_id = normalize_field(policy.id.as_str());
         if policy_id.is_empty() {
-            return Err(ConfigurationError::InvalidConfiguration {
-                path: path.clone(),
-                message: "policy id must be non-empty".to_string(),
-            });
+            return Err(ConfigurationError::invalid(
+                &path,
+                "policy id must be non-empty",
+            ));
         }
         if !unique.insert(policy_id.to_string()) {
-            return Err(ConfigurationError::InvalidConfiguration {
-                path: path.clone(),
-                message: format!("duplicate policy id '{policy_id}'"),
-            });
+            return Err(ConfigurationError::invalid(
+                &path,
+                format!("duplicate policy id '{policy_id}'"),
+            ));
         }
     }
     Ok(unique)
@@ -627,18 +689,26 @@ fn validate_loaded_configuration(
     bundle_file: RawBundleFile,
     bundle_path: &Path,
 ) -> Result<BundleConfiguration, ConfigurationError> {
-    validate_format_version(coders_file.format_version, coders_path)?;
-    validate_format_version(bundle_file.format_version, bundle_path)?;
+    validate_format_version(
+        coders_file.format_version,
+        BUNDLE_SCHEMA_VERSION,
+        coders_path,
+    )?;
+    validate_format_version(
+        bundle_file.format_version,
+        BUNDLE_SCHEMA_VERSION,
+        bundle_path,
+    )?;
 
     let coders = validate_coders(coders_file.coders, coders_path)?;
 
     let groups = validate_bundle_groups(&bundle_file.groups, bundle_path)?;
 
     if bundle_file.sessions.is_empty() {
-        return Err(ConfigurationError::InvalidConfiguration {
-            path: bundle_path.to_path_buf(),
-            message: "sessions must contain at least one session".to_string(),
-        });
+        return Err(ConfigurationError::invalid(
+            bundle_path,
+            "sessions must contain at least one session",
+        ));
     }
 
     let mut session_ids = HashSet::new();
@@ -648,17 +718,17 @@ fn validate_loaded_configuration(
     for session in &bundle_file.sessions {
         let session_id = normalize_field(session.id.as_str());
         if session_id.is_empty() {
-            return Err(ConfigurationError::InvalidConfiguration {
-                path: bundle_path.to_path_buf(),
-                message: "session id must be non-empty".to_string(),
-            });
+            return Err(ConfigurationError::invalid(
+                bundle_path,
+                "session id must be non-empty",
+            ));
         }
         validate_session_id(bundle_path, session_id)?;
         if !session_ids.insert(session_id.to_string()) {
-            return Err(ConfigurationError::InvalidConfiguration {
-                path: bundle_path.to_path_buf(),
-                message: format!("duplicate session id '{session_id}'"),
-            });
+            return Err(ConfigurationError::invalid(
+                bundle_path,
+                format!("duplicate session id '{session_id}'"),
+            ));
         }
 
         let session_name = session
@@ -669,83 +739,41 @@ fn validate_loaded_configuration(
         if let Some(session_name) = session_name
             && !session_names.insert(session_name.to_string())
         {
-            return Err(ConfigurationError::InvalidConfiguration {
-                path: bundle_path.to_path_buf(),
-                message: format!("duplicate session name '{session_name}'"),
-            });
+            return Err(ConfigurationError::invalid(
+                bundle_path,
+                format!("duplicate session name '{session_name}'"),
+            ));
         }
-
-        let coder_id = normalize_field(session.coder.as_str());
-        let Some(coder) = coders.get(coder_id) else {
-            return Err(ConfigurationError::InvalidConfiguration {
-                path: bundle_path.to_path_buf(),
-                message: format!(
-                    "session '{}' references unknown coder '{}'",
-                    session_id, coder_id
-                ),
-            });
-        };
 
         if session.directory.as_os_str().is_empty() {
-            return Err(ConfigurationError::InvalidConfiguration {
-                path: bundle_path.to_path_buf(),
-                message: format!("session '{}' directory must be non-empty", session_id),
-            });
+            return Err(ConfigurationError::invalid(
+                bundle_path,
+                format!("session '{session_id}' directory must be non-empty"),
+            ));
         }
 
-        let coder_session_id = session
-            .coder_session_id
-            .as_deref()
-            .map(normalize_field)
-            .filter(|value| !value.is_empty());
         let policy_id = session
             .policy
             .as_deref()
             .map(normalize_field)
             .filter(|value| !value.is_empty())
             .map(ToString::to_string);
-        let target = match &coder.target {
-            CoderTarget::Tmux(target) => {
-                let command_template = if coder_session_id.is_some() {
-                    target.resume_command.as_str()
-                } else {
-                    target.initial_command.as_str()
-                };
-                let start_command = render_command_template(
-                    command_template,
-                    coder_session_id,
-                    bundle_path,
-                    session_id,
-                )?;
-                let prompt_readiness =
-                    prompt_readiness_from_tmux_target(target, coders_path, session_id)?;
-                TargetConfiguration::Tmux(TmuxTargetConfiguration {
-                    start_command,
-                    prompt_readiness,
-                })
-            }
-            CoderTarget::Acp(target) => TargetConfiguration::Acp(AcpTargetConfiguration {
-                channel: target.channel,
-                command: target.command.clone(),
-                url: target.url.clone(),
-                turn_timeout_ms: target.turn_timeout_ms,
-                headers: target.headers.clone(),
-                environment: target.environment.clone(),
-            }),
-        };
+
+        let (target, coder_session_id) =
+            build_session_target(session, &coders, coders_path, bundle_path, session_id)?;
 
         members.push(BundleMember {
             id: session_id.to_string(),
             name: session_name.map(ToString::to_string),
             working_directory: Some(session.directory.clone()),
             target,
-            coder_session_id: coder_session_id.map(ToString::to_string),
+            coder_session_id,
             policy_id,
         });
     }
 
     Ok(BundleConfiguration {
-        schema_version: FORMAT_VERSION.to_string(),
+        schema_version: BUNDLE_SCHEMA_VERSION.to_string(),
         bundle_name: expected_bundle_name.to_string(),
         autostart: bundle_file.autostart,
         groups,
@@ -753,8 +781,192 @@ fn validate_loaded_configuration(
     })
 }
 
+/// Resolves a bundle member's validated delivery target.
+///
+/// A session is coder-backed when it carries a `coder` reference; its transport
+/// (tmux or ACP) is derived from that coder's descriptor. Coder-less sessions
+/// declare exactly one of the `[sessions.ui]` or `[sessions.pubsub]` markers.
+fn build_session_target(
+    session: &RawSession,
+    coders: &HashMap<String, Coder>,
+    coders_path: &Path,
+    bundle_path: &Path,
+    session_id: &str,
+) -> Result<(TargetConfiguration, Option<String>), ConfigurationError> {
+    let kind = select_session_kind(
+        session.coder.is_some(),
+        session.ui.is_some(),
+        session.pubsub.is_some(),
+        bundle_path,
+        session_id,
+    )?;
+    match kind {
+        SessionKind::Coder => {
+            let coder_session_id = normalize_optional(session.coder_session_id.as_deref());
+            let coder = resolve_session_coder(
+                session.coder.as_deref().unwrap_or_default(),
+                coders,
+                bundle_path,
+                session_id,
+            )?;
+            match &coder.target {
+                CoderTarget::Tmux(tmux_target) => {
+                    let command_template = if coder_session_id.is_some() {
+                        tmux_target.resume_command.as_str()
+                    } else {
+                        tmux_target.initial_command.as_str()
+                    };
+                    let start_command = render_command_template(
+                        command_template,
+                        coder_session_id.as_deref(),
+                        bundle_path,
+                        session_id,
+                    )?;
+                    let prompt_readiness =
+                        prompt_readiness_from_tmux_target(tmux_target, coders_path, session_id)?;
+                    Ok((
+                        TargetConfiguration::Tmux(TmuxTargetConfiguration {
+                            start_command,
+                            prompt_readiness,
+                        }),
+                        coder_session_id,
+                    ))
+                }
+                CoderTarget::Acp(acp_target) => Ok((
+                    TargetConfiguration::Acp(AcpTargetConfiguration {
+                        channel: acp_target.channel,
+                        command: acp_target.command.clone(),
+                        url: acp_target.url.clone(),
+                        turn_timeout_ms: acp_target.turn_timeout_ms,
+                        headers: acp_target.headers.clone(),
+                        environment: acp_target.environment.clone(),
+                    }),
+                    coder_session_id,
+                )),
+            }
+        }
+        SessionKind::Ui => {
+            reject_coder_session_id(session, bundle_path, session_id)?;
+            Ok((TargetConfiguration::Ui, None))
+        }
+        SessionKind::Pubsub => {
+            reject_coder_session_id(session, bundle_path, session_id)?;
+            Ok((TargetConfiguration::Pubsub, None))
+        }
+    }
+}
+
+/// Rejects a `coder-session-id` declared on a coder-less session entry.
+fn reject_coder_session_id(
+    session: &RawSession,
+    bundle_path: &Path,
+    session_id: &str,
+) -> Result<(), ConfigurationError> {
+    if session.coder_session_id.is_some() {
+        return Err(ConfigurationError::invalid(
+            bundle_path,
+            format!("coder-less session '{session_id}' must not declare coder-session-id"),
+        ));
+    }
+    Ok(())
+}
+
+fn resolve_session_coder<'a>(
+    coder: &str,
+    coders: &'a HashMap<String, Coder>,
+    bundle_path: &Path,
+    session_id: &str,
+) -> Result<&'a Coder, ConfigurationError> {
+    let coder_id = normalize_field(coder);
+    if coder_id.is_empty() {
+        return Err(ConfigurationError::invalid(
+            bundle_path,
+            format!("session '{session_id}' coder reference must be non-empty"),
+        ));
+    }
+    coders.get(coder_id).ok_or_else(|| {
+        ConfigurationError::invalid(
+            bundle_path,
+            format!("session '{session_id}' references unknown coder '{coder_id}'"),
+        )
+    })
+}
+
+/// The declared shape of a bundle session: coder-backed, or one of the
+/// coder-less marker types.
+#[derive(Clone, Copy)]
+enum SessionKind {
+    Coder,
+    Ui,
+    Pubsub,
+}
+
+/// Selects the single declared session kind, rejecting a session that declares
+/// neither a coder reference nor a coder-less marker, or more than one.
+fn select_session_kind(
+    has_coder: bool,
+    has_ui: bool,
+    has_pubsub: bool,
+    path: &Path,
+    session_id: &str,
+) -> Result<SessionKind, ConfigurationError> {
+    let declared = [
+        (has_coder, SessionKind::Coder),
+        (has_ui, SessionKind::Ui),
+        (has_pubsub, SessionKind::Pubsub),
+    ];
+    let present: Vec<SessionKind> = declared
+        .into_iter()
+        .filter_map(|(declared, kind)| declared.then_some(kind))
+        .collect();
+    match present.as_slice() {
+        [kind] => Ok(*kind),
+        [] => Err(ConfigurationError::invalid(
+            path,
+            format!(
+                "session '{session_id}' must declare a coder reference or exactly one \
+                 coder-less session-type subtable ([sessions.ui] or [sessions.pubsub])"
+            ),
+        )),
+        _ => Err(ConfigurationError::invalid(
+            path,
+            format!(
+                "session '{session_id}' declares multiple session types; expected a coder \
+                 reference or exactly one of [sessions.ui] or [sessions.pubsub]"
+            ),
+        )),
+    }
+}
+
+/// Selects the session type for a global user, which is always coder-less.
+fn select_marker_session_type(
+    has_ui: bool,
+    has_pubsub: bool,
+    path: &Path,
+    session_id: &str,
+) -> Result<SessionType, ConfigurationError> {
+    match (has_ui, has_pubsub) {
+        (true, false) => Ok(SessionType::Ui),
+        (false, true) => Ok(SessionType::Pubsub),
+        (false, false) => Err(ConfigurationError::invalid(
+            path,
+            format!(
+                "users session '{session_id}' must declare exactly one session-type \
+                 subtable ([sessions.ui] or [sessions.pubsub])"
+            ),
+        )),
+        (true, true) => Err(ConfigurationError::invalid(
+            path,
+            format!(
+                "users session '{session_id}' declares multiple session-type subtables; \
+                 expected exactly one"
+            ),
+        )),
+    }
+}
+
 fn validate_tui_sessions(
-    sessions: Vec<RawTuiSession>,
+    sessions: Vec<RawUsersSession>,
     path: &Path,
 ) -> Result<Vec<TuiSession>, ConfigurationError> {
     let mut unique = HashSet::<String>::new();
@@ -762,26 +974,32 @@ fn validate_tui_sessions(
     for session in sessions {
         let selector_id = normalize_field(session.id.as_str());
         if selector_id.is_empty() {
-            return Err(ConfigurationError::InvalidConfiguration {
-                path: path.to_path_buf(),
-                message: "tui session id must be non-empty".to_string(),
-            });
+            return Err(ConfigurationError::invalid(
+                path,
+                "users session id must be non-empty",
+            ));
         }
-        validate_session_id(path, selector_id)?;
+        validate_global_session_id(path, selector_id)?;
         if !unique.insert(selector_id.to_string()) {
-            return Err(ConfigurationError::InvalidConfiguration {
-                path: path.to_path_buf(),
-                message: format!("duplicate tui session id '{selector_id}'"),
-            });
+            return Err(ConfigurationError::invalid(
+                path,
+                format!("duplicate users session id '{selector_id}'"),
+            ));
         }
 
         let policy_id = normalize_field(session.policy.as_str());
         if policy_id.is_empty() {
-            return Err(ConfigurationError::InvalidConfiguration {
-                path: path.to_path_buf(),
-                message: format!("tui session '{}' policy must be non-empty", selector_id),
-            });
+            return Err(ConfigurationError::invalid(
+                path,
+                format!("users session '{selector_id}' policy must be non-empty"),
+            ));
         }
+        let session_type = select_marker_session_type(
+            session.ui.is_some(),
+            session.pubsub.is_some(),
+            path,
+            selector_id,
+        )?;
         let name = session
             .name
             .as_deref()
@@ -792,7 +1010,8 @@ fn validate_tui_sessions(
         validated.push(TuiSession {
             id: selector_id.to_string(),
             name,
-            policy_id: policy_id.to_string(),
+            policy: policy_id.to_string(),
+            session_type,
         });
     }
     Ok(validated)
@@ -803,26 +1022,26 @@ fn validate_coders(
     coders_path: &Path,
 ) -> Result<HashMap<String, Coder>, ConfigurationError> {
     if coders.is_empty() {
-        return Err(ConfigurationError::InvalidConfiguration {
-            path: coders_path.to_path_buf(),
-            message: "coders must contain at least one coder".to_string(),
-        });
+        return Err(ConfigurationError::invalid(
+            coders_path,
+            "coders must contain at least one coder",
+        ));
     }
 
     let mut unique = HashMap::new();
     for coder in coders {
         let coder_id = normalize_field(coder.id.as_str());
         if coder_id.is_empty() {
-            return Err(ConfigurationError::InvalidConfiguration {
-                path: coders_path.to_path_buf(),
-                message: "coder id must be non-empty".to_string(),
-            });
+            return Err(ConfigurationError::invalid(
+                coders_path,
+                "coder id must be non-empty",
+            ));
         }
         if unique.contains_key(coder_id) {
-            return Err(ConfigurationError::InvalidConfiguration {
-                path: coders_path.to_path_buf(),
-                message: format!("duplicate coder id '{coder_id}'"),
-            });
+            return Err(ConfigurationError::invalid(
+                coders_path,
+                format!("duplicate coder id '{coder_id}'"),
+            ));
         }
 
         let target = match (coder.tmux, coder.acp) {
@@ -831,22 +1050,20 @@ fn validate_coders(
             }
             (None, Some(acp)) => CoderTarget::Acp(validate_acp_target(acp, coders_path, coder_id)?),
             (None, None) => {
-                return Err(ConfigurationError::InvalidConfiguration {
-                    path: coders_path.to_path_buf(),
-                    message: format!(
-                        "coder '{}' must define exactly one target table ([coders.tmux] or [coders.acp])",
-                        coder_id
+                return Err(ConfigurationError::invalid(
+                    coders_path,
+                    format!(
+                        "coder '{coder_id}' must define exactly one target table ([coders.tmux] or [coders.acp])"
                     ),
-                });
+                ));
             }
             (Some(_), Some(_)) => {
-                return Err(ConfigurationError::InvalidConfiguration {
-                    path: coders_path.to_path_buf(),
-                    message: format!(
-                        "coder '{}' defines multiple target tables; expected exactly one",
-                        coder_id
+                return Err(ConfigurationError::invalid(
+                    coders_path,
+                    format!(
+                        "coder '{coder_id}' defines multiple target tables; expected exactly one"
                     ),
-                });
+                ));
             }
         };
 
@@ -904,14 +1121,18 @@ fn is_custom_group_name(group: &str) -> bool {
     })
 }
 
-fn validate_format_version(version: u32, path: &Path) -> Result<(), ConfigurationError> {
-    if version == FORMAT_VERSION {
+fn validate_format_version(
+    version: u32,
+    expected: u32,
+    path: &Path,
+) -> Result<(), ConfigurationError> {
+    if version == expected {
         return Ok(());
     }
-    Err(ConfigurationError::InvalidConfiguration {
-        path: path.to_path_buf(),
-        message: format!("unsupported format-version '{version}'"),
-    })
+    Err(ConfigurationError::invalid(
+        path,
+        format!("unsupported format-version '{version}'; expected '{expected}'"),
+    ))
 }
 
 fn render_command_template(
@@ -924,39 +1145,35 @@ fn render_command_template(
 
     if rendered.contains("{coder-session-id}") {
         let Some(coder_session_id) = coder_session_id else {
-            return Err(ConfigurationError::InvalidConfiguration {
-                path: path.to_path_buf(),
-                message: format!(
-                    "session '{}' requires coder-session-id for template",
-                    session_id
-                ),
-            });
+            return Err(ConfigurationError::invalid(
+                path,
+                format!("session '{session_id}' requires coder-session-id for template"),
+            ));
         };
         rendered = rendered.replace("{coder-session-id}", coder_session_id);
     }
 
     let placeholder_regex = Regex::new(r"\{[a-z][a-z0-9-]*\}").map_err(|source| {
-        ConfigurationError::InvalidConfiguration {
-            path: path.to_path_buf(),
-            message: format!("internal placeholder regex failure: {source}"),
-        }
+        ConfigurationError::invalid(
+            path,
+            format!("internal placeholder regex failure: {source}"),
+        )
     })?;
     if let Some(found) = placeholder_regex.find(rendered.as_str()) {
-        return Err(ConfigurationError::InvalidConfiguration {
-            path: path.to_path_buf(),
-            message: format!(
-                "session '{}' template has unknown placeholder '{}'",
-                session_id,
+        return Err(ConfigurationError::invalid(
+            path,
+            format!(
+                "session '{session_id}' template has unknown placeholder '{}'",
                 found.as_str()
             ),
-        });
+        ));
     }
 
     if normalize_field(rendered.as_str()).is_empty() {
-        return Err(ConfigurationError::InvalidConfiguration {
-            path: path.to_path_buf(),
-            message: format!("session '{}' resolved command is empty", session_id),
-        });
+        return Err(ConfigurationError::invalid(
+            path,
+            format!("session '{session_id}' resolved command is empty"),
+        ));
     }
     Ok(rendered)
 }
@@ -967,42 +1184,33 @@ fn validate_tmux_target(
     coder_id: &str,
 ) -> Result<TmuxTarget, ConfigurationError> {
     if normalize_field(target.initial_command.as_str()).is_empty() {
-        return Err(ConfigurationError::InvalidConfiguration {
-            path: coders_path.to_path_buf(),
-            message: format!(
-                "coder '{}' tmux initial-command must be non-empty",
-                coder_id
-            ),
-        });
+        return Err(ConfigurationError::invalid(
+            coders_path,
+            format!("coder '{coder_id}' tmux initial-command must be non-empty"),
+        ));
     }
     if normalize_field(target.resume_command.as_str()).is_empty() {
-        return Err(ConfigurationError::InvalidConfiguration {
-            path: coders_path.to_path_buf(),
-            message: format!("coder '{}' tmux resume-command must be non-empty", coder_id),
-        });
+        return Err(ConfigurationError::invalid(
+            coders_path,
+            format!("coder '{coder_id}' tmux resume-command must be non-empty"),
+        ));
     }
 
     if let Some(prompt_regex) = target.prompt_regex.as_deref() {
         if normalize_field(prompt_regex).is_empty() {
-            return Err(ConfigurationError::InvalidConfiguration {
-                path: coders_path.to_path_buf(),
-                message: format!(
-                    "coder '{}' tmux prompt-regex must be non-empty when set",
-                    coder_id
-                ),
-            });
+            return Err(ConfigurationError::invalid(
+                coders_path,
+                format!("coder '{coder_id}' tmux prompt-regex must be non-empty when set"),
+            ));
         }
         compile_prompt_regex(prompt_regex, coders_path, coder_id, "tmux prompt-regex")?;
     }
 
     if matches!(target.prompt_inspect_lines, Some(0)) {
-        return Err(ConfigurationError::InvalidConfiguration {
-            path: coders_path.to_path_buf(),
-            message: format!(
-                "coder '{}' tmux prompt-inspect-lines must be greater than zero",
-                coder_id
-            ),
-        });
+        return Err(ConfigurationError::invalid(
+            coders_path,
+            format!("coder '{coder_id}' tmux prompt-inspect-lines must be greater than zero"),
+        ));
     }
 
     Ok(TmuxTarget {
@@ -1020,75 +1228,57 @@ fn validate_acp_target(
     coder_id: &str,
 ) -> Result<AcpTarget, ConfigurationError> {
     if matches!(target.turn_timeout_ms, Some(0)) {
-        return Err(ConfigurationError::InvalidConfiguration {
-            path: coders_path.to_path_buf(),
-            message: format!(
-                "coder '{}' ACP turn-timeout-ms must be greater than zero",
-                coder_id
-            ),
-        });
+        return Err(ConfigurationError::invalid(
+            coders_path,
+            format!("coder '{coder_id}' ACP turn-timeout-ms must be greater than zero"),
+        ));
     }
 
     match target.channel {
         AcpChannel::Stdio => {
             let Some(command) = target.command.as_deref() else {
-                return Err(ConfigurationError::InvalidConfiguration {
-                    path: coders_path.to_path_buf(),
-                    message: format!(
-                        "coder '{}' ACP stdio target requires non-empty command",
-                        coder_id
-                    ),
-                });
+                return Err(ConfigurationError::invalid(
+                    coders_path,
+                    format!("coder '{coder_id}' ACP stdio target requires non-empty command"),
+                ));
             };
             if normalize_field(command).is_empty() {
-                return Err(ConfigurationError::InvalidConfiguration {
-                    path: coders_path.to_path_buf(),
-                    message: format!(
-                        "coder '{}' ACP stdio target requires non-empty command",
-                        coder_id
-                    ),
-                });
+                return Err(ConfigurationError::invalid(
+                    coders_path,
+                    format!("coder '{coder_id}' ACP stdio target requires non-empty command"),
+                ));
             }
             if target.url.is_some() {
-                return Err(ConfigurationError::InvalidConfiguration {
-                    path: coders_path.to_path_buf(),
-                    message: format!("coder '{}' ACP stdio target must not set url", coder_id),
-                });
+                return Err(ConfigurationError::invalid(
+                    coders_path,
+                    format!("coder '{coder_id}' ACP stdio target must not set url"),
+                ));
             }
             if !target.headers.is_empty() {
-                return Err(ConfigurationError::InvalidConfiguration {
-                    path: coders_path.to_path_buf(),
-                    message: format!("coder '{}' ACP stdio target must not set headers", coder_id),
-                });
+                return Err(ConfigurationError::invalid(
+                    coders_path,
+                    format!("coder '{coder_id}' ACP stdio target must not set headers"),
+                ));
             }
         }
         AcpChannel::Http => {
             let Some(url) = target.url.as_deref() else {
-                return Err(ConfigurationError::InvalidConfiguration {
-                    path: coders_path.to_path_buf(),
-                    message: format!(
-                        "coder '{}' ACP http target requires non-empty url",
-                        coder_id
-                    ),
-                });
+                return Err(ConfigurationError::invalid(
+                    coders_path,
+                    format!("coder '{coder_id}' ACP http target requires non-empty url"),
+                ));
             };
             if normalize_field(url).is_empty() {
-                return Err(ConfigurationError::InvalidConfiguration {
-                    path: coders_path.to_path_buf(),
-                    message: format!(
-                        "coder '{}' ACP http target requires non-empty url",
-                        coder_id
-                    ),
-                });
+                return Err(ConfigurationError::invalid(
+                    coders_path,
+                    format!("coder '{coder_id}' ACP http target requires non-empty url"),
+                ));
             }
             if target.command.is_some() {
-                return Err(ConfigurationError::InvalidConfiguration {
-                    path: coders_path.to_path_buf(),
-                    message: format!(
-                        "coder '{}' ACP http target must not set stdio-only fields",
-                        coder_id
-                    ),
-                });
+                return Err(ConfigurationError::invalid(
+                    coders_path,
+                    format!("coder '{coder_id}' ACP http target must not set stdio-only fields"),
+                ));
             }
             validate_name_value_entries(&target.headers, coders_path, coder_id, "headers")?;
         }
@@ -1114,22 +1304,16 @@ fn validate_name_value_entries(
 ) -> Result<(), ConfigurationError> {
     for (index, entry) in entries.iter().enumerate() {
         if normalize_field(entry.name.as_str()).is_empty() {
-            return Err(ConfigurationError::InvalidConfiguration {
-                path: path.to_path_buf(),
-                message: format!(
-                    "coder '{}' {} entry {} has empty name",
-                    coder_id, field_name, index
-                ),
-            });
+            return Err(ConfigurationError::invalid(
+                path,
+                format!("coder '{coder_id}' {field_name} entry {index} has empty name"),
+            ));
         }
         if normalize_field(entry.value.as_str()).is_empty() {
-            return Err(ConfigurationError::InvalidConfiguration {
-                path: path.to_path_buf(),
-                message: format!(
-                    "coder '{}' {} entry {} has empty value",
-                    coder_id, field_name, index
-                ),
-            });
+            return Err(ConfigurationError::invalid(
+                path,
+                format!("coder '{coder_id}' {field_name} entry {index} has empty value"),
+            ));
         }
     }
     Ok(())
@@ -1157,56 +1341,76 @@ fn compile_prompt_regex(
     session_id: &str,
     field_name: &str,
 ) -> Result<(), ConfigurationError> {
-    Regex::new(pattern)
-        .map(|_| ())
-        .map_err(|source| ConfigurationError::InvalidConfiguration {
-            path: path.to_path_buf(),
-            message: format!("invalid {field_name} for session/coder '{session_id}': {source}"),
-        })
+    Regex::new(pattern).map(|_| ()).map_err(|source| {
+        ConfigurationError::invalid(
+            path,
+            format!("invalid {field_name} for session/coder '{session_id}': {source}"),
+        )
+    })
 }
 
 fn normalize_field(value: &str) -> &str {
     value.trim()
 }
 
+fn normalize_optional(value: Option<&str>) -> Option<String> {
+    value
+        .map(normalize_field)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
 fn validate_session_id(path: &Path, session_id: &str) -> Result<(), ConfigurationError> {
     let mut characters = session_id.chars();
     let Some(first) = characters.next() else {
-        return Err(ConfigurationError::InvalidConfiguration {
-            path: path.to_path_buf(),
-            message: "session id must be non-empty".to_string(),
-        });
+        return Err(ConfigurationError::invalid(
+            path,
+            "session id must be non-empty",
+        ));
     };
     if !first.is_ascii_alphabetic() {
-        return Err(ConfigurationError::InvalidConfiguration {
-            path: path.to_path_buf(),
-            message: format!(
-                "session id '{}' must start with an ASCII alphabetic character",
-                session_id
-            ),
-        });
+        return Err(ConfigurationError::invalid(
+            path,
+            format!("session id '{session_id}' must start with an ASCII alphabetic character"),
+        ));
     }
     if !characters
         .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
     {
-        return Err(ConfigurationError::InvalidConfiguration {
-            path: path.to_path_buf(),
-            message: format!(
-                "session id '{}' may only contain ASCII alphanumeric characters, '-' or '_'",
-                session_id
+        return Err(ConfigurationError::invalid(
+            path,
+            format!(
+                "session id '{session_id}' may only contain ASCII alphanumeric characters, '-' or '_'"
             ),
-        });
+        ));
     }
     if session_id.len() > SESSION_ID_LENGTH_MAX {
-        return Err(ConfigurationError::InvalidConfiguration {
-            path: path.to_path_buf(),
-            message: format!(
-                "session id '{}' exceeds max length {}",
-                session_id, SESSION_ID_LENGTH_MAX
-            ),
-        });
+        return Err(ConfigurationError::invalid(
+            path,
+            format!("session id '{session_id}' exceeds max length {SESSION_ID_LENGTH_MAX}"),
+        ));
     }
     Ok(())
+}
+
+/// Validates a global user session id in `session@GLOBAL` canonical form.
+///
+/// The `@GLOBAL` suffix is required; the local prefix follows the bundle
+/// session-id grammar.
+fn validate_global_session_id(path: &Path, session_id: &str) -> Result<(), ConfigurationError> {
+    let Some(local) = session_id.strip_suffix(GLOBAL_SESSION_SUFFIX) else {
+        return Err(ConfigurationError::invalid(
+            path,
+            format!("users session id '{session_id}' must be in 'session@GLOBAL' canonical form"),
+        ));
+    };
+    if local.is_empty() {
+        return Err(ConfigurationError::invalid(
+            path,
+            format!("users session id '{session_id}' has an empty local part"),
+        ));
+    }
+    validate_session_id(path, local)
 }
 
 fn canonicalize_best_effort(path: &Path) -> PathBuf {

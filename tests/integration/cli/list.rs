@@ -134,7 +134,7 @@ fn list_sessions_single_bundle_json_uses_canonical_bundle_shape() {
     let requests = request_log.lock().expect("request log lock");
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0]["operation"], "list");
-    assert_eq!(requests[0]["sender_session"], "user");
+    assert_eq!(requests[0]["sender_session"], "user@GLOBAL");
 }
 
 #[test]
@@ -234,9 +234,9 @@ fn list_sessions_all_json_orders_bundles_lexicographically() {
     assert_eq!(bundles[1]["startup_health"], "healthy");
     assert_eq!(bundles[1]["startup_failure_count"], 0);
     let alpha_requests = alpha_log.lock().expect("alpha request lock");
-    assert_eq!(alpha_requests[0]["sender_session"], "user");
+    assert_eq!(alpha_requests[0]["sender_session"], "user@GLOBAL");
     let beta_requests = beta_log.lock().expect("beta request lock");
-    assert_eq!(beta_requests[0]["sender_session"], "user");
+    assert_eq!(beta_requests[0]["sender_session"], "user@GLOBAL");
 }
 
 #[test]
@@ -368,5 +368,5 @@ fn list_sessions_uses_ui_session_identity_defaults_outside_associated_workspace(
     assert!(output.status.success(), "command should succeed");
     let requests = request_log.lock().expect("request log lock");
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0]["sender_session"], "user");
+    assert_eq!(requests[0]["sender_session"], "user@GLOBAL");
 }

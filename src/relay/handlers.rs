@@ -33,8 +33,8 @@ use super::{
     DeliveryPayloadMode, LifecycleBundleResult, ListedBundle, ListedBundleStartupHealth,
     ListedBundleState, ListedSession, ListedSessionTransport, LookRequestContext,
     PendingPermissionEntry, PermissionDecisionRequestContext, RawwRequestContext, RelayError,
-    RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION, load_startup_failures,
-    relay_error,
+    RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION, bare_session_id,
+    canonical_session_id, load_startup_failures, relay_error,
 };
 
 const LOOK_LINES_DEFAULT: usize = 120;
@@ -76,6 +76,7 @@ pub(super) fn handle_request(
     runtime_directory: &Path,
     principal: Option<RequestPrincipal>,
 ) -> Result<RelayResponse, RelayError> {
+    let request = normalize_request_identities(request, bundle.bundle_name.as_str());
     match request {
         RelayRequest::Up => handle_lifecycle_up(bundle, runtime_directory),
         RelayRequest::Down => handle_lifecycle_down(bundle, runtime_directory),
@@ -175,6 +176,68 @@ pub(super) fn handle_request(
     }
 }
 
+/// Rewrites canonical `session@bundle` identities in an incoming request to
+/// their bundle-local form so internal lookups match configured member ids.
+fn normalize_request_identities(request: RelayRequest, bundle_name: &str) -> RelayRequest {
+    let bare = |id: String| bare_session_id(id.as_str(), bundle_name);
+    match request {
+        RelayRequest::List { sender_session } => RelayRequest::List {
+            sender_session: sender_session.map(bare),
+        },
+        RelayRequest::Chat {
+            request_id,
+            sender_session,
+            message,
+            targets,
+            broadcast,
+            delivery_mode,
+            quiet_window_ms,
+            quiescence_timeout_ms,
+            acp_turn_timeout_ms,
+        } => RelayRequest::Chat {
+            request_id,
+            sender_session: bare(sender_session),
+            message,
+            targets: targets.into_iter().map(bare).collect(),
+            broadcast,
+            delivery_mode,
+            quiet_window_ms,
+            quiescence_timeout_ms,
+            acp_turn_timeout_ms,
+        },
+        RelayRequest::Look {
+            requester_session,
+            target_session,
+            lines,
+            bundle_name: request_bundle_name,
+        } => RelayRequest::Look {
+            requester_session: bare(requester_session),
+            target_session: bare(target_session),
+            lines,
+            bundle_name: request_bundle_name,
+        },
+        RelayRequest::Raww {
+            request_id,
+            sender_session,
+            target_session,
+            text,
+            no_enter,
+            bundle_name: request_bundle_name,
+        } => RelayRequest::Raww {
+            request_id,
+            sender_session: bare(sender_session),
+            target_session: bare(target_session),
+            text,
+            no_enter,
+            bundle_name: request_bundle_name,
+        },
+        request @ (RelayRequest::Up
+        | RelayRequest::Down
+        | RelayRequest::PermissionResolve { .. }
+        | RelayRequest::PermissionList { .. }) => request,
+    }
+}
+
 fn handle_lifecycle_up(
     bundle: &BundleConfiguration,
     runtime_directory: &Path,
@@ -268,12 +331,9 @@ fn handle_list(
         .members
         .iter()
         .map(|member| ListedSession {
-            id: member.id.clone(),
+            id: canonical_session_id(member.id.as_str(), bundle.bundle_name.as_str()),
             name: member.name.clone(),
-            transport: match member.target {
-                TargetConfiguration::Tmux(_) => ListedSessionTransport::Tmux,
-                TargetConfiguration::Acp(_) => ListedSessionTransport::Acp,
-            },
+            transport: member.target.session_type().into(),
         })
         .collect::<Vec<_>>();
 
@@ -301,6 +361,9 @@ fn handle_list(
                 runtime_directory,
                 member.id.as_str(),
             ),
+            // `ui`/`pubsub` members have no implemented startup path; they are
+            // never counted ready and surface a startup failure in lifecycle.
+            TargetConfiguration::Ui | TargetConfiguration::Pubsub => false,
         };
         if ready {
             ready_session_count += 1;
@@ -466,6 +529,8 @@ fn handle_chat(
             match &target_member.target {
                 crate::configuration::TargetConfiguration::Tmux(_) => has_tmux_target = true,
                 crate::configuration::TargetConfiguration::Acp(_) => has_acp_target = true,
+                crate::configuration::TargetConfiguration::Ui
+                | crate::configuration::TargetConfiguration::Pubsub => {}
             }
             continue;
         }
@@ -562,6 +627,13 @@ fn handle_chat(
                         crate::configuration::TargetConfiguration::Tmux(_) => {
                             deliver_one_target(&task)?
                         }
+                        crate::configuration::TargetConfiguration::Ui
+                        | crate::configuration::TargetConfiguration::Pubsub => {
+                            return Err(super::session_type_not_implemented(
+                                target_member.id.as_str(),
+                                target_member.target.session_type(),
+                            ));
+                        }
                     }
                 };
                 results.push(result);
@@ -622,11 +694,22 @@ fn handle_chat(
         }
     };
 
+    let results = results
+        .into_iter()
+        .map(|mut result| {
+            result.target_session =
+                canonical_session_id(result.target_session.as_str(), bundle.bundle_name.as_str());
+            result
+        })
+        .collect::<Vec<_>>();
     let response = RelayResponse::Chat {
         schema_version: SCHEMA_VERSION.to_string(),
         bundle_name: bundle.bundle_name.clone(),
         request_id,
-        sender_session: sender.session_id.clone(),
+        sender_session: canonical_session_id(
+            sender.session_id.as_str(),
+            bundle.bundle_name.as_str(),
+        ),
         sender_display_name: sender.display_name.clone(),
         delivery_mode,
         status,
@@ -746,6 +829,13 @@ fn handle_look(
             })?;
             LookSnapshotPayload::Lines { snapshot_lines }
         }
+        crate::configuration::TargetConfiguration::Ui
+        | crate::configuration::TargetConfiguration::Pubsub => {
+            return Err(super::session_type_not_implemented(
+                target.id.as_str(),
+                target.target.session_type(),
+            ));
+        }
         crate::configuration::TargetConfiguration::Acp(_) => {
             let prime_timed_out =
                 await_acp_worker_prime_for_look(bundle, target, runtime_directory).map_err(
@@ -785,8 +875,11 @@ fn handle_look(
     let response = RelayResponse::Look {
         schema_version: SCHEMA_VERSION.to_string(),
         bundle_name: bundle.bundle_name.clone(),
-        requester_session: requester.session_id.clone(),
-        target_session: target.id.clone(),
+        requester_session: canonical_session_id(
+            requester.session_id.as_str(),
+            bundle.bundle_name.as_str(),
+        ),
+        target_session: canonical_session_id(target.id.as_str(), bundle.bundle_name.as_str()),
         captured_at: time::OffsetDateTime::now_utc()
             .format(&Rfc3339)
             .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string()),
@@ -939,6 +1032,12 @@ fn handle_raww(
     let transport = match &target_member.target {
         TargetConfiguration::Tmux(_) => ListedSessionTransport::Tmux,
         TargetConfiguration::Acp(_) => ListedSessionTransport::Acp,
+        TargetConfiguration::Ui | TargetConfiguration::Pubsub => {
+            return Err(super::session_type_not_implemented(
+                target_member.id.as_str(),
+                target_member.target.session_type(),
+            ));
+        }
     };
     let message_id = Uuid::new_v4().to_string();
     let sender_member = sender.to_bundle_member();
@@ -965,6 +1064,12 @@ fn handle_raww(
     let result = match &target_member.target {
         TargetConfiguration::Acp(_) => enqueue_sync_delivery(task)?,
         TargetConfiguration::Tmux(_) => deliver_one_target(&task)?,
+        TargetConfiguration::Ui | TargetConfiguration::Pubsub => {
+            return Err(super::session_type_not_implemented(
+                target_member.id.as_str(),
+                target_member.target.session_type(),
+            ));
+        }
     };
     if result.outcome != ChatOutcome::Delivered {
         let reason = result
@@ -1002,7 +1107,10 @@ fn handle_raww(
     Ok(RelayResponse::Raww {
         schema_version: SCHEMA_VERSION.to_string(),
         status: "accepted".to_string(),
-        target_session: target_member.id.clone(),
+        target_session: canonical_session_id(
+            target_member.id.as_str(),
+            bundle.bundle_name.as_str(),
+        ),
         transport,
         request_id,
         message_id: Some(message_id),
@@ -1146,18 +1254,6 @@ fn handle_permission_decision(
             None,
         )
     })?;
-    if !matches!(
-        principal.client_class,
-        super::stream::RelayClientClass::Ui | super::stream::RelayClientClass::Operator
-    ) {
-        return Err(relay_error(
-            "validation_invalid_client_class_for_action",
-            "permission decision actions require ui or operator client_class",
-            Some(json!({
-                "client_class": format!("{:?}", principal.client_class).to_lowercase(),
-            })),
-        ));
-    }
     authorize_grant(
         bundle,
         authorization,
@@ -1176,7 +1272,10 @@ fn handle_permission_decision(
             permission_request_id: permission_request_id.clone(),
             option_id: decision_option_id,
             decision,
-            decided_by: principal.session_id.clone(),
+            decided_by: canonical_session_id(
+                principal.session_id.as_str(),
+                bundle.bundle_name.as_str(),
+            ),
         },
     )
     .map_err(|cause| {
@@ -1267,18 +1366,6 @@ fn handle_permission_list(
             None,
         )
     })?;
-    if !matches!(
-        principal.client_class,
-        super::stream::RelayClientClass::Ui | super::stream::RelayClientClass::Operator
-    ) {
-        return Err(relay_error(
-            "validation_invalid_client_class_for_action",
-            "permission list requires ui or operator client_class",
-            Some(json!({
-                "client_class": format!("{:?}", principal.client_class).to_lowercase(),
-            })),
-        ));
-    }
     authorize_grant_for_list(bundle, authorization, principal.session_id.as_str())?;
     let pending = list_pending_permission_requests(runtime_directory).map_err(|cause| {
         if cause.starts_with("runtime_permission_queue_unavailable") {
@@ -1297,7 +1384,12 @@ fn handle_permission_list(
     })?;
     let pending_requests = pending
         .into_iter()
-        .map(pending_permission_entry_from_record)
+        .map(|record| {
+            let mut entry = pending_permission_entry_from_record(record);
+            entry.target_session =
+                canonical_session_id(entry.target_session.as_str(), bundle.bundle_name.as_str());
+            entry
+        })
         .collect();
     Ok(RelayResponse::PermissionList {
         schema_version: SCHEMA_VERSION.to_string(),

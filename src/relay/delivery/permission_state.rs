@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::runtime::{inscriptions::emit_inscription, signals::shutdown_requested};
 
 use super::super::{
-    relay_error,
+    canonical_session_id, relay_error,
     stream::{RelayStreamEvent, send_event_to_registered_ui},
 };
 
@@ -491,7 +491,7 @@ fn permission_requested_event(
         payload: json!({
             "message_id": request.message_id,
             "permission_request_id": request.permission_request_id,
-            "target_session": request.target_session,
+            "target_session": canonical_session_id(request.target_session.as_str(), bundle_name),
             "requested_kind": request.requested_kind,
             "requested_details": request.requested_details,
             "enqueued_at": request.enqueued_at,

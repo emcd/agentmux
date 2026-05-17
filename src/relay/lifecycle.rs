@@ -205,6 +205,20 @@ fn startup_loaded_bundle(
                     }),
                 }
             }
+            // `ui`/`pubsub` members have no implemented startup path; record a
+            // structured startup failure and exclude them from active routing.
+            TargetConfiguration::Ui | TargetConfiguration::Pubsub => {
+                failed_startups.push(StartupFailureRecord {
+                    bundle_name: bundle.bundle_name.clone(),
+                    session_id: member.id.clone(),
+                    transport: member.target.session_type().into(),
+                    code: "runtime_session_type_not_implemented".to_string(),
+                    reason: "session type delivery is not yet implemented".to_string(),
+                    timestamp: startup_timestamp(),
+                    sequence: 0,
+                    details: None,
+                });
+            }
         }
     }
 
@@ -302,6 +316,9 @@ fn create_member_once(
         TargetConfiguration::Tmux(target) => target.start_command.as_str(),
         TargetConfiguration::Acp(_) => {
             return Err("cannot create tmux session for ACP target".to_string());
+        }
+        TargetConfiguration::Ui | TargetConfiguration::Pubsub => {
+            return Err("cannot create tmux session for ui/pubsub target".to_string());
         }
     };
 

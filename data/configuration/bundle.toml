@@ -3,27 +3,26 @@
 format-version = 1
 # autostart = true
 
-# Each session may reference a policy preset from policies.toml via `policy`.
-# Omitting `policy` resolves to the policies.toml `default` preset.
+# Each [[sessions]] entry is either coder-backed or coder-less:
+#   coder = "<id>"    - a coder-backed session; transport (tmux pane injection
+#                       or ACP worker delivery) is derived from the coder.
+#   [sessions.ui]     - live relay stream push events (no coder)
+#   [sessions.pubsub] - embedded callback delivery (no coder)
 #
-# Operator-class assignment: a session may claim relay
-# `client_class = operator` (required to poll and resolve ACP permission
-# requests through the MCP `grant` tool) only when its `policy` preset
-# sets `operator-class = true`. Assign the `operator` preset deliberately;
-# restrict it to coordination/decisioning lanes (for example `master` and
-# `mcp`) and leave worker lanes on `default` so they register as `agent`.
+# A session may reference a policy preset from policies.toml via `policy`.
+# Omitting `policy` resolves to the policies.toml `default` preset.
 
 # [[sessions]]
 # id = "agent-a"
 # name = "Agent A"
 # directory = "/home/me/src/WORKTREES/agentmux/agent-a"
+# policy = "operator"
 # coder = "codex"
 # coder-session-id = "00000000-0000-0000-0000-000000000000"
-# policy = "operator"
 
 # [[sessions]]
 # id = "agent-b"
 # name = "Agent B"
 # directory = "/home/me/src/WORKTREES/agentmux/agent-b"
-# coder = "codex"
 # policy = "default"
+# coder = "opencode-acp"

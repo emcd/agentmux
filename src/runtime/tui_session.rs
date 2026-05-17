@@ -9,7 +9,8 @@ use crate::configuration::{
 
 use super::error::RuntimeError;
 
-const OVERRIDE_FILE_PATH: &str = ".auxiliary/configuration/agentmux/overrides/tui.toml";
+const OVERRIDE_FILE_PATH: &str = ".auxiliary/configuration/agentmux/overrides/users.toml";
+const GLOBAL_SESSION_SUFFIX: &str = "@GLOBAL";
 
 /// Resolved TUI session identity for CLI/TUI operations.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -18,7 +19,7 @@ pub struct ResolvedTuiSession {
     pub session_selector: String,
     pub session_id: String,
     pub session_name: Option<String>,
-    pub policy_id: String,
+    pub policy: String,
 }
 
 /// Loads active TUI configuration with debug/testing override precedence.
@@ -61,13 +62,13 @@ pub fn resolve_tui_session_identity(
     let selector = resolve_session_selector(configuration.as_ref(), explicit_session)?;
     let selected = resolve_selected_session(configuration.as_ref(), selector.as_str())?;
     validate_sender_shape(selected.id.as_str())?;
-    validate_selected_policy(configuration_root, selected.policy_id.as_str())?;
+    validate_selected_policy(configuration_root, selected.policy.as_str())?;
     Ok(ResolvedTuiSession {
         bundle_name,
         session_selector: selector,
         session_id: selected.id.clone(),
         session_name: selected.name.clone(),
-        policy_id: selected.policy_id.clone(),
+        policy: selected.policy.clone(),
     })
 }
 
@@ -86,7 +87,7 @@ fn resolve_bundle_name(
     }
     Err(RuntimeError::validation(
         "validation_unknown_bundle",
-        "bundle is required via --bundle or tui.toml default-bundle".to_string(),
+        "bundle is required via --bundle or users.toml default-bundle".to_string(),
     ))
 }
 
@@ -105,7 +106,7 @@ fn resolve_session_selector(
     }
     Err(RuntimeError::validation(
         "validation_unknown_session",
-        "session is required via --as-session or tui.toml default-session".to_string(),
+        "session is required via --as-session or users.toml default-session".to_string(),
     ))
 }
 
@@ -116,13 +117,13 @@ fn resolve_selected_session<'a>(
     let Some(configuration) = configuration else {
         return Err(RuntimeError::validation(
             "validation_unknown_session",
-            format!("session '{}' is not configured in tui.toml", selector),
+            format!("session '{selector}' is not configured in users.toml"),
         ));
     };
     configuration.session_by_id(selector).ok_or_else(|| {
         RuntimeError::validation(
             "validation_unknown_session",
-            format!("session '{}' is not configured in tui.toml", selector),
+            format!("session '{selector}' is not configured in users.toml"),
         )
     })
 }
@@ -146,7 +147,12 @@ fn validate_selected_policy(
 }
 
 fn validate_sender_shape(session_id: &str) -> Result<(), RuntimeError> {
-    let Some(first) = session_id.chars().next() else {
+    // Global users carry a `@GLOBAL` suffix; the local prefix follows the
+    // bundle session-id grammar.
+    let local = session_id
+        .strip_suffix(GLOBAL_SESSION_SUFFIX)
+        .unwrap_or(session_id);
+    let Some(first) = local.chars().next() else {
         return Err(RuntimeError::validation(
             "validation_unknown_sender",
             "session id is empty".to_string(),
@@ -155,21 +161,17 @@ fn validate_sender_shape(session_id: &str) -> Result<(), RuntimeError> {
     if !first.is_ascii_alphabetic() {
         return Err(RuntimeError::validation(
             "validation_unknown_sender",
-            format!(
-                "session id '{}' must start with an ASCII alphabetic character",
-                session_id
-            ),
+            format!("session id '{session_id}' must start with an ASCII alphabetic character"),
         ));
     }
-    if !session_id
+    if !local
         .chars()
         .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
     {
         return Err(RuntimeError::validation(
             "validation_unknown_sender",
             format!(
-                "session id '{}' may only contain ASCII alphanumeric characters, '-' or '_'",
-                session_id
+                "session id '{session_id}' may only contain ASCII alphanumeric characters, '-' or '_'"
             ),
         ));
     }

@@ -33,9 +33,10 @@ use super::permission_state::{PermissionEventContext, invalidate_pending_for_res
 use super::quiescence::{DeliveryWaitError, wait_for_quiescent_pane};
 use super::ui_delivery::deliver_one_target_ui;
 
+use super::super::canonical_session_id;
 use super::super::stream::{
-    RelayClientClass, RelayStreamEvent, broadcast_event_to_bundle_ui,
-    list_registered_ui_sessions_for_bundle, resolve_registered_client_class,
+    RelayStreamEvent, broadcast_event_to_bundle_ui, list_registered_ui_sessions_for_bundle,
+    resolve_registered_session_type,
 };
 use super::super::tmux::{inject_literal_text, inject_prompt, resolve_active_pane_target};
 use super::super::{
@@ -422,14 +423,14 @@ fn should_route_to_ui(task: &AsyncDeliveryTask) -> Result<bool, RelayError> {
     if task.target_is_ui {
         return Ok(true);
     }
-    let resolved_client_class = resolve_registered_client_class(
+    let resolved_session_type = resolve_registered_session_type(
         task.bundle.bundle_name.as_str(),
         task.target_session.as_str(),
     )
     .map_err(|source| {
         super::super::relay_error(
             "internal_unexpected_failure",
-            "failed to resolve relay stream endpoint class",
+            "failed to resolve relay stream session type",
             Some(json!({
                 "bundle_name": task.bundle.bundle_name,
                 "target_session": task.target_session,
@@ -437,7 +438,10 @@ fn should_route_to_ui(task: &AsyncDeliveryTask) -> Result<bool, RelayError> {
             })),
         )
     })?;
-    Ok(matches!(resolved_client_class, Some(RelayClientClass::Ui)))
+    Ok(matches!(
+        resolved_session_type,
+        Some(crate::configuration::SessionType::Ui)
+    ))
 }
 
 fn deliver_non_ui_target(
@@ -458,6 +462,12 @@ fn deliver_non_ui_target(
         )),
         TargetConfiguration::Tmux(tmux_target) => {
             Ok(deliver_one_target_tmux(task, tmux_target, prompt_batches))
+        }
+        TargetConfiguration::Ui | TargetConfiguration::Pubsub => {
+            Err(super::super::session_type_not_implemented(
+                target_member.id.as_str(),
+                target_member.target.session_type(),
+            ))
         }
     }
 }
@@ -1002,7 +1012,7 @@ fn acp_respawn_stream_event(
     RelayStreamEvent {
         event_type: event_type.to_string(),
         bundle_name: bundle_name.to_string(),
-        target_session: target_session.to_string(),
+        target_session: canonical_session_id(target_session, bundle_name),
         created_at: time::OffsetDateTime::now_utc()
             .format(&Rfc3339)
             .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string()),

@@ -14,11 +14,13 @@ Supported fields SHALL use kebab-case and include:
 - `default-session` (optional)
 - `[[sessions]]` entries with:
   - required `id` (in `session@GLOBAL` canonical form)
-  - required exactly one session-type subtable
-    (`[sessions.ui]` for TUI operators; `[sessions.pubsub]` for embedded
-    agents; other types permitted for future use)
+  - required exactly one coder-less marker subtable: `[sessions.ui]` (TUI
+    operators) or `[sessions.pubsub]` (embedded agents)
   - optional `name`
   - optional `policy`
+
+Global user sessions are coder-less by construction; a `coder` reference is
+not accepted in `users.toml` entries.
 
 Missing files SHALL not be treated as errors.
 Malformed files SHALL fail fast with structured bootstrap validation errors.
@@ -53,31 +55,44 @@ configuration.
 
 ### Requirement: Session Type Validation in Config Load
 
-The runtime SHALL validate session-type subtable presence and exclusivity at
-config load time for both bundle `[[sessions]]` entries and global
-`users.toml` entries:
+The runtime SHALL validate session shape exclusivity at config load time:
 
-- Exactly one session-type subtable (`tmux`, `acp`, `ui`, `pubsub`) SHALL be
-  present per session entry.
-- Zero or multiple subtables SHALL fail fast with a structured config error.
+- A bundle `[[sessions]]` entry SHALL declare exactly one shape: a coder-backed
+  shape (a flat `coder` reference, with optional `coder-session-id`) or a
+  coder-less shape (exactly one `[sessions.ui]` or `[sessions.pubsub]` marker
+  subtable).
+- A global `users.toml` entry SHALL declare exactly one coder-less marker
+  subtable; a `coder` reference is not accepted.
+- Zero shapes, or more than one shape, SHALL fail fast with a structured
+  config error.
+- A `coder-session-id` on a coder-less session SHALL fail fast with a
+  structured config error.
 - Unrecognized subtable keys SHALL fail fast with a structured config error.
 
-`ui` and `pubsub` session types with empty subtable bodies SHALL be valid at
-parse time. Runtime MAY emit `runtime_session_type_not_implemented` at
-startup for these types without treating the configuration itself as invalid.
+A coder-less `[sessions.ui]` or `[sessions.pubsub]` marker with an empty body
+SHALL be valid at parse time. Runtime MAY emit
+`runtime_session_type_not_implemented` at startup for these types without
+treating the configuration itself as invalid.
 
-#### Scenario: Reject session entry with no type subtable
+#### Scenario: Reject session entry with neither coder nor marker
 
-- **WHEN** a `[[sessions]]` entry has no recognized type subtable
+- **WHEN** a `[[sessions]]` entry declares no `coder` reference and no
+  coder-less marker subtable
 - **THEN** config load fails with a structured validation error
 
-#### Scenario: Reject session entry with multiple type subtables
+#### Scenario: Reject session entry declaring both coder and marker
 
-- **WHEN** a `[[sessions]]` entry declares both `[sessions.tmux]` and
-  `[sessions.acp]`
+- **WHEN** a `[[sessions]]` entry declares a `coder` reference and also a
+  `[sessions.ui]` marker subtable
 - **THEN** config load fails with a structured validation error
 
-#### Scenario: Accept ui session with empty subtable body
+#### Scenario: Reject coder-session-id on coder-less session
+
+- **WHEN** a `[[sessions]]` entry declares a `[sessions.ui]` marker and a
+  `coder-session-id`
+- **THEN** config load fails with a structured validation error
+
+#### Scenario: Accept ui session with empty marker body
 
 - **WHEN** a `[[sessions]]` entry declares `[sessions.ui]` with no additional
   fields

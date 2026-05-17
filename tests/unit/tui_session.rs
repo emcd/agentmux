@@ -20,23 +20,25 @@ fn write_policies(configuration_root: &std::path::Path, policy_ids: &[&str]) {
     fs::write(configuration_root.join("policies.toml"), body).expect("write policies.toml");
 }
 
-fn write_tui(configuration_root: &std::path::Path, body: &str) {
-    fs::write(configuration_root.join("tui.toml"), body).expect("write tui.toml");
+fn write_users(configuration_root: &std::path::Path, body: &str) {
+    fs::write(configuration_root.join("users.toml"), body).expect("write users.toml");
 }
 
 #[test]
 fn resolves_explicit_bundle_and_session_selector() {
     let temporary = TempDir::new().expect("temporary");
     write_policies(temporary.path(), &["default"]);
-    write_tui(
+    write_users(
         temporary.path(),
         r#"
 default-bundle = "bundle-default"
-default-session = "user"
+default-session = "user@GLOBAL"
 
 [[sessions]]
-id = "user"
+id = "user@GLOBAL"
 policy = "default"
+
+[sessions.ui]
 "#,
     );
 
@@ -44,49 +46,53 @@ policy = "default"
         temporary.path(),
         temporary.path(),
         Some("agentmux"),
-        Some("user"),
+        Some("user@GLOBAL"),
     )
     .expect("resolve explicit session");
     assert_eq!(resolved.bundle_name, "agentmux");
-    assert_eq!(resolved.session_selector, "user");
-    assert_eq!(resolved.session_id, "user");
-    assert_eq!(resolved.policy_id, "default");
+    assert_eq!(resolved.session_selector, "user@GLOBAL");
+    assert_eq!(resolved.session_id, "user@GLOBAL");
+    assert_eq!(resolved.policy, "default");
 }
 
 #[test]
 fn resolves_defaults_when_selectors_are_omitted() {
     let temporary = TempDir::new().expect("temporary");
     write_policies(temporary.path(), &["default"]);
-    write_tui(
+    write_users(
         temporary.path(),
         r#"
 default-bundle = "agentmux"
-default-session = "user"
+default-session = "user@GLOBAL"
 
 [[sessions]]
-id = "user"
+id = "user@GLOBAL"
 policy = "default"
+
+[sessions.ui]
 "#,
     );
 
     let resolved = resolve_tui_session_identity(temporary.path(), temporary.path(), None, None)
         .expect("resolve defaults");
     assert_eq!(resolved.bundle_name, "agentmux");
-    assert_eq!(resolved.session_selector, "user");
+    assert_eq!(resolved.session_selector, "user@GLOBAL");
 }
 
 #[test]
 fn rejects_missing_default_bundle_when_bundle_is_omitted() {
     let temporary = TempDir::new().expect("temporary");
     write_policies(temporary.path(), &["default"]);
-    write_tui(
+    write_users(
         temporary.path(),
         r#"
-default-session = "user"
+default-session = "user@GLOBAL"
 
 [[sessions]]
-id = "user"
+id = "user@GLOBAL"
 policy = "default"
+
+[sessions.ui]
 "#,
     );
 
@@ -99,14 +105,16 @@ policy = "default"
 fn rejects_unknown_session_selector() {
     let temporary = TempDir::new().expect("temporary");
     write_policies(temporary.path(), &["default"]);
-    write_tui(
+    write_users(
         temporary.path(),
         r#"
 default-bundle = "agentmux"
 
 [[sessions]]
-id = "user"
+id = "user@GLOBAL"
 policy = "default"
+
+[sessions.ui]
 "#,
     );
 
@@ -124,15 +132,17 @@ policy = "default"
 fn rejects_session_with_unknown_policy_reference() {
     let temporary = TempDir::new().expect("temporary");
     write_policies(temporary.path(), &["default"]);
-    write_tui(
+    write_users(
         temporary.path(),
         r#"
 default-bundle = "agentmux"
-default-session = "user"
+default-session = "user@GLOBAL"
 
 [[sessions]]
-id = "user"
+id = "user@GLOBAL"
 policy = "missing"
+
+[sessions.ui]
 "#,
     );
 
@@ -144,15 +154,17 @@ policy = "missing"
 #[test]
 fn loads_local_override_in_debug_builds() {
     let temporary = TempDir::new().expect("temporary");
-    write_tui(
+    write_users(
         temporary.path(),
         r#"
 default-bundle = "agentmux"
-default-session = "normal"
+default-session = "normal@GLOBAL"
 
 [[sessions]]
-id = "normal"
+id = "normal@GLOBAL"
 policy = "default"
+
+[sessions.ui]
 "#,
     );
     let override_directory = temporary
@@ -160,14 +172,16 @@ policy = "default"
         .join(".auxiliary/configuration/agentmux/overrides");
     fs::create_dir_all(&override_directory).expect("create override directory");
     fs::write(
-        override_directory.join("tui.toml"),
+        override_directory.join("users.toml"),
         r#"
 default-bundle = "agentmux"
-default-session = "override"
+default-session = "override@GLOBAL"
 
 [[sessions]]
-id = "override"
+id = "override@GLOBAL"
 policy = "default"
+
+[sessions.ui]
 "#,
     )
     .expect("write override file");
@@ -181,8 +195,8 @@ policy = "default"
         panic!("expected active tui configuration");
     };
     if cfg!(debug_assertions) {
-        assert_eq!(default_session.as_deref(), Some("override"));
+        assert_eq!(default_session.as_deref(), Some("override@GLOBAL"));
     } else {
-        assert_eq!(default_session.as_deref(), Some("normal"));
+        assert_eq!(default_session.as_deref(), Some("normal@GLOBAL"));
     }
 }

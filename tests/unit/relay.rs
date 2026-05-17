@@ -18,24 +18,26 @@ fn dispatch_request(
 
 fn write_tui_configuration(root: &std::path::Path, policy: &str) {
     std::fs::write(
-        root.join("tui.toml"),
+        root.join("users.toml"),
         format!(
             r#"
 default-bundle = "party"
-default-session = "user"
+default-session = "user@GLOBAL"
 
 [[sessions]]
-id = "user"
+id = "user@GLOBAL"
 policy = "{policy}"
+
+[sessions.ui]
 "#
         ),
     )
-    .expect("write tui configuration");
+    .expect("write users configuration");
 }
 
 fn write_tui_configuration_with_session_id(root: &std::path::Path, policy: &str, session_id: &str) {
     std::fs::write(
-        root.join("tui.toml"),
+        root.join("users.toml"),
         format!(
             r#"
 default-bundle = "party"
@@ -44,10 +46,12 @@ default-session = "{session_id}"
 [[sessions]]
 id = "{session_id}"
 policy = "{policy}"
+
+[sessions.ui]
 "#
         ),
     )
-    .expect("write tui configuration");
+    .expect("write users configuration");
 }
 
 fn write_bundle(temporary: &TempDir, name: &str) -> std::path::PathBuf {
@@ -264,9 +268,9 @@ fn list_returns_all_configured_sessions_with_transport() {
     assert_eq!(bundle.startup_failure_count, 0);
     assert!(bundle.recent_startup_failures.is_empty());
     assert_eq!(bundle.sessions.len(), 2);
-    assert_eq!(bundle.sessions[0].id, "alpha");
+    assert_eq!(bundle.sessions[0].id, "alpha@party");
     assert_eq!(bundle.sessions[0].transport, ListedSessionTransport::Tmux);
-    assert_eq!(bundle.sessions[1].id, "bravo");
+    assert_eq!(bundle.sessions[1].id, "bravo@party");
     assert_eq!(bundle.sessions[1].transport, ListedSessionTransport::Tmux);
 }
 
@@ -278,7 +282,7 @@ fn list_allows_ui_sender_from_global_tui_sessions() {
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_request(
         RelayRequest::List {
-            sender_session: Some("user".to_string()),
+            sender_session: Some("user@GLOBAL".to_string()),
         },
         &config_root,
         "party",
@@ -293,8 +297,8 @@ fn list_allows_ui_sender_from_global_tui_sessions() {
     assert!(bundle.startup_health.is_none());
     assert_eq!(bundle.startup_failure_count, 0);
     assert_eq!(bundle.sessions.len(), 2);
-    assert_eq!(bundle.sessions[0].id, "alpha");
-    assert_eq!(bundle.sessions[1].id, "bravo");
+    assert_eq!(bundle.sessions[0].id, "alpha@party");
+    assert_eq!(bundle.sessions[1].id, "bravo@party");
 }
 
 #[test]
@@ -305,7 +309,7 @@ fn list_rejects_ui_sender_with_unknown_policy_reference() {
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_request(
         RelayRequest::List {
-            sender_session: Some("user".to_string()),
+            sender_session: Some("user@GLOBAL".to_string()),
         },
         &config_root,
         "party",
@@ -324,7 +328,7 @@ fn list_reports_down_when_no_acp_worker_registered() {
 
     let response = dispatch_request(
         RelayRequest::List {
-            sender_session: Some("user".to_string()),
+            sender_session: Some("user@GLOBAL".to_string()),
         },
         &config_root,
         "party",
@@ -401,7 +405,7 @@ fn chat_accepts_global_ui_target_not_in_bundle_configuration() {
             request_id: None,
             sender_session: "alpha".to_string(),
             message: "hello".to_string(),
-            targets: vec!["user".to_string()],
+            targets: vec!["user@GLOBAL".to_string()],
             broadcast: false,
             delivery_mode: ChatDeliveryMode::Sync,
             quiet_window_ms: Some(1),
@@ -418,14 +422,14 @@ fn chat_accepts_global_ui_target_not_in_bundle_configuration() {
         panic!("expected chat response");
     };
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].target_session, "user");
+    assert_eq!(results[0].target_session, "user@GLOBAL");
 }
 
 #[test]
 fn chat_prefers_bundle_member_when_target_id_overlaps_with_ui_session_id() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
-    write_tui_configuration_with_session_id(&config_root, "default", "alpha");
+    write_tui_configuration_with_session_id(&config_root, "default", "alpha@GLOBAL");
     let tmux_socket = temporary.path().join("tmux.sock");
 
     let response = dispatch_request(
@@ -450,7 +454,7 @@ fn chat_prefers_bundle_member_when_target_id_overlaps_with_ui_session_id() {
         panic!("expected chat response");
     };
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].target_session, "alpha");
+    assert_eq!(results[0].target_session, "alpha@party");
     // Overlap precedence is bundle-member-first, so missing tmux runtime yields
     // a direct tmux delivery failure (not a UI stream timeout).
     assert_eq!(results[0].outcome, agentmux::relay::ChatOutcome::Failed);
@@ -483,7 +487,7 @@ fn chat_broadcast_excludes_sender_session() {
         panic!("expected chat response");
     };
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].target_session, "bravo");
+    assert_eq!(results[0].target_session, "bravo@party");
 }
 
 #[test]
@@ -517,7 +521,7 @@ fn chat_async_returns_accepted_and_queued_outcome() {
     };
     assert_eq!(status, agentmux::relay::ChatStatus::Accepted);
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].target_session, "bravo");
+    assert_eq!(results[0].target_session, "bravo@party");
     assert_eq!(results[0].outcome, agentmux::relay::ChatOutcome::Queued);
 }
 
@@ -880,8 +884,8 @@ format-version = 1
 [[sessions]]
 id = "alpha"
 directory = "/tmp"
-coder = "shell"
 policy = "missing"
+coder = "shell"
 "#,
         Some(
             r#"
@@ -962,16 +966,18 @@ fn raww_rejects_cross_bundle_selector() {
 
 #[test]
 fn raww_rejects_ui_target_class() {
+    // Raww writes raw text to a tmux pane; a global UI session is rejected as
+    // an unsupported target class.
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
-    write_tui_configuration_with_session_id(&config_root, "default", "ui");
+    write_tui_configuration_with_session_id(&config_root, "default", "ui@GLOBAL");
     let tmux_socket = temporary.path().join("tmux.sock");
 
     let response = dispatch_request(
         RelayRequest::Raww {
             request_id: None,
             sender_session: "alpha".to_string(),
-            target_session: "ui".to_string(),
+            target_session: "ui@GLOBAL".to_string(),
             text: "hello".to_string(),
             no_enter: false,
             bundle_name: None,

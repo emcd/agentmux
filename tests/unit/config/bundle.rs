@@ -43,9 +43,9 @@ format-version = 1
 id = "session-a"
 name = "a"
 directory = "{}"
+policy = "default"
 coder = "codex"
 coder-session-id = "abc123"
-policy = "default"
 
 [[sessions]]
 id = "session-b"

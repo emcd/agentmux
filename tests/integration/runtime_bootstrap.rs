@@ -138,7 +138,6 @@ fn handle_connection(
                 "schema_version": decoded["schema_version"],
                 "bundle_name": decoded["bundle_name"],
                 "session_id": decoded["session_id"],
-                "client_class": decoded["client_class"],
             });
             let text = serde_json::to_string(&hello_ack).expect("encode hello ack");
             stream

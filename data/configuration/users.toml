@@ -1,0 +1,14 @@
+# agentmux global user sessions
+default-bundle = "example"
+default-session = "user@GLOBAL"
+
+# Global user `id` values are canonical `session@GLOBAL` identities.
+# Each entry declares exactly one session-type subtable: `[sessions.ui]` for
+# TUI operators, `[sessions.pubsub]` for embedded agents.
+
+[[sessions]]
+id = "user@GLOBAL"
+name = "Operator"
+policy = "operator"
+
+[sessions.ui]

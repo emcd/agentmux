@@ -70,19 +70,21 @@ coder = "shell"
 
 fn write_tui_configuration(configuration_root: &Path, policy: &str) {
     std::fs::write(
-        configuration_root.join("tui.toml"),
+        configuration_root.join("users.toml"),
         format!(
             r#"
 default-bundle = "party"
-default-session = "user"
+default-session = "user@GLOBAL"
 
 [[sessions]]
-id = "user"
+id = "user@GLOBAL"
 policy = "{policy}"
+
+[sessions.ui]
 "#
         ),
     )
-    .expect("write tui configuration");
+    .expect("write users configuration");
 }
 
 fn write_policies_with_grant(configuration_root: &Path, grant: &str) {
@@ -258,14 +260,12 @@ fn stream_hello_acknowledges_and_allows_request() {
             "schema_version": "1",
             "bundle_name": bundle_name,
             "session_id": "alpha",
-            "client_class": "agent"
         }),
     );
     let hello_ack = read_json(&mut reader);
     assert_eq!(hello_ack["frame"], "hello_ack");
     assert_eq!(hello_ack["bundle_name"], bundle_name);
     assert_eq!(hello_ack["session_id"], "alpha");
-    assert_eq!(hello_ack["client_class"], "agent");
 
     send_json(
         &mut client_stream,
@@ -311,7 +311,6 @@ fn duplicate_live_hello_claim_is_rejected_with_identity_conflict() {
         "schema_version": "1",
         "bundle_name": bundle_name,
         "session_id": "alpha",
-        "client_class": "agent"
     });
 
     send_json(&mut first_client, hello_frame.clone());
@@ -376,7 +375,6 @@ fn hello_claim_is_accepted_after_prior_owner_disconnects() {
             "schema_version": "1",
             "bundle_name": bundle_name,
             "session_id": "alpha",
-            "client_class": "agent"
         }),
     );
     let first_ack = read_json(&mut first_reader);
@@ -395,7 +393,6 @@ fn hello_claim_is_accepted_after_prior_owner_disconnects() {
             "schema_version": "1",
             "bundle_name": bundle_name,
             "session_id": "alpha",
-            "client_class": "agent"
         }),
     );
     let second_ack = read_json(&mut second_reader);
@@ -406,9 +403,12 @@ fn hello_claim_is_accepted_after_prior_owner_disconnects() {
 }
 
 #[test]
-fn permission_decision_rejects_non_ui_stream_submitter() {
+fn permission_decision_rejects_submitter_without_grant_capability() {
+    // Permission decisioning is now gated on the `grant` policy capability
+    // rather than a hello-asserted client class. The `alpha` bundle member
+    // resolves to the default policy, which omits `grant`.
     let temporary = TempDir::new().expect("temporary directory");
-    let bundle_name = "party_permission_non_ui";
+    let bundle_name = "party_permission_non_grant";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
@@ -424,7 +424,6 @@ fn permission_decision_rejects_non_ui_stream_submitter() {
             "schema_version": "1",
             "bundle_name": bundle_name,
             "session_id": "alpha",
-            "client_class": "agent"
         }),
     );
     let hello_ack = read_json(&mut reader);
@@ -451,7 +450,11 @@ fn permission_decision_rejects_non_ui_stream_submitter() {
     assert_eq!(response["response"]["kind"], "error");
     assert_eq!(
         response["response"]["error"]["code"],
-        "validation_invalid_client_class_for_action"
+        "authorization_forbidden"
+    );
+    assert_eq!(
+        response["response"]["error"]["details"]["capability"],
+        "grant"
     );
 
     shutdown_stream(&client_stream, "shutdown client stream");
@@ -477,8 +480,7 @@ fn permission_decision_rejects_payload_actor_spoof_field() {
             "frame": "hello",
             "schema_version": "1",
             "bundle_name": bundle_name,
-            "session_id": "user",
-            "client_class": "ui"
+            "session_id": "user@GLOBAL",
         }),
     );
     let hello_ack = read_json(&mut reader);
@@ -532,8 +534,7 @@ fn permission_decision_denial_uses_grant_capability() {
             "frame": "hello",
             "schema_version": "1",
             "bundle_name": bundle_name,
-            "session_id": "user",
-            "client_class": "ui"
+            "session_id": "user@GLOBAL",
         }),
     );
     let hello_ack = read_json(&mut reader);
@@ -587,8 +588,7 @@ fn permission_decision_rejects_empty_option_id() {
             "frame": "hello",
             "schema_version": "1",
             "bundle_name": bundle_name,
-            "session_id": "user",
-            "client_class": "ui"
+            "session_id": "user@GLOBAL",
         }),
     );
     let hello_ack = read_json(&mut reader);
@@ -643,8 +643,7 @@ fn permission_decision_rejects_selected_without_option_id() {
             "frame": "hello",
             "schema_version": "1",
             "bundle_name": bundle_name,
-            "session_id": "user",
-            "client_class": "ui"
+            "session_id": "user@GLOBAL",
         }),
     );
     let hello_ack = read_json(&mut reader);
@@ -698,8 +697,7 @@ fn permission_decision_rejects_cancelled_with_option_id() {
             "frame": "hello",
             "schema_version": "1",
             "bundle_name": bundle_name,
-            "session_id": "user",
-            "client_class": "ui"
+            "session_id": "user@GLOBAL",
         }),
     );
     let hello_ack = read_json(&mut reader);
@@ -760,8 +758,7 @@ fn permission_snapshot_then_replay_carries_option_metadata() {
             "frame": "hello",
             "schema_version": "1",
             "bundle_name": bundle_name,
-            "session_id": "user",
-            "client_class": "ui"
+            "session_id": "user@GLOBAL",
         }),
     );
     let hello_ack = read_json(&mut reader);
@@ -778,7 +775,10 @@ fn permission_snapshot_then_replay_carries_option_metadata() {
     let first = read_until_event_type(&mut reader, "permission.requested");
     let first_payload = &first["event"]["payload"];
     assert_eq!(first_payload["permission_request_id"], "perm-aaa");
-    assert_eq!(first_payload["target_session"], "alpha");
+    assert_eq!(
+        first_payload["target_session"],
+        format!("alpha@{bundle_name}")
+    );
     let options = first_payload["requested_details"]["options"]
         .as_array()
         .expect("options array on permission.requested payload");
@@ -818,8 +818,7 @@ fn permission_request_persists_across_authorized_ui_reconnect() {
         "frame": "hello",
         "schema_version": "1",
         "bundle_name": bundle_name,
-        "session_id": "user",
-        "client_class": "ui"
+        "session_id": "user@GLOBAL",
     });
 
     let (mut first_client, first_handle) =
@@ -885,8 +884,7 @@ fn permission_resolve_selected_emits_resolved_event_with_option_id() {
             "frame": "hello",
             "schema_version": "1",
             "bundle_name": bundle_name,
-            "session_id": "user",
-            "client_class": "ui"
+            "session_id": "user@GLOBAL",
         }),
     );
     let ack = read_json(&mut reader);
@@ -913,7 +911,7 @@ fn permission_resolve_selected_emits_resolved_event_with_option_id() {
     assert_eq!(payload["permission_request_id"], "perm-selected");
     assert_eq!(payload["outcome"], "selected");
     assert_eq!(payload["reason_code"], Value::Null);
-    assert_eq!(payload["decided_by"], "user");
+    assert_eq!(payload["decided_by"], "user@GLOBAL");
 
     let response = read_json(&mut reader);
     assert_eq!(response["frame"], "response");
@@ -955,8 +953,7 @@ fn permission_resolve_cancelled_emits_resolved_event_with_reason_code() {
             "frame": "hello",
             "schema_version": "1",
             "bundle_name": bundle_name,
-            "session_id": "user",
-            "client_class": "ui"
+            "session_id": "user@GLOBAL",
         }),
     );
     let ack = read_json(&mut reader);
@@ -985,7 +982,7 @@ fn permission_resolve_cancelled_emits_resolved_event_with_reason_code() {
         payload["reason_code"],
         "runtime_permission_request_cancelled"
     );
-    assert_eq!(payload["decided_by"], "user");
+    assert_eq!(payload["decided_by"], "user@GLOBAL");
 
     let response = read_json(&mut reader);
     assert_eq!(response["frame"], "response");
@@ -1030,8 +1027,7 @@ max-pending = 10000
             "frame": "hello",
             "schema_version": "1",
             "bundle_name": bundle_name,
-            "session_id": "user",
-            "client_class": "ui"
+            "session_id": "user@GLOBAL",
         }),
     );
     let ack = read_json(&mut reader);
@@ -1079,8 +1075,7 @@ fn permission_resolve_selected_rejects_unknown_option_id() {
             "frame": "hello",
             "schema_version": "1",
             "bundle_name": bundle_name,
-            "session_id": "user",
-            "client_class": "ui"
+            "session_id": "user@GLOBAL",
         }),
     );
     let hello_ack = read_json(&mut reader);
@@ -1186,7 +1181,6 @@ fn agent_hello_frame(bundle_name: &str) -> Value {
         "schema_version": "1",
         "bundle_name": bundle_name,
         "session_id": "alpha",
-        "client_class": "agent"
     })
 }
 

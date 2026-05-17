@@ -85,7 +85,7 @@ fn look_returns_canonical_json_payload() {
     let requests = request_log.lock().expect("request log lock");
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0]["operation"], "look");
-    assert_eq!(requests[0]["requester_session"], "user");
+    assert_eq!(requests[0]["requester_session"], "user@GLOBAL");
     assert_eq!(requests[0]["target_session"], "bravo");
 }
 

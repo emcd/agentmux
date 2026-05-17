@@ -14,8 +14,8 @@ use serde_json::{Value, json};
 use crate::{
     acp::AcpSnapshotEntry,
     configuration::{
-        BundleConfiguration, ConfigurationError, load_bundle_configuration, load_policy_ids,
-        load_tui_configuration,
+        BundleConfiguration, ConfigurationError, SessionType, load_bundle_configuration,
+        load_policy_ids, load_tui_configuration,
     },
     envelope::{ENVELOPE_SCHEMA_VERSION, PromptBatchSettings},
     runtime::paths::BundleRuntimePaths,
@@ -29,13 +29,12 @@ mod startup_state;
 mod stream;
 mod tmux;
 
-use self::authorization::{is_operator_class_authorized, load_authorization_context};
+use self::authorization::load_authorization_context;
 use self::delivery::QuiescenceOptions;
 use self::stream::{
-    HelloFrame, IncomingFrame, OutgoingFrame, RegisterStreamOutcome, RelayClientClass,
-    SharedStreamWriter, StreamRegistration, clone_stream_writer, note_write_timeout,
-    parse_incoming_frame, register_stream, registration_is_current,
-    resolve_registered_client_class, unregister_stream, write_stream_frame_to_writer,
+    HelloFrame, IncomingFrame, OutgoingFrame, RegisterStreamOutcome, SharedStreamWriter,
+    StreamRegistration, clone_stream_writer, note_write_timeout, parse_incoming_frame,
+    register_stream, registration_is_current, unregister_stream, write_stream_frame_to_writer,
 };
 
 const SCHEMA_VERSION: &str = ENVELOPE_SCHEMA_VERSION;
@@ -47,13 +46,55 @@ const RELAY_STREAM_READ_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const RELAY_CONNECTION_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const HELLO_CONFLICT_RETRY_INTERVAL_MS: u64 = 50;
 const HELLO_CONFLICT_RETRY_TIMEOUT_MS: u64 = 1_000;
+const GLOBAL_SESSION_SUFFIX: &str = "@GLOBAL";
 
-/// Transport class for one listed bundle session.
+/// Returns the canonical `session@bundle` identity for a session id.
+///
+/// Global-user identities already carry the `@GLOBAL` suffix and are their own
+/// canonical form; bundle-local identities are qualified with the bundle name.
+pub(super) fn canonical_session_id(session_id: &str, bundle_name: &str) -> String {
+    if session_id.ends_with(GLOBAL_SESSION_SUFFIX) {
+        session_id.to_string()
+    } else {
+        format!("{session_id}@{bundle_name}")
+    }
+}
+
+/// Returns the bundle-local session id for a possibly-canonical identity.
+///
+/// Strips a trailing `@{bundle_name}` qualifier so internal lookups match
+/// configured member ids; global-user (`@GLOBAL`) identities and already-bare
+/// ids are returned unchanged.
+pub(super) fn bare_session_id(session_id: &str, bundle_name: &str) -> String {
+    if session_id.ends_with(GLOBAL_SESSION_SUFFIX) {
+        return session_id.to_string();
+    }
+    let qualifier = format!("@{bundle_name}");
+    session_id
+        .strip_suffix(qualifier.as_str())
+        .unwrap_or(session_id)
+        .to_string()
+}
+
+/// Declared session type for one listed bundle session.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ListedSessionTransport {
     Tmux,
     Acp,
+    Ui,
+    Pubsub,
+}
+
+impl From<SessionType> for ListedSessionTransport {
+    fn from(value: SessionType) -> Self {
+        match value {
+            SessionType::Tmux => Self::Tmux,
+            SessionType::Acp => Self::Acp,
+            SessionType::Ui => Self::Ui,
+            SessionType::Pubsub => Self::Pubsub,
+        }
+    }
 }
 
 /// One configured session entry in list-sessions payloads.
@@ -228,15 +269,6 @@ pub struct RelayError {
     pub details: Option<Value>,
 }
 
-/// Relay stream endpoint class used for persistent client hello registration.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum RelayStreamClientClass {
-    Agent,
-    Ui,
-    Operator,
-}
-
 /// Relay-pushed stream event payload.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct RelayStreamEvent {
@@ -263,7 +295,6 @@ pub struct RelayStreamSession {
     socket_path: PathBuf,
     bundle_name: String,
     session_id: String,
-    client_class: RelayStreamClientClass,
     connection: Option<RelayStreamConnection>,
 }
 
@@ -280,7 +311,6 @@ enum StreamClientFrame<'a> {
         schema_version: &'a str,
         bundle_name: &'a str,
         session_id: &'a str,
-        client_class: RelayStreamClientClass,
     },
     Request {
         request_id: &'a str,
@@ -295,7 +325,6 @@ enum StreamServerFrame {
         schema_version: String,
         bundle_name: String,
         session_id: String,
-        client_class: RelayStreamClientClass,
     },
     Response {
         request_id: Option<String>,
@@ -489,7 +518,6 @@ pub(super) struct PermissionDecisionRequestContext {
 #[derive(Clone, Debug)]
 pub(super) struct RequestPrincipal {
     session_id: String,
-    client_class: RelayClientClass,
 }
 
 #[derive(Clone, Debug)]
@@ -616,9 +644,9 @@ fn serve_connection_frames(
             IncomingFrame::Hello(hello) => {
                 let response = handle_hello_frame(configuration_root, bundle_paths, &hello);
                 match response {
-                    Ok(()) => {
+                    Ok(session_type) => {
                         stream.set_read_timeout(None)?;
-                        match register_stream(&hello, writer.clone())? {
+                        match register_stream(&hello, session_type, writer.clone())? {
                             RegisterStreamOutcome::Registered(value) => {
                                 *registration = Some(value);
                             }
@@ -667,10 +695,9 @@ fn serve_connection_frames(
                                 schema_version: SCHEMA_VERSION,
                                 bundle_name: hello.bundle_name.as_str(),
                                 session_id: hello.session_id.as_str(),
-                                client_class: hello.client_class,
                             },
                         )?;
-                        if hello.client_class == RelayClientClass::Ui
+                        if session_type == SessionType::Ui
                             && let Err(error) =
                                 handlers::emit_permission_snapshot_for_ui_registration(
                                     configuration_root,
@@ -745,7 +772,6 @@ fn serve_connection_frames(
                     &bundle_paths.runtime_directory,
                     Some(RequestPrincipal {
                         session_id: active_registration.session_id.clone(),
-                        client_class: hello_client_class(active_registration)?,
                     }),
                 );
                 write_stream_frame_to_writer(
@@ -799,17 +825,11 @@ fn handle_request_with_principal(
 impl RelayStreamSession {
     /// Creates a persistent relay stream session descriptor.
     #[must_use]
-    pub fn new(
-        socket_path: PathBuf,
-        bundle_name: String,
-        session_id: String,
-        client_class: RelayStreamClientClass,
-    ) -> Self {
+    pub fn new(socket_path: PathBuf, bundle_name: String, session_id: String) -> Self {
         Self {
             socket_path,
             bundle_name,
             session_id,
-            client_class,
             connection: None,
         }
     }
@@ -922,7 +942,6 @@ impl RelayStreamSession {
                 schema_version: SCHEMA_VERSION,
                 bundle_name: self.bundle_name.as_str(),
                 session_id: self.session_id.as_str(),
-                client_class: self.client_class,
             },
         )
         .map_err(ConnectAttemptError::Io)?;
@@ -959,7 +978,6 @@ impl RelayStreamSession {
                     schema_version,
                     bundle_name,
                     session_id,
-                    client_class,
                 } => {
                     if schema_version != SCHEMA_VERSION {
                         return Err(ConnectAttemptError::Io(io::Error::other(format!(
@@ -970,11 +988,6 @@ impl RelayStreamSession {
                     if bundle_name != self.bundle_name || session_id != self.session_id {
                         return Err(ConnectAttemptError::Io(io::Error::other(
                             "relay hello acknowledgement identity mismatch",
-                        )));
-                    }
-                    if client_class != self.client_class {
-                        return Err(ConnectAttemptError::Io(io::Error::other(
-                            "relay hello acknowledgement class mismatch",
                         )));
                     }
                     if let Err(source) = stream.set_read_timeout(None)
@@ -1250,14 +1263,6 @@ fn is_ignorable_socket_option_error(error: &io::Error) -> bool {
     )
 }
 
-fn hello_client_class(registration: &StreamRegistration) -> Result<RelayClientClass, io::Error> {
-    resolve_registered_client_class(
-        registration.bundle_name.as_str(),
-        registration.session_id.as_str(),
-    )?
-    .ok_or_else(|| io::Error::other("stream registration client class is missing"))
-}
-
 fn dispatch_request(
     request: RelayRequest,
     configuration_root: &Path,
@@ -1277,11 +1282,16 @@ fn dispatch_request(
     }
 }
 
+/// Validates a hello frame and resolves the session's configured session type.
+///
+/// Identity lookup proceeds in order: bundle members for the associated
+/// bundle, then global users in `users.toml` when `session_id` carries the
+/// `@GLOBAL` suffix.
 fn handle_hello_frame(
     configuration_root: &Path,
     bundle_paths: &BundleRuntimePaths,
     hello: &HelloFrame,
-) -> Result<(), RelayError> {
+) -> Result<SessionType, RelayError> {
     if hello.schema_version != SCHEMA_VERSION {
         return Err(relay_error(
             "validation_invalid_schema_version",
@@ -1302,95 +1312,77 @@ fn handle_hello_frame(
             })),
         ));
     }
-    match hello.client_class {
-        RelayClientClass::Agent => {
-            let bundle = load_bundle_configuration(configuration_root, &bundle_paths.bundle_name)
-                .map_err(map_config)?;
-            if bundle
-                .members
-                .iter()
-                .any(|member| member.id == hello.session_id)
-            {
-                return Ok(());
-            }
-            Err(relay_error(
-                "validation_unknown_sender",
-                "hello session_id is not configured in associated bundle",
-                Some(json!({
-                    "bundle_name": bundle.bundle_name,
-                    "session_id": hello.session_id,
-                })),
-            ))
-        }
-        RelayClientClass::Ui => {
-            let Some(tui_configuration) =
-                load_tui_configuration(configuration_root).map_err(map_tui_config)?
-            else {
-                return Err(relay_error(
-                    "validation_unknown_sender",
-                    "hello session_id is not configured in global tui sessions",
-                    Some(json!({
-                        "bundle_name": bundle_paths.bundle_name,
-                        "session_id": hello.session_id,
-                    })),
-                ));
-            };
-            let Some(tui_session) = tui_configuration.session_by_id(hello.session_id.as_str())
-            else {
-                return Err(relay_error(
-                    "validation_unknown_sender",
-                    "hello session_id is not configured in global tui sessions",
-                    Some(json!({
-                        "bundle_name": bundle_paths.bundle_name,
-                        "session_id": hello.session_id,
-                    })),
-                ));
-            };
-            let policy_ids = load_policy_ids(configuration_root).map_err(map_tui_config)?;
-            if policy_ids.contains(tui_session.policy_id.as_str()) {
-                return Ok(());
-            }
-            Err(relay_error(
-                "validation_unknown_policy",
-                "ui session policy references unknown policy id",
-                Some(json!({
-                    "session_id": tui_session.id,
-                    "policy_id": tui_session.policy_id,
-                })),
-            ))
-        }
-        RelayClientClass::Operator => {
-            let bundle = load_bundle_configuration(configuration_root, &bundle_paths.bundle_name)
-                .map_err(map_config)?;
-            if !bundle
-                .members
-                .iter()
-                .any(|member| member.id == hello.session_id)
-            {
-                return Err(relay_error(
-                    "validation_unknown_sender",
-                    "hello session_id is not configured in associated bundle",
-                    Some(json!({
-                        "bundle_name": bundle.bundle_name,
-                        "session_id": hello.session_id,
-                    })),
-                ));
-            }
-            let authorization = load_authorization_context(configuration_root, &bundle)?;
-            if is_operator_class_authorized(&authorization, hello.session_id.as_str()) {
-                return Ok(());
-            }
-            Err(relay_error(
-                "validation_invalid_client_class_for_hello",
-                "operator client class is not authorized for this session",
-                Some(json!({
-                    "bundle_name": bundle.bundle_name,
-                    "session_id": hello.session_id,
-                    "client_class": "operator",
-                })),
-            ))
-        }
+    if hello.session_id.ends_with(GLOBAL_SESSION_SUFFIX) {
+        return resolve_global_user_session_type(configuration_root, bundle_paths, hello);
     }
+    resolve_bundle_member_session_type(configuration_root, &bundle_paths.bundle_name, hello)
+}
+
+/// Resolves the session type for a hello identity matching a bundle member.
+fn resolve_bundle_member_session_type(
+    configuration_root: &Path,
+    bundle_name: &str,
+    hello: &HelloFrame,
+) -> Result<SessionType, RelayError> {
+    let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
+    let Some(member) = bundle
+        .members
+        .iter()
+        .find(|member| member.id == hello.session_id)
+    else {
+        return Err(relay_error(
+            "validation_unknown_sender",
+            "hello session_id is not configured in associated bundle",
+            Some(json!({
+                "bundle_name": bundle.bundle_name,
+                "session_id": hello.session_id,
+            })),
+        ));
+    };
+    Ok(member.target.session_type())
+}
+
+/// Resolves the session type for a hello identity carrying the `@GLOBAL`
+/// suffix by searching `users.toml` global users.
+fn resolve_global_user_session_type(
+    configuration_root: &Path,
+    bundle_paths: &BundleRuntimePaths,
+    hello: &HelloFrame,
+) -> Result<SessionType, RelayError> {
+    let Some(users_configuration) =
+        load_tui_configuration(configuration_root).map_err(map_tui_config)?
+    else {
+        return Err(relay_error(
+            "validation_unknown_sender",
+            "hello session_id is not configured in global users",
+            Some(json!({
+                "bundle_name": bundle_paths.bundle_name,
+                "session_id": hello.session_id,
+            })),
+        ));
+    };
+    let Some(user_session) = users_configuration.session_by_id(hello.session_id.as_str()) else {
+        return Err(relay_error(
+            "validation_unknown_sender",
+            "hello session_id is not configured in global users",
+            Some(json!({
+                "bundle_name": bundle_paths.bundle_name,
+                "session_id": hello.session_id,
+            })),
+        ));
+    };
+    let policy_ids = load_policy_ids(configuration_root).map_err(map_tui_config)?;
+    if !policy_ids.contains(user_session.policy.as_str()) {
+        return Err(relay_error(
+            "validation_unknown_policy",
+            "global user policy references unknown policy id",
+            Some(json!({
+                "session_id": user_session.id,
+                "policy_id": user_session.policy,
+            })),
+        ));
+    }
+    Ok(user_session.session_type)
 }
 
 pub(super) fn map_config(error: ConfigurationError) -> RelayError {
@@ -1439,6 +1431,22 @@ pub(super) fn relay_error(code: &str, message: &str, details: Option<Value>) -> 
     }
 }
 
+/// Builds the structured error for a session whose declared session type does
+/// not yet have an implemented delivery path (`ui`, `pubsub`).
+pub(super) fn session_type_not_implemented(
+    session_id: &str,
+    session_type: SessionType,
+) -> RelayError {
+    relay_error(
+        "runtime_session_type_not_implemented",
+        "session type delivery is not yet implemented",
+        Some(json!({
+            "session_id": session_id,
+            "session_type": session_type,
+        })),
+    )
+}
+
 fn map_tui_config(error: ConfigurationError) -> RelayError {
     match error {
         ConfigurationError::InvalidConfiguration { path, message } => relay_error(
@@ -1457,28 +1465,6 @@ fn map_tui_config(error: ConfigurationError) -> RelayError {
             Some(json!({"cause": other.to_string()})),
         ),
     }
-}
-
-/// Reports whether the given session is authorized to claim
-/// `client_class=operator` under the bundle's resolved policy controls.
-///
-/// Returns `false` on any configuration/authorization error so callers can
-/// fall back to a more conservative claim. Use this from non-relay crates
-/// (for example MCP startup) to decide whether to send `client_class=operator`
-/// in the hello frame.
-#[must_use]
-pub fn is_session_operator_class_authorized(
-    configuration_root: &Path,
-    bundle_name: &str,
-    session_id: &str,
-) -> bool {
-    let Ok(bundle) = load_bundle_configuration(configuration_root, bundle_name) else {
-        return false;
-    };
-    let Ok(authorization) = load_authorization_context(configuration_root, &bundle) else {
-        return false;
-    };
-    is_operator_class_authorized(&authorization, session_id)
 }
 
 /// Sends one request to relay socket and returns the parsed response.
