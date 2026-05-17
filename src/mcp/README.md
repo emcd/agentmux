@@ -47,12 +47,10 @@ This module implements the MCP stdio server for `agentmux`.
 - MCP rejects decider-identity fields (`decided_by`, `ui_session_id`,
   `operator_session_id`) before relay submission; the deciding identity is
   association-derived and relay-stamped.
-- Both subcommands require the MCP server's relay stream to hold
-  `client_class ∈ {ui, operator}` plus the `grant` policy capability. The MCP
-  server claims `operator` at startup only when
-  `is_session_operator_class_authorized` confirms the sender session's bundle
-  policy preset enables `operator-class`; otherwise it registers as `agent`
-  and `grant` calls return the relay submitter-gate rejection.
+- Both subcommands are gated solely on the sender session's `grant` policy
+  capability. The MCP server forwards the decision over its relay stream, and
+  the relay authorizes it against the bundle policy preset. Sessions whose
+  policy does not enable `grant` receive the relay submitter-gate rejection.
 
 ## Key Types
 
