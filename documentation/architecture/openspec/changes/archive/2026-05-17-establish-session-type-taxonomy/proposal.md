@@ -7,8 +7,8 @@
 may decide ACP permission requests. Post-merge review found this conflates two
 unrelated concerns:
 
-1. **Authorization** — already fully expressed by the `authorize_grant` policy
-   capability (`grant` control).
+1. **Authorization** — already fully expressed by the `grant` policy
+   capability.
 2. **Transport role** — an intrinsic property of how a session is wired, not a
    privilege granted at connect time.
 
@@ -28,7 +28,7 @@ cannot express this transport; behavior must be derivable from config alone.
   exactly one subtable per `[[sessions]]` config entry.
 - Relay routes and delivers based on session type from config, not hello
   `client_class`.
-- Permission-decision authority gated by `authorize_grant` capability alone;
+- Permission-decision authority gated by `grant` capability alone;
   `UI-Mediated Decision Submitter Gate` and `operator-class` policy control
   removed.
 - Hello hydrates `session_id@bundle_name` canonical identity; unified lookup

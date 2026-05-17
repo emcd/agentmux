@@ -51,7 +51,7 @@
 ## 4. Permission decisioning (relay lane — `src/relay/authorization.rs`, `src/relay/handlers.rs`)
 
 - [x] 4.1 Remove `UI-Mediated Decision Submitter Gate`: accept
-  `permission.resolve` from any principal with `authorize_grant` capability
+  `permission.resolve` from any principal with `grant` capability
 - [x] 4.2 Remove `operator-class` policy control from config validation and
   authorization evaluation
 - [x] 4.3 Delete error codes `validation_invalid_client_class_for_action` and

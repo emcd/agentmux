@@ -7,7 +7,7 @@ two problems:
 
 1. **Authorization conflation** — `Operator` is a third class whose only
    purpose is to gate permission decisions. That gate is already redundantly
-   expressed by the `authorize_grant` policy capability. Two mechanisms for one
+   expressed by the `grant` policy capability. Two mechanisms for one
    control is one too many.
 2. **Embeddability gap** — Embedded in-process agents receive envelopes as
    prompts and make direct tool calls — no tmux pane, no ACP channel, no
@@ -24,7 +24,7 @@ two problems:
     marker subtable.
   - Establish `session@bundle` as the canonical identity everywhere on the wire
     and in internal state.
-  - Gate permission decisions on `authorize_grant` alone.
+  - Gate permission decisions on `grant` alone.
   - Recognize all four session types from day one; make unimplemented types
     fail fast without a parse error.
   - Rename `tui.toml` → `users.toml` (global users, not TUI-specific).
@@ -82,10 +82,10 @@ no extra field.
 **Wire breaking change**: Clients comparing against bare `"master"` must
 compare against `"master@agentmux"`. Accepted because this is pre-MVP.
 
-### Permission decisioning: `authorize_grant` alone
+### Permission decisioning: `grant` alone
 
 `UI-Mediated Decision Submitter Gate` is deleted. Any principal with
-`authorize_grant` capability may submit `permission.resolve`, regardless of
+`grant` capability may submit `permission.resolve`, regardless of
 session type.
 
 **Why**: `Operator` class was the only mechanism enforcing this gate. Deleting

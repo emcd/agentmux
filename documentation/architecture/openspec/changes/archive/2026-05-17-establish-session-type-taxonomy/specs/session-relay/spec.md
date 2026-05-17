@@ -1,11 +1,11 @@
 ## REMOVED Requirements
 
-### Requirement: UI-Mediated Decision Submitter Gate
+### Requirement: Permission Decision Submitter Gate
 **Reason**: Permission-decision authority is expressed entirely by the
-`authorize_grant` policy capability. Session class is not a meaningful
+`grant` policy capability. Session class is not a meaningful
 authorization axis and is eliminated by the session-type taxonomy.
 **Migration**: Remove the submitter-class gate. Evaluate `permission.resolve`
-authority via `authorize_grant` alone.
+authority via `grant` alone.
 
 ### Requirement: Endpoint Class Routing Behavior
 **Reason**: Routing is derived from session type declared in config, not from

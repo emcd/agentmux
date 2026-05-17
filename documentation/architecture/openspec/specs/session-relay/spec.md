@@ -12,23 +12,37 @@ files with kebab-case keys:
 
 Each bundle file SHALL include:
 
-- `format-version` (supported value for this schema: `2`)
+- `format-version` (supported value for this schema: `1`)
 - `[[sessions]]` entries with:
   - `id`
   - optional `name` (human-readable recipient name)
   - `directory`
-  - required `coder` reference
-  - optional `coder-session-id`
+  - exactly one session shape: a coder-backed shape (a flat `coder` reference,
+    with optional `coder-session-id`) or a coder-less shape (exactly one
+    `[sessions.ui]` or `[sessions.pubsub]` marker subtable)
 
 Session membership invariants SHALL remain enforced:
 
 - session `id` values are unique within one bundle
 - optional session `name` values are unique within one bundle when present
-- each session `coder` references an existing coder id from `coders.toml`
+
+A coder-backed `[[sessions]]` entry SHALL carry:
+
+- required `coder` reference (must resolve to a `[[coders]]` entry)
+- optional `coder-session-id`
+
+The session's transport (tmux pane injection vs. ACP worker delivery) SHALL be
+derived from the referenced coder's descriptor (`[coders.tmux]` vs.
+`[coders.acp]`); the session entry SHALL NOT restate the transport.
+
+A coder-less `[[sessions]]` entry SHALL declare exactly one `[sessions.ui]` or
+`[sessions.pubsub]` marker subtable, which SHALL carry no required fields
+(empty body is valid). A coder-less entry SHALL NOT carry a `coder` or
+`coder-session-id` field.
 
 Coder definitions SHALL include target descriptors in `coders.toml`:
 
-- `format-version` (supported value for this schema: `2`)
+- `format-version` (supported value for this schema: `1`)
 - `[[coders]]` entries with:
   - `id`
   - exactly one target descriptor table:
@@ -45,11 +59,9 @@ Descriptor fields SHALL be:
   - optional `prompt-idle-column`
 - `[coders.acp]`:
   - required `channel` (`stdio` | `http`)
-  - for `channel = "stdio"`:
-    - required `command`
-  - for `channel = "http"`:
-    - required `url`
-    - optional `headers` entries (`name`, `value`)
+  - for `channel = "stdio"`: required `command`
+  - for `channel = "http"`: required `url`; optional `headers` entries
+    (`name`, `value`)
 
 ACP lifecycle selection constraints:
 
@@ -57,83 +69,40 @@ ACP lifecycle selection constraints:
   `session/load` for that session.
 - if ACP-backed session omits `coder-session-id`, runtime SHALL call
   `session/new` for that session.
-- if ACP `session/load` fails, runtime SHALL fail that session operation and
-  SHALL NOT silently fall back to ACP `session/new` in the same operation.
+- if ACP `session/load` fails, runtime SHALL fail that session and SHALL NOT
+  silently fall back to `session/new`.
 
 Routing and delivery SHALL use session `id` values.
 Bundle identity SHALL be derived from bundle filename (`<bundle-id>.toml`).
 
-#### Scenario: Load valid v2 tmux coder + session configuration
+#### Scenario: Load valid tmux-backed session configuration
 
-- **WHEN** bundle file uses `format-version = 2`
-- **AND** coders file uses `format-version = 2`
-- **AND** a coder defines `[coders.tmux]` with required fields
-- **AND** sessions use unique `id` values
-- **AND** optional session `name` values are unique when present
-- **AND** each session references an existing coder
+- **WHEN** bundle and coders files use `format-version = 1`
+- **AND** a session entry declares a flat `coder` reference
+- **AND** the referenced coder defines `[coders.tmux]`
 - **THEN** the system loads configuration successfully
+- **AND** the session is routed via the tmux transport
 
-#### Scenario: Load valid v2 ACP stdio coder + session configuration
+#### Scenario: Load valid ACP-backed session configuration
 
-- **WHEN** bundle and coders files use `format-version = 2`
-- **AND** a coder defines `[coders.acp]`
-- **AND** `coders.acp.channel = "stdio"`
-- **AND** `coders.acp.command` is provided
-- **AND** sessions use unique `id` values
-- **AND** optional session `name` values are unique when present
-- **AND** each session references an existing coder
+- **WHEN** bundle and coders files use `format-version = 1`
+- **AND** a session entry declares a flat `coder` reference with
+  `coder-session-id`
+- **AND** the referenced coder defines `[coders.acp]` with `channel = "stdio"`
 - **THEN** the system loads configuration successfully
+- **AND** the session is routed via the ACP transport
 
-#### Scenario: Reject unknown coder reference
+#### Scenario: Reject session with neither coder nor marker
 
-- **WHEN** a session references a `coder` value not present in `coders.toml`
-- **THEN** the system rejects configuration with a validation error
+- **WHEN** a bundle session entry declares no `coder` reference and no
+  `[sessions.ui]` or `[sessions.pubsub]` marker subtable
+- **THEN** relay rejects configuration with a structured config error
 
-#### Scenario: Reject duplicate session id in one bundle
+#### Scenario: Reject session declaring both coder and marker
 
-- **WHEN** one bundle contains duplicate session `id` values
-- **THEN** the system rejects configuration with a validation error
-
-#### Scenario: Reject duplicate session name in one bundle
-
-- **WHEN** one bundle contains duplicate session `name` values
-- **THEN** the system rejects configuration with a validation error
-
-#### Scenario: Reject missing coder target descriptor
-
-- **WHEN** a coder omits both `[coders.tmux]` and `[coders.acp]`
-- **THEN** the system rejects configuration with a validation error
-
-#### Scenario: Reject multiple coder target descriptors
-
-- **WHEN** a coder defines both `[coders.tmux]` and `[coders.acp]`
-- **THEN** the system rejects configuration with a validation error
-
-#### Scenario: Select ACP session load when session identity is present
-
-- **WHEN** a session references an ACP coder
-- **AND** the session includes `coder-session-id`
-- **THEN** runtime selects ACP `session/load` for that session.
-
-#### Scenario: Fail fast when ACP session load fails
-
-- **WHEN** runtime selects ACP `session/load` for a session
-- **AND** the ACP `session/load` call returns an error
-- **THEN** runtime fails the session operation
-- **AND** runtime does not call ACP `session/new` as fallback in the same
-  operation.
-
-#### Scenario: Reject ACP stdio channel without command
-
-- **WHEN** a coder defines `[coders.acp]`
-- **AND** `coders.acp.channel = "stdio"`
-- **AND** `coders.acp.command` is missing
-- **THEN** the system rejects configuration with a validation error
-
-#### Scenario: Reject unsupported format-version
-
-- **WHEN** bundle or coders file uses `format-version` other than `2`
-- **THEN** the system rejects configuration with a validation error
+- **WHEN** a bundle session entry declares a `coder` reference and also a
+  `[sessions.ui]` or `[sessions.pubsub]` marker subtable
+- **THEN** relay rejects configuration with a structured config error
 
 ### Requirement: Bundle Reconciliation
 
@@ -197,59 +166,35 @@ creation races and avoids leaking idle tmux servers.
 
 The system SHALL expose session ids as the routing primitive for message
 delivery.
-The system SHALL resolve each target session to its currently active pane at
-delivery time.
+The system SHALL resolve each target session to its delivery endpoint at
+delivery time using session type from config:
+
+- `tmux` sessions: prompt-injection/quiescence delivery path
+- `acp` sessions: ACP worker delivery path
+- `ui` sessions: stream push event delivery path
+- `pubsub` sessions: embedded callback delivery path
+
 The system SHALL support directed delivery to one or more explicitly selected
 target sessions.
 
-For send explicit targets, relay SHALL accept only canonical target
-identifiers:
-
-- configured bundle member `session_id`,
-- configured/registered UI session id (when UI routing is supported).
+For send explicit targets, relay SHALL accept only canonical target identifiers
+in `session@bundle` form or bare `session_id` values that resolve unambiguously
+within the sending bundle.
 
 Relay SHALL NOT resolve configured bundle session `name` values as send-target
 aliases.
 Session `name` remains informational metadata only and is not send-routable.
 
-When one explicit token exactly matches both a bundle member `session_id` and a
-UI session id, relay SHALL route to the bundle member `session_id`.
+#### Scenario: Resolve session target for direct send by session type
 
-#### Scenario: Resolve session target for direct send
-
-- **WHEN** a caller sends a message to one target session id
-- **THEN** the system routes by that session id
-- **AND** resolves the session's active pane as the concrete tmux injection
-  endpoint
+- **WHEN** a caller sends a message to target `session_id`
+- **THEN** the system routes to that session using its configured session type
+- **AND** resolves the appropriate delivery endpoint for that type
 
 #### Scenario: Reject configured name alias as explicit send target
 
-- **WHEN** a caller sends a message using a configured session `name` token
-- **THEN** relay rejects the target with `validation_unknown_target`
-
-#### Scenario: Prefer bundle member session_id on overlap with UI session id
-
-- **WHEN** an explicit token matches both bundle member `session_id` and UI
-  session id
-- **THEN** relay routes to the bundle member target
-
-#### Scenario: Active pane changes before delivery
-
-- **WHEN** the active pane for a target session changes before injection
-- **THEN** the system resolves the new active pane at delivery time
-- **AND** injects into that resolved pane
-
-#### Scenario: Broadcast to all known bundle sessions
-
-- **WHEN** a caller sends a broadcast message
-- **THEN** the system attempts delivery to every known session in the bundle
-  except the sender session
-
-#### Scenario: Deliver to explicit target subset
-
-- **WHEN** a caller sends one message to a selected subset of sessions
-- **THEN** the system attempts delivery only to those selected sessions
-- **AND** does not deliver to other known bundle sessions
+- **WHEN** a caller sends using a session `name` value as explicit target
+- **THEN** relay rejects the target as unresolvable
 
 ### Requirement: JSON Chat Envelope
 
@@ -775,59 +720,49 @@ registration with `validation_missing_hello`.
 
 ### Requirement: Hello Registration Contract
 
-Each client stream SHALL begin with `hello` registration frame containing:
+Each client stream SHALL begin with a `hello` registration frame containing:
 
 - `bundle_name`
 - `session_id`
-- `client_class` (`agent` | `ui` | `operator`)
+- `schema_version`
 
-`hello` identity SHALL bind principal/session for that stream using canonical
-identity key:
+`hello` SHALL carry identity only. No transport class, mode, or privilege field
+is accepted; relay SHALL reject unrecognized fields.
 
-- `(bundle_name, session_id)`
+The relay SHALL hydrate canonical identity as `{session_id}@{bundle_name}` at
+registration. All subsequent internal state and wire output SHALL use the
+canonical form.
 
-For `client_class=agent`, `session_id` SHALL resolve via bundle
-`[[sessions]]` configuration.
+Identity lookup at hello registration SHALL proceed in order:
 
-For `client_class=ui`, `session_id` SHALL resolve via global TUI sessions from
-`<config-root>/tui.toml`.
+1. Bundle `[[sessions]]` for the named `bundle_name` (bundle members)
+2. Global users from `users.toml` when `session_id` carries a `@GLOBAL` suffix
 
-For `client_class=operator`, `session_id` SHALL resolve via bundle
-`[[sessions]]` configuration AND the resolved principal SHALL be authorized
-for operator-class registration by the bundle policy preset. Unauthorized
-`operator` claims SHALL be rejected with
-`validation_invalid_client_class_for_hello`.
+If no match is found, relay SHALL reject with `validation_unknown_sender`.
 
-If a second stream attempts `hello` for the same identity while the current
-owner is still live, relay SHALL reject second claim with
+If a second stream attempts `hello` for the same canonical identity while the
+current owner is live, relay SHALL reject the second claim with
 `runtime_identity_claim_conflict`.
 
-#### Scenario: Accept hello for configured UI session identity
+#### Scenario: Accept hello for configured bundle member
 
-- **WHEN** TUI client sends valid `hello` with `client_class=ui`
-- **AND** `session_id` maps to configured global TUI session `id`
-- **THEN** relay accepts hello and binds stream owner identity
+- **WHEN** a client sends valid `hello` with `bundle_name = "agentmux"` and
+  `session_id = "master"`
+- **AND** `session_id` maps to a configured bundle member
+- **THEN** relay accepts hello and binds stream to canonical identity
+  `master@agentmux`
 
-#### Scenario: Reject hello for unknown UI session identity
+#### Scenario: Accept hello for configured global user
 
-- **WHEN** a stream sends `hello` with `client_class=ui`
-- **AND** `session_id` is not present in global TUI sessions
-- **THEN** relay rejects hello with `validation_unknown_sender`
+- **WHEN** a client sends valid `hello` with `session_id = "user@GLOBAL"`
+- **AND** `session_id` matches a configured global user entry in `users.toml`
+- **THEN** relay accepts hello and binds stream using that canonical identity
 
-#### Scenario: Accept hello for authorized operator session identity
+#### Scenario: Reject hello for unknown session
 
-- **WHEN** a stream sends `hello` with `client_class=operator`
-- **AND** `session_id` maps to a configured bundle session
-- **AND** the bundle policy preset authorizes operator-class for that
-  principal
-- **THEN** relay accepts hello and binds stream owner identity
-
-#### Scenario: Reject hello for unauthorized operator class claim
-
-- **WHEN** a stream sends `hello` with `client_class=operator`
-- **AND** the bundle policy preset does not authorize operator class for that
-  principal
-- **THEN** relay rejects hello with `validation_invalid_client_class_for_hello`
+- **WHEN** a client sends `hello` with a `session_id` not present in bundle
+  members or (for `@GLOBAL` suffix) in `users.toml`
+- **THEN** relay rejects with `validation_unknown_sender`
 
 ### Requirement: Same-Bundle Stream Scope Enforcement
 
@@ -854,78 +789,6 @@ recipients.
 - **AND** recipient has no active stream registration
 - **THEN** relay processes routing using configured recipient identity semantics
 - **AND** does not reject solely for missing recipient `hello`
-
-### Requirement: Endpoint Class Routing Behavior
-
-Relay SHALL route recipient delivery by endpoint class:
-
-- `agent` recipients use existing prompt-injection/quiescence delivery path
-- `ui` recipients use stream push event delivery path
-
-`operator` is a decision-submitter class only and SHALL NOT be a delivery
-recipient in alpha. Inbound message routing to `operator` recipients is
-non-operative and reserved for a future class expansion.
-
-For disconnected `ui` recipients, relay SHALL keep pending delivery queued using
-existing relay async queue machinery and attempt delivery when same identity
-reconnects.
-
-Endpoint class resolution SHALL be deterministic with this precedence:
-
-1. active `hello` registration for target identity
-2. otherwise, target configured in bundle with no active registration defaults
-   to class `agent`
-3. otherwise, target is rejected as unknown
-
-Recipient-class transport matrix SHALL be:
-
-- `agent`: prompt-injection/quiescence path; active stream binding not required
-  for routability
-- `ui` with active binding: stream push event path
-- `ui` without active binding: queue and retry on reconnect
-- `operator`: not a delivery target; no routing matrix entry
-
-Non-UI stream-recipient classes (other than `operator`, which is
-delivery-inert) are an empty set in MVP.
-Therefore, no-live-binding fail-fast rules for non-UI stream recipients are
-non-operative in MVP and reserved for a future class expansion.
-
-#### Scenario: Deliver to agent recipient via prompt injection path
-
-- **WHEN** target recipient is class `agent`
-- **THEN** relay uses existing prompt-injection/quiescence delivery behavior
-
-#### Scenario: Deliver to connected ui recipient via stream event
-
-- **WHEN** target recipient is class `ui`
-- **AND** recipient has active registered stream
-- **THEN** relay emits inbound-message event frame to that stream
-
-#### Scenario: Queue ui delivery while stream is disconnected
-
-- **WHEN** target recipient is class `ui`
-- **AND** recipient has no active registered stream
-- **THEN** relay keeps pending delivery queued
-- **AND** attempts delivery when same identity reconnects
-
-#### Scenario: Default unregistered configured recipient to agent class
-
-- **WHEN** target recipient is configured in bundle
-- **AND** target has no active registration
-- **THEN** relay resolves endpoint class as `agent`
-
-#### Scenario: Reject unregistered unknown recipient
-
-- **WHEN** target has no active registration
-- **AND** target is not configured in associated bundle
-- **THEN** relay rejects request with `validation_unknown_recipient`
-
-#### Scenario: Reject inbound delivery routed to operator recipient
-
-- **WHEN** routing resolution selects `operator` as endpoint class for an
-  inbound message
-- **THEN** relay rejects the routing attempt; operator is not a delivery
-  recipient in alpha
 
 ### Requirement: Relay Stream Event Contract
 
@@ -2190,12 +2053,14 @@ For alpha scope:
 
 ### Requirement: Non-Spoofable Decision Actor Identity
 
-Relay SHALL derive permission decision actor identity from association/request
-context and SHALL NOT trust caller-supplied identity fields in action payload.
+Relay SHALL derive permission decision actor identity from the authenticated
+stream context and SHALL NOT trust caller-supplied identity fields in the
+action payload.
 
 #### Scenario: Reject caller-supplied decision actor field
 
-- **WHEN** `permission.resolve` payload includes `ui_session_id`
+- **WHEN** `permission.resolve` payload includes any caller-supplied identity
+  field (e.g., `decided_by`, `session_id`, or similar)
 - **THEN** relay rejects with `validation_invalid_params`
 
 ### Requirement: Same-Bundle Permission Decision Scope
@@ -2408,36 +2273,6 @@ The denial schema applies uniformly to `client_class=ui` and
 - **THEN** relay returns `authorization_forbidden`
 - **AND** denial details include canonical required fields
 
-### Requirement: Permission Decision Submitter Gate
-
-Permission decision actions (`permission.resolve`) SHALL be accepted only from
-associated principals whose `client_class ∈ {ui, operator}`.
-
-Operator-class submitters SHALL satisfy the same `grant` policy capability
-check as UI-class submitters.
-
-#### Scenario: Reject non-decision-class submitter
-
-- **WHEN** an associated principal with `client_class=agent` submits
-  `permission.resolve`
-- **THEN** relay rejects with `validation_invalid_client_class_for_action`
-
-#### Scenario: Accept operator-class submitter with grant authorization
-
-- **WHEN** an associated principal with `client_class=operator` submits
-  `permission.resolve`
-- **AND** the principal has `grant` capability satisfying the policy
-- **THEN** relay processes the decision under the same enforcement mapping as
-  a `client_class=ui` submitter
-
-#### Scenario: Reject operator submitter without grant authorization
-
-- **WHEN** an associated principal with `client_class=operator` submits
-  `permission.resolve`
-- **AND** the principal lacks `grant` capability
-- **THEN** relay rejects with `authorization_forbidden`
-- **AND** denial details include `capability="grant"`
-
 ### Requirement: Operator Client Class
 
 Relay SHALL recognize `operator` as a stream `client_class` distinct from
@@ -2545,4 +2380,75 @@ poll-only via `PermissionList`.
 - **WHEN** a permission list request targets a bundle other than the
   associated bundle
 - **THEN** relay rejects with `validation_cross_bundle_unsupported`
+
+### Requirement: Session Type Taxonomy
+
+The relay SHALL recognize exactly four session types, resolved from config:
+
+| Type | Origin | Delivery binding | Notes |
+|---|---|---|---|
+| `tmux` | coder-backed; coder defines `[coders.tmux]` | tmux pane prompt injection + quiescence gating | MCP server socket; request/reply |
+| `acp` | coder-backed; coder defines `[coders.acp]` | ACP prompt via relay-spawned worker | Bidirectional; relay drives channel |
+| `ui` | coder-less `[sessions.ui]` marker | live relay stream push events | Bare marker subtable; no required fields |
+| `pubsub` | coder-less `[sessions.pubsub]` marker | embedded callback; envelope as prompt | In-process tool calls |
+
+A coder-backed session's type (`tmux` or `acp`) SHALL be derived from the
+referenced coder's descriptor; the session entry SHALL NOT restate it. A
+coder-less session's type (`ui` or `pubsub`) SHALL be its declared marker
+subtable.
+
+Session type SHALL be determined solely from config. Hello frames SHALL NOT
+carry or assert session type.
+
+`ui` and `pubsub` session types SHALL be recognized and validated from day one.
+Sessions of these types SHALL be excluded from active routing at startup with a
+structured `runtime_session_type_not_implemented` failure rather than a parse
+error, until delivery is implemented.
+
+#### Scenario: Derive tmux session type from referenced coder
+
+- **WHEN** a session entry references a coder whose descriptor is
+  `[coders.tmux]`
+- **AND** the relay starts up
+- **THEN** relay routes messages to that session via prompt injection
+
+#### Scenario: Derive acp session type from referenced coder
+
+- **WHEN** a session entry references a coder whose descriptor is
+  `[coders.acp]`
+- **THEN** relay delivers to that session via the ACP worker path
+
+#### Scenario: Fail fast for unimplemented session type
+
+- **WHEN** a session entry declares a `[sessions.ui]` or `[sessions.pubsub]`
+  marker subtable
+- **THEN** relay emits `runtime_session_type_not_implemented` for that session
+- **AND** excludes it from routing without aborting other session startup
+
+### Requirement: Canonical Session Identity
+
+All relay internal state and wire-facing output SHALL represent session
+identity in `session@bundle` canonical form.
+
+Canonical identity SHALL be hydrated at `hello` registration:
+`{session_id}@{bundle_name}`. The hydrated form SHALL be used for all
+subsequent operations on that stream and in all relay responses and events.
+
+Wire fields carrying session identity (`target_session`, `sender_session`,
+`session_id` in listing responses, `decided_by` in decision responses) SHALL
+emit the canonical form.
+
+Global users (from `users.toml`) carry `@GLOBAL` in their `session_id`;
+their canonical form is their configured `id` unchanged.
+
+#### Scenario: Emit canonical sender identity in send response
+
+- **WHEN** a session with `session_id = "master"` in bundle `"agentmux"` sends
+  a message
+- **THEN** relay send response includes `sender_session = "master@agentmux"`
+
+#### Scenario: Emit canonical target identity in delivery event
+
+- **WHEN** relay delivers a message to session `"relay"` in bundle `"agentmux"`
+- **THEN** delivery event includes `target_session = "relay@agentmux"`
 

@@ -833,9 +833,6 @@ for validation, authorization, and runtime failures, including:
 
 - `validation_invalid_params`
 - `validation_cross_bundle_unsupported`
-- `validation_invalid_client_class_for_action`
-- `validation_invalid_client_class_for_hello` (surfaced at relay
-  registration; reported via inscription rather than tool response)
 - `authorization_forbidden`
 - `runtime_permission_request_already_resolved`
 - `runtime_permission_queue_full`
