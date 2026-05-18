@@ -56,7 +56,6 @@ async fn tool_catalog_contains_list_sessions_send_look_and_raww() {
                     "bundle_name": BUNDLE_NAME,
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
                     "sender_session": SENDER_SESSION,
-                    "delivery_mode": "sync",
                     "status": "success",
                     "results": [],
                 }),

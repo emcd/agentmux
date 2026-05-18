@@ -2,7 +2,7 @@
 
 use std::{io::IsTerminal, path::PathBuf};
 
-use crate::{relay::ChatDeliveryMode, runtime::error::RuntimeError};
+use crate::runtime::error::RuntimeError;
 
 mod down;
 mod host;
@@ -89,7 +89,6 @@ pub(super) struct SendArguments {
     pub(super) message: String,
     pub(super) targets: Vec<String>,
     pub(super) broadcast: bool,
-    pub(super) delivery_mode: ChatDeliveryMode,
     pub(super) quiescence_timeout_ms: Option<u64>,
     pub(super) acp_turn_timeout_ms: Option<u64>,
     pub(super) output_json: bool,
@@ -216,7 +215,7 @@ fn print_agentmux_help() {
         "[--inscriptions-directory PATH|--logs-directory PATH] ",
         "[--repository-root PATH]\n",
         "  send (--target NAME ... | --broadcast) [--message TEXT] ",
-        "[--delivery-mode async|sync] [--quiescence-timeout-ms MS] ",
+        "[--quiescence-timeout-ms MS] ",
         "[--acp-turn-timeout-ms MS] [--request-id ID] [--bundle NAME] ",
         "[--as-session NAME] [--json] [--config-directory PATH] ",
         "[--state-directory PATH] [--inscriptions-directory PATH|",

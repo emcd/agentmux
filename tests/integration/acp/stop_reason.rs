@@ -1,12 +1,11 @@
 use agentmux::relay::{ChatOutcome, ChatStatus};
-use serde_json::Value;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 use super::helpers::*;
 
 #[test]
-fn acp_cancelled_stop_reason_does_not_block_sync_dispatch_ack() {
+fn acp_cancelled_stop_reason_is_accepted_for_async_dispatch() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions {
         stop_reason: "cancelled".to_string(),
@@ -19,19 +18,12 @@ fn acp_cancelled_stop_reason_does_not_block_sync_dispatch_ack() {
         Some(1_000),
     );
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Success);
-    assert_eq!(result.outcome, ChatOutcome::Delivered);
-    assert_eq!(
-        result
-            .details
-            .as_ref()
-            .and_then(|value| value.get("delivery_phase")),
-        Some(&Value::String("accepted_in_progress".to_string()))
-    );
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(result.outcome, ChatOutcome::Queued);
 }
 
 #[test]
-fn acp_turn_timeout_does_not_block_sync_dispatch_ack() {
+fn acp_turn_timeout_is_accepted_for_async_dispatch() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions {
         prompt_delay_sec: 1,
@@ -40,19 +32,12 @@ fn acp_turn_timeout_does_not_block_sync_dispatch_ack() {
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"), Some(100));
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Success);
-    assert_eq!(result.outcome, ChatOutcome::Delivered);
-    assert_eq!(
-        result
-            .details
-            .as_ref()
-            .and_then(|value| value.get("delivery_phase")),
-        Some(&Value::String("accepted_in_progress".to_string()))
-    );
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(result.outcome, ChatOutcome::Queued);
 }
 
 #[test]
-fn acp_coder_default_turn_timeout_does_not_block_sync_dispatch_ack() {
+fn acp_coder_default_turn_timeout_is_accepted_for_async_dispatch() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions {
         prompt_delay_sec: 1,
@@ -62,19 +47,12 @@ fn acp_coder_default_turn_timeout_does_not_block_sync_dispatch_ack() {
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"), None);
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Success);
-    assert_eq!(result.outcome, ChatOutcome::Delivered);
-    assert_eq!(
-        result
-            .details
-            .as_ref()
-            .and_then(|value| value.get("delivery_phase")),
-        Some(&Value::String("accepted_in_progress".to_string()))
-    );
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(result.outcome, ChatOutcome::Queued);
 }
 
 #[test]
-fn acp_turn_timeout_request_override_does_not_block_sync_dispatch_ack() {
+fn acp_turn_timeout_request_override_is_accepted_for_async_dispatch() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions {
         prompt_delay_sec: 1,
@@ -84,19 +62,12 @@ fn acp_turn_timeout_request_override_does_not_block_sync_dispatch_ack() {
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"), Some(100));
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Success);
-    assert_eq!(result.outcome, ChatOutcome::Delivered);
-    assert_eq!(
-        result
-            .details
-            .as_ref()
-            .and_then(|value| value.get("delivery_phase")),
-        Some(&Value::String("accepted_in_progress".to_string()))
-    );
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(result.outcome, ChatOutcome::Queued);
 }
 
 #[test]
-fn acp_successful_terminal_stop_reason_marks_accepted_in_progress_phase() {
+fn acp_successful_terminal_stop_reason_is_accepted_for_async_dispatch() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions::default();
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
@@ -106,17 +77,10 @@ fn acp_successful_terminal_stop_reason_marks_accepted_in_progress_phase() {
         Some(1_000),
     );
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Success);
-    assert_eq!(result.outcome, ChatOutcome::Delivered);
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(result.outcome, ChatOutcome::Queued);
     assert_eq!(result.reason_code, None);
     assert_eq!(result.reason, None);
-    assert_eq!(
-        result
-            .details
-            .as_ref()
-            .and_then(|value| value.get("delivery_phase")),
-        Some(&Value::String("accepted_in_progress".to_string()))
-    );
 }
 
 #[test]
@@ -130,20 +94,13 @@ fn acp_first_activity_acceptance_prevents_late_turn_timeout_failure() {
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"), Some(100));
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Success);
-    assert_eq!(result.outcome, ChatOutcome::Delivered);
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(result.outcome, ChatOutcome::Queued);
     assert_eq!(result.reason_code, None);
-    assert_eq!(
-        result
-            .details
-            .as_ref()
-            .and_then(|value| value.get("delivery_phase")),
-        Some(&Value::String("accepted_in_progress".to_string()))
-    );
 }
 
 #[test]
-fn acp_sync_send_returns_on_dispatch_without_waiting_for_terminal_stop_reason() {
+fn acp_async_send_returns_on_dispatch_without_waiting_for_terminal_stop_reason() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions {
         prompt_delay_sec: 2,
@@ -159,17 +116,10 @@ fn acp_sync_send_returns_on_dispatch_without_waiting_for_terminal_stop_reason() 
     let elapsed = started_at.elapsed();
     let (status, result) = chat_result(response);
 
-    assert_eq!(status, ChatStatus::Success);
-    assert_eq!(result.outcome, ChatOutcome::Delivered);
-    assert_eq!(
-        result
-            .details
-            .as_ref()
-            .and_then(|value| value.get("delivery_phase")),
-        Some(&Value::String("accepted_in_progress".to_string()))
-    );
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(result.outcome, ChatOutcome::Queued);
     assert!(
         elapsed < Duration::from_secs(1),
-        "expected sync send to return after dispatch, elapsed={elapsed:?}"
+        "expected async send to return after dispatch, elapsed={elapsed:?}"
     );
 }

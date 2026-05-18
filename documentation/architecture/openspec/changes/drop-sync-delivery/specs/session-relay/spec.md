@@ -60,33 +60,6 @@ queued`. Relay SHALL NOT block the caller waiting for delivery completion.
 - **THEN** relay returns an immediate no-op response without validation error
 - **AND** response contains zero per-target results
 
-## ADDED Requirements
-
-### Requirement: Reject delivery_mode Field
-
-Relay SHALL reject any send request that includes a `delivery_mode` field with
-`validation_invalid_params`.
-
-The rejection SHALL apply regardless of the field value (including
-`delivery_mode = async`).
-
-The rejection SHALL include a details object identifying the removed field:
-
-- `field`: `"delivery_mode"`
-- `reason`: `"removed; async is the only delivery mode"`
-
-#### Scenario: Reject request with delivery_mode present
-
-- **WHEN** a send request includes a `delivery_mode` field
-- **THEN** relay returns `validation_invalid_params`
-- **AND** details identifies `field = "delivery_mode"`
-
-#### Scenario: Reject delivery_mode regardless of value
-
-- **WHEN** a send request includes `delivery_mode = "async"`
-- **THEN** relay returns `validation_invalid_params`
-- **AND** does not treat the async value as a valid no-op
-
 ## REMOVED Requirements
 
 ### Requirement: ACP Sync Delivery Phase Contract

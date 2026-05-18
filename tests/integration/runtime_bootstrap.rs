@@ -635,7 +635,6 @@ async fn mcp_auto_discovers_association_from_non_git_cwd() {
                     "bundle_name": "relay",
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
                     "sender_session": request.get("sender_session").cloned().unwrap_or(Value::Null),
-                    "delivery_mode": request.get("delivery_mode").cloned().unwrap_or(Value::Null),
                     "status": "success",
                     "results": [{
                         "target_session": "bravo",
@@ -711,7 +710,6 @@ async fn mcp_falls_back_to_directory_match_when_auto_sender_is_not_member() {
                     "bundle_name": "master",
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
                     "sender_session": request.get("sender_session").cloned().unwrap_or(Value::Null),
-                    "delivery_mode": request.get("delivery_mode").cloned().unwrap_or(Value::Null),
                     "status": "success",
                     "results": [{
                         "target_session": "bravo",

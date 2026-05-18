@@ -20,16 +20,15 @@ use super::authorization::{
 use super::delivery::{
     PermissionDecisionKind, PermissionDecisionRequest, PermissionEventContext,
     PersistedPendingPermissionRequest, QuiescenceOptions, acp_session_ready_for_startup,
-    aggregate_chat_status, await_acp_worker_prime_for_look, deliver_one_target,
-    derive_acp_look_snapshot, emit_permission_snapshot_then_replay, enqueue_async_delivery,
-    enqueue_sync_delivery, get_acp_worker_snapshot, get_acp_worker_state,
-    list_pending_permission_requests, map_permission_state_error, prompt_batch_settings,
-    resolve_permission_request,
+    await_acp_worker_prime_for_look, deliver_one_target, derive_acp_look_snapshot,
+    emit_permission_snapshot_then_replay, enqueue_async_delivery, enqueue_sync_delivery,
+    get_acp_worker_snapshot, get_acp_worker_state, list_pending_permission_requests,
+    map_permission_state_error, prompt_batch_settings, resolve_permission_request,
 };
 use super::lifecycle::{reconcile_loaded_bundle_for_lifecycle, shutdown_bundle_runtime};
 use super::tmux::{capture_pane_tail_lines, resolve_active_pane_target};
 use super::{
-    AsyncDeliveryTask, ChatDeliveryMode, ChatOutcome, ChatRequestContext, ChatResult, ChatStatus,
+    AsyncDeliveryTask, ChatOutcome, ChatRequestContext, ChatResult, ChatStatus,
     DeliveryPayloadMode, LifecycleBundleResult, ListedBundle, ListedBundleStartupHealth,
     ListedBundleState, ListedSession, ListedSessionTransport, LookRequestContext,
     PendingPermissionEntry, PermissionDecisionRequestContext, RawwRequestContext, RelayError,
@@ -89,7 +88,6 @@ pub(super) fn handle_request(
             message,
             targets,
             broadcast,
-            delivery_mode,
             quiet_window_ms,
             quiescence_timeout_ms,
             acp_turn_timeout_ms,
@@ -102,7 +100,6 @@ pub(super) fn handle_request(
                 message,
                 targets,
                 broadcast,
-                delivery_mode,
                 quiet_window_ms,
                 quiescence_timeout_ms,
                 acp_turn_timeout_ms,
@@ -190,7 +187,6 @@ fn normalize_request_identities(request: RelayRequest, bundle_name: &str) -> Rel
             message,
             targets,
             broadcast,
-            delivery_mode,
             quiet_window_ms,
             quiescence_timeout_ms,
             acp_turn_timeout_ms,
@@ -200,7 +196,6 @@ fn normalize_request_identities(request: RelayRequest, bundle_name: &str) -> Rel
             message,
             targets: targets.into_iter().map(bare).collect(),
             broadcast,
-            delivery_mode,
             quiet_window_ms,
             quiescence_timeout_ms,
             acp_turn_timeout_ms,
@@ -435,7 +430,6 @@ fn handle_chat(
         message,
         targets,
         broadcast,
-        delivery_mode,
         quiet_window_ms,
         quiescence_timeout_ms,
         acp_turn_timeout_ms,
@@ -500,7 +494,6 @@ fn handle_chat(
             "bundle_name": bundle.bundle_name,
             "sender_session": sender.session_id,
             "broadcast": broadcast,
-            "delivery_mode": delivery_mode,
             "target_count": targets.len(),
             "message_length": message.len(),
             "request_id": request_id.clone(),
@@ -574,125 +567,53 @@ fn handle_chat(
 
     let all_target_sessions = resolved_targets.clone();
     let batch_settings = prompt_batch_settings();
-    let (status, results) = match delivery_mode {
-        ChatDeliveryMode::Sync => {
-            let quiescence = QuiescenceOptions::for_sync(
-                quiet_window_ms,
-                quiescence_timeout_ms,
-                acp_turn_timeout_ms,
-            );
-            let mut results = Vec::with_capacity(resolved_targets.len());
-            for target_session in resolved_targets {
-                let message_id = Uuid::new_v4().to_string();
-                let target_is_ui = has_ui_session(authorization, target_session.as_str())
-                    && bundle
-                        .members
-                        .iter()
-                        .all(|member| member.id != target_session);
-                let task = AsyncDeliveryTask {
-                    bundle: bundle.clone(),
-                    sender: sender_member.clone(),
-                    all_target_sessions: all_target_sessions.clone(),
-                    target_session,
-                    target_is_ui,
-                    message: message.clone(),
-                    message_id,
-                    quiescence,
-                    batch_settings,
-                    runtime_directory: runtime_directory.to_path_buf(),
-                    completion_sender: None,
-                    payload_mode: DeliveryPayloadMode::EnvelopeMessage,
-                    append_enter: true,
-                    permission_decider_sessions: permission_decider_sessions.clone(),
-                    permission_max_pending: queue_max_pending,
-                };
-                let result = if task.target_is_ui {
-                    deliver_one_target(&task)?
-                } else {
-                    let target_member = bundle
-                        .members
-                        .iter()
-                        .find(|member| member.id == task.target_session)
-                        .ok_or_else(|| {
-                            relay_error(
-                                "internal_unexpected_failure",
-                                "resolved target member is missing from bundle configuration",
-                                Some(json!({"target_session": task.target_session})),
-                            )
-                        })?;
-                    match &target_member.target {
-                        crate::configuration::TargetConfiguration::Acp(_) => {
-                            enqueue_sync_delivery(task)?
-                        }
-                        crate::configuration::TargetConfiguration::Tmux(_) => {
-                            deliver_one_target(&task)?
-                        }
-                        crate::configuration::TargetConfiguration::Ui
-                        | crate::configuration::TargetConfiguration::Pubsub => {
-                            return Err(super::session_type_not_implemented(
-                                target_member.id.as_str(),
-                                target_member.target.session_type(),
-                            ));
-                        }
-                    }
-                };
-                results.push(result);
-            }
-            (aggregate_chat_status(&results), results)
-        }
-        ChatDeliveryMode::Async => {
-            let quiescence = QuiescenceOptions::for_async(
-                quiet_window_ms,
-                quiescence_timeout_ms,
-                acp_turn_timeout_ms,
-            );
-            let mut results = Vec::with_capacity(resolved_targets.len());
-            for target_session in resolved_targets {
-                let message_id = Uuid::new_v4().to_string();
-                let target_is_ui = has_ui_session(authorization, target_session.as_str())
-                    && bundle
-                        .members
-                        .iter()
-                        .all(|member| member.id != target_session);
-                let task = AsyncDeliveryTask {
-                    bundle: bundle.clone(),
-                    sender: sender_member.clone(),
-                    all_target_sessions: all_target_sessions.clone(),
-                    target_session: target_session.clone(),
-                    target_is_ui,
-                    message: message.clone(),
-                    message_id: message_id.clone(),
-                    quiescence,
-                    batch_settings,
-                    runtime_directory: runtime_directory.to_path_buf(),
-                    completion_sender: None,
-                    payload_mode: DeliveryPayloadMode::EnvelopeMessage,
-                    append_enter: true,
-                    permission_decider_sessions: permission_decider_sessions.clone(),
-                    permission_max_pending: queue_max_pending,
-                };
-                enqueue_async_delivery(task)?;
-                emit_inscription(
-                    "relay.chat.async.queued",
-                    &json!({
-                        "bundle_name": bundle.bundle_name,
-                        "sender_session": sender.session_id,
-                        "target_session": target_session,
-                        "message_id": message_id,
-                    }),
-                );
-                results.push(ChatResult {
-                    target_session,
-                    message_id,
-                    outcome: ChatOutcome::Queued,
-                    reason_code: None,
-                    reason: None,
-                    details: None,
-                });
-            }
-            (ChatStatus::Accepted, results)
-        }
-    };
+    let quiescence =
+        QuiescenceOptions::for_async(quiet_window_ms, quiescence_timeout_ms, acp_turn_timeout_ms);
+    let mut results = Vec::with_capacity(resolved_targets.len());
+    for target_session in resolved_targets {
+        let message_id = Uuid::new_v4().to_string();
+        let target_is_ui = has_ui_session(authorization, target_session.as_str())
+            && bundle
+                .members
+                .iter()
+                .all(|member| member.id != target_session);
+        let task = AsyncDeliveryTask {
+            bundle: bundle.clone(),
+            sender: sender_member.clone(),
+            all_target_sessions: all_target_sessions.clone(),
+            target_session: target_session.clone(),
+            target_is_ui,
+            message: message.clone(),
+            message_id: message_id.clone(),
+            quiescence,
+            batch_settings,
+            runtime_directory: runtime_directory.to_path_buf(),
+            completion_sender: None,
+            payload_mode: DeliveryPayloadMode::EnvelopeMessage,
+            append_enter: true,
+            permission_decider_sessions: permission_decider_sessions.clone(),
+            permission_max_pending: queue_max_pending,
+        };
+        enqueue_async_delivery(task)?;
+        emit_inscription(
+            "relay.chat.async.queued",
+            &json!({
+                "bundle_name": bundle.bundle_name,
+                "sender_session": sender.session_id,
+                "target_session": target_session,
+                "message_id": message_id,
+            }),
+        );
+        results.push(ChatResult {
+            target_session,
+            message_id,
+            outcome: ChatOutcome::Queued,
+            reason_code: None,
+            reason: None,
+            details: None,
+        });
+    }
+    let status = ChatStatus::Accepted;
 
     let results = results
         .into_iter()
@@ -711,7 +632,6 @@ fn handle_chat(
             bundle.bundle_name.as_str(),
         ),
         sender_display_name: sender.display_name.clone(),
-        delivery_mode,
         status,
         results,
     };
@@ -732,7 +652,6 @@ fn handle_chat(
             &json!({
             "bundle_name": bundle_name,
             "sender_session": sender_session,
-            "delivery_mode": delivery_mode,
             "status": status,
             "result_count": results.len(),
             "delivered_count": delivered_count,

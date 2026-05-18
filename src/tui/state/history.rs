@@ -1,8 +1,7 @@
 use std::collections::{HashSet, VecDeque};
 
 use crate::relay::{
-    ChatDeliveryMode, ChatOutcome, ChatResult, ChatStatus, RelayRequest, RelayResponse,
-    RelayStreamEvent,
+    ChatOutcome, ChatResult, ChatStatus, RelayRequest, RelayResponse, RelayStreamEvent,
 };
 use crate::runtime::error::RuntimeError;
 
@@ -27,7 +26,6 @@ impl AppState {
             message: message_body.clone(),
             targets,
             broadcast: false,
-            delivery_mode: ChatDeliveryMode::Async,
             quiet_window_ms: None,
             quiescence_timeout_ms: None,
             acp_turn_timeout_ms: None,

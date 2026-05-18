@@ -15,7 +15,7 @@ use rmcp::{
     transport::stdio,
 };
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::configuration::{
@@ -23,9 +23,8 @@ use crate::configuration::{
     load_bundle_group_memberships,
 };
 use crate::relay::{
-    ChatDeliveryMode, ListedBundle, ListedBundleState, ListedSession, LookSnapshotPayload,
-    RelayError, RelayRequest, RelayResponse, RelayStreamSession, load_startup_failures,
-    request_relay,
+    ListedBundle, ListedBundleState, ListedSession, LookSnapshotPayload, RelayError, RelayRequest,
+    RelayResponse, RelayStreamSession, load_startup_failures, request_relay,
 };
 use crate::runtime::error::RuntimeError;
 use crate::runtime::inscriptions::emit_inscription;
@@ -92,9 +91,6 @@ struct SendParams {
     /// Broadcast to all known sessions for the bundle.
     #[serde(default)]
     broadcast: bool,
-    /// Delivery behavior: async queues and returns immediately, sync blocks for completion.
-    #[serde(default)]
-    delivery_mode: SendDeliveryModeParam,
     /// Optional quiescence timeout override in milliseconds.
     #[serde(default)]
     quiescence_timeout_ms: Option<u64>,
@@ -173,23 +169,6 @@ struct RawwParams {
     #[serde(flatten, default)]
     #[schemars(skip)]
     extra_fields: BTreeMap<String, Value>,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-enum SendDeliveryModeParam {
-    #[default]
-    Async,
-    Sync,
-}
-
-impl From<SendDeliveryModeParam> for ChatDeliveryMode {
-    fn from(value: SendDeliveryModeParam) -> Self {
-        match value {
-            SendDeliveryModeParam::Async => ChatDeliveryMode::Async,
-            SendDeliveryModeParam::Sync => ChatDeliveryMode::Sync,
-        }
-    }
 }
 
 const LOOK_LINES_MIN: u64 = 1;
@@ -344,7 +323,6 @@ impl McpServer {
                 "request_id": params.request_id.clone(),
                 "targets": params.targets.clone(),
                 "broadcast": params.broadcast,
-                "delivery_mode": params.delivery_mode,
                 "quiescence_timeout_ms": params.quiescence_timeout_ms,
                 "acp_turn_timeout_ms": params.acp_turn_timeout_ms,
                 "message_length": params.message.len(),
@@ -370,7 +348,6 @@ impl McpServer {
             message: params.message.clone(),
             targets: params.targets.clone(),
             broadcast: params.broadcast,
-            delivery_mode: params.delivery_mode.into(),
             quiet_window_ms: None,
             quiescence_timeout_ms: params.quiescence_timeout_ms,
             acp_turn_timeout_ms: params.acp_turn_timeout_ms,
@@ -382,7 +359,6 @@ impl McpServer {
                 request_id,
                 sender_session,
                 sender_display_name,
-                delivery_mode,
                 status,
                 results,
             }) => {
@@ -392,7 +368,6 @@ impl McpServer {
                     "request_id": request_id,
                     "sender_session": sender_session,
                     "sender_display_name": sender_display_name,
-                    "delivery_mode": delivery_mode,
                     "status": status,
                     "results": results,
                 });

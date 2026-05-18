@@ -1,6 +1,6 @@
 use agentmux::relay::{
-    ChatDeliveryMode, ListedBundleState, ListedSessionTransport, LookSnapshotPayload, RelayRequest,
-    RelayResponse, handle_request,
+    ListedBundleState, ListedSessionTransport, LookSnapshotPayload, RelayRequest, RelayResponse,
+    handle_request,
 };
 use tempfile::TempDir;
 
@@ -356,7 +356,6 @@ fn chat_rejects_unknown_target() {
             message: "hello".to_string(),
             targets: vec!["missing".to_string()],
             broadcast: false,
-            delivery_mode: ChatDeliveryMode::Sync,
             quiet_window_ms: None,
             quiescence_timeout_ms: None,
             acp_turn_timeout_ms: None,
@@ -381,7 +380,6 @@ fn chat_rejects_target_by_configured_session_name_alias() {
             message: "hello".to_string(),
             targets: vec!["Bravo".to_string()],
             broadcast: false,
-            delivery_mode: ChatDeliveryMode::Sync,
             quiet_window_ms: Some(1),
             quiescence_timeout_ms: Some(1),
             acp_turn_timeout_ms: None,
@@ -407,7 +405,6 @@ fn chat_accepts_global_ui_target_not_in_bundle_configuration() {
             message: "hello".to_string(),
             targets: vec!["user@GLOBAL".to_string()],
             broadcast: false,
-            delivery_mode: ChatDeliveryMode::Sync,
             quiet_window_ms: Some(1),
             quiescence_timeout_ms: Some(1),
             acp_turn_timeout_ms: None,
@@ -439,7 +436,6 @@ fn chat_prefers_bundle_member_when_target_id_overlaps_with_ui_session_id() {
             message: "hello".to_string(),
             targets: vec!["alpha".to_string()],
             broadcast: false,
-            delivery_mode: ChatDeliveryMode::Sync,
             quiet_window_ms: Some(1),
             quiescence_timeout_ms: Some(1),
             acp_turn_timeout_ms: None,
@@ -455,9 +451,10 @@ fn chat_prefers_bundle_member_when_target_id_overlaps_with_ui_session_id() {
     };
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].target_session, "alpha@party");
-    // Overlap precedence is bundle-member-first, so missing tmux runtime yields
-    // a direct tmux delivery failure (not a UI stream timeout).
-    assert_eq!(results[0].outcome, agentmux::relay::ChatOutcome::Failed);
+    // Overlap precedence is bundle-member-first: the resolved target is the
+    // bundle member alpha@party, not the overlapping UI session. Async
+    // dispatch queues the delivery regardless of tmux runtime presence.
+    assert_eq!(results[0].outcome, agentmux::relay::ChatOutcome::Queued);
 }
 
 #[test]
@@ -472,7 +469,6 @@ fn chat_broadcast_excludes_sender_session() {
             message: "hello".to_string(),
             targets: Vec::new(),
             broadcast: true,
-            delivery_mode: ChatDeliveryMode::Sync,
             quiet_window_ms: Some(1),
             quiescence_timeout_ms: Some(1),
             acp_turn_timeout_ms: None,
@@ -502,7 +498,6 @@ fn chat_async_returns_accepted_and_queued_outcome() {
             message: "hello".to_string(),
             targets: vec!["bravo".to_string()],
             broadcast: false,
-            delivery_mode: ChatDeliveryMode::Async,
             quiet_window_ms: Some(1),
             quiescence_timeout_ms: Some(1),
             acp_turn_timeout_ms: None,
@@ -537,7 +532,6 @@ fn chat_rejects_zero_timeout_override() {
             message: "hello".to_string(),
             targets: vec!["bravo".to_string()],
             broadcast: false,
-            delivery_mode: ChatDeliveryMode::Sync,
             quiet_window_ms: Some(1),
             quiescence_timeout_ms: Some(0),
             acp_turn_timeout_ms: None,
@@ -556,14 +550,13 @@ fn chat_broadcast_with_only_sender_returns_empty_results() {
     let config_root = write_single_member_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let sync_response = dispatch_request(
+    let response = dispatch_request(
         RelayRequest::Chat {
             request_id: None,
             sender_session: "alpha".to_string(),
             message: "hello".to_string(),
             targets: Vec::new(),
             broadcast: true,
-            delivery_mode: ChatDeliveryMode::Sync,
             quiet_window_ms: Some(1),
             quiescence_timeout_ms: Some(1),
             acp_turn_timeout_ms: None,
@@ -572,47 +565,16 @@ fn chat_broadcast_with_only_sender_returns_empty_results() {
         "party",
         &tmux_socket,
     )
-    .expect("sync chat response");
+    .expect("chat response");
 
     let RelayResponse::Chat {
-        status: sync_status,
-        results: sync_results,
-        ..
-    } = sync_response
+        status, results, ..
+    } = response
     else {
-        panic!("expected sync chat response");
+        panic!("expected chat response");
     };
-    assert_eq!(sync_status, agentmux::relay::ChatStatus::Success);
-    assert!(sync_results.is_empty());
-
-    let async_response = dispatch_request(
-        RelayRequest::Chat {
-            request_id: None,
-            sender_session: "alpha".to_string(),
-            message: "hello".to_string(),
-            targets: Vec::new(),
-            broadcast: true,
-            delivery_mode: ChatDeliveryMode::Async,
-            quiet_window_ms: Some(1),
-            quiescence_timeout_ms: Some(1),
-            acp_turn_timeout_ms: None,
-        },
-        &config_root,
-        "party",
-        &tmux_socket,
-    )
-    .expect("async chat response");
-
-    let RelayResponse::Chat {
-        status: async_status,
-        results: async_results,
-        ..
-    } = async_response
-    else {
-        panic!("expected async chat response");
-    };
-    assert_eq!(async_status, agentmux::relay::ChatStatus::Accepted);
-    assert!(async_results.is_empty());
+    assert_eq!(status, agentmux::relay::ChatStatus::Accepted);
+    assert!(results.is_empty());
 }
 
 #[test]
@@ -627,7 +589,6 @@ fn chat_rejects_quiescence_timeout_for_acp_target() {
             message: "hello".to_string(),
             targets: vec!["bravo".to_string()],
             broadcast: false,
-            delivery_mode: ChatDeliveryMode::Sync,
             quiet_window_ms: Some(1),
             quiescence_timeout_ms: Some(100),
             acp_turn_timeout_ms: None,
@@ -655,7 +616,6 @@ fn chat_rejects_acp_turn_timeout_for_tmux_target() {
             message: "hello".to_string(),
             targets: vec!["bravo".to_string()],
             broadcast: false,
-            delivery_mode: ChatDeliveryMode::Sync,
             quiet_window_ms: Some(1),
             quiescence_timeout_ms: None,
             acp_turn_timeout_ms: Some(100),
@@ -683,7 +643,6 @@ fn chat_rejects_conflicting_timeout_fields() {
             message: "hello".to_string(),
             targets: vec!["bravo".to_string()],
             broadcast: false,
-            delivery_mode: ChatDeliveryMode::Sync,
             quiet_window_ms: Some(1),
             quiescence_timeout_ms: Some(100),
             acp_turn_timeout_ms: Some(200),

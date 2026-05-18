@@ -3,9 +3,10 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     sync::OnceLock,
+    thread,
+    time::{Duration, Instant},
 };
 
-pub(super) use agentmux::relay::ChatDeliveryMode;
 use agentmux::relay::{ChatStatus, RelayRequest, RelayResponse, handle_request};
 use serde_json::Value;
 
@@ -323,48 +324,55 @@ coder = "acp"
     (config_root, log_path)
 }
 
+fn acp_chat_request(acp_turn_timeout_ms: Option<u64>) -> RelayRequest {
+    RelayRequest::Chat {
+        request_id: Some("req-acp".to_string()),
+        sender_session: "alpha".to_string(),
+        message: "status?".to_string(),
+        targets: vec!["bravo".to_string()],
+        broadcast: false,
+        quiet_window_ms: Some(50),
+        quiescence_timeout_ms: None,
+        acp_turn_timeout_ms,
+    }
+}
+
+/// Starts the bundle, dispatches an async chat to `bravo`, then blocks until
+/// the persistent ACP worker has acted on the queued task -- its
+/// `session/prompt` reached the stub, or the worker settled `unavailable` --
+/// so callers can inspect post-delivery side effects deterministically.
 pub(super) fn dispatch_send(
     config_root: &Path,
     tmux_socket: &Path,
     acp_turn_timeout_ms: Option<u64>,
 ) -> RelayResponse {
-    dispatch_send_with_mode(
-        config_root,
-        tmux_socket,
-        acp_turn_timeout_ms,
-        ChatDeliveryMode::Sync,
-    )
+    let root = tmux_socket.parent().unwrap_or_else(|| Path::new("."));
+    let log_path = root.join("acp_requests.log");
+    let baseline_prompts = count_logged_method(&log_path, "session/prompt");
+    let response = dispatch_send_result(config_root, tmux_socket, acp_turn_timeout_ms)
+        .expect("relay request should parse");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        if count_logged_method(&log_path, "session/prompt") > baseline_prompts
+            || read_worker_state(root, "bravo").as_deref() == Some("unavailable")
+        {
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    response
 }
 
-pub(super) fn dispatch_send_with_mode(
+/// Starts the bundle and dispatches an async chat to `bravo`, returning the
+/// immediate relay response without waiting for the worker to act.
+pub(super) fn dispatch_send_result(
     config_root: &Path,
     tmux_socket: &Path,
     acp_turn_timeout_ms: Option<u64>,
-    delivery_mode: ChatDeliveryMode,
-) -> RelayResponse {
-    dispatch_send_with_mode_result(config_root, tmux_socket, acp_turn_timeout_ms, delivery_mode)
-        .expect("relay request should parse")
-}
-
-pub(super) fn dispatch_send_with_mode_result(
-    config_root: &Path,
-    tmux_socket: &Path,
-    acp_turn_timeout_ms: Option<u64>,
-    delivery_mode: ChatDeliveryMode,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
     startup_bundle(config_root, tmux_socket)?;
     dispatch_request(
-        RelayRequest::Chat {
-            request_id: Some("req-acp".to_string()),
-            sender_session: "alpha".to_string(),
-            message: "status?".to_string(),
-            targets: vec!["bravo".to_string()],
-            broadcast: false,
-            delivery_mode,
-            quiet_window_ms: Some(50),
-            quiescence_timeout_ms: None,
-            acp_turn_timeout_ms,
-        },
+        acp_chat_request(acp_turn_timeout_ms),
         config_root,
         "party",
         tmux_socket,
@@ -375,24 +383,76 @@ pub(super) fn dispatch_send_without_startup_result(
     config_root: &Path,
     tmux_socket: &Path,
     acp_turn_timeout_ms: Option<u64>,
-    delivery_mode: ChatDeliveryMode,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
     dispatch_request(
-        RelayRequest::Chat {
-            request_id: Some("req-acp".to_string()),
-            sender_session: "alpha".to_string(),
-            message: "status?".to_string(),
-            targets: vec!["bravo".to_string()],
-            broadcast: false,
-            delivery_mode,
-            quiet_window_ms: Some(50),
-            quiescence_timeout_ms: None,
-            acp_turn_timeout_ms,
-        },
+        acp_chat_request(acp_turn_timeout_ms),
         config_root,
         "party",
         tmux_socket,
     )
+}
+
+fn count_logged_method(log_path: &Path, method: &str) -> usize {
+    fs::read_to_string(log_path)
+        .map(|contents| {
+            contents
+                .matches(&format!("\"method\":\"{method}\""))
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+/// Polls the persistent ACP worker for `target_session` until it converges to
+/// the expected readiness state, returning true on success within the timeout.
+pub(super) fn wait_for_worker_state(
+    root: &Path,
+    target_session: &str,
+    expected: &str,
+    timeout: Duration,
+) -> bool {
+    wait_for_any_worker_state(root, target_session, &[expected], timeout)
+}
+
+/// Polls the persistent ACP worker for `target_session` until it converges to
+/// any of the expected readiness states, returning true on success.
+pub(super) fn wait_for_any_worker_state(
+    root: &Path,
+    target_session: &str,
+    expected: &[&str],
+    timeout: Duration,
+) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if let Some(state) = read_worker_state(root, target_session)
+            && expected.iter().any(|candidate| state == *candidate)
+        {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    false
+}
+
+/// Asserts that an ACP send to `bravo` does not succeed: either the relay
+/// rejects the enqueue outright with `runtime_acp_worker_unavailable`, or it
+/// accepts the async dispatch and the persistent worker settles `unavailable`.
+pub(super) fn assert_acp_delivery_unavailable(
+    config_root: &Path,
+    tmux_socket: &Path,
+    acp_turn_timeout_ms: Option<u64>,
+) {
+    let root = tmux_socket.parent().unwrap_or_else(|| Path::new("."));
+    match dispatch_send_result(config_root, tmux_socket, acp_turn_timeout_ms) {
+        Err(error) => assert_eq!(error.code, "runtime_acp_worker_unavailable"),
+        Ok(response) => {
+            let (status, _result) = chat_result(response);
+            assert_eq!(status, ChatStatus::Accepted);
+            assert!(
+                wait_for_worker_state(root, "bravo", "unavailable", Duration::from_secs(3)),
+                "ACP worker did not settle unavailable after a failed startup stage"
+            );
+        }
+    }
 }
 
 pub(super) fn dispatch_look(

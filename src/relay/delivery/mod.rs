@@ -14,9 +14,9 @@ pub(in crate::relay) use self::async_worker::{
     get_acp_worker_state,
 };
 pub(in crate::relay) use self::dispatch::{
-    aggregate_chat_status, await_acp_worker_prime_for_look, deliver_one_target,
-    enqueue_async_delivery, enqueue_sync_delivery, initialize_acp_target_for_startup,
-    prompt_batch_settings, wait_for_async_delivery_shutdown,
+    await_acp_worker_prime_for_look, deliver_one_target, enqueue_async_delivery,
+    enqueue_sync_delivery, initialize_acp_target_for_startup, prompt_batch_settings,
+    wait_for_async_delivery_shutdown,
 };
 pub(in crate::relay) use self::permission_state::{
     PermissionDecisionKind, PermissionDecisionRequest, PermissionEventContext,

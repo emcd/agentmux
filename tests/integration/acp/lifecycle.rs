@@ -20,8 +20,8 @@ fn acp_send_selects_session_new_without_coder_session_id() {
         Some(1_000),
     );
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Success);
-    assert_eq!(result.outcome, ChatOutcome::Delivered);
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(result.outcome, ChatOutcome::Queued);
 
     let state_path = persisted_state_path(temporary.path(), "bravo");
     assert!(
@@ -44,7 +44,7 @@ fn acp_send_selects_session_new_without_coder_session_id() {
 }
 
 #[test]
-fn acp_sync_send_reuses_persistent_worker_across_requests() {
+fn acp_send_reuses_persistent_worker_across_requests() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions::default();
     let (config_root, log_path) = write_configuration(temporary.path(), &options);
@@ -54,10 +54,10 @@ fn acp_sync_send_reuses_persistent_worker_across_requests() {
     let second = dispatch_send(&config_root, &tmux_socket, Some(1_000));
     let (first_status, first_result) = chat_result(first);
     let (second_status, second_result) = chat_result(second);
-    assert_eq!(first_status, ChatStatus::Success);
-    assert_eq!(first_result.outcome, ChatOutcome::Delivered);
-    assert_eq!(second_status, ChatStatus::Success);
-    assert_eq!(second_result.outcome, ChatOutcome::Delivered);
+    assert_eq!(first_status, ChatStatus::Accepted);
+    assert_eq!(first_result.outcome, ChatOutcome::Queued);
+    assert_eq!(second_status, ChatStatus::Accepted);
+    assert_eq!(second_result.outcome, ChatOutcome::Queued);
 
     let requests = wait_for_request_count(log_path.as_path(), "session/prompt", 2);
     // Startup-owned ACP workers initialize once per configured ACP session
@@ -78,8 +78,8 @@ fn acp_initialize_request_uses_protocol_version_integer_and_client_version() {
         Some(1_000),
     );
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Success);
-    assert_eq!(result.outcome, ChatOutcome::Delivered);
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(result.outcome, ChatOutcome::Queued);
 
     let requests = read_request_log(log_path.as_path());
     let initialize = request_by_method(requests.as_slice(), "initialize");
@@ -109,8 +109,8 @@ fn acp_session_setup_requests_include_mcp_servers_array() {
         Some(1_000),
     );
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Success);
-    assert_eq!(result.outcome, ChatOutcome::Delivered);
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(result.outcome, ChatOutcome::Queued);
 
     let requests = read_request_log(log_path.as_path());
     let session_new = request_by_method(requests.as_slice(), "session/new");
@@ -131,8 +131,8 @@ fn acp_session_setup_requests_include_mcp_servers_array() {
         Some(1_000),
     );
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Success);
-    assert_eq!(result.outcome, ChatOutcome::Delivered);
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(result.outcome, ChatOutcome::Queued);
 
     let requests = read_request_log(log_path.as_path());
     let session_load = request_by_method(requests.as_slice(), "session/load");
@@ -155,8 +155,8 @@ fn acp_send_uses_persisted_session_id_when_config_id_is_absent() {
 
     let first = dispatch_send(&config_root, &tmux_socket, Some(1_000));
     let (first_status, first_result) = chat_result(first);
-    assert_eq!(first_status, ChatStatus::Success);
-    assert_eq!(first_result.outcome, ChatOutcome::Delivered);
+    assert_eq!(first_status, ChatStatus::Accepted);
+    assert_eq!(first_result.outcome, ChatOutcome::Queued);
 
     // After bravo's disconnect, auto-respawn rebuilds the worker using the
     // session id persisted by the first bootstrap. Wait until the respawn
@@ -200,8 +200,8 @@ fn acp_send_selects_session_load_with_configured_coder_session_id() {
         Some(1_000),
     );
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Success);
-    assert_eq!(result.outcome, ChatOutcome::Delivered);
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(result.outcome, ChatOutcome::Queued);
     let log = fs::read_to_string(log_path).expect("read ACP log");
     assert!(log.contains("\"method\":\"session/load\""), "log={log}");
     assert!(log.contains("\"sessionId\":\"sess-abc\""), "log={log}");
@@ -216,17 +216,10 @@ fn acp_load_failure_does_not_fallback_to_session_new() {
         ..AcpStubOptions::default()
     };
     let (config_root, log_path) = write_configuration(temporary.path(), &options);
-    let response = dispatch_send(
+    assert_acp_delivery_unavailable(
         &config_root,
         &temporary.path().join("tmux.sock"),
         Some(1_000),
-    );
-    let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Failure);
-    assert_eq!(result.outcome, ChatOutcome::Failed);
-    assert_eq!(
-        result.reason_code.as_deref(),
-        Some("runtime_acp_worker_unavailable")
     );
     let log = fs::read_to_string(log_path).expect("read ACP log");
     assert!(log.contains("\"method\":\"session/load\""), "log={log}");
@@ -240,17 +233,10 @@ fn acp_new_failure_returns_runtime_stage_code() {
         ..AcpStubOptions::default()
     };
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
-    let response = dispatch_send(
+    assert_acp_delivery_unavailable(
         &config_root,
         &temporary.path().join("tmux.sock"),
         Some(1_000),
-    );
-    let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Failure);
-    assert_eq!(result.outcome, ChatOutcome::Failed);
-    assert_eq!(
-        result.reason_code.as_deref(),
-        Some("runtime_acp_worker_unavailable")
     );
 }
 
@@ -263,17 +249,10 @@ fn acp_missing_load_capability_returns_canonical_failure_code_and_details() {
         ..AcpStubOptions::default()
     };
     let (config_root, log_path) = write_configuration(temporary.path(), &options);
-    let response = dispatch_send(
+    assert_acp_delivery_unavailable(
         &config_root,
         &temporary.path().join("tmux.sock"),
         Some(1_000),
-    );
-    let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Failure);
-    assert_eq!(result.outcome, ChatOutcome::Failed);
-    assert_eq!(
-        result.reason_code.as_deref(),
-        Some("runtime_acp_worker_unavailable")
     );
     let log = fs::read_to_string(log_path).expect("read ACP log");
     assert!(!log.contains("\"method\":\"session/load\""), "log={log}");
@@ -287,17 +266,10 @@ fn acp_missing_prompt_capability_returns_canonical_failure_code_and_details() {
         ..AcpStubOptions::default()
     };
     let (config_root, log_path) = write_configuration(temporary.path(), &options);
-    let response = dispatch_send(
+    assert_acp_delivery_unavailable(
         &config_root,
         &temporary.path().join("tmux.sock"),
         Some(1_000),
-    );
-    let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Failure);
-    assert_eq!(result.outcome, ChatOutcome::Failed);
-    assert_eq!(
-        result.reason_code.as_deref(),
-        Some("runtime_acp_worker_unavailable")
     );
     let log = fs::read_to_string(log_path).expect("read ACP log");
     assert!(!log.contains("\"method\":\"session/prompt\""), "log={log}");
@@ -311,22 +283,15 @@ fn acp_initialize_failure_returns_canonical_runtime_code() {
         ..AcpStubOptions::default()
     };
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
-    let response = dispatch_send(
+    assert_acp_delivery_unavailable(
         &config_root,
         &temporary.path().join("tmux.sock"),
         Some(1_000),
     );
-    let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Failure);
-    assert_eq!(result.outcome, ChatOutcome::Failed);
-    assert_eq!(
-        result.reason_code.as_deref(),
-        Some("runtime_acp_worker_unavailable")
-    );
 }
 
 #[test]
-fn acp_prompt_failure_does_not_block_sync_dispatch_ack() {
+fn acp_prompt_failure_keeps_persistent_worker_available() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions {
         fail_prompt: true,
@@ -339,19 +304,23 @@ fn acp_prompt_failure_does_not_block_sync_dispatch_ack() {
         Some(1_000),
     );
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Success);
-    assert_eq!(result.outcome, ChatOutcome::Delivered);
-    assert_eq!(
-        result
-            .details
-            .as_ref()
-            .and_then(|value| value.get("delivery_phase")),
-        Some(&Value::String("accepted_in_progress".to_string()))
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(result.outcome, ChatOutcome::Queued);
+    // A JSON-RPC prompt error is a logical failure from a still-responsive
+    // agent; the persistent worker stays available for subsequent prompts.
+    assert!(
+        wait_for_worker_state(
+            temporary.path(),
+            "bravo",
+            "available",
+            Duration::from_secs(2)
+        ),
+        "worker_state did not stay available after a prompt error"
     );
 }
 
 #[test]
-fn acp_disconnect_before_first_activity_does_not_block_sync_dispatch_ack() {
+fn acp_disconnect_before_first_activity_engages_auto_respawn() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions {
         disconnect_on_prompt: Some("before_activity".to_string()),
@@ -364,15 +333,8 @@ fn acp_disconnect_before_first_activity_does_not_block_sync_dispatch_ack() {
         Some(1_000),
     );
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Success);
-    assert_eq!(result.outcome, ChatOutcome::Delivered);
-    assert_eq!(
-        result
-            .details
-            .as_ref()
-            .and_then(|value| value.get("delivery_phase")),
-        Some(&Value::String("accepted_in_progress".to_string()))
-    );
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(result.outcome, ChatOutcome::Queued);
     // Auto-respawn pulls the worker out of `unavailable` as soon as it
     // observes the ConnectionClosed transition; assert that the worker
     // transitions through the recovery path (or settles back at available)
@@ -403,16 +365,9 @@ fn acp_disconnect_after_first_activity_preserves_accepted_response() {
         Some(1_000),
     );
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Success);
-    assert_eq!(result.outcome, ChatOutcome::Delivered);
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(result.outcome, ChatOutcome::Queued);
     assert_eq!(result.reason_code, None);
-    assert_eq!(
-        result
-            .details
-            .as_ref()
-            .and_then(|value| value.get("delivery_phase")),
-        Some(&Value::String("accepted_in_progress".to_string()))
-    );
     assert!(
         wait_for_any_worker_state(
             temporary.path(),

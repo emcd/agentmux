@@ -15,10 +15,9 @@ the only clean state.
 
 ## What Changes
 
-- `delivery_mode` is removed as an accepted field from the relay send API.
-  Any request that includes `delivery_mode` — including `delivery_mode = async`
-  — is rejected with `validation_invalid_params` and a details object
-  identifying the removed field.
+- `delivery_mode` is removed as a field from the relay send API. The relay
+  does not special-case it: with the field gone, an internally tagged
+  `RelayRequest::Chat` silently ignores it like any other unrecognised field.
 - `ChatDeliveryMode` enum is deleted. No one-variant stub is kept.
 - `delivery_mode` is removed from `RelayRequest::Chat`, `RelayResponse::Chat`,
   and `ChatRequestContext`.
@@ -31,29 +30,14 @@ the only clean state.
   receive `validation_invalid_params` rather than silent ignore.
 - `quiescence_timeout_ms` is retained as the sole async tmux quiescence knob.
 
-## Rejection Details Pattern
-
-Relay rejection SHALL use a details object to aid external-client diagnosis:
-
-```
-validation_invalid_params
-details: { field: "delivery_mode", reason: "removed; async is the only delivery mode" }
-```
-
-This follows the existing `validation_invalid_timeout_field_for_transport`
-details pattern.
-
 ## serde Implementation Note
 
 `RelayRequest` uses `#[serde(tag = "operation")]`. serde does not support
-`deny_unknown_fields` on internally tagged enum variants. Deleting the
-`delivery_mode` field alone results in silent ignore. The relay lane must
-replace the field with an explicit capture and fail-fast when present:
-
-```rust
-#[serde(default)]
-delivery_mode: Option<serde_json::Value>,
-```
+`deny_unknown_fields` on internally tagged enum variants, so deleting the
+`delivery_mode` field results in silent ignore at the relay layer. That is the
+intended behavior: the relay treats `delivery_mode` as any other unrecognised
+field. Caller-facing rejection lives at the MCP `send` surface, where
+`SendParams` gains the `extra_fields` unknown-parameter rejection.
 
 ## Lane Sequencing
 

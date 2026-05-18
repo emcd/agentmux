@@ -21,13 +21,8 @@ fn acp_send_without_startup_fails_when_worker_is_unavailable() {
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let error = dispatch_send_without_startup_result(
-        &config_root,
-        &tmux_socket,
-        Some(1_000),
-        ChatDeliveryMode::Sync,
-    )
-    .expect_err("ACP send should fail without startup worker");
+    let error = dispatch_send_without_startup_result(&config_root, &tmux_socket, Some(1_000))
+        .expect_err("ACP send should fail without startup worker");
     assert_eq!(error.code, "runtime_acp_worker_unavailable");
 }
 
@@ -60,8 +55,8 @@ fn acp_look_returns_oldest_to_newest_session_update_lines() {
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_send(&config_root, &tmux_socket, Some(1_000));
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Success);
-    assert_eq!(result.outcome, ChatOutcome::Delivered);
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(result.outcome, ChatOutcome::Queued);
 
     let look = wait_for_look(
         &config_root,
@@ -98,8 +93,8 @@ fn acp_look_enforces_bounded_retention_and_tail_selection() {
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_send(&config_root, &tmux_socket, Some(2_000));
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Success);
-    assert_eq!(result.outcome, ChatOutcome::Delivered);
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(result.outcome, ChatOutcome::Queued);
 
     let look = wait_for_look(
         &config_root,
@@ -170,8 +165,8 @@ fn acp_look_reflects_outgoing_user_prompt_before_session_updates_arrive() {
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_send(&config_root, &tmux_socket, Some(1_000));
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Success);
-    assert_eq!(result.outcome, ChatOutcome::Delivered);
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(result.outcome, ChatOutcome::Queued);
 
     let look = wait_for_look(
         &config_root,
@@ -206,8 +201,8 @@ fn acp_look_captures_updates_emitted_after_prompt_response() {
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_send(&config_root, &tmux_socket, Some(1_000));
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Success);
-    assert_eq!(result.outcome, ChatOutcome::Delivered);
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(result.outcome, ChatOutcome::Queued);
 
     let look = wait_for_look(
         &config_root,
@@ -239,8 +234,8 @@ fn acp_look_reuses_persistent_worker_without_one_shot_replay_refresh() {
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_send(&config_root, &tmux_socket, Some(1_000));
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Success);
-    assert_eq!(result.outcome, ChatOutcome::Delivered);
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(result.outcome, ChatOutcome::Queued);
 
     let look = dispatch_look(&config_root, &tmux_socket, "bravo", "bravo", Some(10));
     let snapshot = expect_acp_snapshot(look);
@@ -296,8 +291,8 @@ fn acp_look_replaces_legacy_flattened_baseline_after_structured_load() {
 
     let response = dispatch_send(&config_root, &tmux_socket, Some(1_000));
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Success);
-    assert_eq!(result.outcome, ChatOutcome::Delivered);
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(result.outcome, ChatOutcome::Queued);
 
     let snapshot = expect_acp_snapshot(dispatch_look(
         &config_root,
@@ -324,8 +319,8 @@ fn acp_look_marks_snapshot_stale_when_updates_are_stalled() {
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_send(&config_root, &tmux_socket, Some(1_000));
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Success);
-    assert_eq!(result.outcome, ChatOutcome::Delivered);
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(result.outcome, ChatOutcome::Queued);
 
     thread::sleep(Duration::from_millis(5_200));
 

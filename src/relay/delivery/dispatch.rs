@@ -40,8 +40,7 @@ use super::super::stream::{
 };
 use super::super::tmux::{inject_literal_text, inject_prompt, resolve_active_pane_target};
 use super::super::{
-    AsyncDeliveryTask, ChatOutcome, ChatResult, ChatStatus, DeliveryPayloadMode, RelayError,
-    SCHEMA_VERSION,
+    AsyncDeliveryTask, ChatOutcome, ChatResult, DeliveryPayloadMode, RelayError, SCHEMA_VERSION,
 };
 
 const PROMPT_TOKENS_MAX_ENVVAR: &str = "AGENTMUX_MAX_PROMPT_TOKENS";
@@ -601,20 +600,6 @@ fn resolve_tmux_pane_target(
             )
         }
     }
-}
-
-pub(in crate::relay) fn aggregate_chat_status(results: &[ChatResult]) -> ChatStatus {
-    let delivered = results
-        .iter()
-        .filter(|result| result.outcome == ChatOutcome::Delivered)
-        .count();
-    if delivered == results.len() {
-        return ChatStatus::Success;
-    }
-    if delivered > 0 {
-        return ChatStatus::Partial;
-    }
-    ChatStatus::Failure
 }
 
 pub(in crate::relay) fn prompt_batch_settings() -> PromptBatchSettings {

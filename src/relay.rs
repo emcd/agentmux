@@ -243,15 +243,6 @@ pub enum ChatOutcome {
     Failed,
 }
 
-/// Chat delivery behavior requested by caller.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ChatDeliveryMode {
-    Async,
-    #[default]
-    Sync,
-}
-
 /// Payload handling mode for one async delivery task.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -351,8 +342,6 @@ pub enum RelayRequest {
         targets: Vec<String>,
         broadcast: bool,
         #[serde(default)]
-        delivery_mode: ChatDeliveryMode,
-        #[serde(default)]
         quiet_window_ms: Option<u64>,
         #[serde(default)]
         quiescence_timeout_ms: Option<u64>,
@@ -417,7 +406,6 @@ pub enum RelayResponse {
         sender_session: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         sender_display_name: Option<String>,
-        delivery_mode: ChatDeliveryMode,
         status: ChatStatus,
         results: Vec<ChatResult>,
     },
@@ -482,7 +470,6 @@ pub(super) struct ChatRequestContext {
     message: String,
     targets: Vec<String>,
     broadcast: bool,
-    delivery_mode: ChatDeliveryMode,
     quiet_window_ms: Option<u64>,
     quiescence_timeout_ms: Option<u64>,
     acp_turn_timeout_ms: Option<u64>,

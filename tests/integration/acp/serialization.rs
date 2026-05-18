@@ -5,7 +5,7 @@ use tempfile::TempDir;
 use super::helpers::*;
 
 #[test]
-fn acp_result_serialization_preserves_dispatch_phase_details() {
+fn acp_result_serialization_reflects_queued_async_outcome() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions {
         stop_reason: "cancelled".to_string(),
@@ -25,10 +25,10 @@ fn acp_result_serialization_preserves_dispatch_phase_details() {
         panic!("expected array");
     };
     assert_eq!(results.len(), 1);
+    // Async dispatch records a queued per-target result with no terminal
+    // reason or phase details; those are observed later via worker state.
+    assert_eq!(results[0]["outcome"], Value::String("queued".to_string()));
     assert_eq!(results[0]["reason_code"], Value::Null);
     assert_eq!(results[0]["reason"], Value::Null);
-    assert_eq!(
-        results[0]["details"]["delivery_phase"],
-        Value::String("accepted_in_progress".to_string())
-    );
+    assert_eq!(results[0]["details"], Value::Null);
 }

@@ -8,8 +8,7 @@ use std::{
 
 use agentmux::{
     relay::{
-        ChatDeliveryMode, ChatOutcome, ChatStatus, RelayRequest, RelayResponse, handle_request,
-        serve_connection,
+        ChatOutcome, ChatStatus, RelayRequest, RelayResponse, handle_request, serve_connection,
     },
     runtime::paths::BundleRuntimePaths,
 };
@@ -174,7 +173,6 @@ fn relay_chat_routes_to_connected_ui_stream_with_event_frames() {
             message: "hello ui".to_string(),
             targets: vec!["user@GLOBAL".to_string()],
             broadcast: false,
-            delivery_mode: ChatDeliveryMode::Sync,
             quiet_window_ms: None,
             quiescence_timeout_ms: Some(500),
             acp_turn_timeout_ms: None,
@@ -188,7 +186,7 @@ fn relay_chat_routes_to_connected_ui_stream_with_event_frames() {
         panic!("expected chat response");
     };
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].outcome, ChatOutcome::Delivered);
+    assert_eq!(results[0].outcome, ChatOutcome::Queued);
 
     let first_event = read_json(&mut reader);
     let second_event = read_json(&mut reader);
@@ -282,7 +280,6 @@ fn relay_chat_waits_for_ui_reconnect_before_delivery() {
         (ack, first_event, second_event, third_event)
     });
 
-    let start = Instant::now();
     let response = dispatch_request(
         RelayRequest::Chat {
             request_id: Some("req-2".to_string()),
@@ -290,7 +287,6 @@ fn relay_chat_waits_for_ui_reconnect_before_delivery() {
             message: "wait for reconnect".to_string(),
             targets: vec!["user@GLOBAL".to_string()],
             broadcast: false,
-            delivery_mode: ChatDeliveryMode::Sync,
             quiet_window_ms: None,
             quiescence_timeout_ms: Some(1_000),
             acp_turn_timeout_ms: None,
@@ -300,17 +296,16 @@ fn relay_chat_waits_for_ui_reconnect_before_delivery() {
         &bundle_paths.runtime_directory,
     )
     .expect("chat response");
-    assert!(
-        start.elapsed() >= Duration::from_millis(120),
-        "chat should wait for reconnect before delivery"
-    );
 
     let RelayResponse::Chat { results, .. } = response else {
         panic!("expected chat response");
     };
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].outcome, ChatOutcome::Delivered);
+    assert_eq!(results[0].outcome, ChatOutcome::Queued);
 
+    // Async dispatch returns immediately; the reconnect thread connects at
+    // +150ms and still receives the terminal delivered/success event, which
+    // proves the background worker held delivery until the UI reconnected.
     let (ack, first_event, second_event, third_event) =
         reconnect_thread.join().expect("join reconnect thread");
     let events = [&first_event, &second_event, &third_event];
@@ -361,7 +356,6 @@ fn relay_async_chat_emits_terminal_delivery_outcome_to_sender_ui_stream() {
             message: "verify sender completion stream".to_string(),
             targets: vec!["alpha".to_string()],
             broadcast: false,
-            delivery_mode: ChatDeliveryMode::Async,
             quiet_window_ms: None,
             quiescence_timeout_ms: Some(500),
             acp_turn_timeout_ms: None,

@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     configuration::{BundleGroupMembership, ConfigurationError, RESERVED_GROUP_ALL},
-    relay::{ChatDeliveryMode, RelayError},
+    relay::RelayError,
     runtime::{
         association::{McpAssociationOverrides, WorkspaceContext},
         error::RuntimeError,
@@ -75,17 +75,6 @@ pub(super) fn resolve_roots(
             .clone()
             .or_else(|| workspace.debug_repository_root()),
     })
-}
-
-pub(super) fn parse_delivery_mode(value: &str) -> Result<ChatDeliveryMode, RuntimeError> {
-    match value {
-        "async" => Ok(ChatDeliveryMode::Async),
-        "sync" => Ok(ChatDeliveryMode::Sync),
-        _ => Err(RuntimeError::validation(
-            "validation_invalid_delivery_mode",
-            format!("unsupported delivery mode '{value}'; expected async or sync"),
-        )),
-    }
 }
 
 pub(super) fn parse_positive_u64(

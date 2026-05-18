@@ -49,7 +49,6 @@ pub(super) fn run_agentmux_send(arguments: &[String]) -> Result<(), RuntimeError
             message: parsed.message.clone(),
             targets: parsed.targets.clone(),
             broadcast: parsed.broadcast,
-            delivery_mode: parsed.delivery_mode,
             quiet_window_ms: None,
             quiescence_timeout_ms: parsed.quiescence_timeout_ms,
             acp_turn_timeout_ms: parsed.acp_turn_timeout_ms,
@@ -63,7 +62,6 @@ pub(super) fn run_agentmux_send(arguments: &[String]) -> Result<(), RuntimeError
             request_id,
             sender_session,
             sender_display_name,
-            delivery_mode,
             status,
             results,
         } => json!({
@@ -72,7 +70,6 @@ pub(super) fn run_agentmux_send(arguments: &[String]) -> Result<(), RuntimeError
             "request_id": request_id,
             "sender_session": sender_session,
             "sender_display_name": sender_display_name,
-            "delivery_mode": delivery_mode,
             "status": status,
             "results": results,
         }),
@@ -93,9 +90,8 @@ pub(super) fn run_agentmux_send(arguments: &[String]) -> Result<(), RuntimeError
         );
     } else {
         println!(
-            "bundle={} mode={:?} status={}",
+            "bundle={} status={}",
             payload["bundle_name"].as_str().unwrap_or_default(),
-            parsed.delivery_mode,
             payload["status"].as_str().unwrap_or_default(),
         );
         if let Some(results) = payload["results"].as_array() {
@@ -120,7 +116,6 @@ fn parse_send_arguments(arguments: &[String]) -> Result<SendArguments, RuntimeEr
     let mut targets = Vec::<String>::new();
     let mut broadcast = false;
     let mut message = None;
-    let mut delivery_mode = crate::relay::ChatDeliveryMode::Async;
     let mut quiescence_timeout_ms = None;
     let mut acp_turn_timeout_ms = None;
     let mut output_json = false;
@@ -145,10 +140,6 @@ fn parse_send_arguments(arguments: &[String]) -> Result<SendArguments, RuntimeEr
             "--target" => targets.push(shared::take_value(arguments, &mut index, "--target")?),
             "--broadcast" => broadcast = true,
             "--message" => message = Some(shared::take_value(arguments, &mut index, "--message")?),
-            "--delivery-mode" => {
-                let value = shared::take_value(arguments, &mut index, "--delivery-mode")?;
-                delivery_mode = shared::parse_delivery_mode(value.as_str())?;
-            }
             "--quiescence-timeout-ms" => {
                 let value = shared::take_value(arguments, &mut index, "--quiescence-timeout-ms")?;
                 quiescence_timeout_ms = Some(shared::parse_positive_u64(
@@ -192,7 +183,6 @@ fn parse_send_arguments(arguments: &[String]) -> Result<SendArguments, RuntimeEr
         message,
         targets,
         broadcast,
-        delivery_mode,
         quiescence_timeout_ms,
         acp_turn_timeout_ms,
         output_json,
@@ -344,6 +334,6 @@ fn validate_send_targets(arguments: &SendArguments) -> Result<(), RuntimeError> 
 
 pub(super) fn print_send_help() {
     println!(
-        "Usage: agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--quiescence-timeout-ms MS] [--acp-turn-timeout-ms MS] [--request-id ID] [--bundle NAME] [--as-session NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--quiescence-timeout-ms MS] [--acp-turn-timeout-ms MS] [--request-id ID] [--bundle NAME] [--as-session NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }

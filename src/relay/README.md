@@ -29,7 +29,7 @@ types in `src/relay.rs`.
   - tmux/process adapters used by delivery and look paths.
 - `delivery/`
   - transport-specific delivery decomposition:
-  - `dispatch.rs`: per-target dispatch + status aggregation.
+  - `dispatch.rs`: per-target async dispatch and delivery task enqueue.
   - `async_worker.rs`: async queue worker behavior.
   - `acp_client.rs`, `acp_delivery.rs`, `acp_state.rs`: ACP lifecycle,
     prompt flow, and snapshot persistence helpers.
@@ -38,7 +38,10 @@ types in `src/relay.rs`.
 
 ## Runtime Behavior Notes
 
-- ACP sync delivery supports `acp_turn_timeout_ms`; tmux delivery uses
+- Chat delivery is async-only; `delivery_mode` is no longer part of the relay
+  send API. With the field removed, an internally tagged request silently
+  ignores it like any other unrecognised field.
+- ACP delivery supports `acp_turn_timeout_ms`; tmux delivery uses
   `quiescence_timeout_ms`.
 - Pre-hello idle sockets are reaped in host connection workers to prevent
   starvation (`AGENTMUX_RELAY_PRE_HELLO_IDLE_TIMEOUT_MS` override).

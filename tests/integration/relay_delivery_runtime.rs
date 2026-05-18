@@ -7,7 +7,7 @@ use std::{
 };
 
 use agentmux::relay::{
-    ChatDeliveryMode, ChatOutcome, ChatStatus, ListedSessionTransport, RelayRequest, RelayResponse,
+    ChatOutcome, ChatStatus, ListedSessionTransport, RelayRequest, RelayResponse,
     RelayStreamSession, request_relay,
 };
 use tempfile::TempDir;
@@ -99,7 +99,6 @@ async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
             message: "queued async message".to_string(),
             targets: vec!["alpha".to_string()],
             broadcast: false,
-            delivery_mode: ChatDeliveryMode::Async,
             quiet_window_ms: None,
             quiescence_timeout_ms: None,
             acp_turn_timeout_ms: None,
@@ -107,15 +106,11 @@ async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
     )
     .expect("queue async request");
     let RelayResponse::Chat {
-        status,
-        results,
-        delivery_mode,
-        ..
+        status, results, ..
     } = chat_response
     else {
         panic!("expected chat response");
     };
-    assert_eq!(delivery_mode, ChatDeliveryMode::Async);
     assert_eq!(status, ChatStatus::Accepted);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].outcome, ChatOutcome::Queued);
@@ -490,7 +485,7 @@ async fn relay_reaps_pre_hello_idle_connections_and_recovers_worker_capacity() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn relay_sync_delivery_sends_submit_in_separate_tmux_command() {
+async fn relay_delivery_sends_submit_in_separate_tmux_command() {
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
     let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
@@ -523,7 +518,6 @@ async fn relay_sync_delivery_sends_submit_in_separate_tmux_command() {
             message: "A".repeat(6_000),
             targets: vec!["alpha".to_string()],
             broadcast: false,
-            delivery_mode: ChatDeliveryMode::Sync,
             quiet_window_ms: Some(50),
             quiescence_timeout_ms: Some(2_000),
             acp_turn_timeout_ms: None,
@@ -536,9 +530,27 @@ async fn relay_sync_delivery_sends_submit_in_separate_tmux_command() {
     else {
         panic!("expected chat response");
     };
-    assert_eq!(status, ChatStatus::Success);
+    assert_eq!(status, ChatStatus::Accepted);
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].outcome, ChatOutcome::Delivered);
+    assert_eq!(results[0].outcome, ChatOutcome::Queued);
+
+    // Async delivery runs in a background worker; wait for the fake tmux log
+    // to record the trailing Enter send-keys before reaping the relay so the
+    // paste-buffer command sequence is fully observable.
+    let delivery_deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if fs::read_to_string(&log_file)
+            .map(|log| log.contains("send-keys -t %1 Enter"))
+            .unwrap_or(false)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < delivery_deadline,
+            "async delivery did not complete within timeout"
+        );
+        sleep(Duration::from_millis(20)).await;
+    }
 
     child.start_kill().expect("kill relay");
     let _ = child.wait().await;
@@ -654,7 +666,6 @@ async fn relay_async_delivery_does_not_inject_while_pane_in_mode() {
             message: "interaction marker".to_string(),
             targets: vec!["alpha".to_string()],
             broadcast: false,
-            delivery_mode: ChatDeliveryMode::Async,
             quiet_window_ms: Some(50),
             quiescence_timeout_ms: Some(250),
             acp_turn_timeout_ms: None,

@@ -1,10 +1,6 @@
-use std::{
-    thread,
-    time::{Duration, Instant},
-};
+use std::time::Duration;
 
 use agentmux::relay::{ChatOutcome, ChatStatus, RelayResponse};
-use serde_json::Value;
 use tempfile::TempDir;
 
 use super::helpers::*;
@@ -20,33 +16,24 @@ fn acp_worker_state_transitions_busy_then_available() {
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let config_root_for_thread = config_root.clone();
-    let tmux_socket_for_thread = tmux_socket.clone();
-    let handle = thread::spawn(move || {
-        dispatch_send(
-            &config_root_for_thread,
-            &tmux_socket_for_thread,
-            Some(2_000),
-        )
-    });
-
-    let observed_busy =
-        wait_for_worker_state(temporary.path(), "bravo", "busy", Duration::from_secs(2));
-    assert!(
-        observed_busy,
-        "expected worker_state=busy before completion"
-    );
-
-    let response = handle.join().expect("join send thread");
+    let response = dispatch_send(&config_root, &tmux_socket, Some(2_000));
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Success);
-    assert_eq!(result.outcome, ChatOutcome::Delivered);
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(result.outcome, ChatOutcome::Queued);
+
+    // dispatch_send returns once the worker picks up the queued prompt; with a
+    // 1s prompt delay the worker is mid-turn and must report busy, then
+    // converge back to available once the turn completes.
+    assert!(
+        wait_for_worker_state(temporary.path(), "bravo", "busy", Duration::from_secs(2)),
+        "expected worker_state=busy while the ACP turn is in flight"
+    );
     assert!(
         wait_for_worker_state(
             temporary.path(),
             "bravo",
             "available",
-            Duration::from_secs(2)
+            Duration::from_secs(3)
         ),
         "worker_state did not converge to available"
     );
@@ -63,29 +50,14 @@ fn acp_request_permission_keeps_worker_busy_while_pending_decision() {
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let config_root_for_thread = config_root.clone();
-    let tmux_socket_for_thread = tmux_socket.clone();
-    let handle = thread::spawn(move || {
-        dispatch_send(&config_root_for_thread, &tmux_socket_for_thread, Some(100))
-    });
-
-    let observed_busy =
-        wait_for_worker_state(temporary.path(), "bravo", "busy", Duration::from_secs(2));
-    assert!(
-        observed_busy,
-        "expected worker_state=busy while ACP requested permission"
-    );
-
-    let response = handle.join().expect("join send thread");
+    let response = dispatch_send(&config_root, &tmux_socket, Some(100));
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Success);
-    assert_eq!(result.outcome, ChatOutcome::Delivered);
-    assert_eq!(
-        result
-            .details
-            .as_ref()
-            .and_then(|value| value.get("delivery_phase")),
-        Some(&Value::String("accepted_in_progress".to_string()))
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(result.outcome, ChatOutcome::Queued);
+
+    assert!(
+        wait_for_worker_state(temporary.path(), "bravo", "busy", Duration::from_secs(2)),
+        "expected worker_state=busy while ACP requested permission"
     );
     assert!(
         !wait_for_worker_state(
@@ -121,15 +93,8 @@ fn acp_worker_state_stays_available_after_protocol_error() {
         Some(1_000),
     );
     let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Success);
-    assert_eq!(result.outcome, ChatOutcome::Delivered);
-    assert_eq!(
-        result
-            .details
-            .as_ref()
-            .and_then(|value| value.get("delivery_phase")),
-        Some(&Value::String("accepted_in_progress".to_string()))
-    );
+    assert_eq!(status, ChatStatus::Accepted);
+    assert_eq!(result.outcome, ChatOutcome::Queued);
     assert!(
         wait_for_worker_state(
             temporary.path(),
@@ -150,22 +115,6 @@ fn acp_worker_state_stays_available_after_protocol_error() {
     );
 }
 
-fn wait_for_worker_state(
-    root: &std::path::Path,
-    target_session: &str,
-    expected: &str,
-    timeout: Duration,
-) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if read_worker_state(root, target_session).as_deref() == Some(expected) {
-            return true;
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-    false
-}
-
 #[test]
 fn acp_async_queue_overflow_returns_runtime_queue_full() {
     let temporary = TempDir::new().expect("temporary");
@@ -178,12 +127,7 @@ fn acp_async_queue_overflow_returns_runtime_queue_full() {
 
     let mut overflow_response = None::<RelayResponse>;
     for _ in 0..70 {
-        let response = dispatch_send_with_mode_result(
-            &config_root,
-            &tmux_socket,
-            Some(2_000),
-            ChatDeliveryMode::Async,
-        );
+        let response = dispatch_send_result(&config_root, &tmux_socket, Some(2_000));
         match response {
             Ok(response) => {
                 if let RelayResponse::Error { error } = &response

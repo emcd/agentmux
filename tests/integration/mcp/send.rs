@@ -167,7 +167,6 @@ async fn send_returns_partial_and_forwards_sender_session() {
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
                     "sender_session": request.get("sender_session").cloned().unwrap_or(Value::Null),
                     "sender_display_name": "Alpha",
-                    "delivery_mode": request.get("delivery_mode").cloned().unwrap_or(Value::Null),
                     "status": "partial",
                     "results": [
                         {
@@ -212,7 +211,6 @@ async fn send_returns_partial_and_forwards_sender_session() {
     assert_eq!(payload["status"], "partial");
     assert_eq!(payload["sender_session"], SENDER_SESSION);
     assert_eq!(payload["sender_display_name"], "Alpha");
-    assert_eq!(payload["delivery_mode"], "async");
     assert_eq!(payload["results"][1]["outcome"], "timeout");
     assert_eq!(
         payload["results"][1]["reason"],
@@ -224,11 +222,10 @@ async fn send_returns_partial_and_forwards_sender_session() {
     assert_eq!(relay_requests[0]["sender_session"], SENDER_SESSION);
     assert_eq!(relay_requests[0]["targets"][0], "bravo");
     assert_eq!(relay_requests[0]["targets"][1], "charlie");
-    assert_eq!(relay_requests[0]["delivery_mode"], "async");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn send_forwards_sync_mode_and_timeout_override() {
+async fn send_forwards_quiescence_timeout_override() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -240,7 +237,6 @@ async fn send_forwards_sync_mode_and_timeout_override() {
                     "bundle_name": BUNDLE_NAME,
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
                     "sender_session": request.get("sender_session").cloned().unwrap_or(Value::Null),
-                    "delivery_mode": request.get("delivery_mode").cloned().unwrap_or(Value::Null),
                     "status": "success",
                     "results": [],
                 }),
@@ -264,20 +260,14 @@ async fn send_forwards_sync_mode_and_timeout_override() {
     );
     arguments.insert("broadcast".to_string(), Value::Bool(false));
     arguments.insert(
-        "delivery_mode".to_string(),
-        Value::String("sync".to_string()),
-    );
-    arguments.insert(
         "quiescence_timeout_ms".to_string(),
         Value::Number(1234.into()),
     );
     let response = harness.call_tool(2, "send", arguments).await;
-    let payload = decode_tool_payload(&response);
-    assert_eq!(payload["delivery_mode"], "sync");
+    decode_tool_payload(&response);
 
     let relay_requests = relay.requests_for_operation("chat");
     assert_eq!(relay_requests.len(), 1);
-    assert_eq!(relay_requests[0]["delivery_mode"], "sync");
     assert_eq!(relay_requests[0]["quiescence_timeout_ms"], 1234);
 }
 
@@ -294,7 +284,6 @@ async fn send_forwards_acp_turn_timeout_override() {
                     "bundle_name": BUNDLE_NAME,
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
                     "sender_session": request.get("sender_session").cloned().unwrap_or(Value::Null),
-                    "delivery_mode": request.get("delivery_mode").cloned().unwrap_or(Value::Null),
                     "status": "success",
                     "results": [],
                 }),
@@ -317,18 +306,12 @@ async fn send_forwards_acp_turn_timeout_override() {
         Value::Array(vec![Value::String("bravo".to_string())]),
     );
     arguments.insert("broadcast".to_string(), Value::Bool(false));
-    arguments.insert(
-        "delivery_mode".to_string(),
-        Value::String("sync".to_string()),
-    );
     arguments.insert("acp_turn_timeout_ms".to_string(), Value::Number(987.into()));
     let response = harness.call_tool(2, "send", arguments).await;
-    let payload = decode_tool_payload(&response);
-    assert_eq!(payload["delivery_mode"], "sync");
+    decode_tool_payload(&response);
 
     let relay_requests = relay.requests_for_operation("chat");
     assert_eq!(relay_requests.len(), 1);
-    assert_eq!(relay_requests[0]["delivery_mode"], "sync");
     assert_eq!(relay_requests[0]["acp_turn_timeout_ms"], 987);
 }
 

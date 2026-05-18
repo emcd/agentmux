@@ -1,9 +1,7 @@
 use std::time::Duration;
 
 use agentmux::{
-    relay::{
-        ChatDeliveryMode, ChatOutcome, ChatStatus, RelayRequest, RelayResponse, handle_request,
-    },
+    relay::{ChatOutcome, ChatStatus, RelayRequest, RelayResponse, handle_request},
     runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory},
 };
 use tempfile::TempDir;
@@ -50,7 +48,6 @@ fn relay_chat_async_processes_repeated_target_messages_in_fifo_order() {
             message: first_marker.to_string(),
             targets: vec!["bravo".to_string()],
             broadcast: false,
-            delivery_mode: ChatDeliveryMode::Async,
             quiet_window_ms: Some(70),
             quiescence_timeout_ms: None,
             acp_turn_timeout_ms: None,
@@ -79,7 +76,6 @@ fn relay_chat_async_processes_repeated_target_messages_in_fifo_order() {
             message: second_marker.to_string(),
             targets: vec!["bravo".to_string()],
             broadcast: false,
-            delivery_mode: ChatDeliveryMode::Async,
             quiet_window_ms: Some(70),
             quiescence_timeout_ms: None,
             acp_turn_timeout_ms: None,
@@ -165,7 +161,6 @@ fn relay_chat_async_without_timeout_waits_for_late_quiescence() {
             message: marker.to_string(),
             targets: vec!["bravo".to_string()],
             broadcast: false,
-            delivery_mode: ChatDeliveryMode::Async,
             quiet_window_ms: Some(120),
             quiescence_timeout_ms: None,
             acp_turn_timeout_ms: None,
@@ -232,7 +227,6 @@ fn relay_chat_async_timeout_override_stops_wait_before_late_quiescence() {
             message: marker.to_string(),
             targets: vec!["bravo".to_string()],
             broadcast: false,
-            delivery_mode: ChatDeliveryMode::Async,
             quiet_window_ms: Some(120),
             quiescence_timeout_ms: Some(350),
             acp_turn_timeout_ms: None,
