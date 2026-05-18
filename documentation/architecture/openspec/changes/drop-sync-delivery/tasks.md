@@ -6,9 +6,11 @@
 - [ ] 1.2 Delete `ChatDeliveryMode` enum from `src/relay.rs`.
 - [ ] 1.3 Remove `delivery_mode` from `RelayResponse::Chat` and
   `ChatRequestContext`.
-- [ ] 1.4 Remove sync delivery loop: `enqueue_sync_delivery`,
-  `QuiescenceOptions::for_sync`, `aggregate_chat_status`, and the
-  `ChatDeliveryMode::Sync` match arm from `handlers.rs`.
+- [ ] 1.4 Remove sync delivery loop from `handle_chat`: delete the
+  `ChatDeliveryMode::Sync` match arm and `aggregate_chat_status`
+  (`dispatch.rs:606`, dead once the sync arm is gone). Do NOT remove
+  `enqueue_sync_delivery` or `QuiescenceOptions::for_sync` — both are
+  used by the raww ACP path and are out of this proposal's scope.
 - [ ] 1.5 Delete `tests/integration/relay_delivery_sync.rs`; add rejection
   regression test asserting `validation_invalid_params` when `delivery_mode`
   is present.
@@ -42,6 +44,12 @@
   from `src/commands/shared.rs`.
 - [ ] 3.3 Remove `ChatDeliveryMode::Async` construction from
   `src/tui/state/history.rs:30`.
+- [ ] 3.4 Drop `ChatStatus::{Success,Partial,Failure}` variants from
+  `src/relay.rs` and the corresponding match arms from
+  `src/tui/state/history.rs` (~line 540). These variants are no longer
+  constructed once `aggregate_chat_status` is removed; only `Accepted`
+  remains. (Relay lane intentionally left them in place to avoid a
+  cross-ownership edit of `history.rs`.)
 
 ## 4. Validation
 
