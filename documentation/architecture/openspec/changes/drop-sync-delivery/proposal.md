@@ -21,10 +21,13 @@ the only clean state.
 - `ChatDeliveryMode` enum is deleted. No one-variant stub is kept.
 - `delivery_mode` is removed from `RelayRequest::Chat`, `RelayResponse::Chat`,
   and `ChatRequestContext`.
-- The sync delivery loop (`enqueue_sync_delivery`), quiescence defaults table
+- The sync delivery loop in `handle_chat` (the `ChatDeliveryMode::Sync` match
+  arm and `aggregate_chat_status`), quiescence defaults table
   (`quiet_window_ms = 750`, `delivery_timeout_ms = 30000`), sync-specific
   scenarios, and sync response shape (`success`, `partial`, `failure`) are
-  removed.
+  removed. `enqueue_sync_delivery` and `QuiescenceOptions::for_sync` are
+  retained — they remain in use by the synchronous ACP raw-write
+  (`handle_raww`) path.
 - MCP `SendParams` gains an `extra_fields` unknown-parameter rejection pattern
   (same pattern used by `RawwParams`) so MCP callers who supply `delivery_mode`
   receive `validation_invalid_params` rather than silent ignore.
