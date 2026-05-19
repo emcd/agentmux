@@ -84,6 +84,7 @@ Use consistent tags for discoverability:
 - Recommended top-level issue types are:
     - `todos/`
     - `coordination/`
+    - `designs/` (pre-OpenSpec drafts; use `designs/<component>/` until scaffolded into `openspec/`)
     - `decisions/` (optional for durable rationale notes)
 - Example component names include `engine`, `mcp`, `tui`, `web`, `handbook`, and `data-models`.
 - This project should define and document its specific component-folder conventions in the **Project Notes** section.
@@ -163,6 +164,7 @@ Use `openspec/AGENTS.md` to learn:
 
 - Standardized top-level notebook folders for this project are:
   - `coordination/`
+  - `designs/`
   - `issues/`
   - `todos/`
   - `ideas/`
@@ -241,12 +243,14 @@ Use a coordinator-plus-specialists model:
 - Specialists should not merge OpenSpec proposal files directly into `master`
   for review visibility. Coordinator owns merges into `master`.
 
-## Pre-MVP Defaults
+## Alpha Defaults
 
-- This project is **pre-MVP**. Do **not** preserve backwards compatibility
-  unless the human developer explicitly requests it.
+- This project is **alpha software with live releases**. Do **not** preserve
+  backwards compatibility unless the human developer explicitly requests it.
 - Prefer **raising errors** (fail fast) over “graceful degradation” with
   defaults; only use silent fallbacks when explicitly requested.
+- Do not add new `-mvp` suffixes to OpenSpec change IDs. Existing archived
+  MVP-era proposal names may remain as historical artifacts.
 
 ## MCP Tool Inventory Refresh
 
