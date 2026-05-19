@@ -370,6 +370,10 @@ fn duplicate_live_hello_claim_is_rejected_with_identity_conflict() {
     second_handle.join().expect("join second relay thread");
 }
 
+// SHUT_RD on a Unix-domain socket causes EPIPE on the peer's write only on
+// Linux. On macOS the write succeeds, so the probe correctly reports the owner
+// as live and the test assertion fails. Gate to Linux where the semantics hold.
+#[cfg(target_os = "linux")]
 #[test]
 fn stale_identity_owner_is_evicted_when_reconnecting() {
     let temporary = TempDir::new().expect("temporary directory");
