@@ -24,10 +24,6 @@ bundle member `session_id` interpretation SHALL win.
 Transport-incompatible timeout overrides SHALL fail fast with
 `validation_invalid_timeout_field_for_transport`.
 
-`send` SHALL reject any request that includes an unrecognised field with
-`validation_invalid_params`. The `delivery_mode` field is explicitly rejected
-under this rule.
-
 `send` authorization scope SHALL follow requester policy control:
 
 - `all:home`
@@ -44,12 +40,6 @@ under this rule.
   UI session id
 - **THEN** the token is interpreted as bundle member `session_id`
 
-#### Scenario: Reject delivery_mode field
-
-- **WHEN** a caller invokes `send` with a `delivery_mode` field
-- **THEN** the tool returns `validation_invalid_params`
-- **AND** does not process the request
-
 ### Requirement: Send Response Contract
 
 `send` SHALL return a response containing:
@@ -59,10 +49,9 @@ under this rule.
 - `request_id` (when provided by caller)
 - `sender_session`
 - `sender_display_name` (optional)
-- `status`
 - `results` (per-target entries)
 
-`status` SHALL be `accepted` and each per-target result SHALL include:
+Each per-target result SHALL include:
 
 - `target_session`
 - `message_id`
@@ -71,15 +60,13 @@ under this rule.
 #### Scenario: Return accepted outcome for send request
 
 - **WHEN** a caller invokes `send`
-- **THEN** the response status is `accepted`
-- **AND** per-target outcomes are `queued`
+- **THEN** per-target outcomes are `queued`
 
 #### Scenario: Return empty results for zero effective recipients
 
 - **WHEN** a caller invokes `send`
 - **AND** effective target resolution yields zero recipients
 - **THEN** the response includes `results=[]`
-- **AND** `status` is `accepted`
 
 ## REMOVED Requirements
 

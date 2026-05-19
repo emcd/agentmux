@@ -525,25 +525,6 @@ Transport-incompatible timeout flags SHALL fail fast with
 - **THEN** invocation fails with
   `validation_invalid_timeout_field_for_transport`
 
-### Requirement: CLI ACP Sync Delivery-Phase Passthrough
-
-For sync ACP sends, CLI SHALL preserve relay-authored early-success markers in
-structured output.
-
-When relay returns phase-1 acknowledgment, CLI JSON output SHALL include:
-
-- `outcome = delivered`
-- `details.delivery_phase = "accepted_in_progress"`
-- unchanged `message_id` for request tracing
-
-#### Scenario: Preserve relay delivery-phase details in CLI JSON output
-
-- **WHEN** operator invokes `agentmux send --delivery-mode sync` to ACP target
-- **AND** relay returns phase-1 acknowledgment marker
-- **THEN** CLI JSON output includes
-  `details.delivery_phase = "accepted_in_progress"`
-- **AND** preserves the same `message_id`
-
 ### Requirement: Send Session Selector Surface
 
 `agentmux send` SHALL support optional sender session selector:

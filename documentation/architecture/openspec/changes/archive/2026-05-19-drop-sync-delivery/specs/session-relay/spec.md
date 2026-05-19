@@ -39,7 +39,7 @@ wait timeout for the request.
 - **THEN** relay uses that value as the effective delivery wait timeout for the
   request
 
-### Requirement: Delivery Results Contract
+### Requirement: Delivery Results Without ACK Protocol
 
 Relay SHALL use asynchronous acceptance responses and SHALL NOT support
 synchronous completion responses.

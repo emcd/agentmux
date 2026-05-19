@@ -164,14 +164,9 @@ successful list payload.
 
 ### Requirement: Send Target Selection
 
-`send` SHALL support exactly one target mode per request:
+Send target identifiers SHALL be:
 
-- `targets` (non-empty list of canonical recipient identifiers)
-- `broadcast=true` for full bundle delivery
-
-For send explicit targets, canonical identifiers in MVP are:
-
-- bundle member `session_id`
+- bundle member session id
 - UI session id (where UI routing is supported)
 
 Configured session `name` values and display-name aliases are not canonical send
@@ -179,13 +174,6 @@ target identifiers and SHALL NOT be relay-routed.
 
 If one token matches both a bundle member `session_id` and UI session id, the
 bundle member `session_id` interpretation SHALL win.
-
-`send` SHALL additionally support optional `delivery_mode` with values:
-
-- `async`
-- `sync`
-
-If `delivery_mode` is omitted, the system SHALL default to `async`.
 
 `send` timeout override fields SHALL be transport-specific:
 
@@ -213,26 +201,6 @@ Transport-incompatible timeout overrides SHALL fail fast with
 - **WHEN** one explicit target token matches both bundle member `session_id` and
   UI session id
 - **THEN** the token is interpreted as bundle member `session_id`
-
-#### Scenario: Reject conflicting timeout override fields
-
-- **WHEN** a caller provides `quiescence_timeout_ms` and
-  `acp_turn_timeout_ms` in one request
-- **THEN** the system rejects with `validation_conflicting_timeout_fields`
-
-#### Scenario: Reject tmux timeout field on ACP send target
-
-- **WHEN** request resolves target transport as ACP
-- **AND** caller provides `quiescence_timeout_ms`
-- **THEN** the system rejects with
-  `validation_invalid_timeout_field_for_transport`
-
-#### Scenario: Reject ACP timeout field on tmux send target
-
-- **WHEN** request resolves target transport as tmux
-- **AND** caller provides `acp_turn_timeout_ms`
-- **THEN** the system rejects with
-  `validation_invalid_timeout_field_for_transport`
 
 ### Requirement: Sender Identity Inference
 
@@ -263,45 +231,24 @@ Caller-supplied sender-like payload fields SHALL NOT override that principal.
 - `request_id` (when provided by caller)
 - `sender_session`
 - `sender_display_name` (optional)
-- `delivery_mode` (`async` or `sync`)
-- `status`
 - `results` (per-target entries)
 
-In `delivery_mode=async`, `status` SHALL be `accepted` and each per-target
-result SHALL include:
+Each per-target result SHALL include:
 
 - `target_session`
 - `message_id`
 - `outcome` = `queued`
 
-In `delivery_mode=sync`, `status` SHALL be one of `success`, `partial`, or
-`failure`, and each per-target result SHALL include:
+#### Scenario: Return accepted outcome for send request
 
-- `target_session`
-- `message_id`
-- `outcome` (`delivered`, `timeout`, or `failed`)
-- `reason` (required when outcome is not `delivered`)
-
-#### Scenario: Return accepted outcome for async request
-
-- **WHEN** a caller invokes `send` with `delivery_mode=async`
-- **THEN** the response status is `accepted`
-- **AND** per-target outcomes are `queued`
-
-#### Scenario: Return partial outcome for sync mixed delivery
-
-- **WHEN** a caller invokes `send` with `delivery_mode=sync`
-- **AND** at least one target succeeds and at least one target fails
-- **THEN** `status` is `partial`
-- **AND** each target result includes its own outcome and reason data
+- **WHEN** a caller invokes `send`
+- **THEN** per-target outcomes are `queued`
 
 #### Scenario: Return empty results for zero effective recipients
 
 - **WHEN** a caller invokes `send`
 - **AND** effective target resolution yields zero recipients
 - **THEN** the response includes `results=[]`
-- **AND** `status` is `accepted` for `delivery_mode=async`
-- **AND** `status` is `success` for `delivery_mode=sync`
 
 ### Requirement: Error Object Contract
 
@@ -493,24 +440,6 @@ MCP SHALL NOT parse or reinterpret ACP `snapshot_entries` content.
 
 - **WHEN** relay returns successful ACP look payload with `snapshot_entries = []`
 - **THEN** MCP propagates `snapshot_entries = []` unchanged
-
-### Requirement: MCP ACP Sync Delivery-Phase Passthrough
-
-For sync `send` targeting ACP transport, MCP SHALL propagate relay-authored
-phase-1 acknowledgment details without adapter mutation.
-
-When relay marks early delivery acknowledgment, MCP response SHALL preserve:
-
-- `outcome = delivered`
-- `details.delivery_phase = "accepted_in_progress"`
-- unchanged `message_id` for request tracing
-
-#### Scenario: Preserve early delivery-phase marker in MCP sync response
-
-- **WHEN** relay returns sync ACP result with
-  `details.delivery_phase = "accepted_in_progress"`
-- **THEN** MCP returns the same result fields unchanged
-- **AND** retains the same `message_id` in response payload
 
 ### Requirement: MCP List Sessions Selectors
 

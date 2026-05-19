@@ -225,16 +225,11 @@ Each envelope SHALL include:
 The system SHALL avoid injecting a message while target session output is
 actively changing.
 
-The default quiescence values for `sync` delivery SHALL be:
-
-- `quiet_window_ms = 750`
-- `delivery_timeout_ms = 30000`
-
-For `async` delivery, relay SHALL keep accepted targets pending and wait
-indefinitely for quiescence before injection.
+For async delivery, relay SHALL keep accepted targets pending and wait for
+quiescence before injection.
 
 When request-level `quiescence_timeout_ms` is provided, relay SHALL use that
-value as the wait bound for both modes.
+value as the wait bound for the delivery attempt.
 
 Request-level `quiescence_timeout_ms` SHALL map to relay's effective delivery
 wait timeout for the request.
@@ -245,31 +240,15 @@ wait timeout for the request.
   window
 - **THEN** the system injects the pending message
 
-#### Scenario: Use default quiescence values in sync mode
-
-- **WHEN** a caller requests `delivery_mode=sync`
-- **AND** does not provide quiescence configuration overrides
-- **THEN** the system uses `quiet_window_ms = 750`
-- **AND** uses `delivery_timeout_ms = 30000`
-
-#### Scenario: Time out while waiting for quiescence in sync mode
-
-- **WHEN** `delivery_mode=sync`
-- **AND** pane output keeps changing until the delivery timeout elapses
-- **THEN** the system reports target delivery failure with timeout reason
-- **AND** does not inject the message for that target
-
 #### Scenario: Continue waiting without timeout in async mode
 
-- **WHEN** `delivery_mode=async`
-- **AND** pane output continues changing beyond sync timeout thresholds
+- **WHEN** pane output continues changing
 - **THEN** the system keeps the target pending
 - **AND** attempts injection after a future quiescent window is observed
 
-#### Scenario: Apply request quiescence timeout override in async mode
+#### Scenario: Apply request quiescence timeout override
 
-- **WHEN** `delivery_mode=async`
-- **AND** request provides `quiescence_timeout_ms`
+- **WHEN** request provides `quiescence_timeout_ms`
 - **AND** no quiescent window is observed before that timeout
 - **THEN** the system drops that pending target
 - **AND** records timeout in relay diagnostics/inscriptions
@@ -294,29 +273,17 @@ patterns for users configuring agent sessions.
 
 ### Requirement: Delivery Results Without ACK Protocol
 
-The system SHALL support both asynchronous acceptance responses and
-synchronous completion responses, and SHALL NOT require accept/done
-acknowledgements.
+Relay SHALL use asynchronous acceptance responses and SHALL NOT support
+synchronous completion responses.
+
+An accepted send request SHALL return immediately with per-target `outcome =
+queued`. Relay SHALL NOT block the caller waiting for delivery completion.
 
 #### Scenario: Report accepted async delivery
 
-- **WHEN** relay accepts an `async` chat request for one or more targets
+- **WHEN** relay accepts a chat request for one or more targets
 - **THEN** the immediate result marks those targets as `queued`
 - **AND** does not wait for final delivery outcome before responding
-
-#### Scenario: Report successful sync tmux injection
-
-- **WHEN** relay processes a `sync` chat request and tmux injection succeeds for
-  a target
-- **THEN** the result marks that target as delivered to pane input
-- **AND** includes the `message_id` and target session name
-
-#### Scenario: Report failed sync tmux injection
-
-- **WHEN** relay processes a `sync` chat request and tmux injection fails for a
-  target
-- **THEN** the result marks that target as failed
-- **AND** includes a failure reason
 
 #### Scenario: Return no-op completion for zero effective targets
 
@@ -1412,45 +1379,6 @@ Mapping SHALL include:
 - **WHEN** ACP prompt turn does not complete before effective turn-wait timeout
 - **THEN** relay reports target delivery outcome `timeout`
 - **AND** sets `reason_code = acp_turn_timeout`
-
-### Requirement: ACP Sync Delivery Phase Contract
-
-For `delivery_mode=sync` and ACP targets, relay SHALL use a two-phase contract.
-
-Phase 1 (delivery acknowledgment):
-
-- relay SHALL report target `outcome=delivered` when the prompt write to ACP
-  stdin succeeds (write-success equals delivery on a local stdio pipe)
-- phase-1 response SHALL include
-  `details.delivery_phase = "accepted_in_progress"`
-- relay SHALL NOT wait for any `session/update` or other first-activity signal
-  before returning phase-1
-
-Wire-level phase tokens (`accepted_in_progress`, `accepted_dispatched`) are
-unchanged.
-
-Phase 2 (terminal completion):
-
-- terminal prompt completion SHALL drive relay-internal worker readiness state
-- phase-2 is signaled by the background reader when it receives the JSON-RPC
-  response matching the prompt request-id
-- phase-2 completion SHALL NOT retroactively mutate phase-1 sync response
-- phase-2 completion SHALL NOT be required sender-facing `send` output in MVP
-
-#### Scenario: Return delivered on prompt write success
-
-- **WHEN** sync send targets ACP session
-- **AND** relay successfully writes the prompt to ACP stdin
-- **THEN** relay returns target `outcome=delivered`
-- **AND** includes `details.delivery_phase = "accepted_in_progress"`
-- **AND** does not wait for session/update or any other activity signal
-
-#### Scenario: Fail on stdin write failure
-
-- **WHEN** sync send targets ACP session
-- **AND** ACP stdin write fails with an I/O error
-- **THEN** relay returns terminal failure outcome with `transport_unavailable`
-  error code for that target
 
 ### Requirement: ACP Terminal Readiness Tracking
 
