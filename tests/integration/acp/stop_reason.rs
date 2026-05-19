@@ -1,4 +1,4 @@
-use agentmux::relay::{ChatOutcome, ChatStatus};
+use agentmux::relay::ChatOutcome;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
@@ -17,8 +17,7 @@ fn acp_cancelled_stop_reason_is_accepted_for_async_dispatch() {
         &temporary.path().join("tmux.sock"),
         Some(1_000),
     );
-    let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Accepted);
+    let result = chat_result(response);
     assert_eq!(result.outcome, ChatOutcome::Queued);
 }
 
@@ -31,8 +30,7 @@ fn acp_turn_timeout_is_accepted_for_async_dispatch() {
     };
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"), Some(100));
-    let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Accepted);
+    let result = chat_result(response);
     assert_eq!(result.outcome, ChatOutcome::Queued);
 }
 
@@ -46,8 +44,7 @@ fn acp_coder_default_turn_timeout_is_accepted_for_async_dispatch() {
     };
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"), None);
-    let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Accepted);
+    let result = chat_result(response);
     assert_eq!(result.outcome, ChatOutcome::Queued);
 }
 
@@ -61,8 +58,7 @@ fn acp_turn_timeout_request_override_is_accepted_for_async_dispatch() {
     };
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"), Some(100));
-    let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Accepted);
+    let result = chat_result(response);
     assert_eq!(result.outcome, ChatOutcome::Queued);
 }
 
@@ -76,8 +72,7 @@ fn acp_successful_terminal_stop_reason_is_accepted_for_async_dispatch() {
         &temporary.path().join("tmux.sock"),
         Some(1_000),
     );
-    let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Accepted);
+    let result = chat_result(response);
     assert_eq!(result.outcome, ChatOutcome::Queued);
     assert_eq!(result.reason_code, None);
     assert_eq!(result.reason, None);
@@ -93,8 +88,7 @@ fn acp_first_activity_acceptance_prevents_late_turn_timeout_failure() {
     };
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"), Some(100));
-    let (status, result) = chat_result(response);
-    assert_eq!(status, ChatStatus::Accepted);
+    let result = chat_result(response);
     assert_eq!(result.outcome, ChatOutcome::Queued);
     assert_eq!(result.reason_code, None);
 }
@@ -114,9 +108,8 @@ fn acp_async_send_returns_on_dispatch_without_waiting_for_terminal_stop_reason()
         Some(5_000),
     );
     let elapsed = started_at.elapsed();
-    let (status, result) = chat_result(response);
+    let result = chat_result(response);
 
-    assert_eq!(status, ChatStatus::Accepted);
     assert_eq!(result.outcome, ChatOutcome::Queued);
     assert!(
         elapsed < Duration::from_secs(1),

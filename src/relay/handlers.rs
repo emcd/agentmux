@@ -28,12 +28,12 @@ use super::delivery::{
 use super::lifecycle::{reconcile_loaded_bundle_for_lifecycle, shutdown_bundle_runtime};
 use super::tmux::{capture_pane_tail_lines, resolve_active_pane_target};
 use super::{
-    AsyncDeliveryTask, ChatOutcome, ChatRequestContext, ChatResult, ChatStatus,
-    DeliveryPayloadMode, LifecycleBundleResult, ListedBundle, ListedBundleStartupHealth,
-    ListedBundleState, ListedSession, ListedSessionTransport, LookRequestContext,
-    PendingPermissionEntry, PermissionDecisionRequestContext, RawwRequestContext, RelayError,
-    RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION, bare_session_id,
-    canonical_session_id, load_startup_failures, relay_error,
+    AsyncDeliveryTask, ChatOutcome, ChatRequestContext, ChatResult, DeliveryPayloadMode,
+    LifecycleBundleResult, ListedBundle, ListedBundleStartupHealth, ListedBundleState,
+    ListedSession, ListedSessionTransport, LookRequestContext, PendingPermissionEntry,
+    PermissionDecisionRequestContext, RawwRequestContext, RelayError, RelayRequest, RelayResponse,
+    RequestPrincipal, SCHEMA_VERSION, bare_session_id, canonical_session_id, load_startup_failures,
+    relay_error,
 };
 
 const LOOK_LINES_DEFAULT: usize = 120;
@@ -613,8 +613,6 @@ fn handle_chat(
             details: None,
         });
     }
-    let status = ChatStatus::Accepted;
-
     let results = results
         .into_iter()
         .map(|mut result| {
@@ -632,13 +630,11 @@ fn handle_chat(
             bundle.bundle_name.as_str(),
         ),
         sender_display_name: sender.display_name.clone(),
-        status,
         results,
     };
     if let RelayResponse::Chat {
         bundle_name,
         sender_session,
-        status,
         results,
         ..
     } = &response
@@ -652,7 +648,6 @@ fn handle_chat(
             &json!({
             "bundle_name": bundle_name,
             "sender_session": sender_session,
-            "status": status,
             "result_count": results.len(),
             "delivered_count": delivered_count,
             }),

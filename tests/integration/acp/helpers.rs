@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use agentmux::relay::{ChatStatus, RelayRequest, RelayResponse, handle_request};
+use agentmux::relay::{RelayRequest, RelayResponse, handle_request};
 use serde_json::Value;
 
 fn dispatch_request(
@@ -445,8 +445,7 @@ pub(super) fn assert_acp_delivery_unavailable(
     match dispatch_send_result(config_root, tmux_socket, acp_turn_timeout_ms) {
         Err(error) => assert_eq!(error.code, "runtime_acp_worker_unavailable"),
         Ok(response) => {
-            let (status, _result) = chat_result(response);
-            assert_eq!(status, ChatStatus::Accepted);
+            let _result = chat_result(response);
             assert!(
                 wait_for_worker_state(root, "bravo", "unavailable", Duration::from_secs(3)),
                 "ACP worker did not settle unavailable after a failed startup stage"
@@ -579,13 +578,10 @@ pub(super) fn read_worker_state(root: &Path, target_session: &str) -> Option<Str
     agentmux::relay::read_acp_worker_state("party", root, target_session).map(ToString::to_string)
 }
 
-pub(super) fn chat_result(response: RelayResponse) -> (ChatStatus, agentmux::relay::ChatResult) {
-    let RelayResponse::Chat {
-        status, results, ..
-    } = response
-    else {
+pub(super) fn chat_result(response: RelayResponse) -> agentmux::relay::ChatResult {
+    let RelayResponse::Chat { results, .. } = response else {
         panic!("expected chat response");
     };
     assert_eq!(results.len(), 1);
-    (status, results.into_iter().next().expect("one result"))
+    results.into_iter().next().expect("one result")
 }

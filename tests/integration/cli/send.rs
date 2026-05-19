@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use agentmux::relay::{ChatOutcome, ChatResult, ChatStatus, RelayResponse};
+use agentmux::relay::{ChatOutcome, ChatResult, RelayResponse};
 use agentmux::runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory};
 use serde_json::Value;
 use tempfile::TempDir;
@@ -85,7 +85,6 @@ fn send_accepts_message_flag_when_piped_stdin_is_empty() {
             request_id: None,
             sender_session: "user".to_string(),
             sender_display_name: Some("Operator".to_string()),
-            status: ChatStatus::Accepted,
             results: vec![ChatResult {
                 target_session: "bravo".to_string(),
                 message_id: "msg-1".to_string(),
@@ -216,7 +215,6 @@ fn send_preserves_valid_explicit_session_in_relay_request() {
             request_id: None,
             sender_session: "user".to_string(),
             sender_display_name: Some("Alpha".to_string()),
-            status: ChatStatus::Accepted,
             results: vec![ChatResult {
                 target_session: "bravo".to_string(),
                 message_id: "msg-1".to_string(),
@@ -390,7 +388,6 @@ fn send_uses_tui_defaults_for_bundle_and_session() {
             request_id: None,
             sender_session: "user".to_string(),
             sender_display_name: Some("Operator".to_string()),
-            status: ChatStatus::Accepted,
             results: vec![ChatResult {
                 target_session: "bravo".to_string(),
                 message_id: "msg-1".to_string(),

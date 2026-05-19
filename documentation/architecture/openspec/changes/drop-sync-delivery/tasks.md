@@ -47,7 +47,7 @@
   from `src/commands/shared.rs`.
 - [x] 3.3 Remove `ChatDeliveryMode::Async` construction from
   `src/tui/state/history.rs`.
-- [ ] 3.4 Remove `ChatStatus` entirely: delete the enum from `src/relay.rs`,
+- [x] 3.4 Remove `ChatStatus` entirely: delete the enum from `src/relay.rs`,
   drop the `status` field from `RelayResponse::Chat`, strip `status` from
   `handle_chat` in `handlers.rs`, from the MCP send response JSON and
   inscription, and from the CLI send output; fix the 5 stale sync-era test

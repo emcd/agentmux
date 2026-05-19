@@ -635,7 +635,6 @@ async fn mcp_auto_discovers_association_from_non_git_cwd() {
                     "bundle_name": "relay",
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
                     "sender_session": request.get("sender_session").cloned().unwrap_or(Value::Null),
-                    "status": "success",
                     "results": [{
                         "target_session": "bravo",
                         "message_id": "msg-1",
@@ -676,7 +675,6 @@ async fn mcp_auto_discovers_association_from_non_git_cwd() {
     let response = harness.call_tool(2, "send", arguments).await;
     let payload = decode_tool_payload(&response);
     assert_eq!(payload["sender_session"], "relay");
-    assert_eq!(payload["status"], "success");
 
     let chat_requests = relay.requests_for_operation("chat");
     assert_eq!(chat_requests.len(), 1);
@@ -710,7 +708,6 @@ async fn mcp_falls_back_to_directory_match_when_auto_sender_is_not_member() {
                     "bundle_name": "master",
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
                     "sender_session": request.get("sender_session").cloned().unwrap_or(Value::Null),
-                    "status": "success",
                     "results": [{
                         "target_session": "bravo",
                         "message_id": "msg-1",
@@ -751,7 +748,6 @@ async fn mcp_falls_back_to_directory_match_when_auto_sender_is_not_member() {
     let response = harness.call_tool(2, "send", arguments).await;
     let payload = decode_tool_payload(&response);
     assert_eq!(payload["sender_session"], "coordinator");
-    assert_eq!(payload["status"], "success");
 
     let chat_requests = relay.requests_for_operation("chat");
     assert_eq!(chat_requests.len(), 1);

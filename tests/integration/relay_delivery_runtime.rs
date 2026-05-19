@@ -7,8 +7,8 @@ use std::{
 };
 
 use agentmux::relay::{
-    ChatOutcome, ChatStatus, ListedSessionTransport, RelayRequest, RelayResponse,
-    RelayStreamSession, request_relay,
+    ChatOutcome, ListedSessionTransport, RelayRequest, RelayResponse, RelayStreamSession,
+    request_relay,
 };
 use tempfile::TempDir;
 use tokio::time::{sleep, timeout};
@@ -105,13 +105,9 @@ async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
         },
     )
     .expect("queue async request");
-    let RelayResponse::Chat {
-        status, results, ..
-    } = chat_response
-    else {
+    let RelayResponse::Chat { results, .. } = chat_response else {
         panic!("expected chat response");
     };
-    assert_eq!(status, ChatStatus::Accepted);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].outcome, ChatOutcome::Queued);
 
@@ -524,13 +520,9 @@ async fn relay_delivery_sends_submit_in_separate_tmux_command() {
         },
     )
     .expect("chat request should succeed");
-    let RelayResponse::Chat {
-        status, results, ..
-    } = response
-    else {
+    let RelayResponse::Chat { results, .. } = response else {
         panic!("expected chat response");
     };
-    assert_eq!(status, ChatStatus::Accepted);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].outcome, ChatOutcome::Queued);
 
@@ -672,13 +664,9 @@ async fn relay_async_delivery_does_not_inject_while_pane_in_mode() {
         },
     )
     .expect("chat request should complete");
-    let RelayResponse::Chat {
-        status, results, ..
-    } = response
-    else {
+    let RelayResponse::Chat { results, .. } = response else {
         panic!("expected chat response");
     };
-    assert_eq!(status, ChatStatus::Accepted);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].outcome, ChatOutcome::Queued);
 

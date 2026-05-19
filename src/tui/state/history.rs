@@ -1,8 +1,6 @@
 use std::collections::{HashSet, VecDeque};
 
-use crate::relay::{
-    ChatOutcome, ChatResult, ChatStatus, RelayRequest, RelayResponse, RelayStreamEvent,
-};
+use crate::relay::{ChatOutcome, ChatResult, RelayRequest, RelayResponse, RelayStreamEvent};
 use crate::runtime::error::RuntimeError;
 
 use super::{
@@ -31,9 +29,7 @@ impl AppState {
             acp_turn_timeout_ms: None,
         })?;
         match response {
-            RelayResponse::Chat {
-                status, results, ..
-            } => {
+            RelayResponse::Chat { results, .. } => {
                 let history_targets = results
                     .iter()
                     .map(|result| result.target_session.clone())
@@ -41,14 +37,10 @@ impl AppState {
                 if !history_targets.is_empty() {
                     self.push_outgoing_chat_history(&history_targets, message_body.as_str());
                 }
-                self.record_chat_events(&status, &results);
+                self.record_chat_events(&results);
                 self.push_status(
                     None,
-                    format!(
-                        "send accepted status={} pending={}",
-                        render_chat_status(&status),
-                        self.pending_deliveries_count()
-                    ),
+                    format!("send accepted pending={}", self.pending_deliveries_count()),
                 );
                 self.clear_compose_fields();
                 self.relay_stream_poll_error_reported = false;
@@ -176,7 +168,7 @@ impl AppState {
         true
     }
 
-    pub(super) fn record_chat_events(&mut self, status: &ChatStatus, results: &[ChatResult]) {
+    pub(super) fn record_chat_events(&mut self, results: &[ChatResult]) {
         let mut accepted_count = 0usize;
         for result in results {
             match result.outcome {
@@ -197,8 +189,7 @@ impl AppState {
         }
 
         self.push_event(format!(
-            "send status={} targets={} accepted={} pending={}",
-            render_chat_status(status),
+            "send targets={} accepted={} pending={}",
             results.len(),
             accepted_count,
             self.pending_deliveries_count()
@@ -530,15 +521,6 @@ impl AppState {
         self.pending_permissions.remove(index);
         self.ensure_pending_permission_selection();
         true
-    }
-}
-
-fn render_chat_status(status: &ChatStatus) -> &'static str {
-    match status {
-        ChatStatus::Accepted => "accepted",
-        ChatStatus::Success => "success",
-        ChatStatus::Partial => "partial",
-        ChatStatus::Failure => "failure",
     }
 }
 

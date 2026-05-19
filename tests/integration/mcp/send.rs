@@ -154,77 +154,6 @@ async fn send_rejects_conflicting_timeout_fields_before_relay_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn send_returns_partial_and_forwards_sender_session() {
-    let runtime = TestRuntime::create();
-    let relay = FakeRelay::start(
-        runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
-                Some("chat") => json!({
-                    "kind": "chat",
-                    "schema_version": "1",
-                    "bundle_name": BUNDLE_NAME,
-                    "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
-                    "sender_session": request.get("sender_session").cloned().unwrap_or(Value::Null),
-                    "sender_display_name": "Alpha",
-                    "status": "partial",
-                    "results": [
-                        {
-                            "target_session": "bravo",
-                            "message_id": "msg-1",
-                            "outcome": "delivered",
-                        },
-                        {
-                            "target_session": "charlie",
-                            "message_id": "msg-2",
-                            "outcome": "timeout",
-                            "reason": "delivery_quiescence_timeout",
-                        }
-                    ],
-                }),
-                _ => json!({
-                    "kind": "error",
-                    "error": {
-                        "code": "internal_unexpected_failure",
-                        "message": "unexpected operation",
-                    },
-                }),
-            },
-        ),
-    );
-    let mut harness = McpHarness::spawn(&runtime).await;
-
-    let mut arguments = Map::new();
-    arguments.insert("message".to_string(), Value::String("hello".to_string()));
-    arguments.insert("request_id".to_string(), Value::String("req-7".to_string()));
-    arguments.insert(
-        "targets".to_string(),
-        Value::Array(vec![
-            Value::String("bravo".to_string()),
-            Value::String("charlie".to_string()),
-        ]),
-    );
-    arguments.insert("broadcast".to_string(), Value::Bool(false));
-    let response = harness.call_tool(2, "send", arguments).await;
-    let payload = decode_tool_payload(&response);
-
-    assert_eq!(payload["status"], "partial");
-    assert_eq!(payload["sender_session"], SENDER_SESSION);
-    assert_eq!(payload["sender_display_name"], "Alpha");
-    assert_eq!(payload["results"][1]["outcome"], "timeout");
-    assert_eq!(
-        payload["results"][1]["reason"],
-        "delivery_quiescence_timeout"
-    );
-
-    let relay_requests = relay.requests_for_operation("chat");
-    assert_eq!(relay_requests.len(), 1);
-    assert_eq!(relay_requests[0]["sender_session"], SENDER_SESSION);
-    assert_eq!(relay_requests[0]["targets"][0], "bravo");
-    assert_eq!(relay_requests[0]["targets"][1], "charlie");
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn send_forwards_quiescence_timeout_override() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
@@ -237,7 +166,6 @@ async fn send_forwards_quiescence_timeout_override() {
                     "bundle_name": BUNDLE_NAME,
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
                     "sender_session": request.get("sender_session").cloned().unwrap_or(Value::Null),
-                    "status": "success",
                     "results": [],
                 }),
                 _ => json!({
@@ -284,7 +212,6 @@ async fn send_forwards_acp_turn_timeout_override() {
                     "bundle_name": BUNDLE_NAME,
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
                     "sender_session": request.get("sender_session").cloned().unwrap_or(Value::Null),
-                    "status": "success",
                     "results": [],
                 }),
                 _ => json!({

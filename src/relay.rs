@@ -222,16 +222,6 @@ pub struct BundleStartupReport {
     pub failed_startups: Vec<StartupFailureRecord>,
 }
 
-/// Aggregate delivery status for `chat`.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ChatStatus {
-    Accepted,
-    Success,
-    Partial,
-    Failure,
-}
-
 /// Per-target delivery outcome for `chat`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -406,7 +396,6 @@ pub enum RelayResponse {
         sender_session: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         sender_display_name: Option<String>,
-        status: ChatStatus,
         results: Vec<ChatResult>,
     },
     Look {

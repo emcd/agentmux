@@ -62,7 +62,6 @@ pub(super) fn run_agentmux_send(arguments: &[String]) -> Result<(), RuntimeError
             request_id,
             sender_session,
             sender_display_name,
-            status,
             results,
         } => json!({
             "schema_version": schema_version,
@@ -70,7 +69,6 @@ pub(super) fn run_agentmux_send(arguments: &[String]) -> Result<(), RuntimeError
             "request_id": request_id,
             "sender_session": sender_session,
             "sender_display_name": sender_display_name,
-            "status": status,
             "results": results,
         }),
         RelayResponse::Error { error } => return Err(shared::map_relay_error(error)),
@@ -90,9 +88,8 @@ pub(super) fn run_agentmux_send(arguments: &[String]) -> Result<(), RuntimeError
         );
     } else {
         println!(
-            "bundle={} status={}",
+            "bundle={}",
             payload["bundle_name"].as_str().unwrap_or_default(),
-            payload["status"].as_str().unwrap_or_default(),
         );
         if let Some(results) = payload["results"].as_array() {
             for result in results {

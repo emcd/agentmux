@@ -508,13 +508,9 @@ fn chat_async_returns_accepted_and_queued_outcome() {
     )
     .expect("chat response");
 
-    let RelayResponse::Chat {
-        status, results, ..
-    } = response
-    else {
+    let RelayResponse::Chat { results, .. } = response else {
         panic!("expected chat response");
     };
-    assert_eq!(status, agentmux::relay::ChatStatus::Accepted);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].target_session, "bravo@party");
     assert_eq!(results[0].outcome, agentmux::relay::ChatOutcome::Queued);
@@ -567,13 +563,9 @@ fn chat_broadcast_with_only_sender_returns_empty_results() {
     )
     .expect("chat response");
 
-    let RelayResponse::Chat {
-        status, results, ..
-    } = response
-    else {
+    let RelayResponse::Chat { results, .. } = response else {
         panic!("expected chat response");
     };
-    assert_eq!(status, agentmux::relay::ChatStatus::Accepted);
     assert!(results.is_empty());
 }
 

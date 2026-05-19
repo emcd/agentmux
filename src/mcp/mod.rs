@@ -359,7 +359,6 @@ impl McpServer {
                 request_id,
                 sender_session,
                 sender_display_name,
-                status,
                 results,
             }) => {
                 let response = json!({
@@ -368,14 +367,12 @@ impl McpServer {
                     "request_id": request_id,
                     "sender_session": sender_session,
                     "sender_display_name": sender_display_name,
-                    "status": status,
                     "results": results,
                 });
                 emit_inscription(
                     "mcp.tool.send.success",
                     &json!({
                         "bundle_name": response["bundle_name"],
-                        "status": response["status"],
                         "result_count": response["results"].as_array().map_or(0, |value| value.len()),
                     }),
                 );

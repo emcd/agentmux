@@ -1,4 +1,4 @@
-use agentmux::relay::{ChatOutcome, ChatStatus};
+use agentmux::relay::ChatOutcome;
 use serde_json::Value;
 use std::{
     fs, thread,
@@ -21,8 +21,7 @@ fn acp_next_send_recovers_after_connection_closed_failure() {
         &temporary.path().join("tmux.sock"),
         Some(1_000),
     );
-    let (first_status, first_result) = chat_result(first);
-    assert_eq!(first_status, ChatStatus::Accepted);
+    let first_result = chat_result(first);
     assert_eq!(first_result.outcome, ChatOutcome::Queued);
 
     // Swap in a healthy stub before the respawn loop picks up its next
@@ -43,8 +42,7 @@ fn acp_next_send_recovers_after_connection_closed_failure() {
         &temporary.path().join("tmux.sock"),
         Some(1_000),
     );
-    let (second_status, second_result) = chat_result(second);
-    assert_eq!(second_status, ChatStatus::Accepted);
+    let second_result = chat_result(second);
     assert_eq!(second_result.outcome, ChatOutcome::Queued);
 }
 
@@ -62,8 +60,7 @@ fn acp_next_send_recovers_after_post_accept_disconnect() {
         &temporary.path().join("tmux.sock"),
         Some(1_000),
     );
-    let (first_status, first_result) = chat_result(first);
-    assert_eq!(first_status, ChatStatus::Accepted);
+    let first_result = chat_result(first);
     assert_eq!(first_result.outcome, ChatOutcome::Queued);
 
     let recovered = AcpStubOptions::default();
@@ -82,8 +79,7 @@ fn acp_next_send_recovers_after_post_accept_disconnect() {
         &temporary.path().join("tmux.sock"),
         Some(1_000),
     );
-    let (second_status, second_result) = chat_result(second);
-    assert_eq!(second_status, ChatStatus::Accepted);
+    let second_result = chat_result(second);
     assert_eq!(second_result.outcome, ChatOutcome::Queued);
 }
 
@@ -187,8 +183,7 @@ fn acp_respawn_invalidates_pending_permission_queue_entry_for_target() {
         &temporary.path().join("tmux.sock"),
         Some(1_000),
     );
-    let (first_status, first_result) = chat_result(first);
-    assert_eq!(first_status, ChatStatus::Accepted);
+    let first_result = chat_result(first);
     assert_eq!(first_result.outcome, ChatOutcome::Queued);
 
     assert!(
@@ -262,8 +257,7 @@ fn acp_respawn_with_missing_load_capability_is_permanent_failure() {
         &temporary.path().join("tmux.sock"),
         Some(1_000),
     );
-    let (first_status, first_result) = chat_result(first);
-    assert_eq!(first_status, ChatStatus::Accepted);
+    let first_result = chat_result(first);
     assert_eq!(first_result.outcome, ChatOutcome::Queued);
 
     assert!(

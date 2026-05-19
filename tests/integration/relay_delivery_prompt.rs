@@ -1,7 +1,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use agentmux::{
-    relay::{ChatOutcome, ChatStatus, RelayRequest, RelayResponse, handle_request},
+    relay::{ChatOutcome, RelayRequest, RelayResponse, handle_request},
     runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory},
 };
 use tempfile::TempDir;
@@ -96,14 +96,10 @@ fn relay_chat_delivers_when_prompt_readiness_template_matches() {
     )
     .expect("async send should be accepted");
 
-    let RelayResponse::Chat {
-        status, results, ..
-    } = response
-    else {
+    let RelayResponse::Chat { results, .. } = response else {
         panic!("expected chat response");
     };
 
-    assert_eq!(status, ChatStatus::Accepted);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].outcome, ChatOutcome::Queued);
 
@@ -193,14 +189,10 @@ fn relay_chat_times_out_when_prompt_readiness_never_matches() {
     )
     .expect("async send should be accepted");
 
-    let RelayResponse::Chat {
-        status, results, ..
-    } = response
-    else {
+    let RelayResponse::Chat { results, .. } = response else {
         panic!("expected chat response");
     };
 
-    assert_eq!(status, ChatStatus::Accepted);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].outcome, ChatOutcome::Queued);
 
@@ -296,13 +288,9 @@ fn relay_chat_delivers_when_prompt_idle_column_matches() {
     )
     .expect("async send should be accepted");
 
-    let RelayResponse::Chat {
-        status, results, ..
-    } = response
-    else {
+    let RelayResponse::Chat { results, .. } = response else {
         panic!("expected chat response");
     };
-    assert_eq!(status, ChatStatus::Accepted);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].outcome, ChatOutcome::Queued);
 
@@ -398,13 +386,9 @@ fn relay_chat_delivers_when_prompt_regex_requires_blank_separator_line() {
     )
     .expect("async send should be accepted");
 
-    let RelayResponse::Chat {
-        status, results, ..
-    } = response
-    else {
+    let RelayResponse::Chat { results, .. } = response else {
         panic!("expected chat response");
     };
-    assert_eq!(status, ChatStatus::Accepted);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].outcome, ChatOutcome::Queued);
 
@@ -509,13 +493,9 @@ fn relay_chat_times_out_when_prompt_idle_column_does_not_match() {
     )
     .expect("async send should be accepted");
 
-    let RelayResponse::Chat {
-        status, results, ..
-    } = response
-    else {
+    let RelayResponse::Chat { results, .. } = response else {
         panic!("expected chat response");
     };
-    assert_eq!(status, ChatStatus::Accepted);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].outcome, ChatOutcome::Queued);
 

@@ -7,9 +7,7 @@ use std::{
 };
 
 use agentmux::{
-    relay::{
-        ChatOutcome, ChatStatus, RelayRequest, RelayResponse, handle_request, serve_connection,
-    },
+    relay::{ChatOutcome, RelayRequest, RelayResponse, handle_request, serve_connection},
     runtime::paths::BundleRuntimePaths,
 };
 use serde_json::{Value, json};
@@ -365,13 +363,9 @@ fn relay_async_chat_emits_terminal_delivery_outcome_to_sender_ui_stream() {
         &bundle_paths.runtime_directory,
     )
     .expect("chat response");
-    let RelayResponse::Chat {
-        status, results, ..
-    } = response
-    else {
+    let RelayResponse::Chat { results, .. } = response else {
         panic!("expected chat response");
     };
-    assert_eq!(status, ChatStatus::Accepted);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].outcome, ChatOutcome::Queued);
     let expected_message_id = results[0].message_id.clone();

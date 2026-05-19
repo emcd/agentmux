@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use agentmux::{
-    relay::{ChatOutcome, ChatStatus, RelayRequest, RelayResponse, handle_request},
+    relay::{ChatOutcome, RelayRequest, RelayResponse, handle_request},
     runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory},
 };
 use tempfile::TempDir;
@@ -58,14 +58,12 @@ fn relay_chat_async_processes_repeated_target_messages_in_fifo_order() {
     )
     .expect("first async send should be accepted");
     let RelayResponse::Chat {
-        status: first_status,
         results: first_results,
         ..
     } = first
     else {
         panic!("expected chat response");
     };
-    assert_eq!(first_status, ChatStatus::Accepted);
     assert_eq!(first_results.len(), 1);
     assert_eq!(first_results[0].outcome, ChatOutcome::Queued);
 
@@ -86,14 +84,12 @@ fn relay_chat_async_processes_repeated_target_messages_in_fifo_order() {
     )
     .expect("second async send should be accepted");
     let RelayResponse::Chat {
-        status: second_status,
         results: second_results,
         ..
     } = second
     else {
         panic!("expected chat response");
     };
-    assert_eq!(second_status, ChatStatus::Accepted);
     assert_eq!(second_results.len(), 1);
     assert_eq!(second_results[0].outcome, ChatOutcome::Queued);
 
@@ -171,13 +167,9 @@ fn relay_chat_async_without_timeout_waits_for_late_quiescence() {
     )
     .expect("async send should be accepted");
 
-    let RelayResponse::Chat {
-        status, results, ..
-    } = response
-    else {
+    let RelayResponse::Chat { results, .. } = response else {
         panic!("expected chat response");
     };
-    assert_eq!(status, ChatStatus::Accepted);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].outcome, ChatOutcome::Queued);
 
@@ -237,13 +229,9 @@ fn relay_chat_async_timeout_override_stops_wait_before_late_quiescence() {
     )
     .expect("async send should be accepted");
 
-    let RelayResponse::Chat {
-        status, results, ..
-    } = response
-    else {
+    let RelayResponse::Chat { results, .. } = response else {
         panic!("expected chat response");
     };
-    assert_eq!(status, ChatStatus::Accepted);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].outcome, ChatOutcome::Queued);
 
