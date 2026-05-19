@@ -36,7 +36,7 @@
   the `mcp.tool.send.request` inscription.
 - [ ] 2.4 Add `extra_fields` unknown-parameter rejection to `SendParams`
   (same pattern as `RawwParams`), returning `validation_invalid_params` for
-  any unrecognised field. (Overlaps `todos/mcp/25`; fold into this slice.)
+  any unrecognised field. (Deferred to `todos/mcp/25`; not part of this slice.)
 - [ ] 2.5 Update `src/mcp/README.md` to remove `delivery_mode` reference.
 
 ## 3. CLI/TUI Lane (rebase onto relay)
@@ -47,9 +47,12 @@
   from `src/commands/shared.rs`.
 - [x] 3.3 Remove `ChatDeliveryMode::Async` construction from
   `src/tui/state/history.rs`.
-- [ ] 3.4 Remove the now-unconstructed `ChatStatus` variants (`Success`,
-  `Partial`, `Failure`) left after the async-only relay change, including the
-  `chat_status_label` match in `src/tui/state/history.rs`. (TUI lane.)
+- [ ] 3.4 Remove `ChatStatus` entirely: delete the enum from `src/relay.rs`,
+  drop the `status` field from `RelayResponse::Chat`, strip `status` from
+  `handle_chat` in `handlers.rs`, from the MCP send response JSON and
+  inscription, and from the CLI send output; fix the 5 stale sync-era test
+  fixtures in `mcp/send.rs` (3 tests) and `runtime_bootstrap.rs` (2 tests).
+  (TUI lane; cross-lane edit authority granted for this task.)
 
 ## 4. Validation
 
@@ -69,8 +72,10 @@
 - Operator review (2026-05-18) dropped the relay-layer reject-on-present
   design: `delivery_mode` is not special-cased at the relay. With the field
   removed, an internally tagged `RelayRequest::Chat` silently ignores it like
-  any other unrecognised field; caller-facing rejection lives only at the MCP
-  `send` surface (task 2.4 `extra_fields`). The relay-layer rework that
-  deletes the field is complete, and the dedicated reject test
-  (`relay_delivery_reject_mode.rs`) created under the original design was
-  removed by that rework.
+  any other unrecognised field. The relay-layer rework that deletes the field
+  is complete, and the dedicated reject test (`relay_delivery_reject_mode.rs`)
+  created under the original design was removed by that rework.
+- Task 2.4 (`extra_fields` rejection for `SendParams`) is deferred to
+  `todos/mcp/25` rather than being folded into this slice. Pre-1.x drops do
+  not require caller-facing rejection logic for the removed field; general
+  unknown-field rejection is a separate hygiene improvement tracked there.
