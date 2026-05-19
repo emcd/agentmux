@@ -18,8 +18,9 @@ End-user workflows are documented under `documentation/usage/`.
   - Runtime-root resolution, bootstrap locks/socket binding, startup template
     hydration, inscriptions, and signal wiring.
   - See [src/runtime/README.md](runtime/README.md).
-- `configuration.rs`
+- `configuration/`
   - Bundle/coder/policy parsing and validation, plus session identity helpers.
+  - See [src/configuration/README.md](configuration/README.md).
 - `relay.rs` + `relay/`
   - Relay IPC contracts, authorization checks, lifecycle actions, delivery
     engine, and stream registration/event routing.
