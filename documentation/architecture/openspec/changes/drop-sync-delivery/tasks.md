@@ -37,7 +37,7 @@
 - [ ] 2.4 Add `extra_fields` unknown-parameter rejection to `SendParams`
   (same pattern as `RawwParams`), returning `validation_invalid_params` for
   any unrecognised field. (Deferred to `todos/mcp/25`; not part of this slice.)
-- [ ] 2.5 Update `src/mcp/README.md` to remove `delivery_mode` reference.
+- [x] 2.5 Update `src/mcp/README.md` to remove `delivery_mode` reference.
 
 ## 3. CLI/TUI Lane (rebase onto relay)
 
