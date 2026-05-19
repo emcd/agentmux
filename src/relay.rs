@@ -895,7 +895,12 @@ impl RelayStreamSession {
                 }
                 Err(ConnectAttemptError::IdentityClaimConflict { message }) => {
                     if Instant::now() >= deadline {
-                        return Err(io::Error::other(message));
+                        // Surface an exhausted conflict retry as a timeout so
+                        // `map_relay_request_failure` reports `relay_timeout`
+                        // with the conflict message, rather than the opaque
+                        // `internal_unexpected_failure` that `io::Error::other`
+                        // falls through to.
+                        return Err(io::Error::new(io::ErrorKind::TimedOut, message));
                     }
                     thread::sleep(Duration::from_millis(HELLO_CONFLICT_RETRY_INTERVAL_MS));
                 }

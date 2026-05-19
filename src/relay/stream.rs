@@ -3,6 +3,7 @@ use std::{
     io,
     os::unix::net::UnixStream,
     sync::{Arc, Mutex, OnceLock},
+    time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
@@ -12,7 +13,12 @@ use uuid::Uuid;
 use crate::configuration::SessionType;
 use crate::runtime::inscriptions::emit_inscription;
 
-use super::{RelayRequest, RelayResponse};
+use super::{RelayRequest, RelayResponse, SCHEMA_VERSION};
+
+// Bounded write timeout for the conflict liveness probe. Long enough to
+// distinguish a live peer from a dead one, short enough that the rare
+// reconnect-race path does not stall registry operations for long.
+const STREAM_PROBE_WRITE_TIMEOUT: Duration = Duration::from_millis(50);
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(super) struct HelloFrame {
@@ -150,11 +156,19 @@ pub(super) fn register_stream(
     };
     if let Some(entry) = entries.get(&key)
         && entry.stream_id.is_some()
-        && entry.writer.is_some()
+        && let Some(existing_writer) = entry.writer.clone()
     {
-        return Ok(RegisterStreamOutcome::IdentityClaimConflict {
-            existing_connection_id: entry.stream_id.clone(),
-        });
+        // A registry entry can outlive its connection: when a client drops and
+        // immediately reconnects, the owning connection thread may not have
+        // observed EOF yet, so the stale entry still looks live. Probe the
+        // existing writer before rejecting. A live owner keeps the claim; a
+        // dead one is evicted so the reconnecting session registers without
+        // exhausting its hello-conflict retry window.
+        if probe_writer_is_live(&existing_writer, hello) {
+            return Ok(RegisterStreamOutcome::IdentityClaimConflict {
+                existing_connection_id: entry.stream_id.clone(),
+            });
+        }
     }
     let stream_id = Uuid::new_v4().to_string();
     entries.insert(
@@ -170,6 +184,35 @@ pub(super) fn register_stream(
         session_id: hello.session_id.clone(),
         stream_id,
     }))
+}
+
+// Probes whether a registered stream writer still has a live peer by writing a
+// `HelloAck` frame under a bounded write timeout. `HelloAck` is a safe probe
+// frame: an established-connection client silently ignores stray `HelloAck`s.
+// A write failure (peer closed, broken pipe, or probe timeout) reports the
+// owner as dead so the caller can evict the stale registry entry. The prior
+// write timeout is restored so a surviving owner keeps its saturation guard.
+fn probe_writer_is_live(writer: &SharedStreamWriter, hello: &HelloFrame) -> bool {
+    let Ok(mut stream) = writer.lock() else {
+        return false;
+    };
+    let prior_timeout = stream.write_timeout().ok().flatten();
+    if stream
+        .set_write_timeout(Some(STREAM_PROBE_WRITE_TIMEOUT))
+        .is_err()
+    {
+        return false;
+    }
+    let probe = write_stream_frame_quiet(
+        &mut stream,
+        OutgoingFrame::HelloAck {
+            schema_version: SCHEMA_VERSION,
+            bundle_name: hello.bundle_name.as_str(),
+            session_id: hello.session_id.as_str(),
+        },
+    );
+    let _ = stream.set_write_timeout(prior_timeout);
+    probe.is_ok()
 }
 
 #[derive(Clone, Debug)]
@@ -355,13 +398,22 @@ pub(super) fn write_stream_frame(
     stream: &mut UnixStream,
     frame: OutgoingFrame<'_>,
 ) -> Result<(), io::Error> {
+    write_stream_frame_quiet(stream, frame).inspect_err(note_write_timeout)
+}
+
+// Writes a frame without the `note_write_timeout` inscription side effect.
+// Used by the conflict liveness probe, where a failed write is an expected,
+// benign outcome that must not be mistaken for client-induced saturation.
+fn write_stream_frame_quiet(
+    stream: &mut UnixStream,
+    frame: OutgoingFrame<'_>,
+) -> Result<(), io::Error> {
     use std::io::Write;
     let encoded = encode_outgoing_frame(frame)?;
     stream
         .write_all(encoded.as_bytes())
         .and_then(|()| stream.write_all(b"\n"))
         .and_then(|()| stream.flush())
-        .inspect_err(note_write_timeout)
 }
 
 // Records an inscription when a relay-to-client write failed because the write

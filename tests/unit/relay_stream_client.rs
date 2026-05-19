@@ -1,8 +1,11 @@
 use std::{
     io::{BufRead, BufReader, Write},
-    os::unix::net::UnixListener,
+    os::unix::net::{UnixListener, UnixStream},
     path::PathBuf,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -279,5 +282,69 @@ fn stream_client_retries_hello_after_identity_claim_conflict() {
         }
         other => panic!("unexpected response: {other:?}"),
     }
+    server.join().expect("join server");
+}
+
+#[test]
+fn stream_client_reports_exhausted_hello_conflict_as_timeout() {
+    let (_temporary, socket_path) =
+        temporary_socket_path("relay-stream-client-hello-conflict-exhausted");
+    let listener = UnixListener::bind(&socket_path).expect("bind unix listener");
+    let done = Arc::new(AtomicBool::new(false));
+    let server_done = Arc::clone(&done);
+
+    // Answer every hello with an identity-claim conflict so the client retries
+    // until its hello-conflict deadline elapses. The `done` flag plus a
+    // wake-up connection let the accept loop exit once the client gives up.
+    let server = thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            if server_done.load(Ordering::Relaxed) {
+                break;
+            }
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            let hello_payload = read_json_line(&mut reader);
+            assert_eq!(hello_payload["frame"], "hello");
+            write_json_line(
+                &mut stream,
+                &json!({
+                    "frame": "response",
+                    "response": {
+                        "kind": "error",
+                        "error": {
+                            "code": "runtime_identity_claim_conflict",
+                            "message": "stream identity is already claimed by a live connection"
+                        }
+                    }
+                }),
+            );
+            shutdown_stream(&stream, "shutdown conflict stream");
+        }
+    });
+
+    let mut session = RelayStreamSession::new(
+        socket_path.clone(),
+        "party".to_string(),
+        "alpha".to_string(),
+    );
+    let error = session
+        .request_with_events(&agentmux::relay::RelayRequest::List {
+            sender_session: Some("alpha".to_string()),
+        })
+        .expect_err("persistent hello conflict should fail the request");
+    assert_eq!(
+        error.kind(),
+        std::io::ErrorKind::TimedOut,
+        "exhausted hello conflict must surface as a timeout: {error:?}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("runtime_identity_claim_conflict"),
+        "timeout error should embed the conflict cause: {error}"
+    );
+
+    // Release the server's accept loop now that the client has stopped.
+    done.store(true, Ordering::Relaxed);
+    let _ = UnixStream::connect(&socket_path);
     server.join().expect("join server");
 }

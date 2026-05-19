@@ -202,6 +202,18 @@ fn read_json(reader: &mut BufReader<UnixStream>) -> Value {
     serde_json::from_str::<Value>(line.trim_end()).expect("decode frame")
 }
 
+// Reads the next frame, skipping any stray `hello_ack` frames. The relay emits
+// a `hello_ack` into a live connection as a conflict liveness probe; raw test
+// clients must tolerate it the way the production stream client does.
+fn read_json_skipping_hello_ack(reader: &mut BufReader<UnixStream>) -> Value {
+    loop {
+        let frame = read_json(reader);
+        if frame["frame"] != "hello_ack" {
+            return frame;
+        }
+    }
+}
+
 fn shutdown_stream(stream: &UnixStream, context: &str) {
     match stream.shutdown(std::net::Shutdown::Both) {
         Ok(()) => {}
@@ -345,9 +357,59 @@ fn duplicate_live_hello_claim_is_rejected_with_identity_conflict() {
             "request": {"operation": "list", "sender_session": "alpha"}
         }),
     );
-    let first_response = read_json(&mut first_reader);
+    // The conflicting reconnect probed this live owner with a `hello_ack`
+    // frame; skip it the way the production client does before reading the
+    // list response.
+    let first_response = read_json_skipping_hello_ack(&mut first_reader);
     assert_eq!(first_response["frame"], "response");
     assert_eq!(first_response["response"]["kind"], "list");
+
+    shutdown_stream(&first_client, "shutdown first client");
+    shutdown_stream(&second_client, "shutdown second client");
+    first_handle.join().expect("join first relay thread");
+    second_handle.join().expect("join second relay thread");
+}
+
+#[test]
+fn stale_identity_owner_is_evicted_when_reconnecting() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "party_stale_eviction";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+
+    let hello_frame = json!({
+        "frame": "hello",
+        "schema_version": "1",
+        "bundle_name": bundle_name,
+        "session_id": "alpha",
+    });
+
+    // Register the first connection, then shut down only its read half. The
+    // write half stays open, so the relay's connection thread keeps blocking
+    // on its read loop and never observes EOF: the registry entry stays "live"
+    // even though the peer can no longer receive a delivery. This reproduces
+    // the stale-owner state that a fast reconnect races against.
+    let (mut first_client, first_handle) =
+        spawn_relay_connection(&configuration_root, &bundle_paths);
+    let mut first_reader = BufReader::new(first_client.try_clone().expect("clone first stream"));
+    send_json(&mut first_client, hello_frame.clone());
+    assert_eq!(read_json(&mut first_reader)["frame"], "hello_ack");
+    first_client
+        .shutdown(std::net::Shutdown::Read)
+        .expect("shut down first client read half");
+
+    // A reconnect with the same identity must probe the stale owner, find it
+    // unreachable, evict it, and register — not return an identity conflict.
+    let (mut second_client, second_handle) =
+        spawn_relay_connection(&configuration_root, &bundle_paths);
+    let mut second_reader = BufReader::new(second_client.try_clone().expect("clone second stream"));
+    send_json(&mut second_client, hello_frame);
+    let second_response = read_json(&mut second_reader);
+    assert_eq!(
+        second_response["frame"], "hello_ack",
+        "reconnect should evict the stale owner, not conflict: {second_response}"
+    );
 
     shutdown_stream(&first_client, "shutdown first client");
     shutdown_stream(&second_client, "shutdown second client");
