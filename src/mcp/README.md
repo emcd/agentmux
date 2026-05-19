@@ -63,6 +63,23 @@ This module implements the MCP stdio server for `agentmux`.
   - MCP `send` request schema, including optional transport-scoped timeout
     overrides (`quiescence_timeout_ms`, `acp_turn_timeout_ms`).
 
+## Module Layout
+
+- `mod.rs`
+  - Module declarations and public re-exports.
+- `server.rs`
+  - MCP server state, tool handlers, and relay/list plumbing.
+- `params.rs`
+  - MCP tool parameter and meta-tool argument schemas plus shared command
+    constants.
+- `validation.rs`
+  - request-shape validation, meta-tool argument parsing, and relay I/O error
+    classification helpers.
+- `help.rs`
+  - help catalog responses and generated JSON schemas.
+- `errors.rs`
+  - relay/configuration/runtime error mapping and MCP error payload helpers.
+
 ## Validation and Error Policy
 
 - MCP rejects invalid request shapes before relay submission (for example empty
