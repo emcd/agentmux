@@ -14,8 +14,18 @@ exported from `src/relay/mod.rs`.
 ## File Map
 
 - `mod.rs`
-  - relay request/response enums, shared context structs, public re-exports,
-    lifecycle wrappers, and error mapping.
+  - public re-export hub plus relay entrypoint wrappers.
+- `contract.rs`
+  - relay request/response enums and public payload structs.
+- `context.rs`
+  - internal request context and delivery task structs shared across relay
+    submodules.
+- `constants.rs`
+  - relay-local constants shared across submodules.
+- `identity.rs`
+  - canonical/bare session identity helpers.
+- `errors.rs`
+  - relay error constructors and configuration error mapping.
 - `client.rs`
   - relay socket client helpers and persistent stream session request/event
     polling.
