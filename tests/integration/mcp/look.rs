@@ -235,6 +235,30 @@ async fn look_rejects_invalid_lines_before_relay_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn look_rejects_unknown_fields_before_relay_request() {
+    let runtime = TestRuntime::create();
+    let relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(|_| panic!("relay should not receive look request for invalid parameters")),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let mut arguments = Map::new();
+    arguments.insert(
+        "target_session".to_string(),
+        Value::String("bravo".to_string()),
+    );
+    arguments.insert(
+        "requester_session".to_string(),
+        Value::String("spoof".to_string()),
+    );
+    let response = harness.call_tool(2, "look", arguments).await;
+
+    assert_unknown_field_error(&response, &["requester_session"]);
+    assert!(relay.requests_for_operation("look").is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn look_maps_validation_errors_from_relay() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(

@@ -446,3 +446,18 @@ pub(crate) fn error_code(response: &Value) -> Option<&str> {
         .and_then(|data| data.get("code"))
         .and_then(Value::as_str)
 }
+
+pub(crate) fn assert_unknown_field_error(response: &Value, expected_fields: &[&str]) {
+    assert_eq!(error_code(response), Some("validation_invalid_params"));
+    let fields = response["error"]["data"]["details"]["fields"]
+        .as_array()
+        .unwrap_or_else(|| panic!("missing unknown-field details: {response}"))
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .unwrap_or_else(|| panic!("unknown-field entry must be string: {response}"))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(fields, expected_fields);
+}

@@ -218,7 +218,30 @@ async fn grant_resolve_rejects_decider_identity_fields_before_relay_request() {
     );
     let response = harness.call_tool(2, "grant", arguments).await;
 
-    assert_eq!(error_code(&response), Some("validation_invalid_params"));
+    assert_unknown_field_error(&response, &["args.decided_by"]);
+    assert!(
+        relay
+            .requests_for_operation("permission_resolve")
+            .is_empty()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn grant_rejects_unknown_top_level_fields() {
+    let runtime = TestRuntime::create();
+    let relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(|_| panic!("relay should not receive a request for invalid parameters")),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let mut arguments = Map::new();
+    arguments.insert("command".to_string(), Value::String("list".to_string()));
+    arguments.insert("stowaway".to_string(), Value::String("value".to_string()));
+    let response = harness.call_tool(2, "grant", arguments).await;
+
+    assert_unknown_field_error(&response, &["stowaway"]);
+    assert!(relay.requests_for_operation("permission_list").is_empty());
     assert!(
         relay
             .requests_for_operation("permission_resolve")
@@ -324,7 +347,7 @@ async fn grant_list_rejects_unknown_arg_fields() {
     );
     let response = harness.call_tool(2, "grant", arguments).await;
 
-    assert_eq!(error_code(&response), Some("validation_invalid_params"));
+    assert_unknown_field_error(&response, &["args.stowaway_field"]);
     assert!(relay.requests_for_operation("permission_list").is_empty());
 }
 
