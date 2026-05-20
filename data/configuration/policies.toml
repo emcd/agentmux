@@ -1,4 +1,4 @@
-# agentmux authorization policy presets
+# authorization policy presets
 format-version = 1
 default = 'default'
 
@@ -11,21 +11,15 @@ find = 'self'
 list = 'all:home'
 look = 'all:home'
 send = 'all:home'
-raww = 'all:home'
-grant = 'none'
 
-# The `operator` preset grants the `grant` capability. Any session whose
-# policy enables `grant` may resolve ACP permission requests through the MCP
-# `grant` tool. Assign it only to coordination/decisioning lanes (for example
-# `master` and `mcp`).
 [[policies]]
 id = 'operator'
 description = 'Operator policy with permission-grant capability over home.'
 
 [policies.controls]
 find = 'self'
+grant = 'all:home'
 list = 'all:home'
 look = 'all:home'
-send = 'all:home'
 raww = 'all:home'
-grant = 'all:home'
+send = 'all:home'
