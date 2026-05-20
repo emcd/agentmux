@@ -154,6 +154,28 @@ async fn send_rejects_conflicting_timeout_fields_before_relay_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn send_rejects_unknown_fields_before_relay_request() {
+    let runtime = TestRuntime::create();
+    let relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(|_| panic!("relay should not receive chat request for invalid parameters")),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let mut arguments = Map::new();
+    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments.insert(
+        "targets".to_string(),
+        Value::Array(vec![Value::String("bravo".to_string())]),
+    );
+    arguments.insert("unexpected".to_string(), Value::Bool(true));
+    let response = harness.call_tool(2, "send", arguments).await;
+
+    assert_unknown_field_error(&response, &["unexpected"]);
+    assert!(relay.requests_for_operation("chat").is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn send_forwards_quiescence_timeout_override() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(

@@ -84,6 +84,10 @@ This module implements the MCP stdio server for `agentmux`.
 
 - MCP rejects invalid request shapes before relay submission (for example empty
   targets or conflicting timeout fields).
+- MCP rejects unknown top-level tool fields and unknown meta-tool `args` fields
+  with `validation_invalid_params`; error details include the rejected field
+  paths (for example `args.bundle_name_typo`).
+- Help schemas set `additionalProperties=false` for documented request shapes.
 - MCP does not perform shadow authorization checks.
 - Relay `authorization_forbidden` and other relay codes are passed through as
   MCP errors with relay details.

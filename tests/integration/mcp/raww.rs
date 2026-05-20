@@ -23,7 +23,7 @@ async fn raww_rejects_sender_like_fields_before_relay_request() {
     );
     let response = harness.call_tool(2, "raww", arguments).await;
 
-    assert_eq!(error_code(&response), Some("validation_invalid_params"));
+    assert_unknown_field_error(&response, &["sender_session"]);
     assert!(relay.requests_for_operation("raww").is_empty());
 }
 

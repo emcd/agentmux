@@ -81,6 +81,31 @@ async fn help_raww_query_returns_args_schema() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn help_rejects_unknown_fields() {
+    let runtime = TestRuntime::create();
+    let mut harness = McpHarness::spawn(&runtime).await;
+    let response = harness
+        .call_tool(
+            2,
+            "help",
+            Map::from_iter([("unexpected".to_string(), Value::String("value".to_string()))]),
+        )
+        .await;
+
+    assert_unknown_field_error(&response, &["unexpected"]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn help_schemas_disallow_additional_properties() {
+    let runtime = TestRuntime::create();
+    let mut harness = McpHarness::spawn(&runtime).await;
+    let response = harness.call_tool(2, "help", help_call(Some("send"))).await;
+    let payload = decode_tool_payload(&response);
+
+    assert_eq!(payload["args_schema"]["additionalProperties"], false);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn help_rejects_unknown_query() {
     let runtime = TestRuntime::create();
     let mut harness = McpHarness::spawn(&runtime).await;

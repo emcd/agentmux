@@ -37,8 +37,8 @@ use super::params::{
 };
 use super::validation::{
     is_relay_unavailable_error, parse_meta_tool_args, validate_grant_list_args,
-    validate_grant_resolve_args, validate_list_request, validate_look_request,
-    validate_raww_request, validate_send_request,
+    validate_grant_params, validate_grant_resolve_args, validate_help_request,
+    validate_list_request, validate_look_request, validate_raww_request, validate_send_request,
 };
 
 /// Configuration provided when booting MCP stdio service.
@@ -98,7 +98,7 @@ impl McpServer {
                 })),
             )
         })?;
-        validate_list_request(params.command.as_deref(), &parsed_args)?;
+        validate_list_request(&params, &parsed_args)?;
         let sender_session = self
             .state
             .configuration
@@ -179,6 +179,7 @@ impl McpServer {
         &self,
         Parameters(params): Parameters<HelpParams>,
     ) -> Result<CallToolResult, McpError> {
+        validate_help_request(&params)?;
         Ok(CallToolResult::success(vec![Content::json(help_tool(
             params,
         )?)?]))
@@ -502,6 +503,7 @@ impl McpServer {
         &self,
         Parameters(params): Parameters<GrantParams>,
     ) -> Result<CallToolResult, McpError> {
+        validate_grant_params(&params)?;
         let command = params
             .command
             .as_deref()

@@ -21,6 +21,7 @@ pub(super) const GRANT_OUTCOME_CANCELLED: &str = "cancelled";
 pub(super) const NAMESPACE_AGENTMUX: &str = "agentmux";
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub(super) struct ListParams {
     /// List command selector. MVP requires command="sessions".
     #[serde(default)]
@@ -29,16 +30,26 @@ pub(super) struct ListParams {
     #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
     #[serde(default)]
     pub(super) args: Value,
+    /// Unknown fields captured for explicit validation.
+    #[serde(flatten, default)]
+    #[schemars(skip)]
+    pub(super) extra_fields: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub(super) struct HelpParams {
     /// Namespace, tool, or command query (for example `list` or `list.sessions`).
     #[serde(default)]
     pub(super) query: Option<String>,
+    /// Unknown fields captured for explicit validation.
+    #[serde(flatten, default)]
+    #[schemars(skip)]
+    pub(super) extra_fields: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub(super) struct ListArgs {
     /// Optional bundle selector. Mutually exclusive with all=true.
     #[serde(default)]
@@ -46,9 +57,14 @@ pub(super) struct ListArgs {
     /// Optional all-bundles fanout selector.
     #[serde(default)]
     pub(super) all: bool,
+    /// Unknown fields captured for explicit validation.
+    #[serde(flatten, default)]
+    #[schemars(skip)]
+    pub(super) extra_fields: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub(super) struct SendParams {
     /// Optional client request identifier echoed in responses.
     #[serde(default)]
@@ -67,9 +83,14 @@ pub(super) struct SendParams {
     /// Optional ACP turn timeout override in milliseconds.
     #[serde(default)]
     pub(super) acp_turn_timeout_ms: Option<u64>,
+    /// Unknown fields captured for explicit validation.
+    #[serde(flatten, default)]
+    #[schemars(skip)]
+    pub(super) extra_fields: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub(super) struct LookParams {
     /// Session identifier to inspect.
     pub(super) target_session: String,
@@ -79,9 +100,14 @@ pub(super) struct LookParams {
     /// Optional number of pane snapshot lines to capture.
     #[serde(default)]
     pub(super) lines: Option<u64>,
+    /// Unknown fields captured for explicit validation.
+    #[serde(flatten, default)]
+    #[schemars(skip)]
+    pub(super) extra_fields: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub(super) struct GrantParams {
     /// Grant subcommand selector. Required; allowed values: `list`, `resolve`.
     #[serde(default)]
@@ -90,9 +116,14 @@ pub(super) struct GrantParams {
     #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
     #[serde(default)]
     pub(super) args: Value,
+    /// Unknown fields captured for explicit validation.
+    #[serde(flatten, default)]
+    #[schemars(skip)]
+    pub(super) extra_fields: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub(super) struct GrantListArgs {
     /// Optional bundle selector. When present must equal the associated bundle.
     #[serde(default)]
@@ -104,6 +135,7 @@ pub(super) struct GrantListArgs {
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub(super) struct GrantResolveArgs {
     /// Required permission request identifier returned by `grant list`.
     #[serde(default)]
@@ -124,6 +156,7 @@ pub(super) struct GrantResolveArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub(super) struct RawwParams {
     /// Session identifier to write to.
     pub(super) target_session: String,

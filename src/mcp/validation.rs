@@ -1,18 +1,33 @@
+use std::collections::BTreeMap;
+
 use rmcp::ErrorData as McpError;
 use serde_json::json;
 
 use super::errors::validation_tool_error;
 use super::params::{
-    GRANT_OUTCOME_CANCELLED, GRANT_OUTCOME_SELECTED, GrantListArgs, GrantResolveArgs,
-    LIST_COMMAND_SESSIONS, LOOK_LINES_MAX, LOOK_LINES_MIN, ListArgs, LookParams, RawwParams,
-    SendParams,
+    GRANT_OUTCOME_CANCELLED, GRANT_OUTCOME_SELECTED, GrantListArgs, GrantParams, GrantResolveArgs,
+    HelpParams, LIST_COMMAND_SESSIONS, LOOK_LINES_MAX, LOOK_LINES_MIN, ListArgs, ListParams,
+    LookParams, RawwParams, SendParams,
 };
 
-pub(super) fn validate_list_request(
-    command: Option<&str>,
-    args: &ListArgs,
-) -> Result<(), McpError> {
-    let command = command
+pub(super) fn validate_list_params(params: &ListParams) -> Result<(), McpError> {
+    validate_unknown_fields("list request", None, &params.extra_fields)
+}
+
+pub(super) fn validate_help_request(params: &HelpParams) -> Result<(), McpError> {
+    validate_unknown_fields("help request", None, &params.extra_fields)
+}
+
+pub(super) fn validate_grant_params(params: &GrantParams) -> Result<(), McpError> {
+    validate_unknown_fields("grant request", None, &params.extra_fields)
+}
+
+pub(super) fn validate_list_request(params: &ListParams, args: &ListArgs) -> Result<(), McpError> {
+    validate_list_params(params)?;
+    validate_unknown_fields("list sessions command", Some("args"), &args.extra_fields)?;
+    let command = params
+        .command
+        .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
@@ -83,6 +98,7 @@ fn json_type_name(value: &serde_json::Value) -> &'static str {
 }
 
 pub(super) fn validate_send_request(params: &SendParams) -> Result<(), McpError> {
+    validate_unknown_fields("send request", None, &params.extra_fields)?;
     let message = params.message.trim();
     if message.is_empty() {
         return Err(validation_tool_error(
@@ -130,6 +146,7 @@ pub(super) fn validate_send_request(params: &SendParams) -> Result<(), McpError>
 }
 
 pub(super) fn validate_look_request(params: &LookParams) -> Result<(), McpError> {
+    validate_unknown_fields("look request", None, &params.extra_fields)?;
     if params.target_session.trim().is_empty() {
         return Err(validation_tool_error(
             "validation_unknown_target",
@@ -154,6 +171,7 @@ pub(super) fn validate_look_request(params: &LookParams) -> Result<(), McpError>
 }
 
 pub(super) fn validate_raww_request(params: &RawwParams) -> Result<(), McpError> {
+    validate_unknown_fields("raww request", None, &params.extra_fields)?;
     if params.target_session.trim().is_empty() {
         return Err(validation_tool_error(
             "validation_unknown_target",
@@ -161,53 +179,11 @@ pub(super) fn validate_raww_request(params: &RawwParams) -> Result<(), McpError>
             None,
         ));
     }
-    let mut provided_fields = params.extra_fields.keys().cloned().collect::<Vec<_>>();
-    provided_fields.sort();
-    if !provided_fields.is_empty() {
-        let sender_like = provided_fields
-            .iter()
-            .filter(|field| is_sender_like_field(field.as_str()))
-            .cloned()
-            .collect::<Vec<_>>();
-        if !sender_like.is_empty() {
-            return Err(validation_tool_error(
-                "validation_invalid_params",
-                "sender-like fields are not allowed; sender authority is association-derived",
-                Some(json!({"fields": sender_like})),
-            ));
-        }
-        return Err(validation_tool_error(
-            "validation_invalid_params",
-            "unknown parameter(s) for raww request",
-            Some(json!({"fields": provided_fields})),
-        ));
-    }
     Ok(())
 }
 
-fn is_sender_like_field(field: &str) -> bool {
-    matches!(
-        field,
-        "sender"
-            | "sender_id"
-            | "sender_name"
-            | "sender_session"
-            | "sender_session_id"
-            | "requester"
-            | "requester_session"
-            | "requester_session_id"
-            | "as_session"
-    )
-}
-
-fn is_grant_decider_field(field: &str) -> bool {
-    matches!(
-        field,
-        "decided_by" | "ui_session_id" | "operator_session_id" | "decider" | "decider_session"
-    )
-}
-
 pub(super) fn validate_grant_list_args(args: &GrantListArgs) -> Result<(), McpError> {
+    validate_unknown_fields("grant list command", Some("args"), &args.extra_fields)?;
     if let Some(bundle_name) = args.bundle_name.as_ref()
         && bundle_name.trim().is_empty()
     {
@@ -217,19 +193,11 @@ pub(super) fn validate_grant_list_args(args: &GrantListArgs) -> Result<(), McpEr
             None,
         ));
     }
-    let mut provided_fields = args.extra_fields.keys().cloned().collect::<Vec<_>>();
-    provided_fields.sort();
-    if !provided_fields.is_empty() {
-        return Err(validation_tool_error(
-            "validation_invalid_params",
-            "unknown parameter(s) for grant list command",
-            Some(json!({"fields": provided_fields})),
-        ));
-    }
     Ok(())
 }
 
 pub(super) fn validate_grant_resolve_args(args: &GrantResolveArgs) -> Result<(), McpError> {
+    validate_unknown_fields("grant resolve command", Some("args"), &args.extra_fields)?;
     let permission_request_id = args
         .permission_request_id
         .as_ref()
@@ -302,28 +270,30 @@ pub(super) fn validate_grant_resolve_args(args: &GrantResolveArgs) -> Result<(),
             None,
         ));
     }
-    let mut provided_fields = args.extra_fields.keys().cloned().collect::<Vec<_>>();
-    provided_fields.sort();
-    if !provided_fields.is_empty() {
-        let decider_like = provided_fields
-            .iter()
-            .filter(|field| is_grant_decider_field(field.as_str()))
-            .cloned()
-            .collect::<Vec<_>>();
-        if !decider_like.is_empty() {
-            return Err(validation_tool_error(
-                "validation_invalid_params",
-                "decider-identity fields are not allowed; decided_by is association-derived",
-                Some(json!({"fields": decider_like})),
-            ));
-        }
-        return Err(validation_tool_error(
-            "validation_invalid_params",
-            "unknown parameter(s) for grant resolve command",
-            Some(json!({"fields": provided_fields})),
-        ));
-    }
     Ok(())
+}
+
+fn validate_unknown_fields(
+    context: &str,
+    prefix: Option<&str>,
+    extra_fields: &BTreeMap<String, serde_json::Value>,
+) -> Result<(), McpError> {
+    if extra_fields.is_empty() {
+        return Ok(());
+    }
+    let fields = extra_fields
+        .keys()
+        .map(|field| match prefix {
+            Some(prefix) => format!("{prefix}.{field}"),
+            None => field.clone(),
+        })
+        .collect::<Vec<_>>();
+    let message = format!("unknown parameter(s) for {context}: {}", fields.join(", "));
+    Err(validation_tool_error(
+        "validation_invalid_params",
+        message.as_str(),
+        Some(json!({"fields": fields})),
+    ))
 }
 
 pub(super) fn is_relay_unavailable_error(source: &std::io::Error) -> bool {

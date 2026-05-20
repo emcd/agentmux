@@ -198,6 +198,42 @@ async fn list_rejects_missing_or_invalid_command() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_rejects_unknown_top_level_fields() {
+    let runtime = TestRuntime::create();
+    let mut harness = McpHarness::spawn(&runtime).await;
+    let response = harness
+        .call_tool(
+            2,
+            "list",
+            Map::from_iter([
+                ("command".to_string(), Value::String("sessions".to_string())),
+                ("bogus".to_string(), Value::Bool(true)),
+            ]),
+        )
+        .await;
+
+    assert_unknown_field_error(&response, &["bogus"]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_sessions_rejects_unknown_arg_fields() {
+    let runtime = TestRuntime::create();
+    let mut harness = McpHarness::spawn(&runtime).await;
+    let response = harness
+        .call_tool(
+            2,
+            "list",
+            list_sessions_call(Map::from_iter([(
+                "stowaway".to_string(),
+                Value::String("value".to_string()),
+            )])),
+        )
+        .await;
+
+    assert_unknown_field_error(&response, &["args.stowaway"]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn list_rejects_stringified_args_with_informative_validation_error() {
     let runtime = TestRuntime::create();
     let mut harness = McpHarness::spawn(&runtime).await;
