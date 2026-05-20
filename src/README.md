@@ -21,9 +21,9 @@ End-user workflows are documented under `documentation/usage/`.
 - `configuration/`
   - Bundle/coder/policy parsing and validation, plus session identity helpers.
   - See [src/configuration/README.md](configuration/README.md).
-- `relay.rs` + `relay/`
-  - Relay IPC contracts, authorization checks, lifecycle actions, delivery
-    engine, and stream registration/event routing.
+- `relay/`
+  - Relay IPC contracts, socket/client entrypoints, authorization checks,
+    lifecycle actions, delivery engine, and stream registration/event routing.
   - See [src/relay/README.md](relay/README.md).
 - `mcp/`
   - MCP server handlers that validate MCP payloads and forward relay requests.

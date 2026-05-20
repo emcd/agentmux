@@ -13,28 +13,24 @@ use crate::{
 };
 
 use super::authorization::{
-    AuthorizationContext, authorize_grant, authorize_grant_for_list, authorize_list,
-    authorize_look, authorize_raww, authorize_send, grant_authorized_ui_sessions, has_ui_session,
-    permission_max_pending, ui_session_display_name,
+    AuthorizationContext, authorize_look, authorize_raww, authorize_send,
+    grant_authorized_ui_sessions, has_ui_session, permission_max_pending, ui_session_display_name,
 };
 use super::delivery::{
-    PermissionDecisionKind, PermissionDecisionRequest, PermissionEventContext,
-    PersistedPendingPermissionRequest, QuiescenceOptions, acp_session_ready_for_startup,
-    await_acp_worker_prime_for_look, deliver_one_target, derive_acp_look_snapshot,
-    emit_permission_snapshot_then_replay, enqueue_async_delivery, enqueue_sync_delivery,
-    get_acp_worker_snapshot, get_acp_worker_state, list_pending_permission_requests,
-    map_permission_state_error, prompt_batch_settings, resolve_permission_request,
+    QuiescenceOptions, await_acp_worker_prime_for_look, deliver_one_target,
+    derive_acp_look_snapshot, enqueue_async_delivery, enqueue_sync_delivery,
+    get_acp_worker_snapshot, get_acp_worker_state, prompt_batch_settings,
 };
-use super::lifecycle::{reconcile_loaded_bundle_for_lifecycle, shutdown_bundle_runtime};
 use super::tmux::{capture_pane_tail_lines, resolve_active_pane_target};
 use super::{
     AsyncDeliveryTask, ChatOutcome, ChatRequestContext, ChatResult, DeliveryPayloadMode,
-    LifecycleBundleResult, ListedBundle, ListedBundleStartupHealth, ListedBundleState,
-    ListedSession, ListedSessionTransport, LookRequestContext, PendingPermissionEntry,
-    PermissionDecisionRequestContext, RawwRequestContext, RelayError, RelayRequest, RelayResponse,
-    RequestPrincipal, SCHEMA_VERSION, bare_session_id, canonical_session_id, load_startup_failures,
-    relay_error,
+    ListedSessionTransport, LookRequestContext, PermissionDecisionRequestContext,
+    RawwRequestContext, RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
+    bare_session_id, canonical_session_id, relay_error,
 };
+
+mod listing;
+mod permissions;
 
 const LOOK_LINES_DEFAULT: usize = 120;
 const LOOK_LINES_MAX: usize = 1000;
@@ -77,10 +73,10 @@ pub(super) fn handle_request(
 ) -> Result<RelayResponse, RelayError> {
     let request = normalize_request_identities(request, bundle.bundle_name.as_str());
     match request {
-        RelayRequest::Up => handle_lifecycle_up(bundle, runtime_directory),
-        RelayRequest::Down => handle_lifecycle_down(bundle, runtime_directory),
+        RelayRequest::Up => listing::handle_lifecycle_up(bundle, runtime_directory),
+        RelayRequest::Down => listing::handle_lifecycle_down(bundle, runtime_directory),
         RelayRequest::List { sender_session } => {
-            handle_list(bundle, authorization, sender_session, runtime_directory)
+            listing::handle_list(bundle, authorization, sender_session, runtime_directory)
         }
         RelayRequest::Chat {
             request_id,
@@ -163,7 +159,7 @@ pub(super) fn handle_request(
         ),
         RelayRequest::PermissionList {
             bundle_name: request_bundle_name,
-        } => handle_permission_list(
+        } => permissions::handle_permission_list(
             bundle,
             authorization,
             request_bundle_name,
@@ -231,191 +227,6 @@ fn normalize_request_identities(request: RelayRequest, bundle_name: &str) -> Rel
         | RelayRequest::PermissionResolve { .. }
         | RelayRequest::PermissionList { .. }) => request,
     }
-}
-
-fn handle_lifecycle_up(
-    bundle: &BundleConfiguration,
-    runtime_directory: &Path,
-) -> Result<RelayResponse, RelayError> {
-    let tmux_socket = tmux_socket_path_for_runtime_directory(runtime_directory);
-    let report = reconcile_loaded_bundle_for_lifecycle(bundle, tmux_socket.as_path())?;
-    let changed = report.bootstrap_session.is_some()
-        || !report.created_sessions.is_empty()
-        || !report.pruned_sessions.is_empty();
-    let bundle_result = if changed {
-        LifecycleBundleResult {
-            bundle_name: bundle.bundle_name.clone(),
-            outcome: "hosted".to_string(),
-            reason_code: None,
-            reason: None,
-        }
-    } else {
-        LifecycleBundleResult {
-            bundle_name: bundle.bundle_name.clone(),
-            outcome: "skipped".to_string(),
-            reason_code: Some("already_hosted".to_string()),
-            reason: Some("bundle runtime is already hosted".to_string()),
-        }
-    };
-    Ok(RelayResponse::Lifecycle {
-        schema_version: SCHEMA_VERSION.to_string(),
-        action: "up".to_string(),
-        bundles: vec![bundle_result],
-        changed_bundle_count: usize::from(changed),
-        skipped_bundle_count: usize::from(!changed),
-        failed_bundle_count: 0,
-        changed_any: changed,
-    })
-}
-
-fn handle_lifecycle_down(
-    bundle: &BundleConfiguration,
-    runtime_directory: &Path,
-) -> Result<RelayResponse, RelayError> {
-    let tmux_socket = tmux_socket_path_for_runtime_directory(runtime_directory);
-    let report = shutdown_bundle_runtime(tmux_socket.as_path())?;
-    let changed = !report.pruned_sessions.is_empty() || report.killed_tmux_server;
-    let bundle_result = if changed {
-        LifecycleBundleResult {
-            bundle_name: bundle.bundle_name.clone(),
-            outcome: "unhosted".to_string(),
-            reason_code: None,
-            reason: None,
-        }
-    } else {
-        LifecycleBundleResult {
-            bundle_name: bundle.bundle_name.clone(),
-            outcome: "skipped".to_string(),
-            reason_code: Some("already_unhosted".to_string()),
-            reason: Some("bundle runtime is already unhosted".to_string()),
-        }
-    };
-    Ok(RelayResponse::Lifecycle {
-        schema_version: SCHEMA_VERSION.to_string(),
-        action: "down".to_string(),
-        bundles: vec![bundle_result],
-        changed_bundle_count: usize::from(changed),
-        skipped_bundle_count: usize::from(!changed),
-        failed_bundle_count: 0,
-        changed_any: changed,
-    })
-}
-
-fn handle_list(
-    bundle: &BundleConfiguration,
-    authorization: &AuthorizationContext,
-    sender_session: Option<String>,
-    runtime_directory: &Path,
-) -> Result<RelayResponse, RelayError> {
-    let tmux_socket = tmux_socket_path_for_runtime_directory(runtime_directory);
-    let sender_session = sender_session.ok_or_else(|| {
-        relay_error(
-            "validation_unknown_sender",
-            "sender_session is required for list authorization",
-            None,
-        )
-    })?;
-    let sender = resolve_sender_identity(
-        bundle,
-        authorization,
-        sender_session.as_str(),
-        "sender_session",
-    )?;
-    authorize_list(bundle, authorization, sender.session_id.as_str())?;
-    let sessions = bundle
-        .members
-        .iter()
-        .map(|member| ListedSession {
-            id: canonical_session_id(member.id.as_str(), bundle.bundle_name.as_str()),
-            name: member.name.clone(),
-            transport: member.target.session_type().into(),
-        })
-        .collect::<Vec<_>>();
-
-    let recent_startup_failures = load_startup_failures(runtime_directory).map_err(|cause| {
-        relay_error(
-            "internal_unexpected_failure",
-            "failed to load startup failure history",
-            Some(json!({
-                "bundle_name": bundle.bundle_name,
-                "cause": cause,
-            })),
-        )
-    })?;
-    let startup_failure_count = recent_startup_failures.len();
-
-    let configured_session_count = bundle.members.len();
-    let mut ready_session_count = 0usize;
-    for member in &bundle.members {
-        let ready = match member.target {
-            TargetConfiguration::Tmux(_) => {
-                resolve_active_pane_target(tmux_socket.as_path(), member.id.as_str()).is_ok()
-            }
-            TargetConfiguration::Acp(_) => acp_session_ready_for_startup(
-                bundle.bundle_name.as_str(),
-                runtime_directory,
-                member.id.as_str(),
-            ),
-            // `ui`/`pubsub` members have no implemented startup path; they are
-            // never counted ready and surface a startup failure in lifecycle.
-            TargetConfiguration::Ui | TargetConfiguration::Pubsub => false,
-        };
-        if ready {
-            ready_session_count += 1;
-        }
-    }
-
-    let (state, startup_health, state_reason_code, state_reason) = if configured_session_count == 0
-    {
-        (
-            ListedBundleState::Down,
-            None,
-            Some("runtime_no_configured_sessions".to_string()),
-            Some("bundle has zero configured sessions".to_string()),
-        )
-    } else if ready_session_count == 0 {
-        (
-            ListedBundleState::Down,
-            None,
-            Some("runtime_startup_failed".to_string()),
-            Some("zero configured sessions are currently ready".to_string()),
-        )
-    } else {
-        let health = if ready_session_count == configured_session_count {
-            ListedBundleStartupHealth::Healthy
-        } else {
-            ListedBundleStartupHealth::Degraded
-        };
-        (ListedBundleState::Up, Some(health), None, None)
-    };
-
-    let response = RelayResponse::List {
-        schema_version: SCHEMA_VERSION.to_string(),
-        bundle: ListedBundle {
-            id: bundle.bundle_name.clone(),
-            state,
-            startup_health,
-            state_reason_code,
-            state_reason,
-            startup_failure_count,
-            recent_startup_failures,
-            sessions,
-        },
-    };
-    if let RelayResponse::List { bundle, .. } = &response {
-        emit_inscription(
-            "relay.list.response",
-            &json!({
-                "bundle_name": bundle.id,
-                "sender_session": sender.session_id,
-                "state": bundle.state,
-                "startup_health": bundle.startup_health,
-                "startup_failure_count": bundle.startup_failure_count,
-                "session_count": bundle.sessions.len(),
-            }),
-        );
-    }
-    Ok(response)
 }
 
 fn handle_chat(
@@ -1038,34 +849,12 @@ pub(super) fn emit_permission_snapshot_for_ui_registration(
     runtime_directory: &Path,
     ui_session_id: &str,
 ) -> Result<(), RelayError> {
-    let bundle = crate::configuration::load_bundle_configuration(configuration_root, bundle_name)
-        .map_err(super::map_config)?;
-    let authorization =
-        crate::relay::authorization::load_authorization_context(configuration_root, &bundle)?;
-    let authorized_sessions = grant_authorized_ui_sessions(&authorization, &bundle);
-    if !authorized_sessions
-        .iter()
-        .any(|value| value == ui_session_id)
-    {
-        return Ok(());
-    }
-    let context = PermissionEventContext {
-        runtime_directory: runtime_directory.to_path_buf(),
-        bundle_name: bundle.bundle_name.clone(),
-        authorized_ui_sessions: authorized_sessions,
-    };
-    emit_permission_snapshot_then_replay(&context, ui_session_id).map_err(|cause| {
-        let mut error = map_permission_state_error(
-            "runtime_permission_queue_unavailable",
-            "failed to replay permission snapshot for ui session",
-        );
-        error.details = Some(json!({
-            "bundle_name": bundle.bundle_name,
-            "session_id": ui_session_id,
-            "cause": cause,
-        }));
-        error
-    })
+    permissions::emit_permission_snapshot_for_ui_registration(
+        configuration_root,
+        bundle_name,
+        runtime_directory,
+        ui_session_id,
+    )
 }
 
 fn handle_permission_decision(
@@ -1075,263 +864,13 @@ fn handle_permission_decision(
     runtime_directory: &Path,
     principal: Option<RequestPrincipal>,
 ) -> Result<RelayResponse, RelayError> {
-    let PermissionDecisionRequestContext {
-        permission_request_id,
-        outcome,
-        option_id,
-        bundle_name: request_bundle_name,
-        ui_session_id,
-    } = request;
-    if let Some(request_bundle_name) = request_bundle_name.as_deref()
-        && request_bundle_name != bundle.bundle_name
-    {
-        return Err(relay_error(
-            "validation_cross_bundle_unsupported",
-            "permission decisions are limited to the associated bundle in MVP",
-            Some(json!({
-                "associated_bundle_name": bundle.bundle_name,
-                "requested_bundle_name": request_bundle_name,
-            })),
-        ));
-    }
-    if ui_session_id.is_some() {
-        return Err(relay_error(
-            "validation_invalid_params",
-            "caller-supplied ui_session_id is not allowed",
-            Some(json!({
-                "field": "ui_session_id",
-            })),
-        ));
-    }
-    if permission_request_id.trim().is_empty() {
-        return Err(relay_error(
-            "validation_invalid_params",
-            "permission_request_id must be non-empty",
-            Some(json!({
-                "field": "permission_request_id",
-            })),
-        ));
-    }
-    if let Some(option_id) = option_id.as_deref()
-        && option_id.trim().is_empty()
-    {
-        return Err(relay_error(
-            "validation_invalid_params",
-            "option_id must be non-empty when provided",
-            Some(json!({
-                "field": "option_id",
-            })),
-        ));
-    }
-    let decision = match outcome.as_str() {
-        "selected" => {
-            if option_id.is_none() {
-                return Err(relay_error(
-                    "validation_invalid_params",
-                    "selected outcome requires explicit option_id",
-                    Some(json!({
-                        "field": "option_id",
-                        "outcome": "selected",
-                    })),
-                ));
-            }
-            PermissionDecisionKind::Selected
-        }
-        "cancelled" => {
-            if option_id.is_some() {
-                return Err(relay_error(
-                    "validation_invalid_params",
-                    "cancelled outcome must omit option_id",
-                    Some(json!({
-                        "field": "option_id",
-                        "outcome": "cancelled",
-                    })),
-                ));
-            }
-            PermissionDecisionKind::Cancelled
-        }
-        _ => {
-            return Err(relay_error(
-                "validation_invalid_params",
-                "permission decision outcome must be selected or cancelled",
-                Some(json!({
-                    "field": "outcome",
-                    "value": outcome,
-                })),
-            ));
-        }
-    };
-    let principal = principal.ok_or_else(|| {
-        relay_error(
-            "validation_missing_hello",
-            "permission decisions require stream-associated principal identity",
-            None,
-        )
-    })?;
-    authorize_grant(
+    permissions::handle_permission_decision(
         bundle,
         authorization,
-        principal.session_id.as_str(),
-        permission_request_id.as_str(),
-    )?;
-    let context = PermissionEventContext {
-        runtime_directory: runtime_directory.to_path_buf(),
-        bundle_name: bundle.bundle_name.clone(),
-        authorized_ui_sessions: grant_authorized_ui_sessions(authorization, bundle),
-    };
-    let decision_option_id = option_id.clone();
-    let outcome = resolve_permission_request(
-        &context,
-        PermissionDecisionRequest {
-            permission_request_id: permission_request_id.clone(),
-            option_id: decision_option_id,
-            decision,
-            decided_by: canonical_session_id(
-                principal.session_id.as_str(),
-                bundle.bundle_name.as_str(),
-            ),
-        },
+        request,
+        runtime_directory,
+        principal,
     )
-    .map_err(|cause| {
-        if cause == "runtime_permission_request_already_resolved" {
-            relay_error(
-                "runtime_permission_request_already_resolved",
-                "permission request is already resolved",
-                Some(json!({
-                    "permission_request_id": permission_request_id,
-                })),
-            )
-        } else if cause.starts_with("runtime_permission_queue_unavailable") {
-            relay_error(
-                "runtime_permission_queue_unavailable",
-                "permission queue state is unavailable",
-                Some(json!({
-                    "permission_request_id": permission_request_id,
-                })),
-            )
-        } else if cause.starts_with("validation_invalid_params:") {
-            let validation_message = cause
-                .split_once(':')
-                .map(|(_, message)| message.trim().to_string())
-                .unwrap_or_else(|| "invalid permission decision parameters".to_string());
-            relay_error(
-                "validation_invalid_params",
-                validation_message.as_str(),
-                Some(json!({
-                    "field": "option_id",
-                    "value": option_id,
-                })),
-            )
-        } else {
-            relay_error(
-                "internal_unexpected_failure",
-                "failed to resolve permission request",
-                Some(json!({
-                    "permission_request_id": permission_request_id,
-                    "cause": cause,
-                })),
-            )
-        }
-    })?;
-
-    let (outcome_label, reason_code, reason_message) = match outcome {
-        super::delivery::PermissionResolutionOutcome::Selected { .. } => {
-            ("selected".to_string(), None, None)
-        }
-        super::delivery::PermissionResolutionOutcome::Cancelled {
-            reason_code,
-            reason,
-            ..
-        } => ("cancelled".to_string(), Some(reason_code), reason),
-    };
-    Ok(RelayResponse::PermissionDecision {
-        schema_version: SCHEMA_VERSION.to_string(),
-        status: "resolved".to_string(),
-        permission_request_id,
-        outcome: outcome_label,
-        reason_code,
-        reason: reason_message,
-    })
-}
-
-fn handle_permission_list(
-    bundle: &BundleConfiguration,
-    authorization: &AuthorizationContext,
-    request_bundle_name: Option<String>,
-    runtime_directory: &Path,
-    principal: Option<RequestPrincipal>,
-) -> Result<RelayResponse, RelayError> {
-    if let Some(request_bundle_name) = request_bundle_name.as_deref()
-        && request_bundle_name != bundle.bundle_name
-    {
-        return Err(relay_error(
-            "validation_cross_bundle_unsupported",
-            "permission list is limited to the associated bundle",
-            Some(json!({
-                "associated_bundle_name": bundle.bundle_name,
-                "requested_bundle_name": request_bundle_name,
-            })),
-        ));
-    }
-    let principal = principal.ok_or_else(|| {
-        relay_error(
-            "validation_missing_hello",
-            "permission list requires stream-associated principal identity",
-            None,
-        )
-    })?;
-    authorize_grant_for_list(bundle, authorization, principal.session_id.as_str())?;
-    let pending = list_pending_permission_requests(runtime_directory).map_err(|cause| {
-        if cause.starts_with("runtime_permission_queue_unavailable") {
-            relay_error(
-                "runtime_permission_queue_unavailable",
-                "permission queue state is unavailable",
-                None,
-            )
-        } else {
-            relay_error(
-                "internal_unexpected_failure",
-                "failed to list pending permission requests",
-                Some(json!({ "cause": cause })),
-            )
-        }
-    })?;
-    let pending_requests = pending
-        .into_iter()
-        .map(|record| {
-            let mut entry = pending_permission_entry_from_record(record);
-            entry.target_session =
-                canonical_session_id(entry.target_session.as_str(), bundle.bundle_name.as_str());
-            entry
-        })
-        .collect();
-    Ok(RelayResponse::PermissionList {
-        schema_version: SCHEMA_VERSION.to_string(),
-        bundle_name: bundle.bundle_name.clone(),
-        pending_requests,
-    })
-}
-
-fn pending_permission_entry_from_record(
-    record: PersistedPendingPermissionRequest,
-) -> PendingPermissionEntry {
-    let PersistedPendingPermissionRequest {
-        message_id,
-        permission_request_id,
-        target_session,
-        requested_kind,
-        requested_details,
-        enqueued_at,
-        ..
-    } = record;
-    PendingPermissionEntry {
-        message_id,
-        permission_request_id,
-        target_session,
-        requested_kind,
-        requested_details,
-        enqueued_at,
-    }
 }
 
 fn resolve_sender_identity(

@@ -1,7 +1,7 @@
 # Relay Module
 
-This directory documents relay internals beyond the public request/response
-types in `src/relay.rs`.
+This directory contains relay internals and the public request/response types
+exported from `src/relay/mod.rs`.
 
 ## Primary Responsibilities
 
@@ -13,13 +13,23 @@ types in `src/relay.rs`.
 
 ## File Map
 
-- `src/relay.rs`
-  - relay request/response enums and main connection handling entrypoints.
-  - owns stream hello/request frame dispatch and error mapping.
+- `mod.rs`
+  - relay request/response enums, shared context structs, public re-exports,
+    lifecycle wrappers, and error mapping.
+- `client.rs`
+  - relay socket client helpers and persistent stream session request/event
+    polling.
+- `connection.rs`
+  - relay socket serving, stream hello/request frame dispatch, hello identity
+    validation, and connection write-timeout handling.
 - `authorization.rs`
   - policy loading and operation-level authorization checks.
 - `handlers.rs`
-  - request handlers for list/look/chat/lifecycle operations.
+  - request dispatcher plus chat/look/raww handlers.
+- `handlers/listing.rs`
+  - lifecycle and list-session request handlers.
+- `handlers/permissions.rs`
+  - permission snapshot, list, and decision request handlers.
 - `lifecycle.rs`
   - runtime reconcile/shutdown helpers for managed sessions.
 - `stream.rs`
