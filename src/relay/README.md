@@ -49,7 +49,12 @@ exported from `src/relay/mod.rs`.
   - tmux/process adapters used by delivery and look paths.
 - `delivery/`
   - transport-specific delivery decomposition:
-  - `dispatch.rs`: per-target async dispatch and delivery task enqueue.
+  - `dispatch/mod.rs`: delivery dispatch re-export hub.
+  - `dispatch/orchestration.rs`: delivery startup, enqueue, and per-target
+    orchestration.
+  - `dispatch/payload.rs`: envelope/raw payload preparation and UI routing.
+  - `dispatch/transport.rs`: ACP/tmux transport-specific dispatch.
+  - `dispatch/worker.rs`: async worker loop and ACP respawn handling.
   - `async_worker.rs`: async queue worker behavior.
   - `acp_client.rs`, `acp_delivery.rs`, `acp_state.rs`: ACP lifecycle,
     prompt flow, and snapshot persistence helpers.
