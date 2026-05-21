@@ -13,10 +13,23 @@ This directory owns the unified CLI surface for `agentmux`.
 
 - `mod.rs`
   - top-level command router and shared command argument/result structs.
-- `host.rs`
-  - `agentmux host relay` and `agentmux host mcp`.
-  - relay listener/process loop, lifecycle startup summary emission,
-    no-autostart mode, and connection-worker orchestration.
+- `host/mod.rs`
+  - `agentmux host` module hub.
+- `host/arguments.rs`
+  - `agentmux host relay` and `agentmux host mcp` argument parsing.
+- `host/help.rs`
+  - `agentmux host` help text rendering.
+- `host/mcp.rs`
+  - `agentmux host mcp` association resolution, inscription setup, and MCP
+    stdio service startup.
+- `host/relay.rs`
+  - relay listener/process loop, no-autostart mode, startup orchestration, and
+    connection-worker orchestration.
+- `host/router.rs`
+  - `agentmux host` mode dispatch.
+- `host/summary.rs`
+  - relay startup summary construction, JSON payload rendering, and per-bundle
+    outcome helpers.
 - `lifecycle.rs`
   - shared `up`/`down` transition execution helpers.
 - `up.rs`
@@ -43,5 +56,5 @@ This directory owns the unified CLI surface for `agentmux`.
 - `host relay --no-autostart` is process-only mode and must not report
   autostart failures for bundles.
 - Worker-pool overload and pre-hello idle handling are implemented in
-  `host.rs` and covered by integration tests under `tests/integration/cli/`
+  `host/relay.rs` and covered by integration tests under `tests/integration/cli/`
   and `tests/integration/relay_delivery_runtime.rs`.

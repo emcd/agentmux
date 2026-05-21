@@ -13,29 +13,21 @@ use std::{
     time::Duration,
 };
 
-use serde_json::{Map, Value, json};
+use serde_json::json;
 
 use crate::{
-    configuration::{load_bundle_configuration, load_bundle_group_memberships},
-    mcp::McpConfiguration,
+    configuration::load_bundle_group_memberships,
     relay::{
         append_startup_failure, shutdown_bundle_runtime, startup_bundle,
         wait_for_async_delivery_shutdown,
     },
     runtime::{
-        association::{
-            McpAssociationCli, WorkspaceContext, load_local_mcp_overrides, resolve_association,
-            resolve_sender_session,
-        },
         bootstrap::{
             RelayRuntimeLock, acquire_relay_runtime_lock, bind_relay_listener,
             relay_runtime_lock_is_held,
         },
         error::RuntimeError,
-        inscriptions::{
-            configure_process_inscriptions, emit_inscription, mcp_inscriptions_path,
-            mcp_unassociated_inscriptions_path, relay_inscriptions_path,
-        },
+        inscriptions::{configure_process_inscriptions, emit_inscription, relay_inscriptions_path},
         paths::{
             BundleRuntimePaths, RuntimeRootOverrides, RuntimeRoots, ensure_bundle_runtime_directory,
         },
@@ -44,9 +36,11 @@ use crate::{
     },
 };
 
-use super::{
-    McpHostArguments, RelayHostArguments, RelayHostStartupBundle, RelayHostStartupSummary,
-    RuntimeArguments, shared,
+use crate::commands::{RelayHostArguments, RelayHostStartupBundle, RuntimeArguments, shared};
+
+use super::summary::{
+    build_startup_summary, failed_startup_bundle, hosted_startup_bundle, render_startup_summary,
+    skipped_startup_bundle, startup_summary_payload,
 };
 
 #[derive(Clone, Debug)]
@@ -103,47 +97,7 @@ const RELAY_CONNECTION_WORKER_STACK_SIZE: usize = 512 * 1024;
 const RELAY_CONNECTION_QUEUE_CAPACITY: usize = 64;
 const RELAY_PRE_HELLO_IDLE_TIMEOUT_MS: u64 = 2_000;
 
-pub(super) async fn run_agentmux_host(arguments: &[String]) -> Result<(), RuntimeError> {
-    if arguments.is_empty() {
-        return Err(RuntimeError::InvalidArgument {
-            argument: "host".to_string(),
-            message: "missing mode; expected relay or mcp".to_string(),
-        });
-    }
-    if arguments[0] == "--help" || arguments[0] == "-h" {
-        print_host_help();
-        return Ok(());
-    }
-
-    match arguments[0].as_str() {
-        "relay" => {
-            if arguments[1..]
-                .iter()
-                .any(|value| value == "--help" || value == "-h")
-            {
-                print_host_relay_help();
-                return Ok(());
-            }
-            run_relay_host(parse_host_relay_arguments(&arguments[1..])?)
-        }
-        "mcp" => {
-            if arguments[1..]
-                .iter()
-                .any(|value| value == "--help" || value == "-h")
-            {
-                print_host_mcp_help();
-                return Ok(());
-            }
-            run_mcp_host(parse_host_mcp_arguments(&arguments[1..])?).await
-        }
-        unknown => Err(RuntimeError::InvalidArgument {
-            argument: unknown.to_string(),
-            message: "unknown host mode; expected relay or mcp".to_string(),
-        }),
-    }
-}
-
-fn run_relay_host(arguments: RelayHostArguments) -> Result<(), RuntimeError> {
+pub(super) fn run_relay_host(arguments: RelayHostArguments) -> Result<(), RuntimeError> {
     let roots = resolve_runtime_roots(arguments.runtime)?;
     run_relay_host_no_selector(&roots, arguments.no_autostart)
 }
@@ -767,304 +721,4 @@ fn host_selected_bundle(
             _runtime_lock: runtime_lock,
         }),
     )
-}
-
-fn build_startup_summary(
-    host_mode: &str,
-    bundles: Vec<RelayHostStartupBundle>,
-) -> RelayHostStartupSummary {
-    let hosted_bundle_count = bundles
-        .iter()
-        .filter(|bundle| bundle.outcome == "hosted")
-        .count();
-    let skipped_bundle_count = bundles
-        .iter()
-        .filter(|bundle| bundle.outcome == "skipped")
-        .count();
-    let failed_bundle_count = bundles
-        .iter()
-        .filter(|bundle| bundle.outcome == "failed")
-        .count();
-    RelayHostStartupSummary {
-        schema_version: 1,
-        host_mode: host_mode.to_string(),
-        bundles,
-        hosted_bundle_count,
-        skipped_bundle_count,
-        failed_bundle_count,
-        hosted_any: hosted_bundle_count > 0,
-    }
-}
-
-fn startup_summary_payload(summary: &RelayHostStartupSummary) -> Value {
-    let mut payload = Map::<String, Value>::new();
-    payload.insert("schema_version".to_string(), json!(summary.schema_version));
-    payload.insert("host_mode".to_string(), json!(summary.host_mode));
-    payload.insert(
-        "bundles".to_string(),
-        Value::Array(
-            summary
-                .bundles
-                .iter()
-                .map(|bundle| {
-                    json!({
-                        "bundle_name": bundle.bundle_name,
-                        "outcome": bundle.outcome,
-                        "reason_code": bundle.reason_code,
-                        "reason": bundle.reason,
-                    })
-                })
-                .collect::<Vec<_>>(),
-        ),
-    );
-    payload.insert(
-        "hosted_bundle_count".to_string(),
-        json!(summary.hosted_bundle_count),
-    );
-    payload.insert(
-        "skipped_bundle_count".to_string(),
-        json!(summary.skipped_bundle_count),
-    );
-    payload.insert(
-        "failed_bundle_count".to_string(),
-        json!(summary.failed_bundle_count),
-    );
-    payload.insert("hosted_any".to_string(), json!(summary.hosted_any));
-    Value::Object(payload)
-}
-
-fn render_startup_summary(summary: &RelayHostStartupSummary) {
-    match serde_json::to_string(&startup_summary_payload(summary)) {
-        Ok(encoded) => println!("{encoded}"),
-        Err(source) => emit_inscription(
-            "relay.startup.summary.encode_failed",
-            &json!({
-                "error": source.to_string(),
-                "host_mode": summary.host_mode,
-                "bundle_count": summary.bundles.len(),
-            }),
-        ),
-    }
-}
-
-fn hosted_startup_bundle(bundle_name: &str) -> RelayHostStartupBundle {
-    RelayHostStartupBundle {
-        bundle_name: bundle_name.to_string(),
-        outcome: "hosted".to_string(),
-        reason_code: None,
-        reason: None,
-    }
-}
-
-fn skipped_startup_bundle(
-    bundle_name: &str,
-    reason_code: &str,
-    reason: String,
-) -> RelayHostStartupBundle {
-    RelayHostStartupBundle {
-        bundle_name: bundle_name.to_string(),
-        outcome: "skipped".to_string(),
-        reason_code: Some(reason_code.to_string()),
-        reason: Some(reason),
-    }
-}
-
-fn failed_startup_bundle(bundle_name: &str, source: RuntimeError) -> RelayHostStartupBundle {
-    let (reason_code, reason) = shared::runtime_error_reason(&source);
-    RelayHostStartupBundle {
-        bundle_name: bundle_name.to_string(),
-        outcome: "failed".to_string(),
-        reason_code: Some(reason_code),
-        reason: Some(reason),
-    }
-}
-
-async fn run_mcp_host(arguments: McpHostArguments) -> Result<(), RuntimeError> {
-    let current_directory = env::current_dir()
-        .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
-    let workspace = WorkspaceContext::discover(&current_directory)?;
-    let local_overrides = load_local_mcp_overrides(&workspace.workspace_root)?;
-    let association_cli = McpAssociationCli {
-        bundle_name: arguments.bundle_name.clone(),
-        session_name: arguments.session_name.clone(),
-    };
-    let association_is_explicit = association_cli.bundle_name.is_some()
-        || association_cli.session_name.is_some()
-        || local_overrides.as_ref().is_some_and(|overrides| {
-            overrides.bundle_name.is_some() || overrides.session_name.is_some()
-        });
-    let roots = shared::resolve_roots(&arguments.runtime, &workspace, local_overrides.as_ref())?;
-    ensure_starter_configuration_layout(&roots.configuration_root)?;
-    let mut associated_bundle_name = None::<String>;
-    let mut sender_session = None::<String>;
-    let mut startup_association_reason = None::<String>;
-
-    let association = resolve_association(&association_cli, local_overrides.as_ref(), &workspace);
-    match association {
-        Ok(association) => {
-            associated_bundle_name = Some(association.bundle_name.clone());
-            let loaded_bundle =
-                load_bundle_configuration(&roots.configuration_root, &association.bundle_name)
-                    .map_err(shared::map_bundle_load_error);
-            match loaded_bundle {
-                Ok(bundle) => {
-                    let resolved_sender = resolve_sender_session(
-                        &bundle,
-                        &association.session_name,
-                        &current_directory,
-                    );
-                    match resolved_sender {
-                        Ok(session_name) => sender_session = Some(session_name),
-                        Err(source)
-                            if should_start_mcp_unassociated(association_is_explicit, &source) =>
-                        {
-                            startup_association_reason = Some(source.to_string());
-                            associated_bundle_name = None;
-                        }
-                        Err(source) => return Err(source),
-                    }
-                }
-                Err(source) if should_start_mcp_unassociated(association_is_explicit, &source) => {
-                    startup_association_reason = Some(source.to_string());
-                    associated_bundle_name = None;
-                }
-                Err(source) => return Err(source),
-            }
-        }
-        Err(source) if should_start_mcp_unassociated(association_is_explicit, &source) => {
-            startup_association_reason = Some(source.to_string());
-        }
-        Err(source) => return Err(source),
-    }
-
-    let associated_bundle_paths = associated_bundle_name
-        .as_deref()
-        .map(|bundle_name| BundleRuntimePaths::resolve(&roots.state_root, bundle_name))
-        .transpose()?;
-    let inscriptions_path = if let Some(bundle_paths) = associated_bundle_paths.as_ref() {
-        let session_name = sender_session
-            .as_deref()
-            .expect("associated startup must include sender session");
-        mcp_inscriptions_path(
-            &roots.inscriptions_root,
-            bundle_paths.bundle_name.as_str(),
-            session_name,
-        )
-    } else {
-        mcp_unassociated_inscriptions_path(&roots.inscriptions_root)
-    };
-    configure_process_inscriptions(&inscriptions_path)?;
-    emit_inscription(
-        "mcp.startup",
-        &json!({
-            "association_status": if sender_session.is_some() { "associated" } else { "unassociated" },
-            "association_reason": startup_association_reason,
-            "bundle_name": associated_bundle_name,
-            "session_name": sender_session.clone(),
-            "runtime_bundle_name": associated_bundle_paths.as_ref().map(|paths| paths.bundle_name.clone()),
-            "configuration_root": roots.configuration_root,
-            "state_root": roots.state_root,
-            "inscriptions_root": roots.inscriptions_root,
-        }),
-    );
-    crate::mcp::run(McpConfiguration {
-        configuration_root: roots.configuration_root,
-        state_root: roots.state_root,
-        associated_bundle_paths,
-        sender_session,
-    })
-    .await
-    .map_err(|source| RuntimeError::io("run MCP stdio service", std::io::Error::other(source)))
-}
-
-fn should_start_mcp_unassociated(association_is_explicit: bool, source: &RuntimeError) -> bool {
-    if association_is_explicit {
-        return false;
-    }
-    matches!(
-        source,
-        RuntimeError::Validation { code, .. }
-            if code == "validation_unknown_bundle" || code == "validation_unknown_sender"
-    )
-}
-
-fn parse_host_relay_arguments(arguments: &[String]) -> Result<RelayHostArguments, RuntimeError> {
-    let mut parsed = RelayHostArguments {
-        no_autostart: false,
-        runtime: RuntimeArguments::default(),
-    };
-    let mut index = 0usize;
-    while index < arguments.len() {
-        if shared::parse_runtime_flag(arguments, &mut index, &mut parsed.runtime)? {
-            index += 1;
-            continue;
-        }
-        match arguments[index].as_str() {
-            "--no-autostart" => parsed.no_autostart = true,
-            "--all" | "--include-bundle" | "--exclude-bundle" => {
-                return Err(RuntimeError::validation(
-                    "validation_invalid_arguments",
-                    format!("'{}' is not supported in relay host MVP", arguments[index]),
-                ));
-            }
-            value if !value.starts_with('-') => {
-                return Err(RuntimeError::validation(
-                    "validation_invalid_arguments",
-                    format!("'{}' is not supported in relay host MVP", value),
-                ));
-            }
-            unknown => {
-                return Err(RuntimeError::InvalidArgument {
-                    argument: unknown.to_string(),
-                    message: "unknown argument".to_string(),
-                });
-            }
-        }
-        index += 1;
-    }
-    Ok(parsed)
-}
-
-fn parse_host_mcp_arguments(arguments: &[String]) -> Result<McpHostArguments, RuntimeError> {
-    let mut parsed = McpHostArguments::default();
-    let mut index = 0usize;
-    while index < arguments.len() {
-        if shared::parse_runtime_flag(arguments, &mut index, &mut parsed.runtime)? {
-            index += 1;
-            continue;
-        }
-        match arguments[index].as_str() {
-            "--bundle" | "--bundle-name" => {
-                parsed.bundle_name = Some(shared::take_value(arguments, &mut index, "--bundle")?);
-            }
-            "--session-name" => {
-                parsed.session_name =
-                    Some(shared::take_value(arguments, &mut index, "--session-name")?);
-            }
-            unknown => {
-                return Err(RuntimeError::InvalidArgument {
-                    argument: unknown.to_string(),
-                    message: "unknown argument".to_string(),
-                });
-            }
-        }
-        index += 1;
-    }
-    Ok(parsed)
-}
-
-pub(super) fn print_host_help() {
-    println!("Usage: agentmux host <relay|mcp> [options]");
-}
-
-pub(super) fn print_host_relay_help() {
-    println!(
-        "Usage: agentmux host relay [--no-autostart] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
-    );
-}
-
-pub(super) fn print_host_mcp_help() {
-    println!(
-        "Usage: agentmux host mcp [--bundle NAME] [--session-name NAME] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
-    );
 }
