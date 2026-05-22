@@ -97,9 +97,24 @@ const RELAY_CONNECTION_WORKER_STACK_SIZE: usize = 512 * 1024;
 const RELAY_CONNECTION_QUEUE_CAPACITY: usize = 64;
 const RELAY_PRE_HELLO_IDLE_TIMEOUT_MS: u64 = 2_000;
 
-pub(super) fn run_relay_host(arguments: RelayHostArguments) -> Result<(), RuntimeError> {
-    let roots = resolve_runtime_roots(arguments.runtime)?;
-    run_relay_host_no_selector(&roots, arguments.no_autostart)
+pub(super) async fn run_relay_host(arguments: RelayHostArguments) -> Result<(), RuntimeError> {
+    // The relay supervisor and its per-bundle accept loops are blocking
+    // (`std::os::unix::net` accept, a `recv_timeout` poll loop, thread joins).
+    // Host them on a dedicated blocking task so the supervisor does not pin a
+    // runtime worker for the relay's lifetime. This establishes the async
+    // boundary; slice 2 of todos/relay/48 moves the accept loops themselves
+    // onto the async runtime (`tokio::net::UnixListener` + `tokio::spawn`).
+    tokio::task::spawn_blocking(move || {
+        let roots = resolve_runtime_roots(arguments.runtime)?;
+        run_relay_host_no_selector(&roots, arguments.no_autostart)
+    })
+    .await
+    .map_err(|source| {
+        RuntimeError::validation(
+            "internal_unexpected_failure",
+            format!("relay host supervisor task failed to join: {source}"),
+        )
+    })?
 }
 
 fn resolve_runtime_roots(runtime: RuntimeArguments) -> Result<RuntimeRoots, RuntimeError> {

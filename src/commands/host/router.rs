@@ -25,7 +25,7 @@ pub(in crate::commands) async fn run_agentmux_host(
                 help::print_host_relay_help();
                 return Ok(());
             }
-            relay::run_relay_host(arguments::parse_host_relay_arguments(&arguments[1..])?)
+            relay::run_relay_host(arguments::parse_host_relay_arguments(&arguments[1..])?).await
         }
         "mcp" => {
             if arguments[1..]
