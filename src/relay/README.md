@@ -70,11 +70,18 @@ exported from `src/relay/mod.rs`.
   `quiescence_timeout_ms`.
 - Pre-hello idle sockets are reaped in host connection workers to prevent
   starvation (`AGENTMUX_RELAY_PRE_HELLO_IDLE_TIMEOUT_MS` override).
-- Relay-to-client writes carry a write timeout (`serve_connection`) so a
-  stalled client cannot pin a connection-pool worker — or, via registered
-  event writers, a delivery worker — indefinitely
+- Each connection owns a per-connection writer task (mpsc + tokio write half)
+  that applies a relay-to-client write timeout
   (`AGENTMUX_RELAY_CONNECTION_WRITE_TIMEOUT_MS` override, default 5s). A
-  tripped write emits a `relay.connection.write_timeout` inscription.
-- Host connection workers emit `relay.connection_pool.metrics` on each accept
-  (`queued`/`active`/`rejected` counts) so pool saturation is observable.
+  stalled client cannot pin the writer — or, via cloned writer senders, a
+  delivery worker — indefinitely: a tripped write emits a
+  `relay.connection.write_timeout` inscription and the writer task exits,
+  closing the channel so cloned senders surface the disconnect.
+- The stream registry entry is released via a drop guard so an async-cancelled
+  connection cannot leak a registry entry and wedge the next same-identity
+  reconnect into an identity-claim conflict.
+- Host accept loops emit `relay.connection_pool.metrics` on each accept
+  (`max_connections`/`active`/`rejected` counts) so saturation against the
+  unified `AGENTMUX_RELAY_MAX_CONNECTIONS` cap is observable. Connections that
+  exceed the cap receive a `runtime_connection_limit_reached` error.
 - Stream events are correlated by `message_id` for send completion workflows.

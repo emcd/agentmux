@@ -5,7 +5,6 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
-    thread,
     time::Duration,
 };
 
@@ -387,21 +386,13 @@ async fn run_relay_accept_loop(
                         }
                         match Arc::clone(&connection_permits).try_acquire_owned() {
                             Ok(permit) => {
-                                if let Err(source) = spawn_connection_worker(
+                                spawn_connection_worker(
                                     permit,
                                     stream,
                                     configuration_root.clone(),
                                     paths.clone(),
                                     Arc::clone(&metrics),
-                                ) {
-                                    emit_inscription(
-                                        "relay.request_failed",
-                                        &json!({
-                                            "bundle_name": paths.bundle_name,
-                                            "error": source.to_string(),
-                                        }),
-                                    );
-                                }
+                                );
                             }
                             Err(TryAcquireError::NoPermits) => {
                                 reject_overloaded_connection(&paths, stream, &metrics).await;
@@ -439,69 +430,35 @@ async fn run_relay_accept_loop(
     accept_outcome
 }
 
-/// Spawns an OS thread to serve one accepted connection synchronously. The
-/// thread is intentionally detached: on shutdown the accept loops join cleanly
-/// and any in-flight serving threads are abandoned, reaped by the OS at process
-/// exit (matching the previous std-thread connection-worker behavior). Using a
-/// std thread here also avoids tokio-runtime-drop blocking on `spawn_blocking`
-/// tasks that are parked in `serve_connection`'s post-hello blocking read.
-///
-/// Slice 3 of todos/relay/48 makes this fully async (tokio task, no OS thread)
-/// by replacing the blocking frame loop with an async one.
+/// Spawns a tokio task to serve one accepted connection asynchronously. The
+/// task is detached: in-flight tasks are cancelled when the runtime is dropped
+/// (process shutdown), which triggers the connection's drop-guard unregister
+/// path. Per-connection writes run on a separate writer task spawned inside
+/// `serve_connection`, so no blocking call ever ties up a runtime worker.
 fn spawn_connection_worker(
     permit: OwnedSemaphorePermit,
     stream: TokioUnixStream,
     configuration_root: std::path::PathBuf,
     paths: BundleRuntimePaths,
     metrics: Arc<RelayConnectionMetrics>,
-) -> Result<(), std::io::Error> {
-    // `into_std` deregisters the fd from the tokio reactor and must be called
-    // in the runtime context; do it before handing the fd to the std thread.
-    let std_stream = stream.into_std()?;
+) {
     metrics.active_connections.fetch_add(1, Ordering::SeqCst);
-    let paths_for_thread = paths.clone();
-    let metrics_for_thread = Arc::clone(&metrics);
-    let spawn_result = thread::Builder::new()
-        .name(format!("relay-conn-{}", paths.bundle_name))
-        .spawn(move || {
-            let result = serve_connection_on_thread(
-                std_stream,
-                &configuration_root,
-                &paths_for_thread,
-                relay_pre_hello_idle_timeout(),
+    let pre_hello_idle_timeout = relay_pre_hello_idle_timeout();
+    tokio::spawn(async move {
+        let result =
+            serve_connection(stream, &configuration_root, &paths, pre_hello_idle_timeout).await;
+        metrics.active_connections.fetch_sub(1, Ordering::SeqCst);
+        drop(permit);
+        if let Err(source) = result {
+            emit_inscription(
+                "relay.request_failed",
+                &json!({
+                    "bundle_name": paths.bundle_name,
+                    "error": source.to_string(),
+                }),
             );
-            metrics_for_thread
-                .active_connections
-                .fetch_sub(1, Ordering::SeqCst);
-            drop(permit);
-            if let Err(source) = result {
-                emit_inscription(
-                    "relay.request_failed",
-                    &json!({
-                        "bundle_name": paths_for_thread.bundle_name,
-                        "error": source.to_string(),
-                    }),
-                );
-            }
-        });
-    match spawn_result {
-        Ok(_join_handle) => Ok(()),
-        Err(source) => {
-            metrics.active_connections.fetch_sub(1, Ordering::SeqCst);
-            Err(source)
         }
-    }
-}
-
-fn serve_connection_on_thread(
-    mut stream: std::os::unix::net::UnixStream,
-    configuration_root: &std::path::Path,
-    paths: &BundleRuntimePaths,
-    pre_hello_idle_timeout: Duration,
-) -> Result<(), std::io::Error> {
-    stream.set_nonblocking(false)?;
-    stream.set_read_timeout(Some(pre_hello_idle_timeout))?;
-    serve_connection(&mut stream, configuration_root, paths)
+    });
 }
 
 fn relay_max_connections() -> usize {
@@ -532,14 +489,14 @@ async fn reject_overloaded_connection(
         "relay.connection.rejected",
         &json!({
             "bundle_name": paths.bundle_name,
-            "reason_code": "runtime_connection_queue_full",
-            "reason": "connection worker pool queue is full",
+            "reason_code": "runtime_connection_limit_reached",
+            "reason": "relay connection limit reached",
         }),
     );
     let response = crate::relay::RelayResponse::Error {
         error: crate::relay::RelayError {
-            code: "runtime_connection_queue_full".to_string(),
-            message: "relay connection worker pool queue is full".to_string(),
+            code: "runtime_connection_limit_reached".to_string(),
+            message: "relay connection limit reached".to_string(),
             details: Some(json!({
                 "bundle_name": paths.bundle_name,
             })),

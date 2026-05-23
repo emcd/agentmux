@@ -408,8 +408,8 @@ async fn relay_rejects_connections_when_worker_queue_is_full() {
     let RelayResponse::Error { error } = rejected_response else {
         panic!("expected overload error response");
     };
-    assert_eq!(error.code, "runtime_connection_queue_full");
-    assert_eq!(error.message, "relay connection worker pool queue is full");
+    assert_eq!(error.code, "runtime_connection_limit_reached");
+    assert_eq!(error.message, "relay connection limit reached");
 
     drop(queued_stream);
     drop(stream_session);

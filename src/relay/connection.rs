@@ -1,11 +1,11 @@
-use std::{
-    io::{self, BufRead, BufReader, Write},
-    os::unix::net::UnixStream,
-    path::Path,
-    time::Duration,
-};
+use std::{io, path::Path, time::Duration};
 
 use serde_json::{Value, json};
+use tokio::{
+    io::{AsyncBufReadExt, BufReader},
+    net::{UnixStream, unix::OwnedReadHalf},
+    time::error::Elapsed,
+};
 
 use crate::{
     configuration::{
@@ -16,86 +16,104 @@ use crate::{
 
 use super::stream::{
     HelloFrame, IncomingFrame, OutgoingFrame, RegisterStreamOutcome, SharedStreamWriter,
-    StreamRegistration, clone_stream_writer, note_write_timeout, parse_incoming_frame,
-    register_stream, registration_is_current, unregister_stream, write_stream_frame_to_writer,
+    StreamRegistration, parse_incoming_frame, register_stream, registration_is_current,
+    spawn_stream_writer, unregister_stream, write_legacy_response_to_writer,
+    write_stream_frame_to_writer,
 };
 use super::{
     GLOBAL_SESSION_SUFFIX, RelayError, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
     dispatch_request, handlers, map_config, map_tui_config, relay_error,
 };
 
-const RELAY_CONNECTION_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Handles one relay socket request/response exchange on a connected stream.
-pub fn serve_connection(
-    stream: &mut UnixStream,
+/// Serves one relay socket connection on the async runtime.
+///
+/// The stream is split into independent halves: a per-connection writer task
+/// owns the write half and serializes outgoing frames; this function consumes
+/// the read half here. A `RegistrationGuard` ensures the stream registry entry
+/// is released on every exit path (including async cancellation), so a
+/// reconnecting client with the same identity cannot be wedged into an
+/// identity-claim conflict by a stale entry.
+pub async fn serve_connection(
+    stream: UnixStream,
     configuration_root: &Path,
     bundle_paths: &BundleRuntimePaths,
+    pre_hello_idle_timeout: Duration,
 ) -> Result<(), io::Error> {
-    stream.set_write_timeout(Some(relay_connection_write_timeout()))?;
-    let writer = clone_stream_writer(stream)?;
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let mut registration = None::<StreamRegistration>;
-
+    let (read_half, write_half) = stream.into_split();
+    let (writer, writer_handle) = spawn_stream_writer(write_half);
+    let reader = BufReader::new(read_half);
+    let mut guard = RegistrationGuard::default();
     let outcome = serve_connection_frames(
-        stream,
-        writer,
-        &mut reader,
-        &mut registration,
+        reader,
+        &writer,
+        &mut guard,
         configuration_root,
         bundle_paths,
-    );
-
-    // Always release the registry entry, including on the error-return paths
-    // (write timeout, invalid frame bytes). A leaked entry would force every
-    // subsequent reconnect with the same identity into an identity-claim
-    // conflict until an event write incidentally cleared it.
-    if let Some(registration) = registration.as_ref()
-        && let Err(source) = unregister_stream(registration)
-        && outcome.is_ok()
-    {
-        return Err(source);
-    }
+        pre_hello_idle_timeout,
+    )
+    .await;
+    // Drop the local writer clone and unregister synchronously before awaiting
+    // the writer task. The registry entry's writer clone is released here so
+    // the writer task can observe its receiver close and drain remaining bytes
+    // (e.g., a final error response) before exiting. Without this ordering,
+    // the writer task would either be cancelled by runtime drop or wait for
+    // senders that the caller has not yet released.
+    drop(writer);
+    drop(guard);
+    let _ = writer_handle.await;
     outcome
 }
 
-/// Resolves the relay-side write timeout for client connections.
-///
-/// A stalled client whose receive buffer is full must not pin a connection-pool
-/// worker (or, via registered event writers, a delivery worker) indefinitely;
-/// this timeout bounds every relay-to-client write. Override with
-/// `AGENTMUX_RELAY_CONNECTION_WRITE_TIMEOUT_MS`.
-fn relay_connection_write_timeout() -> Duration {
-    std::env::var("AGENTMUX_RELAY_CONNECTION_WRITE_TIMEOUT_MS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .map(Duration::from_millis)
-        .unwrap_or(RELAY_CONNECTION_WRITE_TIMEOUT)
+/// Drop-guard owner of a `StreamRegistration` that unregisters on every exit
+/// path, including a future cancellation. Without this, an awaited frame loop
+/// dropped mid-execution would leak a registry entry and wedge the next
+/// same-identity reconnect into an identity-claim conflict.
+#[derive(Default)]
+struct RegistrationGuard {
+    registration: Option<StreamRegistration>,
 }
 
-fn serve_connection_frames(
-    stream: &mut UnixStream,
-    writer: SharedStreamWriter,
-    reader: &mut BufReader<UnixStream>,
-    registration: &mut Option<StreamRegistration>,
+impl RegistrationGuard {
+    fn set(&mut self, registration: StreamRegistration) {
+        self.registration = Some(registration);
+    }
+
+    fn current(&self) -> Option<&StreamRegistration> {
+        self.registration.as_ref()
+    }
+}
+
+impl Drop for RegistrationGuard {
+    fn drop(&mut self) {
+        if let Some(registration) = self.registration.take() {
+            let _ = unregister_stream(&registration);
+        }
+    }
+}
+
+async fn serve_connection_frames(
+    mut reader: BufReader<OwnedReadHalf>,
+    writer: &SharedStreamWriter,
+    guard: &mut RegistrationGuard,
     configuration_root: &Path,
     bundle_paths: &BundleRuntimePaths,
+    pre_hello_idle_timeout: Duration,
 ) -> Result<(), io::Error> {
     let mut line = String::new();
     loop {
         line.clear();
-        let read = match reader.read_line(&mut line) {
-            Ok(read) => read,
-            Err(source)
-                if matches!(
-                    source.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                ) && registration.is_none() =>
-            {
-                break;
-            }
-            Err(source) => return Err(source),
+        let read = match read_next_line(
+            &mut reader,
+            &mut line,
+            guard.current().is_some(),
+            pre_hello_idle_timeout,
+        )
+        .await
+        {
+            ReadLineOutcome::Read(read) => read,
+            ReadLineOutcome::Eof => break,
+            ReadLineOutcome::PreHelloIdleTimeout => break,
+            ReadLineOutcome::Error(source) => return Err(source),
         };
         if read == 0 {
             break;
@@ -105,6 +123,9 @@ fn serve_connection_frames(
         let frame = match parse_incoming_frame(trimmed) {
             Ok(frame) => frame,
             Err(source) => {
+                // Wire contract: pre-hello parse failures write the unwrapped
+                // `RelayResponse` shape so legacy `request_relay` clients can
+                // decode the error.
                 let response = RelayResponse::Error {
                     error: relay_error(
                         "validation_invalid_arguments",
@@ -112,7 +133,7 @@ fn serve_connection_frames(
                         Some(json!({"cause": source.to_string()})),
                     ),
                 };
-                write_response(stream, &response)?;
+                write_legacy_response_to_writer(writer, &response)?;
                 break;
             }
         };
@@ -126,16 +147,15 @@ fn serve_connection_frames(
                     &bundle_paths.runtime_directory,
                     None,
                 );
-                write_response(stream, &response)?;
+                write_legacy_response_to_writer(writer, &response)?;
             }
             IncomingFrame::Hello(hello) => {
                 let response = handle_hello_frame(configuration_root, bundle_paths, &hello);
                 match response {
                     Ok(session_type) => {
-                        stream.set_read_timeout(None)?;
                         match register_stream(&hello, session_type, writer.clone())? {
                             RegisterStreamOutcome::Registered(value) => {
-                                *registration = Some(value);
+                                guard.set(value);
                             }
                             RegisterStreamOutcome::IdentityClaimConflict {
                                 existing_connection_id,
@@ -143,7 +163,7 @@ fn serve_connection_frames(
                                 let error =
                                     identity_claim_conflict_error(&hello, existing_connection_id);
                                 write_stream_frame_to_writer(
-                                    &writer,
+                                    writer,
                                     OutgoingFrame::Response {
                                         request_id: None,
                                         response: &RelayResponse::Error { error },
@@ -153,7 +173,7 @@ fn serve_connection_frames(
                             }
                         }
                         write_stream_frame_to_writer(
-                            &writer,
+                            writer,
                             OutgoingFrame::HelloAck {
                                 schema_version: SCHEMA_VERSION,
                                 bundle_name: hello.bundle_name.as_str(),
@@ -170,7 +190,7 @@ fn serve_connection_frames(
                                 )
                         {
                             write_stream_frame_to_writer(
-                                &writer,
+                                writer,
                                 OutgoingFrame::Response {
                                     request_id: None,
                                     response: &RelayResponse::Error { error },
@@ -181,7 +201,7 @@ fn serve_connection_frames(
                     }
                     Err(error) => {
                         write_stream_frame_to_writer(
-                            &writer,
+                            writer,
                             OutgoingFrame::Response {
                                 request_id: None,
                                 response: &RelayResponse::Error { error },
@@ -195,14 +215,14 @@ fn serve_connection_frames(
                 request_id,
                 request,
             } => {
-                let Some(active_registration) = registration.as_ref() else {
+                let Some(active_registration) = guard.current() else {
                     let error = relay_error(
                         "validation_missing_hello",
                         "stream request requires hello registration",
                         None,
                     );
                     write_stream_frame_to_writer(
-                        &writer,
+                        writer,
                         OutgoingFrame::Response {
                             request_id: request_id.as_deref(),
                             response: &RelayResponse::Error { error },
@@ -220,7 +240,7 @@ fn serve_connection_frames(
                         })),
                     );
                     write_stream_frame_to_writer(
-                        &writer,
+                        writer,
                         OutgoingFrame::Response {
                             request_id: request_id.as_deref(),
                             response: &RelayResponse::Error { error },
@@ -228,17 +248,16 @@ fn serve_connection_frames(
                     )?;
                     break;
                 }
+                let session_id = active_registration.session_id.clone();
                 let response = dispatch_request(
                     request,
                     configuration_root,
                     &bundle_paths.bundle_name,
                     &bundle_paths.runtime_directory,
-                    Some(RequestPrincipal {
-                        session_id: active_registration.session_id.clone(),
-                    }),
+                    Some(RequestPrincipal { session_id }),
                 );
                 write_stream_frame_to_writer(
-                    &writer,
+                    writer,
                     OutgoingFrame::Response {
                         request_id: request_id.as_deref(),
                         response: &response,
@@ -249,6 +268,38 @@ fn serve_connection_frames(
     }
 
     Ok(())
+}
+
+enum ReadLineOutcome {
+    Read(usize),
+    Eof,
+    PreHelloIdleTimeout,
+    Error(io::Error),
+}
+
+/// Reads the next framed line. Pre-hello reads are bounded by
+/// `pre_hello_idle_timeout` so an unresponsive client cannot consume a
+/// connection slot indefinitely; post-hello reads block until a frame or EOF
+/// arrives.
+async fn read_next_line(
+    reader: &mut BufReader<OwnedReadHalf>,
+    line: &mut String,
+    after_hello: bool,
+    pre_hello_idle_timeout: Duration,
+) -> ReadLineOutcome {
+    let read_result = if after_hello {
+        reader.read_line(line).await
+    } else {
+        match tokio::time::timeout(pre_hello_idle_timeout, reader.read_line(line)).await {
+            Ok(result) => result,
+            Err(Elapsed { .. }) => return ReadLineOutcome::PreHelloIdleTimeout,
+        }
+    };
+    match read_result {
+        Ok(0) => ReadLineOutcome::Eof,
+        Ok(read) => ReadLineOutcome::Read(read),
+        Err(source) => ReadLineOutcome::Error(source),
+    }
 }
 
 fn identity_claim_conflict_error(
@@ -276,15 +327,6 @@ fn identity_claim_conflict_error(
         "stream identity is already claimed by a live connection",
         Some(Value::Object(details)),
     )
-}
-
-fn write_response(stream: &mut UnixStream, response: &RelayResponse) -> Result<(), io::Error> {
-    let encoded = serde_json::to_string(response).map_err(io::Error::other)?;
-    stream
-        .write_all(encoded.as_bytes())
-        .and_then(|()| stream.write_all(b"\n"))
-        .and_then(|()| stream.flush())
-        .inspect_err(note_write_timeout)
 }
 
 /// Validates a hello frame and resolves the session's configured session type.
