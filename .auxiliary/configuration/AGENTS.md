@@ -128,8 +128,13 @@ Use consistent tags for discoverability:
 
 ## Tests Development
 
-- Prefer tests under `tests/unit` and `tests/integration` over inline `#[cfg(test)]` modules in `src/**`, unless there is a strong locality reason to keep tests adjacent to implementation.
+- Prefer tests under `tests/unit` and `tests/integration` over inline `#[cfg(test)]` modules in `src/**`.
 - Prefer tests that exercise public interfaces; avoid source-inclusion patterns used only to reach private internals.
+- Inline `#[cfg(test)]` is permitted only when ALL of the following hold:
+  1. The tested item is crate-private **by design** (not by oversight or laziness) and making it testable externally would require widening its visibility or adding a `#[doc(hidden)] pub` escape hatch that would itself become unintended API surface.
+  2. No existing public interface exercises the same code path.
+  3. The inline test block contains at most **one** `#[test]` function.
+  If a candidate inline test fails any of these conditions, move it to `tests/unit` and widen visibility or restructure as needed. Do not default to inline to avoid that conversation — the friction is intentional.
 
 ## OpenSpec Instructions
 
