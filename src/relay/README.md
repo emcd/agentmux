@@ -54,8 +54,11 @@ exported from `src/relay/mod.rs`.
     orchestration.
   - `dispatch/payload.rs`: envelope/raw payload preparation and UI routing.
   - `dispatch/transport.rs`: ACP/tmux transport-specific dispatch.
-  - `dispatch/worker.rs`: async worker loop and ACP respawn handling.
-  - `async_worker.rs`: async queue worker behavior.
+  - `dispatch/worker.rs`: per-target tokio worker task; ACP bootstrap,
+    respawn, and the blocking delivery body are run on the blocking pool
+    via `spawn_blocking`.
+  - `async_worker.rs`: worker registry (tokio mpsc senders) and shutdown
+    drain helpers.
   - `acp_client.rs`, `acp_delivery.rs`, `acp_state.rs`: ACP lifecycle,
     prompt flow, and snapshot persistence helpers.
   - `ui_delivery.rs`: UI-stream event emission for delivery completion.
@@ -85,3 +88,14 @@ exported from `src/relay/mod.rs`.
   unified `AGENTMUX_RELAY_MAX_CONNECTIONS` cap is observable. Connections that
   exceed the cap receive a `runtime_connection_limit_reached` error.
 - Stream events are correlated by `message_id` for send completion workflows.
+- Per-target delivery workers run as tokio tasks (`tokio::spawn`) reading
+  from a `tokio::sync::mpsc::UnboundedReceiver`. The blocking ACP / tmux
+  delivery body, the ACP single-flight prompt-completion wait, and the
+  ACP bootstrap and respawn paths are offloaded to `tokio::task::spawn_blocking`
+  so a tokio runtime worker thread is never pinned during transport IO.
+  Worker tasks normally run on the host's main runtime; sync callers that
+  enqueue work without an ambient runtime (CLI helpers, unit tests) fall
+  back to a process-wide multi-thread runtime created on demand. Worker
+  shutdown is observed via `shutdown_requested()` polled between receives,
+  the same signal the registry-empty drain in
+  `wait_for_async_delivery_shutdown` waits on.

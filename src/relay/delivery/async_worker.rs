@@ -3,7 +3,6 @@ use std::{
     sync::{
         Arc, Mutex, OnceLock,
         atomic::{AtomicUsize, Ordering},
-        mpsc,
     },
     thread,
     time::{Duration, Instant},
@@ -11,6 +10,7 @@ use std::{
 
 use serde_json::json;
 use time::format_description::well_known::Rfc3339;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, error::SendError};
 
 use crate::acp::ReplayEntry;
 use crate::configuration::TargetConfiguration;
@@ -49,7 +49,7 @@ pub(super) struct AsyncDeliveryRegistry {
 }
 
 pub(super) struct AsyncWorkerEntry {
-    pub sender: mpsc::Sender<AsyncDeliveryTask>,
+    pub sender: UnboundedSender<AsyncDeliveryTask>,
     pub pending: std::sync::Arc<AtomicUsize>,
     pub bounded_acp_queue: bool,
     pub acp_state: Option<AcpWorkerReadinessState>,
@@ -133,7 +133,7 @@ pub(super) fn try_existing_worker(
         }
         match worker.sender.send(task) {
             Ok(()) => return Ok(None),
-            Err(mpsc::SendError(returned)) => {
+            Err(SendError(returned)) => {
                 if worker.bounded_acp_queue {
                     release_pending_slot(worker.pending.as_ref());
                 }
@@ -147,7 +147,7 @@ pub(super) fn try_existing_worker(
 
 pub(super) fn register_worker(
     key: AsyncWorkerKey,
-    sender: mpsc::Sender<AsyncDeliveryTask>,
+    sender: UnboundedSender<AsyncDeliveryTask>,
     pending: std::sync::Arc<AtomicUsize>,
     bounded_acp_queue: bool,
 ) {
@@ -167,7 +167,7 @@ pub(super) fn register_worker(
 
 pub(super) fn register_worker_if_absent(
     key: AsyncWorkerKey,
-    sender: mpsc::Sender<AsyncDeliveryTask>,
+    sender: UnboundedSender<AsyncDeliveryTask>,
     pending: std::sync::Arc<AtomicUsize>,
     bounded_acp_queue: bool,
 ) -> Result<bool, RelayError> {
@@ -313,7 +313,7 @@ pub(super) fn release_pending_slot(pending: &AtomicUsize) {
 }
 
 pub(super) fn drop_pending_async_tasks_on_shutdown(
-    receiver: &mpsc::Receiver<AsyncDeliveryTask>,
+    receiver: &mut UnboundedReceiver<AsyncDeliveryTask>,
     pending: &AtomicUsize,
 ) {
     while let Ok(task) = receiver.try_recv() {
