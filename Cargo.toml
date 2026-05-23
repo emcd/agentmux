@@ -49,3 +49,12 @@ path = "src/bin/agentmux_acp.rs"
 
 [dev-dependencies]
 tempfile = "3.18.0"
+
+[lints.clippy]
+# Catch std::sync::Mutex / RwLock guards held across `.await` points. Such a
+# guard would pin a tokio runtime worker thread on a synchronous lock acquired
+# by any other task on the same lock, defeating the slice-4 async conversion.
+# Enforced as `deny` so the build fails on a regression rather than only
+# emitting a warning. Use a scoped block (`{ let g = mutex.lock(); ... }`) or
+# move the critical section into `spawn_blocking` if a needed case appears.
+await_holding_lock = "deny"
