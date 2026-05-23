@@ -49,10 +49,17 @@ pub(super) fn deliver_non_ui_target(
 /// own `message_id`. For ACP the synchronous return is a `delivered_in_progress`
 /// per task; the final outcome is delivered later via `on_completion`
 /// (fanned out inside `deliver_batch_target_acp`).
+///
+/// `pre_resolved_pane` lets the worker loop hoist the tmux quiescence wait so
+/// post-quiescence task arrivals can be drained into the batch before paste.
+/// When `Some` for a tmux target, this skips the in-transport wait + pane
+/// resolution and pastes against the supplied pane directly. ACP/UI/Pubsub
+/// targets ignore the value.
 pub(super) fn deliver_non_ui_target_batch(
     batch: &[AsyncDeliveryTask],
     target_member: &BundleMember,
     prompt_batches: Vec<String>,
+    pre_resolved_pane: Option<String>,
     acp_runtime: &mut Option<PersistentAcpWorkerRuntime>,
 ) -> Vec<Result<ChatResult, RelayError>> {
     debug_assert!(!batch.is_empty());
@@ -64,7 +71,7 @@ pub(super) fn deliver_non_ui_target_batch(
                 .collect()
         }
         TargetConfiguration::Tmux(tmux_target) => {
-            deliver_batch_target_tmux(batch, tmux_target, prompt_batches)
+            deliver_batch_target_tmux(batch, tmux_target, prompt_batches, pre_resolved_pane)
                 .into_iter()
                 .map(Ok)
                 .collect()
@@ -77,6 +84,27 @@ pub(super) fn deliver_non_ui_target_batch(
             batch.iter().map(|_| Err(error.clone())).collect()
         }
     }
+}
+
+/// Worker-loop entry for the tmux quiescence hoist: waits for the head task's
+/// pane to become quiescent and returns the resolved pane target on success.
+/// Returns the per-batch failure template on timeout, shutdown, or pane
+/// unavailability — the worker fans it out to every task in the coalesced
+/// batch. Caller must have established that the head task is envelope-mode
+/// and targets a tmux session.
+pub(super) fn prepare_tmux_pane_for_envelope_head(
+    task: &AsyncDeliveryTask,
+    tmux_target: &TmuxTargetConfiguration,
+) -> Result<String, Box<ChatResult>> {
+    debug_assert!(matches!(
+        task.payload_mode,
+        DeliveryPayloadMode::EnvelopeMessage
+    ));
+    let tmux_socket_path = crate::runtime::paths::tmux_socket_path_for_runtime_directory(
+        task.runtime_directory.as_path(),
+    );
+    let tmux_socket = tmux_socket_path.as_path();
+    resolve_tmux_pane_target(task, tmux_target, tmux_socket)
 }
 
 fn deliver_one_target_tmux(
@@ -140,10 +168,15 @@ fn deliver_one_target_tmux(
 /// prompt batch sequentially. The single delivery outcome (success or the
 /// reason the K-th paste failed) is fanned out to every task in `batch`
 /// using each task's own `message_id` and `target_session`.
+///
+/// When the worker loop has already proven the pane quiescent (post-quiescence
+/// drain path), `pre_resolved_pane` is supplied and both the wait and the
+/// pane-target lookup are skipped here.
 fn deliver_batch_target_tmux(
     batch: &[AsyncDeliveryTask],
     tmux_target: &TmuxTargetConfiguration,
     prompt_batches: Vec<String>,
+    pre_resolved_pane: Option<String>,
 ) -> Vec<ChatResult> {
     let head = &batch[0];
     let tmux_socket_path = crate::runtime::paths::tmux_socket_path_for_runtime_directory(
@@ -151,15 +184,19 @@ fn deliver_batch_target_tmux(
     );
     let tmux_socket = tmux_socket_path.as_path();
 
-    let pane_target = match resolve_tmux_pane_target(head, tmux_target, tmux_socket) {
-        Ok(pane_target) => pane_target,
-        Err(result) => {
-            // Quiescence / pane-resolution failure: every task in the batch
-            // shares the outcome (re-built per-task so message_id / target_session
-            // correlate with each original send call). `Box<ChatResult>` carries
-            // the head's correlation values; replicate the variant fields.
-            return replicate_outcome_for_batch(batch, *result);
-        }
+    let pane_target = match pre_resolved_pane {
+        Some(pane_target) => pane_target,
+        None => match resolve_tmux_pane_target(head, tmux_target, tmux_socket) {
+            Ok(pane_target) => pane_target,
+            Err(result) => {
+                // Quiescence / pane-resolution failure: every task in the batch
+                // shares the outcome (re-built per-task so message_id /
+                // target_session correlate with each original send call).
+                // `Box<ChatResult>` carries the head's correlation values;
+                // replicate the variant fields.
+                return replicate_outcome_for_batch(batch, *result);
+            }
+        },
     };
 
     let mut failed_reason = None::<String>;

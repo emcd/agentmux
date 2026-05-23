@@ -9,7 +9,7 @@ use time::format_description::well_known::Rfc3339;
 use tokio::{runtime::Handle, sync::mpsc::UnboundedReceiver};
 
 use crate::{
-    configuration::BundleMember,
+    configuration::{BundleMember, TargetConfiguration, TmuxTargetConfiguration},
     runtime::{inscriptions::emit_inscription, signals::shutdown_requested},
 };
 
@@ -150,7 +150,37 @@ async fn run_async_delivery_worker(
             break;
         }
 
-        let batch = coalesce_batch(head, drain_max, &mut carry, &mut receiver);
+        let mut batch = coalesce_batch(head, drain_max, &mut carry, &mut receiver);
+        let pre_quiescence_count = batch.len();
+
+        // Tmux envelope-mode heads: hoist the quiescence wait out of the
+        // transport so any tasks arriving during the wait can be coalesced
+        // into this batch via a post-quiescence try_recv drain. ACP/UI
+        // targets and RawInput heads pass through with `pre_resolved_pane`
+        // unset; their transport paths are unchanged.
+        let pre_resolved_pane = match classify_tmux_quiescence_hoist(&batch[0]) {
+            Some(tmux_target) => {
+                let head_task = batch[0].clone();
+                let wait_outcome = tokio::task::spawn_blocking(move || {
+                    super::transport::prepare_tmux_pane_for_envelope_head(&head_task, &tmux_target)
+                })
+                .await
+                .expect("tmux quiescence hoist task panicked");
+                match wait_outcome {
+                    Ok(pane_target) => {
+                        extend_batch_with_drain(&mut batch, drain_max, &mut carry, &mut receiver);
+                        Some(pane_target)
+                    }
+                    Err(boxed_template) => {
+                        complete_batch_with_template(&batch, *boxed_template, pending.as_ref());
+                        continue;
+                    }
+                }
+            }
+            None => None,
+        };
+        let post_quiescence_count = batch.len() - pre_quiescence_count;
+
         if batch.len() > 1 {
             emit_inscription(
                 "relay.chat.batch_drain.coalesced",
@@ -158,12 +188,14 @@ async fn run_async_delivery_worker(
                     "bundle_name": batch[0].bundle.bundle_name,
                     "target_session": batch[0].target_session,
                     "drained_count": batch.len(),
+                    "pre_quiescence_count": pre_quiescence_count,
+                    "post_quiescence_count": post_quiescence_count,
                     "message_ids": batch.iter().map(|task| &task.message_id).collect::<Vec<_>>(),
                 }),
             );
         }
         let (outcomes, returned_runtime, deferred) =
-            deliver_batch_blocking(batch.clone(), acp_runtime).await;
+            deliver_batch_blocking(batch.clone(), pre_resolved_pane, acp_runtime).await;
         acp_runtime = returned_runtime;
         // Push deferred (ACP-peeled) tasks back to the front of the carry queue
         // in original order so they are the head of the next iteration.
@@ -241,6 +273,21 @@ pub(super) fn coalesce_batch(
     if !coalescable {
         return batch;
     }
+    extend_batch_with_drain(&mut batch, drain_max, carry, receiver);
+    batch
+}
+
+/// Drains carry-then-channel into an existing coalescable batch under the
+/// head-coalesce predicate, up to `drain_max`. Used by `coalesce_batch` for the
+/// pre-wait drain and by the worker loop for the post-quiescence drain that
+/// absorbs tasks arriving while the per-target pane wait was in flight.
+pub(super) fn extend_batch_with_drain(
+    batch: &mut Vec<AsyncDeliveryTask>,
+    drain_max: usize,
+    carry: &mut VecDeque<AsyncDeliveryTask>,
+    receiver: &mut UnboundedReceiver<AsyncDeliveryTask>,
+) {
+    debug_assert!(!batch.is_empty(), "extend requires a non-empty head batch");
     while batch.len() < drain_max {
         let candidate = if let Some(task) = carry.pop_front() {
             Some(task)
@@ -258,7 +305,6 @@ pub(super) fn coalesce_batch(
         }
         batch.push(candidate);
     }
-    batch
 }
 
 /// Coalesce predicate: the candidate must share the head's payload mode and
@@ -271,6 +317,49 @@ fn can_coalesce_with_head(head: &AsyncDeliveryTask, candidate: &AsyncDeliveryTas
     matches!(head.payload_mode, DeliveryPayloadMode::EnvelopeMessage)
         && matches!(candidate.payload_mode, DeliveryPayloadMode::EnvelopeMessage)
         && head.target_is_ui == candidate.target_is_ui
+}
+
+/// Identifies a head task that needs the worker-loop tmux quiescence hoist.
+/// Returns the cloned `TmuxTargetConfiguration` so the blocking pane wait can
+/// run without re-borrowing into the worker's bundle state. ACP/UI targets
+/// and RawInput heads return `None` — they keep their original transport flow.
+fn classify_tmux_quiescence_hoist(task: &AsyncDeliveryTask) -> Option<TmuxTargetConfiguration> {
+    if !matches!(task.payload_mode, DeliveryPayloadMode::EnvelopeMessage) || task.target_is_ui {
+        return None;
+    }
+    let target_member = task
+        .bundle
+        .members
+        .iter()
+        .find(|member| member.id == task.target_session)?;
+    match &target_member.target {
+        TargetConfiguration::Tmux(tmux_target) => Some(tmux_target.clone()),
+        _ => None,
+    }
+}
+
+/// Fans a single failure template across every task in a coalesced batch,
+/// preserving each task's own `message_id` / `target_session`, then completes
+/// the tasks and releases their pending slots. Used when the worker-loop
+/// quiescence hoist fails before paste begins so all coalesced tasks receive
+/// the same outcome and the loop can continue.
+fn complete_batch_with_template(
+    batch: &[AsyncDeliveryTask],
+    template: ChatResult,
+    pending: &std::sync::atomic::AtomicUsize,
+) {
+    for task in batch {
+        let outcome = Ok(ChatResult {
+            target_session: task.target_session.clone(),
+            message_id: task.message_id.clone(),
+            outcome: template.outcome.clone(),
+            reason_code: template.reason_code.clone(),
+            reason: template.reason.clone(),
+            details: template.details.clone(),
+        });
+        super::super::async_worker::complete_task_outcome(task, outcome);
+        super::super::async_worker::release_pending_slot(pending);
+    }
 }
 
 fn drain_carry_on_shutdown(
@@ -346,6 +435,7 @@ async fn bootstrap_acp_runtime_on_worker_start(
 /// ACP-peeled tasks that must be re-queued for the next worker iteration.
 async fn deliver_batch_blocking(
     batch: Vec<AsyncDeliveryTask>,
+    pre_resolved_pane: Option<String>,
     acp_runtime: Option<PersistentAcpWorkerRuntime>,
 ) -> (
     Vec<Result<ChatResult, RelayError>>,
@@ -354,8 +444,11 @@ async fn deliver_batch_blocking(
 ) {
     tokio::task::spawn_blocking(move || {
         let mut local_runtime = acp_runtime;
-        let (outcomes, deferred) =
-            super::orchestration::deliver_batch_with_worker_state(&batch, &mut local_runtime);
+        let (outcomes, deferred) = super::orchestration::deliver_batch_with_worker_state(
+            &batch,
+            pre_resolved_pane,
+            &mut local_runtime,
+        );
         (outcomes, local_runtime, deferred)
     })
     .await
@@ -715,46 +808,91 @@ mod coalesce_batch_tests {
         }
     }
 
-    /// Coordinator-named regression: a heterogeneous `[Envelope, Raw, Envelope,
-    /// Envelope]` queue against one per-target worker must drain across three
-    /// iterations (one envelope, one raw, one coalesced pair) without stranding
-    /// any task. This exercises every coalesce-batch branch the slice
-    /// introduces — the head-is-envelope path, the mode-change carry pushback,
-    /// the head-is-raw skip, and the multi-task pack — plus the worker-loop
-    /// invariant that carry empties before the receiver. A tokio
-    /// `UnboundedReceiver` only operates inside a runtime, so the test loop
-    /// drives `coalesce_batch` from `block_on`.
+    /// Pre- and post-quiescence drain regression across one heterogeneous
+    /// stream. Simulates the worker loop without the tmux pane wait by driving
+    /// `coalesce_batch` (pre-wait) and then `extend_batch_with_drain` directly
+    /// (post-wait) against a single `UnboundedReceiver`.
+    ///
+    /// Stream timeline:
+    /// - `e1` is queued first → becomes head of the first iteration.
+    /// - `r2` arrives before the pre-wait drain → must end the first batch
+    ///   (mode-divergent) and head the second iteration.
+    /// - `e3` arrives before the second pre-wait drain → becomes the head of
+    ///   iteration three.
+    /// - `e4`, `e5` arrive *during* iteration three's quiescence wait → the
+    ///   post-wait drain must absorb them into the same batch (the operator-
+    ///   observed bug case: drained_count=3 with pre=1/post=2).
+    ///
+    /// One test covers every coalesce-batch branch the slice introduces
+    /// (head-is-envelope, head-is-raw skip, mode-change carry pushback,
+    /// multi-task pack) plus the post-wait extension being the same helper.
     #[test]
-    fn heterogeneous_queue_drains_across_three_iterations() {
+    fn pre_and_post_quiescence_drains_cover_heterogeneous_stream() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("build current-thread runtime");
         runtime.block_on(async move {
             let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-            for prepared in [
-                task("e1", DeliveryPayloadMode::EnvelopeMessage),
-                task("r2", DeliveryPayloadMode::RawInput),
-                task("e3", DeliveryPayloadMode::EnvelopeMessage),
-                task("e4", DeliveryPayloadMode::EnvelopeMessage),
-            ] {
-                sender.send(prepared).expect("seed channel");
-            }
             let mut carry: VecDeque<AsyncDeliveryTask> = VecDeque::new();
             let mut iterations: Vec<Vec<String>> = Vec::new();
-            loop {
-                let head = carry.pop_front().or_else(|| receiver.try_recv().ok());
-                let Some(head) = head else { break };
-                let batch = coalesce_batch(head, 32, &mut carry, &mut receiver);
-                iterations.push(batch.iter().map(|task| task.message_id.clone()).collect());
-            }
+
+            // Iteration 1: pre-wait drain only — [e1].
+            sender
+                .send(task("e1", DeliveryPayloadMode::EnvelopeMessage))
+                .expect("seed e1");
+            sender
+                .send(task("r2", DeliveryPayloadMode::RawInput))
+                .expect("seed r2");
+            let head = receiver.try_recv().expect("e1 head");
+            let batch = coalesce_batch(head, 32, &mut carry, &mut receiver);
+            iterations.push(batch.iter().map(|t| t.message_id.clone()).collect());
+
+            // Iteration 2: RawInput head, pre-wait drain returns it alone.
+            let head = carry
+                .pop_front()
+                .or_else(|| receiver.try_recv().ok())
+                .expect("r2 head");
+            let batch = coalesce_batch(head, 32, &mut carry, &mut receiver);
+            iterations.push(batch.iter().map(|t| t.message_id.clone()).collect());
+
+            // Iteration 3: envelope head, *post-wait* drain absorbs e4/e5
+            // that landed in the channel while the quiescence wait was in
+            // flight (simulated by sending after coalesce_batch returns).
+            sender
+                .send(task("e3", DeliveryPayloadMode::EnvelopeMessage))
+                .expect("seed e3");
+            let head = receiver.try_recv().expect("e3 head");
+            let mut batch = coalesce_batch(head, 32, &mut carry, &mut receiver);
+            let pre_quiescence_count = batch.len();
+            // Tasks arriving during the (skipped) quiescence wait:
+            sender
+                .send(task("e4", DeliveryPayloadMode::EnvelopeMessage))
+                .expect("seed e4");
+            sender
+                .send(task("e5", DeliveryPayloadMode::EnvelopeMessage))
+                .expect("seed e5");
+            extend_batch_with_drain(&mut batch, 32, &mut carry, &mut receiver);
+            assert_eq!(pre_quiescence_count, 1, "pre-wait batch should be [e3]");
+            assert_eq!(
+                batch.len() - pre_quiescence_count,
+                2,
+                "post-wait drain should absorb e4 and e5",
+            );
+            iterations.push(batch.iter().map(|t| t.message_id.clone()).collect());
+
             assert_eq!(
                 iterations,
                 vec![
                     vec!["e1".to_string()],
                     vec!["r2".to_string()],
-                    vec!["e3".to_string(), "e4".to_string()],
+                    vec!["e3".to_string(), "e4".to_string(), "e5".to_string()],
                 ],
+            );
+            assert!(carry.is_empty(), "no tasks should be stranded in carry");
+            assert!(
+                receiver.try_recv().is_err(),
+                "no tasks should be left in the channel",
             );
         });
     }
