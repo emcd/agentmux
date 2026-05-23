@@ -1,24 +1,31 @@
 use std::{
     collections::HashMap,
     io,
-    os::unix::net::UnixStream,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Mutex, OnceLock},
     time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::{
+    io::AsyncWriteExt,
+    net::unix::OwnedWriteHalf,
+    sync::mpsc::{self, UnboundedSender, error::SendError},
+    task::JoinHandle,
+    time::timeout,
+};
 use uuid::Uuid;
 
 use crate::configuration::SessionType;
 use crate::runtime::inscriptions::emit_inscription;
 
-use super::{RelayRequest, RelayResponse, SCHEMA_VERSION};
+use super::{RelayRequest, RelayResponse};
 
-// Bounded write timeout for the conflict liveness probe. Long enough to
-// distinguish a live peer from a dead one, short enough that the rare
-// reconnect-race path does not stall registry operations for long.
-const STREAM_PROBE_WRITE_TIMEOUT: Duration = Duration::from_millis(50);
+// Bounded write timeout for relay-to-client writes. A stalled client whose
+// receive buffer is full must not pin the per-connection writer task
+// indefinitely; this timeout bounds every write attempt. Override with
+// `AGENTMUX_RELAY_CONNECTION_WRITE_TIMEOUT_MS`.
+const RELAY_CONNECTION_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(super) struct HelloFrame {
@@ -34,7 +41,11 @@ pub(super) struct StreamRegistration {
     pub(super) stream_id: String,
 }
 
-pub(super) type SharedStreamWriter = Arc<Mutex<UnixStream>>;
+/// Sender side of a per-connection writer task. Cloned into the stream registry
+/// and into delivery paths so events can be dispatched without holding any
+/// stream-level mutex. A cloned sender keeps the writer task alive; the task
+/// exits when every clone is dropped or when a write attempt fails.
+pub(super) type SharedStreamWriter = UnboundedSender<Vec<u8>>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum IncomingFrame {
@@ -136,8 +147,58 @@ pub(super) fn encode_outgoing_frame(frame: OutgoingFrame<'_>) -> Result<String, 
     serde_json::to_string(&frame).map_err(io::Error::other)
 }
 
-pub(super) fn clone_stream_writer(stream: &UnixStream) -> Result<SharedStreamWriter, io::Error> {
-    stream.try_clone().map(|value| Arc::new(Mutex::new(value)))
+/// Spawns a per-connection writer task that owns the write half of a relay
+/// stream and serially drains framed bytes from an mpsc queue. Returns the
+/// sender half so the connection loop, the stream registry, and delivery
+/// workers can share write access without holding a per-stream lock across an
+/// `.await`.
+///
+/// The task applies `relay_connection_write_timeout` to every write so a
+/// stalled client cannot pin the writer indefinitely. On any write error or
+/// timeout the task exits, dropping its receiver; further `send` calls from
+/// any cloned sender then return `SendError`, which is the signal callers use
+/// to recognize a closed writer.
+pub(super) fn spawn_stream_writer(
+    mut write_half: OwnedWriteHalf,
+) -> (SharedStreamWriter, JoinHandle<()>) {
+    let (sender, mut receiver) = mpsc::unbounded_channel::<Vec<u8>>();
+    let handle = tokio::spawn(async move {
+        while let Some(bytes) = receiver.recv().await {
+            let write = async {
+                write_half.write_all(&bytes).await?;
+                write_half.flush().await
+            };
+            match timeout(relay_connection_write_timeout(), write).await {
+                Ok(Ok(())) => {}
+                Ok(Err(source)) => {
+                    note_write_timeout(&source);
+                    break;
+                }
+                Err(_elapsed) => {
+                    let timeout_error =
+                        io::Error::new(io::ErrorKind::TimedOut, "relay connection write timed out");
+                    note_write_timeout(&timeout_error);
+                    break;
+                }
+            }
+        }
+    });
+    (sender, handle)
+}
+
+/// Resolves the relay-side write timeout for the per-connection writer task.
+///
+/// A stalled client whose receive buffer is full must not pin a writer task
+/// (or, via registered event senders, a delivery worker) indefinitely; this
+/// timeout bounds every relay-to-client write. Override with
+/// `AGENTMUX_RELAY_CONNECTION_WRITE_TIMEOUT_MS`.
+fn relay_connection_write_timeout() -> Duration {
+    std::env::var("AGENTMUX_RELAY_CONNECTION_WRITE_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .map(Duration::from_millis)
+        .unwrap_or(RELAY_CONNECTION_WRITE_TIMEOUT)
 }
 
 pub(super) fn register_stream(
@@ -156,19 +217,18 @@ pub(super) fn register_stream(
     };
     if let Some(entry) = entries.get(&key)
         && entry.stream_id.is_some()
-        && let Some(existing_writer) = entry.writer.clone()
+        && let Some(existing_writer) = entry.writer.as_ref()
+        && !existing_writer.is_closed()
     {
-        // A registry entry can outlive its connection: when a client drops and
-        // immediately reconnects, the owning connection thread may not have
-        // observed EOF yet, so the stale entry still looks live. Probe the
-        // existing writer before rejecting. A live owner keeps the claim; a
-        // dead one is evicted so the reconnecting session registers without
-        // exhausting its hello-conflict retry window.
-        if probe_writer_is_live(&existing_writer, hello) {
-            return Ok(RegisterStreamOutcome::IdentityClaimConflict {
-                existing_connection_id: entry.stream_id.clone(),
-            });
-        }
+        // A registry entry can briefly outlive its connection: when a client
+        // drops and immediately reconnects, the owning connection task may not
+        // have observed EOF yet, so the stale entry still looks live. Async
+        // reads + a drop-guard unregister narrow the race window to scheduling
+        // jitter; the conflict surfaces through the standard client retry path
+        // (`runtime_identity_claim_conflict`) instead of a synchronous probe.
+        return Ok(RegisterStreamOutcome::IdentityClaimConflict {
+            existing_connection_id: entry.stream_id.clone(),
+        });
     }
     let stream_id = Uuid::new_v4().to_string();
     entries.insert(
@@ -184,35 +244,6 @@ pub(super) fn register_stream(
         session_id: hello.session_id.clone(),
         stream_id,
     }))
-}
-
-// Probes whether a registered stream writer still has a live peer by writing a
-// `HelloAck` frame under a bounded write timeout. `HelloAck` is a safe probe
-// frame: an established-connection client silently ignores stray `HelloAck`s.
-// A write failure (peer closed, broken pipe, or probe timeout) reports the
-// owner as dead so the caller can evict the stale registry entry. The prior
-// write timeout is restored so a surviving owner keeps its saturation guard.
-fn probe_writer_is_live(writer: &SharedStreamWriter, hello: &HelloFrame) -> bool {
-    let Ok(mut stream) = writer.lock() else {
-        return false;
-    };
-    let prior_timeout = stream.write_timeout().ok().flatten();
-    if stream
-        .set_write_timeout(Some(STREAM_PROBE_WRITE_TIMEOUT))
-        .is_err()
-    {
-        return false;
-    }
-    let probe = write_stream_frame_quiet(
-        &mut stream,
-        OutgoingFrame::HelloAck {
-            schema_version: SCHEMA_VERSION,
-            bundle_name: hello.bundle_name.as_str(),
-            session_id: hello.session_id.as_str(),
-        },
-    );
-    let _ = stream.set_write_timeout(prior_timeout);
-    probe.is_ok()
 }
 
 #[derive(Clone, Debug)]
@@ -394,33 +425,44 @@ pub(super) fn send_event_to_registered_ui(
     Ok(StreamEventSendOutcome::Disconnected)
 }
 
-pub(super) fn write_stream_frame(
-    stream: &mut UnixStream,
+/// Encodes an outgoing frame and hands the bytes to the connection's writer
+/// task. Returns an error only when the writer task has already exited (its
+/// receiver is dropped); that signals a broken pipe or write timeout observed
+/// by the writer, and callers use it to evict the registry entry.
+pub(super) fn write_stream_frame_to_writer(
+    writer: &SharedStreamWriter,
     frame: OutgoingFrame<'_>,
 ) -> Result<(), io::Error> {
-    write_stream_frame_quiet(stream, frame).inspect_err(note_write_timeout)
+    let mut bytes = encode_outgoing_frame(frame)?.into_bytes();
+    bytes.push(b'\n');
+    enqueue_bytes(writer, bytes)
 }
 
-// Writes a frame without the `note_write_timeout` inscription side effect.
-// Used by the conflict liveness probe, where a failed write is an expected,
-// benign outcome that must not be mistaken for client-induced saturation.
-fn write_stream_frame_quiet(
-    stream: &mut UnixStream,
-    frame: OutgoingFrame<'_>,
+/// Sends a raw `RelayResponse` JSON line (no frame envelope) through the
+/// connection's writer task. Used for legacy callers that have not sent a
+/// hello frame and for the pre-hello parse-failure path, where the wire
+/// contract is the unwrapped `RelayResponse` shape that `request_relay`
+/// decodes.
+pub(super) fn write_legacy_response_to_writer(
+    writer: &SharedStreamWriter,
+    response: &RelayResponse,
 ) -> Result<(), io::Error> {
-    use std::io::Write;
-    let encoded = encode_outgoing_frame(frame)?;
-    stream
-        .write_all(encoded.as_bytes())
-        .and_then(|()| stream.write_all(b"\n"))
-        .and_then(|()| stream.flush())
+    let mut bytes = serde_json::to_vec(response).map_err(io::Error::other)?;
+    bytes.push(b'\n');
+    enqueue_bytes(writer, bytes)
+}
+
+fn enqueue_bytes(writer: &SharedStreamWriter, bytes: Vec<u8>) -> Result<(), io::Error> {
+    writer.send(bytes).map_err(|SendError(_)| {
+        io::Error::new(io::ErrorKind::BrokenPipe, "stream writer task has closed")
+    })
 }
 
 // Records an inscription when a relay-to-client write failed because the write
 // timeout fired. A stalled client (full socket buffer) surfaces here as a
 // `WouldBlock` or `TimedOut` error; capturing it makes connection-pool and
 // delivery-worker saturation traceable to the offending client.
-pub(super) fn note_write_timeout(error: &io::Error) {
+fn note_write_timeout(error: &io::Error) {
     if matches!(
         error.kind(),
         io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
@@ -430,16 +472,6 @@ pub(super) fn note_write_timeout(error: &io::Error) {
             &serde_json::json!({ "cause": error.to_string() }),
         );
     }
-}
-
-pub(super) fn write_stream_frame_to_writer(
-    writer: &SharedStreamWriter,
-    frame: OutgoingFrame<'_>,
-) -> Result<(), io::Error> {
-    let mut stream = writer
-        .lock()
-        .map_err(|_| io::Error::other("failed to lock stream writer"))?;
-    write_stream_frame(&mut stream, frame)
 }
 
 fn stream_registry() -> &'static StreamRegistry {

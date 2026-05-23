@@ -4,6 +4,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use tokio::sync::mpsc as tokio_mpsc;
+
 use serde_json::json;
 use time::format_description::well_known::Rfc3339;
 
@@ -88,7 +90,7 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
             })),
         )
     })? {
-        let (sender, receiver) = mpsc::channel::<AsyncDeliveryTask>();
+        let (sender, receiver) = tokio_mpsc::unbounded_channel::<AsyncDeliveryTask>();
         let pending = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let bootstrap = AcpWorkerBootstrap {
             target_member: target_member.clone(),
@@ -195,7 +197,7 @@ fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
                     })),
                 ));
             }
-            let (sender, receiver) = mpsc::channel::<AsyncDeliveryTask>();
+            let (sender, receiver) = tokio_mpsc::unbounded_channel::<AsyncDeliveryTask>();
             let pending = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
             if bounded_acp_queue
                 && !super::super::async_worker::reserve_acp_pending_slot(pending.as_ref())

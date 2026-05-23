@@ -54,8 +54,11 @@ exported from `src/relay/mod.rs`.
     orchestration.
   - `dispatch/payload.rs`: envelope/raw payload preparation and UI routing.
   - `dispatch/transport.rs`: ACP/tmux transport-specific dispatch.
-  - `dispatch/worker.rs`: async worker loop and ACP respawn handling.
-  - `async_worker.rs`: async queue worker behavior.
+  - `dispatch/worker.rs`: per-target tokio worker task; ACP bootstrap,
+    respawn, and the blocking delivery body are run on the blocking pool
+    via `spawn_blocking`.
+  - `async_worker.rs`: worker registry (tokio mpsc senders) and shutdown
+    drain helpers.
   - `acp_client.rs`, `acp_delivery.rs`, `acp_state.rs`: ACP lifecycle,
     prompt flow, and snapshot persistence helpers.
   - `ui_delivery.rs`: UI-stream event emission for delivery completion.
@@ -70,11 +73,29 @@ exported from `src/relay/mod.rs`.
   `quiescence_timeout_ms`.
 - Pre-hello idle sockets are reaped in host connection workers to prevent
   starvation (`AGENTMUX_RELAY_PRE_HELLO_IDLE_TIMEOUT_MS` override).
-- Relay-to-client writes carry a write timeout (`serve_connection`) so a
-  stalled client cannot pin a connection-pool worker — or, via registered
-  event writers, a delivery worker — indefinitely
+- Each connection owns a per-connection writer task (mpsc + tokio write half)
+  that applies a relay-to-client write timeout
   (`AGENTMUX_RELAY_CONNECTION_WRITE_TIMEOUT_MS` override, default 5s). A
-  tripped write emits a `relay.connection.write_timeout` inscription.
-- Host connection workers emit `relay.connection_pool.metrics` on each accept
-  (`queued`/`active`/`rejected` counts) so pool saturation is observable.
+  stalled client cannot pin the writer — or, via cloned writer senders, a
+  delivery worker — indefinitely: a tripped write emits a
+  `relay.connection.write_timeout` inscription and the writer task exits,
+  closing the channel so cloned senders surface the disconnect.
+- The stream registry entry is released via a drop guard so an async-cancelled
+  connection cannot leak a registry entry and wedge the next same-identity
+  reconnect into an identity-claim conflict.
+- Host accept loops emit `relay.connection_pool.metrics` on each accept
+  (`max_connections`/`active`/`rejected` counts) so saturation against the
+  unified `AGENTMUX_RELAY_MAX_CONNECTIONS` cap is observable. Connections that
+  exceed the cap receive a `runtime_connection_limit_reached` error.
 - Stream events are correlated by `message_id` for send completion workflows.
+- Per-target delivery workers run as tokio tasks (`tokio::spawn`) reading
+  from a `tokio::sync::mpsc::UnboundedReceiver`. The blocking ACP / tmux
+  delivery body, the ACP single-flight prompt-completion wait, and the
+  ACP bootstrap and respawn paths are offloaded to `tokio::task::spawn_blocking`
+  so a tokio runtime worker thread is never pinned during transport IO.
+  Worker tasks normally run on the host's main runtime; sync callers that
+  enqueue work without an ambient runtime (CLI helpers, unit tests) fall
+  back to a process-wide multi-thread runtime created on demand. Worker
+  shutdown is observed via `shutdown_requested()` polled between receives,
+  the same signal the registry-empty drain in
+  `wait_for_async_delivery_shutdown` waits on.

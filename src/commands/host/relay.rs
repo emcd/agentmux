@@ -1,24 +1,25 @@
 use std::{
     env,
-    io::Write,
-    net::Shutdown,
-    os::unix::net::{UnixListener, UnixStream},
-    path::Path,
+    os::unix::net::UnixListener,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
-    thread,
     time::Duration,
 };
 
 use serde_json::json;
+use tokio::{
+    io::AsyncWriteExt,
+    net::{UnixListener as TokioUnixListener, UnixStream as TokioUnixStream},
+    sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError},
+    task::JoinSet,
+};
 
 use crate::{
     configuration::load_bundle_group_memberships,
     relay::{
-        append_startup_failure, shutdown_bundle_runtime, startup_bundle,
+        append_startup_failure, serve_connection, shutdown_bundle_runtime, startup_bundle,
         wait_for_async_delivery_shutdown,
     },
     runtime::{
@@ -36,7 +37,9 @@ use crate::{
     },
 };
 
-use crate::commands::{RelayHostArguments, RelayHostStartupBundle, RuntimeArguments, shared};
+use crate::commands::{
+    RelayHostArguments, RelayHostStartupBundle, RelayHostStartupSummary, RuntimeArguments, shared,
+};
 
 use super::summary::{
     build_startup_summary, failed_startup_bundle, hosted_startup_bundle, render_startup_summary,
@@ -56,50 +59,61 @@ struct HostedRelayBundle {
     _runtime_lock: RelayRuntimeLock,
 }
 
-#[derive(Debug)]
-struct RelayListenerWorker {
-    paths: BundleRuntimePaths,
-    join_handle: thread::JoinHandle<()>,
+/// Outcome of the synchronous relay-host startup phase.
+///
+/// `NoHostedBundles` means startup finalized without anything to serve (process
+/// only, or zero ready bundles) and the summary, if any, has already been
+/// emitted. `Serve` carries the bound listeners forward into the async serve
+/// phase.
+enum RelayHostPreparation {
+    NoHostedBundles,
+    Serve {
+        summary: RelayHostStartupSummary,
+        hosted_bundles: Vec<HostedRelayBundle>,
+    },
 }
 
 #[derive(Debug)]
-struct RelayConnectionWorker {
-    sender: mpsc::SyncSender<UnixStream>,
-    join_handle: thread::JoinHandle<()>,
+struct RelayConnectionMetrics {
+    active_connections: AtomicUsize,
+    rejected_connections: AtomicUsize,
 }
 
-#[derive(Debug)]
-struct RelayConnectionPoolMetrics {
-    queued_connections: std::sync::atomic::AtomicUsize,
-    active_connections: std::sync::atomic::AtomicUsize,
-    rejected_connections: std::sync::atomic::AtomicUsize,
-}
-
-impl RelayConnectionPoolMetrics {
+impl RelayConnectionMetrics {
     fn new() -> Self {
         Self {
-            queued_connections: std::sync::atomic::AtomicUsize::new(0),
-            active_connections: std::sync::atomic::AtomicUsize::new(0),
-            rejected_connections: std::sync::atomic::AtomicUsize::new(0),
+            active_connections: AtomicUsize::new(0),
+            rejected_connections: AtomicUsize::new(0),
         }
     }
 }
 
-enum RelayConnectionDispatchOutcome {
-    Queued,
-    QueueFull(UnixStream),
-    WorkersUnavailable(UnixStream),
-}
-
-const RELAY_CONNECTION_WORKER_MIN: usize = 2;
-const RELAY_CONNECTION_WORKER_MAX: usize = 64;
-const RELAY_CONNECTION_WORKER_STACK_SIZE: usize = 512 * 1024;
-const RELAY_CONNECTION_QUEUE_CAPACITY: usize = 64;
+// Unified cap on concurrent relay connections (persistent streams and
+// short-lived requests share it), enforced by a semaphore at accept time.
+// Raise via AGENTMUX_RELAY_MAX_CONNECTIONS if multi-tenant load ever demands it.
+const RELAY_MAX_CONNECTIONS: usize = 512;
 const RELAY_PRE_HELLO_IDLE_TIMEOUT_MS: u64 = 2_000;
+const RELAY_SHUTDOWN_POLL_INTERVAL_MS: u64 = 100;
 
-pub(super) fn run_relay_host(arguments: RelayHostArguments) -> Result<(), RuntimeError> {
-    let roots = resolve_runtime_roots(arguments.runtime)?;
-    run_relay_host_no_selector(&roots, arguments.no_autostart)
+pub(super) async fn run_relay_host(arguments: RelayHostArguments) -> Result<(), RuntimeError> {
+    // Startup (config load, tmux autostart, lock acquisition, socket binding) is
+    // blocking, so it runs on a blocking task. The async serve phase then drives
+    // the per-bundle accept loops on the runtime (tokio::net + tokio::spawn).
+    let (roots, preparation) = tokio::task::spawn_blocking(move || {
+        let roots = resolve_runtime_roots(arguments.runtime)?;
+        let preparation = prepare_relay_host(&roots, arguments.no_autostart)?;
+        Ok::<_, RuntimeError>((roots, preparation))
+    })
+    .await
+    .map_err(|source| supervisor_join_error("relay host startup", source))??;
+
+    match preparation {
+        RelayHostPreparation::NoHostedBundles => Ok(()),
+        RelayHostPreparation::Serve {
+            summary,
+            hosted_bundles,
+        } => serve_relay_host(roots, summary, hosted_bundles).await,
+    }
 }
 
 fn resolve_runtime_roots(runtime: RuntimeArguments) -> Result<RuntimeRoots, RuntimeError> {
@@ -116,10 +130,12 @@ fn resolve_runtime_roots(runtime: RuntimeArguments) -> Result<RuntimeRoots, Runt
     Ok(roots)
 }
 
-fn run_relay_host_no_selector(
+/// Runs the synchronous startup phase: load memberships, host each bundle, and
+/// decide whether there is anything to serve.
+fn prepare_relay_host(
     roots: &RuntimeRoots,
     no_autostart: bool,
-) -> Result<(), RuntimeError> {
+) -> Result<RelayHostPreparation, RuntimeError> {
     let memberships = load_bundle_group_memberships(&roots.configuration_root)
         .map_err(shared::map_bundle_load_error)?;
     if let Some(first_bundle) = memberships.first()
@@ -165,7 +181,7 @@ fn run_relay_host_no_selector(
         if no_autostart {
             emit_inscription("relay.startup.summary", &startup_summary_payload(&summary));
             render_startup_summary(&summary);
-            return Ok(());
+            return Ok(RelayHostPreparation::NoHostedBundles);
         }
         if summary.failed_bundle_count > 0 {
             return Err(RuntimeError::validation(
@@ -176,62 +192,126 @@ fn run_relay_host_no_selector(
                 ),
             ));
         }
-        return Ok(());
+        return Ok(RelayHostPreparation::NoHostedBundles);
     }
 
+    Ok(RelayHostPreparation::Serve {
+        summary,
+        hosted_bundles,
+    })
+}
+
+/// Drives the per-bundle accept loops on the async runtime until shutdown, then
+/// performs runtime cleanup.
+async fn serve_relay_host(
+    roots: RuntimeRoots,
+    summary: RelayHostStartupSummary,
+    hosted_bundles: Vec<HostedRelayBundle>,
+) -> Result<(), RuntimeError> {
     let _signal_handlers = install_shutdown_signal_handlers()?;
     emit_inscription("relay.startup.summary", &startup_summary_payload(&summary));
     render_startup_summary(&summary);
 
     let stop_requested = Arc::new(AtomicBool::new(false));
-    let (error_sender, error_receiver) = mpsc::channel::<RuntimeError>();
-    let mut workers = hosted_bundles
-        .into_iter()
-        .map(|hosted_bundle| {
-            spawn_relay_listener_worker(
-                roots.configuration_root.clone(),
-                hosted_bundle,
-                Arc::clone(&stop_requested),
-                error_sender.clone(),
-            )
-        })
-        .collect::<Vec<_>>();
-    drop(error_sender);
+    let max_connections = relay_max_connections();
+    let connection_permits = Arc::new(Semaphore::new(max_connections));
 
-    let mut accept_error = None::<RuntimeError>;
-    while !shutdown_requested() && !stop_requested.load(Ordering::SeqCst) {
-        match error_receiver.recv_timeout(Duration::from_millis(100)) {
-            Ok(source) => {
-                stop_requested.store(true, Ordering::SeqCst);
-                accept_error = Some(source);
-                break;
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
+    let mut accept_tasks: JoinSet<Result<(), RuntimeError>> = JoinSet::new();
+    let mut cleanup_paths = Vec::<BundleRuntimePaths>::with_capacity(hosted_bundles.len());
+    for hosted_bundle in hosted_bundles {
+        cleanup_paths.push(hosted_bundle.paths.clone());
+        accept_tasks.spawn(run_relay_accept_loop(
+            roots.configuration_root.clone(),
+            hosted_bundle,
+            Arc::clone(&stop_requested),
+            Arc::clone(&connection_permits),
+            max_connections,
+        ));
     }
+
+    let mut accept_error = supervise_accept_loops(&stop_requested, &mut accept_tasks).await;
 
     if shutdown_requested() {
         emit_inscription("relay.shutdown.signal", &json!({"signal": "termination"}));
     }
     stop_requested.store(true, Ordering::SeqCst);
-    for worker in &workers {
-        wake_listener(worker.paths.relay_socket.as_path());
-    }
-    let mut cleanup_paths = Vec::<BundleRuntimePaths>::with_capacity(workers.len());
-    for worker in workers.drain(..) {
-        cleanup_paths.push(worker.paths.clone());
-        if worker.join_handle.join().is_err() && accept_error.is_none() {
-            accept_error = Some(RuntimeError::validation(
-                "internal_unexpected_failure",
-                format!(
-                    "relay listener worker panicked for bundle {}",
-                    worker.paths.bundle_name
-                ),
-            ));
+
+    // In-flight connection tasks are intentionally detached on shutdown (as the
+    // connection-worker pool was before); only the accept loops are joined here.
+    while let Some(joined) = accept_tasks.join_next().await {
+        if let Some(error) = accept_loop_join_error(joined)
+            && accept_error.is_none()
+        {
+            accept_error = Some(error);
         }
     }
 
+    // Cleanup (async-delivery drain, socket removal, tmux shutdown) is blocking.
+    tokio::task::spawn_blocking(move || cleanup_relay_host(cleanup_paths))
+        .await
+        .map_err(|source| supervisor_join_error("relay host cleanup", source))??;
+
+    if let Some(error) = accept_error {
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Waits until a shutdown signal arrives or an accept loop fails. A clean accept
+/// loop exit (graceful stop) is tolerated; a failure stops the remaining loops
+/// and is surfaced to the caller.
+async fn supervise_accept_loops(
+    stop_requested: &Arc<AtomicBool>,
+    accept_tasks: &mut JoinSet<Result<(), RuntimeError>>,
+) -> Option<RuntimeError> {
+    loop {
+        if shutdown_requested() || stop_requested.load(Ordering::SeqCst) {
+            return None;
+        }
+        tokio::select! {
+            biased;
+            joined = accept_tasks.join_next() => {
+                match joined {
+                    None => return None,
+                    Some(result) => {
+                        if let Some(error) = accept_loop_join_error(result) {
+                            stop_requested.store(true, Ordering::SeqCst);
+                            return Some(error);
+                        }
+                    }
+                }
+            }
+            () = tokio::time::sleep(Duration::from_millis(RELAY_SHUTDOWN_POLL_INTERVAL_MS)) => {}
+        }
+    }
+}
+
+/// Maps an accept-loop task's join result to an optional fatal error.
+fn accept_loop_join_error(
+    result: Result<Result<(), RuntimeError>, tokio::task::JoinError>,
+) -> Option<RuntimeError> {
+    match result {
+        Ok(Ok(())) => None,
+        Ok(Err(error)) => Some(error),
+        Err(join_error) => Some(RuntimeError::validation(
+            "internal_unexpected_failure",
+            format!("relay accept loop task panicked: {join_error}"),
+        )),
+    }
+}
+
+/// Builds a runtime error for a blocking supervisor/cleanup task that failed to
+/// join (panic or cancellation).
+fn supervisor_join_error(context: &str, source: tokio::task::JoinError) -> RuntimeError {
+    RuntimeError::validation(
+        "internal_unexpected_failure",
+        format!("{context} task failed to join: {source}"),
+    )
+}
+
+/// Performs runtime cleanup after the accept loops have stopped: drains async
+/// delivery workers (on shutdown), removes relay sockets, and shuts down tmux.
+fn cleanup_relay_host(cleanup_paths: Vec<BundleRuntimePaths>) -> Result<(), RuntimeError> {
     let async_workers_remaining = if shutdown_requested() {
         wait_for_async_delivery_shutdown(Duration::from_millis(1_500))
     } else {
@@ -252,138 +332,137 @@ fn run_relay_host_no_selector(
             }),
         );
     }
-    if let Some(error) = accept_error {
-        return Err(error);
-    }
     Ok(())
 }
 
-fn spawn_relay_listener_worker(
+/// Accepts connections for one bundle and spawns a task per connection, bounded
+/// by the shared connection semaphore. At the cap, new connections receive an
+/// immediate overloaded response.
+async fn run_relay_accept_loop(
     configuration_root: std::path::PathBuf,
     hosted_bundle: HostedRelayBundle,
     stop_requested: Arc<AtomicBool>,
-    error_sender: mpsc::Sender<RuntimeError>,
-) -> RelayListenerWorker {
-    let paths = hosted_bundle.paths.clone();
-    let join_handle = thread::spawn(move || {
-        run_relay_listener_worker(
-            configuration_root,
-            hosted_bundle,
-            stop_requested,
-            error_sender,
-        );
-    });
-    RelayListenerWorker { paths, join_handle }
-}
+    connection_permits: Arc<Semaphore>,
+    max_connections: usize,
+) -> Result<(), RuntimeError> {
+    // `_runtime_lock` is held for the loop's lifetime (released on task exit) to
+    // keep the bundle's relay runtime lock owned while the socket is served.
+    let HostedRelayBundle {
+        paths,
+        listener,
+        _runtime_lock,
+    } = hosted_bundle;
+    listener.set_nonblocking(true).map_err(|source| {
+        RuntimeError::io(
+            format!(
+                "set relay socket non-blocking for bundle {}",
+                paths.bundle_name
+            ),
+            source,
+        )
+    })?;
+    let listener = TokioUnixListener::from_std(listener).map_err(|source| {
+        RuntimeError::io(
+            format!(
+                "register relay socket with async runtime for bundle {}",
+                paths.bundle_name
+            ),
+            source,
+        )
+    })?;
+    let metrics = Arc::new(RelayConnectionMetrics::new());
 
-fn run_relay_listener_worker(
-    configuration_root: std::path::PathBuf,
-    hosted_bundle: HostedRelayBundle,
-    stop_requested: Arc<AtomicBool>,
-    error_sender: mpsc::Sender<RuntimeError>,
-) {
-    let metrics = Arc::new(RelayConnectionPoolMetrics::new());
-    let mut connection_workers = spawn_relay_connection_worker_pool(
-        configuration_root.clone(),
-        hosted_bundle.paths.clone(),
-        Arc::clone(&stop_requested),
-        Arc::clone(&metrics),
-    );
-    let mut next_worker_index = 0usize;
-    while !shutdown_requested() && !stop_requested.load(Ordering::SeqCst) {
-        match hosted_bundle.listener.accept() {
-            Ok((stream, _)) => {
-                if shutdown_requested() || stop_requested.load(Ordering::SeqCst) {
-                    break;
-                }
-                match dispatch_connection_to_worker_pool(
-                    &connection_workers,
-                    &mut next_worker_index,
-                    stream,
-                    &metrics,
-                ) {
-                    RelayConnectionDispatchOutcome::Queued => {}
-                    RelayConnectionDispatchOutcome::QueueFull(stream) => {
-                        reject_overloaded_connection(&hosted_bundle.paths, stream, &metrics);
-                    }
-                    RelayConnectionDispatchOutcome::WorkersUnavailable(stream) => {
-                        let _ = stream.shutdown(Shutdown::Both);
-                        let _ = error_sender.send(RuntimeError::validation(
-                            "internal_unexpected_failure",
-                            format!(
-                                "relay connection workers unavailable for bundle {}",
-                                hosted_bundle.paths.bundle_name
-                            ),
-                        ));
-                        break;
-                    }
-                }
-                emit_connection_pool_metrics(
-                    &hosted_bundle.paths,
-                    connection_workers.len(),
-                    &metrics,
-                );
-            }
-            Err(source) if source.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(source) => {
-                let _ = error_sender.send(RuntimeError::io(
-                    format!(
-                        "accept relay socket connection for bundle {}",
-                        hosted_bundle.paths.bundle_name
-                    ),
-                    source,
-                ));
-                break;
-            }
+    let accept_outcome = loop {
+        if shutdown_requested() || stop_requested.load(Ordering::SeqCst) {
+            break Ok(());
         }
-    }
-    if shutdown_requested() || stop_requested.load(Ordering::SeqCst) {
+        tokio::select! {
+            biased;
+            accepted = listener.accept() => {
+                match accepted {
+                    Ok((stream, _address)) => {
+                        if shutdown_requested() || stop_requested.load(Ordering::SeqCst) {
+                            break Ok(());
+                        }
+                        match Arc::clone(&connection_permits).try_acquire_owned() {
+                            Ok(permit) => {
+                                spawn_connection_worker(
+                                    permit,
+                                    stream,
+                                    configuration_root.clone(),
+                                    paths.clone(),
+                                    Arc::clone(&metrics),
+                                );
+                            }
+                            Err(TryAcquireError::NoPermits) => {
+                                reject_overloaded_connection(&paths, stream, &metrics).await;
+                            }
+                            Err(TryAcquireError::Closed) => break Ok(()),
+                        }
+                        emit_connection_metrics(&paths, max_connections, &metrics);
+                    }
+                    Err(source) => {
+                        break Err(RuntimeError::io(
+                            format!(
+                                "accept relay socket connection for bundle {}",
+                                paths.bundle_name
+                            ),
+                            source,
+                        ));
+                    }
+                }
+            }
+            () = tokio::time::sleep(Duration::from_millis(RELAY_SHUTDOWN_POLL_INTERVAL_MS)) => {}
+        }
+    };
+
+    if accept_outcome.is_ok() && (shutdown_requested() || stop_requested.load(Ordering::SeqCst)) {
         emit_inscription(
             "relay.shutdown.connection_workers_detached",
             &json!({
-                "bundle_name": hosted_bundle.paths.bundle_name,
-                "connection_worker_count": connection_workers.len(),
-                "queued_connections": metrics
-                    .queued_connections
-                    .load(Ordering::SeqCst),
-                "active_connections": metrics
-                    .active_connections
-                    .load(Ordering::SeqCst),
-                "rejected_connections": metrics
-                    .rejected_connections
-                    .load(Ordering::SeqCst),
+                "bundle_name": paths.bundle_name,
+                "max_connections": max_connections,
+                "active_connections": metrics.active_connections.load(Ordering::SeqCst),
+                "rejected_connections": metrics.rejected_connections.load(Ordering::SeqCst),
             }),
         );
-        return;
     }
-    for worker in connection_workers.drain(..) {
-        if worker.join_handle.join().is_err() {
-            let _ = error_sender.send(RuntimeError::validation(
-                "internal_unexpected_failure",
-                format!(
-                    "relay connection worker panicked for bundle {}",
-                    hosted_bundle.paths.bundle_name
-                ),
-            ));
-            break;
+    accept_outcome
+}
+
+/// Spawns a tokio task to serve one accepted connection asynchronously. The
+/// task is detached: in-flight tasks are cancelled when the runtime is dropped
+/// (process shutdown), which triggers the connection's drop-guard unregister
+/// path. Per-connection writes run on a separate writer task spawned inside
+/// `serve_connection`, so no blocking call ever ties up a runtime worker.
+fn spawn_connection_worker(
+    permit: OwnedSemaphorePermit,
+    stream: TokioUnixStream,
+    configuration_root: std::path::PathBuf,
+    paths: BundleRuntimePaths,
+    metrics: Arc<RelayConnectionMetrics>,
+) {
+    metrics.active_connections.fetch_add(1, Ordering::SeqCst);
+    let pre_hello_idle_timeout = relay_pre_hello_idle_timeout();
+    tokio::spawn(async move {
+        let result =
+            serve_connection(stream, &configuration_root, &paths, pre_hello_idle_timeout).await;
+        metrics.active_connections.fetch_sub(1, Ordering::SeqCst);
+        drop(permit);
+        if let Err(source) = result {
+            emit_inscription(
+                "relay.request_failed",
+                &json!({
+                    "bundle_name": paths.bundle_name,
+                    "error": source.to_string(),
+                }),
+            );
         }
-    }
+    });
 }
 
-fn relay_connection_worker_count() -> usize {
-    // Connection workers are IO-bound (blocked on read_line between frames),
-    // so available_parallelism() is the wrong heuristic. Default to the max
-    // so persistent-connection clients (TUI, per-agent MCP streams) do not
-    // exhaust the pool. Override with AGENTMUX_RELAY_CONNECTION_WORKERS.
-    if let Some(override_count) = parse_env_positive_usize("AGENTMUX_RELAY_CONNECTION_WORKERS") {
-        return override_count;
-    }
-    RELAY_CONNECTION_WORKER_MAX.max(RELAY_CONNECTION_WORKER_MIN)
-}
-
-fn relay_connection_queue_capacity() -> usize {
-    parse_env_positive_usize("AGENTMUX_RELAY_CONNECTION_QUEUE_CAPACITY")
-        .unwrap_or(RELAY_CONNECTION_QUEUE_CAPACITY)
+fn relay_max_connections() -> usize {
+    parse_env_positive_usize("AGENTMUX_RELAY_MAX_CONNECTIONS").unwrap_or(RELAY_MAX_CONNECTIONS)
 }
 
 fn relay_pre_hello_idle_timeout() -> Duration {
@@ -400,187 +479,54 @@ fn parse_env_positive_usize(name: &str) -> Option<usize> {
         .filter(|value| *value > 0)
 }
 
-fn spawn_relay_connection_worker_pool(
-    configuration_root: std::path::PathBuf,
-    bundle_paths: BundleRuntimePaths,
-    stop_requested: Arc<AtomicBool>,
-    metrics: Arc<RelayConnectionPoolMetrics>,
-) -> Vec<RelayConnectionWorker> {
-    let worker_count = relay_connection_worker_count();
-    (0..worker_count)
-        .map(|_| {
-            spawn_relay_connection_worker(
-                configuration_root.clone(),
-                bundle_paths.clone(),
-                Arc::clone(&stop_requested),
-                Arc::clone(&metrics),
-            )
-        })
-        .collect::<Vec<_>>()
-}
-
-fn spawn_relay_connection_worker(
-    configuration_root: std::path::PathBuf,
-    bundle_paths: BundleRuntimePaths,
-    stop_requested: Arc<AtomicBool>,
-    metrics: Arc<RelayConnectionPoolMetrics>,
-) -> RelayConnectionWorker {
-    let (sender, receiver) = mpsc::sync_channel::<UnixStream>(relay_connection_queue_capacity());
-    let join_handle = thread::Builder::new()
-        .stack_size(RELAY_CONNECTION_WORKER_STACK_SIZE)
-        .spawn(move || {
-            run_relay_connection_worker(
-                configuration_root,
-                bundle_paths,
-                stop_requested,
-                receiver,
-                metrics,
-            );
-        })
-        .expect("spawn relay connection worker thread");
-    RelayConnectionWorker {
-        sender,
-        join_handle,
-    }
-}
-
-fn run_relay_connection_worker(
-    configuration_root: std::path::PathBuf,
-    bundle_paths: BundleRuntimePaths,
-    stop_requested: Arc<AtomicBool>,
-    receiver: mpsc::Receiver<UnixStream>,
-    metrics: Arc<RelayConnectionPoolMetrics>,
-) {
-    loop {
-        if shutdown_requested() || stop_requested.load(Ordering::SeqCst) {
-            break;
-        }
-        match receiver.recv_timeout(Duration::from_millis(100)) {
-            Ok(mut stream) => {
-                metrics.queued_connections.fetch_sub(1, Ordering::SeqCst);
-                metrics.active_connections.fetch_add(1, Ordering::SeqCst);
-                if let Err(source) = stream.set_read_timeout(Some(relay_pre_hello_idle_timeout())) {
-                    emit_inscription(
-                        "relay.request_failed",
-                        &json!({
-                            "bundle_name": bundle_paths.bundle_name,
-                            "error": format!("failed to set pre-hello idle timeout: {source}"),
-                        }),
-                    );
-                    metrics.active_connections.fetch_sub(1, Ordering::SeqCst);
-                    continue;
-                }
-                if let Err(source) =
-                    crate::relay::serve_connection(&mut stream, &configuration_root, &bundle_paths)
-                {
-                    emit_inscription(
-                        "relay.request_failed",
-                        &json!({
-                            "bundle_name": bundle_paths.bundle_name,
-                            "error": source.to_string(),
-                        }),
-                    );
-                }
-                metrics.active_connections.fetch_sub(1, Ordering::SeqCst);
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-    }
-}
-
-fn dispatch_connection_to_worker_pool(
-    connection_workers: &[RelayConnectionWorker],
-    next_worker_index: &mut usize,
-    mut stream: UnixStream,
-    metrics: &RelayConnectionPoolMetrics,
-) -> RelayConnectionDispatchOutcome {
-    if connection_workers.is_empty() {
-        return RelayConnectionDispatchOutcome::WorkersUnavailable(stream);
-    }
-    let worker_count = connection_workers.len();
-    let mut saw_queue_full = false;
-    let mut saw_disconnected = false;
-    for offset in 0..worker_count {
-        let worker_index = (*next_worker_index + offset) % worker_count;
-        match connection_workers[worker_index].sender.try_send(stream) {
-            Ok(()) => {
-                metrics.queued_connections.fetch_add(1, Ordering::SeqCst);
-                *next_worker_index = (worker_index + 1) % worker_count;
-                return RelayConnectionDispatchOutcome::Queued;
-            }
-            Err(mpsc::TrySendError::Full(returned_stream)) => {
-                saw_queue_full = true;
-                stream = returned_stream;
-            }
-            Err(mpsc::TrySendError::Disconnected(returned_stream)) => {
-                saw_disconnected = true;
-                stream = returned_stream;
-            }
-        }
-    }
-    if saw_queue_full {
-        return RelayConnectionDispatchOutcome::QueueFull(stream);
-    }
-    if saw_disconnected {
-        return RelayConnectionDispatchOutcome::WorkersUnavailable(stream);
-    }
-    RelayConnectionDispatchOutcome::WorkersUnavailable(stream)
-}
-
-fn reject_overloaded_connection(
-    bundle_paths: &BundleRuntimePaths,
-    mut stream: UnixStream,
-    metrics: &RelayConnectionPoolMetrics,
+async fn reject_overloaded_connection(
+    paths: &BundleRuntimePaths,
+    mut stream: TokioUnixStream,
+    metrics: &RelayConnectionMetrics,
 ) {
     metrics.rejected_connections.fetch_add(1, Ordering::SeqCst);
     emit_inscription(
         "relay.connection.rejected",
         &json!({
-            "bundle_name": bundle_paths.bundle_name,
-            "reason_code": "runtime_connection_queue_full",
-            "reason": "connection worker pool queue is full",
+            "bundle_name": paths.bundle_name,
+            "reason_code": "runtime_connection_limit_reached",
+            "reason": "relay connection limit reached",
         }),
     );
     let response = crate::relay::RelayResponse::Error {
         error: crate::relay::RelayError {
-            code: "runtime_connection_queue_full".to_string(),
-            message: "relay connection worker pool queue is full".to_string(),
+            code: "runtime_connection_limit_reached".to_string(),
+            message: "relay connection limit reached".to_string(),
             details: Some(json!({
-                "bundle_name": bundle_paths.bundle_name,
+                "bundle_name": paths.bundle_name,
             })),
         },
     };
     if let Ok(mut encoded) = serde_json::to_vec(&response) {
         encoded.push(b'\n');
-        let _ = stream.write_all(&encoded);
-        let _ = stream.flush();
+        let _ = stream.write_all(&encoded).await;
+        let _ = stream.flush().await;
     }
-    let _ = stream.shutdown(Shutdown::Both);
+    let _ = stream.shutdown().await;
 }
 
-// Emits a snapshot of connection-pool occupancy on each accept so worker
-// saturation is observable: `active_connections` at `connection_worker_count`
-// with a non-zero `queued_connections` is the pool-exhaustion signal.
-fn emit_connection_pool_metrics(
-    bundle_paths: &BundleRuntimePaths,
-    connection_worker_count: usize,
-    metrics: &RelayConnectionPoolMetrics,
+// Emits a snapshot of connection occupancy on each accept so saturation is
+// observable: `active_connections` approaching `max_connections` with non-zero
+// `rejected_connections` is the at-capacity signal.
+fn emit_connection_metrics(
+    paths: &BundleRuntimePaths,
+    max_connections: usize,
+    metrics: &RelayConnectionMetrics,
 ) {
     emit_inscription(
         "relay.connection_pool.metrics",
         &json!({
-            "bundle_name": bundle_paths.bundle_name,
-            "connection_worker_count": connection_worker_count,
-            "queued_connections": metrics.queued_connections.load(Ordering::SeqCst),
+            "bundle_name": paths.bundle_name,
+            "max_connections": max_connections,
             "active_connections": metrics.active_connections.load(Ordering::SeqCst),
             "rejected_connections": metrics.rejected_connections.load(Ordering::SeqCst),
         }),
     );
-}
-
-fn wake_listener(socket_path: &Path) {
-    let _ = UnixStream::connect(socket_path);
 }
 
 fn host_selected_bundle(

@@ -10,6 +10,13 @@ use std::{
 use agentmux::{relay::serve_connection, runtime::paths::BundleRuntimePaths};
 use serde_json::{Value, json};
 use tempfile::TempDir;
+use tokio::runtime::Builder as TokioRuntimeBuilder;
+
+// Mirrors the production pre-hello idle timeout. Tests connect through the
+// async `serve_connection`, which now drives reads on a tokio runtime; pre-
+// hello idle gating is enforced inline by the connection task rather than on
+// the OS stream.
+const TEST_PRE_HELLO_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[path = "relay_stream/permissions.rs"]
 mod permissions;
@@ -183,13 +190,41 @@ fn spawn_relay_connection(
     configuration_root: &Path,
     bundle_paths: &BundleRuntimePaths,
 ) -> (UnixStream, thread::JoinHandle<()>) {
-    let (mut server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
+    let (server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
     let root = configuration_root.to_path_buf();
     let paths = bundle_paths.clone();
     let join_handle = thread::spawn(move || {
-        serve_connection(&mut server_stream, &root, &paths).expect("serve connection")
+        run_serve_connection(server_stream, root, paths).expect("serve connection")
     });
     (client_stream, join_handle)
+}
+
+// Bridges a synchronous unit test to the async `serve_connection`. Each
+// connection gets its own two-worker tokio runtime so the writer task can
+// observe its write timeout while the connection task is in a tight
+// read/dispatch loop (a single-worker runtime starves the writer until the
+// reader yields). Matches the production runtime flavor.
+fn run_serve_connection(
+    server_stream: UnixStream,
+    configuration_root: PathBuf,
+    bundle_paths: BundleRuntimePaths,
+) -> Result<(), std::io::Error> {
+    server_stream.set_nonblocking(true)?;
+    let runtime = TokioRuntimeBuilder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("build multi-thread runtime");
+    runtime.block_on(async move {
+        let stream = tokio::net::UnixStream::from_std(server_stream)?;
+        serve_connection(
+            stream,
+            &configuration_root,
+            &bundle_paths,
+            TEST_PRE_HELLO_IDLE_TIMEOUT,
+        )
+        .await
+    })
 }
 
 fn send_json(stream: &mut UnixStream, payload: Value) {
@@ -207,9 +242,9 @@ fn read_json(reader: &mut BufReader<UnixStream>) -> Value {
     serde_json::from_str::<Value>(line.trim_end()).expect("decode frame")
 }
 
-// Reads the next frame, skipping any stray `hello_ack` frames. The relay emits
-// a `hello_ack` into a live connection as a conflict liveness probe; raw test
-// clients must tolerate it the way the production stream client does.
+// Reads the next frame, tolerating a stray `hello_ack` in the rare case the
+// connection observes one (kept defensive even after the probe-based liveness
+// check was removed; the production stream client still tolerates it).
 fn read_json_skipping_hello_ack(reader: &mut BufReader<UnixStream>) -> Value {
     loop {
         let frame = read_json(reader);
@@ -362,9 +397,9 @@ fn duplicate_live_hello_claim_is_rejected_with_identity_conflict() {
             "request": {"operation": "list", "sender_session": "alpha"}
         }),
     );
-    // The conflicting reconnect probed this live owner with a `hello_ack`
-    // frame; skip it the way the production client does before reading the
-    // list response.
+    // The production client tolerates a stray `hello_ack` and the legacy
+    // helper still skips one defensively, even though the async migration
+    // removed the conflict probe.
     let first_response = read_json_skipping_hello_ack(&mut first_reader);
     assert_eq!(first_response["frame"], "response");
     assert_eq!(first_response["response"]["kind"], "list");
@@ -375,56 +410,12 @@ fn duplicate_live_hello_claim_is_rejected_with_identity_conflict() {
     second_handle.join().expect("join second relay thread");
 }
 
-// SHUT_RD on a Unix-domain socket causes EPIPE on the peer's write only on
-// Linux. On macOS the write succeeds, so the probe correctly reports the owner
-// as live and the test assertion fails. Gate to Linux where the semantics hold.
-#[cfg(target_os = "linux")]
-#[test]
-fn stale_identity_owner_is_evicted_when_reconnecting() {
-    let temporary = TempDir::new().expect("temporary directory");
-    let bundle_name = "party_stale_eviction";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
-
-    let hello_frame = json!({
-        "frame": "hello",
-        "schema_version": "1",
-        "bundle_name": bundle_name,
-        "session_id": "alpha",
-    });
-
-    // Register the first connection, then shut down only its read half. The
-    // write half stays open, so the relay's connection thread keeps blocking
-    // on its read loop and never observes EOF: the registry entry stays "live"
-    // even though the peer can no longer receive a delivery. This reproduces
-    // the stale-owner state that a fast reconnect races against.
-    let (mut first_client, first_handle) =
-        spawn_relay_connection(&configuration_root, &bundle_paths);
-    let mut first_reader = BufReader::new(first_client.try_clone().expect("clone first stream"));
-    send_json(&mut first_client, hello_frame.clone());
-    assert_eq!(read_json(&mut first_reader)["frame"], "hello_ack");
-    first_client
-        .shutdown(std::net::Shutdown::Read)
-        .expect("shut down first client read half");
-
-    // A reconnect with the same identity must probe the stale owner, find it
-    // unreachable, evict it, and register — not return an identity conflict.
-    let (mut second_client, second_handle) =
-        spawn_relay_connection(&configuration_root, &bundle_paths);
-    let mut second_reader = BufReader::new(second_client.try_clone().expect("clone second stream"));
-    send_json(&mut second_client, hello_frame);
-    let second_response = read_json(&mut second_reader);
-    assert_eq!(
-        second_response["frame"], "hello_ack",
-        "reconnect should evict the stale owner, not conflict: {second_response}"
-    );
-
-    shutdown_stream(&first_client, "shutdown first client");
-    shutdown_stream(&second_client, "shutdown second client");
-    first_handle.join().expect("join first relay thread");
-    second_handle.join().expect("join second relay thread");
-}
+// The synchronous identity-conflict liveness probe was removed during the
+// async migration: stale-but-attached owners now surface conflicts until a
+// real relay-to-client write fails and the writer task closes the registry's
+// sender. The standard client retry on `runtime_identity_claim_conflict`
+// covers the reconnect path. (Previously a Linux-only test asserted probe-
+// driven eviction here; see todos/relay/48.)
 
 #[test]
 fn hello_claim_is_accepted_after_prior_owner_disconnects() {

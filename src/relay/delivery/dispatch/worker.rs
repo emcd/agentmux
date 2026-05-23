@@ -1,11 +1,11 @@
 use std::{
-    sync::mpsc,
-    thread,
+    sync::OnceLock,
     time::{Duration, Instant},
 };
 
 use serde_json::json;
 use time::format_description::well_known::Rfc3339;
+use tokio::{runtime::Handle, sync::mpsc::UnboundedReceiver};
 
 use crate::{
     configuration::BundleMember,
@@ -41,125 +41,233 @@ pub(super) struct AcpWorkerBootstrap {
     pub(super) runtime_directory: std::path::PathBuf,
 }
 
+/// Spawns the per-target async delivery worker as a tokio task.
+///
+/// The worker awaits delivery tasks on a `tokio::sync::mpsc::UnboundedReceiver`
+/// and offloads the synchronous ACP / tmux delivery body to `spawn_blocking`,
+/// so the tokio runtime worker thread is not pinned during the IO. ACP
+/// bootstrap, respawn, and the per-target single-flight wait for prompt
+/// completion are likewise offloaded to blocking tasks. Shutdown is observed
+/// via `shutdown_requested()` polled between receives.
 pub(super) fn spawn_async_delivery_worker(
     key: AsyncWorkerKey,
-    receiver: mpsc::Receiver<AsyncDeliveryTask>,
+    receiver: UnboundedReceiver<AsyncDeliveryTask>,
     pending: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     bootstrap: Option<AcpWorkerBootstrap>,
 ) {
-    thread::spawn(move || {
-        let acp_context = bootstrap.clone();
-        let mut acp_runtime = None::<PersistentAcpWorkerRuntime>;
-        let mut respawn_state = AcpRespawnState::new();
-        if let Some(bootstrap) = bootstrap {
-            set_acp_worker_state(
+    delivery_runtime_handle().spawn(async move {
+        run_async_delivery_worker(key, receiver, pending, bootstrap).await;
+    });
+}
+
+/// Resolves the tokio runtime handle that hosts delivery worker tasks.
+///
+/// In production the relay binary runs under `#[tokio::main]` and worker
+/// enqueue happens inside `spawn_blocking` from the relay accept loop or
+/// inline from an async stream handler, so a current runtime handle is
+/// always available and we reuse it. In CLI/test contexts where workers are
+/// enqueued without an ambient runtime (one-shot `request_relay` callers,
+/// startup helpers driven directly from sync tests), a process-wide
+/// fallback multi-thread runtime is created on demand. Both surfaces give
+/// the worker the multi-thread + blocking pool flavor it needs for the
+/// `spawn_blocking` calls inside the task body.
+fn delivery_runtime_handle() -> Handle {
+    if let Ok(handle) = Handle::try_current() {
+        return handle;
+    }
+    static DELIVERY_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    DELIVERY_RUNTIME
+        .get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .thread_name("agentmux-delivery")
+                .build()
+                .expect("build agentmux delivery fallback runtime")
+        })
+        .handle()
+        .clone()
+}
+
+async fn run_async_delivery_worker(
+    key: AsyncWorkerKey,
+    mut receiver: UnboundedReceiver<AsyncDeliveryTask>,
+    pending: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    bootstrap: Option<AcpWorkerBootstrap>,
+) {
+    let acp_context = bootstrap.clone();
+    let mut acp_runtime = if let Some(bootstrap) = bootstrap {
+        bootstrap_acp_runtime_on_worker_start(&key, bootstrap).await
+    } else {
+        None
+    };
+    let mut respawn_state = AcpRespawnState::new();
+    let poll_interval = Duration::from_millis(ASYNC_WORKER_POLL_INTERVAL_MS);
+
+    loop {
+        if shutdown_requested() {
+            super::super::async_worker::drop_pending_async_tasks_on_shutdown(
+                &mut receiver,
+                pending.as_ref(),
+            );
+            break;
+        }
+        let received = tokio::select! {
+            biased;
+            value = receiver.recv() => value,
+            _ = tokio::time::sleep(poll_interval) => {
+                // Poll-tick: re-evaluate shutdown gate without consuming a task.
+                continue;
+            }
+        };
+        let task = match received {
+            Some(task) => task,
+            // All senders dropped; worker is no longer reachable.
+            None => break,
+        };
+        if shutdown_requested() {
+            super::super::async_worker::complete_task_on_shutdown(&task);
+            super::super::async_worker::release_pending_slot(pending.as_ref());
+            super::super::async_worker::drop_pending_async_tasks_on_shutdown(
+                &mut receiver,
+                pending.as_ref(),
+            );
+            break;
+        }
+
+        let (outcome, returned_runtime) =
+            deliver_one_task_blocking(task.clone(), acp_runtime).await;
+        acp_runtime = returned_runtime;
+        let trigger_reason = classify_respawn_trigger(&outcome);
+        super::super::async_worker::complete_task_outcome(&task, outcome);
+        super::super::async_worker::release_pending_slot(pending.as_ref());
+
+        // Per-target ACP single-flight: block until the previous prompt is
+        // fully complete (background reader fired `on_completion`, or
+        // synchronous dispatch failure already cleared the slot) before
+        // pulling the next task. `wait_for_prompt_complete()` is a blocking
+        // mpsc recv inside `AcpStdioClient`; run it on the blocking pool so
+        // the tokio worker thread is not pinned.
+        if acp_runtime.is_some() {
+            acp_runtime = wait_for_prompt_complete_blocking(acp_runtime).await;
+        }
+
+        if let Some(ctx) = acp_context.as_ref() {
+            let state = get_acp_worker_state(
                 key.bundle_name.as_str(),
+                ctx.runtime_directory.as_path(),
+                ctx.target_member.id.as_str(),
+            );
+            if matches!(state, Some(AcpWorkerReadinessState::Unavailable)) {
+                drive_acp_worker_respawn(
+                    &key,
+                    ctx,
+                    trigger_reason,
+                    &mut respawn_state,
+                    &mut acp_runtime,
+                )
+                .await;
+            } else if matches!(
+                state,
+                Some(AcpWorkerReadinessState::Available | AcpWorkerReadinessState::Busy)
+            ) {
+                respawn_state.reset_on_success();
+            }
+        }
+    }
+    super::super::async_worker::unregister_worker(&key);
+}
+
+async fn bootstrap_acp_runtime_on_worker_start(
+    key: &AsyncWorkerKey,
+    bootstrap: AcpWorkerBootstrap,
+) -> Option<PersistentAcpWorkerRuntime> {
+    set_acp_worker_state(
+        key.bundle_name.as_str(),
+        bootstrap.runtime_directory.as_path(),
+        bootstrap.target_member.id.as_str(),
+        AcpWorkerReadinessState::Initializing,
+    );
+    let bundle_name = key.bundle_name.clone();
+    let target_session = key.target_session.clone();
+    let runtime_directory = bootstrap.runtime_directory.clone();
+    let target_member = bootstrap.target_member.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        bootstrap_acp_worker_runtime(runtime_directory.as_path(), &target_member)
+    })
+    .await
+    .expect("ACP worker bootstrap task panicked");
+
+    match result {
+        Ok(runtime) => {
+            install_acp_worker_replay_buffer(
+                bundle_name.as_str(),
                 bootstrap.runtime_directory.as_path(),
                 bootstrap.target_member.id.as_str(),
-                AcpWorkerReadinessState::Initializing,
+                runtime.client.replay_buffer_handle(),
             );
-            match bootstrap_acp_worker_runtime(
+            set_acp_worker_state(
+                bundle_name.as_str(),
                 bootstrap.runtime_directory.as_path(),
-                &bootstrap.target_member,
-            ) {
-                Ok(runtime) => {
-                    install_acp_worker_replay_buffer(
-                        key.bundle_name.as_str(),
-                        bootstrap.runtime_directory.as_path(),
-                        bootstrap.target_member.id.as_str(),
-                        runtime.client.replay_buffer_handle(),
-                    );
-                    set_acp_worker_state(
-                        key.bundle_name.as_str(),
-                        bootstrap.runtime_directory.as_path(),
-                        bootstrap.target_member.id.as_str(),
-                        AcpWorkerReadinessState::Available,
-                    );
-                    acp_runtime = Some(runtime);
-                }
-                Err(error) => {
-                    set_acp_worker_state(
-                        key.bundle_name.as_str(),
-                        bootstrap.runtime_directory.as_path(),
-                        bootstrap.target_member.id.as_str(),
-                        AcpWorkerReadinessState::Unavailable,
-                    );
-                    emit_inscription(
-                        "relay.acp.worker.bootstrap_failed",
-                        &json!({
-                            "bundle_name": key.bundle_name,
-                            "target_session": key.target_session,
-                            "error_code": error.code,
-                            "reason": error.reason,
-                        }),
-                    );
-                }
-            }
+                bootstrap.target_member.id.as_str(),
+                AcpWorkerReadinessState::Available,
+            );
+            Some(runtime)
         }
-        loop {
-            if shutdown_requested() {
-                super::super::async_worker::drop_pending_async_tasks_on_shutdown(
-                    &receiver,
-                    pending.as_ref(),
-                );
-                break;
-            }
-            let received =
-                receiver.recv_timeout(Duration::from_millis(ASYNC_WORKER_POLL_INTERVAL_MS));
-            let task = match received {
-                Ok(task) => task,
-                Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            };
-            if shutdown_requested() {
-                super::super::async_worker::complete_task_on_shutdown(&task);
-                super::super::async_worker::release_pending_slot(pending.as_ref());
-                super::super::async_worker::drop_pending_async_tasks_on_shutdown(
-                    &receiver,
-                    pending.as_ref(),
-                );
-                break;
-            }
-
-            let outcome =
-                super::orchestration::deliver_one_target_with_worker_state(&task, &mut acp_runtime);
-            let trigger_reason = classify_respawn_trigger(&outcome);
-            super::super::async_worker::complete_task_outcome(&task, outcome);
-            super::super::async_worker::release_pending_slot(pending.as_ref());
-
-            // Per-target ACP single-flight: block until the previous prompt
-            // is fully complete (background reader fired `on_completion`, or
-            // synchronous dispatch failure already cleared the slot) before
-            // pulling the next task. `wait_for_prompt_complete()` returns
-            // immediately if no prompt was dispatched.
-            if let Some(runtime) = acp_runtime.as_ref() {
-                runtime.client.wait_for_prompt_complete();
-            }
-
-            if let Some(ctx) = acp_context.as_ref() {
-                let state = get_acp_worker_state(
-                    key.bundle_name.as_str(),
-                    ctx.runtime_directory.as_path(),
-                    ctx.target_member.id.as_str(),
-                );
-                if matches!(state, Some(AcpWorkerReadinessState::Unavailable)) {
-                    drive_acp_worker_respawn(
-                        &key,
-                        ctx,
-                        trigger_reason,
-                        &mut respawn_state,
-                        &mut acp_runtime,
-                    );
-                } else if matches!(
-                    state,
-                    Some(AcpWorkerReadinessState::Available | AcpWorkerReadinessState::Busy)
-                ) {
-                    respawn_state.reset_on_success();
-                }
-            }
+        Err(error) => {
+            set_acp_worker_state(
+                bundle_name.as_str(),
+                bootstrap.runtime_directory.as_path(),
+                bootstrap.target_member.id.as_str(),
+                AcpWorkerReadinessState::Unavailable,
+            );
+            emit_inscription(
+                "relay.acp.worker.bootstrap_failed",
+                &json!({
+                    "bundle_name": bundle_name,
+                    "target_session": target_session,
+                    "error_code": error.code,
+                    "reason": error.reason,
+                }),
+            );
+            None
         }
-        super::super::async_worker::unregister_worker(&key);
-    });
+    }
+}
+
+/// Drives one delivery on the blocking pool. Moves the per-worker ACP runtime
+/// into the blocking task and back out, so its sync state machine never
+/// crosses an `.await`.
+async fn deliver_one_task_blocking(
+    task: AsyncDeliveryTask,
+    acp_runtime: Option<PersistentAcpWorkerRuntime>,
+) -> (
+    Result<ChatResult, RelayError>,
+    Option<PersistentAcpWorkerRuntime>,
+) {
+    tokio::task::spawn_blocking(move || {
+        let mut local_runtime = acp_runtime;
+        let outcome =
+            super::orchestration::deliver_one_target_with_worker_state(&task, &mut local_runtime);
+        (outcome, local_runtime)
+    })
+    .await
+    .expect("delivery blocking task panicked")
+}
+
+/// Awaits the per-target single-flight prompt completion on the blocking pool.
+/// Returns the runtime so the worker loop retains ownership for the next task.
+async fn wait_for_prompt_complete_blocking(
+    acp_runtime: Option<PersistentAcpWorkerRuntime>,
+) -> Option<PersistentAcpWorkerRuntime> {
+    tokio::task::spawn_blocking(move || {
+        if let Some(runtime) = acp_runtime.as_ref() {
+            runtime.client.wait_for_prompt_complete();
+        }
+        acp_runtime
+    })
+    .await
+    .expect("ACP prompt-complete wait task panicked")
 }
 
 struct AcpRespawnState {
@@ -238,7 +346,7 @@ fn classify_respawn_trigger(outcome: &Result<ChatResult, RelayError>) -> &'stati
     }
 }
 
-fn drive_acp_worker_respawn(
+async fn drive_acp_worker_respawn(
     key: &AsyncWorkerKey,
     ctx: &AcpWorkerBootstrap,
     trigger_reason: &'static str,
@@ -247,7 +355,7 @@ fn drive_acp_worker_respawn(
 ) {
     // Drop the dead runtime so its child and reader thread are joined before
     // the new child is spawned. Without this, `respawn_acp_worker_runtime`
-    // would leave the zombie process unreaped until the worker thread exits.
+    // would leave the zombie process unreaped until the worker task exits.
     *acp_runtime = None;
 
     loop {
@@ -285,7 +393,7 @@ fn drive_acp_worker_respawn(
             ),
         );
 
-        if !sleep_with_shutdown_gate(backoff) {
+        if !sleep_with_shutdown_gate(backoff).await {
             return;
         }
 
@@ -309,11 +417,20 @@ fn drive_acp_worker_respawn(
             );
         }
 
-        match respawn_acp_worker_runtime(
-            key.bundle_name.as_str(),
-            ctx.runtime_directory.as_path(),
-            &ctx.target_member,
-        ) {
+        let respawn_bundle_name = key.bundle_name.clone();
+        let respawn_runtime_directory = ctx.runtime_directory.clone();
+        let respawn_target_member = ctx.target_member.clone();
+        let respawn_result = tokio::task::spawn_blocking(move || {
+            respawn_acp_worker_runtime(
+                respawn_bundle_name.as_str(),
+                respawn_runtime_directory.as_path(),
+                &respawn_target_member,
+            )
+        })
+        .await
+        .expect("ACP respawn task panicked");
+
+        match respawn_result {
             Ok(runtime) => {
                 set_acp_worker_state(
                     key.bundle_name.as_str(),
@@ -395,7 +512,7 @@ fn drive_acp_worker_respawn(
     }
 }
 
-fn sleep_with_shutdown_gate(duration: Duration) -> bool {
+async fn sleep_with_shutdown_gate(duration: Duration) -> bool {
     let deadline = Instant::now() + duration;
     while Instant::now() < deadline {
         if shutdown_requested() {
@@ -406,7 +523,7 @@ fn sleep_with_shutdown_gate(duration: Duration) -> bool {
         if poll.is_zero() {
             break;
         }
-        thread::sleep(poll);
+        tokio::time::sleep(poll).await;
     }
     !shutdown_requested()
 }

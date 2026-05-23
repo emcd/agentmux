@@ -98,13 +98,39 @@ fn spawn_relay_stream(
     configuration_root: &Path,
     bundle_paths: &BundleRuntimePaths,
 ) -> (UnixStream, thread::JoinHandle<()>) {
-    let (mut server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
+    let (server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
     let root = configuration_root.to_path_buf();
     let paths = bundle_paths.clone();
     let handle = thread::spawn(move || {
-        serve_connection(&mut server_stream, &root, &paths).expect("serve connection");
+        run_serve_connection(server_stream, root, paths).expect("serve connection");
     });
     (client_stream, handle)
+}
+
+// Bridges `serve_connection` (now async) into a synchronous test thread by
+// owning a dedicated current-thread tokio runtime per connection.
+fn run_serve_connection(
+    server_stream: UnixStream,
+    configuration_root: PathBuf,
+    bundle_paths: BundleRuntimePaths,
+) -> Result<(), std::io::Error> {
+    server_stream
+        .set_nonblocking(true)
+        .expect("non-blocking server stream");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build current-thread runtime");
+    runtime.block_on(async move {
+        let stream = tokio::net::UnixStream::from_std(server_stream)?;
+        serve_connection(
+            stream,
+            &configuration_root,
+            &bundle_paths,
+            Duration::from_secs(2),
+        )
+        .await
+    })
 }
 
 fn send_json(stream: &mut UnixStream, payload: Value) {
