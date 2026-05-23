@@ -138,6 +138,273 @@ pub(super) fn respawn_acp_worker_runtime(
     Ok(runtime)
 }
 
+/// Delivers a coalesced envelope batch over one ACP prompt.
+///
+/// Mirrors `deliver_one_target_acp` but folds N tasks into the prompt's
+/// completion path: the on_completion callback fans the single transport
+/// outcome out to every task's `completion_sender` using each task's own
+/// `target_session` and `message_id`. The shared permission decision window
+/// (one tool-call surface per coalesced prompt) is correlated to the head
+/// task's `message_id`; that is the operator-facing message under which the
+/// decision is recorded.
+pub(super) fn deliver_batch_target_acp(
+    batch: &[AsyncDeliveryTask],
+    target_member: &BundleMember,
+    _acp: &AcpTargetConfiguration,
+    prompt_batches: Vec<String>,
+    acp_runtime: &mut Option<PersistentAcpWorkerRuntime>,
+) -> Vec<ChatResult> {
+    debug_assert!(!batch.is_empty());
+    let head = &batch[0];
+    let head_target_session = head.target_session.clone();
+    let head_message_id = head.message_id.clone();
+    if target_member.working_directory.is_none() {
+        return replicate_failed_result(
+            batch,
+            "ACP target is missing working directory".to_string(),
+        );
+    }
+    let runtime_directory = head.runtime_directory.as_path();
+
+    if matches!(
+        get_acp_worker_state(
+            head.bundle.bundle_name.as_str(),
+            runtime_directory,
+            target_member.id.as_str(),
+        ),
+        Some(AcpWorkerReadinessState::Unavailable)
+    ) {
+        return replicate_failed_result_with_code(
+            batch,
+            "runtime_acp_worker_unavailable",
+            "ACP worker is unavailable for target session",
+            Some(json!({
+                "target_session": target_member.id,
+            })),
+        );
+    }
+
+    let Some(runtime) = acp_runtime.as_mut() else {
+        return replicate_failed_result_with_code(
+            batch,
+            "runtime_acp_worker_unavailable",
+            "ACP worker is unavailable for target session",
+            Some(json!({
+                "target_session": target_member.id,
+            })),
+        );
+    };
+
+    debug_assert!(
+        prompt_batches.len() == 1,
+        "ACP batch delivery expects exactly one prompt batch; payload preparation peels the tail when more are produced",
+    );
+    let Some(prompt) = prompt_batches.into_iter().next() else {
+        return replicate_failed_result(batch, "ACP delivery received no prompt batch".to_string());
+    };
+
+    let permission_context = PermissionEventContext {
+        runtime_directory: head.runtime_directory.clone(),
+        bundle_name: head.bundle.bundle_name.clone(),
+        // The head's decider list governs the permission decision for the
+        // coalesced prompt. All tasks share the same target session, so the
+        // permission_decider_sessions field will typically match across tasks;
+        // diverging values would indicate a configuration race we do not
+        // attempt to reconcile here.
+        authorized_ui_sessions: head.permission_decider_sessions.clone(),
+    };
+    let pending_permission_outcome_shared: Arc<Mutex<Option<PermissionResolutionOutcome>>> =
+        Arc::new(Mutex::new(None));
+
+    let bundle_name = head.bundle.bundle_name.clone();
+    let runtime_directory_owned = head.runtime_directory.clone();
+    let target_member_id = target_member.id.clone();
+    let session_id = runtime.session_id.clone();
+
+    let dispatch_bundle_name = bundle_name.clone();
+    let dispatch_runtime_directory = runtime_directory_owned.clone();
+    let dispatch_target_member_id = target_member_id.clone();
+    let on_dispatched: crate::acp::DispatchHandler = Box::new(move || {
+        set_acp_worker_state(
+            dispatch_bundle_name.as_str(),
+            dispatch_runtime_directory.as_path(),
+            dispatch_target_member_id.as_str(),
+            AcpWorkerReadinessState::Busy,
+        );
+    });
+
+    let permission_context_for_handler = permission_context.clone();
+    // Permission requests inside one ACP prompt correlate to the head
+    // message_id; downstream UIs can resolve the batch via inscriptions if
+    // they need to enumerate the coalesced message ids.
+    let permission_message_id_for_handler = head_message_id.clone();
+    let permission_target_member_id = target_member_id.clone();
+    let permission_max_pending = head.permission_max_pending;
+    let pending_permission_outcome_writer = Arc::clone(&pending_permission_outcome_shared);
+    let on_permission_request: crate::acp::PermissionHandler =
+        Box::new(move |permission_request: &crate::acp::PermissionRequest| {
+            let (response_option_id, outcome) = resolve_acp_permission_request(
+                &permission_context_for_handler,
+                permission_message_id_for_handler.as_str(),
+                permission_target_member_id.as_str(),
+                permission_request,
+                permission_max_pending,
+            );
+            *pending_permission_outcome_writer
+                .lock()
+                .expect("pending_permission_outcome mutex") = Some(outcome);
+            response_option_id
+        });
+
+    // Per-task correlation captured into on_completion. One ACP completion
+    // outcome maps to N synthesised per-task ChatResults so each original
+    // send call's completion_sender receives a result tied to its own
+    // message_id and target_session.
+    let completion_correlations: Vec<TaskCorrelation> = batch
+        .iter()
+        .map(|task| TaskCorrelation {
+            completion_sender: task.completion_sender.clone(),
+            target_session: task.target_session.clone(),
+            message_id: task.message_id.clone(),
+        })
+        .collect();
+    let completion_bundle_name = bundle_name.clone();
+    let completion_runtime_directory = runtime_directory_owned.clone();
+    let completion_target_member_id = target_member_id.clone();
+    let pending_permission_outcome_reader = Arc::clone(&pending_permission_outcome_shared);
+    let on_completion: crate::acp::PromptCompletionHandler = Box::new(move |completion| {
+        let pending_permission_outcome = pending_permission_outcome_reader
+            .lock()
+            .expect("pending_permission_outcome mutex")
+            .clone();
+        // build_acp_completion_result is deterministic over (completion,
+        // pending_permission_outcome); the final state and the non-correlation
+        // fields of the result are identical across tasks. Compute the
+        // template once (consuming `completion`, which is not Clone), then
+        // replicate per task by overwriting target_session and message_id.
+        let template_correlation = completion_correlations
+            .first()
+            .expect("batch ACP completion requires at least one correlation");
+        let (final_state, template_result) = build_acp_completion_result(
+            completion,
+            pending_permission_outcome,
+            template_correlation.target_session.clone(),
+            template_correlation.message_id.clone(),
+            completion_target_member_id.as_str(),
+        );
+        for correlation in &completion_correlations {
+            let mut per_task = template_result.clone();
+            per_task.target_session = correlation.target_session.clone();
+            per_task.message_id = correlation.message_id.clone();
+            if let Some(sender) = correlation.completion_sender.as_ref() {
+                let _ = sender.send(Ok(per_task));
+            }
+        }
+        set_acp_worker_state(
+            completion_bundle_name.as_str(),
+            completion_runtime_directory.as_path(),
+            completion_target_member_id.as_str(),
+            final_state,
+        );
+    });
+
+    let outcome = runtime.client.prompt(
+        session_id.as_str(),
+        prompt.as_str(),
+        Some(on_dispatched),
+        Some(on_permission_request),
+        on_completion,
+    );
+
+    match outcome {
+        PromptDispatchOutcome::Submitted => batch
+            .iter()
+            .map(|task| {
+                delivered_in_progress_result(task.target_session.clone(), task.message_id.clone())
+            })
+            .collect(),
+        PromptDispatchOutcome::TransportUnavailable { reason } => {
+            set_acp_worker_state(
+                bundle_name.as_str(),
+                runtime_directory,
+                target_member.id.as_str(),
+                AcpWorkerReadinessState::Unavailable,
+            );
+            // Touch the head's correlation values so the head-derived error
+            // matches the single-task path's failed_result_with_code shape
+            // verbatim; the per-task results are replicated below.
+            let _ = (head_target_session, head_message_id);
+            replicate_failed_result_with_code(
+                batch,
+                ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE,
+                "ACP child stdin write failed",
+                Some(json!({
+                    "target_session": target_member.id,
+                    "reason": reason,
+                })),
+            )
+        }
+        PromptDispatchOutcome::SerializationFailed(reason) => {
+            set_acp_worker_state(
+                bundle_name.as_str(),
+                runtime_directory,
+                target_member.id.as_str(),
+                AcpWorkerReadinessState::Unavailable,
+            );
+            replicate_failed_result_with_code(
+                batch,
+                ACP_ERROR_CODE_PROMPT_FAILED,
+                "ACP session/prompt dispatch failed",
+                Some(json!({
+                    "target_session": target_member.id,
+                    "reason": reason,
+                })),
+            )
+        }
+    }
+}
+
+#[derive(Clone)]
+struct TaskCorrelation {
+    completion_sender:
+        Option<std::sync::mpsc::Sender<Result<ChatResult, crate::relay::RelayError>>>,
+    target_session: String,
+    message_id: String,
+}
+
+fn replicate_failed_result(batch: &[AsyncDeliveryTask], reason: String) -> Vec<ChatResult> {
+    batch
+        .iter()
+        .map(|task| {
+            failed_result(
+                task.target_session.clone(),
+                task.message_id.clone(),
+                reason.clone(),
+            )
+        })
+        .collect()
+}
+
+fn replicate_failed_result_with_code(
+    batch: &[AsyncDeliveryTask],
+    code: &'static str,
+    reason: &'static str,
+    details: Option<Value>,
+) -> Vec<ChatResult> {
+    batch
+        .iter()
+        .map(|task| {
+            failed_result_with_code(
+                task.target_session.clone(),
+                task.message_id.clone(),
+                code,
+                reason,
+                details.clone(),
+            )
+        })
+        .collect()
+}
+
 pub(super) fn deliver_one_target_acp(
     task: &AsyncDeliveryTask,
     target_member: &BundleMember,

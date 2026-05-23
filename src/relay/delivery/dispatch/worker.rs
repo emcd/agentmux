@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     sync::OnceLock,
     time::{Duration, Instant},
 };
@@ -16,7 +17,7 @@ use super::super::super::canonical_session_id;
 use super::super::super::stream::{
     RelayStreamEvent, broadcast_event_to_bundle_ui, list_registered_ui_sessions_for_bundle,
 };
-use super::super::super::{AsyncDeliveryTask, ChatResult, RelayError};
+use super::super::super::{AsyncDeliveryTask, ChatResult, DeliveryPayloadMode, RelayError};
 use super::super::acp_delivery::{
     ACP_ERROR_CODE_CONNECTION_CLOSED, ACP_ERROR_CODE_INITIALIZE_FAILED,
     ACP_ERROR_CODE_PROMPT_FAILED, ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE, AcpBootstrapError,
@@ -34,6 +35,8 @@ const RESPAWN_SLEEP_POLL_MS: u64 = 50;
 const RESPAWN_BACKOFF_INITIAL_MS: u64 = 1_000;
 const RESPAWN_BACKOFF_CAP_DEFAULT_MS: u64 = 30_000;
 const RESPAWN_INIT_FAILURE_THRESHOLD: u32 = 3;
+const BATCH_DRAIN_MAX_ENVVAR: &str = "AGENTMUX_RELAY_BATCH_DRAIN_MAX";
+const BATCH_DRAIN_MAX_DEFAULT: usize = 32;
 
 #[derive(Clone)]
 pub(super) struct AcpWorkerBootstrap {
@@ -103,31 +106,43 @@ async fn run_async_delivery_worker(
     };
     let mut respawn_state = AcpRespawnState::new();
     let poll_interval = Duration::from_millis(ASYNC_WORKER_POLL_INTERVAL_MS);
+    let drain_max = batch_drain_max();
+    // Carry buffer: tasks consumed from the channel that did not coalesce with
+    // the current head (different payload mode or UI-routing), plus ACP tasks
+    // peeled back because the rendered prompt exceeded one budget batch. Drained
+    // before the channel on the next iteration so original ordering survives.
+    let mut carry: VecDeque<AsyncDeliveryTask> = VecDeque::new();
 
     loop {
         if shutdown_requested() {
+            drain_carry_on_shutdown(&mut carry, pending.as_ref());
             super::super::async_worker::drop_pending_async_tasks_on_shutdown(
                 &mut receiver,
                 pending.as_ref(),
             );
             break;
         }
-        let received = tokio::select! {
-            biased;
-            value = receiver.recv() => value,
-            _ = tokio::time::sleep(poll_interval) => {
-                // Poll-tick: re-evaluate shutdown gate without consuming a task.
-                continue;
+        let head = if let Some(carried) = carry.pop_front() {
+            carried
+        } else {
+            let received = tokio::select! {
+                biased;
+                value = receiver.recv() => value,
+                _ = tokio::time::sleep(poll_interval) => {
+                    // Poll-tick: re-evaluate shutdown gate without consuming a task.
+                    continue;
+                }
+            };
+            match received {
+                Some(task) => task,
+                // All senders dropped; worker is no longer reachable.
+                None => break,
             }
         };
-        let task = match received {
-            Some(task) => task,
-            // All senders dropped; worker is no longer reachable.
-            None => break,
-        };
         if shutdown_requested() {
-            super::super::async_worker::complete_task_on_shutdown(&task);
+            super::super::async_worker::complete_task_on_shutdown(&head);
             super::super::async_worker::release_pending_slot(pending.as_ref());
+            drain_carry_on_shutdown(&mut carry, pending.as_ref());
             super::super::async_worker::drop_pending_async_tasks_on_shutdown(
                 &mut receiver,
                 pending.as_ref(),
@@ -135,12 +150,34 @@ async fn run_async_delivery_worker(
             break;
         }
 
-        let (outcome, returned_runtime) =
-            deliver_one_task_blocking(task.clone(), acp_runtime).await;
+        let batch = coalesce_batch(head, drain_max, &mut carry, &mut receiver);
+        if batch.len() > 1 {
+            emit_inscription(
+                "relay.chat.batch_drain.coalesced",
+                &json!({
+                    "bundle_name": batch[0].bundle.bundle_name,
+                    "target_session": batch[0].target_session,
+                    "drained_count": batch.len(),
+                    "message_ids": batch.iter().map(|task| &task.message_id).collect::<Vec<_>>(),
+                }),
+            );
+        }
+        let (outcomes, returned_runtime, deferred) =
+            deliver_batch_blocking(batch.clone(), acp_runtime).await;
         acp_runtime = returned_runtime;
-        let trigger_reason = classify_respawn_trigger(&outcome);
-        super::super::async_worker::complete_task_outcome(&task, outcome);
-        super::super::async_worker::release_pending_slot(pending.as_ref());
+        // Push deferred (ACP-peeled) tasks back to the front of the carry queue
+        // in original order so they are the head of the next iteration.
+        for deferred_task in deferred.into_iter().rev() {
+            carry.push_front(deferred_task);
+        }
+        let trigger_reason = outcomes
+            .first()
+            .map(classify_respawn_trigger)
+            .unwrap_or("worker_unavailable");
+        for (task, outcome) in batch.iter().zip(outcomes) {
+            super::super::async_worker::complete_task_outcome(task, outcome);
+            super::super::async_worker::release_pending_slot(pending.as_ref());
+        }
 
         // Per-target ACP single-flight: block until the previous prompt is
         // fully complete (background reader fired `on_completion`, or
@@ -176,6 +213,74 @@ async fn run_async_delivery_worker(
         }
     }
     super::super::async_worker::unregister_worker(&key);
+}
+
+fn batch_drain_max() -> usize {
+    std::env::var(BATCH_DRAIN_MAX_ENVVAR)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(BATCH_DRAIN_MAX_DEFAULT)
+}
+
+/// Collects up to `drain_max` tasks into a coalesce batch starting with `head`.
+///
+/// Only `EnvelopeMessage` tasks targeting non-UI sessions coalesce. The first
+/// task whose payload mode or UI-routing differs from the head is pushed to
+/// the front of `carry` so it heads the next worker iteration. The channel
+/// is read non-blocking via `try_recv`; an empty channel ends the drain.
+pub(super) fn coalesce_batch(
+    head: AsyncDeliveryTask,
+    drain_max: usize,
+    carry: &mut VecDeque<AsyncDeliveryTask>,
+    receiver: &mut UnboundedReceiver<AsyncDeliveryTask>,
+) -> Vec<AsyncDeliveryTask> {
+    let coalescable =
+        matches!(head.payload_mode, DeliveryPayloadMode::EnvelopeMessage) && !head.target_is_ui;
+    let mut batch = vec![head];
+    if !coalescable {
+        return batch;
+    }
+    while batch.len() < drain_max {
+        let candidate = if let Some(task) = carry.pop_front() {
+            Some(task)
+        } else {
+            receiver.try_recv().ok()
+        };
+        let Some(candidate) = candidate else {
+            break;
+        };
+        if !can_coalesce_with_head(&batch[0], &candidate) {
+            // Different mode or UI-routing: defer so the head of the next
+            // iteration starts a fresh batch with this task.
+            carry.push_front(candidate);
+            break;
+        }
+        batch.push(candidate);
+    }
+    batch
+}
+
+/// Coalesce predicate: the candidate must share the head's payload mode and
+/// UI-routing. Target session, runtime, and bundle are guaranteed identical
+/// by the per-target worker registry key — assert in debug for safety.
+fn can_coalesce_with_head(head: &AsyncDeliveryTask, candidate: &AsyncDeliveryTask) -> bool {
+    debug_assert_eq!(head.target_session, candidate.target_session);
+    debug_assert_eq!(head.runtime_directory, candidate.runtime_directory);
+    debug_assert_eq!(head.bundle.bundle_name, candidate.bundle.bundle_name);
+    matches!(head.payload_mode, DeliveryPayloadMode::EnvelopeMessage)
+        && matches!(candidate.payload_mode, DeliveryPayloadMode::EnvelopeMessage)
+        && head.target_is_ui == candidate.target_is_ui
+}
+
+fn drain_carry_on_shutdown(
+    carry: &mut VecDeque<AsyncDeliveryTask>,
+    pending: &std::sync::atomic::AtomicUsize,
+) {
+    while let Some(task) = carry.pop_front() {
+        super::super::async_worker::complete_task_on_shutdown(&task);
+        super::super::async_worker::release_pending_slot(pending);
+    }
 }
 
 async fn bootstrap_acp_runtime_on_worker_start(
@@ -235,21 +340,23 @@ async fn bootstrap_acp_runtime_on_worker_start(
     }
 }
 
-/// Drives one delivery on the blocking pool. Moves the per-worker ACP runtime
-/// into the blocking task and back out, so its sync state machine never
-/// crosses an `.await`.
-async fn deliver_one_task_blocking(
-    task: AsyncDeliveryTask,
+/// Drives one batched delivery on the blocking pool. Moves the per-worker ACP
+/// runtime into the blocking task and back out, so its sync state machine
+/// never crosses an `.await`. Returns one outcome per accepted task plus any
+/// ACP-peeled tasks that must be re-queued for the next worker iteration.
+async fn deliver_batch_blocking(
+    batch: Vec<AsyncDeliveryTask>,
     acp_runtime: Option<PersistentAcpWorkerRuntime>,
 ) -> (
-    Result<ChatResult, RelayError>,
+    Vec<Result<ChatResult, RelayError>>,
     Option<PersistentAcpWorkerRuntime>,
+    Vec<AsyncDeliveryTask>,
 ) {
     tokio::task::spawn_blocking(move || {
         let mut local_runtime = acp_runtime;
-        let outcome =
-            super::orchestration::deliver_one_target_with_worker_state(&task, &mut local_runtime);
-        (outcome, local_runtime)
+        let (outcomes, deferred) =
+            super::orchestration::deliver_batch_with_worker_state(&batch, &mut local_runtime);
+        (outcomes, local_runtime, deferred)
     })
     .await
     .expect("delivery blocking task panicked")
@@ -335,6 +442,8 @@ fn respawn_backoff_cap_ms() -> u64 {
 }
 
 fn classify_respawn_trigger(outcome: &Result<ChatResult, RelayError>) -> &'static str {
+    // All tasks in a coalesced batch share one transport outcome by
+    // construction, so classifying off the first outcome is sufficient.
     match outcome {
         Ok(result) => match result.reason_code.as_deref() {
             Some(code) if code == ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE => "transport_unavailable",
@@ -542,5 +651,111 @@ fn acp_respawn_stream_event(
             .format(&Rfc3339)
             .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string()),
         payload,
+    }
+}
+
+#[cfg(test)]
+mod coalesce_batch_tests {
+    //! Locality-justified inline coverage: `coalesce_batch` operates over
+    //! crate-private types (`AsyncDeliveryTask`, `DeliveryPayloadMode`,
+    //! `QuiescenceOptions`) that aren't part of any stable contract, so
+    //! external `tests/` files cannot name them without a `#[doc(hidden)] pub`
+    //! escape hatch that would be more API surface than this is worth. The
+    //! coalesce loop's branches are all reachable from the heterogeneous
+    //! queue case the Coordinator named; the rest are obvious from the code.
+    use std::collections::VecDeque;
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    use super::*;
+    use crate::configuration::{
+        BundleConfiguration, BundleMember, TargetConfiguration, TmuxTargetConfiguration,
+    };
+    use crate::envelope::PromptBatchSettings;
+    use crate::relay::delivery::QuiescenceOptions;
+
+    fn task(message_id: &str, payload_mode: DeliveryPayloadMode) -> AsyncDeliveryTask {
+        let member = BundleMember {
+            id: "bravo".to_string(),
+            name: None,
+            working_directory: None,
+            target: TargetConfiguration::Tmux(TmuxTargetConfiguration {
+                start_command: "sh -c 'exit 0'".to_string(),
+                prompt_readiness: None,
+            }),
+            coder_session_id: None,
+            policy_id: None,
+        };
+        AsyncDeliveryTask {
+            bundle: BundleConfiguration {
+                schema_version: "1".to_string(),
+                bundle_name: "party".to_string(),
+                autostart: false,
+                groups: Vec::new(),
+                members: vec![member.clone()],
+            },
+            sender: member.clone(),
+            all_target_sessions: vec!["bravo".to_string()],
+            target_session: "bravo".to_string(),
+            target_is_ui: false,
+            message: String::new(),
+            message_id: message_id.to_string(),
+            quiescence: QuiescenceOptions {
+                quiet_window: Duration::from_millis(1),
+                quiescence_timeout: Some(Duration::from_millis(1)),
+                acp_turn_timeout_override: None,
+            },
+            batch_settings: PromptBatchSettings::default(),
+            runtime_directory: PathBuf::from("/tmp/relay-test"),
+            completion_sender: None,
+            payload_mode,
+            append_enter: true,
+            permission_decider_sessions: Vec::new(),
+            permission_max_pending: 0,
+        }
+    }
+
+    /// Coordinator-named regression: a heterogeneous `[Envelope, Raw, Envelope,
+    /// Envelope]` queue against one per-target worker must drain across three
+    /// iterations (one envelope, one raw, one coalesced pair) without stranding
+    /// any task. This exercises every coalesce-batch branch the slice
+    /// introduces — the head-is-envelope path, the mode-change carry pushback,
+    /// the head-is-raw skip, and the multi-task pack — plus the worker-loop
+    /// invariant that carry empties before the receiver. A tokio
+    /// `UnboundedReceiver` only operates inside a runtime, so the test loop
+    /// drives `coalesce_batch` from `block_on`.
+    #[test]
+    fn heterogeneous_queue_drains_across_three_iterations() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build current-thread runtime");
+        runtime.block_on(async move {
+            let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+            for prepared in [
+                task("e1", DeliveryPayloadMode::EnvelopeMessage),
+                task("r2", DeliveryPayloadMode::RawInput),
+                task("e3", DeliveryPayloadMode::EnvelopeMessage),
+                task("e4", DeliveryPayloadMode::EnvelopeMessage),
+            ] {
+                sender.send(prepared).expect("seed channel");
+            }
+            let mut carry: VecDeque<AsyncDeliveryTask> = VecDeque::new();
+            let mut iterations: Vec<Vec<String>> = Vec::new();
+            loop {
+                let head = carry.pop_front().or_else(|| receiver.try_recv().ok());
+                let Some(head) = head else { break };
+                let batch = coalesce_batch(head, 32, &mut carry, &mut receiver);
+                iterations.push(batch.iter().map(|task| task.message_id.clone()).collect());
+            }
+            assert_eq!(
+                iterations,
+                vec![
+                    vec!["e1".to_string()],
+                    vec!["r2".to_string()],
+                    vec!["e3".to_string(), "e4".to_string()],
+                ],
+            );
+        });
     }
 }

@@ -50,13 +50,21 @@ exported from `src/relay/mod.rs`.
 - `delivery/`
   - transport-specific delivery decomposition:
   - `dispatch/mod.rs`: delivery dispatch re-export hub.
-  - `dispatch/orchestration.rs`: delivery startup, enqueue, and per-target
-    orchestration.
-  - `dispatch/payload.rs`: envelope/raw payload preparation and UI routing.
-  - `dispatch/transport.rs`: ACP/tmux transport-specific dispatch.
+  - `dispatch/orchestration.rs`: delivery startup, enqueue, per-target
+    orchestration, and the batch-drain entry point that fans one transport
+    outcome out to N coalesced tasks.
+  - `dispatch/payload.rs`: envelope/raw payload preparation, UI routing, and
+    the multi-envelope batch preparer that packs coalesced envelopes against
+    the prompt-token budget and peels the tail when ACP cannot accept the
+    rendered multi-batch result in a single dispatch.
+  - `dispatch/transport.rs`: ACP/tmux transport-specific dispatch, including
+    the batch variants that share one quiescence wait (tmux) or one
+    permission decision window (ACP) across the coalesced tasks.
   - `dispatch/worker.rs`: per-target tokio worker task; ACP bootstrap,
     respawn, and the blocking delivery body are run on the blocking pool
-    via `spawn_blocking`.
+    via `spawn_blocking`. Holds a carry buffer that re-queues tasks the
+    coalesce loop did not accept (mode-divergent head, ACP tail peeled to
+    fit the single-batch invariant).
   - `async_worker.rs`: worker registry (tokio mpsc senders) and shutdown
     drain helpers.
   - `acp_client.rs`, `acp_delivery.rs`, `acp_state.rs`: ACP lifecycle,
@@ -99,3 +107,19 @@ exported from `src/relay/mod.rs`.
   shutdown is observed via `shutdown_requested()` polled between receives,
   the same signal the registry-empty drain in
   `wait_for_async_delivery_shutdown` waits on.
+- Each worker iteration coalesces a burst of pending envelope-mode tasks
+  into one transport delivery. After the first task is received, the worker
+  drains additional ready tasks via `try_recv` up to
+  `AGENTMUX_RELAY_BATCH_DRAIN_MAX` (default 32), stopping at any task that
+  changes payload mode or UI-routing. The non-coalescing task is pushed
+  back onto a local carry buffer so it heads the next iteration without
+  losing its place. For tmux the rendered envelopes share one quiescence
+  wait and one paste-buffer sequence; for ACP they share one
+  `session/prompt` dispatch and one permission-decision window. ACP cannot
+  accept multi-batch payloads, so when the packer produces more than one
+  prompt batch the tail tasks are peeled back to the carry buffer to
+  preserve the single-batch invariant. A mid-batch transport failure
+  propagates the same outcome to every task in the batch (one delivery,
+  one outcome by construction). When two or more tasks coalesce, the worker
+  emits a `relay.chat.batch_drain.coalesced` inscription with the drained
+  count and per-task message ids.
