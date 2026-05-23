@@ -369,10 +369,7 @@ async fn relay_rejects_connections_when_worker_queue_is_full() {
         &state_root,
         &inscriptions_root,
         &fake_tmux_script,
-        &[
-            ("AGENTMUX_RELAY_CONNECTION_WORKERS", "1"),
-            ("AGENTMUX_RELAY_CONNECTION_QUEUE_CAPACITY", "1"),
-        ],
+        &[("AGENTMUX_RELAY_MAX_CONNECTIONS", "2")],
     );
     wait_for_relay_socket(&relay_socket).await;
 
@@ -443,8 +440,7 @@ async fn relay_reaps_pre_hello_idle_connections_and_recovers_worker_capacity() {
         &inscriptions_root,
         &fake_tmux_script,
         &[
-            ("AGENTMUX_RELAY_CONNECTION_WORKERS", "1"),
-            ("AGENTMUX_RELAY_CONNECTION_QUEUE_CAPACITY", "1"),
+            ("AGENTMUX_RELAY_MAX_CONNECTIONS", "2"),
             ("AGENTMUX_RELAY_PRE_HELLO_IDLE_TIMEOUT_MS", "150"),
         ],
     );
