@@ -266,8 +266,14 @@ pub(in crate::relay) fn deliver_one_target_with_worker_state(
 /// predicate refuses them), so a RawInput head implies `batch.len() == 1`
 /// and is delegated to the single-task path verbatim — the existing tmux
 /// raw-input semantics carry through unchanged.
+///
+/// `pre_resolved_pane` is supplied by the worker loop when it has already
+/// performed the tmux quiescence wait so that post-quiescence task arrivals
+/// could be drained into the batch. Threaded into `deliver_non_ui_target_batch`
+/// where it short-circuits the in-transport pane resolution + wait.
 pub(in crate::relay) fn deliver_batch_with_worker_state(
     batch: &[AsyncDeliveryTask],
+    pre_resolved_pane: Option<String>,
     acp_runtime: &mut Option<PersistentAcpWorkerRuntime>,
 ) -> (Vec<Result<ChatResult, RelayError>>, Vec<AsyncDeliveryTask>) {
     debug_assert!(
@@ -320,6 +326,7 @@ pub(in crate::relay) fn deliver_batch_with_worker_state(
                 accepted,
                 nonui_target_member,
                 prompt_batches,
+                pre_resolved_pane,
                 acp_runtime,
             );
             (outcomes, deferred)

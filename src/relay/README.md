@@ -113,13 +113,25 @@ exported from `src/relay/mod.rs`.
   `AGENTMUX_RELAY_BATCH_DRAIN_MAX` (default 32), stopping at any task that
   changes payload mode or UI-routing. The non-coalescing task is pushed
   back onto a local carry buffer so it heads the next iteration without
-  losing its place. For tmux the rendered envelopes share one quiescence
-  wait and one paste-buffer sequence; for ACP they share one
-  `session/prompt` dispatch and one permission-decision window. ACP cannot
-  accept multi-batch payloads, so when the packer produces more than one
-  prompt batch the tail tasks are peeled back to the carry buffer to
-  preserve the single-batch invariant. A mid-batch transport failure
-  propagates the same outcome to every task in the batch (one delivery,
-  one outcome by construction). When two or more tasks coalesce, the worker
-  emits a `relay.chat.batch_drain.coalesced` inscription with the drained
-  count and per-task message ids.
+  losing its place. For tmux envelope-mode heads the worker then hoists
+  the per-target quiescence wait out of the transport: it runs
+  `wait_for_quiescent_pane` on the blocking pool, and on success performs
+  a second `try_recv` drain (same predicate, same drain-max budget) to
+  absorb any tasks that landed in the channel while the pane wait was in
+  flight. The rendered envelopes then share one paste-buffer sequence
+  against the pre-resolved pane (the transport skips its own wait when a
+  pre-resolved pane is supplied). ACP heads skip the hoist: the ACP single-
+  flight prompt-completion wait runs *between* worker iterations, so the
+  next iteration's blocking `recv` plus initial coalesce drain already
+  absorb anything that queued during the previous turn. ACP-coalesced
+  tasks share one `session/prompt` dispatch and one permission-decision
+  window; ACP cannot accept multi-batch payloads, so when the packer
+  produces more than one prompt batch the tail tasks are peeled back to
+  the carry buffer to preserve the single-batch invariant. A mid-batch
+  transport failure propagates the same outcome to every task in the batch
+  (one delivery, one outcome by construction). When two or more tasks
+  coalesce, the worker emits a `relay.chat.batch_drain.coalesced`
+  inscription with the total `drained_count`, per-task `message_ids`, and
+  the `pre_quiescence_count` / `post_quiescence_count` split so the
+  operator can distinguish bursts already queued at batch assembly from
+  bursts absorbed during the quiescence wait.
