@@ -134,6 +134,50 @@ struct PromptReadinessEvaluation {
     observed_cursor_column: Option<usize>,
 }
 
+/// Signature of a non-ready evaluation used to dedup `delivery_prompt_mismatch`
+/// log lines emitted from the quiescence wait. When the pane is stuck on the
+/// same non-matching state (for example a Claude Code tool-approval dialog
+/// that the readiness regex does not match), repeated identical evaluations
+/// across poll ticks collapse to a single inscription. The dialog is still
+/// treated as non-quiescent and delivery still blocks until the state clears.
+#[derive(Debug, PartialEq, Eq)]
+struct PromptMismatchSignature {
+    mismatch_reason: Option<String>,
+    inspected_block: Option<String>,
+    regex_matched: Option<bool>,
+    expected_cursor_column: Option<usize>,
+    observed_cursor_column: Option<usize>,
+}
+
+impl PromptMismatchSignature {
+    fn from_evaluation(evaluation: &PromptReadinessEvaluation) -> Self {
+        Self {
+            mismatch_reason: evaluation.mismatch_reason.clone(),
+            inspected_block: evaluation.inspected_block.clone(),
+            regex_matched: evaluation.regex_matched,
+            expected_cursor_column: evaluation.expected_cursor_column,
+            observed_cursor_column: evaluation.observed_cursor_column,
+        }
+    }
+}
+
+/// Returns whether a mismatch evaluation should emit a fresh diagnostic. The
+/// first call after entering the wait, and every call whose evaluation
+/// signature differs from the last emitted one, returns `true` and updates
+/// `last`. Repeated identical signatures return `false`.
+fn should_emit_prompt_mismatch(
+    last: &mut Option<PromptMismatchSignature>,
+    evaluation: &PromptReadinessEvaluation,
+) -> bool {
+    let signature = PromptMismatchSignature::from_evaluation(evaluation);
+    if last.as_ref() == Some(&signature) {
+        false
+    } else {
+        *last = Some(signature);
+        true
+    }
+}
+
 pub(super) fn wait_for_quiescent_pane(
     tmux_socket: &Path,
     target_session: &str,
@@ -147,6 +191,7 @@ pub(super) fn wait_for_quiescent_pane(
         .map(|timeout| Instant::now() + timeout);
     let mut readiness_mismatch = false;
     let mut mismatch_reason = None::<String>;
+    let mut last_mismatch_signature: Option<PromptMismatchSignature> = None;
     loop {
         if shutdown_requested() {
             return Err(DeliveryWaitError::Shutdown);
@@ -211,18 +256,20 @@ pub(super) fn wait_for_quiescent_pane(
             }
             readiness_mismatch = true;
             mismatch_reason = evaluation.mismatch_reason.clone();
-            emit_delivery_diagnostic(
-                "delivery_prompt_mismatch",
-                &json!({
-                    "target_session": target_session,
-                    "pane_target": pane_after,
-                    "mismatch_reason": evaluation.mismatch_reason,
-                    "regex_matched": evaluation.regex_matched,
-                    "inspected_block": evaluation.inspected_block,
-                    "expected_cursor_column": evaluation.expected_cursor_column,
-                    "observed_cursor_column": evaluation.observed_cursor_column,
-                }),
-            );
+            if should_emit_prompt_mismatch(&mut last_mismatch_signature, &evaluation) {
+                emit_delivery_diagnostic(
+                    "delivery_prompt_mismatch",
+                    &json!({
+                        "target_session": target_session,
+                        "pane_target": pane_after,
+                        "mismatch_reason": evaluation.mismatch_reason,
+                        "regex_matched": evaluation.regex_matched,
+                        "inspected_block": evaluation.inspected_block,
+                        "expected_cursor_column": evaluation.expected_cursor_column,
+                        "observed_cursor_column": evaluation.observed_cursor_column,
+                    }),
+                );
+            }
         }
 
         if deadline.is_some_and(|value| Instant::now() >= value) {
@@ -339,4 +386,57 @@ fn prompt_readiness_matches(
         observed_cursor_column: Some(cursor_column),
         ..PromptReadinessEvaluation::default()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Dedup is a private detail of `wait_for_quiescent_pane`: the loop owns
+    // the signature state and emits via a crate-private helper. Driving it
+    // from an external test would require either widening visibility on the
+    // helper / signature struct or spinning up tmux to drive the loop. One
+    // inline unit covers the three transitions that matter: first emit,
+    // identical repeat suppressed, and signature change re-emits.
+    #[test]
+    fn dedup_emits_only_on_signature_transitions() {
+        let stuck = PromptReadinessEvaluation {
+            mismatch_reason: Some("prompt regex did not match inspected pane tail".to_string()),
+            inspected_block: Some("Do you want to proceed?".to_string()),
+            regex_matched: Some(false),
+            expected_cursor_column: Some(4),
+            observed_cursor_column: None,
+            ..PromptReadinessEvaluation::default()
+        };
+        let cursor_only = PromptReadinessEvaluation {
+            mismatch_reason: Some("cursor column 0 did not match required 4".to_string()),
+            inspected_block: Some("> ".to_string()),
+            regex_matched: Some(true),
+            expected_cursor_column: Some(4),
+            observed_cursor_column: Some(0),
+            ..PromptReadinessEvaluation::default()
+        };
+
+        let mut last = None;
+        assert!(
+            should_emit_prompt_mismatch(&mut last, &stuck),
+            "first mismatch must emit",
+        );
+        assert!(
+            !should_emit_prompt_mismatch(&mut last, &stuck),
+            "identical follow-up must suppress",
+        );
+        assert!(
+            !should_emit_prompt_mismatch(&mut last, &stuck),
+            "second identical follow-up must suppress",
+        );
+        assert!(
+            should_emit_prompt_mismatch(&mut last, &cursor_only),
+            "signature change must re-emit",
+        );
+        assert!(
+            !should_emit_prompt_mismatch(&mut last, &cursor_only),
+            "post-change identical follow-up must suppress",
+        );
+    }
 }
