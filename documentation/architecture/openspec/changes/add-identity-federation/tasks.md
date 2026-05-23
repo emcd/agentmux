@@ -1,15 +1,19 @@
+## Prerequisite: `todos/relay/50` — Migrate `request_relay` callers to Hello+envelope protocol
+
+The one-shot `request_relay` path (CLI commands, MCP server, TUI polls) sends
+bare `RelayRequest` JSON without a Hello frame, bypassing session registration
+and identity verification. This must be resolved before slice 1 can enforce
+credentials on all connection paths. See `todos/relay/50` for scope and
+implementation details.
+
 ## Slice 1 — Authentication Foundation (prerequisite for all other slices)
 
 - [ ] 1.1 Change `HelloFrame` in `src/relay/stream.rs`: `identity_token`
       becomes a required `String` field (was absent; this is breaking — all
       clients must be updated).
-- [ ] 1.2 Migrate all relay clients to Hello + envelope protocol: convert
-      `request_relay` one-shot callers (CLI commands, MCP server call sites,
-      TUI one-shot polls) from bare `RelayRequest` JSON to a Hello +
-      `{"frame":"request",...}` + close sequence. Remove
-      `IncomingFrame::LegacyRequest` and its parse fallback once all callers
-      are migrated. All migrated clients send `"socket-trust"` as
-      `identity_token` when no credential is provisioned.
+- [ ] 1.2 Update all Hello-sending clients (MCP server, TUI, relay client) to
+      send `"socket-trust"` as `identity_token` when no credential is
+      provisioned.
 - [ ] 1.3 Add per-session credential configuration: each session entry in
       bundle config may declare a `credential_path`. Seed the principal store
       from all configured credential paths at relay startup so credentials are
