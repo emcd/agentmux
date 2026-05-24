@@ -79,6 +79,8 @@ Important files:
 - `tmux.sock`: bundle tmux socket
 - `relay.lock`: relay host lock
 - `relay.spawn.lock`: relay spawn lock
+- `relay.ready`: relay readiness sentinel (present only while the host is
+  serving with signal handlers installed and accept loops spawned)
 
 Inscriptions:
 

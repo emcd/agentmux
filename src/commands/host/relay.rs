@@ -96,6 +96,17 @@ const RELAY_PRE_HELLO_IDLE_TIMEOUT_MS: u64 = 2_000;
 const RELAY_SHUTDOWN_POLL_INTERVAL_MS: u64 = 100;
 
 pub(super) async fn run_relay_host(arguments: RelayHostArguments) -> Result<(), RuntimeError> {
+    // Install SIGINT/SIGTERM handlers before any startup work. The handlers do
+    // nothing beyond flipping a process-wide atomic, so they tolerate being
+    // installed before the runtime is fully initialized. Installing them here
+    // (rather than inside `serve_relay_host`) closes a window where a SIGINT
+    // delivered between socket bind and handler install would terminate the
+    // relay with default signal disposition. This was observed as macOS CI
+    // flakiness for relay_sigint_* tests (issues/relay/20): the test gated on
+    // socket existence, which on macOS could become true before the handlers
+    // were installed.
+    let _signal_handlers = install_shutdown_signal_handlers()?;
+
     // Startup (config load, tmux autostart, lock acquisition, socket binding) is
     // blocking, so it runs on a blocking task. The async serve phase then drives
     // the per-bundle accept loops on the runtime (tokio::net + tokio::spawn).
@@ -208,7 +219,6 @@ async fn serve_relay_host(
     summary: RelayHostStartupSummary,
     hosted_bundles: Vec<HostedRelayBundle>,
 ) -> Result<(), RuntimeError> {
-    let _signal_handlers = install_shutdown_signal_handlers()?;
     emit_inscription("relay.startup.summary", &startup_summary_payload(&summary));
     render_startup_summary(&summary);
 
@@ -227,6 +237,22 @@ async fn serve_relay_host(
             Arc::clone(&connection_permits),
             max_connections,
         ));
+    }
+
+    // Remove any stale sentinel left by a crashed predecessor before we
+    // publish ours. Otherwise a waiter could observe "stale sentinel + new
+    // socket connectable" between socket bind (already completed in startup)
+    // and our publish below, and falsely conclude the relay is serving.
+    for paths in &cleanup_paths {
+        remove_relay_ready_sentinel(paths);
+    }
+
+    // Publish the ready sentinel only after all accept loops have been spawned.
+    // The signal handler is already installed (in `run_relay_host`), so
+    // `relay_socket_connectable && relay.ready exists` is a sound readiness
+    // gate for callers waiting on relay startup.
+    for paths in &cleanup_paths {
+        write_relay_ready_sentinel(paths)?;
     }
 
     let mut accept_error = supervise_accept_loops(&stop_requested, &mut accept_tasks).await;
@@ -318,6 +344,7 @@ fn cleanup_relay_host(cleanup_paths: Vec<BundleRuntimePaths>) -> Result<(), Runt
         0
     };
     for paths in cleanup_paths {
+        remove_relay_ready_sentinel(&paths);
         shared::remove_relay_socket_file(&paths.relay_socket)?;
         let shutdown =
             shutdown_bundle_runtime(&paths.tmux_socket).map_err(shared::map_reconcile_error)?;
@@ -333,6 +360,32 @@ fn cleanup_relay_host(cleanup_paths: Vec<BundleRuntimePaths>) -> Result<(), Runt
         );
     }
     Ok(())
+}
+
+/// Writes the relay ready sentinel atomically (write-tmp + rename) so callers
+/// that poll for its existence never see a partially-written file.
+fn write_relay_ready_sentinel(paths: &BundleRuntimePaths) -> Result<(), RuntimeError> {
+    let sentinel = &paths.relay_ready_sentinel;
+    let temporary = sentinel.with_extension("ready.tmp");
+    std::fs::write(&temporary, b"").map_err(|source| {
+        RuntimeError::io(
+            format!("write relay ready sentinel {}", temporary.display()),
+            source,
+        )
+    })?;
+    std::fs::rename(&temporary, sentinel).map_err(|source| {
+        RuntimeError::io(
+            format!("publish relay ready sentinel {}", sentinel.display()),
+            source,
+        )
+    })
+}
+
+/// Best-effort sentinel removal during shutdown cleanup. A missing sentinel is
+/// not an error; nor is a removal failure (the caller has already lost the
+/// relay process and we should not block the rest of cleanup).
+fn remove_relay_ready_sentinel(paths: &BundleRuntimePaths) {
+    let _ = std::fs::remove_file(&paths.relay_ready_sentinel);
 }
 
 /// Accepts connections for one bundle and spawns a task per connection, bounded

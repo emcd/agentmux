@@ -15,7 +15,7 @@ use tokio::time::{sleep, timeout};
 
 use crate::support::relay_delivery::{
     drain_child_stdout, spawn_relay_with_fake_tmux, spawn_relay_with_fake_tmux_and_env,
-    wait_for_relay_socket, write_bundle_configuration, write_fake_tmux_script,
+    wait_for_relay_ready, write_bundle_configuration, write_fake_tmux_script,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -43,7 +43,7 @@ async fn relay_startup_retries_transient_tmux_create_failures() {
         &inscriptions_root,
         &fake_tmux_script,
     );
-    wait_for_relay_socket(&relay_socket).await;
+    wait_for_relay_ready(&relay_socket).await;
     let elapsed = started.elapsed();
 
     let stdout = drain_child_stdout(&mut child).await;
@@ -89,7 +89,7 @@ async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
         &inscriptions_root,
         &fake_tmux_script,
     );
-    wait_for_relay_socket(&relay_socket).await;
+    wait_for_relay_ready(&relay_socket).await;
 
     let chat_response = request_relay(
         &relay_socket,
@@ -186,7 +186,7 @@ async fn relay_sigint_ignores_server_exited_unexpectedly_during_shutdown_cleanup
             "server_exited_unexpectedly",
         )],
     );
-    wait_for_relay_socket(&relay_socket).await;
+    wait_for_relay_ready(&relay_socket).await;
 
     let pid = child.id().expect("relay pid");
     let pid = i32::try_from(pid).expect("relay pid fits i32");
@@ -244,7 +244,7 @@ async fn relay_sigint_exits_with_active_stream_connection() {
         &inscriptions_root,
         &fake_tmux_script,
     );
-    wait_for_relay_socket(&relay_socket).await;
+    wait_for_relay_ready(&relay_socket).await;
 
     let mut stream_session = RelayStreamSession::new(
         relay_socket.clone(),
@@ -309,7 +309,7 @@ async fn relay_accepts_new_connections_while_registered_stream_stays_open() {
         &inscriptions_root,
         &fake_tmux_script,
     );
-    wait_for_relay_socket(&relay_socket).await;
+    wait_for_relay_ready(&relay_socket).await;
 
     let mut stream_session = RelayStreamSession::new(
         relay_socket.clone(),
@@ -376,7 +376,7 @@ async fn relay_rejects_connections_when_worker_queue_is_full() {
         &fake_tmux_script,
         &[("AGENTMUX_RELAY_MAX_CONNECTIONS", "2")],
     );
-    wait_for_relay_socket(&relay_socket).await;
+    wait_for_relay_ready(&relay_socket).await;
 
     let mut stream_session = RelayStreamSession::new(
         relay_socket.clone(),
@@ -462,7 +462,7 @@ async fn relay_reaps_pre_hello_idle_connections_and_recovers_worker_capacity() {
             ("AGENTMUX_RELAY_PRE_HELLO_IDLE_TIMEOUT_MS", "150"),
         ],
     );
-    wait_for_relay_socket(&relay_socket).await;
+    wait_for_relay_ready(&relay_socket).await;
 
     let idle_active = UnixStream::connect(&relay_socket).expect("connect idle active stream");
     let idle_queued = UnixStream::connect(&relay_socket).expect("connect idle queued stream");
@@ -520,7 +520,7 @@ async fn relay_delivery_sends_submit_in_separate_tmux_command() {
         &fake_tmux_script,
         &[("FAKE_TMUX_CAPTURE_MODE", "stable")],
     );
-    wait_for_relay_socket(&relay_socket).await;
+    wait_for_relay_ready(&relay_socket).await;
 
     let response = request_relay(
         &relay_socket,
@@ -666,7 +666,7 @@ async fn relay_async_delivery_does_not_inject_while_pane_in_mode() {
             ("FAKE_TMUX_PANE_IN_MODE", "1"),
         ],
     );
-    wait_for_relay_socket(&relay_socket).await;
+    wait_for_relay_ready(&relay_socket).await;
 
     let response = request_relay(
         &relay_socket,
@@ -725,7 +725,7 @@ async fn relay_raww_tmux_default_appends_enter_and_reports_dispatched_phase() {
         &inscriptions_root,
         &fake_tmux_script,
     );
-    wait_for_relay_socket(&relay_socket).await;
+    wait_for_relay_ready(&relay_socket).await;
 
     let response = request_relay(
         &relay_socket,
@@ -809,7 +809,7 @@ async fn relay_raww_tmux_no_enter_omits_enter_command() {
         &inscriptions_root,
         &fake_tmux_script,
     );
-    wait_for_relay_socket(&relay_socket).await;
+    wait_for_relay_ready(&relay_socket).await;
 
     let response = request_relay(
         &relay_socket,

@@ -416,15 +416,31 @@ pub(crate) fn spawn_relay_with_fake_tmux_and_env(
     command.spawn().expect("spawn relay")
 }
 
-pub(crate) async fn wait_for_relay_socket(socket: &Path) {
+// Waits on the relay's published readiness sentinel (relay.ready), which the
+// host writes only after SIGINT/SIGTERM handlers are installed AND every
+// per-bundle accept loop has been spawned. Socket-existence on its own is not
+// a sound readiness signal: the kernel queues connections from `bind`, well
+// before the relay is actually serving (and on macOS, before signal handlers
+// are installed -- see issues/relay/20).
+//
+// Callers pass the relay socket path; the sentinel lives alongside it in the
+// bundle runtime directory.
+pub(crate) async fn wait_for_relay_ready(socket: &Path) {
+    let sentinel = socket
+        .parent()
+        .expect("relay socket has parent directory")
+        .join("relay.ready");
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
-        if socket.exists() {
+        if sentinel.exists() && socket.exists() {
             return;
         }
         sleep(Duration::from_millis(25)).await;
     }
-    panic!("timed out waiting for relay socket {}", socket.display());
+    panic!(
+        "timed out waiting for relay ready sentinel {}",
+        sentinel.display()
+    );
 }
 
 pub(crate) async fn drain_child_stdout(child: &mut Child) -> String {

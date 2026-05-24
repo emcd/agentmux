@@ -334,11 +334,14 @@ pub(super) fn shutdown_relay_if_present(state_root: &Path, bundle_name: &str) {
     }
 }
 
-pub(super) fn wait_for_relay_socket(state_root: &Path, bundle_name: &str) {
+pub(super) fn wait_for_relay_ready(state_root: &Path, bundle_name: &str) {
     let paths = BundleRuntimePaths::resolve(state_root, bundle_name).expect("bundle paths");
     let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
-        if paths.relay_socket.exists() {
+        // The sentinel is published only after signal handlers are installed
+        // and accept loops are spawned. Pairing it with socket existence
+        // closes the early-startup race (issues/relay/20).
+        if paths.relay_ready_sentinel.exists() && paths.relay_socket.exists() {
             return;
         }
         thread::sleep(Duration::from_millis(20));
