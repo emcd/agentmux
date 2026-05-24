@@ -386,6 +386,11 @@ pub(super) fn spawn_fake_relay_once(
         while Instant::now() < deadline {
             match listener.accept() {
                 Ok((mut stream, _address)) => {
+                    // macOS propagates the listener's non-blocking flag to the
+                    // accepted socket; reset to blocking before any reads.
+                    stream
+                        .set_nonblocking(false)
+                        .expect("set accepted stream blocking");
                     let mut reader =
                         BufReader::new(stream.try_clone().expect("clone fake relay stream"));
 
