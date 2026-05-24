@@ -96,13 +96,19 @@ fn stalled_client_write_timeout_releases_connection_worker() {
 
     let (mut client_stream, join_handle) =
         spawn_relay_connection_capturing(&configuration_root, &bundle_paths);
-    let rcvbuf_bytes = minimize_receive_buffer(&client_stream);
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
 
     send_json(&mut client_stream, agent_hello_frame(bundle_name));
     let hello_ack = read_json(&mut reader);
     assert_eq!(hello_ack["frame"], "hello_ack");
+
+    // Minimize the receive buffer only after the handshake completes. On
+    // macOS, shrinking SO_RCVBUF before the first relay write causes the
+    // hello_ack write to block immediately (Unix domain socket send/recv
+    // buffer coupling differs from Linux), triggering the write timeout and
+    // tearing the connection down before the client reads the ack.
+    let rcvbuf_bytes = minimize_receive_buffer(&client_stream);
 
     // Stop draining responses, then flood the relay with requests. The relay
     // writes one response per request into the shrunk client buffer; once it
