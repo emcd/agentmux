@@ -493,6 +493,8 @@ fn concurrent_bootstrap_spawns_single_relay() {
                     let bound =
                         UnixListener::bind(&paths.relay_socket).expect("bind relay listener");
                     *listener.lock().expect("listener lock") = Some(bound);
+                    fs::write(&paths.relay_ready_sentinel, b"")
+                        .expect("write relay ready sentinel");
                 }
                 Ok(())
             })
@@ -530,6 +532,7 @@ fn bootstrap_removes_stale_socket_before_spawn() {
             "stale socket should be removed"
         );
         listener = Some(UnixListener::bind(&paths.relay_socket).expect("bind listener"));
+        fs::write(&paths.relay_ready_sentinel, b"").expect("write relay ready sentinel");
         Ok(())
     })
     .expect("bootstrap should succeed");

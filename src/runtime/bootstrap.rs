@@ -107,13 +107,13 @@ where
             let _ = remove_stale_relay_socket(paths)?;
             let spawn = spawn_relay.take().expect("spawn closure available");
             spawn()?;
-            wait_for_relay_socket(paths, options.startup_timeout)?;
+            wait_for_relay_ready(paths, options.startup_timeout)?;
             Ok(BootstrapReport {
                 spawned_relay: true,
             })
         }
         None => {
-            wait_for_relay_socket(paths, options.startup_timeout)?;
+            wait_for_relay_ready(paths, options.startup_timeout)?;
             Ok(BootstrapReport {
                 spawned_relay: false,
             })
@@ -203,13 +203,20 @@ fn relay_socket_connectable(paths: &BundleRuntimePaths) -> bool {
         && UnixStream::connect(&paths.relay_socket).is_ok()
 }
 
-fn wait_for_relay_socket(
+// A connectable socket alone is not a sound readiness gate: the kernel queues
+// connections into the listen backlog as soon as `bind` returns, well before
+// the relay's accept loop starts polling and before SIGINT/SIGTERM handlers
+// are installed. The relay publishes `relay.ready` after both are in place
+// (see `write_relay_ready_sentinel` in src/commands/host/relay.rs); waiting on
+// both signals closes the early-SIGINT window (issues/relay/20) and gives
+// callers a real "relay is serving" signal.
+fn wait_for_relay_ready(
     paths: &BundleRuntimePaths,
     startup_timeout: Duration,
 ) -> Result<(), RuntimeError> {
     let deadline = Instant::now() + startup_timeout;
     loop {
-        if relay_socket_connectable(paths) {
+        if paths.relay_ready_sentinel.exists() && relay_socket_connectable(paths) {
             return Ok(());
         }
         if Instant::now() >= deadline {
@@ -381,8 +388,10 @@ mod tests {
         };
         let report = bootstrap_relay(&paths, options, || {
             let relay_socket = paths.relay_socket.clone();
+            let ready_sentinel = paths.relay_ready_sentinel.clone();
             let handle = thread::spawn(move || {
                 let listener = UnixListener::bind(&relay_socket).expect("bind");
+                std::fs::write(&ready_sentinel, b"").expect("write ready sentinel");
                 thread::sleep(Duration::from_millis(250));
                 drop(listener);
             });
@@ -411,8 +420,10 @@ mod tests {
         let report = bootstrap_relay(&paths, options, || {
             assert!(!paths.relay_socket.exists(), "stale file should be removed");
             let relay_socket = paths.relay_socket.clone();
+            let ready_sentinel = paths.relay_ready_sentinel.clone();
             let handle = thread::spawn(move || {
                 let listener = UnixListener::bind(&relay_socket).expect("bind");
+                std::fs::write(&ready_sentinel, b"").expect("write ready sentinel");
                 thread::sleep(Duration::from_millis(250));
                 drop(listener);
             });

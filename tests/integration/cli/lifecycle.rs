@@ -66,7 +66,7 @@ fn up_and_down_report_idempotent_transitions() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn agentmux host relay --no-autostart");
-    wait_for_relay_socket(&state_root, "alpha");
+    wait_for_relay_ready(&state_root, "alpha");
 
     let first_up = Command::new(env!("CARGO_BIN_EXE_agentmux"))
         .args([
@@ -225,7 +225,7 @@ fn host_relay_summary_json_omits_group_name() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn agentmux host relay");
-    wait_for_relay_socket(&state_root, "alpha");
+    wait_for_relay_ready(&state_root, "alpha");
     shutdown_relay_if_present(&state_root, "alpha");
     let output = child
         .wait_with_output()

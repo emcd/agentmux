@@ -159,7 +159,7 @@ fn host_relay_default_mode_starts_autostart_bundles() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn agentmux host relay");
-    wait_for_relay_socket(&state_root, "alpha");
+    wait_for_relay_ready(&state_root, "alpha");
     shutdown_relay_if_present(&state_root, "alpha");
     let output = child
         .wait_with_output()
@@ -230,7 +230,7 @@ fn host_relay_records_startup_failures_and_list_reports_degraded_health() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn agentmux host relay");
-    wait_for_relay_socket(&state_root, "alpha");
+    wait_for_relay_ready(&state_root, "alpha");
 
     let listed = Command::new(env!("CARGO_BIN_EXE_agentmux"))
         .args([
@@ -311,7 +311,7 @@ fn host_relay_no_autostart_mode_reports_process_only_summary() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn agentmux host relay --no-autostart");
-    wait_for_relay_socket(&state_root, "alpha");
+    wait_for_relay_ready(&state_root, "alpha");
     shutdown_relay_if_present(&state_root, "alpha");
     let output = child
         .wait_with_output()

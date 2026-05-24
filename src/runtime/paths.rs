@@ -17,6 +17,7 @@ const RELAY_SOCKET_FILE: &str = "relay.sock";
 const TMUX_SOCKET_FILE: &str = "tmux.sock";
 const RELAY_LOCK_FILE: &str = "relay.lock";
 const RELAY_SPAWN_LOCK_FILE: &str = "relay.spawn.lock";
+const RELAY_READY_SENTINEL_FILE: &str = "relay.ready";
 const DIRECTORY_MODE_OWNER_ONLY: u32 = 0o700;
 
 /// Optional overrides for runtime root resolution.
@@ -65,6 +66,11 @@ pub struct BundleRuntimePaths {
     pub relay_socket: PathBuf,
     pub relay_lock_file: PathBuf,
     pub relay_spawn_lock_file: PathBuf,
+    /// Filesystem sentinel written by the relay host once SIGINT/SIGTERM
+    /// handlers are installed and per-bundle accept loops have been spawned.
+    /// Callers should treat the relay as ready only when both the socket is
+    /// connectable AND this sentinel exists.
+    pub relay_ready_sentinel: PathBuf,
 }
 
 impl BundleRuntimePaths {
@@ -84,6 +90,7 @@ impl BundleRuntimePaths {
             relay_socket: runtime_directory.join(RELAY_SOCKET_FILE),
             relay_lock_file: runtime_directory.join(RELAY_LOCK_FILE),
             relay_spawn_lock_file: runtime_directory.join(RELAY_SPAWN_LOCK_FILE),
+            relay_ready_sentinel: runtime_directory.join(RELAY_READY_SENTINEL_FILE),
             runtime_directory,
         })
     }
