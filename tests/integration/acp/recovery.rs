@@ -264,8 +264,11 @@ fn acp_respawn_recovers_when_agent_exits_during_pending_permission() {
     // thread (the new code path) enqueues. If it never appears, the reader
     // either parked in the handler (regression to the pre-fix deadlock) or
     // failed to spawn the resolver at all.
+    // 10 s budget: macOS CI runners are 3-5x slower than Linux for
+    // process-heavy tests; the right fix is a readiness channel rather than
+    // filesystem polling (see todos/acp/18).
     assert!(
-        wait_for_pending_permission(temporary.path(), "bravo", Duration::from_secs(3)),
+        wait_for_pending_permission(temporary.path(), "bravo", Duration::from_secs(10)),
         "resolver thread did not enqueue a pending permission record for bravo"
     );
 
@@ -274,7 +277,7 @@ fn acp_respawn_recovers_when_agent_exits_during_pending_permission() {
     // fired). With the reader unparked, that completion path is now
     // reachable during a pending permission.
     assert!(
-        wait_for_permission_invalidation(temporary.path(), "bravo", Duration::from_secs(3)),
+        wait_for_permission_invalidation(temporary.path(), "bravo", Duration::from_secs(10)),
         "respawn did not invalidate the pending permission record for bravo"
     );
 
@@ -285,7 +288,7 @@ fn acp_respawn_recovers_when_agent_exits_during_pending_permission() {
             temporary.path(),
             "bravo",
             "available",
-            Duration::from_secs(3),
+            Duration::from_secs(10),
         ),
         "worker did not auto-respawn back to available after permission-then-exit"
     );
