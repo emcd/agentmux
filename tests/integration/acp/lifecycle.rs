@@ -219,7 +219,6 @@ fn acp_load_failure_does_not_fallback_to_session_new() {
 }
 
 #[test]
-#[ignore = "macOS release CI ACP new-failure settle race"]
 fn acp_new_failure_returns_runtime_stage_code() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions {

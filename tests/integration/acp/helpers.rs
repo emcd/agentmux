@@ -7,8 +7,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use agentmux::relay::{RelayRequest, RelayResponse, handle_request};
+pub(super) use agentmux::relay::{AcpWorkerReadinessState, PermissionQueueEvent};
+use agentmux::relay::{
+    RelayRequest, RelayResponse, handle_request, subscribe_acp_worker_state,
+    subscribe_permission_queue_events,
+};
 use serde_json::Value;
+use tokio::sync::{broadcast, watch};
 
 fn dispatch_request(
     request: RelayRequest,
@@ -433,21 +438,115 @@ pub(super) fn wait_for_any_worker_state(
     false
 }
 
+/// Subscribes to readiness-state transitions for `bravo` under the default
+/// test bundle (`party`). Callers must invoke this BEFORE dispatching the
+/// action that triggers the transition; the watch::Receiver yields the
+/// current value on first borrow and every subsequent published transition.
+pub(super) fn subscribe_bravo_worker_state(
+    root: &Path,
+) -> watch::Receiver<Option<AcpWorkerReadinessState>> {
+    subscribe_acp_worker_state("party", root, "bravo")
+}
+
+/// Subscribes to permission-queue mutation events for the runtime directory.
+/// Subscriptions must be established BEFORE the action that publishes events;
+/// the broadcast::Receiver only observes events that arrive after subscribe.
+pub(super) fn subscribe_bravo_permission_queue(
+    root: &Path,
+) -> broadcast::Receiver<PermissionQueueEvent> {
+    subscribe_permission_queue_events(root)
+}
+
+/// Polls a watch::Receiver for the ACP worker's readiness state until it
+/// matches `expected`. Uses `has_changed` + `borrow_and_update` so it can be
+/// called from synchronous test bodies without a tokio runtime; the channel
+/// is updated in-process by the producer, so each poll is a cheap atomic
+/// read with no filesystem or RPC cost.
+pub(super) fn await_acp_worker_state(
+    receiver: &mut watch::Receiver<Option<AcpWorkerReadinessState>>,
+    expected: AcpWorkerReadinessState,
+    timeout: Duration,
+) -> bool {
+    await_acp_worker_any_state(receiver, &[expected], timeout)
+}
+
+pub(super) fn await_acp_worker_any_state(
+    receiver: &mut watch::Receiver<Option<AcpWorkerReadinessState>>,
+    expected: &[AcpWorkerReadinessState],
+    timeout: Duration,
+) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(current) = *receiver.borrow_and_update()
+            && expected.contains(&current)
+        {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Polls a broadcast::Receiver for the first permission-queue event matching
+/// the predicate. Drops non-matching events; treats `Lagged` as a continue
+/// (tests should subscribe before the action so lag is not expected).
+pub(super) fn await_permission_event<F>(
+    receiver: &mut broadcast::Receiver<PermissionQueueEvent>,
+    mut matcher: F,
+    timeout: Duration,
+) -> bool
+where
+    F: FnMut(&PermissionQueueEvent) -> bool,
+{
+    let deadline = Instant::now() + timeout;
+    loop {
+        match receiver.try_recv() {
+            Ok(event) => {
+                if matcher(&event) {
+                    return true;
+                }
+            }
+            Err(broadcast::error::TryRecvError::Empty) => {
+                if Instant::now() >= deadline {
+                    return false;
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+            Err(broadcast::error::TryRecvError::Lagged(_)) => continue,
+            Err(broadcast::error::TryRecvError::Closed) => return false,
+        }
+    }
+}
+
 /// Asserts that an ACP send to `bravo` does not succeed: either the relay
 /// rejects the enqueue outright with `runtime_acp_worker_unavailable`, or it
 /// accepts the async dispatch and the persistent worker settles `unavailable`.
+///
+/// Subscribes to the worker readiness channel BEFORE dispatching so the
+/// terminal `Unavailable` transition cannot be missed if it fires before the
+/// test code reaches the await. Uses a 5 s budget (vs. 3 s under the old
+/// filesystem-poll path) to absorb macOS scheduling latency; with channel
+/// observation the test thread is not burning CPU on poll loops while it
+/// waits, so a generous deadline is cheap.
 pub(super) fn assert_acp_delivery_unavailable(
     config_root: &Path,
     tmux_socket: &Path,
     acp_turn_timeout_ms: Option<u64>,
 ) {
     let root = tmux_socket.parent().unwrap_or_else(|| Path::new("."));
+    let mut receiver = subscribe_bravo_worker_state(root);
     match dispatch_send_result(config_root, tmux_socket, acp_turn_timeout_ms) {
         Err(error) => assert_eq!(error.code, "runtime_acp_worker_unavailable"),
         Ok(response) => {
             let _result = chat_result(response);
             assert!(
-                wait_for_worker_state(root, "bravo", "unavailable", Duration::from_secs(3)),
+                await_acp_worker_state(
+                    &mut receiver,
+                    AcpWorkerReadinessState::Unavailable,
+                    Duration::from_secs(5),
+                ),
                 "ACP worker did not settle unavailable after a failed startup stage"
             );
         }
