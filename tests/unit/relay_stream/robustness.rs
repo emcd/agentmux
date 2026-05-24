@@ -66,6 +66,10 @@ fn agent_hello_frame(bundle_name: &str) -> Value {
     })
 }
 
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "SO_RCVBUF minimum on macOS (~2 KiB) is too high to fill reliably within the test flood window; see issues/relay/19"
+)]
 #[test]
 fn stalled_client_write_timeout_releases_connection_worker() {
     ensure_fast_write_timeout_for_tests();
