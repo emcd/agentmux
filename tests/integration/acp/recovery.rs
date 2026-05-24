@@ -155,13 +155,10 @@ fn wait_for_permission_invalidation(
     false
 }
 
-// Exercises `invalidate_pending_for_respawn` through the respawn loop. The
-// natural in-flight path (stub emits session/request_permission then
-// disconnects) would have the reader thread blocked in the permission
-// handler waiting for a UI decision, which prevents the EOF detection that
-// drives the respawn in the first place. That cross-cutting limitation is
-// out of scope here; seeding a permission record directly lets us verify
-// the invalidation surface in isolation.
+// Exercises `invalidate_pending_for_respawn` through the respawn loop by
+// seeding a queue record directly. The natural in-flight path (agent emits
+// session/request_permission then exits) is covered by
+// `acp_respawn_recovers_when_agent_exits_during_pending_permission`.
 #[test]
 fn acp_respawn_invalidates_pending_permission_queue_entry_for_target() {
     let temporary = TempDir::new().expect("temporary");
@@ -235,6 +232,63 @@ fn seed_permission_queue_record(
         serde_json::to_string(&state).expect("serialize seed"),
     )
     .expect("write seed permission queue");
+}
+
+// todos/acp/16: the ACP reader thread must not block on the operator's
+// permission decision. With the resolver hoisted onto a dedicated short-lived
+// thread, an agent that emits session/request_permission and then exits
+// reaches EOF on the reader's next read_line, fires on_completion with
+// ConnectionClosed, transitions the worker to Unavailable, and drives the
+// respawn loop. The respawn calls invalidate_pending_for_respawn, which
+// wakes the parked resolver with a cancelled outcome. Pre-fix, the reader
+// was parked in the permission handler and never observed EOF, so this
+// scenario deadlocked indefinitely.
+#[test]
+fn acp_respawn_recovers_when_agent_exits_during_pending_permission() {
+    let temporary = TempDir::new().expect("temporary");
+    let exiting = AcpStubOptions {
+        request_permission_on_prompt: true,
+        disconnect_on_prompt: Some("after_activity".to_string()),
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &exiting);
+    let first = dispatch_send(
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+        Some(1_000),
+    );
+    let first_result = chat_result(first);
+    assert_eq!(first_result.outcome, ChatOutcome::Queued);
+
+    // Permission record must land in the persisted queue. Only the resolver
+    // thread (the new code path) enqueues. If it never appears, the reader
+    // either parked in the handler (regression to the pre-fix deadlock) or
+    // failed to spawn the resolver at all.
+    assert!(
+        wait_for_pending_permission(temporary.path(), "bravo", Duration::from_secs(3)),
+        "resolver thread did not enqueue a pending permission record for bravo"
+    );
+
+    // Respawn must invalidate the pending record. This is only reachable if
+    // the worker observed Unavailable (i.e. on_completion(ConnectionClosed)
+    // fired). With the reader unparked, that completion path is now
+    // reachable during a pending permission.
+    assert!(
+        wait_for_permission_invalidation(temporary.path(), "bravo", Duration::from_secs(3)),
+        "respawn did not invalidate the pending permission record for bravo"
+    );
+
+    // Final state must converge to available; the respawn loop must rebuild
+    // the ACP child and resume readiness.
+    assert!(
+        wait_for_worker_state(
+            temporary.path(),
+            "bravo",
+            "available",
+            Duration::from_secs(3),
+        ),
+        "worker did not auto-respawn back to available after permission-then-exit"
+    );
 }
 
 #[test]

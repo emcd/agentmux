@@ -305,13 +305,14 @@ fn run_tui(
                     // Handle prompt synchronously for MVP
                     // (TUI freezes during prompt — acceptable for debugging use case)
                     let session = session_id.to_string();
-                    let permission_handler: agentmux::acp::PermissionHandler =
-                        Box::new(|req: &PermissionRequest| -> Option<String> {
+                    let permission_handler: agentmux::acp::PermissionHandler = Box::new(
+                        |req: PermissionRequest, mut responder: agentmux::acp::PermissionResponder| {
                             disable_raw_mode().ok();
-                            let result = show_permission_menu(req);
+                            let result = show_permission_menu(&req);
                             enable_raw_mode().ok();
-                            result
-                        });
+                            responder.respond(result);
+                        },
+                    );
                     let (completion_tx, completion_rx) =
                         std::sync::mpsc::channel::<agentmux::acp::PromptCompletion>();
                     let on_completion: agentmux::acp::PromptCompletionHandler =

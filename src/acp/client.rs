@@ -5,6 +5,7 @@ use std::{
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
     sync::{
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, RecvTimeoutError},
     },
     thread::{self, JoinHandle},
@@ -33,8 +34,45 @@ pub(in crate::acp) fn append_replay_entries(
 }
 
 pub type DispatchHandler = Box<dyn FnOnce() + Send + 'static>;
-pub type PermissionHandler = Box<dyn FnMut(&PermissionRequest) -> Option<String> + Send + 'static>;
+// Permission handler is void-returning: the reader thread must not block on
+// the operator's decision (see todos/acp/16). The handler receives a
+// `PermissionResponder` it can move onto a separate task; that task awaits
+// the decision and writes the JSON-RPC response via the responder when ready.
+pub type PermissionHandler =
+    Box<dyn FnMut(PermissionRequest, PermissionResponder) + Send + 'static>;
 pub type PromptCompletionHandler = Box<dyn FnOnce(PromptCompletion) + Send + 'static>;
+
+// Owns the obligation to write the agent's `session/request_permission`
+// response. The handler installed by relay delivery moves the responder onto
+// a short-lived resolver thread; once the operator's decision arrives, the
+// resolver calls `respond` (or, if the resolver path drops it without
+// responding, `Drop` emits a cancelled outcome) so the agent never waits
+// forever on a permission it issued.
+pub struct PermissionResponder {
+    stdin: SharedStdin,
+    request_id: u64,
+    in_flight_flag: Arc<AtomicBool>,
+    responded: bool,
+}
+
+impl PermissionResponder {
+    pub fn respond(&mut self, decision: Option<String>) {
+        if self.responded {
+            return;
+        }
+        send_permission_response(&self.stdin, self.request_id, decision);
+        self.responded = true;
+    }
+}
+
+impl Drop for PermissionResponder {
+    fn drop(&mut self) {
+        if !self.responded {
+            send_permission_response(&self.stdin, self.request_id, None);
+        }
+        self.in_flight_flag.store(false, Ordering::SeqCst);
+    }
+}
 
 #[derive(Debug)]
 pub enum AcpRequestError {
@@ -73,6 +111,16 @@ struct ActivePrompt {
     request_id: u64,
     on_permission_request: Mutex<Option<PermissionHandler>>,
     on_completion: Mutex<Option<PromptCompletionHandler>>,
+    // Single-in-flight contract: at most one permission request may be
+    // outstanding on the active prompt at a time. The reader sets the flag
+    // when it dispatches a permission request to the handler; the
+    // `PermissionResponder` clears it on drop (after responding). A second
+    // request that arrives while the flag is set is dropped synchronously
+    // with a cancelled response and an inscription. The contract keeps the
+    // resolver-thread state (and `pending_permission_outcome`) at most
+    // one-deep; upgrading to a queue is a separate slice if federation load
+    // demands it.
+    permission_in_flight: Arc<AtomicBool>,
     // Dropped when the active_prompt slot is cleared (after on_completion
     // fires, or on synchronous dispatch failure). The matching receiver
     // on `AcpStdioClient.last_prompt_signal` then observes `Disconnected`
@@ -276,6 +324,7 @@ impl AcpStdioClient {
             request_id,
             on_permission_request: Mutex::new(on_permission_request),
             on_completion: Mutex::new(Some(on_completion)),
+            permission_in_flight: Arc::new(AtomicBool::new(false)),
             _completion_signal: signal_tx,
         });
         {
@@ -662,20 +711,54 @@ fn dispatch_permission_request(
         return;
     }
 
-    let request = build_permission_request_from_params(params, request_id);
+    // Single-in-flight contract (see ActivePrompt::permission_in_flight):
+    // a second permission request landing while one is unresolved is dropped
+    // here with a cancelled response. The agent receives a normal response
+    // (so it does not stall), and an inscription records the drop for
+    // diagnostics. The PermissionResponder for the in-flight request clears
+    // the flag on drop, so this gate is purely a concurrency guard, not a
+    // permanent block.
+    if active
+        .permission_in_flight
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        emit_inscription(
+            "acp.reader.permission_dropped_already_in_flight",
+            &json!({"id": request_id}),
+        );
+        send_permission_response(stdin, request_id, None);
+        return;
+    }
 
-    let decision = {
-        let mut handler_slot = active
-            .on_permission_request
-            .lock()
-            .expect("permission mutex");
-        match handler_slot.as_mut() {
-            Some(handler) => handler(&request),
-            None => None,
-        }
+    let request = build_permission_request_from_params(params, request_id);
+    let responder = PermissionResponder {
+        stdin: Arc::clone(stdin),
+        request_id,
+        in_flight_flag: Arc::clone(&active.permission_in_flight),
+        responded: false,
     };
 
-    send_permission_response(stdin, request_id, decision);
+    // The handler is expected to move the responder onto a separate task
+    // (typically a short-lived thread) so the reader returns to its
+    // `read_line` loop immediately. If the handler is unset (e.g. relay
+    // delivery did not register one), the responder is dropped here, which
+    // synthesizes a cancelled response and clears the in-flight flag.
+    let mut handler_slot = active
+        .on_permission_request
+        .lock()
+        .expect("permission mutex");
+    match handler_slot.as_mut() {
+        Some(handler) => handler(request, responder),
+        None => {
+            emit_inscription(
+                "acp.reader.permission_dropped_no_handler",
+                &json!({"id": request_id}),
+            );
+            // Responder dropped: sends cancelled, clears flag.
+            drop(responder);
+        }
+    }
 }
 
 fn build_permission_request_from_params(params: &Value, request_id: u64) -> PermissionRequest {
