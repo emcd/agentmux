@@ -3,15 +3,16 @@ mod acp_delivery;
 mod acp_state;
 mod async_worker;
 mod dispatch;
+pub(in crate::relay) mod observability;
 mod permission_state;
 mod quiescence;
 mod results;
 mod ui_delivery;
 
 pub(in crate::relay) use self::acp_state::derive_acp_look_snapshot;
+pub use self::async_worker::AcpWorkerReadinessState;
 pub(in crate::relay) use self::async_worker::{
-    AcpWorkerReadinessState, acp_session_ready_for_startup, get_acp_worker_snapshot,
-    get_acp_worker_state,
+    acp_session_ready_for_startup, get_acp_worker_snapshot, get_acp_worker_state,
 };
 pub(in crate::relay) use self::dispatch::{
     await_acp_worker_prime_for_look, deliver_one_target, enqueue_async_delivery,
