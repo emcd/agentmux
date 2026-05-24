@@ -26,19 +26,38 @@ fn spawn_relay_connection_capturing(
 }
 
 // Clamps a socket's receive buffer to the kernel minimum so a non-reading peer
-// fills its buffer after only a handful of small frames.
-fn minimize_receive_buffer(stream: &UnixStream) {
-    let size: libc::c_int = 1;
+// fills its buffer after only a handful of small frames. Returns the actual
+// clamped size reported by `getsockopt`; the kernel may round up significantly
+// (Linux usually doubles for accounting overhead; macOS enforces a higher
+// minimum than Linux, ~2 KiB). The caller uses this to size a flood that is
+// guaranteed to overrun the buffer on any platform.
+fn minimize_receive_buffer(stream: &UnixStream) -> usize {
+    let requested: libc::c_int = 1;
     let result = unsafe {
         libc::setsockopt(
             stream.as_raw_fd(),
             libc::SOL_SOCKET,
             libc::SO_RCVBUF,
-            std::ptr::addr_of!(size).cast(),
+            std::ptr::addr_of!(requested).cast(),
             std::mem::size_of::<libc::c_int>() as libc::socklen_t,
         )
     };
     assert_eq!(result, 0, "failed to shrink socket receive buffer");
+
+    let mut actual: libc::c_int = 0;
+    let mut actual_len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+    let result = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_RCVBUF,
+            std::ptr::addr_of_mut!(actual).cast(),
+            std::ptr::addr_of_mut!(actual_len),
+        )
+    };
+    assert_eq!(result, 0, "failed to read back SO_RCVBUF");
+    assert!(actual >= 0, "kernel reported negative SO_RCVBUF: {actual}");
+    actual as usize
 }
 
 // Joins a captured `serve_connection` thread, failing the test if the worker
@@ -66,10 +85,6 @@ fn agent_hello_frame(bundle_name: &str) -> Value {
     })
 }
 
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "SO_RCVBUF minimum on macOS (~2 KiB) is too high to fill reliably within the test flood window; see issues/relay/19"
-)]
 #[test]
 fn stalled_client_write_timeout_releases_connection_worker() {
     ensure_fast_write_timeout_for_tests();
@@ -81,7 +96,7 @@ fn stalled_client_write_timeout_releases_connection_worker() {
 
     let (mut client_stream, join_handle) =
         spawn_relay_connection_capturing(&configuration_root, &bundle_paths);
-    minimize_receive_buffer(&client_stream);
+    let rcvbuf_bytes = minimize_receive_buffer(&client_stream);
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
 
@@ -93,9 +108,21 @@ fn stalled_client_write_timeout_releases_connection_worker() {
     // writes one response per request into the shrunk client buffer; once it
     // is full the relay's write blocks, and the write timeout must tear the
     // connection down rather than pinning the worker indefinitely.
+    //
+    // Flood size is derived from the actual receive-buffer capacity reported
+    // by getsockopt above. The conservative lower bound of 32 bytes per
+    // response, multiplied by a 4x safety factor, guarantees the flood
+    // overruns the buffer on every platform (Linux ~2 KiB and macOS ~2-8 KiB
+    // both fall well inside the resulting count). A 512-floor preserves the
+    // historical Linux flood size in case getsockopt reports something
+    // unusually small. See issues/relay/19.
+    const ASSUMED_MIN_RESPONSE_BYTES: usize = 32;
+    const FLOOD_SAFETY_MULTIPLIER: usize = 4;
+    let flood_count =
+        (rcvbuf_bytes / ASSUMED_MIN_RESPONSE_BYTES * FLOOD_SAFETY_MULTIPLIER).max(512);
     drop(reader);
     let flood = thread::spawn(move || {
-        for _ in 0..512 {
+        for _ in 0..flood_count {
             let encoded = serde_json::to_string(&json!({
                 "frame": "request",
                 "request": {"operation": "list", "sender_session": "alpha"}
