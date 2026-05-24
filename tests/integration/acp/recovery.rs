@@ -234,15 +234,19 @@ fn seed_permission_queue_record(
     .expect("write seed permission queue");
 }
 
-// todos/acp/16: the ACP reader thread must not block on the operator's
-// permission decision. With the resolver hoisted onto a dedicated short-lived
-// thread, an agent that emits session/request_permission and then exits
-// reaches EOF on the reader's next read_line, fires on_completion with
-// ConnectionClosed, transitions the worker to Unavailable, and drives the
-// respawn loop. The respawn calls invalidate_pending_for_respawn, which
-// wakes the parked resolver with a cancelled outcome. Pre-fix, the reader
-// was parked in the permission handler and never observed EOF, so this
-// scenario deadlocked indefinitely.
+// todos/acp/16 + todos/acp/18: the ACP reader thread must not block on the
+// operator's permission decision. With the resolver hoisted onto a dedicated
+// short-lived thread, an agent that emits session/request_permission and
+// then exits reaches EOF on the reader's next read_line, fires on_completion
+// with ConnectionClosed, transitions the worker to Unavailable, and drives
+// the respawn loop. The respawn calls invalidate_pending_for_respawn, which
+// wakes the parked resolver with a cancelled outcome.
+//
+// All three transitions are observed via in-process readiness channels
+// (subscribed BEFORE dispatch, so no event can be missed). Pre-channel
+// versions of this test polled permission_queue.json and the worker-state
+// snapshot with 10 s budgets to absorb macOS scheduling latency. The
+// channel-backed waits are deterministic; the budget reverts to 5 s.
 #[test]
 fn acp_respawn_recovers_when_agent_exits_during_pending_permission() {
     let temporary = TempDir::new().expect("temporary");
@@ -252,6 +256,11 @@ fn acp_respawn_recovers_when_agent_exits_during_pending_permission() {
         ..AcpStubOptions::default()
     };
     let (config_root, _log_path) = write_configuration(temporary.path(), &exiting);
+
+    // Subscribe BEFORE dispatch so no transitions can fire and be missed.
+    let mut worker_state_receiver = subscribe_bravo_worker_state(temporary.path());
+    let mut queue_receiver = subscribe_bravo_permission_queue(temporary.path());
+
     let first = dispatch_send(
         &config_root,
         &temporary.path().join("tmux.sock"),
@@ -260,35 +269,48 @@ fn acp_respawn_recovers_when_agent_exits_during_pending_permission() {
     let first_result = chat_result(first);
     assert_eq!(first_result.outcome, ChatOutcome::Queued);
 
-    // Permission record must land in the persisted queue. Only the resolver
-    // thread (the new code path) enqueues. If it never appears, the reader
-    // either parked in the handler (regression to the pre-fix deadlock) or
-    // failed to spawn the resolver at all.
-    // 10 s budget: macOS CI runners are 3-5x slower than Linux for
-    // process-heavy tests; the right fix is a readiness channel rather than
-    // filesystem polling (see todos/acp/18).
+    // Permission record must be enqueued. Only the resolver thread (the
+    // todos/acp/16 code path) calls enqueue_permission_request. If the
+    // Enqueued event never arrives, the reader either parked in the handler
+    // (regression to the pre-fix deadlock) or failed to spawn the resolver.
     assert!(
-        wait_for_pending_permission(temporary.path(), "bravo", Duration::from_secs(10)),
-        "resolver thread did not enqueue a pending permission record for bravo"
+        await_permission_event(
+            &mut queue_receiver,
+            |event| matches!(
+                event,
+                PermissionQueueEvent::Enqueued { target_session, .. }
+                    if target_session == "bravo"
+            ),
+            Duration::from_secs(5),
+        ),
+        "resolver thread did not publish Enqueued for bravo"
     );
 
     // Respawn must invalidate the pending record. This is only reachable if
     // the worker observed Unavailable (i.e. on_completion(ConnectionClosed)
-    // fired). With the reader unparked, that completion path is now
-    // reachable during a pending permission.
+    // fired). The Invalidated event with the respawn reason code is the
+    // critical signal that the deadlock-breaking path executed.
     assert!(
-        wait_for_permission_invalidation(temporary.path(), "bravo", Duration::from_secs(10)),
-        "respawn did not invalidate the pending permission record for bravo"
+        await_permission_event(
+            &mut queue_receiver,
+            |event| matches!(
+                event,
+                PermissionQueueEvent::Invalidated { target_session, reason_code, .. }
+                    if target_session == "bravo"
+                        && reason_code == "runtime_permission_request_invalidated_by_respawn"
+            ),
+            Duration::from_secs(5),
+        ),
+        "respawn did not publish Invalidated for the pending permission of bravo"
     );
 
     // Final state must converge to available; the respawn loop must rebuild
     // the ACP child and resume readiness.
     assert!(
-        wait_for_worker_state(
-            temporary.path(),
-            "bravo",
-            "available",
-            Duration::from_secs(10),
+        await_acp_worker_state(
+            &mut worker_state_receiver,
+            AcpWorkerReadinessState::Available,
+            Duration::from_secs(5),
         ),
         "worker did not auto-respawn back to available after permission-then-exit"
     );
