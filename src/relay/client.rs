@@ -417,25 +417,22 @@ fn is_ignorable_socket_option_error(error: &io::Error) -> bool {
     )
 }
 
-/// Sends one request to relay socket and returns the parsed response.
+/// Sends one Hello + request frame to the relay socket and returns the parsed
+/// response. The connection is opened, used for one exchange, and dropped.
+///
+/// # Errors
+///
+/// Returns IO errors when the relay transport or Hello/Request exchange fails.
 pub fn request_relay(
     socket_path: &Path,
+    bundle_name: &str,
+    session_id: &str,
     request: &RelayRequest,
 ) -> Result<RelayResponse, io::Error> {
-    let mut stream = UnixStream::connect(socket_path)?;
-    let request_text = serde_json::to_string(request).map_err(io::Error::other)?;
-    stream.write_all(request_text.as_bytes())?;
-    stream.write_all(b"\n")?;
-    stream.shutdown(std::net::Shutdown::Write)?;
-
-    let mut reader = BufReader::new(&mut stream);
-    let mut line = String::new();
-    let read = reader.read_line(&mut line)?;
-    if read == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::UnexpectedEof,
-            "relay returned empty response",
-        ));
-    }
-    serde_json::from_str::<RelayResponse>(line.trim_end()).map_err(io::Error::other)
+    let mut session = RelayStreamSession::new(
+        socket_path.to_path_buf(),
+        bundle_name.to_string(),
+        session_id.to_string(),
+    );
+    session.request(request)
 }

@@ -715,6 +715,8 @@ impl McpServer {
         let relay_socket = bundle_paths.relay_socket;
         match request_relay(
             &relay_socket,
+            bundle_name,
+            sender_session,
             &RelayRequest::List {
                 sender_session: Some(sender_session.to_string()),
             },

@@ -17,8 +17,7 @@ use crate::{
 use super::stream::{
     HelloFrame, IncomingFrame, OutgoingFrame, RegisterStreamOutcome, SharedStreamWriter,
     StreamRegistration, parse_incoming_frame, register_stream, registration_is_current,
-    spawn_stream_writer, unregister_stream, write_legacy_response_to_writer,
-    write_stream_frame_to_writer,
+    spawn_stream_writer, unregister_stream, write_stream_frame_to_writer,
 };
 use super::{
     GLOBAL_SESSION_SUFFIX, RelayError, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
@@ -123,9 +122,6 @@ async fn serve_connection_frames(
         let frame = match parse_incoming_frame(trimmed) {
             Ok(frame) => frame,
             Err(source) => {
-                // Wire contract: pre-hello parse failures write the unwrapped
-                // `RelayResponse` shape so legacy `request_relay` clients can
-                // decode the error.
                 let response = RelayResponse::Error {
                     error: relay_error(
                         "validation_invalid_arguments",
@@ -133,22 +129,18 @@ async fn serve_connection_frames(
                         Some(json!({"cause": source.to_string()})),
                     ),
                 };
-                write_legacy_response_to_writer(writer, &response)?;
+                write_stream_frame_to_writer(
+                    writer,
+                    OutgoingFrame::Response {
+                        request_id: None,
+                        response: &response,
+                    },
+                )?;
                 break;
             }
         };
 
         match frame {
-            IncomingFrame::LegacyRequest(request) => {
-                let response = dispatch_request(
-                    request,
-                    configuration_root,
-                    &bundle_paths.bundle_name,
-                    &bundle_paths.runtime_directory,
-                    None,
-                );
-                write_legacy_response_to_writer(writer, &response)?;
-            }
             IncomingFrame::Hello(hello) => {
                 let response = handle_hello_frame(configuration_root, bundle_paths, &hello);
                 match response {

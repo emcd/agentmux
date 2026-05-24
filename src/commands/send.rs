@@ -43,9 +43,11 @@ pub(super) fn run_agentmux_send(arguments: &[String]) -> Result<(), RuntimeError
     let paths = BundleRuntimePaths::resolve(&roots.state_root, &resolved_session.bundle_name)?;
     let response = request_relay(
         &paths.relay_socket,
+        &resolved_session.bundle_name,
+        &resolved_session.session_id,
         &RelayRequest::Chat {
             request_id: parsed.request_id.clone(),
-            sender_session: resolved_session.session_id,
+            sender_session: resolved_session.session_id.clone(),
             message: parsed.message.clone(),
             targets: parsed.targets.clone(),
             broadcast: parsed.broadcast,

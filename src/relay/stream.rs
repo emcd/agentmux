@@ -54,7 +54,6 @@ pub(super) enum IncomingFrame {
         request_id: Option<String>,
         request: RelayRequest,
     },
-    LegacyRequest(RelayRequest),
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -120,26 +119,24 @@ struct StreamRegistry {
 static STREAM_REGISTRY: OnceLock<StreamRegistry> = OnceLock::new();
 
 pub(super) fn parse_incoming_frame(line: &str) -> Result<IncomingFrame, io::Error> {
-    match serde_json::from_str::<IncomingEnvelope>(line) {
-        Ok(IncomingEnvelope::Hello {
+    let envelope = serde_json::from_str::<IncomingEnvelope>(line).map_err(io::Error::other)?;
+    match envelope {
+        IncomingEnvelope::Hello {
             schema_version,
             bundle_name,
             session_id,
-        }) => Ok(IncomingFrame::Hello(HelloFrame {
+        } => Ok(IncomingFrame::Hello(HelloFrame {
             schema_version,
             bundle_name,
             session_id,
         })),
-        Ok(IncomingEnvelope::Request {
+        IncomingEnvelope::Request {
             request_id,
             request,
-        }) => Ok(IncomingFrame::Request {
+        } => Ok(IncomingFrame::Request {
             request_id,
             request,
         }),
-        Err(_) => serde_json::from_str::<RelayRequest>(line)
-            .map(IncomingFrame::LegacyRequest)
-            .map_err(io::Error::other),
     }
 }
 
@@ -434,20 +431,6 @@ pub(super) fn write_stream_frame_to_writer(
     frame: OutgoingFrame<'_>,
 ) -> Result<(), io::Error> {
     let mut bytes = encode_outgoing_frame(frame)?.into_bytes();
-    bytes.push(b'\n');
-    enqueue_bytes(writer, bytes)
-}
-
-/// Sends a raw `RelayResponse` JSON line (no frame envelope) through the
-/// connection's writer task. Used for legacy callers that have not sent a
-/// hello frame and for the pre-hello parse-failure path, where the wire
-/// contract is the unwrapped `RelayResponse` shape that `request_relay`
-/// decodes.
-pub(super) fn write_legacy_response_to_writer(
-    writer: &SharedStreamWriter,
-    response: &RelayResponse,
-) -> Result<(), io::Error> {
-    let mut bytes = serde_json::to_vec(response).map_err(io::Error::other)?;
     bytes.push(b'\n');
     enqueue_bytes(writer, bytes)
 }

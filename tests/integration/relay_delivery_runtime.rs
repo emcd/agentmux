@@ -93,6 +93,8 @@ async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
 
     let chat_response = request_relay(
         &relay_socket,
+        "party",
+        "alpha",
         &RelayRequest::Chat {
             request_id: Some("req-shutdown-drop".to_string()),
             sender_session: "alpha".to_string(),
@@ -287,7 +289,8 @@ async fn relay_sigint_exits_with_active_stream_connection() {
 async fn relay_accepts_new_connections_while_registered_stream_stays_open() {
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
-    let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
+    let config_root =
+        write_bundle_configuration(temporary.path(), bundle_name, &["alpha", "bravo"]);
     let state_root = temporary.path().join("state");
     let fake_tmux_script = temporary.path().join("fake-tmux.sh");
     let attempts_file = temporary.path().join("attempts.txt");
@@ -328,6 +331,8 @@ async fn relay_accepts_new_connections_while_registered_stream_stays_open() {
         tokio::task::spawn_blocking(move || {
             request_relay(
                 &relay_socket_for_second_request,
+                "party",
+                "bravo",
                 &RelayRequest::List {
                     sender_session: Some("alpha".to_string()),
                 },
@@ -403,8 +408,21 @@ async fn relay_rejects_connections_when_worker_queue_is_full() {
     .await
     .expect("timed out waiting for overload response")
     .expect("join overload response task");
-    let rejected_response: RelayResponse =
+    let rejected_envelope: serde_json::Value =
         serde_json::from_str(rejected_line.trim_end()).expect("decode overload response");
+    assert_eq!(
+        rejected_envelope
+            .get("frame")
+            .and_then(serde_json::Value::as_str),
+        Some("response")
+    );
+    let rejected_response: RelayResponse = serde_json::from_value(
+        rejected_envelope
+            .get("response")
+            .cloned()
+            .expect("overload response envelope missing 'response' field"),
+    )
+    .expect("decode overload response payload");
     let RelayResponse::Error { error } = rejected_response else {
         panic!("expected overload error response");
     };
@@ -456,6 +474,8 @@ async fn relay_reaps_pre_hello_idle_connections_and_recovers_worker_capacity() {
         tokio::task::spawn_blocking(move || {
             request_relay(
                 &relay_socket_for_retry,
+                "party",
+                "alpha",
                 &RelayRequest::List {
                     sender_session: Some("alpha".to_string()),
                 },
@@ -504,6 +524,8 @@ async fn relay_delivery_sends_submit_in_separate_tmux_command() {
 
     let response = request_relay(
         &relay_socket,
+        "party",
+        "alpha",
         &RelayRequest::Chat {
             request_id: Some("req-submit-separate-enter".to_string()),
             sender_session: "alpha".to_string(),
@@ -648,6 +670,8 @@ async fn relay_async_delivery_does_not_inject_while_pane_in_mode() {
 
     let response = request_relay(
         &relay_socket,
+        "party",
+        "alpha",
         &RelayRequest::Chat {
             request_id: Some("req-interaction-mode".to_string()),
             sender_session: "alpha".to_string(),
@@ -705,6 +729,8 @@ async fn relay_raww_tmux_default_appends_enter_and_reports_dispatched_phase() {
 
     let response = request_relay(
         &relay_socket,
+        "party",
+        "alpha",
         &RelayRequest::Raww {
             request_id: Some("req-raww-default-enter".to_string()),
             sender_session: "alpha".to_string(),
@@ -787,6 +813,8 @@ async fn relay_raww_tmux_no_enter_omits_enter_command() {
 
     let response = request_relay(
         &relay_socket,
+        "party",
+        "alpha",
         &RelayRequest::Raww {
             request_id: Some("req-raww-no-enter".to_string()),
             sender_session: "alpha".to_string(),
