@@ -2,8 +2,8 @@ pub mod client;
 pub mod render;
 
 pub use client::{
-    AcpRequestError, AcpStdioClient, DispatchHandler, PermissionHandler, PromptCompletion,
-    PromptCompletionHandler, PromptDispatchOutcome, REPLAY_BUFFER_MAX_ENTRIES,
+    AcpRequestError, AcpStdioClient, DispatchHandler, PermissionHandler, PermissionResponder,
+    PromptCompletion, PromptCompletionHandler, PromptDispatchOutcome, REPLAY_BUFFER_MAX_ENTRIES,
 };
 pub use render::{
     AcpSnapshotEntry, replay_entries_to_snapshot_entries, snapshot_entries_to_plain_lines,

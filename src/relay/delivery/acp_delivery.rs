@@ -241,20 +241,42 @@ pub(super) fn deliver_batch_target_acp(
     let permission_target_member_id = target_member_id.clone();
     let permission_max_pending = head.permission_max_pending;
     let pending_permission_outcome_writer = Arc::clone(&pending_permission_outcome_shared);
-    let on_permission_request: crate::acp::PermissionHandler =
-        Box::new(move |permission_request: &crate::acp::PermissionRequest| {
-            let (response_option_id, outcome) = resolve_acp_permission_request(
-                &permission_context_for_handler,
-                permission_message_id_for_handler.as_str(),
-                permission_target_member_id.as_str(),
-                permission_request,
-                permission_max_pending,
-            );
-            *pending_permission_outcome_writer
-                .lock()
-                .expect("pending_permission_outcome mutex") = Some(outcome);
-            response_option_id
-        });
+    let on_permission_request: crate::acp::PermissionHandler = Box::new(
+        move |permission_request: crate::acp::PermissionRequest,
+              mut responder: crate::acp::PermissionResponder| {
+            // Resolver runs on a dedicated short-lived thread so the ACP
+            // reader thread can return to its `read_line` loop immediately
+            // (see todos/acp/16). The captured context/writer/responder
+            // outlive the reader's dispatch frame; the thread name aids
+            // debugging when many resolvers fire under federation load.
+            let context = permission_context_for_handler.clone();
+            let message_id = permission_message_id_for_handler.clone();
+            let target = permission_target_member_id.clone();
+            let writer = Arc::clone(&pending_permission_outcome_writer);
+            std::thread::Builder::new()
+                .name("acp-permission-resolver".to_string())
+                .spawn(move || {
+                    let (response_option_id, outcome) = resolve_acp_permission_request(
+                        &context,
+                        message_id.as_str(),
+                        target.as_str(),
+                        &permission_request,
+                        permission_max_pending,
+                    );
+                    // Ordering invariant: populate
+                    // pending_permission_outcome BEFORE writing the
+                    // JSON-RPC response. on_completion reads the shared
+                    // slot when building the final ChatResult; the agent
+                    // cannot send its prompt-response until it sees the
+                    // permission response, so once the responder writes,
+                    // a fast agent reply could race on_completion ahead
+                    // of the outcome record otherwise.
+                    *writer.lock().expect("pending_permission_outcome mutex") = Some(outcome);
+                    responder.respond(response_option_id);
+                })
+                .expect("spawn ACP permission resolver thread");
+        },
+    );
 
     // Per-task correlation captured into on_completion. One ACP completion
     // outcome maps to N synthesised per-task ChatResults so each original
@@ -501,20 +523,33 @@ pub(super) fn deliver_one_target_acp(
     let permission_target_member_id = target_member_id.clone();
     let permission_max_pending = task.permission_max_pending;
     let pending_permission_outcome_writer = Arc::clone(&pending_permission_outcome_shared);
-    let on_permission_request: crate::acp::PermissionHandler =
-        Box::new(move |permission_request: &crate::acp::PermissionRequest| {
-            let (response_option_id, outcome) = resolve_acp_permission_request(
-                &permission_context_for_handler,
-                message_id_for_handler.as_str(),
-                permission_target_member_id.as_str(),
-                permission_request,
-                permission_max_pending,
-            );
-            *pending_permission_outcome_writer
-                .lock()
-                .expect("pending_permission_outcome mutex") = Some(outcome);
-            response_option_id
-        });
+    let on_permission_request: crate::acp::PermissionHandler = Box::new(
+        move |permission_request: crate::acp::PermissionRequest,
+              mut responder: crate::acp::PermissionResponder| {
+            // See the matching comment in deliver_batch_target_acp: the
+            // resolver runs on a short-lived thread so the ACP reader is
+            // never parked, and the ordering invariant (outcome before
+            // response) is the same.
+            let context = permission_context_for_handler.clone();
+            let message_id = message_id_for_handler.clone();
+            let target = permission_target_member_id.clone();
+            let writer = Arc::clone(&pending_permission_outcome_writer);
+            std::thread::Builder::new()
+                .name("acp-permission-resolver".to_string())
+                .spawn(move || {
+                    let (response_option_id, outcome) = resolve_acp_permission_request(
+                        &context,
+                        message_id.as_str(),
+                        target.as_str(),
+                        &permission_request,
+                        permission_max_pending,
+                    );
+                    *writer.lock().expect("pending_permission_outcome mutex") = Some(outcome);
+                    responder.respond(response_option_id);
+                })
+                .expect("spawn ACP permission resolver thread");
+        },
+    );
 
     let completion_bundle_name = bundle_name.clone();
     let completion_runtime_directory = runtime_directory_owned.clone();
