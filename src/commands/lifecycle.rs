@@ -34,12 +34,30 @@ pub(super) fn run_bundle_lifecycle(
     let mut bundles = Vec::<LifecycleTransitionBundle>::with_capacity(selected_bundles.len());
     for bundle_name in selected_bundles {
         let paths = BundleRuntimePaths::resolve(&roots.state_root, bundle_name.as_str())?;
+        let bundle_configuration =
+            load_bundle_configuration(&roots.configuration_root, bundle_name.as_str())
+                .map_err(shared::map_bundle_load_error)?;
+        let hello_session_id = bundle_configuration
+            .members
+            .first()
+            .map(|member| member.id.clone())
+            .ok_or_else(|| {
+                RuntimeError::validation(
+                    "validation_invalid_bundle",
+                    format!("bundle {bundle_name} has no configured members"),
+                )
+            })?;
         let relay_request = match parsed.action {
             LifecycleAction::Up => RelayRequest::Up,
             LifecycleAction::Down => RelayRequest::Down,
         };
-        let response = request_relay(&paths.relay_socket, &relay_request)
-            .map_err(|source| shared::map_relay_request_failure(&paths.relay_socket, source))?;
+        let response = request_relay(
+            &paths.relay_socket,
+            bundle_name.as_str(),
+            hello_session_id.as_str(),
+            &relay_request,
+        )
+        .map_err(|source| shared::map_relay_request_failure(&paths.relay_socket, source))?;
         match response {
             RelayResponse::Lifecycle {
                 bundles: relay_bundles,

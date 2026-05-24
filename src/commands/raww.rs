@@ -39,13 +39,15 @@ pub(super) fn run_agentmux_raww(arguments: &[String]) -> Result<(), RuntimeError
     let paths = BundleRuntimePaths::resolve(&roots.state_root, &resolved_session.bundle_name)?;
     let response = request_relay(
         &paths.relay_socket,
+        &resolved_session.bundle_name,
+        &resolved_session.session_id,
         &RelayRequest::Raww {
             request_id: None,
-            sender_session: resolved_session.session_id,
+            sender_session: resolved_session.session_id.clone(),
             target_session: parsed.target_session,
             text: parsed.text,
             no_enter: parsed.no_enter,
-            bundle_name: Some(resolved_session.bundle_name),
+            bundle_name: Some(resolved_session.bundle_name.clone()),
         },
     )
     .map_err(|source| shared::map_relay_request_failure(&paths.relay_socket, source))?;

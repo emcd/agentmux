@@ -178,6 +178,8 @@ fn request_listed_bundle(
     let paths = BundleRuntimePaths::resolve(&roots.state_root, bundle_name)?;
     let response = request_relay(
         &paths.relay_socket,
+        bundle_name,
+        sender_session,
         &RelayRequest::List {
             sender_session: Some(sender_session.to_string()),
         },

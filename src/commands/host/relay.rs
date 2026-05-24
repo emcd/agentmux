@@ -502,7 +502,11 @@ async fn reject_overloaded_connection(
             })),
         },
     };
-    if let Ok(mut encoded) = serde_json::to_vec(&response) {
+    let frame = json!({
+        "frame": "response",
+        "response": response,
+    });
+    if let Ok(mut encoded) = serde_json::to_vec(&frame) {
         encoded.push(b'\n');
         let _ = stream.write_all(&encoded).await;
         let _ = stream.flush().await;

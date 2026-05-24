@@ -39,11 +39,13 @@ pub(super) fn run_agentmux_look(arguments: &[String]) -> Result<(), RuntimeError
     let paths = BundleRuntimePaths::resolve(&roots.state_root, &resolved_session.bundle_name)?;
     let response = request_relay(
         &paths.relay_socket,
+        &resolved_session.bundle_name,
+        &resolved_session.session_id,
         &RelayRequest::Look {
-            requester_session: resolved_session.session_id,
+            requester_session: resolved_session.session_id.clone(),
             target_session: parsed.target_session,
             lines: parsed.lines.map(|value| value as usize),
-            bundle_name: Some(resolved_session.bundle_name),
+            bundle_name: Some(resolved_session.bundle_name.clone()),
         },
     )
     .map_err(|source| shared::map_relay_request_failure(&paths.relay_socket, source))?;

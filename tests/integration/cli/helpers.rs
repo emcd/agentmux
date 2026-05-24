@@ -9,9 +9,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+use agentmux::envelope::ENVELOPE_SCHEMA_VERSION;
 use agentmux::relay::RelayResponse;
 use agentmux::runtime::paths::BundleRuntimePaths;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 pub(super) fn write_bundle_configuration(
     config_root: &Path,
@@ -385,17 +386,49 @@ pub(super) fn spawn_fake_relay_once(
         while Instant::now() < deadline {
             match listener.accept() {
                 Ok((mut stream, _address)) => {
-                    let mut request_line = String::new();
                     let mut reader =
                         BufReader::new(stream.try_clone().expect("clone fake relay stream"));
+
+                    let mut hello_line = String::new();
+                    reader
+                        .read_line(&mut hello_line)
+                        .expect("read fake relay hello");
+                    let hello: Value = serde_json::from_str(hello_line.trim_end())
+                        .expect("decode fake relay hello");
+                    assert_eq!(hello.get("frame").and_then(Value::as_str), Some("hello"));
+                    let hello_ack = json!({
+                        "frame": "hello_ack",
+                        "schema_version": ENVELOPE_SCHEMA_VERSION,
+                        "bundle_name": hello.get("bundle_name").cloned().unwrap_or(Value::Null),
+                        "session_id": hello.get("session_id").cloned().unwrap_or(Value::Null),
+                    });
+                    let encoded_ack =
+                        serde_json::to_string(&hello_ack).expect("encode fake relay hello_ack");
+                    stream
+                        .write_all(encoded_ack.as_bytes())
+                        .expect("write fake relay hello_ack");
+                    stream.write_all(b"\n").expect("write fake relay newline");
+                    stream.flush().expect("flush fake relay hello_ack");
+
+                    let mut request_line = String::new();
                     reader
                         .read_line(&mut request_line)
                         .expect("read fake relay request");
-                    let request: Value =
-                        serde_json::from_str(request_line.trim_end()).expect("decode request");
+                    let envelope: Value = serde_json::from_str(request_line.trim_end())
+                        .expect("decode fake relay request envelope");
+                    let request = envelope
+                        .get("request")
+                        .cloned()
+                        .expect("fake relay request envelope missing 'request' field");
                     request_log.lock().expect("request log lock").push(request);
+
+                    let response_frame = json!({
+                        "frame": "response",
+                        "request_id": envelope.get("request_id").cloned().unwrap_or(Value::Null),
+                        "response": response,
+                    });
                     let encoded =
-                        serde_json::to_string(&response).expect("encode fake relay response");
+                        serde_json::to_string(&response_frame).expect("encode fake relay response");
                     stream
                         .write_all(encoded.as_bytes())
                         .expect("write fake relay response");
