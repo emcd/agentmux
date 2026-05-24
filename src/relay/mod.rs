@@ -26,6 +26,10 @@ pub use self::connection::serve_connection;
 use self::constants::*;
 use self::context::*;
 pub use self::contract::*;
+pub use self::delivery::AcpWorkerReadinessState;
+pub use self::delivery::observability::{
+    PermissionQueueEvent, subscribe_acp_worker_state, subscribe_permission_queue_events,
+};
 use self::errors::*;
 use self::identity::*;
 

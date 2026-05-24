@@ -34,8 +34,14 @@ pub(super) struct AsyncWorkerKey {
     pub target_session: String,
 }
 
+/// Readiness state for a persistent ACP worker.
+///
+/// Observers can subscribe to per-worker transitions via
+/// [`crate::relay::subscribe_acp_worker_state`]. The state is shared between
+/// the in-process registry (mutated by per-target delivery workers) and
+/// external observers (tests, TUI clients, embedders).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::relay) enum AcpWorkerReadinessState {
+pub enum AcpWorkerReadinessState {
     Initializing,
     Available,
     Busy,
@@ -56,7 +62,7 @@ pub(super) struct AsyncWorkerEntry {
     pub acp_snapshot: Option<Arc<Mutex<Vec<ReplayEntry>>>>,
 }
 
-fn build_worker_key(
+pub(super) fn build_worker_key(
     bundle_name: &str,
     runtime_directory: &Path,
     target_session: &str,
@@ -206,6 +212,11 @@ pub(in crate::relay) fn set_acp_worker_state(
     {
         entry.acp_state = Some(state);
     }
+    // Publish to any observers regardless of whether a worker entry was
+    // present. Publishers are keyed identically and live independently of
+    // worker registration so subscribers can observe pre-registration and
+    // post-unregistration transitions.
+    super::observability::publish_acp_worker_state(&key, state);
 }
 
 pub(in crate::relay) fn get_acp_worker_state(

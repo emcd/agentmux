@@ -167,6 +167,14 @@ pub(in crate::relay) fn enqueue_permission_request(
     store_persisted_permission_queue_state(path.as_path(), &state)?;
     register_waiter(permission_request_id.as_str())?;
     emit_permission_requested_event(context, &record);
+    super::observability::publish_permission_queue_event(
+        context.runtime_directory.as_path(),
+        super::observability::PermissionQueueEvent::Enqueued {
+            permission_request_id: permission_request_id.clone(),
+            message_id: record.message_id.clone(),
+            target_session: record.target_session.clone(),
+        },
+    );
     Ok(PermissionEnqueueResult {
         permission_request_id,
     })
@@ -228,6 +236,13 @@ pub(in crate::relay) fn resolve_permission_request(
         }
     }
     emit_permission_resolved_event(context, &record, &outcome);
+    super::observability::publish_permission_queue_event(
+        context.runtime_directory.as_path(),
+        super::observability::PermissionQueueEvent::Resolved {
+            permission_request_id: record.permission_request_id.clone(),
+            target_session: record.target_session.clone(),
+        },
+    );
     Ok(outcome)
 }
 
@@ -345,6 +360,14 @@ pub(in crate::relay) fn invalidate_pending_for_respawn(
                 "had_pending_waiter": had_pending_waiter,
             }),
         );
+        super::observability::publish_permission_queue_event(
+            context.runtime_directory.as_path(),
+            super::observability::PermissionQueueEvent::Invalidated {
+                permission_request_id: record.permission_request_id.clone(),
+                target_session: record.target_session.clone(),
+                reason_code: PERMISSION_INVALIDATED_BY_RESPAWN_CODE.to_string(),
+            },
+        );
     }
     Ok(invalidated_records.len())
 }
@@ -401,6 +424,14 @@ fn cancel_permission_request_on_shutdown(
         }
     }
     emit_permission_resolved_event(context, &record, &outcome);
+    super::observability::publish_permission_queue_event(
+        context.runtime_directory.as_path(),
+        super::observability::PermissionQueueEvent::Invalidated {
+            permission_request_id: record.permission_request_id.clone(),
+            target_session: record.target_session.clone(),
+            reason_code: PERMISSION_CANCELLED_CODE.to_string(),
+        },
+    );
     Ok(outcome)
 }
 
