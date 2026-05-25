@@ -300,32 +300,6 @@ fn acp_look_replaces_legacy_flattened_baseline_after_structured_load() {
     assert!(!snapshot.lines.iter().any(|line| line == "LEGACY-LINE-2"));
 }
 
-#[test]
-#[ignore = "stream-stalled detection deferred until snapshot timestamp tracking lands"]
-fn acp_look_marks_snapshot_stale_when_updates_are_stalled() {
-    let temporary = TempDir::new().expect("temporary");
-    let options = AcpStubOptions {
-        update_count: 1,
-        ..AcpStubOptions::default()
-    };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
-    let tmux_socket = temporary.path().join("tmux.sock");
-    let response = dispatch_send(&config_root, &tmux_socket, Some(1_000));
-    let result = chat_result(response);
-    assert_eq!(result.outcome, ChatOutcome::Queued);
-
-    thread::sleep(Duration::from_millis(5_200));
-
-    let look = dispatch_look(&config_root, &tmux_socket, "bravo", "bravo", Some(5));
-    let snapshot = expect_acp_snapshot(look);
-    assert_eq!(snapshot.freshness, AcpLookFreshness::Stale);
-    assert_eq!(snapshot.snapshot_source, AcpLookSnapshotSource::LiveBuffer);
-    assert_eq!(
-        snapshot.stale_reason_code.as_deref(),
-        Some("acp_stream_stalled")
-    );
-}
-
 fn wait_for_look(
     config_root: &std::path::Path,
     tmux_socket: &std::path::Path,
