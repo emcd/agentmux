@@ -13,7 +13,7 @@ use crate::{
 };
 
 use super::authorization::{
-    AuthorizationContext, authorize_look, authorize_raww, authorize_send,
+    AuthorizationContext, authorize_look, authorize_raww, authorize_send, authorize_updown,
     grant_authorized_ui_sessions, has_ui_session, permission_max_pending, ui_session_display_name,
 };
 use super::delivery::{
@@ -73,8 +73,14 @@ pub(super) fn handle_request(
 ) -> Result<RelayResponse, RelayError> {
     let request = normalize_request_identities(request, bundle.bundle_name.as_str());
     match request {
-        RelayRequest::Up => listing::handle_lifecycle_up(bundle, runtime_directory),
-        RelayRequest::Down => listing::handle_lifecycle_down(bundle, runtime_directory),
+        RelayRequest::Up => {
+            authorize_lifecycle_principal(bundle, authorization, principal.as_ref())?;
+            listing::handle_bundle_up(bundle, runtime_directory)
+        }
+        RelayRequest::Down => {
+            authorize_lifecycle_principal(bundle, authorization, principal.as_ref())?;
+            listing::handle_bundle_down(bundle, runtime_directory)
+        }
         RelayRequest::List { sender_session } => {
             listing::handle_list(bundle, authorization, sender_session, runtime_directory)
         }
@@ -871,6 +877,21 @@ fn handle_permission_decision(
         runtime_directory,
         principal,
     )
+}
+
+fn authorize_lifecycle_principal(
+    bundle: &BundleConfiguration,
+    authorization: &AuthorizationContext,
+    principal: Option<&RequestPrincipal>,
+) -> Result<(), RelayError> {
+    let principal = principal.ok_or_else(|| {
+        relay_error(
+            "validation_missing_hello",
+            "bundle lifecycle requests require stream-associated principal identity",
+            None,
+        )
+    })?;
+    authorize_updown(bundle, authorization, principal.session_id.as_str())
 }
 
 fn resolve_sender_identity(

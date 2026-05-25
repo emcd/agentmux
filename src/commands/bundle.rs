@@ -10,6 +10,7 @@ use crate::{
         error::RuntimeError,
         paths::BundleRuntimePaths,
         starter::ensure_starter_configuration_layout,
+        tui_session::resolve_tui_session_identity,
     },
 };
 
@@ -34,19 +35,12 @@ pub(super) fn run_bundle_lifecycle(
     let mut bundles = Vec::<LifecycleTransitionBundle>::with_capacity(selected_bundles.len());
     for bundle_name in selected_bundles {
         let paths = BundleRuntimePaths::resolve(&roots.state_root, bundle_name.as_str())?;
-        let bundle_configuration =
-            load_bundle_configuration(&roots.configuration_root, bundle_name.as_str())
-                .map_err(shared::map_bundle_load_error)?;
-        let hello_session_id = bundle_configuration
-            .members
-            .first()
-            .map(|member| member.id.clone())
-            .ok_or_else(|| {
-                RuntimeError::validation(
-                    "validation_invalid_bundle",
-                    format!("bundle {bundle_name} has no configured members"),
-                )
-            })?;
+        let resolved_operator = resolve_tui_session_identity(
+            &roots.configuration_root,
+            &workspace.workspace_root,
+            Some(bundle_name.as_str()),
+            None,
+        )?;
         let relay_request = match parsed.action {
             LifecycleAction::Up => RelayRequest::Up,
             LifecycleAction::Down => RelayRequest::Down,
@@ -54,7 +48,7 @@ pub(super) fn run_bundle_lifecycle(
         let response = request_relay(
             &paths.relay_socket,
             bundle_name.as_str(),
-            hello_session_id.as_str(),
+            resolved_operator.session_id.as_str(),
             &relay_request,
         )
         .map_err(|source| shared::map_relay_request_failure(&paths.relay_socket, source))?;

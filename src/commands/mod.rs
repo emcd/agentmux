@@ -4,9 +4,9 @@ use std::{io::IsTerminal, path::PathBuf};
 
 use crate::runtime::error::RuntimeError;
 
+mod bundle;
 mod down;
 mod host;
-mod lifecycle;
 mod list;
 mod look;
 mod raww;
