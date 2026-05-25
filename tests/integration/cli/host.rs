@@ -117,7 +117,6 @@ fn host_relay_rejects_all_flag_in_group_mvp() {
 }
 
 #[test]
-#[ignore = "flaky relay autostart shutdown race after socket readiness"]
 fn host_relay_default_mode_starts_autostart_bundles() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = temporary.path().join("config");
