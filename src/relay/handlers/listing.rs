@@ -17,7 +17,7 @@ use super::super::{
     load_startup_failures, relay_error,
 };
 
-pub(super) fn handle_lifecycle_up(
+pub(super) fn handle_bundle_up(
     bundle: &BundleConfiguration,
     runtime_directory: &Path,
 ) -> Result<RelayResponse, RelayError> {
@@ -52,7 +52,7 @@ pub(super) fn handle_lifecycle_up(
     })
 }
 
-pub(super) fn handle_lifecycle_down(
+pub(super) fn handle_bundle_down(
     bundle: &BundleConfiguration,
     runtime_directory: &Path,
 ) -> Result<RelayResponse, RelayError> {

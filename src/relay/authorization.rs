@@ -60,6 +60,7 @@ struct PolicyControls {
     send: PolicyScope,
     raww: PolicyScope,
     grant: PolicyScope,
+    updown: PolicyScope,
     do_controls: HashMap<String, PolicyScope>,
 }
 
@@ -77,6 +78,7 @@ impl PolicyControls {
             send: PolicyScope::AllHome,
             raww: PolicyScope::AllHome,
             grant: PolicyScope::None,
+            updown: PolicyScope::None,
             do_controls: HashMap::new(),
         }
     }
@@ -133,6 +135,8 @@ struct RawPolicyControls {
     raww: String,
     #[serde(default = "default_grant_policy_scope")]
     grant: String,
+    #[serde(default = "default_updown_policy_scope")]
+    updown: String,
     #[serde(default, rename = "do")]
     do_controls: HashMap<String, String>,
 }
@@ -142,6 +146,10 @@ fn default_raww_policy_scope() -> String {
 }
 
 fn default_grant_policy_scope() -> String {
+    "none".to_string()
+}
+
+fn default_updown_policy_scope() -> String {
     "none".to_string()
 }
 
@@ -433,6 +441,15 @@ fn parse_policy_controls(
         "validation_invalid_policy_scope",
         "authorization policy grant control uses unsupported scope value",
     )?;
+    let updown = parse_scope_for_control(
+        controls.updown.as_str(),
+        policies_path,
+        policy_id,
+        "updown",
+        &[PolicyScope::None, PolicyScope::AllHome],
+        "validation_invalid_policy_scope",
+        "authorization policy updown control uses unsupported scope value",
+    )?;
     let mut do_controls = HashMap::with_capacity(controls.do_controls.len());
     for (action_id, scope_value) in controls.do_controls {
         let action_id = action_id.trim();
@@ -469,6 +486,7 @@ fn parse_policy_controls(
         send,
         raww,
         grant,
+        updown,
         do_controls,
     })
 }
@@ -672,6 +690,26 @@ pub(super) fn authorize_grant(
         }
         error
     })
+}
+
+pub(super) fn authorize_updown(
+    bundle: &BundleConfiguration,
+    authorization: &AuthorizationContext,
+    requester_session: &str,
+) -> Result<(), RelayError> {
+    let controls = controls_for_requester(authorization, bundle, requester_session)?;
+    authorize_scope(
+        controls.updown,
+        PolicyScope::AllHome,
+        AuthorizationDecisionContext {
+            capability: "updown",
+            requester_session,
+            bundle_name: bundle.bundle_name.as_str(),
+            reason: "updown policy scope does not allow bundle lifecycle changes",
+            target_session: None,
+            targets: None,
+        },
+    )
 }
 
 pub(super) fn authorize_grant_for_list(

@@ -59,10 +59,35 @@ find = "self"
 list = "all:home"
 look = "self"
 send = "all:home"
+
+[[policies]]
+id = "operator"
+
+[policies.controls]
+find = "self"
+grant = "all:home"
+list = "all:home"
+look = "all:home"
+raww = "all:home"
+send = "all:home"
+updown = "all:home"
 "#,
     )
     .expect("write policies config");
-    fs::write(config_root.join("users.toml"), "").expect("write users config");
+    fs::write(
+        config_root.join("users.toml"),
+        r#"
+default-session = "user@GLOBAL"
+
+[[sessions]]
+id = "user@GLOBAL"
+name = "Operator"
+policy = "operator"
+
+[sessions.ui]
+"#,
+    )
+    .expect("write users config");
     let mut bundle = String::from("format-version = 1\n");
     if let Some(autostart) = autostart {
         bundle.push_str(format!("autostart = {autostart}\n").as_str());
@@ -128,9 +153,35 @@ find = "self"
 list = "all:home"
 look = "self"
 send = "all:home"
+
+[[policies]]
+id = "operator"
+
+[policies.controls]
+find = "self"
+grant = "all:home"
+list = "all:home"
+look = "all:home"
+raww = "all:home"
+send = "all:home"
+updown = "all:home"
 "#,
     )
     .expect("write policies config");
+    fs::write(
+        config_root.join("users.toml"),
+        r#"
+default-session = "user@GLOBAL"
+
+[[sessions]]
+id = "user@GLOBAL"
+name = "Operator"
+policy = "operator"
+
+[sessions.ui]
+"#,
+    )
+    .expect("write users config");
     let mut bundle = String::from("format-version = 1\n");
     if let Some(groups) = groups {
         let encoded = groups
