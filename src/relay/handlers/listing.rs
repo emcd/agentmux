@@ -9,10 +9,10 @@ use crate::{
 
 use super::super::authorization::{AuthorizationContext, authorize_list};
 use super::super::delivery::acp_session_ready_for_startup;
-use super::super::lifecycle::{reconcile_loaded_bundle_for_lifecycle, shutdown_bundle_runtime};
+use super::super::lifecycle::{reconcile_loaded_bundle, shutdown_bundle_runtime};
 use super::super::tmux::resolve_active_pane_target;
 use super::super::{
-    LifecycleBundleResult, ListedBundle, ListedBundleStartupHealth, ListedBundleState,
+    BundleTransitionEntry, ListedBundle, ListedBundleStartupHealth, ListedBundleState,
     ListedSession, RelayError, RelayResponse, SCHEMA_VERSION, canonical_session_id,
     load_startup_failures, relay_error,
 };
@@ -22,26 +22,26 @@ pub(super) fn handle_bundle_up(
     runtime_directory: &Path,
 ) -> Result<RelayResponse, RelayError> {
     let tmux_socket = tmux_socket_path_for_runtime_directory(runtime_directory);
-    let report = reconcile_loaded_bundle_for_lifecycle(bundle, tmux_socket.as_path())?;
+    let report = reconcile_loaded_bundle(bundle, tmux_socket.as_path())?;
     let changed = report.bootstrap_session.is_some()
         || !report.created_sessions.is_empty()
         || !report.pruned_sessions.is_empty();
     let bundle_result = if changed {
-        LifecycleBundleResult {
+        BundleTransitionEntry {
             bundle_name: bundle.bundle_name.clone(),
             outcome: "hosted".to_string(),
             reason_code: None,
             reason: None,
         }
     } else {
-        LifecycleBundleResult {
+        BundleTransitionEntry {
             bundle_name: bundle.bundle_name.clone(),
             outcome: "skipped".to_string(),
             reason_code: Some("already_hosted".to_string()),
             reason: Some("bundle runtime is already hosted".to_string()),
         }
     };
-    Ok(RelayResponse::Lifecycle {
+    Ok(RelayResponse::BundleTransition {
         schema_version: SCHEMA_VERSION.to_string(),
         action: "up".to_string(),
         bundles: vec![bundle_result],
@@ -60,21 +60,21 @@ pub(super) fn handle_bundle_down(
     let report = shutdown_bundle_runtime(tmux_socket.as_path())?;
     let changed = !report.pruned_sessions.is_empty() || report.killed_tmux_server;
     let bundle_result = if changed {
-        LifecycleBundleResult {
+        BundleTransitionEntry {
             bundle_name: bundle.bundle_name.clone(),
             outcome: "unhosted".to_string(),
             reason_code: None,
             reason: None,
         }
     } else {
-        LifecycleBundleResult {
+        BundleTransitionEntry {
             bundle_name: bundle.bundle_name.clone(),
             outcome: "skipped".to_string(),
             reason_code: Some("already_unhosted".to_string()),
             reason: Some("bundle runtime is already unhosted".to_string()),
         }
     };
-    Ok(RelayResponse::Lifecycle {
+    Ok(RelayResponse::BundleTransition {
         schema_version: SCHEMA_VERSION.to_string(),
         action: "down".to_string(),
         bundles: vec![bundle_result],
@@ -183,7 +183,7 @@ fn session_ready_for_list(
             member.id.as_str(),
         ),
         // `ui`/`pubsub` members have no implemented startup path; they are
-        // never counted ready and surface a startup failure in lifecycle.
+        // never counted ready and surface a startup failure on bundle up.
         TargetConfiguration::Ui | TargetConfiguration::Pubsub => false,
     }
 }

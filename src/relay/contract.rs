@@ -127,7 +127,7 @@ pub struct SendResult {
     pub details: Option<Value>,
 }
 
-/// Reconciliation results for one bundle lifecycle pass.
+/// Reconciliation results for one bundle reconciliation pass.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ReconciliationReport {
     pub bootstrap_session: Option<String>,
@@ -187,9 +187,9 @@ pub struct RelayStreamEvent {
     pub payload: Value,
 }
 
-/// Per-bundle lifecycle transition result for `up`/`down`.
+/// Per-bundle transition result for `up`/`down`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct LifecycleBundleResult {
+pub struct BundleTransitionEntry {
     pub bundle_name: String,
     pub outcome: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -258,10 +258,10 @@ pub enum RelayRequest {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RelayResponse {
-    Lifecycle {
+    BundleTransition {
         schema_version: String,
         action: String,
-        bundles: Vec<LifecycleBundleResult>,
+        bundles: Vec<BundleTransitionEntry>,
         changed_bundle_count: usize,
         skipped_bundle_count: usize,
         failed_bundle_count: usize,

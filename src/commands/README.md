@@ -30,7 +30,7 @@ This directory owns the unified CLI surface for `agentmux`.
 - `host/summary.rs`
   - relay startup summary construction, JSON payload rendering, and per-bundle
     outcome helpers.
-- `lifecycle.rs`
+- `bundle.rs`
   - shared `up`/`down` transition execution helpers.
 - `up.rs`
   - `agentmux up` selector parsing and execution.

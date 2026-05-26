@@ -15,15 +15,15 @@ use crate::{
 };
 
 use super::{
-    LifecycleAction, LifecycleArguments, LifecycleSelector, LifecycleTransitionBundle,
-    LifecycleTransitionSummary, RuntimeArguments, shared,
+    BundleAction, BundleArguments, BundleSelector, BundleTransitionResult, BundleTransitionSummary,
+    RuntimeArguments, shared,
 };
 
-pub(super) fn run_bundle_lifecycle(
-    action: LifecycleAction,
+pub(super) fn run_bundle_command(
+    action: BundleAction,
     arguments: &[String],
 ) -> Result<(), RuntimeError> {
-    let parsed = parse_lifecycle_arguments(action, arguments)?;
+    let parsed = parse_bundle_arguments(action, arguments)?;
     let current_directory = env::current_dir()
         .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
     let workspace = WorkspaceContext::discover(&current_directory)?;
@@ -33,7 +33,7 @@ pub(super) fn run_bundle_lifecycle(
 
     let selected_bundles = resolve_selected_bundles(&roots.configuration_root, &parsed.selector)?;
     let relay_paths = RelayRuntimePaths::resolve(&roots.state_root);
-    let mut bundles = Vec::<LifecycleTransitionBundle>::with_capacity(selected_bundles.len());
+    let mut bundles = Vec::<BundleTransitionResult>::with_capacity(selected_bundles.len());
     for bundle_name in selected_bundles {
         let resolved_operator = resolve_tui_session_identity(
             &roots.configuration_root,
@@ -42,8 +42,8 @@ pub(super) fn run_bundle_lifecycle(
             None,
         )?;
         let relay_request = match parsed.action {
-            LifecycleAction::Up => RelayRequest::Up,
-            LifecycleAction::Down => RelayRequest::Down,
+            BundleAction::Up => RelayRequest::Up,
+            BundleAction::Down => RelayRequest::Down,
         };
         let response = request_relay(
             &relay_paths.relay_socket,
@@ -53,17 +53,18 @@ pub(super) fn run_bundle_lifecycle(
         )
         .map_err(|source| shared::map_relay_request_failure(&relay_paths.relay_socket, source))?;
         match response {
-            RelayResponse::Lifecycle {
+            RelayResponse::BundleTransition {
                 bundles: relay_bundles,
                 ..
             } => {
                 let Some(entry) = relay_bundles.first() else {
                     return Err(RuntimeError::validation(
                         "internal_unexpected_failure",
-                        "relay returned lifecycle payload with no bundle entries".to_string(),
+                        "relay returned bundle transition payload with no bundle entries"
+                            .to_string(),
                     ));
                 };
-                bundles.push(LifecycleTransitionBundle {
+                bundles.push(BundleTransitionResult {
                     bundle_name: entry.bundle_name.clone(),
                     outcome: entry.outcome.clone(),
                     reason_code: entry.reason_code.clone(),
@@ -97,13 +98,13 @@ pub(super) fn print_down_help() {
     );
 }
 
-fn parse_lifecycle_arguments(
-    action: LifecycleAction,
+fn parse_bundle_arguments(
+    action: BundleAction,
     arguments: &[String],
-) -> Result<LifecycleArguments, RuntimeError> {
-    let mut parsed = LifecycleArguments {
+) -> Result<BundleArguments, RuntimeError> {
+    let mut parsed = BundleArguments {
         action,
-        selector: LifecycleSelector::Bundle(String::new()),
+        selector: BundleSelector::Bundle(String::new()),
         runtime: RuntimeArguments::default(),
     };
     let mut positional_bundle = None::<String>;
@@ -147,10 +148,10 @@ fn parse_lifecycle_arguments(
                 message: "missing selector".to_string(),
             });
         }
-        (Some(bundle_name), None) => LifecycleSelector::Bundle(bundle_name),
+        (Some(bundle_name), None) => BundleSelector::Bundle(bundle_name),
         (None, Some(group_name)) => {
             shared::validate_group_selector_name(group_name.as_str())?;
-            LifecycleSelector::Group(group_name)
+            BundleSelector::Group(group_name)
         }
     };
     Ok(parsed)
@@ -158,15 +159,15 @@ fn parse_lifecycle_arguments(
 
 fn resolve_selected_bundles(
     configuration_root: &std::path::Path,
-    selector: &LifecycleSelector,
+    selector: &BundleSelector,
 ) -> Result<Vec<String>, RuntimeError> {
     match selector {
-        LifecycleSelector::Bundle(bundle_name) => {
+        BundleSelector::Bundle(bundle_name) => {
             let _bundle = load_bundle_configuration(configuration_root, bundle_name)
                 .map_err(shared::map_bundle_load_error)?;
             Ok(vec![bundle_name.to_string()])
         }
-        LifecycleSelector::Group(group_name) => {
+        BundleSelector::Group(group_name) => {
             let memberships = load_bundle_group_memberships(configuration_root)
                 .map_err(shared::map_bundle_load_error)?;
             shared::resolve_group_bundles(memberships, group_name)
@@ -175,9 +176,9 @@ fn resolve_selected_bundles(
 }
 
 fn build_transition_summary(
-    action: LifecycleAction,
-    bundles: Vec<LifecycleTransitionBundle>,
-) -> LifecycleTransitionSummary {
+    action: BundleAction,
+    bundles: Vec<BundleTransitionResult>,
+) -> BundleTransitionSummary {
     let changed_bundle_count = bundles
         .iter()
         .filter(|bundle| matches!(bundle.outcome.as_str(), "hosted" | "unhosted"))
@@ -190,11 +191,11 @@ fn build_transition_summary(
         .iter()
         .filter(|bundle| bundle.outcome == "failed")
         .count();
-    LifecycleTransitionSummary {
+    BundleTransitionSummary {
         schema_version: 1,
         action: match action {
-            LifecycleAction::Up => "up".to_string(),
-            LifecycleAction::Down => "down".to_string(),
+            BundleAction::Up => "up".to_string(),
+            BundleAction::Down => "down".to_string(),
         },
         bundles,
         changed_bundle_count,
@@ -204,7 +205,7 @@ fn build_transition_summary(
     }
 }
 
-fn transition_summary_payload(summary: &LifecycleTransitionSummary) -> Value {
+fn transition_summary_payload(summary: &BundleTransitionSummary) -> Value {
     let mut payload = Map::<String, Value>::new();
     payload.insert("schema_version".to_string(), json!(summary.schema_version));
     payload.insert("action".to_string(), json!(summary.action));
@@ -241,7 +242,7 @@ fn transition_summary_payload(summary: &LifecycleTransitionSummary) -> Value {
     Value::Object(payload)
 }
 
-fn render_transition_summary(summary: &LifecycleTransitionSummary) {
+fn render_transition_summary(summary: &BundleTransitionSummary) {
     match serde_json::to_string(&transition_summary_payload(summary)) {
         Ok(encoded) => println!("{encoded}"),
         Err(source) => {

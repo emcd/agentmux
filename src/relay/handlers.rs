@@ -74,11 +74,11 @@ pub(super) fn handle_request(
     let request = normalize_request_identities(request, bundle.bundle_name.as_str());
     match request {
         RelayRequest::Up => {
-            authorize_lifecycle_principal(bundle, authorization, principal.as_ref())?;
+            authorize_bundle_principal(bundle, authorization, principal.as_ref())?;
             listing::handle_bundle_up(bundle, runtime_directory)
         }
         RelayRequest::Down => {
-            authorize_lifecycle_principal(bundle, authorization, principal.as_ref())?;
+            authorize_bundle_principal(bundle, authorization, principal.as_ref())?;
             listing::handle_bundle_down(bundle, runtime_directory)
         }
         RelayRequest::List { sender_session } => {
@@ -879,7 +879,7 @@ fn handle_permission_decision(
     )
 }
 
-fn authorize_lifecycle_principal(
+fn authorize_bundle_principal(
     bundle: &BundleConfiguration,
     authorization: &AuthorizationContext,
     principal: Option<&RequestPrincipal>,
@@ -887,7 +887,7 @@ fn authorize_lifecycle_principal(
     let principal = principal.ok_or_else(|| {
         relay_error(
             "validation_missing_hello",
-            "bundle lifecycle requests require stream-associated principal identity",
+            "bundle up/down requests require stream-associated principal identity",
             None,
         )
     })?;

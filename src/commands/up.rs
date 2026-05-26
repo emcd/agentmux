@@ -1,6 +1,6 @@
 use crate::runtime::error::RuntimeError;
 
-use super::{LifecycleAction, bundle};
+use super::{BundleAction, bundle};
 
 pub(super) fn run_agentmux_up(arguments: &[String]) -> Result<(), RuntimeError> {
     if arguments
@@ -10,5 +10,5 @@ pub(super) fn run_agentmux_up(arguments: &[String]) -> Result<(), RuntimeError> 
         bundle::print_up_help();
         return Ok(());
     }
-    bundle::run_bundle_lifecycle(LifecycleAction::Up, arguments)
+    bundle::run_bundle_command(BundleAction::Up, arguments)
 }
