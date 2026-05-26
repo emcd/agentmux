@@ -7,8 +7,8 @@ use std::{
 use super::{
     BUNDLE_SCHEMA_VERSION, BUNDLES_DIRECTORY, ConfigurationError, POLICIES_SCHEMA_VERSION,
     fields::{
-        canonicalize_best_effort, normalize_field, validate_bundle_groups, validate_format_version,
-        validate_global_session_id, validate_session_id,
+        canonicalize_best_effort, normalize_field, normalize_global_session_id,
+        validate_bundle_groups, validate_format_version, validate_session_id,
     },
     paths::{
         bundle_configuration_path, coders_configuration_path, policies_configuration_path,
@@ -173,7 +173,8 @@ pub fn load_tui_configuration_file(
         .as_deref()
         .map(normalize_field)
         .filter(|value| !value.is_empty())
-        .map(ToString::to_string);
+        .map(|value| normalize_global_session_id(path, value))
+        .transpose()?;
     let sessions = validate_tui_sessions(parsed.sessions, path)?;
 
     Ok(Some(TuiConfiguration {
@@ -363,11 +364,11 @@ fn validate_tui_sessions(
                 "users session id must be non-empty",
             ));
         }
-        validate_global_session_id(path, selector_id)?;
-        if !unique.insert(selector_id.to_string()) {
+        let canonical_id = normalize_global_session_id(path, selector_id)?;
+        if !unique.insert(canonical_id.clone()) {
             return Err(ConfigurationError::invalid(
                 path,
-                format!("duplicate users session id '{selector_id}'"),
+                format!("duplicate users session id '{canonical_id}'"),
             ));
         }
 
@@ -375,14 +376,14 @@ fn validate_tui_sessions(
         if policy_id.is_empty() {
             return Err(ConfigurationError::invalid(
                 path,
-                format!("users session '{selector_id}' policy must be non-empty"),
+                format!("users session '{canonical_id}' policy must be non-empty"),
             ));
         }
         let session_type = select_marker_session_type(
             session.ui.is_some(),
             session.pubsub.is_some(),
             path,
-            selector_id,
+            canonical_id.as_str(),
         )?;
         let name = session
             .name
@@ -392,7 +393,7 @@ fn validate_tui_sessions(
             .map(ToString::to_string);
 
         validated.push(TuiSession {
-            id: selector_id.to_string(),
+            id: canonical_id,
             name,
             policy: policy_id.to_string(),
             session_type,

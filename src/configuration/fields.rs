@@ -112,27 +112,26 @@ pub(super) fn validate_session_id(path: &Path, session_id: &str) -> Result<(), C
     Ok(())
 }
 
-/// Validates a global user session id in `session@GLOBAL` canonical form.
+/// Normalizes a global user session id to `session@GLOBAL` canonical form.
 ///
-/// The `@GLOBAL` suffix is required; the local prefix follows the bundle
-/// session-id grammar.
-pub(super) fn validate_global_session_id(
+/// Operators may write either the bare local prefix (`user`) or the suffixed
+/// form (`user@GLOBAL`); both are accepted and returned in canonical form. The
+/// local prefix follows the bundle session-id grammar.
+pub(super) fn normalize_global_session_id(
     path: &Path,
     session_id: &str,
-) -> Result<(), ConfigurationError> {
-    let Some(local) = session_id.strip_suffix(GLOBAL_SESSION_SUFFIX) else {
-        return Err(ConfigurationError::invalid(
-            path,
-            format!("users session id '{session_id}' must be in 'session@GLOBAL' canonical form"),
-        ));
-    };
+) -> Result<String, ConfigurationError> {
+    let local = session_id
+        .strip_suffix(GLOBAL_SESSION_SUFFIX)
+        .unwrap_or(session_id);
     if local.is_empty() {
         return Err(ConfigurationError::invalid(
             path,
             format!("users session id '{session_id}' has an empty local part"),
         ));
     }
-    validate_session_id(path, local)
+    validate_session_id(path, local)?;
+    Ok(format!("{local}{GLOBAL_SESSION_SUFFIX}"))
 }
 
 pub(super) fn canonicalize_best_effort(path: &Path) -> PathBuf {
