@@ -22,7 +22,7 @@ mod tmux;
 use self::authorization::load_authorization_context;
 
 pub use self::client::{RelayStreamSession, request_relay};
-pub use self::connection::serve_connection;
+pub use self::connection::{BundleCatalog, serve_connection};
 use self::constants::*;
 use self::context::*;
 pub use self::contract::*;

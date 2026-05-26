@@ -56,21 +56,16 @@ impl RuntimeRoots {
     }
 }
 
-/// Resolved per-bundle runtime paths.
+/// Resolved per-bundle runtime paths. Carries only artifacts that are
+/// genuinely per-bundle (tmux socket, runtime directory for inscriptions,
+/// startup-failure history, ACP session state). Relay-level artifacts
+/// (socket, locks, ready sentinel) live on `RelayRuntimePaths`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BundleRuntimePaths {
     pub state_root: PathBuf,
     pub bundle_name: String,
     pub runtime_directory: PathBuf,
     pub tmux_socket: PathBuf,
-    pub relay_socket: PathBuf,
-    pub relay_lock_file: PathBuf,
-    pub relay_spawn_lock_file: PathBuf,
-    /// Filesystem sentinel written by the relay host once SIGINT/SIGTERM
-    /// handlers are installed and per-bundle accept loops have been spawned.
-    /// Callers should treat the relay as ready only when both the socket is
-    /// connectable AND this sentinel exists.
-    pub relay_ready_sentinel: PathBuf,
 }
 
 impl BundleRuntimePaths {
@@ -87,12 +82,38 @@ impl BundleRuntimePaths {
             state_root: state_root.to_path_buf(),
             bundle_name: bundle_name.to_string(),
             tmux_socket: runtime_directory.join(TMUX_SOCKET_FILE),
-            relay_socket: runtime_directory.join(RELAY_SOCKET_FILE),
-            relay_lock_file: runtime_directory.join(RELAY_LOCK_FILE),
-            relay_spawn_lock_file: runtime_directory.join(RELAY_SPAWN_LOCK_FILE),
-            relay_ready_sentinel: runtime_directory.join(RELAY_READY_SENTINEL_FILE),
             runtime_directory,
         })
+    }
+}
+
+/// Resolved relay-level runtime paths. The relay binds one socket per
+/// instance and holds one runtime/spawn lock; bundle routing is determined
+/// by the Hello frame's `bundle_name`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RelayRuntimePaths {
+    pub state_root: PathBuf,
+    pub relay_socket: PathBuf,
+    pub relay_lock_file: PathBuf,
+    pub relay_spawn_lock_file: PathBuf,
+    /// Filesystem sentinel written by the relay host once SIGINT/SIGTERM
+    /// handlers are installed and the accept loop has been spawned.
+    /// Callers should treat the relay as ready only when both the socket
+    /// is connectable AND this sentinel exists.
+    pub relay_ready_sentinel: PathBuf,
+}
+
+impl RelayRuntimePaths {
+    /// Resolves relay-level runtime paths rooted at `state_root`.
+    #[must_use]
+    pub fn resolve(state_root: &Path) -> Self {
+        Self {
+            state_root: state_root.to_path_buf(),
+            relay_socket: state_root.join(RELAY_SOCKET_FILE),
+            relay_lock_file: state_root.join(RELAY_LOCK_FILE),
+            relay_spawn_lock_file: state_root.join(RELAY_SPAWN_LOCK_FILE),
+            relay_ready_sentinel: state_root.join(RELAY_READY_SENTINEL_FILE),
+        }
     }
 }
 
@@ -130,6 +151,17 @@ pub fn tmux_socket_path_for_runtime_directory(runtime_directory: &Path) -> PathB
 /// Returns a security error when an existing path is owned by another user.
 pub fn ensure_bundle_runtime_directory(paths: &BundleRuntimePaths) -> Result<(), RuntimeError> {
     ensure_directory_secure(&paths.runtime_directory)
+}
+
+/// Ensures the relay-level runtime directory (`state_root`) exists with
+/// owner-only permissions. This is the parent of the relay socket, locks,
+/// and ready sentinel.
+///
+/// # Errors
+///
+/// Returns a security error when an existing path is owned by another user.
+pub fn ensure_relay_runtime_directory(paths: &RelayRuntimePaths) -> Result<(), RuntimeError> {
+    ensure_directory_secure(&paths.state_root)
 }
 
 /// Verifies that an existing filesystem artifact is current-user owned.

@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs,
     io::{BufRead, BufReader, Write},
     os::unix::net::{UnixListener, UnixStream},
@@ -35,18 +36,10 @@ impl TestRuntime {
         let root = temporary_root("mcp-tool-surface");
         let config_root = root.join("config");
         let state_root = root.join("state");
-        let relay_socket = state_root
-            .join("bundles")
-            .join(BUNDLE_NAME)
-            .join("relay.sock");
+        let relay_socket = state_root.join("relay.sock");
 
         fs::create_dir_all(config_root.join("bundles")).expect("create bundles directory");
-        fs::create_dir_all(
-            relay_socket
-                .parent()
-                .expect("relay socket parent should exist"),
-        )
-        .expect("create relay socket parent");
+        fs::create_dir_all(&state_root).expect("create state root");
         write_bundle_configuration(
             &config_root,
             BUNDLE_NAME,
@@ -77,8 +70,20 @@ pub(crate) struct FakeRelay {
 
 impl FakeRelay {
     pub(crate) fn start(socket_path: PathBuf, responder: RelayResponder) -> Self {
+        let mut routes: HashMap<String, RelayResponder> = HashMap::new();
+        routes.insert(BUNDLE_NAME.to_string(), responder);
+        Self::start_for_bundles(socket_path, routes)
+    }
+
+    pub(crate) fn start_for_bundles(
+        socket_path: PathBuf,
+        routes: HashMap<String, RelayResponder>,
+    ) -> Self {
         if socket_path.exists() {
             fs::remove_file(&socket_path).expect("remove stale relay socket");
+        }
+        if let Some(parent) = socket_path.parent() {
+            fs::create_dir_all(parent).expect("create relay socket parent");
         }
         let listener = UnixListener::bind(&socket_path).expect("bind fake relay");
         listener
@@ -90,12 +95,15 @@ impl FakeRelay {
         let stop_inner = Arc::clone(&stop);
         let requests_inner = Arc::clone(&requests);
         let socket_path_inner = socket_path.clone();
+        let routes = Arc::new(routes);
 
         let thread = thread::spawn(move || {
             while !stop_inner.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((stream, _address)) => {
-                        handle_connection(stream, &requests_inner, &responder);
+                        let routes = Arc::clone(&routes);
+                        let requests_for_conn = Arc::clone(&requests_inner);
+                        handle_connection(stream, &requests_for_conn, &routes);
                     }
                     Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(10));
@@ -138,7 +146,7 @@ impl Drop for FakeRelay {
 fn handle_connection(
     mut stream: UnixStream,
     requests: &Arc<Mutex<Vec<Value>>>,
-    responder: &RelayResponder,
+    routes: &Arc<HashMap<String, RelayResponder>>,
 ) {
     stream
         .set_nonblocking(false)
@@ -148,6 +156,7 @@ fn handle_connection(
             .try_clone()
             .expect("clone fake relay stream for reader"),
     );
+    let mut bound_bundle: Option<String> = None;
     loop {
         let mut line = String::new();
         let bytes = match reader.read_line(&mut line) {
@@ -165,6 +174,12 @@ fn handle_connection(
         let decoded: Value =
             serde_json::from_str(line.trim_end()).expect("decode fake relay request");
         if decoded.get("frame").and_then(Value::as_str) == Some("hello") {
+            let bundle_name = decoded
+                .get("bundle_name")
+                .and_then(Value::as_str)
+                .expect("hello bundle_name")
+                .to_string();
+            bound_bundle = Some(bundle_name);
             let hello_ack = json!({
                 "frame": "hello_ack",
                 "schema_version": decoded["schema_version"],
@@ -179,6 +194,12 @@ fn handle_connection(
             stream.flush().expect("flush fake relay hello ack");
             continue;
         }
+        let bundle = bound_bundle
+            .as_deref()
+            .expect("fake relay received request before hello");
+        let responder = routes
+            .get(bundle)
+            .unwrap_or_else(|| panic!("fake relay missing responder for bundle {bundle}"));
         if decoded.get("frame").and_then(Value::as_str) == Some("request") {
             let request = decoded
                 .get("request")

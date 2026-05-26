@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     env,
     os::unix::net::UnixListener,
     sync::{
@@ -13,14 +14,13 @@ use tokio::{
     io::AsyncWriteExt,
     net::{UnixListener as TokioUnixListener, UnixStream as TokioUnixStream},
     sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError},
-    task::JoinSet,
 };
 
 use crate::{
     configuration::load_bundle_group_memberships,
     relay::{
-        append_startup_failure, serve_connection, shutdown_bundle_runtime, startup_bundle,
-        wait_for_async_delivery_shutdown,
+        BundleCatalog, append_startup_failure, serve_connection, shutdown_bundle_runtime,
+        startup_bundle, wait_for_async_delivery_shutdown,
     },
     runtime::{
         bootstrap::{
@@ -30,7 +30,8 @@ use crate::{
         error::RuntimeError,
         inscriptions::{configure_process_inscriptions, emit_inscription, relay_inscriptions_path},
         paths::{
-            BundleRuntimePaths, RuntimeRootOverrides, RuntimeRoots, ensure_bundle_runtime_directory,
+            BundleRuntimePaths, RelayRuntimePaths, RuntimeRootOverrides, RuntimeRoots,
+            ensure_bundle_runtime_directory, ensure_relay_runtime_directory,
         },
         signals::{install_shutdown_signal_handlers, shutdown_requested},
         starter::ensure_starter_configuration_layout,
@@ -53,24 +54,28 @@ enum RelayHostStartupMode {
 }
 
 #[derive(Debug)]
-struct HostedRelayBundle {
+struct HostedBundle {
     paths: BundleRuntimePaths,
-    listener: UnixListener,
-    _runtime_lock: RelayRuntimeLock,
 }
 
 /// Outcome of the synchronous relay-host startup phase.
 ///
 /// `NoHostedBundles` means startup finalized without anything to serve (process
 /// only, or zero ready bundles) and the summary, if any, has already been
-/// emitted. `Serve` carries the bound listeners forward into the async serve
+/// emitted. `Serve` carries the bound listener forward into the async serve
 /// phase.
 enum RelayHostPreparation {
     NoHostedBundles,
-    Serve {
-        summary: RelayHostStartupSummary,
-        hosted_bundles: Vec<HostedRelayBundle>,
-    },
+    Serve(Box<RelayHostServePlan>),
+}
+
+#[derive(Debug)]
+struct RelayHostServePlan {
+    summary: RelayHostStartupSummary,
+    hosted_bundles: Vec<HostedBundle>,
+    relay_paths: RelayRuntimePaths,
+    listener: UnixListener,
+    runtime_lock: RelayRuntimeLock,
 }
 
 #[derive(Debug)]
@@ -120,10 +125,24 @@ pub(super) async fn run_relay_host(arguments: RelayHostArguments) -> Result<(), 
 
     match preparation {
         RelayHostPreparation::NoHostedBundles => Ok(()),
-        RelayHostPreparation::Serve {
-            summary,
-            hosted_bundles,
-        } => serve_relay_host(roots, summary, hosted_bundles).await,
+        RelayHostPreparation::Serve(plan) => {
+            let RelayHostServePlan {
+                summary,
+                hosted_bundles,
+                relay_paths,
+                listener,
+                runtime_lock,
+            } = *plan;
+            serve_relay_host(
+                roots,
+                summary,
+                hosted_bundles,
+                relay_paths,
+                listener,
+                runtime_lock,
+            )
+            .await
+        }
     }
 }
 
@@ -141,8 +160,9 @@ fn resolve_runtime_roots(runtime: RuntimeArguments) -> Result<RuntimeRoots, Runt
     Ok(roots)
 }
 
-/// Runs the synchronous startup phase: load memberships, host each bundle, and
-/// decide whether there is anything to serve.
+/// Runs the synchronous startup phase: acquire the relay-level lock, bind
+/// the single relay socket, host each bundle, and decide whether there is
+/// anything to serve.
 fn prepare_relay_host(
     roots: &RuntimeRoots,
     no_autostart: bool,
@@ -157,8 +177,42 @@ fn prepare_relay_host(
     {
         return Err(source);
     }
+
+    let relay_paths = RelayRuntimePaths::resolve(&roots.state_root);
+    ensure_relay_runtime_directory(&relay_paths)?;
+
+    // Acquire the relay-level runtime lock before any per-bundle startup work.
+    // Holding it for the rest of the host lifetime serializes relay instances
+    // against this state root.
+    if relay_runtime_lock_is_held(&relay_paths)? {
+        // Another relay already owns the socket for this state root. Render
+        // an all-skipped summary and exit without binding.
+        let outcomes = memberships
+            .into_iter()
+            .map(|membership| {
+                skipped_startup_bundle(
+                    membership.bundle_name.as_str(),
+                    "lock_held",
+                    "relay runtime lock is already held".to_string(),
+                )
+            })
+            .collect();
+        let summary = build_startup_summary(
+            if no_autostart {
+                "process_only"
+            } else {
+                "autostart"
+            },
+            outcomes,
+        );
+        emit_inscription("relay.startup.summary", &startup_summary_payload(&summary));
+        render_startup_summary(&summary);
+        return Ok(RelayHostPreparation::NoHostedBundles);
+    }
+    let runtime_lock = acquire_relay_runtime_lock(&relay_paths)?;
+
     let mut outcomes = Vec::with_capacity(memberships.len());
-    let mut hosted_bundles = Vec::<HostedRelayBundle>::with_capacity(memberships.len());
+    let mut hosted_bundles = Vec::<HostedBundle>::with_capacity(memberships.len());
     for membership in memberships {
         let startup_mode = if no_autostart || !membership.autostart {
             RelayHostStartupMode::ProcessOnly
@@ -206,18 +260,26 @@ fn prepare_relay_host(
         return Ok(RelayHostPreparation::NoHostedBundles);
     }
 
-    Ok(RelayHostPreparation::Serve {
+    let listener = bind_relay_listener(&relay_paths)?;
+
+    Ok(RelayHostPreparation::Serve(Box::new(RelayHostServePlan {
         summary,
         hosted_bundles,
-    })
+        relay_paths,
+        listener,
+        runtime_lock,
+    })))
 }
 
-/// Drives the per-bundle accept loops on the async runtime until shutdown, then
-/// performs runtime cleanup.
+/// Drives the single relay accept loop on the async runtime until shutdown,
+/// then performs runtime cleanup.
 async fn serve_relay_host(
     roots: RuntimeRoots,
     summary: RelayHostStartupSummary,
-    hosted_bundles: Vec<HostedRelayBundle>,
+    hosted_bundles: Vec<HostedBundle>,
+    relay_paths: RelayRuntimePaths,
+    listener: UnixListener,
+    runtime_lock: RelayRuntimeLock,
 ) -> Result<(), RuntimeError> {
     emit_inscription("relay.startup.summary", &startup_summary_payload(&summary));
     render_startup_summary(&summary);
@@ -226,100 +288,97 @@ async fn serve_relay_host(
     let max_connections = relay_max_connections();
     let connection_permits = Arc::new(Semaphore::new(max_connections));
 
-    let mut accept_tasks: JoinSet<Result<(), RuntimeError>> = JoinSet::new();
-    let mut cleanup_paths = Vec::<BundleRuntimePaths>::with_capacity(hosted_bundles.len());
-    for hosted_bundle in hosted_bundles {
-        cleanup_paths.push(hosted_bundle.paths.clone());
-        accept_tasks.spawn(run_relay_accept_loop(
-            roots.configuration_root.clone(),
-            hosted_bundle,
-            Arc::clone(&stop_requested),
-            Arc::clone(&connection_permits),
+    // Build the bundle catalog: map from bundle_name to per-bundle paths.
+    // Connection workers consult this on Hello to route to the correct bundle.
+    let bundle_paths_for_cleanup: Vec<BundleRuntimePaths> = hosted_bundles
+        .iter()
+        .map(|hosted| hosted.paths.clone())
+        .collect();
+    let catalog: BundleCatalog = Arc::new(
+        hosted_bundles
+            .into_iter()
+            .map(|hosted| (hosted.paths.bundle_name.clone(), hosted.paths))
+            .collect::<HashMap<_, _>>(),
+    );
+
+    // Remove any stale sentinel left by a crashed predecessor before we publish
+    // ours. Otherwise a waiter could observe "stale sentinel + new socket
+    // connectable" between socket bind (already completed in startup) and our
+    // publish below, and falsely conclude the relay is serving.
+    remove_relay_ready_sentinel(&relay_paths);
+
+    let accept_handle = {
+        let configuration_root = roots.configuration_root.clone();
+        let stop_requested = Arc::clone(&stop_requested);
+        let connection_permits = Arc::clone(&connection_permits);
+        let catalog = Arc::clone(&catalog);
+        tokio::spawn(run_relay_accept_loop(
+            configuration_root,
+            listener,
+            catalog,
+            stop_requested,
+            connection_permits,
             max_connections,
-        ));
-    }
+        ))
+    };
 
-    // Remove any stale sentinel left by a crashed predecessor before we
-    // publish ours. Otherwise a waiter could observe "stale sentinel + new
-    // socket connectable" between socket bind (already completed in startup)
-    // and our publish below, and falsely conclude the relay is serving.
-    for paths in &cleanup_paths {
-        remove_relay_ready_sentinel(paths);
-    }
-
-    // Publish the ready sentinel only after all accept loops have been spawned.
+    // Publish the ready sentinel only after the accept loop has been spawned.
     // The signal handler is already installed (in `run_relay_host`), so
     // `relay_socket_connectable && relay.ready exists` is a sound readiness
     // gate for callers waiting on relay startup.
-    for paths in &cleanup_paths {
-        write_relay_ready_sentinel(paths)?;
-    }
+    write_relay_ready_sentinel(&relay_paths)?;
 
-    let mut accept_error = supervise_accept_loops(&stop_requested, &mut accept_tasks).await;
+    let accept_outcome = supervise_accept_loop(&stop_requested, accept_handle).await;
 
     if shutdown_requested() {
         emit_inscription("relay.shutdown.signal", &json!({"signal": "termination"}));
     }
     stop_requested.store(true, Ordering::SeqCst);
 
-    // In-flight connection tasks are intentionally detached on shutdown (as the
-    // connection-worker pool was before); only the accept loops are joined here.
-    while let Some(joined) = accept_tasks.join_next().await {
-        if let Some(error) = accept_loop_join_error(joined)
-            && accept_error.is_none()
-        {
-            accept_error = Some(error);
-        }
-    }
+    // Cleanup (async-delivery drain, socket removal, tmux shutdown per bundle)
+    // is blocking. The relay-level runtime lock is held until cleanup returns.
+    let cleanup_relay_paths = relay_paths.clone();
+    tokio::task::spawn_blocking(move || {
+        cleanup_relay_host(cleanup_relay_paths, bundle_paths_for_cleanup)
+    })
+    .await
+    .map_err(|source| supervisor_join_error("relay host cleanup", source))??;
 
-    // Cleanup (async-delivery drain, socket removal, tmux shutdown) is blocking.
-    tokio::task::spawn_blocking(move || cleanup_relay_host(cleanup_paths))
-        .await
-        .map_err(|source| supervisor_join_error("relay host cleanup", source))??;
+    drop(runtime_lock);
 
-    if let Some(error) = accept_error {
-        return Err(error);
-    }
-    Ok(())
+    accept_outcome
 }
 
-/// Waits until a shutdown signal arrives or an accept loop fails. A clean accept
-/// loop exit (graceful stop) is tolerated; a failure stops the remaining loops
-/// and is surfaced to the caller.
-async fn supervise_accept_loops(
+/// Awaits the single accept loop until it completes or a shutdown signal
+/// arrives. A clean accept-loop exit (graceful stop) is tolerated; a failure
+/// propagates to the caller.
+async fn supervise_accept_loop(
     stop_requested: &Arc<AtomicBool>,
-    accept_tasks: &mut JoinSet<Result<(), RuntimeError>>,
-) -> Option<RuntimeError> {
+    accept_handle: tokio::task::JoinHandle<Result<(), RuntimeError>>,
+) -> Result<(), RuntimeError> {
+    let mut accept_handle = accept_handle;
     loop {
         if shutdown_requested() || stop_requested.load(Ordering::SeqCst) {
-            return None;
+            // Drive the loop to completion so the JoinHandle is consumed.
+            return accept_loop_join_outcome(accept_handle.await);
         }
         tokio::select! {
             biased;
-            joined = accept_tasks.join_next() => {
-                match joined {
-                    None => return None,
-                    Some(result) => {
-                        if let Some(error) = accept_loop_join_error(result) {
-                            stop_requested.store(true, Ordering::SeqCst);
-                            return Some(error);
-                        }
-                    }
-                }
+            joined = &mut accept_handle => {
+                return accept_loop_join_outcome(joined);
             }
             () = tokio::time::sleep(Duration::from_millis(RELAY_SHUTDOWN_POLL_INTERVAL_MS)) => {}
         }
     }
 }
 
-/// Maps an accept-loop task's join result to an optional fatal error.
-fn accept_loop_join_error(
+fn accept_loop_join_outcome(
     result: Result<Result<(), RuntimeError>, tokio::task::JoinError>,
-) -> Option<RuntimeError> {
+) -> Result<(), RuntimeError> {
     match result {
-        Ok(Ok(())) => None,
-        Ok(Err(error)) => Some(error),
-        Err(join_error) => Some(RuntimeError::validation(
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(error),
+        Err(join_error) => Err(RuntimeError::validation(
             "internal_unexpected_failure",
             format!("relay accept loop task panicked: {join_error}"),
         )),
@@ -335,17 +394,21 @@ fn supervisor_join_error(context: &str, source: tokio::task::JoinError) -> Runti
     )
 }
 
-/// Performs runtime cleanup after the accept loops have stopped: drains async
-/// delivery workers (on shutdown), removes relay sockets, and shuts down tmux.
-fn cleanup_relay_host(cleanup_paths: Vec<BundleRuntimePaths>) -> Result<(), RuntimeError> {
+/// Performs runtime cleanup after the accept loop has stopped: drains async
+/// delivery workers (on shutdown), removes the relay socket and sentinel, and
+/// shuts down tmux per bundle.
+fn cleanup_relay_host(
+    relay_paths: RelayRuntimePaths,
+    bundle_paths: Vec<BundleRuntimePaths>,
+) -> Result<(), RuntimeError> {
     let async_workers_remaining = if shutdown_requested() {
         wait_for_async_delivery_shutdown(Duration::from_millis(1_500))
     } else {
         0
     };
-    for paths in cleanup_paths {
-        remove_relay_ready_sentinel(&paths);
-        shared::remove_relay_socket_file(&paths.relay_socket)?;
+    remove_relay_ready_sentinel(&relay_paths);
+    shared::remove_relay_socket_file(&relay_paths.relay_socket)?;
+    for paths in bundle_paths {
         let shutdown =
             shutdown_bundle_runtime(&paths.tmux_socket).map_err(shared::map_reconcile_error)?;
         emit_inscription(
@@ -364,7 +427,7 @@ fn cleanup_relay_host(cleanup_paths: Vec<BundleRuntimePaths>) -> Result<(), Runt
 
 /// Writes the relay ready sentinel atomically (write-tmp + rename) so callers
 /// that poll for its existence never see a partially-written file.
-fn write_relay_ready_sentinel(paths: &BundleRuntimePaths) -> Result<(), RuntimeError> {
+fn write_relay_ready_sentinel(paths: &RelayRuntimePaths) -> Result<(), RuntimeError> {
     let sentinel = &paths.relay_ready_sentinel;
     let temporary = sentinel.with_extension("ready.tmp");
     std::fs::write(&temporary, b"").map_err(|source| {
@@ -384,42 +447,28 @@ fn write_relay_ready_sentinel(paths: &BundleRuntimePaths) -> Result<(), RuntimeE
 /// Best-effort sentinel removal during shutdown cleanup. A missing sentinel is
 /// not an error; nor is a removal failure (the caller has already lost the
 /// relay process and we should not block the rest of cleanup).
-fn remove_relay_ready_sentinel(paths: &BundleRuntimePaths) {
+fn remove_relay_ready_sentinel(paths: &RelayRuntimePaths) {
     let _ = std::fs::remove_file(&paths.relay_ready_sentinel);
 }
 
-/// Accepts connections for one bundle and spawns a task per connection, bounded
-/// by the shared connection semaphore. At the cap, new connections receive an
-/// immediate overloaded response.
+/// Accepts connections on the single relay socket and spawns a task per
+/// connection, bounded by the shared connection semaphore. At the cap, new
+/// connections receive an immediate overloaded response. Bundle routing is
+/// deferred to the connection worker's Hello handling.
 async fn run_relay_accept_loop(
     configuration_root: std::path::PathBuf,
-    hosted_bundle: HostedRelayBundle,
+    listener: UnixListener,
+    bundle_catalog: BundleCatalog,
     stop_requested: Arc<AtomicBool>,
     connection_permits: Arc<Semaphore>,
     max_connections: usize,
 ) -> Result<(), RuntimeError> {
-    // `_runtime_lock` is held for the loop's lifetime (released on task exit) to
-    // keep the bundle's relay runtime lock owned while the socket is served.
-    let HostedRelayBundle {
-        paths,
-        listener,
-        _runtime_lock,
-    } = hosted_bundle;
-    listener.set_nonblocking(true).map_err(|source| {
-        RuntimeError::io(
-            format!(
-                "set relay socket non-blocking for bundle {}",
-                paths.bundle_name
-            ),
-            source,
-        )
-    })?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|source| RuntimeError::io("set relay socket non-blocking".to_string(), source))?;
     let listener = TokioUnixListener::from_std(listener).map_err(|source| {
         RuntimeError::io(
-            format!(
-                "register relay socket with async runtime for bundle {}",
-                paths.bundle_name
-            ),
+            "register relay socket with async runtime".to_string(),
             source,
         )
     })?;
@@ -443,23 +492,20 @@ async fn run_relay_accept_loop(
                                     permit,
                                     stream,
                                     configuration_root.clone(),
-                                    paths.clone(),
+                                    Arc::clone(&bundle_catalog),
                                     Arc::clone(&metrics),
                                 );
                             }
                             Err(TryAcquireError::NoPermits) => {
-                                reject_overloaded_connection(&paths, stream, &metrics).await;
+                                reject_overloaded_connection(stream, &metrics).await;
                             }
                             Err(TryAcquireError::Closed) => break Ok(()),
                         }
-                        emit_connection_metrics(&paths, max_connections, &metrics);
+                        emit_connection_metrics(max_connections, &metrics);
                     }
                     Err(source) => {
                         break Err(RuntimeError::io(
-                            format!(
-                                "accept relay socket connection for bundle {}",
-                                paths.bundle_name
-                            ),
+                            "accept relay socket connection".to_string(),
                             source,
                         ));
                     }
@@ -473,7 +519,6 @@ async fn run_relay_accept_loop(
         emit_inscription(
             "relay.shutdown.connection_workers_detached",
             &json!({
-                "bundle_name": paths.bundle_name,
                 "max_connections": max_connections,
                 "active_connections": metrics.active_connections.load(Ordering::SeqCst),
                 "rejected_connections": metrics.rejected_connections.load(Ordering::SeqCst),
@@ -492,21 +537,25 @@ fn spawn_connection_worker(
     permit: OwnedSemaphorePermit,
     stream: TokioUnixStream,
     configuration_root: std::path::PathBuf,
-    paths: BundleRuntimePaths,
+    bundle_catalog: BundleCatalog,
     metrics: Arc<RelayConnectionMetrics>,
 ) {
     metrics.active_connections.fetch_add(1, Ordering::SeqCst);
     let pre_hello_idle_timeout = relay_pre_hello_idle_timeout();
     tokio::spawn(async move {
-        let result =
-            serve_connection(stream, &configuration_root, &paths, pre_hello_idle_timeout).await;
+        let result = serve_connection(
+            stream,
+            &configuration_root,
+            &bundle_catalog,
+            pre_hello_idle_timeout,
+        )
+        .await;
         metrics.active_connections.fetch_sub(1, Ordering::SeqCst);
         drop(permit);
         if let Err(source) = result {
             emit_inscription(
                 "relay.request_failed",
                 &json!({
-                    "bundle_name": paths.bundle_name,
                     "error": source.to_string(),
                 }),
             );
@@ -533,7 +582,6 @@ fn parse_env_positive_usize(name: &str) -> Option<usize> {
 }
 
 async fn reject_overloaded_connection(
-    paths: &BundleRuntimePaths,
     mut stream: TokioUnixStream,
     metrics: &RelayConnectionMetrics,
 ) {
@@ -541,7 +589,6 @@ async fn reject_overloaded_connection(
     emit_inscription(
         "relay.connection.rejected",
         &json!({
-            "bundle_name": paths.bundle_name,
             "reason_code": "runtime_connection_limit_reached",
             "reason": "relay connection limit reached",
         }),
@@ -550,9 +597,7 @@ async fn reject_overloaded_connection(
         error: crate::relay::RelayError {
             code: "runtime_connection_limit_reached".to_string(),
             message: "relay connection limit reached".to_string(),
-            details: Some(json!({
-                "bundle_name": paths.bundle_name,
-            })),
+            details: None,
         },
     };
     let frame = json!({
@@ -570,15 +615,10 @@ async fn reject_overloaded_connection(
 // Emits a snapshot of connection occupancy on each accept so saturation is
 // observable: `active_connections` approaching `max_connections` with non-zero
 // `rejected_connections` is the at-capacity signal.
-fn emit_connection_metrics(
-    paths: &BundleRuntimePaths,
-    max_connections: usize,
-    metrics: &RelayConnectionMetrics,
-) {
+fn emit_connection_metrics(max_connections: usize, metrics: &RelayConnectionMetrics) {
     emit_inscription(
         "relay.connection_pool.metrics",
         &json!({
-            "bundle_name": paths.bundle_name,
             "max_connections": max_connections,
             "active_connections": metrics.active_connections.load(Ordering::SeqCst),
             "rejected_connections": metrics.rejected_connections.load(Ordering::SeqCst),
@@ -590,7 +630,7 @@ fn host_selected_bundle(
     roots: &RuntimeRoots,
     bundle_name: &str,
     startup_mode: RelayHostStartupMode,
-) -> (RelayHostStartupBundle, Option<HostedRelayBundle>) {
+) -> (RelayHostStartupBundle, Option<HostedBundle>) {
     let paths = match BundleRuntimePaths::resolve(&roots.state_root, bundle_name) {
         Ok(paths) => paths,
         Err(source) => return (failed_startup_bundle(bundle_name, source), None),
@@ -600,52 +640,15 @@ fn host_selected_bundle(
         "relay.startup",
         &json!({
             "bundle_name": paths.bundle_name,
-            "relay_socket": paths.relay_socket,
             "tmux_socket": paths.tmux_socket,
             "configuration_root": roots.configuration_root,
             "state_root": roots.state_root,
             "inscriptions_root": roots.inscriptions_root,
         }),
     );
-    match relay_runtime_lock_is_held(&paths) {
-        Ok(true) => {
-            return (
-                skipped_startup_bundle(
-                    bundle_name,
-                    "lock_held",
-                    "relay runtime lock is already held".to_string(),
-                ),
-                None,
-            );
-        }
-        Err(source) => return (failed_startup_bundle(bundle_name, source), None),
-        Ok(false) => {}
-    }
     if let Err(source) = ensure_bundle_runtime_directory(&paths) {
         return (failed_startup_bundle(bundle_name, source), None);
     }
-    let runtime_lock = match acquire_relay_runtime_lock(&paths) {
-        Ok(runtime_lock) => runtime_lock,
-        Err(source) => {
-            if matches!(
-                &source,
-                RuntimeError::Io {
-                    source,
-                    ..
-                } if source.kind() == std::io::ErrorKind::WouldBlock
-            ) {
-                return (
-                    skipped_startup_bundle(
-                        bundle_name,
-                        "lock_held",
-                        "relay runtime lock is already held".to_string(),
-                    ),
-                    None,
-                );
-            }
-            return (failed_startup_bundle(bundle_name, source), None);
-        }
-    };
     let mut startup_report = None;
     if let RelayHostStartupMode::Autostart = startup_mode {
         let report = match startup_bundle(
@@ -692,10 +695,6 @@ fn host_selected_bundle(
         }
         startup_report = Some(report);
     }
-    let listener = match bind_relay_listener(&paths) {
-        Ok(listener) => listener,
-        Err(source) => return (failed_startup_bundle(bundle_name, source), None),
-    };
     let startup_bundle = match startup_mode {
         RelayHostStartupMode::Autostart => {
             let report = startup_report.expect("autostart report must be present");
@@ -716,12 +715,5 @@ fn host_selected_bundle(
             "relay started without bundle autostart".to_string(),
         ),
     };
-    (
-        startup_bundle,
-        Some(HostedRelayBundle {
-            paths,
-            listener,
-            _runtime_lock: runtime_lock,
-        }),
-    )
+    (startup_bundle, Some(HostedBundle { paths }))
 }

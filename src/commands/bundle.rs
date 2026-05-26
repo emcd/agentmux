@@ -8,7 +8,7 @@ use crate::{
     runtime::{
         association::{WorkspaceContext, load_local_mcp_overrides},
         error::RuntimeError,
-        paths::BundleRuntimePaths,
+        paths::RelayRuntimePaths,
         starter::ensure_starter_configuration_layout,
         tui_session::resolve_tui_session_identity,
     },
@@ -32,9 +32,9 @@ pub(super) fn run_bundle_lifecycle(
     ensure_starter_configuration_layout(&roots.configuration_root)?;
 
     let selected_bundles = resolve_selected_bundles(&roots.configuration_root, &parsed.selector)?;
+    let relay_paths = RelayRuntimePaths::resolve(&roots.state_root);
     let mut bundles = Vec::<LifecycleTransitionBundle>::with_capacity(selected_bundles.len());
     for bundle_name in selected_bundles {
-        let paths = BundleRuntimePaths::resolve(&roots.state_root, bundle_name.as_str())?;
         let resolved_operator = resolve_tui_session_identity(
             &roots.configuration_root,
             &workspace.workspace_root,
@@ -46,12 +46,12 @@ pub(super) fn run_bundle_lifecycle(
             LifecycleAction::Down => RelayRequest::Down,
         };
         let response = request_relay(
-            &paths.relay_socket,
+            &relay_paths.relay_socket,
             bundle_name.as_str(),
             resolved_operator.session_id.as_str(),
             &relay_request,
         )
-        .map_err(|source| shared::map_relay_request_failure(&paths.relay_socket, source))?;
+        .map_err(|source| shared::map_relay_request_failure(&relay_paths.relay_socket, source))?;
         match response {
             RelayResponse::Lifecycle {
                 bundles: relay_bundles,

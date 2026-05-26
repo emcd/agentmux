@@ -1,13 +1,17 @@
 use std::{
+    collections::HashMap,
     io::{BufRead, BufReader, Write},
     os::unix::{io::AsRawFd, net::UnixStream},
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::{Arc, OnceLock},
     thread,
     time::{Duration, Instant},
 };
 
-use agentmux::{relay::serve_connection, runtime::paths::BundleRuntimePaths};
+use agentmux::{
+    relay::{BundleCatalog, serve_connection},
+    runtime::paths::BundleRuntimePaths,
+};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::runtime::Builder as TokioRuntimeBuilder;
@@ -192,11 +196,17 @@ fn spawn_relay_connection(
 ) -> (UnixStream, thread::JoinHandle<()>) {
     let (server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
     let root = configuration_root.to_path_buf();
-    let paths = bundle_paths.clone();
+    let catalog = single_bundle_catalog(bundle_paths);
     let join_handle = thread::spawn(move || {
-        run_serve_connection(server_stream, root, paths).expect("serve connection")
+        run_serve_connection(server_stream, root, catalog).expect("serve connection")
     });
     (client_stream, join_handle)
+}
+
+fn single_bundle_catalog(bundle_paths: &BundleRuntimePaths) -> BundleCatalog {
+    let mut map = HashMap::new();
+    map.insert(bundle_paths.bundle_name.clone(), bundle_paths.clone());
+    Arc::new(map)
 }
 
 // Bridges a synchronous unit test to the async `serve_connection`. Each
@@ -207,7 +217,7 @@ fn spawn_relay_connection(
 fn run_serve_connection(
     server_stream: UnixStream,
     configuration_root: PathBuf,
-    bundle_paths: BundleRuntimePaths,
+    bundle_catalog: BundleCatalog,
 ) -> Result<(), std::io::Error> {
     server_stream.set_nonblocking(true)?;
     let runtime = TokioRuntimeBuilder::new_multi_thread()
@@ -220,7 +230,7 @@ fn run_serve_connection(
         serve_connection(
             stream,
             &configuration_root,
-            &bundle_paths,
+            &bundle_catalog,
             TEST_PRE_HELLO_IDLE_TIMEOUT,
         )
         .await

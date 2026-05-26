@@ -23,7 +23,7 @@ use crate::relay::{
     RelayResponse, RelayStreamSession, load_startup_failures, request_relay,
 };
 use crate::runtime::inscriptions::emit_inscription;
-use crate::runtime::paths::BundleRuntimePaths;
+use crate::runtime::paths::{BundleRuntimePaths, RelayRuntimePaths};
 
 use super::errors::{
     internal_tool_error, map_configuration_error, map_relay_error, map_relay_request_failure,
@@ -64,13 +64,14 @@ struct McpState {
 #[tool_router]
 impl McpServer {
     fn new(configuration: McpConfiguration) -> Self {
+        let relay_paths = RelayRuntimePaths::resolve(&configuration.state_root);
         let relay_stream = configuration
             .sender_session
             .as_ref()
             .zip(configuration.associated_bundle_paths.as_ref())
             .map(|(sender_session, bundle_paths)| {
                 RelayStreamSession::new(
-                    bundle_paths.relay_socket.clone(),
+                    relay_paths.relay_socket.clone(),
                     bundle_paths.bundle_name.clone(),
                     sender_session.clone(),
                 )
@@ -709,10 +710,11 @@ impl McpServer {
         let bundle_paths =
             BundleRuntimePaths::resolve(&self.state.configuration.state_root, bundle_name)
                 .map_err(map_runtime_error)?;
+        let relay_paths = RelayRuntimePaths::resolve(&self.state.configuration.state_root);
         let bundle =
             load_bundle_configuration(&self.state.configuration.configuration_root, bundle_name)
                 .map_err(map_configuration_error)?;
-        let relay_socket = bundle_paths.relay_socket;
+        let relay_socket = relay_paths.relay_socket;
         match request_relay(
             &relay_socket,
             bundle_name,
@@ -732,7 +734,7 @@ impl McpServer {
                 if is_relay_unavailable_error(&source)
                     && self.home_bundle_name() == Some(bundle_name) =>
             {
-                Ok(self.synthesize_down_bundle(&bundle, &relay_socket))
+                Ok(self.synthesize_down_bundle(&bundle, &relay_socket, &bundle_paths))
             }
             Err(source) => Err(map_relay_request_failure(&relay_socket, source)),
         }
@@ -774,28 +776,24 @@ impl McpServer {
         &self,
         bundle: &BundleConfiguration,
         relay_socket: &Path,
+        bundle_paths: &BundleRuntimePaths,
     ) -> ListedBundle {
         let (state_reason_code, state_reason) = if relay_socket.exists() {
             (
                 Some("relay_unavailable".to_string()),
-                Some("bundle relay socket is present but relay is unavailable".to_string()),
+                Some("relay socket is present but relay is unavailable".to_string()),
             )
         } else {
             (
                 Some("not_started".to_string()),
-                Some("bundle relay socket is not present".to_string()),
+                Some("relay socket is not present".to_string()),
             )
         };
         let (startup_failure_count, recent_startup_failures) =
-            relay_socket
-                .parent()
-                .map_or(
-                    (0, Vec::new()),
-                    |runtime_directory| match load_startup_failures(runtime_directory) {
-                        Ok(records) => (records.len(), records),
-                        Err(_) => (0, Vec::new()),
-                    },
-                );
+            match load_startup_failures(&bundle_paths.runtime_directory) {
+                Ok(records) => (records.len(), records),
+                Err(_) => (0, Vec::new()),
+            };
         ListedBundle {
             id: bundle.bundle_name.clone(),
             state: ListedBundleState::Down,
@@ -835,8 +833,9 @@ impl McpServer {
 
     fn map_relay_stream_failure(&self, event: &str, source: std::io::Error) -> McpError {
         emit_inscription(event, &json!({"error": source.to_string()}));
-        if let Some(bundle_paths) = self.state.configuration.associated_bundle_paths.as_ref() {
-            return map_relay_request_failure(&bundle_paths.relay_socket, source);
+        if self.state.configuration.associated_bundle_paths.is_some() {
+            let relay_paths = RelayRuntimePaths::resolve(&self.state.configuration.state_root);
+            return map_relay_request_failure(&relay_paths.relay_socket, source);
         }
         internal_tool_error(
             "internal_unexpected_failure",

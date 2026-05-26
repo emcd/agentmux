@@ -1,7 +1,8 @@
 use agentmux::runtime::paths::{
-    BundleRuntimePaths, RuntimeRootOverrides, RuntimeRoots, debug_repository_configuration_root,
-    debug_repository_inscriptions_root, debug_repository_state_root,
-    ensure_bundle_runtime_directory, tmux_socket_path_for_runtime_directory,
+    BundleRuntimePaths, RelayRuntimePaths, RuntimeRootOverrides, RuntimeRoots,
+    debug_repository_configuration_root, debug_repository_inscriptions_root,
+    debug_repository_state_root, ensure_bundle_runtime_directory,
+    tmux_socket_path_for_runtime_directory,
 };
 use tempfile::TempDir;
 
@@ -44,9 +45,26 @@ fn resolves_bundle_runtime_paths() {
         resolved.tmux_socket,
         std::path::Path::new("/state/root/bundles/party-alpha/tmux.sock")
     );
+}
+
+#[test]
+fn resolves_relay_runtime_paths_at_state_root() {
+    let resolved = RelayRuntimePaths::resolve(std::path::Path::new("/state/root"));
     assert_eq!(
         resolved.relay_socket,
-        std::path::Path::new("/state/root/bundles/party-alpha/relay.sock")
+        std::path::Path::new("/state/root/relay.sock")
+    );
+    assert_eq!(
+        resolved.relay_lock_file,
+        std::path::Path::new("/state/root/relay.lock")
+    );
+    assert_eq!(
+        resolved.relay_spawn_lock_file,
+        std::path::Path::new("/state/root/relay.spawn.lock")
+    );
+    assert_eq!(
+        resolved.relay_ready_sentinel,
+        std::path::Path::new("/state/root/relay.ready")
     );
 }
 

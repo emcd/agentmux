@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs,
     process::Command,
     sync::{Arc, Mutex},
@@ -8,7 +9,9 @@ use agentmux::relay::{
     ListedBundle, ListedBundleStartupHealth, ListedBundleState, ListedSession,
     ListedSessionTransport, RelayError, RelayResponse,
 };
-use agentmux::runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory};
+use agentmux::runtime::paths::{
+    BundleRuntimePaths, RelayRuntimePaths, ensure_bundle_runtime_directory,
+};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -63,7 +66,7 @@ fn list_sessions_single_bundle_json_uses_canonical_bundle_shape() {
     ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
     let request_log = Arc::new(Mutex::new(Vec::<Value>::new()));
     let relay_thread = spawn_fake_relay_once(
-        &bundle_paths.relay_socket,
+        &RelayRuntimePaths::resolve(&state_root).relay_socket,
         RelayResponse::List {
             schema_version: "1".to_string(),
             bundle: ListedBundle {
@@ -162,8 +165,9 @@ fn list_sessions_all_json_orders_bundles_lexicographically() {
 
     let alpha_log = Arc::new(Mutex::new(Vec::<Value>::new()));
     let beta_log = Arc::new(Mutex::new(Vec::<Value>::new()));
-    let alpha_relay = spawn_fake_relay_once(
-        &alpha_paths.relay_socket,
+    let mut responses = HashMap::new();
+    responses.insert(
+        "alpha".to_string(),
         RelayResponse::List {
             schema_version: "1".to_string(),
             bundle: ListedBundle {
@@ -181,10 +185,9 @@ fn list_sessions_all_json_orders_bundles_lexicographically() {
                 }],
             },
         },
-        Arc::clone(&alpha_log),
     );
-    let beta_relay = spawn_fake_relay_once(
-        &beta_paths.relay_socket,
+    responses.insert(
+        "beta".to_string(),
         RelayResponse::List {
             schema_version: "1".to_string(),
             bundle: ListedBundle {
@@ -202,7 +205,15 @@ fn list_sessions_all_json_orders_bundles_lexicographically() {
                 }],
             },
         },
-        Arc::clone(&beta_log),
+    );
+    let mut request_logs = HashMap::new();
+    request_logs.insert("alpha".to_string(), Arc::clone(&alpha_log));
+    request_logs.insert("beta".to_string(), Arc::clone(&beta_log));
+    let relay_thread = spawn_fake_relay_for_bundles(
+        &RelayRuntimePaths::resolve(&state_root).relay_socket,
+        2,
+        responses,
+        request_logs,
     );
 
     let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
@@ -220,8 +231,7 @@ fn list_sessions_all_json_orders_bundles_lexicographically() {
         ])
         .output()
         .expect("run list sessions --all");
-    alpha_relay.join().expect("join alpha relay");
-    beta_relay.join().expect("join beta relay");
+    relay_thread.join().expect("join fake relay");
     assert!(output.status.success(), "command should succeed");
 
     let payload: Value = serde_json::from_slice(&output.stdout).expect("decode list payload");
@@ -261,7 +271,7 @@ fn list_sessions_all_fails_fast_on_first_authorization_denial() {
     ensure_bundle_runtime_directory(&alpha_paths).expect("ensure alpha runtime directory");
     let alpha_log = Arc::new(Mutex::new(Vec::<Value>::new()));
     let alpha_relay = spawn_fake_relay_once(
-        &alpha_paths.relay_socket,
+        &RelayRuntimePaths::resolve(&state_root).relay_socket,
         RelayResponse::Error {
             error: RelayError {
                 code: "authorization_forbidden".to_string(),
@@ -329,7 +339,7 @@ fn list_sessions_uses_ui_session_identity_defaults_outside_associated_workspace(
     ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
     let request_log = Arc::new(Mutex::new(Vec::<Value>::new()));
     let relay_thread = spawn_fake_relay_once(
-        &bundle_paths.relay_socket,
+        &RelayRuntimePaths::resolve(&state_root).relay_socket,
         RelayResponse::List {
             schema_version: "1".to_string(),
             bundle: ListedBundle {

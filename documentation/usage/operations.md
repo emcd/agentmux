@@ -90,18 +90,24 @@ identity to a policy with `updown = "all:home"`.
 
 ## Runtime Artifacts
 
+Relay-level artifacts at the state root:
+
+- `<state-root>/relay.sock`: single relay Unix socket; serves every
+  configured bundle and routes connections by the `bundle_name` carried in
+  each client's `hello` frame
+- `<state-root>/relay.lock`: relay host lock
+- `<state-root>/relay.spawn.lock`: relay spawn lock
+- `<state-root>/relay.ready`: relay readiness sentinel (present only while
+  the host is serving with signal handlers installed and the accept loop
+  spawned)
+
 Per-bundle state directory:
 
 - `<state-root>/bundles/<bundle-name>/`
 
 Important files:
 
-- `relay.sock`: relay Unix socket
 - `tmux.sock`: bundle tmux socket
-- `relay.lock`: relay host lock
-- `relay.spawn.lock`: relay spawn lock
-- `relay.ready`: relay readiness sentinel (present only while the host is
-  serving with signal handlers installed and accept loops spawned)
 
 Inscriptions:
 

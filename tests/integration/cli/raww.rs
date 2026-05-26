@@ -5,7 +5,9 @@ use std::{
 };
 
 use agentmux::relay::{ListedSessionTransport, RelayError, RelayResponse};
-use agentmux::runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory};
+use agentmux::runtime::paths::{
+    BundleRuntimePaths, RelayRuntimePaths, ensure_bundle_runtime_directory,
+};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -51,7 +53,7 @@ fn raww_forwards_no_enter_and_preserves_json_contract() {
     ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
     let request_log = Arc::new(Mutex::new(Vec::<Value>::new()));
     let relay_thread = spawn_fake_relay_once(
-        &bundle_paths.relay_socket,
+        &RelayRuntimePaths::resolve(&state_root).relay_socket,
         RelayResponse::Raww {
             schema_version: "1".to_string(),
             status: "accepted".to_string(),
@@ -129,7 +131,7 @@ fn raww_surfaces_unknown_target_from_relay() {
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux").expect("bundle paths");
     ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
     let relay_thread = spawn_fake_relay_once(
-        &bundle_paths.relay_socket,
+        &RelayRuntimePaths::resolve(&state_root).relay_socket,
         RelayResponse::Error {
             error: RelayError {
                 code: "validation_unknown_target".to_string(),

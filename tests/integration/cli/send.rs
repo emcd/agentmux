@@ -7,7 +7,9 @@ use std::{
 };
 
 use agentmux::relay::{ChatOutcome, ChatResult, RelayResponse};
-use agentmux::runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory};
+use agentmux::runtime::paths::{
+    BundleRuntimePaths, RelayRuntimePaths, ensure_bundle_runtime_directory,
+};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -78,7 +80,7 @@ fn send_accepts_message_flag_when_piped_stdin_is_empty() {
     ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
     let request_log = Arc::new(Mutex::new(Vec::<Value>::new()));
     let relay_thread = spawn_fake_relay_once(
-        &bundle_paths.relay_socket,
+        &RelayRuntimePaths::resolve(&state_root).relay_socket,
         RelayResponse::Chat {
             schema_version: "1".to_string(),
             bundle_name: "agentmux".to_string(),
@@ -208,7 +210,7 @@ fn send_preserves_valid_explicit_session_in_relay_request() {
     ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
     let request_log = Arc::new(Mutex::new(Vec::<Value>::new()));
     let relay_thread = spawn_fake_relay_once(
-        &bundle_paths.relay_socket,
+        &RelayRuntimePaths::resolve(&state_root).relay_socket,
         RelayResponse::Chat {
             schema_version: "1".to_string(),
             bundle_name: "agentmux".to_string(),
@@ -381,7 +383,7 @@ fn send_uses_tui_defaults_for_bundle_and_session() {
     ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
     let request_log = Arc::new(Mutex::new(Vec::<Value>::new()));
     let relay_thread = spawn_fake_relay_once(
-        &bundle_paths.relay_socket,
+        &RelayRuntimePaths::resolve(&state_root).relay_socket,
         RelayResponse::Chat {
             schema_version: "1".to_string(),
             bundle_name: "agentmux".to_string(),

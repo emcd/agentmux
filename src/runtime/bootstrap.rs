@@ -15,9 +15,7 @@ use std::{
 
 use super::{
     error::RuntimeError,
-    paths::{
-        BundleRuntimePaths, ensure_bundle_runtime_directory, ensure_existing_artifact_is_owned,
-    },
+    paths::{RelayRuntimePaths, ensure_existing_artifact_is_owned, ensure_relay_runtime_directory},
 };
 
 const SOCKET_MODE_OWNER_ONLY: u32 = 0o600;
@@ -70,21 +68,21 @@ impl Drop for SpawnLockGuard {
     }
 }
 
-/// Tries to bootstrap relay availability for one bundle.
+/// Tries to bootstrap relay availability.
 ///
 /// # Errors
 ///
 /// Returns structured runtime errors for startup timeout, I/O failures, and
 /// disabled auto-start.
 pub fn bootstrap_relay<F>(
-    paths: &BundleRuntimePaths,
+    paths: &RelayRuntimePaths,
     options: BootstrapOptions,
     spawn_relay: F,
 ) -> Result<BootstrapReport, RuntimeError>
 where
     F: FnOnce() -> Result<(), RuntimeError>,
 {
-    ensure_bundle_runtime_directory(paths)?;
+    ensure_relay_runtime_directory(paths)?;
     if relay_socket_connectable(paths) {
         return Ok(BootstrapReport {
             spawned_relay: false,
@@ -127,13 +125,13 @@ where
 ///
 /// Returns an error if another relay already holds the runtime lock.
 pub fn acquire_relay_runtime_lock(
-    paths: &BundleRuntimePaths,
+    paths: &RelayRuntimePaths,
 ) -> Result<RelayRuntimeLock, RuntimeError> {
     let mut lock_file = open_lock_file(&paths.relay_lock_file)?;
     let lock_obtained = try_lock_exclusive_nonblocking(&lock_file)?;
     if !lock_obtained {
         return Err(RuntimeError::io(
-            format!("relay already running for bundle {}", paths.bundle_name),
+            "relay already running for state root".to_string(),
             io::Error::new(io::ErrorKind::WouldBlock, "lock held"),
         ));
     }
@@ -141,12 +139,12 @@ pub fn acquire_relay_runtime_lock(
     Ok(RelayRuntimeLock { lock_file })
 }
 
-/// Binds the relay socket listener for the active bundle.
+/// Binds the relay socket listener.
 ///
 /// # Errors
 ///
 /// Returns an error when socket bind or permission assignment fails.
-pub fn bind_relay_listener(paths: &BundleRuntimePaths) -> Result<UnixListener, RuntimeError> {
+pub fn bind_relay_listener(paths: &RelayRuntimePaths) -> Result<UnixListener, RuntimeError> {
     ensure_existing_artifact_is_owned(&paths.relay_socket)?;
     if paths.relay_socket.exists() {
         fs::remove_file(&paths.relay_socket).map_err(|source| {
@@ -198,7 +196,7 @@ pub fn resolve_relay_program() -> Result<PathBuf, RuntimeError> {
     Ok(sibling)
 }
 
-fn relay_socket_connectable(paths: &BundleRuntimePaths) -> bool {
+fn relay_socket_connectable(paths: &RelayRuntimePaths) -> bool {
     ensure_existing_artifact_is_owned(&paths.relay_socket).is_ok()
         && UnixStream::connect(&paths.relay_socket).is_ok()
 }
@@ -211,7 +209,7 @@ fn relay_socket_connectable(paths: &BundleRuntimePaths) -> bool {
 // both signals closes the early-SIGINT window (issues/relay/20) and gives
 // callers a real "relay is serving" signal.
 fn wait_for_relay_ready(
-    paths: &BundleRuntimePaths,
+    paths: &RelayRuntimePaths,
     startup_timeout: Duration,
 ) -> Result<(), RuntimeError> {
     let deadline = Instant::now() + startup_timeout;
@@ -230,7 +228,7 @@ fn wait_for_relay_ready(
 }
 
 fn try_acquire_spawn_lock(
-    paths: &BundleRuntimePaths,
+    paths: &RelayRuntimePaths,
 ) -> Result<Option<SpawnLockGuard>, RuntimeError> {
     let lock_file = open_lock_file(&paths.relay_spawn_lock_file)?;
     let lock_obtained = try_lock_exclusive_nonblocking(&lock_file)?;
@@ -240,7 +238,7 @@ fn try_acquire_spawn_lock(
     Ok(None)
 }
 
-fn remove_stale_relay_socket(paths: &BundleRuntimePaths) -> Result<bool, RuntimeError> {
+fn remove_stale_relay_socket(paths: &RelayRuntimePaths) -> Result<bool, RuntimeError> {
     if !paths.relay_socket.exists() {
         return Ok(false);
     }
@@ -257,12 +255,12 @@ fn remove_stale_relay_socket(paths: &BundleRuntimePaths) -> Result<bool, Runtime
     Ok(true)
 }
 
-/// Checks whether the relay runtime lock is currently held for one bundle.
+/// Checks whether the relay runtime lock is currently held.
 ///
 /// # Errors
 ///
 /// Returns `RuntimeError` when lock-file access fails.
-pub fn relay_runtime_lock_is_held(paths: &BundleRuntimePaths) -> Result<bool, RuntimeError> {
+pub fn relay_runtime_lock_is_held(paths: &RelayRuntimePaths) -> Result<bool, RuntimeError> {
     let lock_file = open_lock_file(&paths.relay_lock_file)?;
     let lock_obtained = try_lock_exclusive_nonblocking(&lock_file)?;
     if lock_obtained {
@@ -337,12 +335,12 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{BootstrapOptions, bootstrap_relay};
-    use crate::runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory};
+    use crate::runtime::paths::{RelayRuntimePaths, ensure_relay_runtime_directory};
 
-    fn test_paths() -> (TempDir, BundleRuntimePaths) {
+    fn test_paths() -> (TempDir, RelayRuntimePaths) {
         let temporary = TempDir::new().expect("temporary");
-        let paths = BundleRuntimePaths::resolve(temporary.path(), "party-alpha").expect("paths");
-        ensure_bundle_runtime_directory(&paths).expect("directory");
+        let paths = RelayRuntimePaths::resolve(temporary.path());
+        ensure_relay_runtime_directory(&paths).expect("directory");
         (temporary, paths)
     }
 
