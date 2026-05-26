@@ -705,7 +705,7 @@ pub(super) fn authorize_updown(
             capability: "updown",
             requester_session,
             bundle_name: bundle.bundle_name.as_str(),
-            reason: "updown policy scope does not allow bundle lifecycle changes",
+            reason: "updown policy scope does not allow bundle up/down transitions",
             target_session: None,
             targets: None,
         },

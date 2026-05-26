@@ -30,21 +30,21 @@ pub(super) struct RelayHostArguments {
 }
 
 #[derive(Clone, Debug)]
-pub(super) enum LifecycleAction {
+pub(super) enum BundleAction {
     Up,
     Down,
 }
 
 #[derive(Clone, Debug)]
-pub(super) enum LifecycleSelector {
+pub(super) enum BundleSelector {
     Bundle(String),
     Group(String),
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct LifecycleArguments {
-    pub(super) action: LifecycleAction,
-    pub(super) selector: LifecycleSelector,
+pub(super) struct BundleArguments {
+    pub(super) action: BundleAction,
+    pub(super) selector: BundleSelector,
     pub(super) runtime: RuntimeArguments,
 }
 
@@ -126,7 +126,7 @@ pub(super) struct RelayHostStartupSummary {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct LifecycleTransitionBundle {
+pub(super) struct BundleTransitionResult {
     pub(super) bundle_name: String,
     pub(super) outcome: String,
     pub(super) reason_code: Option<String>,
@@ -134,10 +134,10 @@ pub(super) struct LifecycleTransitionBundle {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct LifecycleTransitionSummary {
+pub(super) struct BundleTransitionSummary {
     pub(super) schema_version: u32,
     pub(super) action: String,
-    pub(super) bundles: Vec<LifecycleTransitionBundle>,
+    pub(super) bundles: Vec<BundleTransitionResult>,
     pub(super) changed_bundle_count: usize,
     pub(super) skipped_bundle_count: usize,
     pub(super) failed_bundle_count: usize,

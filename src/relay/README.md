@@ -40,7 +40,7 @@ exported from `src/relay/mod.rs`.
 - `handlers.rs`
   - request dispatcher plus chat/look/raww handlers.
 - `handlers/listing.rs`
-  - lifecycle and list-session request handlers.
+  - bundle up/down and list-session request handlers.
 - `handlers/permissions.rs`
   - permission snapshot, list, and decision request handlers.
 - `lifecycle.rs`
