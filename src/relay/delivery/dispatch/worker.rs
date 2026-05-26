@@ -17,7 +17,7 @@ use super::super::super::canonical_session_id;
 use super::super::super::stream::{
     RelayStreamEvent, broadcast_event_to_bundle_ui, list_registered_ui_sessions_for_bundle,
 };
-use super::super::super::{AsyncDeliveryTask, ChatResult, DeliveryPayloadMode, RelayError};
+use super::super::super::{AsyncDeliveryTask, DeliveryPayloadMode, RelayError, SendResult};
 use super::super::acp_delivery::{
     ACP_ERROR_CODE_CONNECTION_CLOSED, ACP_ERROR_CODE_INITIALIZE_FAILED,
     ACP_ERROR_CODE_PROMPT_FAILED, ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE, AcpBootstrapError,
@@ -183,7 +183,7 @@ async fn run_async_delivery_worker(
 
         if batch.len() > 1 {
             emit_inscription(
-                "relay.chat.batch_drain.coalesced",
+                "relay.send.batch_drain.coalesced",
                 &json!({
                     "bundle_name": batch[0].bundle.bundle_name,
                     "target_session": batch[0].target_session,
@@ -345,11 +345,11 @@ fn classify_tmux_quiescence_hoist(task: &AsyncDeliveryTask) -> Option<TmuxTarget
 /// the same outcome and the loop can continue.
 fn complete_batch_with_template(
     batch: &[AsyncDeliveryTask],
-    template: ChatResult,
+    template: SendResult,
     pending: &std::sync::atomic::AtomicUsize,
 ) {
     for task in batch {
-        let outcome = Ok(ChatResult {
+        let outcome = Ok(SendResult {
             target_session: task.target_session.clone(),
             message_id: task.message_id.clone(),
             outcome: template.outcome.clone(),
@@ -438,7 +438,7 @@ async fn deliver_batch_blocking(
     pre_resolved_pane: Option<String>,
     acp_runtime: Option<PersistentAcpWorkerRuntime>,
 ) -> (
-    Vec<Result<ChatResult, RelayError>>,
+    Vec<Result<SendResult, RelayError>>,
     Option<PersistentAcpWorkerRuntime>,
     Vec<AsyncDeliveryTask>,
 ) {
@@ -534,7 +534,7 @@ fn respawn_backoff_cap_ms() -> u64 {
         .unwrap_or(RESPAWN_BACKOFF_CAP_DEFAULT_MS)
 }
 
-fn classify_respawn_trigger(outcome: &Result<ChatResult, RelayError>) -> &'static str {
+fn classify_respawn_trigger(outcome: &Result<SendResult, RelayError>) -> &'static str {
     // All tasks in a coalesced batch share one transport outcome by
     // construction, so classifying off the first outcome is sufficient.
     match outcome {

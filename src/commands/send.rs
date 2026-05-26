@@ -45,7 +45,7 @@ pub(super) fn run_agentmux_send(arguments: &[String]) -> Result<(), RuntimeError
         &relay_paths.relay_socket,
         &resolved_session.bundle_name,
         &resolved_session.session_id,
-        &RelayRequest::Chat {
+        &RelayRequest::Send {
             request_id: parsed.request_id.clone(),
             sender_session: resolved_session.session_id.clone(),
             message: parsed.message.clone(),
@@ -58,7 +58,7 @@ pub(super) fn run_agentmux_send(arguments: &[String]) -> Result<(), RuntimeError
     )
     .map_err(|source| shared::map_relay_request_failure(&relay_paths.relay_socket, source))?;
     let payload = match response {
-        RelayResponse::Chat {
+        RelayResponse::Send {
             schema_version,
             bundle_name,
             request_id,

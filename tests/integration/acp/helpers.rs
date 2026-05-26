@@ -329,8 +329,8 @@ coder = "acp"
     (config_root, log_path)
 }
 
-fn acp_chat_request(acp_turn_timeout_ms: Option<u64>) -> RelayRequest {
-    RelayRequest::Chat {
+fn acp_send_request(acp_turn_timeout_ms: Option<u64>) -> RelayRequest {
+    RelayRequest::Send {
         request_id: Some("req-acp".to_string()),
         sender_session: "alpha".to_string(),
         message: "status?".to_string(),
@@ -342,7 +342,7 @@ fn acp_chat_request(acp_turn_timeout_ms: Option<u64>) -> RelayRequest {
     }
 }
 
-/// Starts the bundle, dispatches an async chat to `bravo`, then blocks until
+/// Starts the bundle, dispatches an async send to `bravo`, then blocks until
 /// the persistent ACP worker has acted on the queued task -- its
 /// `session/prompt` reached the stub, or the worker settled `unavailable` --
 /// so callers can inspect post-delivery side effects deterministically.
@@ -368,7 +368,7 @@ pub(super) fn dispatch_send(
     response
 }
 
-/// Starts the bundle and dispatches an async chat to `bravo`, returning the
+/// Starts the bundle and dispatches an async send to `bravo`, returning the
 /// immediate relay response without waiting for the worker to act.
 pub(super) fn dispatch_send_result(
     config_root: &Path,
@@ -377,7 +377,7 @@ pub(super) fn dispatch_send_result(
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
     startup_bundle(config_root, tmux_socket)?;
     dispatch_request(
-        acp_chat_request(acp_turn_timeout_ms),
+        acp_send_request(acp_turn_timeout_ms),
         config_root,
         "party",
         tmux_socket,
@@ -390,7 +390,7 @@ pub(super) fn dispatch_send_without_startup_result(
     acp_turn_timeout_ms: Option<u64>,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
     dispatch_request(
-        acp_chat_request(acp_turn_timeout_ms),
+        acp_send_request(acp_turn_timeout_ms),
         config_root,
         "party",
         tmux_socket,
@@ -540,7 +540,7 @@ pub(super) fn assert_acp_delivery_unavailable(
     match dispatch_send_result(config_root, tmux_socket, acp_turn_timeout_ms) {
         Err(error) => assert_eq!(error.code, "runtime_acp_worker_unavailable"),
         Ok(response) => {
-            let _result = chat_result(response);
+            let _result = send_result(response);
             assert!(
                 await_acp_worker_state(
                     &mut receiver,
@@ -677,9 +677,9 @@ pub(super) fn read_worker_state(root: &Path, target_session: &str) -> Option<Str
     agentmux::relay::read_acp_worker_state("party", root, target_session).map(ToString::to_string)
 }
 
-pub(super) fn chat_result(response: RelayResponse) -> agentmux::relay::ChatResult {
-    let RelayResponse::Chat { results, .. } = response else {
-        panic!("expected chat response");
+pub(super) fn send_result(response: RelayResponse) -> agentmux::relay::SendResult {
+    let RelayResponse::Send { results, .. } = response else {
+        panic!("expected send response");
     };
     assert_eq!(results.len(), 1);
     results.into_iter().next().expect("one result")

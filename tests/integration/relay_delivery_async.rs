@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use agentmux::{
-    relay::{ChatOutcome, RelayRequest, RelayResponse, handle_request},
+    relay::{RelayRequest, RelayResponse, SendOutcome, handle_request},
     runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory},
 };
 use tempfile::TempDir;
@@ -21,7 +21,7 @@ fn dispatch_request(
 }
 
 #[test]
-fn relay_chat_async_processes_repeated_target_messages_in_fifo_order() {
+fn relay_send_async_processes_repeated_target_messages_in_fifo_order() {
     if !tmux_available() {
         eprintln!("skipping relay delivery test because tmux is unavailable");
         return;
@@ -42,7 +42,7 @@ fn relay_chat_async_processes_repeated_target_messages_in_fifo_order() {
     let second_marker = "FIFO-TWO-MARKER";
 
     let first = dispatch_request(
-        RelayRequest::Chat {
+        RelayRequest::Send {
             request_id: Some("req-fifo-1".to_string()),
             sender_session: "alpha".to_string(),
             message: first_marker.to_string(),
@@ -57,18 +57,18 @@ fn relay_chat_async_processes_repeated_target_messages_in_fifo_order() {
         &paths.runtime_directory,
     )
     .expect("first async send should be accepted");
-    let RelayResponse::Chat {
+    let RelayResponse::Send {
         results: first_results,
         ..
     } = first
     else {
-        panic!("expected chat response");
+        panic!("expected send response");
     };
     assert_eq!(first_results.len(), 1);
-    assert_eq!(first_results[0].outcome, ChatOutcome::Queued);
+    assert_eq!(first_results[0].outcome, SendOutcome::Queued);
 
     let second = dispatch_request(
-        RelayRequest::Chat {
+        RelayRequest::Send {
             request_id: Some("req-fifo-2".to_string()),
             sender_session: "alpha".to_string(),
             message: second_marker.to_string(),
@@ -83,15 +83,15 @@ fn relay_chat_async_processes_repeated_target_messages_in_fifo_order() {
         &paths.runtime_directory,
     )
     .expect("second async send should be accepted");
-    let RelayResponse::Chat {
+    let RelayResponse::Send {
         results: second_results,
         ..
     } = second
     else {
-        panic!("expected chat response");
+        panic!("expected send response");
     };
     assert_eq!(second_results.len(), 1);
-    assert_eq!(second_results[0].outcome, ChatOutcome::Queued);
+    assert_eq!(second_results[0].outcome, SendOutcome::Queued);
 
     wait_for_pane_contains(
         &paths.tmux_socket,
@@ -122,7 +122,7 @@ fn relay_chat_async_processes_repeated_target_messages_in_fifo_order() {
 }
 
 #[test]
-fn relay_chat_async_without_timeout_waits_for_late_quiescence() {
+fn relay_send_async_without_timeout_waits_for_late_quiescence() {
     if !tmux_available() {
         eprintln!("skipping relay delivery test because tmux is unavailable");
         return;
@@ -151,7 +151,7 @@ fn relay_chat_async_without_timeout_waits_for_late_quiescence() {
 
     let marker = "ASYNC-LATE-QUIESCENCE-MARKER";
     let response = dispatch_request(
-        RelayRequest::Chat {
+        RelayRequest::Send {
             request_id: Some("req-async-default".to_string()),
             sender_session: "alpha".to_string(),
             message: marker.to_string(),
@@ -167,11 +167,11 @@ fn relay_chat_async_without_timeout_waits_for_late_quiescence() {
     )
     .expect("async send should be accepted");
 
-    let RelayResponse::Chat { results, .. } = response else {
-        panic!("expected chat response");
+    let RelayResponse::Send { results, .. } = response else {
+        panic!("expected send response");
     };
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].outcome, ChatOutcome::Queued);
+    assert_eq!(results[0].outcome, SendOutcome::Queued);
 
     wait_for_pane_contains(
         &paths.tmux_socket,
@@ -184,7 +184,7 @@ fn relay_chat_async_without_timeout_waits_for_late_quiescence() {
 }
 
 #[test]
-fn relay_chat_async_timeout_override_stops_wait_before_late_quiescence() {
+fn relay_send_async_timeout_override_stops_wait_before_late_quiescence() {
     if !tmux_available() {
         eprintln!("skipping relay delivery test because tmux is unavailable");
         return;
@@ -213,7 +213,7 @@ fn relay_chat_async_timeout_override_stops_wait_before_late_quiescence() {
 
     let marker = "ASYNC-TIMEOUT-OVERRIDE-MARKER";
     let response = dispatch_request(
-        RelayRequest::Chat {
+        RelayRequest::Send {
             request_id: Some("req-async-timeout".to_string()),
             sender_session: "alpha".to_string(),
             message: marker.to_string(),
@@ -229,11 +229,11 @@ fn relay_chat_async_timeout_override_stops_wait_before_late_quiescence() {
     )
     .expect("async send should be accepted");
 
-    let RelayResponse::Chat { results, .. } = response else {
-        panic!("expected chat response");
+    let RelayResponse::Send { results, .. } = response else {
+        panic!("expected send response");
     };
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].outcome, ChatOutcome::Queued);
+    assert_eq!(results[0].outcome, SendOutcome::Queued);
 
     std::thread::sleep(Duration::from_millis(2_100));
     let snapshot = capture_pane(&paths.tmux_socket, "bravo", "-200");

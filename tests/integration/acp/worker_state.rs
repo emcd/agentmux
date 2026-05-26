@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use agentmux::relay::{ChatOutcome, RelayResponse};
+use agentmux::relay::{RelayResponse, SendOutcome};
 use tempfile::TempDir;
 
 use super::helpers::*;
@@ -17,8 +17,8 @@ fn acp_worker_state_transitions_busy_then_available() {
     let tmux_socket = temporary.path().join("tmux.sock");
 
     let response = dispatch_send(&config_root, &tmux_socket, Some(2_000));
-    let result = chat_result(response);
-    assert_eq!(result.outcome, ChatOutcome::Queued);
+    let result = send_result(response);
+    assert_eq!(result.outcome, SendOutcome::Queued);
 
     // dispatch_send returns once the worker picks up the queued prompt; with a
     // 1s prompt delay the worker is mid-turn and must report busy, then
@@ -50,8 +50,8 @@ fn acp_request_permission_keeps_worker_busy_while_pending_decision() {
     let tmux_socket = temporary.path().join("tmux.sock");
 
     let response = dispatch_send(&config_root, &tmux_socket, Some(100));
-    let result = chat_result(response);
-    assert_eq!(result.outcome, ChatOutcome::Queued);
+    let result = send_result(response);
+    assert_eq!(result.outcome, SendOutcome::Queued);
 
     assert!(
         wait_for_worker_state(temporary.path(), "bravo", "busy", Duration::from_secs(2)),
@@ -90,8 +90,8 @@ fn acp_worker_state_stays_available_after_protocol_error() {
         &temporary.path().join("tmux.sock"),
         Some(1_000),
     );
-    let result = chat_result(response);
-    assert_eq!(result.outcome, ChatOutcome::Queued);
+    let result = send_result(response);
+    assert_eq!(result.outcome, SendOutcome::Queued);
     assert!(
         wait_for_worker_state(
             temporary.path(),

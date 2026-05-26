@@ -1,6 +1,6 @@
 use agentmux::acp::snapshot_entries_to_plain_lines;
 use agentmux::relay::{
-    AcpLookFreshness, AcpLookSnapshotSource, ChatOutcome, LookSnapshotPayload, RelayResponse,
+    AcpLookFreshness, AcpLookSnapshotSource, LookSnapshotPayload, RelayResponse, SendOutcome,
 };
 use std::{
     fs, thread,
@@ -53,8 +53,8 @@ fn acp_look_returns_oldest_to_newest_session_update_lines() {
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_send(&config_root, &tmux_socket, Some(1_000));
-    let result = chat_result(response);
-    assert_eq!(result.outcome, ChatOutcome::Queued);
+    let result = send_result(response);
+    assert_eq!(result.outcome, SendOutcome::Queued);
 
     let look = wait_for_look(
         &config_root,
@@ -90,8 +90,8 @@ fn acp_look_enforces_bounded_retention_and_tail_selection() {
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_send(&config_root, &tmux_socket, Some(2_000));
-    let result = chat_result(response);
-    assert_eq!(result.outcome, ChatOutcome::Queued);
+    let result = send_result(response);
+    assert_eq!(result.outcome, SendOutcome::Queued);
 
     let look = wait_for_look(
         &config_root,
@@ -161,8 +161,8 @@ fn acp_look_reflects_outgoing_user_prompt_before_session_updates_arrive() {
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_send(&config_root, &tmux_socket, Some(1_000));
-    let result = chat_result(response);
-    assert_eq!(result.outcome, ChatOutcome::Queued);
+    let result = send_result(response);
+    assert_eq!(result.outcome, SendOutcome::Queued);
 
     let look = wait_for_look(
         &config_root,
@@ -196,8 +196,8 @@ fn acp_look_captures_updates_emitted_after_prompt_response() {
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_send(&config_root, &tmux_socket, Some(1_000));
-    let result = chat_result(response);
-    assert_eq!(result.outcome, ChatOutcome::Queued);
+    let result = send_result(response);
+    assert_eq!(result.outcome, SendOutcome::Queued);
 
     let look = wait_for_look(
         &config_root,
@@ -228,8 +228,8 @@ fn acp_look_reuses_persistent_worker_without_one_shot_replay_refresh() {
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_send(&config_root, &tmux_socket, Some(1_000));
-    let result = chat_result(response);
-    assert_eq!(result.outcome, ChatOutcome::Queued);
+    let result = send_result(response);
+    assert_eq!(result.outcome, SendOutcome::Queued);
 
     let look = dispatch_look(&config_root, &tmux_socket, "bravo", "bravo", Some(10));
     let snapshot = expect_acp_snapshot(look);
@@ -284,8 +284,8 @@ fn acp_look_replaces_legacy_flattened_baseline_after_structured_load() {
     assert_eq!(pre_load_snapshot.freshness, AcpLookFreshness::Stale);
 
     let response = dispatch_send(&config_root, &tmux_socket, Some(1_000));
-    let result = chat_result(response);
-    assert_eq!(result.outcome, ChatOutcome::Queued);
+    let result = send_result(response);
+    assert_eq!(result.outcome, SendOutcome::Queued);
 
     let snapshot = expect_acp_snapshot(dispatch_look(
         &config_root,

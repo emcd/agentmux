@@ -1,6 +1,6 @@
 use std::collections::{HashSet, VecDeque};
 
-use crate::relay::{ChatOutcome, ChatResult, RelayRequest, RelayResponse, RelayStreamEvent};
+use crate::relay::{RelayRequest, RelayResponse, RelayStreamEvent, SendOutcome, SendResult};
 use crate::runtime::error::RuntimeError;
 
 use super::{
@@ -18,7 +18,7 @@ impl AppState {
         }
         let targets = merge_tui_targets(&self.to_field, &self.bundle_name)?;
         let message_body = self.message_field.clone();
-        let response = self.request_relay(&RelayRequest::Chat {
+        let response = self.request_relay(&RelayRequest::Send {
             request_id: None,
             sender_session: self.sender_session.clone(),
             message: message_body.clone(),
@@ -29,7 +29,7 @@ impl AppState {
             acp_turn_timeout_ms: None,
         })?;
         match response {
-            RelayResponse::Chat { results, .. } => {
+            RelayResponse::Send { results, .. } => {
                 let history_targets = results
                     .iter()
                     .map(|result| result.target_session.clone())
@@ -168,11 +168,11 @@ impl AppState {
         true
     }
 
-    pub(super) fn record_chat_events(&mut self, results: &[ChatResult]) {
+    pub(super) fn record_chat_events(&mut self, results: &[SendResult]) {
         let mut accepted_count = 0usize;
         for result in results {
             match result.outcome {
-                ChatOutcome::Queued => {
+                SendOutcome::Queued => {
                     if self
                         .terminal_delivery_message_ids
                         .contains(result.message_id.as_str())
@@ -524,13 +524,13 @@ impl AppState {
     }
 }
 
-fn map_chat_result_outcome(outcome: &ChatOutcome) -> (&'static str, Option<&'static str>) {
+fn map_chat_result_outcome(outcome: &SendOutcome) -> (&'static str, Option<&'static str>) {
     match outcome {
-        ChatOutcome::Queued => ("accepted", None),
-        ChatOutcome::Delivered => ("success", None),
-        ChatOutcome::Timeout => ("timeout", None),
-        ChatOutcome::DroppedOnShutdown => ("failed", Some("dropped_on_shutdown")),
-        ChatOutcome::Failed => ("failed", None),
+        SendOutcome::Queued => ("accepted", None),
+        SendOutcome::Delivered => ("success", None),
+        SendOutcome::Timeout => ("timeout", None),
+        SendOutcome::DroppedOnShutdown => ("failed", Some("dropped_on_shutdown")),
+        SendOutcome::Failed => ("failed", None),
     }
 }
 

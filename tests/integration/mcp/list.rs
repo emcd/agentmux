@@ -30,8 +30,8 @@ async fn tool_catalog_contains_list_sessions_send_look_and_raww() {
                         "sessions": [],
                     },
                 }),
-                Some("chat") => json!({
-                    "kind": "chat",
+                Some("send") => json!({
+                    "kind": "send",
                     "schema_version": "1",
                     "bundle_name": BUNDLE_NAME,
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),

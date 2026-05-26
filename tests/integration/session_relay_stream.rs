@@ -10,7 +10,7 @@ use std::{
 
 use agentmux::{
     relay::{
-        BundleCatalog, ChatOutcome, RelayRequest, RelayResponse, handle_request, serve_connection,
+        BundleCatalog, RelayRequest, RelayResponse, SendOutcome, handle_request, serve_connection,
     },
     runtime::paths::BundleRuntimePaths,
 };
@@ -178,7 +178,7 @@ fn hello_payload(bundle_name: &str, session_id: &str) -> Value {
 }
 
 #[test]
-fn relay_chat_routes_to_connected_ui_stream_with_event_frames() {
+fn relay_send_routes_to_connected_ui_stream_with_event_frames() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_root = write_bundle_configuration(&temporary, &bundle_name);
@@ -197,7 +197,7 @@ fn relay_chat_routes_to_connected_ui_stream_with_event_frames() {
     assert_eq!(hello_ack["frame"], "hello_ack");
 
     let response = dispatch_request(
-        RelayRequest::Chat {
+        RelayRequest::Send {
             request_id: Some("req-1".to_string()),
             sender_session: "alpha".to_string(),
             message: "hello ui".to_string(),
@@ -211,12 +211,12 @@ fn relay_chat_routes_to_connected_ui_stream_with_event_frames() {
         bundle_name.as_str(),
         &bundle_paths.runtime_directory,
     )
-    .expect("chat response");
-    let RelayResponse::Chat { results, .. } = response else {
-        panic!("expected chat response");
+    .expect("send response");
+    let RelayResponse::Send { results, .. } = response else {
+        panic!("expected send response");
     };
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].outcome, ChatOutcome::Queued);
+    assert_eq!(results[0].outcome, SendOutcome::Queued);
 
     let first_event = read_json(&mut reader);
     let second_event = read_json(&mut reader);
@@ -266,7 +266,7 @@ fn relay_chat_routes_to_connected_ui_stream_with_event_frames() {
 }
 
 #[test]
-fn relay_chat_waits_for_ui_reconnect_before_delivery() {
+fn relay_send_waits_for_ui_reconnect_before_delivery() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_root = write_bundle_configuration(&temporary, &bundle_name);
@@ -311,7 +311,7 @@ fn relay_chat_waits_for_ui_reconnect_before_delivery() {
     });
 
     let response = dispatch_request(
-        RelayRequest::Chat {
+        RelayRequest::Send {
             request_id: Some("req-2".to_string()),
             sender_session: "alpha".to_string(),
             message: "wait for reconnect".to_string(),
@@ -325,13 +325,13 @@ fn relay_chat_waits_for_ui_reconnect_before_delivery() {
         bundle_name.as_str(),
         &bundle_paths.runtime_directory,
     )
-    .expect("chat response");
+    .expect("send response");
 
-    let RelayResponse::Chat { results, .. } = response else {
-        panic!("expected chat response");
+    let RelayResponse::Send { results, .. } = response else {
+        panic!("expected send response");
     };
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].outcome, ChatOutcome::Queued);
+    assert_eq!(results[0].outcome, SendOutcome::Queued);
 
     // Async dispatch returns immediately; the reconnect thread connects at
     // +150ms and still receives the terminal delivered/success event, which
@@ -358,7 +358,7 @@ fn relay_chat_waits_for_ui_reconnect_before_delivery() {
 }
 
 #[test]
-fn relay_async_chat_emits_terminal_delivery_outcome_to_sender_ui_stream() {
+fn relay_async_send_emits_terminal_delivery_outcome_to_sender_ui_stream() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_root = write_bundle_configuration(&temporary, &bundle_name);
@@ -380,7 +380,7 @@ fn relay_async_chat_emits_terminal_delivery_outcome_to_sender_ui_stream() {
     assert_eq!(sender_ack["frame"], "hello_ack");
 
     let response = dispatch_request(
-        RelayRequest::Chat {
+        RelayRequest::Send {
             request_id: Some("req-async-sender".to_string()),
             sender_session: "user@GLOBAL".to_string(),
             message: "verify sender completion stream".to_string(),
@@ -394,12 +394,12 @@ fn relay_async_chat_emits_terminal_delivery_outcome_to_sender_ui_stream() {
         bundle_name.as_str(),
         &bundle_paths.runtime_directory,
     )
-    .expect("chat response");
-    let RelayResponse::Chat { results, .. } = response else {
-        panic!("expected chat response");
+    .expect("send response");
+    let RelayResponse::Send { results, .. } = response else {
+        panic!("expected send response");
     };
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].outcome, ChatOutcome::Queued);
+    assert_eq!(results[0].outcome, SendOutcome::Queued);
     let expected_message_id = results[0].message_id.clone();
 
     let deadline = Instant::now() + Duration::from_secs(3);

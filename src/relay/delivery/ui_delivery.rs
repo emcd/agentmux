@@ -10,7 +10,7 @@ use crate::runtime::signals::shutdown_requested;
 
 use super::super::canonical_session_id;
 use super::super::stream::{RelayStreamEvent, StreamEventSendOutcome, send_event_to_registered_ui};
-use super::super::{AsyncDeliveryTask, ChatOutcome, ChatResult};
+use super::super::{AsyncDeliveryTask, SendOutcome, SendResult};
 
 const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delivery";
 const DROPPED_ON_SHUTDOWN_REASON_CODE: &str = "dropped_on_shutdown";
@@ -23,7 +23,7 @@ pub(super) fn deliver_one_target_ui(
     target_session: String,
     message_id: String,
     message: &str,
-) -> ChatResult {
+) -> SendResult {
     let bundle_name = task.bundle.bundle_name.as_str();
     let timeout = task.quiescence.quiescence_timeout;
     let start = Instant::now();
@@ -38,10 +38,10 @@ pub(super) fn deliver_one_target_ui(
                 Some(DROPPED_ON_SHUTDOWN_REASON_CODE),
                 Some(DROPPED_ON_SHUTDOWN_REASON),
             );
-            return ChatResult {
+            return SendResult {
                 target_session,
                 message_id,
-                outcome: ChatOutcome::DroppedOnShutdown,
+                outcome: SendOutcome::DroppedOnShutdown,
                 reason_code: Some(DROPPED_ON_SHUTDOWN_REASON_CODE.to_string()),
                 reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
                 details: None,
@@ -82,10 +82,10 @@ pub(super) fn deliver_one_target_ui(
             Ok(StreamEventSendOutcome::Delivered) => {}
             Ok(StreamEventSendOutcome::NoUiEndpoint) | Ok(StreamEventSendOutcome::Disconnected) => {
                 if timeout.is_some_and(|value| start.elapsed() >= value) {
-                    return ChatResult {
+                    return SendResult {
                         target_session,
                         message_id,
-                        outcome: ChatOutcome::Timeout,
+                        outcome: SendOutcome::Timeout,
                         reason_code: None,
                         reason: Some(format!(
                             "ui relay stream was disconnected for {}ms",
@@ -98,10 +98,10 @@ pub(super) fn deliver_one_target_ui(
                 continue;
             }
             Err(source) => {
-                return ChatResult {
+                return SendResult {
                     target_session,
                     message_id,
-                    outcome: ChatOutcome::Failed,
+                    outcome: SendOutcome::Failed,
                     reason_code: None,
                     reason: Some(format!("failed to emit relay stream event: {}", source)),
                     details: None,
@@ -119,10 +119,10 @@ pub(super) fn deliver_one_target_ui(
                     None,
                     None,
                 );
-                return ChatResult {
+                return SendResult {
                     target_session,
                     message_id,
-                    outcome: ChatOutcome::Delivered,
+                    outcome: SendOutcome::Delivered,
                     reason_code: None,
                     reason: None,
                     details: None,
@@ -131,10 +131,10 @@ pub(super) fn deliver_one_target_ui(
             Ok(StreamEventSendOutcome::NoUiEndpoint) | Ok(StreamEventSendOutcome::Disconnected) => {
             }
             Err(source) => {
-                return ChatResult {
+                return SendResult {
                     target_session,
                     message_id,
-                    outcome: ChatOutcome::Failed,
+                    outcome: SendOutcome::Failed,
                     reason_code: None,
                     reason: Some(format!("failed to emit relay stream event: {}", source)),
                     details: None,
@@ -142,10 +142,10 @@ pub(super) fn deliver_one_target_ui(
             }
         }
         if timeout.is_some_and(|value| start.elapsed() >= value) {
-            return ChatResult {
+            return SendResult {
                 target_session,
                 message_id,
-                outcome: ChatOutcome::Timeout,
+                outcome: SendOutcome::Timeout,
                 reason_code: None,
                 reason: Some(format!(
                     "ui relay stream was disconnected for {}ms",

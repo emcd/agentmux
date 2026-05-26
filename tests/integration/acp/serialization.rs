@@ -17,8 +17,8 @@ fn acp_result_serialization_reflects_queued_async_outcome() {
         &temporary.path().join("tmux.sock"),
         Some(1_000),
     );
-    let RelayResponse::Chat { results, .. } = response else {
-        panic!("expected chat response");
+    let RelayResponse::Send { results, .. } = response else {
+        panic!("expected send response");
     };
     let encoded = serde_json::to_value(results).expect("serialize results");
     let Value::Array(results) = encoded else {

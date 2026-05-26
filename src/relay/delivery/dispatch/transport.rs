@@ -2,7 +2,7 @@ use crate::configuration::{BundleMember, TargetConfiguration, TmuxTargetConfigur
 
 use super::super::super::tmux::{inject_literal_text, inject_prompt, resolve_active_pane_target};
 use super::super::super::{
-    AsyncDeliveryTask, ChatOutcome, ChatResult, DeliveryPayloadMode, RelayError,
+    AsyncDeliveryTask, DeliveryPayloadMode, RelayError, SendOutcome, SendResult,
 };
 use super::super::acp_delivery::{
     PersistentAcpWorkerRuntime, deliver_batch_target_acp, deliver_one_target_acp,
@@ -17,7 +17,7 @@ pub(super) fn deliver_non_ui_target(
     target_member: &BundleMember,
     prompt_batches: Vec<String>,
     acp_runtime: &mut Option<PersistentAcpWorkerRuntime>,
-) -> Result<ChatResult, RelayError> {
+) -> Result<SendResult, RelayError> {
     match &target_member.target {
         TargetConfiguration::Acp(acp) => Ok(deliver_one_target_acp(
             task,
@@ -61,7 +61,7 @@ pub(super) fn deliver_non_ui_target_batch(
     prompt_batches: Vec<String>,
     pre_resolved_pane: Option<String>,
     acp_runtime: &mut Option<PersistentAcpWorkerRuntime>,
-) -> Vec<Result<ChatResult, RelayError>> {
+) -> Vec<Result<SendResult, RelayError>> {
     debug_assert!(!batch.is_empty());
     match &target_member.target {
         TargetConfiguration::Acp(acp) => {
@@ -95,7 +95,7 @@ pub(super) fn deliver_non_ui_target_batch(
 pub(super) fn prepare_tmux_pane_for_envelope_head(
     task: &AsyncDeliveryTask,
     tmux_target: &TmuxTargetConfiguration,
-) -> Result<String, Box<ChatResult>> {
+) -> Result<String, Box<SendResult>> {
     debug_assert!(matches!(
         task.payload_mode,
         DeliveryPayloadMode::EnvelopeMessage
@@ -111,7 +111,7 @@ fn deliver_one_target_tmux(
     task: &AsyncDeliveryTask,
     tmux_target: &TmuxTargetConfiguration,
     prompt_batches: Vec<String>,
-) -> ChatResult {
+) -> SendResult {
     let target_session = task.target_session.clone();
     let message_id = task.message_id.clone();
     let tmux_socket_path = crate::runtime::paths::tmux_socket_path_for_runtime_directory(
@@ -144,18 +144,18 @@ fn deliver_one_target_tmux(
         .err(),
     };
     match failed_reason {
-        None => ChatResult {
+        None => SendResult {
             target_session,
             message_id,
-            outcome: ChatOutcome::Delivered,
+            outcome: SendOutcome::Delivered,
             reason_code: None,
             reason: None,
             details: None,
         },
-        Some(reason) => ChatResult {
+        Some(reason) => SendResult {
             target_session,
             message_id,
-            outcome: ChatOutcome::Failed,
+            outcome: SendOutcome::Failed,
             reason_code: None,
             reason: Some(reason),
             details: None,
@@ -177,7 +177,7 @@ fn deliver_batch_target_tmux(
     tmux_target: &TmuxTargetConfiguration,
     prompt_batches: Vec<String>,
     pre_resolved_pane: Option<String>,
-) -> Vec<ChatResult> {
+) -> Vec<SendResult> {
     let head = &batch[0];
     let tmux_socket_path = crate::runtime::paths::tmux_socket_path_for_runtime_directory(
         head.runtime_directory.as_path(),
@@ -192,7 +192,7 @@ fn deliver_batch_target_tmux(
                 // Quiescence / pane-resolution failure: every task in the batch
                 // shares the outcome (re-built per-task so message_id /
                 // target_session correlate with each original send call).
-                // `Box<ChatResult>` carries the head's correlation values;
+                // `Box<SendResult>` carries the head's correlation values;
                 // replicate the variant fields.
                 return replicate_outcome_for_batch(batch, *result);
             }
@@ -209,18 +209,18 @@ fn deliver_batch_target_tmux(
     batch
         .iter()
         .map(|task| match &failed_reason {
-            None => ChatResult {
+            None => SendResult {
                 target_session: task.target_session.clone(),
                 message_id: task.message_id.clone(),
-                outcome: ChatOutcome::Delivered,
+                outcome: SendOutcome::Delivered,
                 reason_code: None,
                 reason: None,
                 details: None,
             },
-            Some(reason) => ChatResult {
+            Some(reason) => SendResult {
                 target_session: task.target_session.clone(),
                 message_id: task.message_id.clone(),
-                outcome: ChatOutcome::Failed,
+                outcome: SendOutcome::Failed,
                 reason_code: None,
                 reason: Some(reason.clone()),
                 details: None,
@@ -229,17 +229,17 @@ fn deliver_batch_target_tmux(
         .collect()
 }
 
-// Reproduces a head-derived ChatResult for every task in the batch, swapping
+// Reproduces a head-derived SendResult for every task in the batch, swapping
 // in each task's own correlation fields. Used when a quiescence wait or pane
 // resolution fails before the actual paste begins: there is one underlying
 // reason but N callers need their own per-task result.
 fn replicate_outcome_for_batch(
     batch: &[AsyncDeliveryTask],
-    template: ChatResult,
-) -> Vec<ChatResult> {
+    template: SendResult,
+) -> Vec<SendResult> {
     batch
         .iter()
-        .map(|task| ChatResult {
+        .map(|task| SendResult {
             target_session: task.target_session.clone(),
             message_id: task.message_id.clone(),
             outcome: template.outcome.clone(),
@@ -254,7 +254,7 @@ fn resolve_tmux_pane_target(
     task: &AsyncDeliveryTask,
     tmux_target: &TmuxTargetConfiguration,
     tmux_socket: &std::path::Path,
-) -> Result<String, Box<ChatResult>> {
+) -> Result<String, Box<SendResult>> {
     match task.payload_mode {
         DeliveryPayloadMode::EnvelopeMessage => wait_for_quiescent_pane(
             tmux_socket,
@@ -281,27 +281,27 @@ fn resolve_tmux_pane_target(
                     } else {
                         format!("quiescence wait timed out after {}ms", timeout.as_millis())
                     };
-                    ChatResult {
+                    SendResult {
                         target_session: task.target_session.clone(),
                         message_id: task.message_id.clone(),
-                        outcome: ChatOutcome::Timeout,
+                        outcome: SendOutcome::Timeout,
                         reason_code: None,
                         reason: Some(reason),
                         details: None,
                     }
                 }
-                DeliveryWaitError::Failed { reason } => ChatResult {
+                DeliveryWaitError::Failed { reason } => SendResult {
                     target_session: task.target_session.clone(),
                     message_id: task.message_id.clone(),
-                    outcome: ChatOutcome::Failed,
+                    outcome: SendOutcome::Failed,
                     reason_code: None,
                     reason: Some(reason),
                     details: None,
                 },
-                DeliveryWaitError::Shutdown => ChatResult {
+                DeliveryWaitError::Shutdown => SendResult {
                     target_session: task.target_session.clone(),
                     message_id: task.message_id.clone(),
-                    outcome: ChatOutcome::DroppedOnShutdown,
+                    outcome: SendOutcome::DroppedOnShutdown,
                     reason_code: Some(DROPPED_ON_SHUTDOWN_REASON_CODE.to_string()),
                     reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
                     details: None,
@@ -311,10 +311,10 @@ fn resolve_tmux_pane_target(
         DeliveryPayloadMode::RawInput => {
             resolve_active_pane_target(tmux_socket, task.target_session.as_str()).map_err(
                 |reason| {
-                    Box::new(ChatResult {
+                    Box::new(SendResult {
                         target_session: task.target_session.clone(),
                         message_id: task.message_id.clone(),
-                        outcome: ChatOutcome::Failed,
+                        outcome: SendOutcome::Failed,
                         reason_code: Some("tmux_target_unavailable".to_string()),
                         reason: Some(reason),
                         details: None,

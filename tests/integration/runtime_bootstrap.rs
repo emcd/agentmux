@@ -632,8 +632,8 @@ async fn mcp_auto_discovers_association_from_non_git_cwd() {
         relay_socket,
         Arc::new(
             |request| match request.get("operation").and_then(Value::as_str) {
-                Some("chat") => json!({
-                    "kind": "chat",
+                Some("send") => json!({
+                    "kind": "send",
                     "schema_version": "1",
                     "bundle_name": "relay",
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
@@ -679,9 +679,9 @@ async fn mcp_auto_discovers_association_from_non_git_cwd() {
     let payload = decode_tool_payload(&response);
     assert_eq!(payload["sender_session"], "relay");
 
-    let chat_requests = relay.requests_for_operation("chat");
-    assert_eq!(chat_requests.len(), 1);
-    assert_eq!(chat_requests[0]["sender_session"], "relay");
+    let send_requests = relay.requests_for_operation("send");
+    assert_eq!(send_requests.len(), 1);
+    assert_eq!(send_requests[0]["sender_session"], "relay");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -705,8 +705,8 @@ async fn mcp_falls_back_to_directory_match_when_auto_sender_is_not_member() {
         relay_socket,
         Arc::new(
             |request| match request.get("operation").and_then(Value::as_str) {
-                Some("chat") => json!({
-                    "kind": "chat",
+                Some("send") => json!({
+                    "kind": "send",
                     "schema_version": "1",
                     "bundle_name": "master",
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
@@ -752,9 +752,9 @@ async fn mcp_falls_back_to_directory_match_when_auto_sender_is_not_member() {
     let payload = decode_tool_payload(&response);
     assert_eq!(payload["sender_session"], "coordinator");
 
-    let chat_requests = relay.requests_for_operation("chat");
-    assert_eq!(chat_requests.len(), 1);
-    assert_eq!(chat_requests[0]["sender_session"], "coordinator");
+    let send_requests = relay.requests_for_operation("send");
+    assert_eq!(send_requests.len(), 1);
+    assert_eq!(send_requests[0]["sender_session"], "coordinator");
 }
 
 #[cfg(debug_assertions)]

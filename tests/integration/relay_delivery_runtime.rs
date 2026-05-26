@@ -7,7 +7,7 @@ use std::{
 };
 
 use agentmux::relay::{
-    ChatOutcome, ListedSessionTransport, RelayRequest, RelayResponse, RelayStreamSession,
+    ListedSessionTransport, RelayRequest, RelayResponse, RelayStreamSession, SendOutcome,
     request_relay,
 };
 use tempfile::TempDir;
@@ -85,11 +85,11 @@ async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
     );
     wait_for_relay_ready(&relay_socket).await;
 
-    let chat_response = request_relay(
+    let send_response = request_relay(
         &relay_socket,
         "party",
         "alpha",
-        &RelayRequest::Chat {
+        &RelayRequest::Send {
             request_id: Some("req-shutdown-drop".to_string()),
             sender_session: "alpha".to_string(),
             message: "queued async message".to_string(),
@@ -101,11 +101,11 @@ async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
         },
     )
     .expect("queue async request");
-    let RelayResponse::Chat { results, .. } = chat_response else {
-        panic!("expected chat response");
+    let RelayResponse::Send { results, .. } = send_response else {
+        panic!("expected send response");
     };
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].outcome, ChatOutcome::Queued);
+    assert_eq!(results[0].outcome, SendOutcome::Queued);
 
     let pid = child.id().expect("relay pid");
     let pid = i32::try_from(pid).expect("relay pid fits i32");
@@ -147,7 +147,7 @@ async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
     )
     .expect("read relay inscriptions");
     assert!(
-        inscriptions.contains("\"event\":\"relay.chat.async.completed\"")
+        inscriptions.contains("\"event\":\"relay.send.async.completed\"")
             && inscriptions.contains("\"outcome\":\"dropped_on_shutdown\""),
         "expected dropped_on_shutdown async terminal inscription, inscriptions={inscriptions:?}"
     );
@@ -502,7 +502,7 @@ async fn relay_delivery_sends_submit_in_separate_tmux_command() {
         &relay_socket,
         "party",
         "alpha",
-        &RelayRequest::Chat {
+        &RelayRequest::Send {
             request_id: Some("req-submit-separate-enter".to_string()),
             sender_session: "alpha".to_string(),
             message: "A".repeat(6_000),
@@ -513,12 +513,12 @@ async fn relay_delivery_sends_submit_in_separate_tmux_command() {
             acp_turn_timeout_ms: None,
         },
     )
-    .expect("chat request should succeed");
-    let RelayResponse::Chat { results, .. } = response else {
-        panic!("expected chat response");
+    .expect("send request should succeed");
+    let RelayResponse::Send { results, .. } = response else {
+        panic!("expected send response");
     };
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].outcome, ChatOutcome::Queued);
+    assert_eq!(results[0].outcome, SendOutcome::Queued);
 
     // Async delivery runs in a background worker; wait for the fake tmux log
     // to record the trailing Enter send-keys before reaping the relay so the
@@ -604,7 +604,7 @@ async fn relay_delivery_sends_submit_in_separate_tmux_command() {
     )
     .expect("read relay inscriptions");
     assert!(
-        inscriptions.contains("\"event\":\"relay.chat.envelope.metadata\"")
+        inscriptions.contains("\"event\":\"relay.send.envelope.metadata\"")
             && inscriptions.contains("\"schema_version\"")
             && inscriptions.contains("\"message_id\"")
             && inscriptions.contains("\"bundle_name\"")
@@ -645,7 +645,7 @@ async fn relay_async_delivery_does_not_inject_while_pane_in_mode() {
         &relay_socket,
         "party",
         "alpha",
-        &RelayRequest::Chat {
+        &RelayRequest::Send {
             request_id: Some("req-interaction-mode".to_string()),
             sender_session: "alpha".to_string(),
             message: "interaction marker".to_string(),
@@ -656,12 +656,12 @@ async fn relay_async_delivery_does_not_inject_while_pane_in_mode() {
             acp_turn_timeout_ms: None,
         },
     )
-    .expect("chat request should complete");
-    let RelayResponse::Chat { results, .. } = response else {
-        panic!("expected chat response");
+    .expect("send request should complete");
+    let RelayResponse::Send { results, .. } = response else {
+        panic!("expected send response");
     };
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].outcome, ChatOutcome::Queued);
+    assert_eq!(results[0].outcome, SendOutcome::Queued);
 
     sleep(Duration::from_millis(500)).await;
 

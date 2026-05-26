@@ -11,7 +11,7 @@ use crate::{
 
 use super::super::super::stream::resolve_registered_session_type;
 use super::super::super::{
-    AsyncDeliveryTask, ChatResult, DeliveryPayloadMode, RelayError, SCHEMA_VERSION,
+    AsyncDeliveryTask, DeliveryPayloadMode, RelayError, SCHEMA_VERSION, SendResult,
 };
 use super::super::ui_delivery::deliver_one_target_ui;
 
@@ -19,7 +19,7 @@ const PROMPT_TOKENS_MAX_ENVVAR: &str = "AGENTMUX_MAX_PROMPT_TOKENS";
 const TOKENIZER_PROFILE_ENVVAR: &str = "AGENTMUX_TOKENIZER_PROFILE";
 
 pub(super) enum PreparedDeliveryPayload {
-    Immediate(ChatResult),
+    Immediate(SendResult),
     Batched { prompt_batches: Vec<String> },
 }
 
@@ -33,7 +33,7 @@ pub(super) enum PreparedDeliveryPayload {
 /// single ACP prompt; those tasks are pushed back onto the worker's carry
 /// buffer for the next iteration.
 pub(super) enum PreparedBatchPayload {
-    Immediate(ChatResult),
+    Immediate(SendResult),
     Batched {
         prompt_batches: Vec<String>,
         accepted_len: usize,
@@ -139,7 +139,7 @@ pub(super) fn prepare_batch_delivery_payload(
 
 /// Renders one task's envelope without batching. Used by the batch preparer
 /// to build per-task envelopes that share a coalesced delivery, and emits the
-/// per-task `relay.chat.envelope.metadata` inscription so each task's
+/// per-task `relay.send.envelope.metadata` inscription so each task's
 /// envelope is independently traceable.
 fn render_task_envelope(
     task: &AsyncDeliveryTask,
@@ -179,7 +179,7 @@ fn render_task_envelope(
         created_at: created_at.to_string(),
     };
     emit_inscription(
-        "relay.chat.envelope.metadata",
+        "relay.send.envelope.metadata",
         &json!({
             "schema_version": manifest.schema_version,
             "message_id": manifest.message_id,
@@ -252,7 +252,7 @@ pub(super) fn prepare_delivery_payload(
                 created_at: created_at.to_string(),
             };
             emit_inscription(
-                "relay.chat.envelope.metadata",
+                "relay.send.envelope.metadata",
                 &json!({
                     "schema_version": manifest.schema_version,
                     "message_id": manifest.message_id,

@@ -7,7 +7,7 @@ async fn send_rejects_conflicting_targets_before_relay_request() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay should not receive chat request for invalid parameters")),
+        Arc::new(|_| panic!("relay should not receive send request for invalid parameters")),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -24,7 +24,7 @@ async fn send_rejects_conflicting_targets_before_relay_request() {
         error_code(&response),
         Some("validation_conflicting_targets")
     );
-    assert!(relay.requests_for_operation("chat").is_empty());
+    assert!(relay.requests_for_operation("send").is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -32,7 +32,7 @@ async fn send_rejects_empty_targets_before_relay_request() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay should not receive chat request for invalid parameters")),
+        Arc::new(|_| panic!("relay should not receive send request for invalid parameters")),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -43,7 +43,7 @@ async fn send_rejects_empty_targets_before_relay_request() {
     let response = harness.call_tool(2, "send", arguments).await;
 
     assert_eq!(error_code(&response), Some("validation_empty_targets"));
-    assert!(relay.requests_for_operation("chat").is_empty());
+    assert!(relay.requests_for_operation("send").is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -51,7 +51,7 @@ async fn send_rejects_empty_message_before_relay_request() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay should not receive chat request for invalid parameters")),
+        Arc::new(|_| panic!("relay should not receive send request for invalid parameters")),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -65,7 +65,7 @@ async fn send_rejects_empty_message_before_relay_request() {
     let response = harness.call_tool(2, "send", arguments).await;
 
     assert_eq!(error_code(&response), Some("validation_invalid_arguments"));
-    assert!(relay.requests_for_operation("chat").is_empty());
+    assert!(relay.requests_for_operation("send").is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -73,7 +73,7 @@ async fn send_rejects_invalid_quiescence_timeout_before_relay_request() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay should not receive chat request for invalid parameters")),
+        Arc::new(|_| panic!("relay should not receive send request for invalid parameters")),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -91,7 +91,7 @@ async fn send_rejects_invalid_quiescence_timeout_before_relay_request() {
         error_code(&response),
         Some("validation_invalid_quiescence_timeout")
     );
-    assert!(relay.requests_for_operation("chat").is_empty());
+    assert!(relay.requests_for_operation("send").is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -99,7 +99,7 @@ async fn send_rejects_invalid_acp_turn_timeout_before_relay_request() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay should not receive chat request for invalid parameters")),
+        Arc::new(|_| panic!("relay should not receive send request for invalid parameters")),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -117,7 +117,7 @@ async fn send_rejects_invalid_acp_turn_timeout_before_relay_request() {
         error_code(&response),
         Some("validation_invalid_acp_turn_timeout")
     );
-    assert!(relay.requests_for_operation("chat").is_empty());
+    assert!(relay.requests_for_operation("send").is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -125,7 +125,7 @@ async fn send_rejects_conflicting_timeout_fields_before_relay_request() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay should not receive chat request for invalid parameters")),
+        Arc::new(|_| panic!("relay should not receive send request for invalid parameters")),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -150,7 +150,7 @@ async fn send_rejects_conflicting_timeout_fields_before_relay_request() {
         error_code(&response),
         Some("validation_conflicting_timeout_fields")
     );
-    assert!(relay.requests_for_operation("chat").is_empty());
+    assert!(relay.requests_for_operation("send").is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -158,7 +158,7 @@ async fn send_rejects_unknown_fields_before_relay_request() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay should not receive chat request for invalid parameters")),
+        Arc::new(|_| panic!("relay should not receive send request for invalid parameters")),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -172,7 +172,7 @@ async fn send_rejects_unknown_fields_before_relay_request() {
     let response = harness.call_tool(2, "send", arguments).await;
 
     assert_unknown_field_error(&response, &["unexpected"]);
-    assert!(relay.requests_for_operation("chat").is_empty());
+    assert!(relay.requests_for_operation("send").is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -182,8 +182,8 @@ async fn send_forwards_quiescence_timeout_override() {
         runtime.relay_socket.clone(),
         Arc::new(
             |request| match request.get("operation").and_then(Value::as_str) {
-                Some("chat") => json!({
-                    "kind": "chat",
+                Some("send") => json!({
+                    "kind": "send",
                     "schema_version": "1",
                     "bundle_name": BUNDLE_NAME,
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
@@ -216,7 +216,7 @@ async fn send_forwards_quiescence_timeout_override() {
     let response = harness.call_tool(2, "send", arguments).await;
     decode_tool_payload(&response);
 
-    let relay_requests = relay.requests_for_operation("chat");
+    let relay_requests = relay.requests_for_operation("send");
     assert_eq!(relay_requests.len(), 1);
     assert_eq!(relay_requests[0]["quiescence_timeout_ms"], 1234);
 }
@@ -228,8 +228,8 @@ async fn send_forwards_acp_turn_timeout_override() {
         runtime.relay_socket.clone(),
         Arc::new(
             |request| match request.get("operation").and_then(Value::as_str) {
-                Some("chat") => json!({
-                    "kind": "chat",
+                Some("send") => json!({
+                    "kind": "send",
                     "schema_version": "1",
                     "bundle_name": BUNDLE_NAME,
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
@@ -259,7 +259,7 @@ async fn send_forwards_acp_turn_timeout_override() {
     let response = harness.call_tool(2, "send", arguments).await;
     decode_tool_payload(&response);
 
-    let relay_requests = relay.requests_for_operation("chat");
+    let relay_requests = relay.requests_for_operation("send");
     assert_eq!(relay_requests.len(), 1);
     assert_eq!(relay_requests[0]["acp_turn_timeout_ms"], 987);
 }
@@ -271,7 +271,7 @@ async fn send_maps_unknown_sender_error_from_relay() {
         runtime.relay_socket.clone(),
         Arc::new(
             |request| match request.get("operation").and_then(Value::as_str) {
-                Some("chat") => json!({
+                Some("send") => json!({
                     "kind": "error",
                     "error": {
                         "code": "validation_unknown_sender",
@@ -310,7 +310,7 @@ async fn send_maps_authorization_forbidden_error_from_relay() {
         runtime.relay_socket.clone(),
         Arc::new(
             |request| match request.get("operation").and_then(Value::as_str) {
-                Some("chat") => json!({
+                Some("send") => json!({
                     "kind": "error",
                     "error": {
                         "code": "authorization_forbidden",
@@ -359,7 +359,7 @@ async fn send_preserves_reserved_capability_label_from_relay_denial() {
         runtime.relay_socket.clone(),
         Arc::new(
             |request| match request.get("operation").and_then(Value::as_str) {
-                Some("chat") => json!({
+                Some("send") => json!({
                     "kind": "error",
                     "error": {
                         "code": "authorization_forbidden",

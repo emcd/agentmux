@@ -17,7 +17,7 @@ use crate::configuration::TargetConfiguration;
 use crate::runtime::{inscriptions::emit_inscription, signals::shutdown_requested};
 
 use super::super::stream::{RelayStreamEvent, send_event_to_registered_ui};
-use super::super::{AsyncDeliveryTask, ChatOutcome, ChatResult, RelayError};
+use super::super::{AsyncDeliveryTask, RelayError, SendOutcome, SendResult};
 
 use std::path::{Path, PathBuf};
 
@@ -336,10 +336,10 @@ pub(super) fn drop_pending_async_tasks_on_shutdown(
 pub(super) fn complete_task_on_shutdown(task: &AsyncDeliveryTask) {
     complete_task_outcome(
         task,
-        Ok(ChatResult {
+        Ok(SendResult {
             target_session: task.target_session.clone(),
             message_id: task.message_id.clone(),
-            outcome: ChatOutcome::DroppedOnShutdown,
+            outcome: SendOutcome::DroppedOnShutdown,
             reason_code: Some(DROPPED_ON_SHUTDOWN_REASON_CODE.to_string()),
             reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
             details: None,
@@ -349,7 +349,7 @@ pub(super) fn complete_task_on_shutdown(task: &AsyncDeliveryTask) {
 
 pub(super) fn complete_task_outcome(
     task: &AsyncDeliveryTask,
-    outcome: Result<ChatResult, RelayError>,
+    outcome: Result<SendResult, RelayError>,
 ) {
     if let Some(sender) = task.completion_sender.as_ref() {
         let _ = sender.send(outcome);
@@ -366,7 +366,7 @@ pub(super) fn complete_task_outcome(
                 result.reason.as_deref(),
             );
             emit_inscription(
-                "relay.chat.async.completed",
+                "relay.send.async.completed",
                 &json!({
                     "bundle_name": task.bundle.bundle_name,
                     "sender_session": task.sender.id,
@@ -384,18 +384,18 @@ pub(super) fn complete_task_outcome(
                 task,
                 task.target_session.as_str(),
                 task.message_id.as_str(),
-                ChatOutcome::Failed,
+                SendOutcome::Failed,
                 Some(error.code.as_str()),
                 Some(error.message.as_str()),
             );
             emit_inscription(
-                "relay.chat.async.completed",
+                "relay.send.async.completed",
                 &json!({
                     "bundle_name": task.bundle.bundle_name,
                     "sender_session": task.sender.id,
                     "target_session": task.target_session,
                     "message_id": task.message_id,
-                    "outcome": ChatOutcome::Failed,
+                    "outcome": SendOutcome::Failed,
                     "reason": error.message,
                     "error_code": error.code,
                 }),
@@ -408,16 +408,16 @@ fn emit_sender_delivery_outcome_event(
     task: &AsyncDeliveryTask,
     target_session: &str,
     message_id: &str,
-    terminal_outcome: ChatOutcome,
+    terminal_outcome: SendOutcome,
     reason_code: Option<&str>,
     reason: Option<&str>,
 ) {
     let (phase, outcome) = match terminal_outcome {
-        ChatOutcome::Delivered => ("delivered", Some("success")),
-        ChatOutcome::Timeout => ("failed", Some("timeout")),
-        ChatOutcome::DroppedOnShutdown => ("failed", Some("failed")),
-        ChatOutcome::Failed => ("failed", Some("failed")),
-        ChatOutcome::Queued => ("routed", None),
+        SendOutcome::Delivered => ("delivered", Some("success")),
+        SendOutcome::Timeout => ("failed", Some("timeout")),
+        SendOutcome::DroppedOnShutdown => ("failed", Some("failed")),
+        SendOutcome::Failed => ("failed", Some("failed")),
+        SendOutcome::Queued => ("routed", None),
     };
     let mut payload = serde_json::Map::new();
     payload.insert(

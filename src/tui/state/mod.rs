@@ -295,7 +295,7 @@ mod tests {
     use serde_json::json;
 
     use crate::{
-        relay::{ChatOutcome, ChatResult, RelayStreamEvent},
+        relay::{RelayStreamEvent, SendOutcome, SendResult},
         runtime::error::RuntimeError,
     };
 
@@ -387,10 +387,10 @@ mod tests {
     #[test]
     fn terminal_delivery_outcome_removes_pending_message() {
         let mut state = make_state();
-        state.record_chat_events(&[ChatResult {
+        state.record_chat_events(&[SendResult {
             target_session: "user".to_string(),
             message_id: "msg-1".to_string(),
-            outcome: ChatOutcome::Queued,
+            outcome: SendOutcome::Queued,
             reason_code: None,
             reason: None,
             details: None,
@@ -427,10 +427,10 @@ mod tests {
         }]);
         assert_eq!(state.pending_deliveries_count(), 0);
 
-        state.record_chat_events(&[ChatResult {
+        state.record_chat_events(&[SendResult {
             target_session: "user".to_string(),
             message_id: "msg-1".to_string(),
-            outcome: ChatOutcome::Queued,
+            outcome: SendOutcome::Queued,
             reason_code: None,
             reason: None,
             details: None,
