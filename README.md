@@ -140,7 +140,7 @@ Delivery behavior:
 Typical topology:
 
 - one shared bundle id (for example `agentmux`),
-- one relay host process serving all configured bundle sockets,
+- one relay host process serving all configured bundles through a single socket,
 - one MCP host per worktree/session identity (`master`, `relay`, `mcp`, `tui`).
 
 Association resolution:
@@ -171,6 +171,11 @@ Bundle configuration file path:
 
 - `<config-root>/bundles/<bundle-name>.toml`
 
+Global user and authorization configuration:
+
+- `<config-root>/users.toml`: maps session identities to policy presets
+- `<config-root>/policies.toml`: defines policy presets with per-control scopes
+
 Global TUI session configuration:
 
 - normal config file: `<config-root>/tui.toml`
@@ -184,6 +189,7 @@ Starter files are generated when missing:
 - `<config-root>/coders.toml`
 - `<config-root>/bundles/example.toml`
 - `<config-root>/policies.toml`
+- `<config-root>/users.toml`
 - `<config-root>/tui.toml`
 
 ### Example `coders.toml`

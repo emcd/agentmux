@@ -111,7 +111,6 @@ Important files:
 
 Inscriptions:
 
-- relay log:
-  `<inscriptions-root>/bundles/<bundle-name>/relay.log`
+- relay log: `<inscriptions-root>/relay.log`
 - MCP log:
   `<inscriptions-root>/bundles/<bundle-name>/sessions/<session-name>/mcp.log`
