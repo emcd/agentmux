@@ -11,7 +11,7 @@ use std::{
 
 use agentmux::envelope::ENVELOPE_SCHEMA_VERSION;
 use agentmux::relay::RelayResponse;
-use agentmux::runtime::paths::BundleRuntimePaths;
+use agentmux::runtime::paths::{BundleRuntimePaths, RelayRuntimePaths};
 use serde_json::{Value, json};
 
 pub(super) fn write_bundle_configuration(
@@ -367,8 +367,10 @@ esac
 }
 
 pub(super) fn shutdown_relay_if_present(state_root: &Path, bundle_name: &str) {
-    let paths = BundleRuntimePaths::resolve(state_root, bundle_name).expect("bundle paths");
-    let Some(pid) = fs::read_to_string(&paths.relay_lock_file)
+    let bundle_paths = BundleRuntimePaths::resolve(state_root, bundle_name).expect("bundle paths");
+    let relay_paths = RelayRuntimePaths::resolve(state_root);
+    let _ = bundle_paths;
+    let Some(pid) = fs::read_to_string(&relay_paths.relay_lock_file)
         .ok()
         .and_then(|value| value.lines().next().map(str::to_string))
         .and_then(|value| value.trim().parse::<i32>().ok())
@@ -378,7 +380,7 @@ pub(super) fn shutdown_relay_if_present(state_root: &Path, bundle_name: &str) {
     let _ = unsafe { libc::kill(pid, libc::SIGTERM) };
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
-        if !paths.relay_socket.exists() {
+        if !relay_paths.relay_socket.exists() {
             return;
         }
         thread::sleep(Duration::from_millis(20));
@@ -386,38 +388,129 @@ pub(super) fn shutdown_relay_if_present(state_root: &Path, bundle_name: &str) {
 }
 
 pub(super) fn wait_for_relay_ready(state_root: &Path, bundle_name: &str) {
-    let paths = BundleRuntimePaths::resolve(state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(state_root, bundle_name).expect("bundle paths");
+    let relay_paths = RelayRuntimePaths::resolve(state_root);
     let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
         // The sentinel is published only after signal handlers are installed
-        // and accept loops are spawned. Pairing it with socket existence
+        // and the accept loop is spawned. Pairing it with socket existence
         // closes the early-startup race (issues/relay/20).
-        if paths.relay_ready_sentinel.exists() && paths.relay_socket.exists() {
+        if relay_paths.relay_ready_sentinel.exists() && relay_paths.relay_socket.exists() {
             return;
         }
         thread::sleep(Duration::from_millis(20));
     }
     let startup_failures =
-        fs::read_to_string(paths.runtime_directory.join("startup_failures.json")).ok();
-    let relay_lock = fs::read_to_string(&paths.relay_lock_file).ok();
-    let known_bundle_sockets = fs::read_dir(state_root.join("bundles"))
-        .ok()
-        .into_iter()
-        .flat_map(|entries| entries.filter_map(Result::ok))
-        .filter_map(|entry| {
-            let bundle_name = entry.file_name().to_string_lossy().to_string();
-            let socket = entry.path().join("relay.sock");
-            if socket.exists() {
-                Some(format!("{bundle_name}:{}", socket.display()))
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
+        fs::read_to_string(bundle_paths.runtime_directory.join("startup_failures.json")).ok();
+    let relay_lock = fs::read_to_string(&relay_paths.relay_lock_file).ok();
     panic!(
-        "timed out waiting for relay socket {}; startup_failures={startup_failures:?}; relay_lock={relay_lock:?}; known_bundle_sockets={known_bundle_sockets:?}",
-        paths.relay_socket.display(),
+        "timed out waiting for relay socket {}; startup_failures={startup_failures:?}; relay_lock={relay_lock:?}",
+        relay_paths.relay_socket.display(),
     );
+}
+
+/// Multibundle fake-relay fixture. Accepts up to `expected_calls` sequential
+/// connections on `socket_path`, dispatching each response by the Hello
+/// frame's `bundle_name`. Records every request envelope into the
+/// per-bundle log if present in `request_logs`.
+pub(super) fn spawn_fake_relay_for_bundles(
+    socket_path: &Path,
+    expected_calls: usize,
+    responses: std::collections::HashMap<String, RelayResponse>,
+    request_logs: std::collections::HashMap<String, Arc<Mutex<Vec<Value>>>>,
+) -> thread::JoinHandle<()> {
+    if socket_path.exists() {
+        fs::remove_file(socket_path).expect("remove stale relay socket");
+    }
+    let parent = socket_path.parent().expect("relay socket parent");
+    fs::create_dir_all(parent).expect("create relay socket parent");
+    let listener = UnixListener::bind(socket_path).expect("bind fake relay socket");
+    listener
+        .set_nonblocking(true)
+        .expect("set fake relay listener nonblocking");
+    let socket_path = socket_path.to_path_buf();
+    thread::spawn(move || {
+        let mut served = 0usize;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while served < expected_calls && Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _address)) => {
+                    stream
+                        .set_nonblocking(false)
+                        .expect("set accepted stream blocking");
+                    let mut reader =
+                        BufReader::new(stream.try_clone().expect("clone fake relay stream"));
+
+                    let mut hello_line = String::new();
+                    reader
+                        .read_line(&mut hello_line)
+                        .expect("read fake relay hello");
+                    let hello: Value = serde_json::from_str(hello_line.trim_end())
+                        .expect("decode fake relay hello");
+                    assert_eq!(hello.get("frame").and_then(Value::as_str), Some("hello"));
+                    let bundle_name = hello
+                        .get("bundle_name")
+                        .and_then(Value::as_str)
+                        .expect("hello bundle_name")
+                        .to_string();
+                    let hello_ack = json!({
+                        "frame": "hello_ack",
+                        "schema_version": ENVELOPE_SCHEMA_VERSION,
+                        "bundle_name": hello.get("bundle_name").cloned().unwrap_or(Value::Null),
+                        "session_id": hello.get("session_id").cloned().unwrap_or(Value::Null),
+                    });
+                    let encoded_ack =
+                        serde_json::to_string(&hello_ack).expect("encode fake relay hello_ack");
+                    stream
+                        .write_all(encoded_ack.as_bytes())
+                        .expect("write fake relay hello_ack");
+                    stream.write_all(b"\n").expect("write fake relay newline");
+                    stream.flush().expect("flush fake relay hello_ack");
+
+                    let mut request_line = String::new();
+                    reader
+                        .read_line(&mut request_line)
+                        .expect("read fake relay request");
+                    let envelope: Value = serde_json::from_str(request_line.trim_end())
+                        .expect("decode fake relay request envelope");
+                    let request = envelope
+                        .get("request")
+                        .cloned()
+                        .expect("fake relay request envelope missing 'request' field");
+                    if let Some(log) = request_logs.get(&bundle_name) {
+                        log.lock().expect("request log lock").push(request);
+                    }
+
+                    let response = responses
+                        .get(&bundle_name)
+                        .expect("fake relay missing response for bundle")
+                        .clone();
+                    let response_frame = json!({
+                        "frame": "response",
+                        "request_id": envelope.get("request_id").cloned().unwrap_or(Value::Null),
+                        "response": response,
+                    });
+                    let encoded =
+                        serde_json::to_string(&response_frame).expect("encode fake relay response");
+                    stream
+                        .write_all(encoded.as_bytes())
+                        .expect("write fake relay response");
+                    stream.write_all(b"\n").expect("write fake relay newline");
+                    stream.flush().expect("flush fake relay response");
+                    served += 1;
+                }
+                Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(source) => panic!("accept fake relay connection: {source}"),
+            }
+        }
+        let _ = fs::remove_file(socket_path);
+        assert_eq!(
+            served, expected_calls,
+            "fake relay did not serve all expected calls"
+        );
+    })
 }
 
 pub(super) fn spawn_fake_relay_once(

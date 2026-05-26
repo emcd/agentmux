@@ -1,4 +1,4 @@
-use std::{io, path::Path, time::Duration};
+use std::{collections::HashMap, io, path::Path, sync::Arc, time::Duration};
 
 use serde_json::{Value, json};
 use tokio::{
@@ -24,6 +24,11 @@ use super::{
     dispatch_request, handlers, map_config, map_tui_config, relay_error,
 };
 
+/// Map from configured bundle name to its resolved runtime paths. Shared
+/// across all connection workers so each accepted connection can look up
+/// its bundle from the Hello frame.
+pub type BundleCatalog = Arc<HashMap<String, BundleRuntimePaths>>;
+
 /// Serves one relay socket connection on the async runtime.
 ///
 /// The stream is split into independent halves: a per-connection writer task
@@ -35,7 +40,7 @@ use super::{
 pub async fn serve_connection(
     stream: UnixStream,
     configuration_root: &Path,
-    bundle_paths: &BundleRuntimePaths,
+    bundle_catalog: &BundleCatalog,
     pre_hello_idle_timeout: Duration,
 ) -> Result<(), io::Error> {
     let (read_half, write_half) = stream.into_split();
@@ -47,7 +52,7 @@ pub async fn serve_connection(
         &writer,
         &mut guard,
         configuration_root,
-        bundle_paths,
+        bundle_catalog,
         pre_hello_idle_timeout,
     )
     .await;
@@ -95,9 +100,10 @@ async fn serve_connection_frames(
     writer: &SharedStreamWriter,
     guard: &mut RegistrationGuard,
     configuration_root: &Path,
-    bundle_paths: &BundleRuntimePaths,
+    bundle_catalog: &BundleCatalog,
     pre_hello_idle_timeout: Duration,
 ) -> Result<(), io::Error> {
+    let mut bound_bundle: Option<BundleRuntimePaths> = None;
     let mut line = String::new();
     loop {
         line.clear();
@@ -142,7 +148,26 @@ async fn serve_connection_frames(
 
         match frame {
             IncomingFrame::Hello(hello) => {
-                let response = handle_hello_frame(configuration_root, bundle_paths, &hello);
+                let bundle_paths = match bundle_catalog.get(hello.bundle_name.as_str()) {
+                    Some(paths) => paths.clone(),
+                    None => {
+                        let error = relay_error(
+                            "validation_unknown_bundle",
+                            "hello bundle_name is not configured on this relay",
+                            Some(json!({"bundle_name": hello.bundle_name})),
+                        );
+                        write_stream_frame_to_writer(
+                            writer,
+                            OutgoingFrame::Response {
+                                request_id: None,
+                                response: &RelayResponse::Error { error },
+                            },
+                        )?;
+                        break;
+                    }
+                };
+                let response =
+                    resolve_hello_session_type(configuration_root, &bundle_paths, &hello);
                 match response {
                     Ok(session_type) => {
                         match register_stream(&hello, session_type, writer.clone())? {
@@ -190,6 +215,7 @@ async fn serve_connection_frames(
                             )?;
                             break;
                         }
+                        bound_bundle = Some(bundle_paths);
                     }
                     Err(error) => {
                         write_stream_frame_to_writer(
@@ -240,6 +266,9 @@ async fn serve_connection_frames(
                     )?;
                     break;
                 }
+                let bundle_paths = bound_bundle
+                    .as_ref()
+                    .expect("bound_bundle set on successful Hello");
                 let session_id = active_registration.session_id.clone();
                 let response = dispatch_request(
                     request,
@@ -321,12 +350,13 @@ fn identity_claim_conflict_error(
     )
 }
 
-/// Validates a hello frame and resolves the session's configured session type.
+/// Validates a hello frame against the bundle resolved from the catalog and
+/// returns the session's configured session type.
 ///
-/// Identity lookup proceeds in order: bundle members for the associated
-/// bundle, then global users in `users.toml` when `session_id` carries the
-/// `@GLOBAL` suffix.
-fn handle_hello_frame(
+/// Identity lookup proceeds in order: global users in `users.toml` when
+/// `session_id` carries the `@GLOBAL` suffix, then bundle members for the
+/// resolved bundle.
+fn resolve_hello_session_type(
     configuration_root: &Path,
     bundle_paths: &BundleRuntimePaths,
     hello: &HelloFrame,
@@ -338,16 +368,6 @@ fn handle_hello_frame(
             Some(json!({
                 "schema_version": hello.schema_version,
                 "supported_schema_version": SCHEMA_VERSION,
-            })),
-        ));
-    }
-    if hello.bundle_name != bundle_paths.bundle_name {
-        return Err(relay_error(
-            "validation_cross_bundle_unsupported",
-            "hello bundle_name does not match associated bundle",
-            Some(json!({
-                "associated_bundle_name": bundle_paths.bundle_name,
-                "hello_bundle_name": hello.bundle_name,
             })),
         ));
     }

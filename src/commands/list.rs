@@ -11,8 +11,11 @@ use crate::{
         load_startup_failures, request_relay,
     },
     runtime::{
-        association::WorkspaceContext, error::RuntimeError, paths::BundleRuntimePaths,
-        starter::ensure_starter_configuration_layout, tui_session::resolve_tui_session_identity,
+        association::WorkspaceContext,
+        error::RuntimeError,
+        paths::{BundleRuntimePaths, RelayRuntimePaths},
+        starter::ensure_starter_configuration_layout,
+        tui_session::resolve_tui_session_identity,
     },
 };
 
@@ -175,9 +178,10 @@ fn request_listed_bundle(
 ) -> Result<ListedBundleResult, RuntimeError> {
     let bundle = load_bundle_configuration(&roots.configuration_root, bundle_name)
         .map_err(shared::map_bundle_load_error)?;
-    let paths = BundleRuntimePaths::resolve(&roots.state_root, bundle_name)?;
+    let bundle_paths = BundleRuntimePaths::resolve(&roots.state_root, bundle_name)?;
+    let relay_paths = RelayRuntimePaths::resolve(&roots.state_root);
     let response = request_relay(
-        &paths.relay_socket,
+        &relay_paths.relay_socket,
         bundle_name,
         sender_session,
         &RelayRequest::List {
@@ -187,11 +191,11 @@ fn request_listed_bundle(
     let response = match response {
         Ok(response) => response,
         Err(source) => {
-            let error = shared::map_relay_request_failure(&paths.relay_socket, source);
+            let error = shared::map_relay_request_failure(&relay_paths.relay_socket, source);
             if can_use_home_fallback(&error, bundle_name, home_bundle_name) {
                 return Ok(ListedBundleResult {
                     schema_version: "1".to_string(),
-                    bundle: synthesize_unreachable_bundle(&bundle, &paths),
+                    bundle: synthesize_unreachable_bundle(&bundle, &relay_paths, &bundle_paths),
                 });
             }
             return Err(error);
@@ -229,14 +233,15 @@ fn can_use_home_fallback(
 
 fn synthesize_unreachable_bundle(
     bundle: &BundleConfiguration,
-    paths: &BundleRuntimePaths,
+    relay_paths: &RelayRuntimePaths,
+    bundle_paths: &BundleRuntimePaths,
 ) -> ListedBundle {
-    let (state_reason_code, state_reason) = if paths.relay_socket.exists() {
+    let (state_reason_code, state_reason) = if relay_paths.relay_socket.exists() {
         (
             Some("relay_unavailable".to_string()),
             Some(format!(
                 "relay socket exists but list request failed at {}",
-                paths.relay_socket.display()
+                relay_paths.relay_socket.display()
             )),
         )
     } else {
@@ -244,12 +249,12 @@ fn synthesize_unreachable_bundle(
             Some("not_started".to_string()),
             Some(format!(
                 "relay socket is absent at {}",
-                paths.relay_socket.display()
+                relay_paths.relay_socket.display()
             )),
         )
     };
     let (startup_failure_count, recent_startup_failures) =
-        match load_startup_failures(&paths.runtime_directory) {
+        match load_startup_failures(&bundle_paths.runtime_directory) {
             Ok(records) => (records.len(), records),
             Err(_) => (0, Vec::new()),
         };

@@ -6,7 +6,9 @@ use std::{
 
 use agentmux::acp::AcpSnapshotEntry;
 use agentmux::relay::{LookSnapshotPayload, RelayError, RelayResponse};
-use agentmux::runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory};
+use agentmux::runtime::paths::{
+    BundleRuntimePaths, RelayRuntimePaths, ensure_bundle_runtime_directory,
+};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -35,7 +37,7 @@ fn look_returns_canonical_json_payload() {
     fs::create_dir_all(&workspace_root).expect("create workspace");
     let request_log = Arc::new(Mutex::new(Vec::<Value>::new()));
     let relay_thread = spawn_fake_relay_once(
-        &bundle_paths.relay_socket,
+        &RelayRuntimePaths::resolve(&state_root).relay_socket,
         RelayResponse::Look {
             schema_version: "1".to_string(),
             bundle_name: "agentmux".to_string(),
@@ -111,7 +113,7 @@ fn look_preserves_additive_acp_freshness_fields_in_machine_output() {
     let workspace_root = temporary.path().join("workspace");
     fs::create_dir_all(&workspace_root).expect("create workspace");
     let relay_thread = spawn_fake_relay_once(
-        &bundle_paths.relay_socket,
+        &RelayRuntimePaths::resolve(&state_root).relay_socket,
         RelayResponse::Look {
             schema_version: "1".to_string(),
             bundle_name: "agentmux".to_string(),
@@ -197,7 +199,7 @@ fn look_preserves_structured_acp_entries_in_machine_output() {
         },
     ];
     let relay_thread = spawn_fake_relay_once(
-        &bundle_paths.relay_socket,
+        &RelayRuntimePaths::resolve(&state_root).relay_socket,
         RelayResponse::Look {
             schema_version: "1".to_string(),
             bundle_name: "agentmux".to_string(),
@@ -307,7 +309,7 @@ fn look_surfaces_authorization_forbidden_from_relay() {
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux").expect("bundle paths");
     ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
     let relay_thread = spawn_fake_relay_once(
-        &bundle_paths.relay_socket,
+        &RelayRuntimePaths::resolve(&state_root).relay_socket,
         RelayResponse::Error {
             error: RelayError {
                 code: "authorization_forbidden".to_string(),
@@ -370,7 +372,7 @@ fn look_surfaces_unsupported_transport_from_relay() {
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux").expect("bundle paths");
     ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
     let relay_thread = spawn_fake_relay_once(
-        &bundle_paths.relay_socket,
+        &RelayRuntimePaths::resolve(&state_root).relay_socket,
         RelayResponse::Error {
             error: RelayError {
                 code: "validation_unsupported_transport".to_string(),

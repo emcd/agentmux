@@ -1,13 +1,17 @@
 use std::{
+    collections::HashMap,
     io::{BufRead, BufReader, ErrorKind, Write},
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
+    sync::Arc,
     thread,
     time::{Duration, Instant},
 };
 
 use agentmux::{
-    relay::{ChatOutcome, RelayRequest, RelayResponse, handle_request, serve_connection},
+    relay::{
+        BundleCatalog, ChatOutcome, RelayRequest, RelayResponse, handle_request, serve_connection,
+    },
     runtime::paths::BundleRuntimePaths,
 };
 use serde_json::{Value, json};
@@ -100,9 +104,11 @@ fn spawn_relay_stream(
 ) -> (UnixStream, thread::JoinHandle<()>) {
     let (server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
     let root = configuration_root.to_path_buf();
-    let paths = bundle_paths.clone();
+    let mut map = HashMap::new();
+    map.insert(bundle_paths.bundle_name.clone(), bundle_paths.clone());
+    let catalog: BundleCatalog = Arc::new(map);
     let handle = thread::spawn(move || {
-        run_serve_connection(server_stream, root, paths).expect("serve connection");
+        run_serve_connection(server_stream, root, catalog).expect("serve connection");
     });
     (client_stream, handle)
 }
@@ -112,7 +118,7 @@ fn spawn_relay_stream(
 fn run_serve_connection(
     server_stream: UnixStream,
     configuration_root: PathBuf,
-    bundle_paths: BundleRuntimePaths,
+    bundle_catalog: BundleCatalog,
 ) -> Result<(), std::io::Error> {
     server_stream
         .set_nonblocking(true)
@@ -126,7 +132,7 @@ fn run_serve_connection(
         serve_connection(
             stream,
             &configuration_root,
-            &bundle_paths,
+            &bundle_catalog,
             Duration::from_secs(2),
         )
         .await

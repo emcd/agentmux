@@ -6,7 +6,7 @@ use crate::{
     configuration::load_bundle_configuration,
     relay::{ListedSessionTransport, RelayRequest, RelayResponse, request_relay},
     runtime::{
-        association::WorkspaceContext, error::RuntimeError, paths::BundleRuntimePaths,
+        association::WorkspaceContext, error::RuntimeError, paths::RelayRuntimePaths,
         starter::ensure_starter_configuration_layout, tui_session::resolve_tui_session_identity,
     },
 };
@@ -36,9 +36,9 @@ pub(super) fn run_agentmux_raww(arguments: &[String]) -> Result<(), RuntimeError
     )?;
     load_bundle_configuration(&roots.configuration_root, &resolved_session.bundle_name)
         .map_err(shared::map_bundle_load_error)?;
-    let paths = BundleRuntimePaths::resolve(&roots.state_root, &resolved_session.bundle_name)?;
+    let relay_paths = RelayRuntimePaths::resolve(&roots.state_root);
     let response = request_relay(
-        &paths.relay_socket,
+        &relay_paths.relay_socket,
         &resolved_session.bundle_name,
         &resolved_session.session_id,
         &RelayRequest::Raww {
@@ -50,7 +50,7 @@ pub(super) fn run_agentmux_raww(arguments: &[String]) -> Result<(), RuntimeError
             bundle_name: Some(resolved_session.bundle_name.clone()),
         },
     )
-    .map_err(|source| shared::map_relay_request_failure(&paths.relay_socket, source))?;
+    .map_err(|source| shared::map_relay_request_failure(&relay_paths.relay_socket, source))?;
     let payload = match response {
         RelayResponse::Raww {
             schema_version,

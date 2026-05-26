@@ -696,6 +696,14 @@ Each client stream SHALL begin with a `hello` registration frame containing:
 `hello` SHALL carry identity only. No transport class, mode, or privilege field
 is accepted; relay SHALL reject unrecognized fields.
 
+The relay process hosts a single Unix socket at `<state_root>/relay.sock` and
+serves all configured bundles through that socket. The `bundle_name` field in
+`hello` SHALL serve as the bundle routing key: the relay SHALL look the value
+up in the bundle catalog supplied at host startup and bind the connection to
+that bundle's runtime for the lifetime of the stream. If `bundle_name` is not
+configured on the running relay, relay SHALL reject with
+`validation_unknown_bundle` and close the connection.
+
 The relay SHALL hydrate canonical identity as `{session_id}@{bundle_name}` at
 registration. All subsequent internal state and wire output SHALL use the
 canonical form.
@@ -731,17 +739,23 @@ current owner is live, relay SHALL reject the second claim with
   members or (for `@GLOBAL` suffix) in `users.toml`
 - **THEN** relay rejects with `validation_unknown_sender`
 
+#### Scenario: Reject hello for unknown bundle
+
+- **WHEN** a client sends `hello` with a `bundle_name` that is not configured
+  on the running relay
+- **THEN** relay rejects with `validation_unknown_bundle`
+- **AND** closes the connection without registering a stream
+
 ### Requirement: Same-Bundle Stream Scope Enforcement
 
-Persistent stream routing in MVP SHALL remain same-bundle only.
-
-Relay SHALL reject cross-bundle stream/request attempts with
+Once a stream is bound to a bundle via `hello`, the relay SHALL reject any
+request frame on that stream whose target falls outside the bound bundle with
 `validation_cross_bundle_unsupported`.
 
 #### Scenario: Reject cross-bundle request frame
 
-- **WHEN** a registered stream submits request frame scoped to bundle that does
-  not match stream identity bundle
+- **WHEN** a registered stream submits request frame scoped to a bundle that
+  does not match the bundle bound by the stream's `hello`
 - **THEN** relay rejects with `validation_cross_bundle_unsupported`
 
 ### Requirement: Static Recipient Routability

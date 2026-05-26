@@ -30,10 +30,7 @@ async fn relay_startup_retries_transient_tmux_create_failures() {
     let inscriptions_root = temporary.path().join("inscriptions");
     write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
 
-    let relay_socket = state_root
-        .join("bundles")
-        .join(bundle_name)
-        .join("relay.sock");
+    let relay_socket = state_root.join("relay.sock");
 
     let started = Instant::now();
     let mut child = spawn_relay_with_fake_tmux(
@@ -78,10 +75,7 @@ async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
     let inscriptions_root = temporary.path().join("inscriptions");
     write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
 
-    let relay_socket = state_root
-        .join("bundles")
-        .join(bundle_name)
-        .join("relay.sock");
+    let relay_socket = state_root.join("relay.sock");
     let mut child = spawn_relay_with_fake_tmux(
         bundle_name,
         &config_root,
@@ -171,10 +165,7 @@ async fn relay_sigint_ignores_server_exited_unexpectedly_during_shutdown_cleanup
     let inscriptions_root = temporary.path().join("inscriptions");
     write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
 
-    let relay_socket = state_root
-        .join("bundles")
-        .join(bundle_name)
-        .join("relay.sock");
+    let relay_socket = state_root.join("relay.sock");
     let mut child = spawn_relay_with_fake_tmux_and_env(
         bundle_name,
         &config_root,
@@ -233,10 +224,7 @@ async fn relay_sigint_exits_with_active_stream_connection() {
     let inscriptions_root = temporary.path().join("inscriptions");
     write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
 
-    let relay_socket = state_root
-        .join("bundles")
-        .join(bundle_name)
-        .join("relay.sock");
+    let relay_socket = state_root.join("relay.sock");
     let mut child = spawn_relay_with_fake_tmux(
         bundle_name,
         &config_root,
@@ -298,10 +286,7 @@ async fn relay_accepts_new_connections_while_registered_stream_stays_open() {
     let inscriptions_root = temporary.path().join("inscriptions");
     write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
 
-    let relay_socket = state_root
-        .join("bundles")
-        .join(bundle_name)
-        .join("relay.sock");
+    let relay_socket = state_root.join("relay.sock");
     let mut child = spawn_relay_with_fake_tmux(
         bundle_name,
         &config_root,
@@ -364,10 +349,7 @@ async fn relay_rejects_connections_when_worker_queue_is_full() {
     let inscriptions_root = temporary.path().join("inscriptions");
     write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
 
-    let relay_socket = state_root
-        .join("bundles")
-        .join(bundle_name)
-        .join("relay.sock");
+    let relay_socket = state_root.join("relay.sock");
     let mut child = spawn_relay_with_fake_tmux_and_env(
         bundle_name,
         &config_root,
@@ -447,10 +429,7 @@ async fn relay_reaps_pre_hello_idle_connections_and_recovers_worker_capacity() {
     let inscriptions_root = temporary.path().join("inscriptions");
     write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
 
-    let relay_socket = state_root
-        .join("bundles")
-        .join(bundle_name)
-        .join("relay.sock");
+    let relay_socket = state_root.join("relay.sock");
     let mut child = spawn_relay_with_fake_tmux_and_env(
         bundle_name,
         &config_root,
@@ -508,10 +487,7 @@ async fn relay_delivery_sends_submit_in_separate_tmux_command() {
     let inscriptions_root = temporary.path().join("inscriptions");
     write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
 
-    let relay_socket = state_root
-        .join("bundles")
-        .join(bundle_name)
-        .join("relay.sock");
+    let relay_socket = state_root.join("relay.sock");
     let mut child = spawn_relay_with_fake_tmux_and_env(
         bundle_name,
         &config_root,
@@ -651,10 +627,7 @@ async fn relay_async_delivery_does_not_inject_while_pane_in_mode() {
     let inscriptions_root = temporary.path().join("inscriptions");
     write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
 
-    let relay_socket = state_root
-        .join("bundles")
-        .join(bundle_name)
-        .join("relay.sock");
+    let relay_socket = state_root.join("relay.sock");
     let mut child = spawn_relay_with_fake_tmux_and_env(
         bundle_name,
         &config_root,
@@ -714,10 +687,7 @@ async fn relay_raww_tmux_default_appends_enter_and_reports_dispatched_phase() {
     let inscriptions_root = temporary.path().join("inscriptions");
     write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
 
-    let relay_socket = state_root
-        .join("bundles")
-        .join(bundle_name)
-        .join("relay.sock");
+    let relay_socket = state_root.join("relay.sock");
     let mut child = spawn_relay_with_fake_tmux(
         bundle_name,
         &config_root,
@@ -798,10 +768,7 @@ async fn relay_raww_tmux_no_enter_omits_enter_command() {
     let inscriptions_root = temporary.path().join("inscriptions");
     write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
 
-    let relay_socket = state_root
-        .join("bundles")
-        .join(bundle_name)
-        .join("relay.sock");
+    let relay_socket = state_root.join("relay.sock");
     let mut child = spawn_relay_with_fake_tmux(
         bundle_name,
         &config_root,

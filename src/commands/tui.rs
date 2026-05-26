@@ -10,8 +10,7 @@ use crate::{
         association::WorkspaceContext,
         bootstrap::{BootstrapOptions, bootstrap_relay, resolve_relay_program},
         error::RuntimeError,
-        paths::BundleRuntimePaths,
-        paths::RuntimeRoots,
+        paths::{RelayRuntimePaths, RuntimeRoots},
         starter::ensure_starter_configuration_layout,
         tui_session::resolve_tui_session_identity,
     },
@@ -42,12 +41,12 @@ pub(super) fn run_agentmux_tui(arguments: &[String]) -> Result<(), RuntimeError>
     )?;
     load_bundle_configuration(&roots.configuration_root, &resolved_session.bundle_name)
         .map_err(shared::map_bundle_load_error)?;
-    let paths = BundleRuntimePaths::resolve(&roots.state_root, &resolved_session.bundle_name)?;
-    ensure_tui_relay_available(&roots, &paths)?;
+    let relay_paths = RelayRuntimePaths::resolve(&roots.state_root);
+    ensure_tui_relay_available(&roots, &relay_paths)?;
     crate::tui::run(crate::tui::TuiLaunchOptions {
         bundle_name: resolved_session.bundle_name,
         sender_session: resolved_session.session_id,
-        relay_socket: paths.relay_socket,
+        relay_socket: relay_paths.relay_socket,
         look_lines: parsed.lines,
     })
 }
@@ -97,7 +96,7 @@ pub(super) fn print_tui_help() {
 
 fn ensure_tui_relay_available(
     roots: &RuntimeRoots,
-    paths: &BundleRuntimePaths,
+    paths: &RelayRuntimePaths,
 ) -> Result<(), RuntimeError> {
     let relay_program = resolve_relay_program()?;
     let configuration_root = roots.configuration_root.clone();

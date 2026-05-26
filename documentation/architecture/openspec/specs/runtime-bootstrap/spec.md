@@ -67,22 +67,25 @@ isolate development runtime data from deployed runtime state.
 - **WHEN** runtime is not debug/development mode
 - **THEN** state root resolution follows XDG state rules
 
-### Requirement: Per-Bundle Runtime Layout
+### Requirement: Runtime Layout
 
-Each bundle SHALL use a dedicated runtime directory:
+Relay-level artifacts SHALL live at the state-root level:
+
+- `<state_root>/relay.sock`
+- `<state_root>/relay.lock`
+- `<state_root>/relay.spawn.lock`
+- `<state_root>/relay.ready`
+
+Each bundle SHALL use a dedicated runtime directory for per-bundle artifacts:
 
 - `<state_root>/bundles/<bundle_name>/`
-
-The system SHALL use:
-
 - `<bundle_runtime>/tmux.sock`
-- `<bundle_runtime>/relay.sock`
 
-#### Scenario: Resolve per-bundle sockets
+#### Scenario: Resolve relay-level and per-bundle paths
 
-- **WHEN** runtime paths are resolved for a bundle
-- **THEN** tmux operations use that bundle's `tmux.sock`
-- **AND** MCP-to-relay IPC uses that bundle's `relay.sock`
+- **WHEN** runtime paths are resolved
+- **THEN** MCP-to-relay IPC uses the single `<state_root>/relay.sock`
+- **AND** tmux operations use the per-bundle `<bundle_runtime>/tmux.sock`
 
 ### Requirement: Relay Connectivity Handling from MCP
 

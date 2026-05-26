@@ -1,9 +1,4 @@
-use std::{
-    collections::BTreeSet,
-    fs,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{collections::BTreeSet, collections::HashMap, sync::Arc};
 
 use serde_json::{Map, Value, json};
 
@@ -14,21 +9,6 @@ fn list_sessions_call(args: Map<String, Value>) -> Map<String, Value> {
         ("command".to_string(), Value::String("sessions".to_string())),
         ("args".to_string(), Value::Object(args)),
     ])
-}
-
-fn relay_socket_for(runtime: &TestRuntime, bundle_name: &str) -> PathBuf {
-    runtime
-        .state_root
-        .join("bundles")
-        .join(bundle_name)
-        .join("relay.sock")
-}
-
-fn ensure_socket_parent(socket_path: &Path) {
-    let parent = socket_path
-        .parent()
-        .expect("relay socket must have parent directory");
-    fs::create_dir_all(parent).expect("create relay socket parent");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -303,7 +283,7 @@ async fn list_sessions_rejects_unreachable_non_home_bundle_with_relay_unavailabl
     assert_eq!(error_code(&response), Some("relay_unavailable"));
     assert_eq!(
         response["error"]["data"]["details"]["relay_socket"],
-        Value::String(relay_socket_for(&runtime, "zeta").display().to_string())
+        Value::String(runtime.relay_socket.display().to_string())
     );
 }
 
@@ -312,12 +292,9 @@ async fn list_sessions_all_mode_aggregates_in_lexicographic_bundle_order() {
     let runtime = TestRuntime::create();
     write_bundle_configuration(&runtime.config_root, "alpha", &["alpha"]);
     write_bundle_configuration(&runtime.config_root, "zeta", &["zeta"]);
-    let alpha_socket = relay_socket_for(&runtime, "alpha");
-    let zeta_socket = relay_socket_for(&runtime, "zeta");
-    ensure_socket_parent(&alpha_socket);
-    ensure_socket_parent(&zeta_socket);
-    let alpha_relay = FakeRelay::start(
-        alpha_socket,
+    let mut routes: HashMap<String, RelayResponder> = HashMap::new();
+    routes.insert(
+        "alpha".to_string(),
         Arc::new(
             |request| match request.get("operation").and_then(Value::as_str) {
                 Some("list") => json!({
@@ -344,8 +321,8 @@ async fn list_sessions_all_mode_aggregates_in_lexicographic_bundle_order() {
             },
         ),
     );
-    let zeta_relay = FakeRelay::start(
-        zeta_socket,
+    routes.insert(
+        "zeta".to_string(),
         Arc::new(
             |request| match request.get("operation").and_then(Value::as_str) {
                 Some("list") => json!({
@@ -372,6 +349,35 @@ async fn list_sessions_all_mode_aggregates_in_lexicographic_bundle_order() {
             },
         ),
     );
+    routes.insert(
+        "party".to_string(),
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("list") => json!({
+                    "kind": "list",
+                    "schema_version": "1",
+                    "bundle": {
+                        "id": "party",
+                        "state": "down",
+                        "startup_health": null,
+                        "state_reason_code": "not_started",
+                        "state_reason": "bundle runtime not started",
+                        "startup_failure_count": 0,
+                        "recent_startup_failures": [],
+                        "sessions": [],
+                    },
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+    let relay = FakeRelay::start_for_bundles(runtime.relay_socket.clone(), routes);
     let mut harness = McpHarness::spawn(&runtime).await;
     let arguments = list_sessions_call(Map::from_iter([("all".to_string(), Value::Bool(true))]));
     let response = harness.call_tool(2, "list", arguments).await;
@@ -388,8 +394,7 @@ async fn list_sessions_all_mode_aggregates_in_lexicographic_bundle_order() {
     assert_eq!(bundles[1]["state"], "down");
     assert_eq!(bundles[1]["state_reason_code"], "not_started");
     assert_eq!(bundles[1]["startup_failure_count"], 0);
-    assert_eq!(alpha_relay.requests_for_operation("list").len(), 1);
-    assert_eq!(zeta_relay.requests_for_operation("list").len(), 1);
+    assert_eq!(relay.requests_for_operation("list").len(), 3);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -397,12 +402,9 @@ async fn list_sessions_all_mode_fails_fast_on_first_authorization_denial() {
     let runtime = TestRuntime::create();
     write_bundle_configuration(&runtime.config_root, "alpha", &["alpha"]);
     write_bundle_configuration(&runtime.config_root, "zeta", &["zeta"]);
-    let alpha_socket = relay_socket_for(&runtime, "alpha");
-    let zeta_socket = relay_socket_for(&runtime, "zeta");
-    ensure_socket_parent(&alpha_socket);
-    ensure_socket_parent(&zeta_socket);
-    let alpha_relay = FakeRelay::start(
-        alpha_socket,
+    let mut routes: HashMap<String, RelayResponder> = HashMap::new();
+    routes.insert(
+        "alpha".to_string(),
         Arc::new(
             |request| match request.get("operation").and_then(Value::as_str) {
                 Some("list") => json!({
@@ -428,8 +430,8 @@ async fn list_sessions_all_mode_fails_fast_on_first_authorization_denial() {
             },
         ),
     );
-    let party_relay = FakeRelay::start(
-        runtime.relay_socket.clone(),
+    routes.insert(
+        BUNDLE_NAME.to_string(),
         Arc::new(
             |request| match request.get("operation").and_then(Value::as_str) {
                 Some("list") => json!({
@@ -456,8 +458,8 @@ async fn list_sessions_all_mode_fails_fast_on_first_authorization_denial() {
             },
         ),
     );
-    let zeta_relay = FakeRelay::start(
-        zeta_socket,
+    routes.insert(
+        "zeta".to_string(),
         Arc::new(
             |request| match request.get("operation").and_then(Value::as_str) {
                 Some("list") => json!({
@@ -484,12 +486,12 @@ async fn list_sessions_all_mode_fails_fast_on_first_authorization_denial() {
             },
         ),
     );
+    let relay = FakeRelay::start_for_bundles(runtime.relay_socket.clone(), routes);
     let mut harness = McpHarness::spawn(&runtime).await;
     let arguments = list_sessions_call(Map::from_iter([("all".to_string(), Value::Bool(true))]));
     let response = harness.call_tool(2, "list", arguments).await;
 
     assert_eq!(error_code(&response), Some("authorization_forbidden"));
-    assert_eq!(alpha_relay.requests_for_operation("list").len(), 1);
-    assert_eq!(party_relay.requests_for_operation("list").len(), 0);
-    assert_eq!(zeta_relay.requests_for_operation("list").len(), 0);
+    let list_requests = relay.requests_for_operation("list");
+    assert_eq!(list_requests.len(), 1);
 }

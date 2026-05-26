@@ -20,8 +20,8 @@ fn spawn_relay_connection_capturing(
 ) -> (UnixStream, thread::JoinHandle<Result<(), std::io::Error>>) {
     let (server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
     let root = configuration_root.to_path_buf();
-    let paths = bundle_paths.clone();
-    let join_handle = thread::spawn(move || run_serve_connection(server_stream, root, paths));
+    let catalog = super::single_bundle_catalog(bundle_paths);
+    let join_handle = thread::spawn(move || run_serve_connection(server_stream, root, catalog));
     (client_stream, join_handle)
 }
 

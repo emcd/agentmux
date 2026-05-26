@@ -31,7 +31,10 @@ exported from `src/relay/mod.rs`.
     polling.
 - `connection.rs`
   - relay socket serving, stream hello/request frame dispatch, hello identity
-    validation, and connection write-timeout handling.
+    validation, and connection write-timeout handling. One process-wide relay
+    socket serves every configured bundle; each connection is bound to a
+    bundle when its `hello` frame's `bundle_name` is looked up in the
+    `BundleCatalog` shared with all connection workers.
 - `authorization.rs`
   - policy loading and operation-level authorization checks.
 - `handlers.rs`
