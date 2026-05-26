@@ -218,7 +218,7 @@ impl McpServer {
                 )
             })?;
 
-        let request = RelayRequest::Chat {
+        let request = RelayRequest::Send {
             request_id: params.request_id.clone(),
             sender_session,
             message: params.message.clone(),
@@ -229,7 +229,7 @@ impl McpServer {
             acp_turn_timeout_ms: params.acp_turn_timeout_ms,
         };
         match self.request_relay(&request) {
-            Ok(RelayResponse::Chat {
+            Ok(RelayResponse::Send {
                 schema_version,
                 bundle_name,
                 request_id,

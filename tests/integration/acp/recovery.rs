@@ -1,4 +1,4 @@
-use agentmux::relay::ChatOutcome;
+use agentmux::relay::SendOutcome;
 use serde_json::Value;
 use std::{
     fs, thread,
@@ -21,8 +21,8 @@ fn acp_next_send_recovers_after_connection_closed_failure() {
         &temporary.path().join("tmux.sock"),
         Some(1_000),
     );
-    let first_result = chat_result(first);
-    assert_eq!(first_result.outcome, ChatOutcome::Queued);
+    let first_result = send_result(first);
+    assert_eq!(first_result.outcome, SendOutcome::Queued);
 
     // Swap in a healthy stub before the respawn loop picks up its next
     // backoff slot so the rebuilt ACP child sees the recovered behavior.
@@ -42,8 +42,8 @@ fn acp_next_send_recovers_after_connection_closed_failure() {
         &temporary.path().join("tmux.sock"),
         Some(1_000),
     );
-    let second_result = chat_result(second);
-    assert_eq!(second_result.outcome, ChatOutcome::Queued);
+    let second_result = send_result(second);
+    assert_eq!(second_result.outcome, SendOutcome::Queued);
 }
 
 #[test]
@@ -60,8 +60,8 @@ fn acp_next_send_recovers_after_post_accept_disconnect() {
         &temporary.path().join("tmux.sock"),
         Some(1_000),
     );
-    let first_result = chat_result(first);
-    assert_eq!(first_result.outcome, ChatOutcome::Queued);
+    let first_result = send_result(first);
+    assert_eq!(first_result.outcome, SendOutcome::Queued);
 
     let recovered = AcpStubOptions::default();
     let (config_root, _log_path) = write_configuration(temporary.path(), &recovered);
@@ -79,8 +79,8 @@ fn acp_next_send_recovers_after_post_accept_disconnect() {
         &temporary.path().join("tmux.sock"),
         Some(1_000),
     );
-    let second_result = chat_result(second);
-    assert_eq!(second_result.outcome, ChatOutcome::Queued);
+    let second_result = send_result(second);
+    assert_eq!(second_result.outcome, SendOutcome::Queued);
 }
 
 fn wait_for_worker_state(
@@ -180,8 +180,8 @@ fn acp_respawn_invalidates_pending_permission_queue_entry_for_target() {
         &temporary.path().join("tmux.sock"),
         Some(1_000),
     );
-    let first_result = chat_result(first);
-    assert_eq!(first_result.outcome, ChatOutcome::Queued);
+    let first_result = send_result(first);
+    assert_eq!(first_result.outcome, SendOutcome::Queued);
 
     assert!(
         wait_for_permission_invalidation(temporary.path(), "bravo", Duration::from_secs(3)),
@@ -266,8 +266,8 @@ fn acp_respawn_recovers_when_agent_exits_during_pending_permission() {
         &temporary.path().join("tmux.sock"),
         Some(1_000),
     );
-    let first_result = chat_result(first);
-    assert_eq!(first_result.outcome, ChatOutcome::Queued);
+    let first_result = send_result(first);
+    assert_eq!(first_result.outcome, SendOutcome::Queued);
 
     // Permission record must be enqueued. Only the resolver thread (the
     // todos/acp/16 code path) calls enqueue_permission_request. If the
@@ -336,8 +336,8 @@ fn acp_respawn_with_missing_load_capability_is_permanent_failure() {
         &temporary.path().join("tmux.sock"),
         Some(1_000),
     );
-    let first_result = chat_result(first);
-    assert_eq!(first_result.outcome, ChatOutcome::Queued);
+    let first_result = send_result(first);
+    assert_eq!(first_result.outcome, SendOutcome::Queued);
 
     assert!(
         wait_for_worker_state(

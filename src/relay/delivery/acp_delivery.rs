@@ -18,7 +18,7 @@ use super::{
     wait_for_permission_resolution,
 };
 
-use super::super::{AsyncDeliveryTask, ChatResult};
+use super::super::{AsyncDeliveryTask, SendResult};
 
 // ACP delivery failure taxonomy:
 // - `runtime_acp_initialize_failed` / `_session_new_failed` / `_session_load_failed`:
@@ -153,7 +153,7 @@ pub(super) fn deliver_batch_target_acp(
     _acp: &AcpTargetConfiguration,
     prompt_batches: Vec<String>,
     acp_runtime: &mut Option<PersistentAcpWorkerRuntime>,
-) -> Vec<ChatResult> {
+) -> Vec<SendResult> {
     debug_assert!(!batch.is_empty());
     let head = &batch[0];
     let head_target_session = head.target_session.clone();
@@ -266,7 +266,7 @@ pub(super) fn deliver_batch_target_acp(
                     // Ordering invariant: populate
                     // pending_permission_outcome BEFORE writing the
                     // JSON-RPC response. on_completion reads the shared
-                    // slot when building the final ChatResult; the agent
+                    // slot when building the final SendResult; the agent
                     // cannot send its prompt-response until it sees the
                     // permission response, so once the responder writes,
                     // a fast agent reply could race on_completion ahead
@@ -279,7 +279,7 @@ pub(super) fn deliver_batch_target_acp(
     );
 
     // Per-task correlation captured into on_completion. One ACP completion
-    // outcome maps to N synthesised per-task ChatResults so each original
+    // outcome maps to N synthesised per-task SendResults so each original
     // send call's completion_sender receives a result tied to its own
     // message_id and target_session.
     let completion_correlations: Vec<TaskCorrelation> = batch
@@ -389,12 +389,12 @@ pub(super) fn deliver_batch_target_acp(
 #[derive(Clone)]
 struct TaskCorrelation {
     completion_sender:
-        Option<std::sync::mpsc::Sender<Result<ChatResult, crate::relay::RelayError>>>,
+        Option<std::sync::mpsc::Sender<Result<SendResult, crate::relay::RelayError>>>,
     target_session: String,
     message_id: String,
 }
 
-fn replicate_failed_result(batch: &[AsyncDeliveryTask], reason: String) -> Vec<ChatResult> {
+fn replicate_failed_result(batch: &[AsyncDeliveryTask], reason: String) -> Vec<SendResult> {
     batch
         .iter()
         .map(|task| {
@@ -412,7 +412,7 @@ fn replicate_failed_result_with_code(
     code: &'static str,
     reason: &'static str,
     details: Option<Value>,
-) -> Vec<ChatResult> {
+) -> Vec<SendResult> {
     batch
         .iter()
         .map(|task| {
@@ -435,7 +435,7 @@ pub(super) fn deliver_one_target_acp(
     target_session: String,
     message_id: String,
     acp_runtime: &mut Option<PersistentAcpWorkerRuntime>,
-) -> ChatResult {
+) -> SendResult {
     if target_member.working_directory.is_none() {
         return failed_result(
             target_session,
@@ -638,7 +638,7 @@ fn build_acp_completion_result(
     target_session: String,
     message_id: String,
     target_member_id: &str,
-) -> (AcpWorkerReadinessState, ChatResult) {
+) -> (AcpWorkerReadinessState, SendResult) {
     if let Some(PermissionResolutionOutcome::Cancelled {
         reason_code,
         reason,
@@ -785,7 +785,7 @@ fn initialize_persistent_acp_worker_runtime(
     runtime_directory: &Path,
     target_session: &str,
     message_id: &str,
-) -> Result<PersistentAcpWorkerRuntime, Box<ChatResult>> {
+) -> Result<PersistentAcpWorkerRuntime, Box<SendResult>> {
     let mut client = match acp.channel {
         crate::configuration::AcpChannel::Stdio => {
             let Some(command) = acp.command.as_deref() else {

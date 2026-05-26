@@ -113,12 +113,12 @@ pub struct ListedBundle {
     pub sessions: Vec<ListedSession>,
 }
 
-/// Per-target delivery result for one `chat` request.
+/// Per-target delivery result for one `send` request.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-pub struct ChatResult {
+pub struct SendResult {
     pub target_session: String,
     pub message_id: String,
-    pub outcome: ChatOutcome,
+    pub outcome: SendOutcome,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason_code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -149,10 +149,10 @@ pub struct BundleStartupReport {
     pub failed_startups: Vec<StartupFailureRecord>,
 }
 
-/// Per-target delivery outcome for `chat`.
+/// Per-target delivery outcome for `send`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum ChatOutcome {
+pub enum SendOutcome {
     Queued,
     Delivered,
     Timeout,
@@ -207,7 +207,7 @@ pub enum RelayRequest {
     List {
         sender_session: Option<String>,
     },
-    Chat {
+    Send {
         request_id: Option<String>,
         sender_session: String,
         message: String,
@@ -271,14 +271,14 @@ pub enum RelayResponse {
         schema_version: String,
         bundle: ListedBundle,
     },
-    Chat {
+    Send {
         schema_version: String,
         bundle_name: String,
         request_id: Option<String>,
         sender_session: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         sender_display_name: Option<String>,
-        results: Vec<ChatResult>,
+        results: Vec<SendResult>,
     },
     Look {
         schema_version: String,

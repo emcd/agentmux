@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use agentmux::relay::ChatOutcome;
+use agentmux::relay::SendOutcome;
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -19,8 +19,8 @@ fn acp_send_selects_session_new_without_coder_session_id() {
         &temporary.path().join("tmux.sock"),
         Some(1_000),
     );
-    let result = chat_result(response);
-    assert_eq!(result.outcome, ChatOutcome::Queued);
+    let result = send_result(response);
+    assert_eq!(result.outcome, SendOutcome::Queued);
 
     let state_path = persisted_state_path(temporary.path(), "bravo");
     assert!(
@@ -51,10 +51,10 @@ fn acp_send_reuses_persistent_worker_across_requests() {
 
     let first = dispatch_send(&config_root, &tmux_socket, Some(1_000));
     let second = dispatch_send(&config_root, &tmux_socket, Some(1_000));
-    let first_result = chat_result(first);
-    let second_result = chat_result(second);
-    assert_eq!(first_result.outcome, ChatOutcome::Queued);
-    assert_eq!(second_result.outcome, ChatOutcome::Queued);
+    let first_result = send_result(first);
+    let second_result = send_result(second);
+    assert_eq!(first_result.outcome, SendOutcome::Queued);
+    assert_eq!(second_result.outcome, SendOutcome::Queued);
 
     let requests = wait_for_request_count(log_path.as_path(), "session/prompt", 2);
     // Startup-owned ACP workers initialize once per configured ACP session
@@ -74,8 +74,8 @@ fn acp_initialize_request_uses_protocol_version_integer_and_client_version() {
         &temporary.path().join("tmux.sock"),
         Some(1_000),
     );
-    let result = chat_result(response);
-    assert_eq!(result.outcome, ChatOutcome::Queued);
+    let result = send_result(response);
+    assert_eq!(result.outcome, SendOutcome::Queued);
 
     let requests = read_request_log(log_path.as_path());
     let initialize = request_by_method(requests.as_slice(), "initialize");
@@ -104,8 +104,8 @@ fn acp_session_setup_requests_include_mcp_servers_array() {
         &temporary.path().join("tmux.sock"),
         Some(1_000),
     );
-    let result = chat_result(response);
-    assert_eq!(result.outcome, ChatOutcome::Queued);
+    let result = send_result(response);
+    assert_eq!(result.outcome, SendOutcome::Queued);
 
     let requests = read_request_log(log_path.as_path());
     let session_new = request_by_method(requests.as_slice(), "session/new");
@@ -125,8 +125,8 @@ fn acp_session_setup_requests_include_mcp_servers_array() {
         &second_temporary.path().join("tmux.sock"),
         Some(1_000),
     );
-    let result = chat_result(response);
-    assert_eq!(result.outcome, ChatOutcome::Queued);
+    let result = send_result(response);
+    assert_eq!(result.outcome, SendOutcome::Queued);
 
     let requests = read_request_log(log_path.as_path());
     let session_load = request_by_method(requests.as_slice(), "session/load");
@@ -148,8 +148,8 @@ fn acp_send_uses_persisted_session_id_when_config_id_is_absent() {
     let tmux_socket = temporary.path().join("tmux.sock");
 
     let first = dispatch_send(&config_root, &tmux_socket, Some(1_000));
-    let first_result = chat_result(first);
-    assert_eq!(first_result.outcome, ChatOutcome::Queued);
+    let first_result = send_result(first);
+    assert_eq!(first_result.outcome, SendOutcome::Queued);
 
     // After bravo's disconnect, auto-respawn rebuilds the worker using the
     // session id persisted by the first bootstrap. Wait until the respawn
@@ -192,8 +192,8 @@ fn acp_send_selects_session_load_with_configured_coder_session_id() {
         &temporary.path().join("tmux.sock"),
         Some(1_000),
     );
-    let result = chat_result(response);
-    assert_eq!(result.outcome, ChatOutcome::Queued);
+    let result = send_result(response);
+    assert_eq!(result.outcome, SendOutcome::Queued);
     let log = fs::read_to_string(log_path).expect("read ACP log");
     assert!(log.contains("\"method\":\"session/load\""), "log={log}");
     assert!(log.contains("\"sessionId\":\"sess-abc\""), "log={log}");
@@ -295,8 +295,8 @@ fn acp_prompt_failure_keeps_persistent_worker_available() {
         &temporary.path().join("tmux.sock"),
         Some(1_000),
     );
-    let result = chat_result(response);
-    assert_eq!(result.outcome, ChatOutcome::Queued);
+    let result = send_result(response);
+    assert_eq!(result.outcome, SendOutcome::Queued);
     // A JSON-RPC prompt error is a logical failure from a still-responsive
     // agent; the persistent worker stays available for subsequent prompts.
     assert!(
@@ -323,8 +323,8 @@ fn acp_disconnect_before_first_activity_engages_auto_respawn() {
         &temporary.path().join("tmux.sock"),
         Some(1_000),
     );
-    let result = chat_result(response);
-    assert_eq!(result.outcome, ChatOutcome::Queued);
+    let result = send_result(response);
+    assert_eq!(result.outcome, SendOutcome::Queued);
     // Auto-respawn pulls the worker out of `unavailable` as soon as it
     // observes the ConnectionClosed transition; assert that the worker
     // transitions through the recovery path (or settles back at available)
@@ -354,8 +354,8 @@ fn acp_disconnect_after_first_activity_preserves_accepted_response() {
         &temporary.path().join("tmux.sock"),
         Some(1_000),
     );
-    let result = chat_result(response);
-    assert_eq!(result.outcome, ChatOutcome::Queued);
+    let result = send_result(response);
+    assert_eq!(result.outcome, SendOutcome::Queued);
     assert_eq!(result.reason_code, None);
     assert!(
         wait_for_any_worker_state(

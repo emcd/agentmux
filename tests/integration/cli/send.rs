@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use agentmux::relay::{ChatOutcome, ChatResult, RelayResponse};
+use agentmux::relay::{RelayResponse, SendOutcome, SendResult};
 use agentmux::runtime::paths::{
     BundleRuntimePaths, RelayRuntimePaths, ensure_bundle_runtime_directory,
 };
@@ -81,16 +81,16 @@ fn send_accepts_message_flag_when_piped_stdin_is_empty() {
     let request_log = Arc::new(Mutex::new(Vec::<Value>::new()));
     let relay_thread = spawn_fake_relay_once(
         &RelayRuntimePaths::resolve(&state_root).relay_socket,
-        RelayResponse::Chat {
+        RelayResponse::Send {
             schema_version: "1".to_string(),
             bundle_name: "agentmux".to_string(),
             request_id: None,
             sender_session: "user".to_string(),
             sender_display_name: Some("Operator".to_string()),
-            results: vec![ChatResult {
+            results: vec![SendResult {
                 target_session: "bravo".to_string(),
                 message_id: "msg-1".to_string(),
-                outcome: ChatOutcome::Queued,
+                outcome: SendOutcome::Queued,
                 reason_code: None,
                 reason: None,
                 details: None,
@@ -211,16 +211,16 @@ fn send_preserves_valid_explicit_session_in_relay_request() {
     let request_log = Arc::new(Mutex::new(Vec::<Value>::new()));
     let relay_thread = spawn_fake_relay_once(
         &RelayRuntimePaths::resolve(&state_root).relay_socket,
-        RelayResponse::Chat {
+        RelayResponse::Send {
             schema_version: "1".to_string(),
             bundle_name: "agentmux".to_string(),
             request_id: None,
             sender_session: "user".to_string(),
             sender_display_name: Some("Alpha".to_string()),
-            results: vec![ChatResult {
+            results: vec![SendResult {
                 target_session: "bravo".to_string(),
                 message_id: "msg-1".to_string(),
-                outcome: ChatOutcome::Queued,
+                outcome: SendOutcome::Queued,
                 reason_code: None,
                 reason: None,
                 details: None,
@@ -264,7 +264,7 @@ fn send_preserves_valid_explicit_session_in_relay_request() {
 
     let requests = request_log.lock().expect("request log lock");
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0]["operation"], "chat");
+    assert_eq!(requests[0]["operation"], "send");
     assert_eq!(requests[0]["sender_session"], "user@GLOBAL");
 }
 
@@ -384,16 +384,16 @@ fn send_uses_tui_defaults_for_bundle_and_session() {
     let request_log = Arc::new(Mutex::new(Vec::<Value>::new()));
     let relay_thread = spawn_fake_relay_once(
         &RelayRuntimePaths::resolve(&state_root).relay_socket,
-        RelayResponse::Chat {
+        RelayResponse::Send {
             schema_version: "1".to_string(),
             bundle_name: "agentmux".to_string(),
             request_id: None,
             sender_session: "user".to_string(),
             sender_display_name: Some("Operator".to_string()),
-            results: vec![ChatResult {
+            results: vec![SendResult {
                 target_session: "bravo".to_string(),
                 message_id: "msg-1".to_string(),
-                outcome: ChatOutcome::Queued,
+                outcome: SendOutcome::Queued,
                 reason_code: None,
                 reason: None,
                 details: None,
@@ -430,6 +430,6 @@ fn send_uses_tui_defaults_for_bundle_and_session() {
 
     let requests = request_log.lock().expect("request log lock");
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0]["operation"], "chat");
+    assert_eq!(requests[0]["operation"], "send");
     assert_eq!(requests[0]["sender_session"], "user@GLOBAL");
 }

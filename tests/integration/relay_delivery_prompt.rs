@@ -1,7 +1,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use agentmux::{
-    relay::{ChatOutcome, RelayRequest, RelayResponse, handle_request},
+    relay::{RelayRequest, RelayResponse, SendOutcome, handle_request},
     runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory},
 };
 use tempfile::TempDir;
@@ -21,7 +21,7 @@ fn dispatch_request(
 }
 
 #[test]
-fn relay_chat_delivers_when_prompt_readiness_template_matches() {
+fn relay_send_delivers_when_prompt_readiness_template_matches() {
     if !tmux_available() {
         eprintln!("skipping relay delivery test because tmux is unavailable");
         return;
@@ -80,7 +80,7 @@ fn relay_chat_delivers_when_prompt_readiness_template_matches() {
 
     let marker = "PROMPT-TEMPLATE-MARKER";
     let response = dispatch_request(
-        RelayRequest::Chat {
+        RelayRequest::Send {
             request_id: Some("req-ready".to_string()),
             sender_session: "alpha".to_string(),
             message: marker.to_string(),
@@ -96,12 +96,12 @@ fn relay_chat_delivers_when_prompt_readiness_template_matches() {
     )
     .expect("async send should be accepted");
 
-    let RelayResponse::Chat { results, .. } = response else {
-        panic!("expected chat response");
+    let RelayResponse::Send { results, .. } = response else {
+        panic!("expected send response");
     };
 
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].outcome, ChatOutcome::Queued);
+    assert_eq!(results[0].outcome, SendOutcome::Queued);
 
     wait_for_pane_contains(
         &paths.tmux_socket,
@@ -114,7 +114,7 @@ fn relay_chat_delivers_when_prompt_readiness_template_matches() {
 }
 
 #[test]
-fn relay_chat_times_out_when_prompt_readiness_never_matches() {
+fn relay_send_times_out_when_prompt_readiness_never_matches() {
     if !tmux_available() {
         eprintln!("skipping relay delivery test because tmux is unavailable");
         return;
@@ -173,7 +173,7 @@ fn relay_chat_times_out_when_prompt_readiness_never_matches() {
 
     let marker = "PROMPT-NEVER-MARKER";
     let response = dispatch_request(
-        RelayRequest::Chat {
+        RelayRequest::Send {
             request_id: Some("req-unready".to_string()),
             sender_session: "alpha".to_string(),
             message: marker.to_string(),
@@ -189,12 +189,12 @@ fn relay_chat_times_out_when_prompt_readiness_never_matches() {
     )
     .expect("async send should be accepted");
 
-    let RelayResponse::Chat { results, .. } = response else {
-        panic!("expected chat response");
+    let RelayResponse::Send { results, .. } = response else {
+        panic!("expected send response");
     };
 
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].outcome, ChatOutcome::Queued);
+    assert_eq!(results[0].outcome, SendOutcome::Queued);
 
     std::thread::sleep(Duration::from_millis(2_000));
     let snapshot = capture_pane(&paths.tmux_socket, "bravo", "-200");
@@ -207,7 +207,7 @@ fn relay_chat_times_out_when_prompt_readiness_never_matches() {
 }
 
 #[test]
-fn relay_chat_delivers_when_prompt_idle_column_matches() {
+fn relay_send_delivers_when_prompt_idle_column_matches() {
     if !tmux_available() {
         eprintln!("skipping relay delivery test because tmux is unavailable");
         return;
@@ -272,7 +272,7 @@ fn relay_chat_delivers_when_prompt_idle_column_matches() {
 
     let marker = "IDLE-COLUMN-MARKER";
     let response = dispatch_request(
-        RelayRequest::Chat {
+        RelayRequest::Send {
             request_id: Some("req-idle-match".to_string()),
             sender_session: "alpha".to_string(),
             message: marker.to_string(),
@@ -288,11 +288,11 @@ fn relay_chat_delivers_when_prompt_idle_column_matches() {
     )
     .expect("async send should be accepted");
 
-    let RelayResponse::Chat { results, .. } = response else {
-        panic!("expected chat response");
+    let RelayResponse::Send { results, .. } = response else {
+        panic!("expected send response");
     };
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].outcome, ChatOutcome::Queued);
+    assert_eq!(results[0].outcome, SendOutcome::Queued);
 
     wait_for_pane_contains(
         &paths.tmux_socket,
@@ -305,7 +305,7 @@ fn relay_chat_delivers_when_prompt_idle_column_matches() {
 }
 
 #[test]
-fn relay_chat_delivers_when_prompt_regex_requires_blank_separator_line() {
+fn relay_send_delivers_when_prompt_regex_requires_blank_separator_line() {
     if !tmux_available() {
         eprintln!("skipping relay delivery test because tmux is unavailable");
         return;
@@ -370,7 +370,7 @@ fn relay_chat_delivers_when_prompt_regex_requires_blank_separator_line() {
 
     let marker = "BLANK-SEPARATOR-MARKER";
     let response = dispatch_request(
-        RelayRequest::Chat {
+        RelayRequest::Send {
             request_id: Some("req-blank-line".to_string()),
             sender_session: "alpha".to_string(),
             message: marker.to_string(),
@@ -386,11 +386,11 @@ fn relay_chat_delivers_when_prompt_regex_requires_blank_separator_line() {
     )
     .expect("async send should be accepted");
 
-    let RelayResponse::Chat { results, .. } = response else {
-        panic!("expected chat response");
+    let RelayResponse::Send { results, .. } = response else {
+        panic!("expected send response");
     };
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].outcome, ChatOutcome::Queued);
+    assert_eq!(results[0].outcome, SendOutcome::Queued);
 
     wait_for_pane_contains(
         &paths.tmux_socket,
@@ -403,7 +403,7 @@ fn relay_chat_delivers_when_prompt_regex_requires_blank_separator_line() {
 }
 
 #[test]
-fn relay_chat_times_out_when_prompt_idle_column_does_not_match() {
+fn relay_send_times_out_when_prompt_idle_column_does_not_match() {
     if !tmux_available() {
         eprintln!("skipping relay delivery test because tmux is unavailable");
         return;
@@ -477,7 +477,7 @@ fn relay_chat_times_out_when_prompt_idle_column_does_not_match() {
 
     let marker = "IDLE-MISMATCH-MARKER";
     let response = dispatch_request(
-        RelayRequest::Chat {
+        RelayRequest::Send {
             request_id: Some("req-idle-mismatch".to_string()),
             sender_session: "alpha".to_string(),
             message: marker.to_string(),
@@ -493,11 +493,11 @@ fn relay_chat_times_out_when_prompt_idle_column_does_not_match() {
     )
     .expect("async send should be accepted");
 
-    let RelayResponse::Chat { results, .. } = response else {
-        panic!("expected chat response");
+    let RelayResponse::Send { results, .. } = response else {
+        panic!("expected send response");
     };
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].outcome, ChatOutcome::Queued);
+    assert_eq!(results[0].outcome, SendOutcome::Queued);
 
     std::thread::sleep(Duration::from_millis(2_000));
     let snapshot = capture_pane(&paths.tmux_socket, "bravo", "-200");

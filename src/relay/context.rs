@@ -2,10 +2,10 @@ use std::{path::PathBuf, sync::mpsc};
 
 use crate::{configuration::BundleConfiguration, envelope::PromptBatchSettings};
 
-use super::{ChatResult, DeliveryPayloadMode, RelayError, delivery::QuiescenceOptions};
+use super::{DeliveryPayloadMode, RelayError, SendResult, delivery::QuiescenceOptions};
 
 #[derive(Clone, Debug)]
-pub(super) struct ChatRequestContext {
+pub(super) struct SendRequestContext {
     pub(super) request_id: Option<String>,
     pub(super) sender_session: String,
     pub(super) message: String,
@@ -60,7 +60,7 @@ pub(super) struct AsyncDeliveryTask {
     pub(super) quiescence: QuiescenceOptions,
     pub(super) batch_settings: PromptBatchSettings,
     pub(super) runtime_directory: PathBuf,
-    pub(super) completion_sender: Option<mpsc::Sender<Result<ChatResult, RelayError>>>,
+    pub(super) completion_sender: Option<mpsc::Sender<Result<SendResult, RelayError>>>,
     pub(super) payload_mode: DeliveryPayloadMode,
     pub(super) append_enter: bool,
     pub(super) permission_decider_sessions: Vec<String>,

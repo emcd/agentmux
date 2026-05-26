@@ -11,7 +11,7 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::configuration::{BundleConfiguration, BundleMember, TargetConfiguration};
 
-use super::super::super::{AsyncDeliveryTask, ChatResult, DeliveryPayloadMode, RelayError};
+use super::super::super::{AsyncDeliveryTask, DeliveryPayloadMode, RelayError, SendResult};
 use super::super::acp_delivery::PersistentAcpWorkerRuntime;
 use super::super::acp_state::{ACP_LOOK_PRIME_TIMEOUT_MS, ACP_STARTUP_PRIME_TIMEOUT_MS};
 use super::super::async_worker::{AcpWorkerReadinessState, get_acp_worker_state};
@@ -159,8 +159,8 @@ pub(in crate::relay) fn enqueue_async_delivery(task: AsyncDeliveryTask) -> Resul
 
 pub(in crate::relay) fn enqueue_sync_delivery(
     mut task: AsyncDeliveryTask,
-) -> Result<ChatResult, RelayError> {
-    let (sender, receiver) = mpsc::channel::<Result<ChatResult, RelayError>>();
+) -> Result<SendResult, RelayError> {
+    let (sender, receiver) = mpsc::channel::<Result<SendResult, RelayError>>();
     task.completion_sender = Some(sender);
     enqueue_delivery_task(task)?;
     receiver.recv().map_err(|source| {
@@ -233,7 +233,7 @@ fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
 
 pub(in crate::relay) fn deliver_one_target(
     task: &AsyncDeliveryTask,
-) -> Result<ChatResult, RelayError> {
+) -> Result<SendResult, RelayError> {
     let mut acp_runtime = None;
     deliver_one_target_with_worker_state(task, &mut acp_runtime)
 }
@@ -241,7 +241,7 @@ pub(in crate::relay) fn deliver_one_target(
 pub(in crate::relay) fn deliver_one_target_with_worker_state(
     task: &AsyncDeliveryTask,
     acp_runtime: &mut Option<PersistentAcpWorkerRuntime>,
-) -> Result<ChatResult, RelayError> {
+) -> Result<SendResult, RelayError> {
     let created_at = time::OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
@@ -275,7 +275,7 @@ pub(in crate::relay) fn deliver_batch_with_worker_state(
     batch: &[AsyncDeliveryTask],
     pre_resolved_pane: Option<String>,
     acp_runtime: &mut Option<PersistentAcpWorkerRuntime>,
-) -> (Vec<Result<ChatResult, RelayError>>, Vec<AsyncDeliveryTask>) {
+) -> (Vec<Result<SendResult, RelayError>>, Vec<AsyncDeliveryTask>) {
     debug_assert!(
         !batch.is_empty(),
         "deliver_batch_with_worker_state requires a non-empty batch",
@@ -341,6 +341,6 @@ pub(in crate::relay) fn deliver_batch_with_worker_state(
 fn fanned_errors(
     batch: &[AsyncDeliveryTask],
     error: RelayError,
-) -> Vec<Result<ChatResult, RelayError>> {
+) -> Vec<Result<SendResult, RelayError>> {
     batch.iter().map(|_| Err(error.clone())).collect()
 }

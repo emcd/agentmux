@@ -196,7 +196,7 @@ Session `name` remains informational metadata only and is not send-routable.
 - **WHEN** a caller sends using a session `name` value as explicit target
 - **THEN** relay rejects the target as unresolvable
 
-### Requirement: JSON Chat Envelope
+### Requirement: JSON Send Envelope
 
 The system SHALL inject messages as strict, pretty-printed JSON envelopes.
 
@@ -281,7 +281,7 @@ queued`. Relay SHALL NOT block the caller waiting for delivery completion.
 
 #### Scenario: Report accepted async delivery
 
-- **WHEN** relay accepts a chat request for one or more targets
+- **WHEN** relay accepts a send request for one or more targets
 - **THEN** the immediate result marks those targets as `queued`
 - **AND** does not wait for final delivery outcome before responding
 

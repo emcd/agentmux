@@ -23,10 +23,10 @@ use super::delivery::{
 };
 use super::tmux::{capture_pane_tail_lines, resolve_active_pane_target};
 use super::{
-    AsyncDeliveryTask, ChatOutcome, ChatRequestContext, ChatResult, DeliveryPayloadMode,
-    ListedSessionTransport, LookRequestContext, PermissionDecisionRequestContext,
-    RawwRequestContext, RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
-    bare_session_id, canonical_session_id, relay_error,
+    AsyncDeliveryTask, DeliveryPayloadMode, ListedSessionTransport, LookRequestContext,
+    PermissionDecisionRequestContext, RawwRequestContext, RelayError, RelayRequest, RelayResponse,
+    RequestPrincipal, SCHEMA_VERSION, SendOutcome, SendRequestContext, SendResult, bare_session_id,
+    canonical_session_id, relay_error,
 };
 
 mod listing;
@@ -84,7 +84,7 @@ pub(super) fn handle_request(
         RelayRequest::List { sender_session } => {
             listing::handle_list(bundle, authorization, sender_session, runtime_directory)
         }
-        RelayRequest::Chat {
+        RelayRequest::Send {
             request_id,
             sender_session,
             message,
@@ -93,10 +93,10 @@ pub(super) fn handle_request(
             quiet_window_ms,
             quiescence_timeout_ms,
             acp_turn_timeout_ms,
-        } => handle_chat(
+        } => handle_send(
             bundle,
             authorization,
-            ChatRequestContext {
+            SendRequestContext {
                 request_id,
                 sender_session,
                 message,
@@ -183,7 +183,7 @@ fn normalize_request_identities(request: RelayRequest, bundle_name: &str) -> Rel
         RelayRequest::List { sender_session } => RelayRequest::List {
             sender_session: sender_session.map(bare),
         },
-        RelayRequest::Chat {
+        RelayRequest::Send {
             request_id,
             sender_session,
             message,
@@ -192,7 +192,7 @@ fn normalize_request_identities(request: RelayRequest, bundle_name: &str) -> Rel
             quiet_window_ms,
             quiescence_timeout_ms,
             acp_turn_timeout_ms,
-        } => RelayRequest::Chat {
+        } => RelayRequest::Send {
             request_id,
             sender_session: bare(sender_session),
             message,
@@ -235,13 +235,13 @@ fn normalize_request_identities(request: RelayRequest, bundle_name: &str) -> Rel
     }
 }
 
-fn handle_chat(
+fn handle_send(
     bundle: &BundleConfiguration,
     authorization: &AuthorizationContext,
-    request: ChatRequestContext,
+    request: SendRequestContext,
     runtime_directory: &Path,
 ) -> Result<RelayResponse, RelayError> {
-    let ChatRequestContext {
+    let SendRequestContext {
         request_id,
         sender_session,
         message,
@@ -306,7 +306,7 @@ fn handle_chat(
     let queue_max_pending = permission_max_pending(authorization);
 
     emit_inscription(
-        "relay.chat.request",
+        "relay.send.request",
         &json!({
             "bundle_name": bundle.bundle_name,
             "sender_session": sender.session_id,
@@ -413,7 +413,7 @@ fn handle_chat(
         };
         enqueue_async_delivery(task)?;
         emit_inscription(
-            "relay.chat.async.queued",
+            "relay.send.async.queued",
             &json!({
                 "bundle_name": bundle.bundle_name,
                 "sender_session": sender.session_id,
@@ -421,10 +421,10 @@ fn handle_chat(
                 "message_id": message_id,
             }),
         );
-        results.push(ChatResult {
+        results.push(SendResult {
             target_session,
             message_id,
-            outcome: ChatOutcome::Queued,
+            outcome: SendOutcome::Queued,
             reason_code: None,
             reason: None,
             details: None,
@@ -438,7 +438,7 @@ fn handle_chat(
             result
         })
         .collect::<Vec<_>>();
-    let response = RelayResponse::Chat {
+    let response = RelayResponse::Send {
         schema_version: SCHEMA_VERSION.to_string(),
         bundle_name: bundle.bundle_name.clone(),
         request_id,
@@ -449,7 +449,7 @@ fn handle_chat(
         sender_display_name: sender.display_name.clone(),
         results,
     };
-    if let RelayResponse::Chat {
+    if let RelayResponse::Send {
         bundle_name,
         sender_session,
         results,
@@ -458,10 +458,10 @@ fn handle_chat(
     {
         let delivered_count = results
             .iter()
-            .filter(|result| result.outcome == ChatOutcome::Delivered)
+            .filter(|result| result.outcome == SendOutcome::Delivered)
             .count();
         emit_inscription(
-            "relay.chat.response",
+            "relay.send.response",
             &json!({
             "bundle_name": bundle_name,
             "sender_session": sender_session,
@@ -802,7 +802,7 @@ fn handle_raww(
             ));
         }
     };
-    if result.outcome != ChatOutcome::Delivered {
+    if result.outcome != SendOutcome::Delivered {
         let reason = result
             .reason
             .unwrap_or_else(|| "raww dispatch failed".to_string());
