@@ -9,6 +9,7 @@ This module implements the MCP stdio server for `agentmux`.
   - `help`
   - `look`
   - `grant` (requires `command="list"` or `command="resolve"`)
+  - `lifecycle` (requires `command="up"` or `command="down"`)
   - `raww`
   - `send`
 - Preserve canonical relay `look` success payloads without adapter reshaping:
@@ -21,21 +22,40 @@ This module implements the MCP stdio server for `agentmux`.
 
 ## Data Flow
 
-1. MCP client calls `list`, `look`, `grant`, `raww`, or `send`.
+1. MCP client calls `list`, `look`, `grant`, `lifecycle`, `raww`, or `send`.
 2. MCP client can call `help` to discover tool/command schemas.
 3. `src/mcp/mod.rs` validates parameter shape and transport-compatible options.
 4. Request is forwarded as relay contract:
    - `list` (`command="sessions"`) -> one-shot `request_relay` probes (`RelayRequest::List`)
    - `look` -> `RelayStreamSession` (`RelayRequest::Look`)
-   - `grant` (`command="list"`) -> one-shot `request_relay` probe
+   - `grant` (`command="list"`) -> `RelayStreamSession`
      (`RelayRequest::PermissionList`)
-   - `grant` (`command="resolve"`) -> one-shot `request_relay` probe
+   - `grant` (`command="resolve"`) -> `RelayStreamSession`
      (`RelayRequest::PermissionResolve`)
+   - `lifecycle` (`command="up"`) -> `RelayStreamSession` (`RelayRequest::Up`)
+   - `lifecycle` (`command="down"`) -> `RelayStreamSession` (`RelayRequest::Down`)
    - `raww` -> `RelayStreamSession` (`RelayRequest::Raww`)
-   - `send` -> `RelayStreamSession` (`RelayRequest::Chat`)
+   - `send` -> `RelayStreamSession` (`RelayRequest::Send`)
 5. For `all=true`, MCP performs adapter fanout across bundle relays in
    deterministic lexicographic order.
 6. Relay response is mapped back to MCP JSON payload.
+
+## Bundle Lifecycle
+
+- The `lifecycle` tool administers bundle runtime state for the associated
+  bundle:
+  - `command="up"` requests `RelayRequest::Up` (host the bundle).
+  - `command="down"` requests `RelayRequest::Down` (unhost the bundle).
+- Requests ride the MCP server's long-lived `RelayStreamSession`; the relay
+  authorizes the caller-session principal carried by the Hello-established
+  connection against the `updown` policy control (deny by default).
+- The MCP tool only addresses the MCP server's associated bundle; cross-bundle
+  administration requires a separate relay connection and is out of scope.
+- Relay returns `RelayResponse::BundleTransition` on success; the MCP response
+  forwards `schema_version`, `action`, `bundles`, `changed_bundle_count`,
+  `skipped_bundle_count`, `failed_bundle_count`, and `changed_any` unchanged.
+- Relay `authorization_forbidden` (capability `updown`) surfaces as a typed
+  MCP tool error with the relay error code and details preserved.
 
 ## Permission Granting
 

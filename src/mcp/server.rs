@@ -32,13 +32,15 @@ use super::errors::{
 use super::help::help_tool;
 use super::params::{
     GRANT_COMMAND_LIST, GRANT_COMMAND_RESOLVE, GrantListArgs, GrantParams, GrantResolveArgs,
-    HelpParams, LIST_COMMAND_SESSIONS, LIST_SESSIONS_SCHEMA_VERSION, ListArgs, ListParams,
-    LookParams, RawwParams, SendParams,
+    HelpParams, LIFECYCLE_COMMAND_DOWN, LIFECYCLE_COMMAND_UP, LIST_COMMAND_SESSIONS,
+    LIST_SESSIONS_SCHEMA_VERSION, LifecycleArgs, LifecycleParams, ListArgs, ListParams, LookParams,
+    RawwParams, SendParams,
 };
 use super::validation::{
     is_relay_unavailable_error, parse_meta_tool_args, validate_grant_list_args,
     validate_grant_params, validate_grant_resolve_args, validate_help_request,
-    validate_list_request, validate_look_request, validate_raww_request, validate_send_request,
+    validate_lifecycle_args, validate_lifecycle_params, validate_list_request,
+    validate_look_request, validate_raww_request, validate_send_request,
 };
 
 /// Configuration provided when booting MCP stdio service.
@@ -699,6 +701,124 @@ impl McpServer {
             Err(source) => {
                 Err(self.map_relay_stream_failure("mcp.tool.grant.resolve.io_error", source))
             }
+        }
+    }
+
+    #[tool(
+        description = "Administer bundle runtime lifecycle. Use command=\"up\" to host the associated bundle or command=\"down\" to unhost it."
+    )]
+    async fn lifecycle(
+        &self,
+        Parameters(params): Parameters<LifecycleParams>,
+    ) -> Result<CallToolResult, McpError> {
+        validate_lifecycle_params(&params)?;
+        let command = params
+            .command
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                validation_tool_error(
+                    "validation_invalid_params",
+                    "command is required; allowed values are \"up\" or \"down\"",
+                    None,
+                )
+            })?;
+        let args = parse_meta_tool_args::<LifecycleArgs>(params.args.clone()).map_err(|reason| {
+            validation_tool_error(
+                "validation_invalid_params",
+                "invalid args for lifecycle command",
+                Some(json!({
+                    "reason": reason,
+                    "hint": "pass args as a JSON object; use help query 'lifecycle.up' or 'lifecycle.down' for exact schema",
+                })),
+            )
+        })?;
+        match command {
+            LIFECYCLE_COMMAND_UP => {
+                validate_lifecycle_args(&args, LIFECYCLE_COMMAND_UP)?;
+                self.lifecycle_transition(LIFECYCLE_COMMAND_UP, RelayRequest::Up)
+            }
+            LIFECYCLE_COMMAND_DOWN => {
+                validate_lifecycle_args(&args, LIFECYCLE_COMMAND_DOWN)?;
+                self.lifecycle_transition(LIFECYCLE_COMMAND_DOWN, RelayRequest::Down)
+            }
+            other => Err(validation_tool_error(
+                "validation_invalid_params",
+                "lifecycle command must be \"up\" or \"down\"",
+                Some(json!({"command": other})),
+            )),
+        }
+    }
+
+    fn lifecycle_transition(
+        &self,
+        command: &str,
+        request: RelayRequest,
+    ) -> Result<CallToolResult, McpError> {
+        let request_event = format!("mcp.tool.lifecycle.{command}.request");
+        let success_event = format!("mcp.tool.lifecycle.{command}.success");
+        let relay_error_event = format!("mcp.tool.lifecycle.{command}.relay_error");
+        let unexpected_event = format!("mcp.tool.lifecycle.{command}.unexpected_response");
+        let io_error_event = format!("mcp.tool.lifecycle.{command}.io_error");
+        emit_inscription(
+            request_event.as_str(),
+            &json!({
+                "bundle_name": self.associated_bundle_name(),
+                "command": command,
+            }),
+        );
+        match self.request_relay(&request) {
+            Ok(RelayResponse::BundleTransition {
+                schema_version,
+                action,
+                bundles,
+                changed_bundle_count,
+                skipped_bundle_count,
+                failed_bundle_count,
+                changed_any,
+            }) => {
+                let response = json!({
+                    "schema_version": schema_version,
+                    "action": action,
+                    "bundles": bundles,
+                    "changed_bundle_count": changed_bundle_count,
+                    "skipped_bundle_count": skipped_bundle_count,
+                    "failed_bundle_count": failed_bundle_count,
+                    "changed_any": changed_any,
+                });
+                emit_inscription(
+                    success_event.as_str(),
+                    &json!({
+                        "bundle_name": self.associated_bundle_name(),
+                        "action": response["action"],
+                        "changed_bundle_count": response["changed_bundle_count"],
+                        "skipped_bundle_count": response["skipped_bundle_count"],
+                        "failed_bundle_count": response["failed_bundle_count"],
+                    }),
+                );
+                Ok(CallToolResult::success(vec![Content::json(response)?]))
+            }
+            Ok(RelayResponse::Error { error }) => {
+                emit_inscription(
+                    relay_error_event.as_str(),
+                    &json!({
+                        "code": error.code.clone(),
+                        "message": error.message.clone(),
+                        "details": error.details.clone(),
+                    }),
+                );
+                Err(map_relay_error(error))
+            }
+            Ok(other) => {
+                emit_inscription(unexpected_event.as_str(), &json!({"response": other}));
+                Err(internal_tool_error(
+                    "internal_unexpected_failure",
+                    "relay returned unexpected response variant",
+                    Some(json!({"response": other})),
+                ))
+            }
+            Err(source) => Err(self.map_relay_stream_failure(io_error_event.as_str(), source)),
         }
     }
 

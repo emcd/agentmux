@@ -5,8 +5,9 @@ use serde_json::json;
 use super::errors::validation_tool_error;
 use super::params::{
     GRANT_COMMAND_LIST, GRANT_COMMAND_RESOLVE, GRANT_OUTCOME_SELECTED, GrantListArgs,
-    GrantResolveArgs, HelpParams, LIST_COMMAND_SESSIONS, ListArgs, LookParams, NAMESPACE_AGENTMUX,
-    RawwParams, SendParams, TOOL_GRANT, TOOL_HELP, TOOL_LIST, TOOL_LOOK, TOOL_RAWW, TOOL_SEND,
+    GrantResolveArgs, HelpParams, LIFECYCLE_COMMAND_DOWN, LIFECYCLE_COMMAND_UP,
+    LIST_COMMAND_SESSIONS, LifecycleArgs, ListArgs, LookParams, NAMESPACE_AGENTMUX, RawwParams,
+    SendParams, TOOL_GRANT, TOOL_HELP, TOOL_LIFECYCLE, TOOL_LIST, TOOL_LOOK, TOOL_RAWW, TOOL_SEND,
 };
 
 pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpError> {
@@ -15,8 +16,8 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
         "" | NAMESPACE_AGENTMUX => Ok(json!({
             "namespace": NAMESPACE_AGENTMUX,
             "shape_hints": [
-                "Call help with query='list' or 'grant' for meta-tool command lists.",
-                "Call help with query='list.sessions', 'grant.list', or 'grant.resolve' for command args schemas.",
+                "Call help with query='list', 'grant', or 'lifecycle' for meta-tool command lists.",
+                "Call help with query='list.sessions', 'grant.list', 'grant.resolve', 'lifecycle.up', or 'lifecycle.down' for command args schemas.",
                 "Call help with query='send', 'look', or 'raww' for exact tool args schemas."
             ],
             "tools": [
@@ -25,6 +26,7 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
                 {"tool": TOOL_LOOK, "kind": "tool", "description": "Inspect a target session pane snapshot for this bundle."},
                 {"tool": TOOL_RAWW, "kind": "tool", "description": "Write raw text directly to one target session."},
                 {"tool": TOOL_GRANT, "kind": "meta_tool", "description": "Inspect or resolve pending ACP permission requests."},
+                {"tool": TOOL_LIFECYCLE, "kind": "meta_tool", "description": "Administer bundle runtime lifecycle (up/down)."},
                 {"tool": TOOL_HELP, "kind": "tool", "description": "Return tool/command help and JSON schemas."}
             ],
             "invoke": {
@@ -148,9 +150,55 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
                 }
             }),
         )),
+        TOOL_LIFECYCLE => Ok(json!({
+            "tool": TOOL_LIFECYCLE,
+            "kind": "meta_tool",
+            "description": "Administer bundle runtime lifecycle (up/down) for the associated bundle.",
+            "commands": [
+                {
+                    "command": "lifecycle.up",
+                    "description": "Host the associated bundle runtime."
+                },
+                {
+                    "command": "lifecycle.down",
+                    "description": "Unhost the associated bundle runtime."
+                }
+            ],
+            "invoke": {
+                "tool": TOOL_LIFECYCLE,
+                "params": {
+                    "command": LIFECYCLE_COMMAND_UP,
+                    "args": {}
+                }
+            }
+        })),
+        "lifecycle.up" => Ok(command_help(
+            "lifecycle.up",
+            "Host the associated bundle runtime.",
+            json_schema_for::<LifecycleArgs>(),
+            json!({
+                "tool": TOOL_LIFECYCLE,
+                "params": {
+                    "command": LIFECYCLE_COMMAND_UP,
+                    "args": {}
+                }
+            }),
+        )),
+        "lifecycle.down" => Ok(command_help(
+            "lifecycle.down",
+            "Unhost the associated bundle runtime.",
+            json_schema_for::<LifecycleArgs>(),
+            json!({
+                "tool": TOOL_LIFECYCLE,
+                "params": {
+                    "command": LIFECYCLE_COMMAND_DOWN,
+                    "args": {}
+                }
+            }),
+        )),
         _ => Err(validation_tool_error(
             "validation_invalid_params",
-            "unknown help query; try empty query, 'agentmux', 'list', 'list.sessions', 'send', 'look', 'raww', 'grant', 'grant.list', or 'grant.resolve'",
+            "unknown help query; try empty query, 'agentmux', 'list', 'list.sessions', 'send', 'look', 'raww', 'grant', 'grant.list', 'grant.resolve', 'lifecycle', 'lifecycle.up', or 'lifecycle.down'",
             Some(json!({"query": query})),
         )),
     }
