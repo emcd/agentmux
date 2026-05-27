@@ -169,14 +169,7 @@ fn prepare_relay_host(
 ) -> Result<RelayHostPreparation, RuntimeError> {
     let memberships = load_bundle_group_memberships(&roots.configuration_root)
         .map_err(shared::map_bundle_load_error)?;
-    if let Some(first_bundle) = memberships.first()
-        && let Err(source) = configure_process_inscriptions(&relay_inscriptions_path(
-            &roots.inscriptions_root,
-            first_bundle.bundle_name.as_str(),
-        ))
-    {
-        return Err(source);
-    }
+    configure_process_inscriptions(&relay_inscriptions_path(&roots.inscriptions_root))?;
 
     let relay_paths = RelayRuntimePaths::resolve(&roots.state_root);
     ensure_relay_runtime_directory(&relay_paths)?;

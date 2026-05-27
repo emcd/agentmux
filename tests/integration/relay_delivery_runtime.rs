@@ -139,13 +139,8 @@ async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
         "shutdown should reap tmux server when no sessions remain, log={log:?}"
     );
 
-    let inscriptions = fs::read_to_string(
-        inscriptions_root
-            .join("bundles")
-            .join(bundle_name)
-            .join("relay.log"),
-    )
-    .expect("read relay inscriptions");
+    let inscriptions =
+        fs::read_to_string(inscriptions_root.join("relay.log")).expect("read relay inscriptions");
     assert!(
         inscriptions.contains("\"event\":\"relay.send.async.completed\"")
             && inscriptions.contains("\"outcome\":\"dropped_on_shutdown\""),
@@ -596,13 +591,8 @@ async fn relay_delivery_sends_submit_in_separate_tmux_command() {
         "expected paste-buffer command before Enter command, log={log:?}"
     );
 
-    let inscriptions = fs::read_to_string(
-        inscriptions_root
-            .join("bundles")
-            .join(bundle_name)
-            .join("relay.log"),
-    )
-    .expect("read relay inscriptions");
+    let inscriptions =
+        fs::read_to_string(inscriptions_root.join("relay.log")).expect("read relay inscriptions");
     assert!(
         inscriptions.contains("\"event\":\"relay.send.envelope.metadata\"")
             && inscriptions.contains("\"schema_version\"")
