@@ -7,6 +7,7 @@ use time::format_description::well_known::Rfc3339;
 use crate::configuration::{BundleConfiguration, TargetConfiguration, load_bundle_configuration};
 use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 
+use super::startup_state::clear_startup_failures_for_session;
 use super::{
     BundleStartupReport, ListedSessionTransport, ReconciliationReport, RelayError, ShutdownReport,
     StartupFailureRecord, map_config, relay_error,
@@ -167,7 +168,10 @@ fn startup_loaded_bundle(
     for member in members {
         match &member.target {
             TargetConfiguration::Tmux(_) => match startup_tmux_member(tmux_socket, &member) {
-                Ok(()) => ready_session_count += 1,
+                Ok(()) => {
+                    clear_session_startup_failures(runtime_directory, member.id.as_str())?;
+                    ready_session_count += 1;
+                }
                 Err((code, reason, details)) => failed_startups.push(StartupFailureRecord {
                     bundle_name: bundle.bundle_name.clone(),
                     session_id: member.id.clone(),
@@ -185,7 +189,10 @@ fn startup_loaded_bundle(
                     runtime_directory,
                     &member,
                 ) {
-                    Ok(()) => ready_session_count += 1,
+                    Ok(()) => {
+                        clear_session_startup_failures(runtime_directory, member.id.as_str())?;
+                        ready_session_count += 1;
+                    }
                     Err((code, reason, details)) => failed_startups.push(StartupFailureRecord {
                         bundle_name: bundle.bundle_name.clone(),
                         session_id: member.id.clone(),
@@ -263,6 +270,21 @@ fn startup_tmux_member(
             })),
         )),
     }
+}
+
+fn clear_session_startup_failures(
+    runtime_directory: &Path,
+    session_id: &str,
+) -> Result<(), RelayError> {
+    clear_startup_failures_for_session(runtime_directory, session_id)
+        .map(|_| ())
+        .map_err(|reason| {
+            relay_error(
+                "internal_unexpected_failure",
+                "failed to clear startup failure history after successful session startup",
+                Some(json!({"session_id": session_id, "cause": reason})),
+            )
+        })
 }
 
 fn startup_timestamp() -> String {
