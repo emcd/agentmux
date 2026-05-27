@@ -13,8 +13,8 @@ a time; `F4` toggles between them. The active mode is shown in the footer.
 - **Communication** — owns send/receive: chat history, compose (`To` +
   `Message`), pending-delivery indicator, send dispatch. Default startup mode.
 - **Interaction** — owns operator-driven session inspection: an interaction
-  target header, the look snapshot, a raww dispatch input, and permission
-  decisioning.
+  target header, the look snapshot, a Write input (relay `raww`), and
+  permission decisioning.
 
 Help (`F1`), recipient picker (`F2`), and delivery events (`F3`) are overlays
 available in both modes.
@@ -69,13 +69,13 @@ available in both modes.
 - picker actions:
   - insert recipient into `To`,
   - set the interaction target and switch to Interaction mode (`l`),
-  - set the interaction target, switch to Interaction mode, and focus the raww
-    input (`w`),
-- Interaction mode raww input dispatches raw writes to the active interaction
+  - set the interaction target, switch to Interaction mode, and focus the
+    Write input (`w`),
+- Interaction mode Write input dispatches raw writes to the active interaction
   target via relay `raww`,
-- raww/permission region replacement: when the interaction target has pending
-  permission requests and the raww input is empty, the permission decisioning
-  pane occupies the raww region; otherwise the raww input occupies it,
+- Write/permission region replacement: when the interaction target has pending
+  permission requests and the Write input is empty, the permission
+  decisioning pane occupies the region; otherwise the Write input occupies it,
 - look snapshot rendering:
   - tmux targets: line snapshot rendering (`snapshot_lines`),
   - ACP targets: structured entry rendering by canonical kinds

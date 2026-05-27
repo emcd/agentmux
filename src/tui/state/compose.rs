@@ -557,7 +557,7 @@ impl AppState {
         let target = self.selected_picker_recipient_id().ok_or_else(|| {
             RuntimeError::validation(
                 "validation_unknown_target",
-                "raww requires a selected recipient in picker",
+                "write requires a selected recipient in picker",
             )
         })?;
         self.set_interaction_target(target);
@@ -570,13 +570,13 @@ impl AppState {
         let Some(target) = self.look_target.clone() else {
             return Err(RuntimeError::validation(
                 "validation_unknown_target",
-                "raww requires an active interaction target",
+                "write requires an active interaction target",
             ));
         };
         if self.raww_draft.trim().is_empty() {
             return Err(RuntimeError::validation(
                 "validation_missing_message_input",
-                "raww text is required from raww input pane",
+                "write text is required from Write input pane",
             ));
         }
 
@@ -611,21 +611,21 @@ impl AppState {
                     self.push_status(
                         None,
                         format!(
-                            "raww accepted status={status} target={target_session} transport={transport_label} phase={phase}"
+                            "write accepted status={status} target={target_session} transport={transport_label} phase={phase}"
                         ),
                     );
                     self.push_event(format!(
-                        "raww target={target_session} status={status} transport={transport_label} phase={phase} message_id={message_id_label}"
+                        "write target={target_session} status={status} transport={transport_label} phase={phase} message_id={message_id_label}"
                     ));
                 } else {
                     self.push_status(
                         None,
                         format!(
-                            "raww accepted status={status} target={target_session} transport={transport_label}"
+                            "write accepted status={status} target={target_session} transport={transport_label}"
                         ),
                     );
                     self.push_event(format!(
-                        "raww target={target_session} status={status} transport={transport_label} message_id={message_id_label}"
+                        "write target={target_session} status={status} transport={transport_label} message_id={message_id_label}"
                     ));
                 }
                 self.clear_raww_draft();
