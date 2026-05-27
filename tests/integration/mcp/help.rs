@@ -20,7 +20,7 @@ async fn help_without_query_returns_tool_inventory() {
     assert_eq!(payload["namespace"], "agentmux");
     assert_eq!(
         payload["tools"].as_array().map_or(0, |value| value.len()),
-        6
+        7
     );
     assert_eq!(payload["tools"][0]["tool"], "list");
     assert_eq!(payload["tools"][0]["kind"], "meta_tool");

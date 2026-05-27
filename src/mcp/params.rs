@@ -18,6 +18,9 @@ pub(super) const GRANT_COMMAND_LIST: &str = "list";
 pub(super) const GRANT_COMMAND_RESOLVE: &str = "resolve";
 pub(super) const GRANT_OUTCOME_SELECTED: &str = "selected";
 pub(super) const GRANT_OUTCOME_CANCELLED: &str = "cancelled";
+pub(super) const TOOL_LIFECYCLE: &str = "lifecycle";
+pub(super) const LIFECYCLE_COMMAND_UP: &str = "up";
+pub(super) const LIFECYCLE_COMMAND_DOWN: &str = "down";
 pub(super) const NAMESPACE_AGENTMUX: &str = "agentmux";
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -149,6 +152,31 @@ pub(super) struct GrantResolveArgs {
     /// Optional bundle selector. When present must equal the associated bundle.
     #[serde(default)]
     pub(super) bundle_name: Option<String>,
+    /// Unknown fields captured for explicit validation.
+    #[serde(flatten, default)]
+    #[schemars(skip)]
+    pub(super) extra_fields: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub(super) struct LifecycleParams {
+    /// Lifecycle subcommand selector. Required; allowed values: `up`, `down`.
+    #[serde(default)]
+    pub(super) command: Option<String>,
+    /// Command-scoped arguments.
+    #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
+    #[serde(default)]
+    pub(super) args: Value,
+    /// Unknown fields captured for explicit validation.
+    #[serde(flatten, default)]
+    #[schemars(skip)]
+    pub(super) extra_fields: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub(super) struct LifecycleArgs {
     /// Unknown fields captured for explicit validation.
     #[serde(flatten, default)]
     #[schemars(skip)]
