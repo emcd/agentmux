@@ -36,6 +36,28 @@ pub(super) fn load_startup_failures(
     Ok(history.map_or_else(Vec::new, |value| value.records))
 }
 
+pub(super) fn clear_startup_failures_for_session(
+    runtime_directory: &Path,
+    session_id: &str,
+) -> Result<usize, String> {
+    let _guard = startup_failure_history_lock()
+        .lock()
+        .map_err(|_| "failed to lock startup failure history".to_string())?;
+    let path = startup_failure_history_path(runtime_directory);
+    let Some(mut history) = load_persisted_startup_failure_history(path.as_path())? else {
+        return Ok(0);
+    };
+    let original_len = history.records.len();
+    history
+        .records
+        .retain(|record| record.session_id != session_id);
+    let removed = original_len - history.records.len();
+    if removed > 0 {
+        store_persisted_startup_failure_history(path.as_path(), &history)?;
+    }
+    Ok(removed)
+}
+
 pub(super) fn append_startup_failure(
     runtime_directory: &Path,
     mut record: StartupFailureRecord,

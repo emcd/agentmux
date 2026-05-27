@@ -15,13 +15,11 @@ use super::error::RuntimeError;
 
 static PROCESS_INSCRIPTIONS_PATH: OnceLock<PathBuf> = OnceLock::new();
 
-/// Resolves relay inscription file path for one bundle.
+/// Resolves the relay inscription file path. One log per relay instance,
+/// rooted at the inscriptions directory.
 #[must_use]
-pub fn relay_inscriptions_path(inscriptions_root: &Path, bundle_name: &str) -> PathBuf {
-    inscriptions_root
-        .join("bundles")
-        .join(safe_segment(bundle_name))
-        .join("relay.log")
+pub fn relay_inscriptions_path(inscriptions_root: &Path) -> PathBuf {
+    inscriptions_root.join("relay.log")
 }
 
 /// Resolves MCP inscription file path for one bundle/session process.

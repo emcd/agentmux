@@ -274,6 +274,114 @@ fn host_relay_records_startup_failures_and_list_reports_degraded_health() {
 }
 
 #[test]
+fn host_relay_clears_startup_failures_for_sessions_that_start_successfully() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_options(&config_root, "alpha", None, &["primary"], Some(true));
+    write_tui_configuration(
+        &config_root,
+        Some("alpha"),
+        Some("user"),
+        &[("user", "default", Some("Operator"))],
+    );
+
+    let bundle_runtime = state_root.join("bundles").join("alpha");
+    fs::create_dir_all(&bundle_runtime).expect("create bundle runtime directory");
+    fs::write(
+        bundle_runtime.join("startup_failures.json"),
+        r#"{
+            "schema_version": 1,
+            "next_sequence": 3,
+            "records": [
+                {
+                    "bundle_name": "alpha",
+                    "session_id": "primary",
+                    "transport": "tmux",
+                    "code": "runtime_startup_failed",
+                    "reason": "stale failure from prior run",
+                    "timestamp": "2026-05-01T00:00:00Z",
+                    "sequence": 1
+                },
+                {
+                    "bundle_name": "alpha",
+                    "session_id": "ghost",
+                    "transport": "tmux",
+                    "code": "runtime_startup_failed",
+                    "reason": "unrelated failure that must be preserved",
+                    "timestamp": "2026-05-01T00:00:01Z",
+                    "sequence": 2
+                }
+            ]
+        }"#,
+    )
+    .expect("seed startup_failures.json");
+
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay");
+    wait_for_relay_ready(&state_root, "alpha");
+
+    let listed = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "list",
+            "sessions",
+            "--bundle",
+            "alpha",
+            "--json",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .output()
+        .expect("run list sessions");
+    assert!(listed.status.success(), "list sessions should succeed");
+    let listed_json: Value = serde_json::from_slice(&listed.stdout).expect("decode list payload");
+    let failures = listed_json["bundle"]["recent_startup_failures"]
+        .as_array()
+        .expect("startup failures array");
+    assert!(
+        failures
+            .iter()
+            .all(|entry| entry["session_id"] != "primary"),
+        "expected primary startup failure to be cleared after successful start: {listed_json}"
+    );
+    assert!(
+        failures.iter().any(|entry| entry["session_id"] == "ghost"),
+        "expected unrelated ghost startup failure to be preserved: {listed_json}"
+    );
+
+    shutdown_relay_if_present(&state_root, "alpha");
+    let output = child
+        .wait_with_output()
+        .expect("wait for agentmux host relay");
+    assert!(output.status.success(), "command should succeed");
+}
+
+#[test]
 fn host_relay_no_autostart_mode_reports_process_only_summary() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = temporary.path().join("config");
