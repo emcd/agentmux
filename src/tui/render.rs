@@ -95,7 +95,7 @@ fn render_raww_cursor(frame: &mut Frame, area: Rect, state: &AppState) {
         return;
     }
     let raww_area = interaction_raww_pane_area(area);
-    let inner = raww_titled_block("  Raww  ").inner(raww_area);
+    let inner = raww_titled_block("  Write  ").inner(raww_area);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
@@ -249,11 +249,11 @@ fn render_interaction_target_header(frame: &mut Frame, area: Rect, state: &AppSt
 }
 
 fn render_interaction_raww_pane(frame: &mut Frame, area: Rect, state: &AppState) {
-    let block = raww_titled_block("  Raww  ");
+    let block = raww_titled_block("  Write  ");
     let inner = block.inner(area);
     let lines: Vec<Line<'static>> = if state.raww_draft.is_empty() {
         vec![Line::from(Span::styled(
-            "(type to compose raww; Enter dispatches, Ctrl+J inserts newline)",
+            "(type to compose write; Enter dispatches, Ctrl+J inserts newline)",
             Style::default().fg(Color::DarkGray),
         ))]
     } else {
@@ -637,9 +637,9 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 }
 
 fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
-    let mode_label = match state.mode {
-        ScreenMode::Communication => "[Communication]",
-        ScreenMode::Interaction => "[Interaction]",
+    let (mode_label, toggle_hint) = match state.mode {
+        ScreenMode::Communication => ("[Communication]", "F4 → Interaction"),
+        ScreenMode::Interaction => ("[Interaction]", "F4 → Communication"),
     };
     let status_line = state
         .status_history
@@ -653,7 +653,9 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" "),
+        Span::raw("  "),
+        Span::styled(toggle_hint, Style::default().fg(Color::Yellow)),
+        Span::raw("  "),
     ];
     spans.extend(status_line.spans);
     let footer = Paragraph::new(Line::from(spans))
@@ -800,12 +802,12 @@ fn render_help_overlay(frame: &mut Frame, _state: &AppState) {
     let right_lines = vec![
         help_section_heading("Interaction Mode"),
         Line::from("PgUp/PgDn: Scroll look snapshot"),
-        Line::from("Raww input (raww has text or no pending):"),
-        Line::from("  Arrows/Home/End: Move raww cursor"),
-        Line::from("  Enter: Dispatch raww to active target"),
+        Line::from("Write input (write has text or no pending):"),
+        Line::from("  Arrows/Home/End: Move write cursor"),
+        Line::from("  Enter: Dispatch write to active target"),
         Line::from("  Ctrl+J: Insert newline"),
-        Line::from("  Backspace: Backspace raww input"),
-        Line::from("Permission (raww empty and pending exists):"),
+        Line::from("  Backspace: Backspace write input"),
+        Line::from("Permission (write empty and pending exists):"),
         Line::from("  Left/Right: Previous/next request"),
         Line::from("  Up/Down: Previous/next ACP option"),
         Line::from("  Enter: Resolve selected option"),
@@ -814,7 +816,7 @@ fn render_help_overlay(frame: &mut Frame, _state: &AppState) {
         help_section_heading("Session Picker (F2)"),
         Line::from("Enter: Choose recipient into To"),
         Line::from("l: Set target, switch to Interaction"),
-        Line::from("w: Set target, switch, focus raww"),
+        Line::from("w: Set target, switch, focus write"),
         Line::from("Esc / F2: Close picker"),
         Line::from("Up/Down: Move picker selection"),
     ];

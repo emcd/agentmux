@@ -30,9 +30,8 @@ draft, and scroll state is preserved across switches.
 
 - **Communication** (default) — chat history and compose (`To` + `Message`)
   for send/receive workflows.
-- **Interaction** — an interaction-target header, the look snapshot, a raww
-  dispatch input, and permission decisioning for operator-driven session
-  inspection.
+- **Interaction** — an interaction-target header, the look snapshot, a Write
+  input, and permission decisioning for operator-driven session inspection.
 
 When Interaction mode has no target, the header shows a placeholder hint:
 open the picker (`F2`) and press `l` or `w` to choose a session.
@@ -66,19 +65,19 @@ open the picker (`F2`) and press `l` or `w` to choose a session.
 ### Interaction mode
 
 - `PgUp` / `PgDn`: scroll look snapshot
-- Raww input (active when raww has text, or no pending permission requests):
-  - `Left` / `Right` / `Up` / `Down` / `Home` / `End`: move raww cursor
-  - `Enter`: dispatch raww to the active interaction target via relay `raww`
-  - `Ctrl+J`: insert newline in raww input
-  - `Backspace`: delete the character before the raww cursor
-- Permission decisioning (active when raww input is empty and the target has
+- Write input (active when write has text, or no pending permission requests):
+  - `Left` / `Right` / `Up` / `Down` / `Home` / `End`: move write cursor
+  - `Enter`: dispatch write to the active interaction target via relay `raww`
+  - `Ctrl+J`: insert newline in write input
+  - `Backspace`: delete the character before the write cursor
+- Permission decisioning (active when write input is empty and the target has
   pending requests):
   - `Left` / `Right`: previous/next pending permission request for the target
   - `Up` / `Down`: previous/next ACP permission option
   - `Enter`: resolve selected request with selected option
     (`outcome=selected`)
   - `c`: resolve selected request as cancelled (`outcome=cancelled`)
-- `Up` / `Down` with an empty raww input and no pending requests: scroll the
+- `Up` / `Down` with an empty write input and no pending requests: scroll the
   look snapshot
 
 ### Recipient picker (`F2`)
@@ -87,7 +86,7 @@ open the picker (`F2`) and press `l` or `w` to choose a session.
 - `Enter`: insert selected recipient into `To`
 - `l`: set the interaction target and switch to Interaction mode
 - `w`: set the interaction target, switch to Interaction mode, and focus the
-  raww input
+  Write input
 - `Esc` / `F2`: close picker
 
 ## Status and Outcome Vocabulary
@@ -113,8 +112,8 @@ Delivery outcomes:
   - tmux look snapshots render line payloads directly.
   - ACP look snapshots render structured entries by kind:
     `user`, `agent`, `cognition`, `invocation`, `result`, `update`.
-- Raww dispatch from Interaction mode routes through relay `raww` and surfaces
-  acceptance-phase metadata when provided.
+- Write dispatch from Interaction mode routes through relay `raww` and
+  surfaces acceptance-phase metadata when provided.
 - Terminal outcomes are sourced from relay completion updates keyed by
   `message_id`.
 - Permission requests are rendered from relay `permission.snapshot`,
