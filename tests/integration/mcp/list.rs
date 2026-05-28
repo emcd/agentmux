@@ -137,8 +137,10 @@ async fn list_sessions_returns_canonical_bundle_payload_from_relay() {
     );
     assert_eq!(payload["bundle"]["sessions"][0]["id"], "bravo");
     assert_eq!(payload["bundle"]["sessions"][0]["name"], "Bravo");
+    assert_eq!(payload["bundle"]["sessions"][0]["ready"], true);
     assert_eq!(payload["bundle"]["sessions"][1]["id"], "charlie");
     assert_eq!(payload["bundle"]["sessions"][1]["transport"], "acp");
+    assert_eq!(payload["bundle"]["sessions"][1]["ready"], true);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -266,12 +268,13 @@ async fn list_sessions_synthesizes_down_bundle_for_unreachable_home_bundle() {
             .as_array()
             .is_some_and(|values| values.is_empty())
     );
-    assert_eq!(
-        payload["bundle"]["sessions"]
-            .as_array()
-            .map_or(0, |value| value.len()),
-        3
-    );
+    let sessions = payload["bundle"]["sessions"]
+        .as_array()
+        .expect("sessions array");
+    assert_eq!(sessions.len(), 3);
+    for session in sessions {
+        assert_eq!(session["ready"], false);
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -402,6 +405,8 @@ async fn list_sessions_all_mode_aggregates_in_lexicographic_bundle_order() {
     assert_eq!(bundles[0]["hosted"], true);
     assert_eq!(bundles[1]["hosted"], false);
     assert_eq!(bundles[2]["hosted"], true);
+    assert_eq!(bundles[0]["sessions"][0]["ready"], true);
+    assert_eq!(bundles[2]["sessions"][0]["ready"], true);
     assert_eq!(bundles[1]["state"], "down");
     assert_eq!(bundles[1]["state_reason_code"], "not_started");
     assert_eq!(bundles[1]["startup_failure_count"], 0);
