@@ -86,6 +86,7 @@ fn listed_bundle(
             id: "alpha".to_string(),
             name: None,
             transport: ListedSessionTransport::Tmux,
+            ready: true,
         }],
     }
 }
