@@ -71,6 +71,7 @@ fn list_sessions_single_bundle_json_uses_canonical_bundle_shape() {
             schema_version: "1".to_string(),
             bundle: ListedBundle {
                 id: "agentmux".to_string(),
+                hosted: true,
                 state: ListedBundleState::Up,
                 startup_health: Some(ListedBundleStartupHealth::Healthy),
                 state_reason_code: None,
@@ -115,6 +116,7 @@ fn list_sessions_single_bundle_json_uses_canonical_bundle_shape() {
     assert_eq!(payload["schema_version"], "1");
     assert_eq!(payload["bundle"]["id"], "agentmux");
     assert_eq!(payload["bundle"]["state"], "up");
+    assert_eq!(payload["bundle"]["hosted"], true);
     assert_eq!(payload["bundle"]["startup_health"], "healthy");
     assert_eq!(payload["bundle"]["startup_failure_count"], 0);
     assert!(
@@ -172,6 +174,7 @@ fn list_sessions_all_json_orders_bundles_lexicographically() {
             schema_version: "1".to_string(),
             bundle: ListedBundle {
                 id: "alpha".to_string(),
+                hosted: true,
                 state: ListedBundleState::Up,
                 startup_health: Some(ListedBundleStartupHealth::Healthy),
                 state_reason_code: None,
@@ -192,6 +195,7 @@ fn list_sessions_all_json_orders_bundles_lexicographically() {
             schema_version: "1".to_string(),
             bundle: ListedBundle {
                 id: "beta".to_string(),
+                hosted: true,
                 state: ListedBundleState::Up,
                 startup_health: Some(ListedBundleStartupHealth::Healthy),
                 state_reason_code: None,
@@ -344,6 +348,7 @@ fn list_sessions_uses_ui_session_identity_defaults_outside_associated_workspace(
             schema_version: "1".to_string(),
             bundle: ListedBundle {
                 id: "infrastructure".to_string(),
+                hosted: true,
                 state: ListedBundleState::Up,
                 startup_health: Some(ListedBundleStartupHealth::Healthy),
                 state_reason_code: None,

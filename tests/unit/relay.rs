@@ -264,6 +264,10 @@ fn list_returns_all_configured_sessions_with_transport() {
         panic!("expected list response");
     };
     assert_eq!(bundle.id, "party");
+    assert!(
+        !bundle.hosted,
+        "tmux-bearing bundle without owned sessions is not hosted"
+    );
     assert_eq!(bundle.state, ListedBundleState::Down);
     assert!(bundle.startup_health.is_none());
     assert_eq!(
@@ -298,6 +302,10 @@ fn list_allows_ui_sender_from_global_tui_sessions() {
     let RelayResponse::List { bundle, .. } = response else {
         panic!("expected list response");
     };
+    assert!(
+        !bundle.hosted,
+        "tmux-bearing bundle without owned sessions is not hosted"
+    );
     assert_eq!(bundle.state, ListedBundleState::Down);
     assert!(bundle.startup_health.is_none());
     assert_eq!(bundle.startup_failure_count, 0);
@@ -344,6 +352,10 @@ fn list_reports_down_when_no_acp_worker_registered() {
     let RelayResponse::List { bundle, .. } = response else {
         panic!("expected list response");
     };
+    assert!(
+        bundle.hosted,
+        "acp-only bundle defaults to hosted=true regardless of worker readiness"
+    );
     assert_eq!(bundle.state, ListedBundleState::Down);
     assert!(bundle.startup_health.is_none());
     assert_eq!(bundle.sessions.len(), 2);

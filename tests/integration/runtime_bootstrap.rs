@@ -781,6 +781,7 @@ async fn mcp_uses_repository_root_debug_state_override() {
                     "schema_version": "1",
                     "bundle": {
                         "id": "party",
+                        "hosted": true,
                         "state": "up",
                         "startup_health": "healthy",
                         "startup_failure_count": 0,
