@@ -9,7 +9,7 @@ use crate::{
 
 use super::super::authorization::{AuthorizationContext, authorize_list};
 use super::super::delivery::acp_session_ready_for_startup;
-use super::super::lifecycle::{reconcile_loaded_bundle, shutdown_bundle_runtime};
+use super::super::lifecycle::{bundle_hosted, reconcile_loaded_bundle, shutdown_bundle_runtime};
 use super::super::tmux::resolve_active_pane_target;
 use super::super::{
     BundleTransitionEntry, ListedBundle, ListedBundleStartupHealth, ListedBundleState,
@@ -137,11 +137,13 @@ pub(super) fn handle_list(
         .count();
     let (state, startup_health, state_reason_code, state_reason) =
         list_bundle_state(configured_session_count, ready_session_count);
+    let hosted = bundle_hosted(bundle, tmux_socket.as_path())?;
 
     let response = RelayResponse::List {
         schema_version: SCHEMA_VERSION.to_string(),
         bundle: ListedBundle {
             id: bundle.bundle_name.clone(),
+            hosted,
             state,
             startup_health,
             state_reason_code,
@@ -157,6 +159,7 @@ pub(super) fn handle_list(
             &json!({
                 "bundle_name": bundle.id,
                 "sender_session": sender.session_id,
+                "hosted": bundle.hosted,
                 "state": bundle.state,
                 "startup_health": bundle.startup_health,
                 "startup_failure_count": bundle.startup_failure_count,

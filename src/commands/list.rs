@@ -260,6 +260,7 @@ fn synthesize_unreachable_bundle(
         };
     ListedBundle {
         id: bundle.bundle_name.clone(),
+        hosted: false,
         state: ListedBundleState::Down,
         startup_health: None,
         state_reason_code,

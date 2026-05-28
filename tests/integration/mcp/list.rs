@@ -23,6 +23,7 @@ async fn tool_catalog_contains_list_sessions_send_look_and_raww() {
                     "schema_version": "1",
                     "bundle": {
                         "id": BUNDLE_NAME,
+                        "hosted": true,
                         "state": "up",
                         "startup_health": "healthy",
                         "startup_failure_count": 0,
@@ -94,6 +95,7 @@ async fn list_sessions_returns_canonical_bundle_payload_from_relay() {
                     "schema_version": "1",
                     "bundle": {
                         "id": BUNDLE_NAME,
+                        "hosted": true,
                         "state": "up",
                         "startup_health": "healthy",
                         "state_reason_code": null,
@@ -303,6 +305,7 @@ async fn list_sessions_all_mode_aggregates_in_lexicographic_bundle_order() {
                     "schema_version": "1",
                     "bundle": {
                         "id": "alpha",
+                        "hosted": true,
                         "state": "up",
                         "startup_health": "healthy",
                         "state_reason_code": null,
@@ -331,6 +334,7 @@ async fn list_sessions_all_mode_aggregates_in_lexicographic_bundle_order() {
                     "schema_version": "1",
                     "bundle": {
                         "id": "zeta",
+                        "hosted": true,
                         "state": "up",
                         "startup_health": "healthy",
                         "state_reason_code": null,
@@ -359,6 +363,7 @@ async fn list_sessions_all_mode_aggregates_in_lexicographic_bundle_order() {
                     "schema_version": "1",
                     "bundle": {
                         "id": "party",
+                        "hosted": false,
                         "state": "down",
                         "startup_health": null,
                         "state_reason_code": "not_started",
@@ -440,6 +445,7 @@ async fn list_sessions_all_mode_fails_fast_on_first_authorization_denial() {
                     "schema_version": "1",
                     "bundle": {
                         "id": BUNDLE_NAME,
+                        "hosted": true,
                         "state": "up",
                         "startup_health": "healthy",
                         "state_reason_code": null,
@@ -468,6 +474,7 @@ async fn list_sessions_all_mode_fails_fast_on_first_authorization_denial() {
                     "schema_version": "1",
                     "bundle": {
                         "id": "zeta",
+                        "hosted": true,
                         "state": "up",
                         "startup_health": "healthy",
                         "state_reason_code": null,

@@ -101,6 +101,7 @@ pub struct StartupFailureRecord {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct ListedBundle {
     pub id: String,
+    pub hosted: bool,
     pub state: ListedBundleState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub startup_health: Option<ListedBundleStartupHealth>,
