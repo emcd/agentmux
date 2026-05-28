@@ -9,7 +9,7 @@ use crate::{
 
 use super::super::authorization::{AuthorizationContext, authorize_list};
 use super::super::delivery::acp_session_ready_for_startup;
-use super::super::lifecycle::{bundle_hosted, reconcile_loaded_bundle, shutdown_bundle_runtime};
+use super::super::lifecycle::{reconcile_loaded_bundle, shutdown_bundle_runtime};
 use super::super::tmux::resolve_active_pane_target;
 use super::super::{
     BundleTransitionEntry, ListedBundle, ListedBundleStartupHealth, ListedBundleState,
@@ -113,6 +113,7 @@ pub(super) fn handle_list(
             id: canonical_session_id(member.id.as_str(), bundle.bundle_name.as_str()),
             name: member.name.clone(),
             transport: member.target.session_type().into(),
+            ready: session_ready_for_list(bundle, runtime_directory, tmux_socket.as_path(), member),
         })
         .collect::<Vec<_>>();
 
@@ -128,16 +129,10 @@ pub(super) fn handle_list(
     })?;
     let startup_failure_count = recent_startup_failures.len();
     let configured_session_count = bundle.members.len();
-    let ready_session_count = bundle
-        .members
-        .iter()
-        .filter(|member| {
-            session_ready_for_list(bundle, runtime_directory, tmux_socket.as_path(), member)
-        })
-        .count();
+    let ready_session_count = sessions.iter().filter(|session| session.ready).count();
     let (state, startup_health, state_reason_code, state_reason) =
         list_bundle_state(configured_session_count, ready_session_count);
-    let hosted = bundle_hosted(bundle, tmux_socket.as_path())?;
+    let hosted = ready_session_count > 0;
 
     let response = RelayResponse::List {
         schema_version: SCHEMA_VERSION.to_string(),

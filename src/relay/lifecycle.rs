@@ -67,31 +67,6 @@ pub(super) fn startup_bundle(
     startup_loaded_bundle(&bundle, runtime_directory, tmux_socket.as_path())
 }
 
-/// Probes whether the bundle is currently hosted by inspecting tmux state.
-///
-/// Returns `true` when the bundle has at least one configured tmux member
-/// with an agentmux-owned tmux session present, or when the bundle has zero
-/// configured tmux members (matches existing idempotent `bundle up` no-op
-/// semantics for ACP-only, UI-only, or pubsub-only bundles).
-pub(super) fn bundle_hosted(
-    bundle: &BundleConfiguration,
-    tmux_socket: &Path,
-) -> Result<bool, RelayError> {
-    let configured_tmux_sessions = bundle
-        .members
-        .iter()
-        .filter(|member| matches!(member.target, TargetConfiguration::Tmux(_)))
-        .map(|member| member.id.clone())
-        .collect::<HashSet<_>>();
-    if configured_tmux_sessions.is_empty() {
-        return Ok(true);
-    }
-    let owned = list_owned_sessions(tmux_socket)?;
-    Ok(owned
-        .iter()
-        .any(|session_name| configured_tmux_sessions.contains(session_name)))
-}
-
 pub(super) fn reconcile_loaded_bundle(
     bundle: &BundleConfiguration,
     tmux_socket: &Path,

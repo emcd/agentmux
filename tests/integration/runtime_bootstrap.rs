@@ -786,7 +786,7 @@ async fn mcp_uses_repository_root_debug_state_override() {
                         "startup_health": "healthy",
                         "startup_failure_count": 0,
                         "recent_startup_failures": [],
-                        "sessions": [{"id": "bravo", "transport": "tmux"}],
+                        "sessions": [{"id": "bravo", "transport": "tmux", "ready": true}],
                     },
                 }),
                 _ => json!({

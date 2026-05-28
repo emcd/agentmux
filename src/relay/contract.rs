@@ -31,6 +31,7 @@ pub struct ListedSession {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub transport: ListedSessionTransport,
+    pub ready: bool,
 }
 
 /// Bundle live state in list-sessions payloads.

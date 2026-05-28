@@ -984,6 +984,7 @@ fn list_sessions_from_bundle_configuration(bundle: &BundleConfiguration) -> Vec<
             id: member.id.clone(),
             name: member.name.clone(),
             transport: member.target.session_type().into(),
+            ready: false,
         })
         .collect::<Vec<_>>()
 }
