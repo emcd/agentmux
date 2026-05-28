@@ -3,7 +3,7 @@ use crate::{
     runtime::error::RuntimeError,
 };
 
-use super::{AppState, Recipient, map_relay_error, map_relay_request_failure};
+use super::{AppState, BundleStatusDisplay, Recipient, map_relay_error, map_relay_request_failure};
 
 impl AppState {
     pub fn refresh_recipients(&mut self) -> Result<(), RuntimeError> {
@@ -12,6 +12,7 @@ impl AppState {
         })?;
         match response {
             RelayResponse::List { bundle, .. } => {
+                self.bundle_status = Some(BundleStatusDisplay::from_listed_bundle(&bundle));
                 let recipients = bundle
                     .sessions
                     .into_iter()
