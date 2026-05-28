@@ -13,6 +13,9 @@ use super::state::{
     AppState, ChatHistoryDirection, FocusField, LookSnapshotFormat, Recipient, ScreenMode,
     StatusEntry,
 };
+use super::status::{
+    BundleStatusDisplay, BundleStatusSeverity, bundle_status_severity, format_bundle_status_line,
+};
 
 const WORKBENCH_MIN_CHAT_HEIGHT: u16 = 1;
 const WORKBENCH_MIN_COMPOSE_HEIGHT: u16 = 4;
@@ -680,6 +683,20 @@ fn render_status_line(entry: &StatusEntry) -> Line<'static> {
 fn render_picker_overlay(frame: &mut Frame, state: &mut AppState) {
     let popup = centered_rect(70, 70, frame.area());
     frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("Recipient Picker");
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .split(inner);
+
+    let status_line = bundle_status_header_line(state.bundle_status.as_ref());
+    frame.render_widget(Paragraph::new(status_line), sections[0]);
+
     let items = if state.recipients.is_empty() {
         vec![ListItem::new("(no recipients)")]
     } else {
@@ -695,14 +712,30 @@ fn render_picker_overlay(frame: &mut Frame, state: &mut AppState) {
             })
             .collect::<Vec<_>>()
     };
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Recipient Picker"),
-        )
-        .highlight_style(Style::default().bg(Color::Blue).fg(Color::White));
-    frame.render_stateful_widget(list, popup, &mut state.picker_state);
+    let list = List::new(items).highlight_style(Style::default().bg(Color::Blue).fg(Color::White));
+    frame.render_stateful_widget(list, sections[1], &mut state.picker_state);
+}
+
+fn bundle_status_header_line(status: Option<&BundleStatusDisplay>) -> Line<'static> {
+    let Some(status) = status else {
+        return Line::from(Span::styled(
+            "(bundle status pending list refresh)",
+            Style::default().fg(Color::DarkGray),
+        ));
+    };
+    let style = bundle_status_severity_style(bundle_status_severity(status));
+    Line::from(Span::styled(format_bundle_status_line(status), style))
+}
+
+fn bundle_status_severity_style(severity: BundleStatusSeverity) -> Style {
+    match severity {
+        BundleStatusSeverity::Healthy => Style::default().fg(Color::Green),
+        BundleStatusSeverity::Degraded => Style::default().fg(Color::Yellow),
+        BundleStatusSeverity::HostedDown => {
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+        }
+        BundleStatusSeverity::Unhosted => Style::default().fg(Color::DarkGray),
+    }
 }
 
 fn render_events_overlay(frame: &mut Frame, state: &mut AppState) {

@@ -21,6 +21,8 @@ mod compose;
 mod history;
 mod relay;
 
+use super::status::BundleStatusDisplay;
+
 const STATUS_HISTORY_MAXIMUM: usize = 6;
 const EVENT_HISTORY_MAXIMUM: usize = 64;
 const CHAT_HISTORY_MAXIMUM: usize = 256;
@@ -105,6 +107,7 @@ pub(crate) struct AppState {
     relay_stream: RelayStreamSession,
     look_lines: Option<u64>,
     pub recipients: Vec<Recipient>,
+    pub bundle_status: Option<BundleStatusDisplay>,
     pub recipients_state: ListState,
     pub picker_open: bool,
     pub events_overlay_open: bool,
@@ -167,6 +170,7 @@ impl AppState {
             relay_stream,
             look_lines,
             recipients: Vec::new(),
+            bundle_status: None,
             recipients_state: ListState::default(),
             picker_open: false,
             events_overlay_open: false,

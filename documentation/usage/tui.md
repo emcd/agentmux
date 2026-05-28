@@ -82,6 +82,17 @@ open the picker (`F2`) and press `l` or `w` to choose a session.
 
 ### Recipient picker (`F2`)
 
+The picker header surfaces a one-line bundle status in CLI-style key=value
+format (`bundle=NAME hosted=yes|no state=up|down ...`) and color-codes it:
+
+- green: hosted and healthy,
+- yellow: hosted and degraded,
+- red (bold): hosted but `state=down` (sessions failed to start),
+- gray: not hosted (never started or shut down).
+
+This distinguishes `hosted=true, state=down` (bundle is up but every session
+failed startup) from `hosted=false, state=down` (bundle has not been started).
+
 - `Up` / `Down`: move recipient selection
 - `Enter`: insert selected recipient into `To`
 - `l`: set the interaction target and switch to Interaction mode

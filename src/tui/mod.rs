@@ -3,6 +3,7 @@
 mod input;
 mod render;
 mod state;
+mod status;
 mod target;
 pub mod workbench;
 
@@ -17,6 +18,9 @@ use crate::runtime::{
 };
 
 pub use state::TuiLaunchOptions;
+pub use status::{
+    BundleStatusDisplay, BundleStatusSeverity, bundle_status_severity, format_bundle_status_line,
+};
 pub use target::{autocomplete_recipient_input, merge_tui_targets, parse_tui_target_identifier};
 
 struct TerminalRestoreGuard;

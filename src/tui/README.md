@@ -71,6 +71,12 @@ available in both modes.
   - set the interaction target and switch to Interaction mode (`l`),
   - set the interaction target, switch to Interaction mode, and focus the
     Write input (`w`),
+- picker bundle status header: one-line CLI-style key=value summary of
+  `bundle.hosted`, `bundle.state`, `bundle.startup_health`, and reason code
+  from `relay::ListedBundle`, color-coded into four severity buckets
+  (`Healthy`/`Degraded`/`HostedDown`/`Unhosted`) so `hosted=true, state=down`
+  (sessions failed to start) is visually distinct from `hosted=false,
+  state=down` (not hosted),
 - Interaction mode Write input dispatches raw writes to the active interaction
   target via relay `raww`,
 - Write/permission region replacement: when the interaction target has pending
