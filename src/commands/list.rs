@@ -274,6 +274,7 @@ fn synthesize_unreachable_bundle(
                 id: member.id.clone(),
                 name: member.name.clone(),
                 transport: member.target.session_type().into(),
+                ready: false,
             })
             .collect::<Vec<_>>(),
     }

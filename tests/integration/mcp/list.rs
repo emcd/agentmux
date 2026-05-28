@@ -103,8 +103,8 @@ async fn list_sessions_returns_canonical_bundle_payload_from_relay() {
                         "startup_failure_count": 0,
                         "recent_startup_failures": [],
                         "sessions": [
-                            {"id": "bravo", "name": "Bravo", "transport": "tmux"},
-                            {"id": "charlie", "transport": "acp"},
+                            {"id": "bravo", "name": "Bravo", "transport": "tmux", "ready": true},
+                            {"id": "charlie", "transport": "acp", "ready": true},
                         ],
                     },
                 }),
@@ -314,7 +314,7 @@ async fn list_sessions_all_mode_aggregates_in_lexicographic_bundle_order() {
                         "state_reason": null,
                         "startup_failure_count": 0,
                         "recent_startup_failures": [],
-                        "sessions": [{"id": "alpha", "transport": "tmux"}],
+                        "sessions": [{"id": "alpha", "transport": "tmux", "ready": true}],
                     },
                 }),
                 _ => json!({
@@ -343,7 +343,7 @@ async fn list_sessions_all_mode_aggregates_in_lexicographic_bundle_order() {
                         "state_reason": null,
                         "startup_failure_count": 0,
                         "recent_startup_failures": [],
-                        "sessions": [{"id": "zeta", "transport": "acp"}],
+                        "sessions": [{"id": "zeta", "transport": "acp", "ready": true}],
                     },
                 }),
                 _ => json!({
@@ -457,7 +457,7 @@ async fn list_sessions_all_mode_fails_fast_on_first_authorization_denial() {
                         "state_reason": null,
                         "startup_failure_count": 0,
                         "recent_startup_failures": [],
-                        "sessions": [{"id": BUNDLE_NAME, "transport": "tmux"}],
+                        "sessions": [{"id": BUNDLE_NAME, "transport": "tmux", "ready": true}],
                     },
                 }),
                 _ => json!({
@@ -486,7 +486,7 @@ async fn list_sessions_all_mode_fails_fast_on_first_authorization_denial() {
                         "state_reason": null,
                         "startup_failure_count": 0,
                         "recent_startup_failures": [],
-                        "sessions": [{"id": "zeta", "transport": "tmux"}],
+                        "sessions": [{"id": "zeta", "transport": "tmux", "ready": true}],
                     },
                 }),
                 _ => json!({
