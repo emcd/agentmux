@@ -126,6 +126,7 @@ async fn list_sessions_returns_canonical_bundle_payload_from_relay() {
 
     assert_eq!(payload["schema_version"], "1");
     assert_eq!(payload["bundle"]["id"], BUNDLE_NAME);
+    assert_eq!(payload["bundle"]["hosted"], true);
     assert_eq!(payload["bundle"]["state"], "up");
     assert_eq!(payload["bundle"]["startup_health"], "healthy");
     assert_eq!(payload["bundle"]["startup_failure_count"], 0);
@@ -256,6 +257,7 @@ async fn list_sessions_synthesizes_down_bundle_for_unreachable_home_bundle() {
 
     assert_eq!(payload["schema_version"], "1");
     assert_eq!(payload["bundle"]["id"], BUNDLE_NAME);
+    assert_eq!(payload["bundle"]["hosted"], false);
     assert_eq!(payload["bundle"]["state"], "down");
     assert_eq!(payload["bundle"]["state_reason_code"], "not_started");
     assert_eq!(payload["bundle"]["startup_failure_count"], 0);
@@ -397,6 +399,9 @@ async fn list_sessions_all_mode_aggregates_in_lexicographic_bundle_order() {
         .collect::<Vec<_>>();
 
     assert_eq!(bundle_ids, vec!["alpha", "party", "zeta"]);
+    assert_eq!(bundles[0]["hosted"], true);
+    assert_eq!(bundles[1]["hosted"], false);
+    assert_eq!(bundles[2]["hosted"], true);
     assert_eq!(bundles[1]["state"], "down");
     assert_eq!(bundles[1]["state_reason_code"], "not_started");
     assert_eq!(bundles[1]["startup_failure_count"], 0);
