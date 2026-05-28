@@ -71,6 +71,7 @@ impl Workbench {
             .map(|session| Recipient {
                 session_name: (*session).to_string(),
                 display_name: None,
+                ready: true,
             })
             .collect::<Vec<_>>();
     }

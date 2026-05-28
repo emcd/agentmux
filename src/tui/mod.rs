@@ -19,7 +19,8 @@ use crate::runtime::{
 
 pub use state::TuiLaunchOptions;
 pub use status::{
-    BundleStatusDisplay, BundleStatusSeverity, bundle_status_severity, format_bundle_status_line,
+    BundleStatusDisplay, BundleStatusSeverity, RecipientReadiness, bundle_status_severity,
+    format_bundle_status_line, format_recipient_picker_label,
 };
 pub use target::{autocomplete_recipient_input, merge_tui_targets, parse_tui_target_identifier};
 

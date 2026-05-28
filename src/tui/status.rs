@@ -1,10 +1,16 @@
-//! Bundle status formatting for the TUI list view.
+//! List-view formatting for the TUI recipient picker.
 //!
-//! Captures the bundle-scoped fields surfaced by `relay::ListedBundle` so the
-//! recipient picker can show whether the bundle is hosted and what its
-//! lifecycle state is. Distinguishing `hosted=true, state=down` (sessions
-//! failed startup) from `hosted=false, state=down` (never started or shut
-//! down) is the load-bearing reason this exists.
+//! Captures bundle-scoped and session-scoped fields surfaced by `relay::List`
+//! so the picker can show:
+//!
+//! - whether the bundle is hosted and what its lifecycle state is — see
+//!   [`BundleStatusDisplay`]. Distinguishing `hosted=true, state=down`
+//!   (sessions failed startup) from `hosted=false, state=down` (never started
+//!   or shut down) is the load-bearing reason that summary exists.
+//! - whether each individual session is ready — see
+//!   [`format_recipient_picker_label`] / [`RecipientReadiness`]. The bundle
+//!   aggregate (`startup_health`) can be `Degraded` while individual sessions
+//!   are still `ready=false`, and the operator needs the per-session detail.
 
 use crate::relay::{ListedBundle, ListedBundleStartupHealth, ListedBundleState};
 
@@ -89,6 +95,44 @@ pub fn bundle_status_severity(status: &BundleStatusDisplay) -> BundleStatusSever
         },
         (true, ListedBundleState::Down) => BundleStatusSeverity::HostedDown,
         (false, _) => BundleStatusSeverity::Unhosted,
+    }
+}
+
+/// Per-session readiness classification for picker rendering.
+///
+/// Mirrors `relay::ListedSession::ready`. Kept as a pure enum (not a
+/// ratatui `Style`) so render styling can be co-located with the rest of the
+/// rendering code while pure formatting/classification stays testable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecipientReadiness {
+    Ready,
+    NotReady,
+}
+
+impl RecipientReadiness {
+    pub fn from_ready(ready: bool) -> Self {
+        if ready { Self::Ready } else { Self::NotReady }
+    }
+}
+
+/// Format one recipient row for the picker list.
+///
+/// `ready=true` rows render as the canonical `id (display_name)` (or just `id`
+/// when no display name is known). `ready=false` rows append a `[not ready]`
+/// marker so the state is legible even without color (color-blind operators,
+/// terminals that drop styling).
+pub fn format_recipient_picker_label(
+    session_name: &str,
+    display_name: Option<&str>,
+    readiness: RecipientReadiness,
+) -> String {
+    let base = match display_name {
+        Some(name) => format!("{session_name} ({name})"),
+        None => session_name.to_string(),
+    };
+    match readiness {
+        RecipientReadiness::Ready => base,
+        RecipientReadiness::NotReady => format!("{base}  [not ready]"),
     }
 }
 

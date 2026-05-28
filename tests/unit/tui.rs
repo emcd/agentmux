@@ -3,9 +3,9 @@ use agentmux::relay::{
     ListedSessionTransport,
 };
 use agentmux::tui::{
-    BundleStatusDisplay, BundleStatusSeverity, autocomplete_recipient_input,
-    bundle_status_severity, format_bundle_status_line, merge_tui_targets,
-    parse_tui_target_identifier,
+    BundleStatusDisplay, BundleStatusSeverity, RecipientReadiness, autocomplete_recipient_input,
+    bundle_status_severity, format_bundle_status_line, format_recipient_picker_label,
+    merge_tui_targets, parse_tui_target_identifier,
 };
 
 #[test]
@@ -157,6 +157,41 @@ fn bundle_status_line_renders_hosted_down_distinct_from_unhosted() {
         bundle_status_severity(&hosted_down),
         bundle_status_severity(&unhosted),
         "severity buckets must differ so the picker can color them apart"
+    );
+}
+
+#[test]
+fn recipient_picker_label_renders_ready_session_without_marker() {
+    let with_name =
+        format_recipient_picker_label("alpha", Some("Alpha"), RecipientReadiness::Ready);
+    assert_eq!(with_name, "alpha (Alpha)");
+    let without_name = format_recipient_picker_label("alpha", None, RecipientReadiness::Ready);
+    assert_eq!(without_name, "alpha");
+}
+
+#[test]
+fn recipient_picker_label_appends_not_ready_marker() {
+    let labelled =
+        format_recipient_picker_label("alpha", Some("Alpha"), RecipientReadiness::NotReady);
+    assert_eq!(labelled, "alpha (Alpha)  [not ready]");
+    let bare = format_recipient_picker_label("alpha", None, RecipientReadiness::NotReady);
+    assert_eq!(bare, "alpha  [not ready]");
+    assert_ne!(
+        format_recipient_picker_label("alpha", Some("Alpha"), RecipientReadiness::Ready),
+        labelled,
+        "ready and not-ready labels must be visibly distinct even without color"
+    );
+}
+
+#[test]
+fn recipient_readiness_classifies_relay_ready_field() {
+    assert_eq!(
+        RecipientReadiness::from_ready(true),
+        RecipientReadiness::Ready
+    );
+    assert_eq!(
+        RecipientReadiness::from_ready(false),
+        RecipientReadiness::NotReady
     );
 }
 

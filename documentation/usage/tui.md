@@ -93,6 +93,10 @@ format (`bundle=NAME hosted=yes|no state=up|down ...`) and color-codes it:
 This distinguishes `hosted=true, state=down` (bundle is up but every session
 failed startup) from `hosted=false, state=down` (bundle has not been started).
 
+Each recipient row reflects the session's per-session readiness from the relay
+list payload. Sessions that are not yet ready render dimmed and gain a
+trailing `[not ready]` marker so the state is legible even without color.
+
 - `Up` / `Down`: move recipient selection
 - `Enter`: insert selected recipient into `To`
 - `l`: set the interaction target and switch to Interaction mode
