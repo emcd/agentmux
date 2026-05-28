@@ -9,10 +9,9 @@ use super::super::authorization::{
     load_authorization_context,
 };
 use super::super::delivery::{
-    PermissionDecisionKind, PermissionDecisionRequest, PermissionEventContext,
-    PermissionResolutionOutcome, PersistedPendingPermissionRequest,
-    emit_permission_snapshot_then_replay, list_pending_permission_requests,
-    map_permission_state_error, resolve_permission_request,
+    PendingPermissionRequest, PermissionDecisionKind, PermissionDecisionRequest,
+    PermissionEventContext, PermissionResolutionOutcome, emit_permission_snapshot_then_replay,
+    list_pending_permission_requests, resolve_permission_request,
 };
 use super::super::{
     PendingPermissionEntry, PermissionDecisionRequestContext, RelayError, RelayResponse,
@@ -40,16 +39,15 @@ pub(super) fn emit_permission_snapshot_for_ui_registration(
         authorized_ui_sessions: authorized_sessions,
     };
     emit_permission_snapshot_then_replay(&context, ui_session_id).map_err(|cause| {
-        let mut error = map_permission_state_error(
-            "runtime_permission_queue_unavailable",
+        relay_error(
+            "internal_unexpected_failure",
             "failed to replay permission snapshot for ui session",
-        );
-        error.details = Some(json!({
-            "bundle_name": bundle.bundle_name,
-            "session_id": ui_session_id,
-            "cause": cause,
-        }));
-        error
+            Some(json!({
+                "bundle_name": bundle.bundle_name,
+                "session_id": ui_session_id,
+                "cause": cause,
+            })),
+        )
     })
 }
 
@@ -152,19 +150,11 @@ pub(super) fn handle_permission_list(
     })?;
     authorize_grant_for_list(bundle, authorization, principal.session_id.as_str())?;
     let pending = list_pending_permission_requests(runtime_directory).map_err(|cause| {
-        if cause.starts_with("runtime_permission_queue_unavailable") {
-            relay_error(
-                "runtime_permission_queue_unavailable",
-                "permission queue state is unavailable",
-                None,
-            )
-        } else {
-            relay_error(
-                "internal_unexpected_failure",
-                "failed to list pending permission requests",
-                Some(json!({ "cause": cause })),
-            )
-        }
+        relay_error(
+            "internal_unexpected_failure",
+            "failed to list pending permission requests",
+            Some(json!({ "cause": cause })),
+        )
     })?;
     let pending_requests = pending
         .into_iter()
@@ -271,12 +261,6 @@ fn map_permission_resolution_error(
             "permission request is already resolved",
             Some(json!({"permission_request_id": permission_request_id})),
         )
-    } else if cause.starts_with("runtime_permission_queue_unavailable") {
-        relay_error(
-            "runtime_permission_queue_unavailable",
-            "permission queue state is unavailable",
-            Some(json!({"permission_request_id": permission_request_id})),
-        )
     } else if cause.starts_with("validation_invalid_params:") {
         let validation_message = cause
             .split_once(':')
@@ -300,9 +284,9 @@ fn map_permission_resolution_error(
 }
 
 fn pending_permission_entry_from_record(
-    record: PersistedPendingPermissionRequest,
+    record: PendingPermissionRequest,
 ) -> PendingPermissionEntry {
-    let PersistedPendingPermissionRequest {
+    let PendingPermissionRequest {
         message_id,
         permission_request_id,
         target_session,

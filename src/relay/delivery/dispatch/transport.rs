@@ -1,5 +1,6 @@
 use crate::configuration::{BundleMember, TargetConfiguration, TmuxTargetConfiguration};
 
+use super::super::super::startup_state::note_session_served_successfully;
 use super::super::super::tmux::{inject_literal_text, inject_prompt, resolve_active_pane_target};
 use super::super::super::{
     AsyncDeliveryTask, DeliveryPayloadMode, RelayError, SendOutcome, SendResult,
@@ -144,14 +145,20 @@ fn deliver_one_target_tmux(
         .err(),
     };
     match failed_reason {
-        None => SendResult {
-            target_session,
-            message_id,
-            outcome: SendOutcome::Delivered,
-            reason_code: None,
-            reason: None,
-            details: None,
-        },
+        None => {
+            let _ = note_session_served_successfully(
+                task.runtime_directory.as_path(),
+                target_session.as_str(),
+            );
+            SendResult {
+                target_session,
+                message_id,
+                outcome: SendOutcome::Delivered,
+                reason_code: None,
+                reason: None,
+                details: None,
+            }
+        }
         Some(reason) => SendResult {
             target_session,
             message_id,
@@ -209,14 +216,20 @@ fn deliver_batch_target_tmux(
     batch
         .iter()
         .map(|task| match &failed_reason {
-            None => SendResult {
-                target_session: task.target_session.clone(),
-                message_id: task.message_id.clone(),
-                outcome: SendOutcome::Delivered,
-                reason_code: None,
-                reason: None,
-                details: None,
-            },
+            None => {
+                let _ = note_session_served_successfully(
+                    task.runtime_directory.as_path(),
+                    task.target_session.as_str(),
+                );
+                SendResult {
+                    target_session: task.target_session.clone(),
+                    message_id: task.message_id.clone(),
+                    outcome: SendOutcome::Delivered,
+                    reason_code: None,
+                    reason: None,
+                    details: None,
+                }
+            }
             Some(reason) => SendResult {
                 target_session: task.target_session.clone(),
                 message_id: task.message_id.clone(),

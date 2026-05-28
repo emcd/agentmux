@@ -18,7 +18,8 @@ use super::{
     wait_for_permission_resolution,
 };
 
-use super::super::{AsyncDeliveryTask, SendResult};
+use super::super::startup_state::note_session_served_successfully;
+use super::super::{AsyncDeliveryTask, SendOutcome, SendResult};
 
 // ACP delivery failure taxonomy:
 // - `runtime_acp_initialize_failed` / `_session_new_failed` / `_session_load_failed`:
@@ -314,6 +315,12 @@ pub(super) fn deliver_batch_target_acp(
             template_correlation.message_id.clone(),
             completion_target_member_id.as_str(),
         );
+        if template_result.outcome == SendOutcome::Delivered {
+            let _ = note_session_served_successfully(
+                completion_runtime_directory.as_path(),
+                completion_target_member_id.as_str(),
+            );
+        }
         for correlation in &completion_correlations {
             let mut per_task = template_result.clone();
             per_task.target_session = correlation.target_session.clone();
@@ -570,6 +577,12 @@ pub(super) fn deliver_one_target_acp(
             completion_message_id.clone(),
             completion_target_member_id.as_str(),
         );
+        if final_result.outcome == SendOutcome::Delivered {
+            let _ = note_session_served_successfully(
+                completion_runtime_directory.as_path(),
+                completion_target_member_id.as_str(),
+            );
+        }
         set_acp_worker_state(
             completion_bundle_name.as_str(),
             completion_runtime_directory.as_path(),

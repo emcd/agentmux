@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fs,
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
@@ -21,8 +22,19 @@ struct PersistedStartupFailureHistory {
 
 static STARTUP_FAILURE_HISTORY_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
+// Per-process record of (runtime_directory, session_id) pairs that have
+// already had their startup failure entries cleared during this relay run.
+// Lets repeated successful serves skip the file lock + read/write entirely.
+// Entries persist for the relay's lifetime; the set is bounded by the number
+// of distinct sessions a relay handles.
+static SERVED_SESSIONS_CLEARED: OnceLock<Mutex<HashSet<(PathBuf, String)>>> = OnceLock::new();
+
 fn startup_failure_history_lock() -> &'static Mutex<()> {
     STARTUP_FAILURE_HISTORY_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn served_sessions_cleared() -> &'static Mutex<HashSet<(PathBuf, String)>> {
+    SERVED_SESSIONS_CLEARED.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
 pub(super) fn load_startup_failures(
@@ -34,6 +46,26 @@ pub(super) fn load_startup_failures(
     let path = startup_failure_history_path(runtime_directory);
     let history = load_persisted_startup_failure_history(path.as_path())?;
     Ok(history.map_or_else(Vec::new, |value| value.records))
+}
+
+/// Records that `session_id` has been observed serving successfully and clears
+/// any stale startup failure entries from its bundle history. Idempotent across
+/// the relay's lifetime via an in-memory dedup set, so callers on the hot
+/// delivery path pay only a mutex acquisition after the first call per session.
+pub(super) fn note_session_served_successfully(
+    runtime_directory: &Path,
+    session_id: &str,
+) -> Result<(), String> {
+    let key = (runtime_directory.to_path_buf(), session_id.to_string());
+    {
+        let mut guard = served_sessions_cleared()
+            .lock()
+            .map_err(|_| "failed to lock served sessions cache".to_string())?;
+        if !guard.insert(key) {
+            return Ok(());
+        }
+    }
+    clear_startup_failures_for_session(runtime_directory, session_id).map(|_| ())
 }
 
 pub(super) fn clear_startup_failures_for_session(

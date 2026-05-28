@@ -7,7 +7,7 @@ use time::format_description::well_known::Rfc3339;
 use crate::configuration::{BundleConfiguration, TargetConfiguration, load_bundle_configuration};
 use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 
-use super::startup_state::clear_startup_failures_for_session;
+use super::startup_state::note_session_served_successfully;
 use super::{
     BundleStartupReport, ListedSessionTransport, ReconciliationReport, RelayError, ShutdownReport,
     StartupFailureRecord, map_config, relay_error,
@@ -276,15 +276,13 @@ fn clear_session_startup_failures(
     runtime_directory: &Path,
     session_id: &str,
 ) -> Result<(), RelayError> {
-    clear_startup_failures_for_session(runtime_directory, session_id)
-        .map(|_| ())
-        .map_err(|reason| {
-            relay_error(
-                "internal_unexpected_failure",
-                "failed to clear startup failure history after successful session startup",
-                Some(json!({"session_id": session_id, "cause": reason})),
-            )
-        })
+    note_session_served_successfully(runtime_directory, session_id).map_err(|reason| {
+        relay_error(
+            "internal_unexpected_failure",
+            "failed to clear startup failure history after successful session startup",
+            Some(json!({"session_id": session_id, "cause": reason})),
+        )
+    })
 }
 
 fn startup_timestamp() -> String {

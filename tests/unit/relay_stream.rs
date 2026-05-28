@@ -132,50 +132,35 @@ fn seed_permission_queue(runtime_directory: &Path, permission_request_id: &str, 
 
 fn seed_permission_queue_with_options(runtime_directory: &Path, entries: &[(&str, &str)]) {
     std::fs::create_dir_all(runtime_directory).expect("create runtime directory");
-    let pending: Vec<Value> = entries
-        .iter()
-        .enumerate()
-        .map(|(index, (permission_request_id, option_id))| {
-            let sequence = (index as u64) + 1;
-            json!({
-                "permission_request_id": permission_request_id,
-                "message_id": format!("msg-{sequence}"),
-                "target_session": "alpha",
-                "requested_kind": "execute",
-                "requested_details": {
-                    "tool_call_title": format!("Run command {sequence}"),
-                    "options": [
-                        {
-                            "option_id": option_id,
-                            "name": "Allow once",
-                            "kind": "allow_once"
-                        },
-                        {
-                            "option_id": format!("{option_id}-reject"),
-                            "name": "Reject once",
-                            "kind": "reject_once"
-                        }
-                    ],
-                    "acp_request_id": 100 + sequence,
-                    "raw": {"sessionId": "alpha"},
+    for (index, (permission_request_id, option_id)) in entries.iter().enumerate() {
+        let sequence = (index as u64) + 1;
+        let requested_details = json!({
+            "tool_call_title": format!("Run command {sequence}"),
+            "options": [
+                {
+                    "option_id": option_id,
+                    "name": "Allow once",
+                    "kind": "allow_once"
                 },
-                "enqueued_at": "2026-01-01T00:00:00Z",
-                "enqueued_at_ms": 12345 + (sequence as i64),
-                "sequence": sequence,
-            })
-        })
-        .collect();
-    let next_sequence = (entries.len() as u64) + 1;
-    let state = json!({
-        "schema_version": 1,
-        "next_sequence": next_sequence,
-        "pending": pending,
-    });
-    std::fs::write(
-        runtime_directory.join("permission_queue.json"),
-        serde_json::to_string_pretty(&state).expect("encode seeded queue"),
-    )
-    .expect("write seeded permission queue");
+                {
+                    "option_id": format!("{option_id}-reject"),
+                    "name": "Reject once",
+                    "kind": "reject_once"
+                }
+            ],
+            "acp_request_id": 100 + sequence,
+            "raw": {"sessionId": "alpha"},
+        });
+        agentmux::relay::install_pending_permission_request_for_testing(
+            runtime_directory,
+            permission_request_id,
+            format!("msg-{sequence}").as_str(),
+            "alpha",
+            "execute",
+            requested_details,
+        )
+        .expect("install pending permission request for testing");
+    }
 }
 
 fn read_until_event_type(reader: &mut BufReader<UnixStream>, event_type: &str) -> Value {
