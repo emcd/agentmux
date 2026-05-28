@@ -19,11 +19,11 @@ pub(in crate::relay) use self::dispatch::{
     enqueue_sync_delivery, initialize_acp_target_for_startup, prompt_batch_settings,
     wait_for_async_delivery_shutdown,
 };
+pub use self::permission_state::install_pending_permission_request_for_testing;
 pub(in crate::relay) use self::permission_state::{
-    PermissionDecisionKind, PermissionDecisionRequest, PermissionEventContext,
-    PermissionResolutionOutcome, PersistedPendingPermissionRequest,
-    emit_permission_snapshot_then_replay, enqueue_permission_request,
-    list_pending_permission_requests, map_permission_state_error, resolve_permission_request,
+    PendingPermissionRequest, PermissionDecisionKind, PermissionDecisionRequest,
+    PermissionEventContext, PermissionResolutionOutcome, emit_permission_snapshot_then_replay,
+    enqueue_permission_request, list_pending_permission_requests, resolve_permission_request,
     wait_for_permission_resolution,
 };
 pub(in crate::relay) use self::quiescence::QuiescenceOptions;
