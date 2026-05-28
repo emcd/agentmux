@@ -14,9 +14,10 @@ This module implements the MCP stdio server for `agentmux`.
   - `send`
 - Preserve canonical relay `list` and `look` success payloads without adapter
   reshaping:
-  - `list`: relay `ListedBundle` (including the `hosted` flag) passes through
-    unchanged; synthesized down-bundle payloads for the unreachable home bundle
-    report `hosted: false`.
+  - `list`: relay `ListedBundle` (including the `hosted` flag and per-session
+    `ready` flag) passes through unchanged; synthesized down-bundle payloads for
+    the unreachable home bundle report `hosted: false` and `ready: false` for
+    every configured session.
   - `look` tmux: `snapshot_format="lines"` + `snapshot_lines`
   - `look` ACP: `snapshot_format="acp_entries_v1"` + `snapshot_entries`
     (+ freshness fields)
