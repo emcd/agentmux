@@ -65,6 +65,10 @@ impl Workbench {
         self.state.message_field.as_str()
     }
 
+    pub fn set_interaction_target(&mut self, target: &str) {
+        self.state.set_interaction_target(target.to_string());
+    }
+
     pub fn set_recipients(&mut self, sessions: &[&str]) {
         self.state.recipients = sessions
             .iter()

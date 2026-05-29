@@ -98,10 +98,10 @@ list payload. Sessions that are not yet ready render dimmed and gain a
 trailing `[not ready]` marker so the state is legible even without color.
 
 - `Up` / `Down`: move recipient selection
-- `Enter`: insert selected recipient into `To`
-- `l`: set the interaction target and switch to Interaction mode
-- `w`: set the interaction target, switch to Interaction mode, and focus the
-  Write input
+- `Enter` (Communication mode): insert selected recipient into `To`
+- `Enter` (Interaction mode): open the Interaction screen for the selected
+  identity — the relay `Look` runs synchronously so the look pane is populated
+  with recent session history before the Write input takes focus
 - `Esc` / `F2`: close picker
 
 ## Status and Outcome Vocabulary

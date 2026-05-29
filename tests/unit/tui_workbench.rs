@@ -305,12 +305,30 @@ fn interaction_mode_enter_without_target_is_validation_error() {
 }
 
 #[test]
-fn picker_look_requires_selected_recipient() {
+fn picker_enter_in_communication_mode_inserts_selected_recipient_into_to() {
     let mut state = make_state();
+    state.set_recipients(&["master"]);
     state
         .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
         .expect("f2 should open picker");
-    let result = state.dispatch_event(key_event(KeyCode::Char('l'), KeyModifiers::NONE));
+    state
+        .dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE))
+        .expect("enter in communication mode should insert recipient");
+    assert_eq!(state.mode(), WorkbenchMode::Communication);
+    assert_eq!(state.to_field(), "master");
+    assert!(!state.picker_open());
+}
+
+#[test]
+fn picker_enter_in_interaction_mode_requires_selected_recipient() {
+    let mut state = make_state();
+    state
+        .dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE))
+        .expect("f4 should switch to interaction");
+    state
+        .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
+        .expect("f2 should open picker");
+    let result = state.dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE));
     match result {
         Err(RuntimeError::Validation { code, .. }) => {
             assert_eq!(code, "validation_unknown_target")
@@ -320,13 +338,16 @@ fn picker_look_requires_selected_recipient() {
 }
 
 #[test]
-fn picker_look_uses_selected_recipient_target() {
+fn picker_enter_in_interaction_mode_attempts_look_for_selected_target() {
     let mut state = make_state();
     state.set_recipients(&["master"]);
     state
+        .dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE))
+        .expect("f4 should switch to interaction");
+    state
         .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
         .expect("f2 should open picker");
-    let result = state.dispatch_event(key_event(KeyCode::Char('l'), KeyModifiers::NONE));
+    let result = state.dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE));
     match result {
         Err(RuntimeError::Validation { code, .. }) => {
             assert_eq!(code, "relay_unavailable")
@@ -339,45 +360,34 @@ fn picker_look_uses_selected_recipient_target() {
 }
 
 #[test]
-fn picker_raww_requires_selected_recipient() {
-    let mut state = make_state();
-    state
-        .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
-        .expect("f2 should open picker");
-    let result = state.dispatch_event(key_event(KeyCode::Char('w'), KeyModifiers::NONE));
-    match result {
-        Err(RuntimeError::Validation { code, .. }) => {
-            assert_eq!(code, "validation_unknown_target")
-        }
-        other => panic!("unexpected result: {other:?}"),
-    }
-}
-
-#[test]
-fn picker_raww_enters_interaction_mode_with_target() {
+fn picker_retires_legacy_l_and_w_keys() {
     let mut state = make_state();
     state.set_recipients(&["master"]);
     state
         .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
         .expect("f2 should open picker");
     state
+        .dispatch_event(key_event(KeyCode::Char('l'), KeyModifiers::NONE))
+        .expect("retired l key should be a no-op");
+    state
         .dispatch_event(key_event(KeyCode::Char('w'), KeyModifiers::NONE))
-        .expect("picker w should set interaction target and switch mode");
-    assert_eq!(state.mode(), WorkbenchMode::Interaction);
-    assert_eq!(state.interaction_target(), Some("master"));
-    assert!(!state.picker_open());
+        .expect("retired w key should be a no-op");
+    assert!(
+        state.picker_open(),
+        "picker should remain open after retired keys"
+    );
+    assert_eq!(state.mode(), WorkbenchMode::Communication);
+    assert_eq!(state.interaction_target(), None);
 }
 
 #[test]
 fn interaction_region_swaps_between_raww_and_permission_pane() {
     let mut state = make_state();
     state.set_recipients(&["master"]);
+    state.set_interaction_target("master");
     state
-        .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
-        .expect("f2 should open picker");
-    state
-        .dispatch_event(key_event(KeyCode::Char('w'), KeyModifiers::NONE))
-        .expect("picker w should enter interaction mode");
+        .dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE))
+        .expect("f4 should switch to interaction");
 
     assert!(
         state.interaction_shows_raww(),

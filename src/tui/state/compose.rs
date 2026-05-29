@@ -510,11 +510,11 @@ impl AppState {
         self.message_cursor_preferred_column = Some(preferred_column);
     }
 
-    pub fn look_picker_target(&mut self) -> Result<(), RuntimeError> {
+    pub fn enter_interaction_from_picker(&mut self) -> Result<(), RuntimeError> {
         let target = self.selected_picker_recipient_id().ok_or_else(|| {
             RuntimeError::validation(
                 "validation_unknown_target",
-                "look requires a selected recipient in picker",
+                "interaction requires a selected recipient in picker",
             )
         })?;
 
@@ -551,19 +551,6 @@ impl AppState {
                 format!("relay returned unexpected response variant: {other:?}"),
             )),
         }
-    }
-
-    pub fn raww_picker_target(&mut self) -> Result<(), RuntimeError> {
-        let target = self.selected_picker_recipient_id().ok_or_else(|| {
-            RuntimeError::validation(
-                "validation_unknown_target",
-                "write requires a selected recipient in picker",
-            )
-        })?;
-        self.set_interaction_target(target);
-        self.picker_open = false;
-        self.enter_interaction_mode();
-        Ok(())
     }
 
     pub fn dispatch_raww_from_interaction(&mut self) -> Result<(), RuntimeError> {
@@ -640,7 +627,7 @@ impl AppState {
         }
     }
 
-    fn set_interaction_target(&mut self, target: String) {
+    pub fn set_interaction_target(&mut self, target: String) {
         let target_changed = self.look_target.as_deref() != Some(target.as_str());
         self.look_target = Some(target);
         if target_changed {
