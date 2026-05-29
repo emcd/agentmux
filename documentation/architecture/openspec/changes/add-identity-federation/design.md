@@ -215,8 +215,10 @@ the type is resolved by credential partition at verification time.
   via Hello. With a verified credential, the relay issues a stable
   `principal_id`. Host applications map this to their own authorization model.
   Sessions using `"socket-trust"` are not recorded in the store.
-- **User** (`<name>@GLOBAL`): a human operator using the CLI or TUI, not tied
-  to any specific bundle. Same authentication path as session principals.
+- **User** (`<name>@GLOBAL`): a human operator using the CLI or TUI. Not
+  bundle-scoped: the relay does not bind a `@GLOBAL` connection to any bundle
+  at Hello time, and delivers relevant events from all bundles on the relay to
+  that connection. Same authentication path as session principals.
 - **Application** (`<name>@EXTERNAL`): a host application (e.g., game engine
   sidecar). Relay grants `IdentityIntrospect` rights at connection time, scoped
   to the associated scope. Credential registered via `new peer <name>@EXTERNAL`.

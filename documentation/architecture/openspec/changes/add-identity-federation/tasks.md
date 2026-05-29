@@ -14,6 +14,15 @@
       and `session_id` with `principal_id: String` (claimed identity in
       `<id>@<namespace>` form) and add `identity_token: String`. Both fields are
       required. This is a breaking change — all clients must be updated.
+      Connection handling at Hello time branches on namespace: session principals
+      (`@<bundle_name>`) continue to do a `bundle_catalog` lookup and bind to
+      that bundle; non-session principals (`@GLOBAL`, `@EXTERNAL`, `@RELAY`) skip
+      the `bundle_catalog` lookup and are not bundle-bound. Extend the stream
+      registry to support a relay-wide path keyed by `principal_id` for
+      non-session principals. `@GLOBAL` UI connections receive relevant events
+      from all bundles; update event delivery fan-out and target resolution in
+      `handle_send` accordingly. The 3 existing `@GLOBAL` integration tests will
+      need logic updates to reflect the new connection model.
 - [ ] 1.2 Update all Hello-sending clients (MCP server, TUI, relay client) to
       send `principal_id = "<session_id>@<bundle_name>"` and read `identity.psk`
       from the well-known path
