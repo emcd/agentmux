@@ -19,6 +19,7 @@ impl AppState {
                     .map(|session| Recipient {
                         session_name: session.id,
                         display_name: session.name,
+                        ready: session.ready,
                     })
                     .collect::<Vec<_>>();
                 self.recipients = recipients;

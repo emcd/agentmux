@@ -77,6 +77,10 @@ available in both modes.
   (`Healthy`/`Degraded`/`HostedDown`/`Unhosted`) so `hosted=true, state=down`
   (sessions failed to start) is visually distinct from `hosted=false,
   state=down` (not hosted),
+- picker per-session readiness: rows sourced from `relay::ListedSession`
+  surface `ready` directly — ready rows render in default style, not-ready
+  rows render dimmed (`DarkGray`/`DIM`) and gain a trailing `[not ready]`
+  marker so the state survives color stripping,
 - Interaction mode Write input dispatches raw writes to the active interaction
   target via relay `raww`,
 - Write/permission region replacement: when the interaction target has pending

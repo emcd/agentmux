@@ -79,6 +79,7 @@ pub(crate) struct StatusEntry {
 pub(crate) struct Recipient {
     pub session_name: String,
     pub display_name: Option<String>,
+    pub ready: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

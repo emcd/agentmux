@@ -14,7 +14,8 @@ use super::state::{
     StatusEntry,
 };
 use super::status::{
-    BundleStatusDisplay, BundleStatusSeverity, bundle_status_severity, format_bundle_status_line,
+    BundleStatusDisplay, BundleStatusSeverity, RecipientReadiness, bundle_status_severity,
+    format_bundle_status_line, format_recipient_picker_label,
 };
 
 const WORKBENCH_MIN_CHAT_HEIGHT: u16 = 1;
@@ -704,11 +705,16 @@ fn render_picker_overlay(frame: &mut Frame, state: &mut AppState) {
             .recipients
             .iter()
             .map(|recipient| {
-                if let Some(display_name) = recipient.display_name.as_ref() {
-                    ListItem::new(format!("{} ({})", recipient.session_name, display_name))
-                } else {
-                    ListItem::new(recipient.session_name.clone())
-                }
+                let readiness = RecipientReadiness::from_ready(recipient.ready);
+                let label = format_recipient_picker_label(
+                    recipient.session_name.as_str(),
+                    recipient.display_name.as_deref(),
+                    readiness,
+                );
+                ListItem::new(Line::from(Span::styled(
+                    label,
+                    recipient_readiness_style(readiness),
+                )))
             })
             .collect::<Vec<_>>()
     };
@@ -725,6 +731,15 @@ fn bundle_status_header_line(status: Option<&BundleStatusDisplay>) -> Line<'stat
     };
     let style = bundle_status_severity_style(bundle_status_severity(status));
     Line::from(Span::styled(format_bundle_status_line(status), style))
+}
+
+fn recipient_readiness_style(readiness: RecipientReadiness) -> Style {
+    match readiness {
+        RecipientReadiness::Ready => Style::default(),
+        RecipientReadiness::NotReady => Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM),
+    }
 }
 
 fn bundle_status_severity_style(severity: BundleStatusSeverity) -> Style {
