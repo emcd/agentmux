@@ -10,7 +10,7 @@
 
 ## Slice 1 — Authentication Foundation (prerequisite for all other slices)
 
-- [ ] 1.1 Redesign `HelloFrame` in `src/relay/stream.rs`: replace `bundle_name`
+- [x] 1.1 Redesign `HelloFrame` in `src/relay/stream.rs`: replace `bundle_name`
       and `session_id` with `principal_id: String` (claimed identity in
       `<id>@<namespace>` form) and add `identity_token: String`. Both fields are
       required. This is a breaking change — all clients must be updated.
@@ -22,14 +22,18 @@
       non-session principals. `@GLOBAL` UI connections receive relevant events
       from all bundles; update event delivery fan-out and target resolution in
       `handle_send` accordingly. The 3 existing `@GLOBAL` integration tests will
-      need logic updates to reflect the new connection model.
-- [ ] 1.2 Update all Hello-sending clients (MCP server, TUI, relay client) to
+      need logic updates to reflect the new connection model. Requests carry an
+      optional `bundle_name` on the frame envelope to select the routing bundle
+      (D1d): present → that bundle regardless of binding; absent → the
+      connection's bound bundle; absent with no binding (relay-wide principal) →
+      typed error (`validation_missing_target_bundle`).
+- [x] 1.2 Update all Hello-sending clients (MCP server, TUI, relay client) to
       send `principal_id = "<session_id>@<bundle_name>"` and read `identity.psk`
       from the well-known path
       `<state-root>/bundles/<bundle>/sessions/<session>/identity.psk`, sending
       its contents as `identity_token`. Send `"socket-trust"` as `identity_token`
       when the file is absent or unreadable.
-- [ ] 1.3 Define the well-known credential file path conventions. Add helpers in
+- [x] 1.3 Define the well-known credential file path conventions. Add helpers in
       `src/runtime/paths.rs` for:
       (a) session PSK path: `<state-root>/bundles/<bundle>/sessions/<session>/identity.psk`
           (derived from bundle name and session id).
@@ -43,7 +47,7 @@
       Note: operators must register at least one credential before setting
       `require_session_credentials = true`; document the bootstrap sequence to
       prevent lockout.
-- [ ] 1.4 Add `rand` (with `getrandom` backend) and `base64` to `Cargo.toml`.
+- [x] 1.4 Add `rand` (with `getrandom` backend) and `base64` to `Cargo.toml`.
       Implement a crate-internal `generate_psk() -> String` helper that produces
       a 32-byte CSPRNG output encoded as `STANDARD_NO_PAD` base64.
 - [ ] 1.5 Implement `agentmux new peer <principal_id>` CLI command and the `new`
@@ -59,19 +63,19 @@
       `change` MCP meta-tool (`command="psk"`). Relay: generate new PSK, replace
       hash in principal store, return new PSK to caller. Slice 1: store update
       only; revocation dispatch to active sessions lands in Slice 2.
-- [ ] 1.7 Add `new.peer` and `change.psk` to `PolicyControls` in
+- [x] 1.7 Add `new.peer` and `change.psk` to `PolicyControls` in
       `src/relay/authorization.rs` (dot-notation fields, operator-level defaults
       following `add-do-action-tool` precedent). Update
       `data/configuration/policies.toml` and
       `.auxiliary/configuration/agentmux/policies.toml` operator policy to
       include both controls.
-- [ ] 1.8 Define the principal store schema: `principal_id`, `principal_type`
+- [x] 1.8 Define the principal store schema: `principal_id`, `principal_type`
       (`session` | `user` | `application` | `relay`), `credential_hash`
       (SHA-256 hex), `scope` (optional; set for `@RELAY` and `@EXTERNAL`
       principals at registration), `expires_at`, and metadata. Create and load
       `<state-root>/identity/principals.json` at relay startup. Write with mode
       0600 on every mutation (new peer, change psk, expiry prune).
-- [ ] 1.9 Wire credential verification on Hello handshake: parse `principal_id`
+- [x] 1.9 Wire credential verification on Hello handshake: parse `principal_id`
       namespace to determine principal type; SHA-256-hash `identity_token` and
       look up in relay-level principal store; use constant-time comparison for
       the hash lookup (e.g. `subtle::ConstantTimeEq`) to avoid timing leaks;

@@ -174,17 +174,21 @@ fn handle_connection(
         let decoded: Value =
             serde_json::from_str(line.trim_end()).expect("decode fake relay request");
         if decoded.get("frame").and_then(Value::as_str) == Some("hello") {
-            let bundle_name = decoded
-                .get("bundle_name")
+            // A session principal_id is `<session>@<bundle>`; the routing bundle
+            // is the namespace after the final `@`.
+            let principal_id = decoded
+                .get("principal_id")
                 .and_then(Value::as_str)
-                .expect("hello bundle_name")
-                .to_string();
+                .expect("hello principal_id");
+            let bundle_name = principal_id
+                .rsplit_once('@')
+                .map(|(_, namespace)| namespace.to_string())
+                .expect("session principal_id must carry a bundle namespace");
             bound_bundle = Some(bundle_name);
             let hello_ack = json!({
                 "frame": "hello_ack",
                 "schema_version": decoded["schema_version"],
-                "bundle_name": decoded["bundle_name"],
-                "session_id": decoded["session_id"],
+                "principal_id": decoded["principal_id"],
             });
             let text = serde_json::to_string(&hello_ack).expect("encode hello ack");
             stream

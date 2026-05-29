@@ -448,16 +448,10 @@ pub(super) fn spawn_fake_relay_for_bundles(
                     let hello: Value = serde_json::from_str(hello_line.trim_end())
                         .expect("decode fake relay hello");
                     assert_eq!(hello.get("frame").and_then(Value::as_str), Some("hello"));
-                    let bundle_name = hello
-                        .get("bundle_name")
-                        .and_then(Value::as_str)
-                        .expect("hello bundle_name")
-                        .to_string();
                     let hello_ack = json!({
                         "frame": "hello_ack",
                         "schema_version": ENVELOPE_SCHEMA_VERSION,
-                        "bundle_name": hello.get("bundle_name").cloned().unwrap_or(Value::Null),
-                        "session_id": hello.get("session_id").cloned().unwrap_or(Value::Null),
+                        "principal_id": hello.get("principal_id").cloned().unwrap_or(Value::Null),
                     });
                     let encoded_ack =
                         serde_json::to_string(&hello_ack).expect("encode fake relay hello_ack");
@@ -477,6 +471,11 @@ pub(super) fn spawn_fake_relay_for_bundles(
                         .get("request")
                         .cloned()
                         .expect("fake relay request envelope missing 'request' field");
+                    let bundle_name = envelope
+                        .get("bundle_name")
+                        .and_then(Value::as_str)
+                        .expect("request envelope bundle_name")
+                        .to_string();
                     if let Some(log) = request_logs.get(&bundle_name) {
                         log.lock().expect("request log lock").push(request);
                     }
@@ -551,8 +550,7 @@ pub(super) fn spawn_fake_relay_once(
                     let hello_ack = json!({
                         "frame": "hello_ack",
                         "schema_version": ENVELOPE_SCHEMA_VERSION,
-                        "bundle_name": hello.get("bundle_name").cloned().unwrap_or(Value::Null),
-                        "session_id": hello.get("session_id").cloned().unwrap_or(Value::Null),
+                        "principal_id": hello.get("principal_id").cloned().unwrap_or(Value::Null),
                     });
                     let encoded_ack =
                         serde_json::to_string(&hello_ack).expect("encode fake relay hello_ack");

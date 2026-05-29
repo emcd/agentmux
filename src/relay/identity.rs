@@ -1,7 +1,8 @@
-// Identity-federation Slice 1 Phase A scaffolding. Phase B (Hello
-// verification) and Phase C (`new peer` / `change psk` tooling) consume the
-// principal store and helpers below; this allow is removed when the
-// consumers land.
+// Identity-federation scaffolding. Phase B (Hello verification) consumes the
+// principal store load/lookup, SHA-256 hashing, and namespace classification
+// below via `verify_hello_credential`. The remaining unused items
+// (`generate_psk`, store mutation/persist) are consumed by Phase C
+// (`new peer` / `change psk` tooling); this allow is removed when they land.
 #![allow(dead_code)]
 
 use std::{
@@ -297,4 +298,93 @@ pub(crate) fn classify_principal_id(principal_id: &str) -> Option<PrincipalType>
         "RELAY" => PrincipalType::Relay,
         _ => PrincipalType::Session,
     })
+}
+
+/// Sentinel `identity_token` presented by sessions that have no provisioned
+/// PSK file. Accepted for session and user principals only when relay-wide
+/// credential enforcement is disabled (see `verify_hello_credential`).
+pub(crate) const SOCKET_TRUST_TOKEN: &str = "socket-trust";
+
+/// Result of verifying a Hello credential against the principal store.
+pub(crate) struct VerifiedIdentity {
+    pub(crate) principal_type: PrincipalType,
+    /// True when a recognized store credential backed the identity; false for
+    /// accepted `"socket-trust"` connections, which create no store entry.
+    pub(crate) store_backed: bool,
+}
+
+/// Verifies a Hello `principal_id` + `identity_token` against the principal
+/// store and the relay-wide enforcement policy.
+///
+/// A recognized token must be registered to the claimed `principal_id`
+/// (credential-to-identity binding). The `"socket-trust"` sentinel is accepted
+/// for session and user principals only when enforcement is disabled;
+/// application and relay principals always require a recognized credential.
+/// Unrecognized non-sentinel tokens are rejected fail-closed regardless of
+/// enforcement.
+pub(crate) fn verify_hello_credential(
+    principal_id: &str,
+    identity_token: &str,
+    store: &PrincipalStore,
+    require_session_credentials: bool,
+) -> Result<VerifiedIdentity, RelayError> {
+    let Some(claimed_type) = classify_principal_id(principal_id) else {
+        return Err(relay_error(
+            "validation_invalid_principal_id",
+            "hello principal_id is not in <id>@<namespace> form",
+            Some(json!({ "principal_id": principal_id })),
+        ));
+    };
+    if identity_token == SOCKET_TRUST_TOKEN {
+        return verify_socket_trust(principal_id, claimed_type, require_session_credentials);
+    }
+    let hash = hash_token_sha256(identity_token);
+    let Some(record) = store.find_by_credential_hash(&hash) else {
+        return Err(relay_error(
+            "validation_unrecognized_credential",
+            "hello identity_token did not match any registered principal",
+            Some(json!({ "principal_id": principal_id })),
+        ));
+    };
+    if record.principal_id != principal_id {
+        return Err(relay_error(
+            "validation_identity_binding_mismatch",
+            "presented credential is registered to a different principal_id",
+            Some(json!({
+                "principal_id": principal_id,
+                "registered_principal_id": record.principal_id,
+            })),
+        ));
+    }
+    Ok(VerifiedIdentity {
+        principal_type: record.principal_type,
+        store_backed: true,
+    })
+}
+
+fn verify_socket_trust(
+    principal_id: &str,
+    claimed_type: PrincipalType,
+    require_session_credentials: bool,
+) -> Result<VerifiedIdentity, RelayError> {
+    match claimed_type {
+        PrincipalType::Application | PrincipalType::Relay => Err(relay_error(
+            "validation_credential_required",
+            "application and relay principals require a registered credential",
+            Some(json!({ "principal_id": principal_id })),
+        )),
+        PrincipalType::Session | PrincipalType::User => {
+            if require_session_credentials {
+                return Err(relay_error(
+                    "validation_credential_required",
+                    "relay requires session credentials; socket-trust is not accepted",
+                    Some(json!({ "principal_id": principal_id })),
+                ));
+            }
+            Ok(VerifiedIdentity {
+                principal_type: claimed_type,
+                store_backed: false,
+            })
+        }
+    }
 }

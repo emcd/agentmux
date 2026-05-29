@@ -20,8 +20,8 @@ fn permission_decision_rejects_submitter_without_grant_capability() {
         json!({
             "frame": "hello",
             "schema_version": "1",
-            "bundle_name": bundle_name,
-            "session_id": "alpha",
+            "principal_id": format!("alpha@{bundle_name}"),
+            "identity_token": "socket-trust",
         }),
     );
     let hello_ack = read_json(&mut reader);
@@ -31,6 +31,7 @@ fn permission_decision_rejects_submitter_without_grant_capability() {
         &mut client_stream,
         json!({
             "frame": "request",
+            "bundle_name": bundle_name,
             "request_id": "req-1",
             "request": {
                 "operation": "permission_resolve",
@@ -64,7 +65,7 @@ fn permission_decision_rejects_payload_actor_spoof_field() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_permission_actor_spoof";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default");
+    write_tui_configuration(&configuration_root, "default", bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let (mut client_stream, join_handle) =
@@ -77,8 +78,8 @@ fn permission_decision_rejects_payload_actor_spoof_field() {
         json!({
             "frame": "hello",
             "schema_version": "1",
-            "bundle_name": bundle_name,
-            "session_id": "user@GLOBAL",
+            "principal_id": global_user_id(bundle_name),
+            "identity_token": "socket-trust",
         }),
     );
     let hello_ack = read_json(&mut reader);
@@ -88,6 +89,7 @@ fn permission_decision_rejects_payload_actor_spoof_field() {
         &mut client_stream,
         json!({
             "frame": "request",
+            "bundle_name": bundle_name,
             "request_id": "req-1",
             "request": {
                 "operation": "permission_resolve",
@@ -118,7 +120,7 @@ fn permission_decision_denial_uses_grant_capability() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_permission_grant_capability";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default");
+    write_tui_configuration(&configuration_root, "default", bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let (mut client_stream, join_handle) =
@@ -131,8 +133,8 @@ fn permission_decision_denial_uses_grant_capability() {
         json!({
             "frame": "hello",
             "schema_version": "1",
-            "bundle_name": bundle_name,
-            "session_id": "user@GLOBAL",
+            "principal_id": global_user_id(bundle_name),
+            "identity_token": "socket-trust",
         }),
     );
     let hello_ack = read_json(&mut reader);
@@ -142,6 +144,7 @@ fn permission_decision_denial_uses_grant_capability() {
         &mut client_stream,
         json!({
             "frame": "request",
+            "bundle_name": bundle_name,
             "request_id": "req-1",
             "request": {
                 "operation": "permission_resolve",
@@ -172,7 +175,7 @@ fn permission_decision_rejects_empty_option_id() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_permission_empty_option";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default");
+    write_tui_configuration(&configuration_root, "default", bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let (mut client_stream, join_handle) =
@@ -185,8 +188,8 @@ fn permission_decision_rejects_empty_option_id() {
         json!({
             "frame": "hello",
             "schema_version": "1",
-            "bundle_name": bundle_name,
-            "session_id": "user@GLOBAL",
+            "principal_id": global_user_id(bundle_name),
+            "identity_token": "socket-trust",
         }),
     );
     let hello_ack = read_json(&mut reader);
@@ -196,6 +199,7 @@ fn permission_decision_rejects_empty_option_id() {
         &mut client_stream,
         json!({
             "frame": "request",
+            "bundle_name": bundle_name,
             "request_id": "req-1",
             "request": {
                 "operation": "permission_resolve",
@@ -227,7 +231,7 @@ fn permission_decision_rejects_selected_without_option_id() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_permission_selected_missing_option";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default");
+    write_tui_configuration(&configuration_root, "default", bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let (mut client_stream, join_handle) =
@@ -240,8 +244,8 @@ fn permission_decision_rejects_selected_without_option_id() {
         json!({
             "frame": "hello",
             "schema_version": "1",
-            "bundle_name": bundle_name,
-            "session_id": "user@GLOBAL",
+            "principal_id": global_user_id(bundle_name),
+            "identity_token": "socket-trust",
         }),
     );
     let hello_ack = read_json(&mut reader);
@@ -251,6 +255,7 @@ fn permission_decision_rejects_selected_without_option_id() {
         &mut client_stream,
         json!({
             "frame": "request",
+            "bundle_name": bundle_name,
             "request_id": "req-1",
             "request": {
                 "operation": "permission_resolve",
@@ -281,7 +286,7 @@ fn permission_decision_rejects_cancelled_with_option_id() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_permission_cancelled_with_option";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default");
+    write_tui_configuration(&configuration_root, "default", bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let (mut client_stream, join_handle) =
@@ -294,8 +299,8 @@ fn permission_decision_rejects_cancelled_with_option_id() {
         json!({
             "frame": "hello",
             "schema_version": "1",
-            "bundle_name": bundle_name,
-            "session_id": "user@GLOBAL",
+            "principal_id": global_user_id(bundle_name),
+            "identity_token": "socket-trust",
         }),
     );
     let hello_ack = read_json(&mut reader);
@@ -305,6 +310,7 @@ fn permission_decision_rejects_cancelled_with_option_id() {
         &mut client_stream,
         json!({
             "frame": "request",
+            "bundle_name": bundle_name,
             "request_id": "req-1",
             "request": {
                 "operation": "permission_resolve",
@@ -336,7 +342,7 @@ fn permission_snapshot_then_replay_carries_option_metadata() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_permission_snapshot_options";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default");
+    write_tui_configuration(&configuration_root, "default", bundle_name);
     write_policies_with_grant(&configuration_root, "all:home");
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
@@ -355,8 +361,8 @@ fn permission_snapshot_then_replay_carries_option_metadata() {
         json!({
             "frame": "hello",
             "schema_version": "1",
-            "bundle_name": bundle_name,
-            "session_id": "user@GLOBAL",
+            "principal_id": global_user_id(bundle_name),
+            "identity_token": "socket-trust",
         }),
     );
     let hello_ack = read_json(&mut reader);
@@ -402,7 +408,7 @@ fn permission_request_persists_across_authorized_ui_reconnect() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_permission_persists";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default");
+    write_tui_configuration(&configuration_root, "default", bundle_name);
     write_policies_with_grant(&configuration_root, "all:home");
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
@@ -415,8 +421,8 @@ fn permission_request_persists_across_authorized_ui_reconnect() {
     let hello_frame = json!({
         "frame": "hello",
         "schema_version": "1",
-        "bundle_name": bundle_name,
-        "session_id": "user@GLOBAL",
+        "principal_id": global_user_id(bundle_name),
+        "identity_token": "socket-trust",
     });
 
     let (mut first_client, first_handle) =
@@ -462,7 +468,7 @@ fn permission_resolve_selected_emits_resolved_event_with_option_id() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_permission_selected_emit";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default");
+    write_tui_configuration(&configuration_root, "default", bundle_name);
     write_policies_with_grant(&configuration_root, "all:home");
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
@@ -481,8 +487,8 @@ fn permission_resolve_selected_emits_resolved_event_with_option_id() {
         json!({
             "frame": "hello",
             "schema_version": "1",
-            "bundle_name": bundle_name,
-            "session_id": "user@GLOBAL",
+            "principal_id": global_user_id(bundle_name),
+            "identity_token": "socket-trust",
         }),
     );
     let ack = read_json(&mut reader);
@@ -494,6 +500,7 @@ fn permission_resolve_selected_emits_resolved_event_with_option_id() {
         &mut client_stream,
         json!({
             "frame": "request",
+            "bundle_name": bundle_name,
             "request_id": "req-resolve-selected",
             "request": {
                 "operation": "permission_resolve",
@@ -509,7 +516,7 @@ fn permission_resolve_selected_emits_resolved_event_with_option_id() {
     assert_eq!(payload["permission_request_id"], "perm-selected");
     assert_eq!(payload["outcome"], "selected");
     assert_eq!(payload["reason_code"], Value::Null);
-    assert_eq!(payload["decided_by"], "user@GLOBAL");
+    assert_eq!(payload["decided_by"], global_user_id(bundle_name));
 
     let response = read_json(&mut reader);
     assert_eq!(response["frame"], "response");
@@ -531,7 +538,7 @@ fn permission_resolve_cancelled_emits_resolved_event_with_reason_code() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_permission_cancelled_emit";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default");
+    write_tui_configuration(&configuration_root, "default", bundle_name);
     write_policies_with_grant(&configuration_root, "all:home");
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
@@ -550,8 +557,8 @@ fn permission_resolve_cancelled_emits_resolved_event_with_reason_code() {
         json!({
             "frame": "hello",
             "schema_version": "1",
-            "bundle_name": bundle_name,
-            "session_id": "user@GLOBAL",
+            "principal_id": global_user_id(bundle_name),
+            "identity_token": "socket-trust",
         }),
     );
     let ack = read_json(&mut reader);
@@ -563,6 +570,7 @@ fn permission_resolve_cancelled_emits_resolved_event_with_reason_code() {
         &mut client_stream,
         json!({
             "frame": "request",
+            "bundle_name": bundle_name,
             "request_id": "req-resolve-cancelled",
             "request": {
                 "operation": "permission_resolve",
@@ -580,7 +588,7 @@ fn permission_resolve_cancelled_emits_resolved_event_with_reason_code() {
         payload["reason_code"],
         "runtime_permission_request_cancelled"
     );
-    assert_eq!(payload["decided_by"], "user@GLOBAL");
+    assert_eq!(payload["decided_by"], global_user_id(bundle_name));
 
     let response = read_json(&mut reader);
     assert_eq!(response["frame"], "response");
@@ -601,7 +609,7 @@ fn permission_max_pending_out_of_range_is_rejected() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_permission_max_pending_invalid";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default");
+    write_tui_configuration(&configuration_root, "default", bundle_name);
     write_policies_with_grant(&configuration_root, "all:home");
     std::fs::write(
         configuration_root.join("relay.toml"),
@@ -624,8 +632,8 @@ max-pending = 10000
         json!({
             "frame": "hello",
             "schema_version": "1",
-            "bundle_name": bundle_name,
-            "session_id": "user@GLOBAL",
+            "principal_id": global_user_id(bundle_name),
+            "identity_token": "socket-trust",
         }),
     );
     let ack = read_json(&mut reader);
@@ -653,7 +661,7 @@ fn permission_resolve_selected_rejects_unknown_option_id() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_permission_unknown_option";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default");
+    write_tui_configuration(&configuration_root, "default", bundle_name);
     write_policies_with_grant(&configuration_root, "all:home");
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
@@ -672,8 +680,8 @@ fn permission_resolve_selected_rejects_unknown_option_id() {
         json!({
             "frame": "hello",
             "schema_version": "1",
-            "bundle_name": bundle_name,
-            "session_id": "user@GLOBAL",
+            "principal_id": global_user_id(bundle_name),
+            "identity_token": "socket-trust",
         }),
     );
     let hello_ack = read_json(&mut reader);
@@ -683,6 +691,7 @@ fn permission_resolve_selected_rejects_unknown_option_id() {
         &mut client_stream,
         json!({
             "frame": "request",
+            "bundle_name": bundle_name,
             "request_id": "req-1",
             "request": {
                 "operation": "permission_resolve",

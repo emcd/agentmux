@@ -19,6 +19,7 @@ use uuid::Uuid;
 use crate::configuration::SessionType;
 use crate::runtime::inscriptions::emit_inscription;
 
+use super::identity::{PrincipalType, classify_principal_id};
 use super::{RelayRequest, RelayResponse};
 
 // Bounded write timeout for relay-to-client writes. A stalled client whose
@@ -27,18 +28,59 @@ use super::{RelayRequest, RelayResponse};
 // `AGENTMUX_RELAY_CONNECTION_WRITE_TIMEOUT_MS`.
 const RELAY_CONNECTION_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Hello handshake frame. Identity is fully described by `principal_id`
+/// (`<id>@<namespace>` form); `identity_token` is the presented credential
+/// (a raw PSK, or the `"socket-trust"` sentinel for unprovisioned sessions).
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(super) struct HelloFrame {
     pub(super) schema_version: String,
-    pub(super) bundle_name: String,
-    pub(super) session_id: String,
+    pub(super) principal_id: String,
+    pub(super) identity_token: String,
 }
 
+/// Registry key for a live stream connection.
+///
+/// Session principals are keyed by `(bundle_name, session_id)` because their
+/// identity is bundle-local. Non-session principals (`@GLOBAL`, `@EXTERNAL`,
+/// `@RELAY`) are relay-wide and keyed by `principal_id` alone; a single relay
+/// socket serves every bundle, so these connections are not bundle-bound.
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub(super) enum RegistryKey {
+    Session {
+        bundle_name: String,
+        session_id: String,
+    },
+    RelayWide {
+        principal_id: String,
+    },
+}
+
+/// Live registration handle returned to the connection worker.
 #[derive(Clone, Debug)]
 pub(super) struct StreamRegistration {
-    pub(super) bundle_name: String,
-    pub(super) session_id: String,
+    pub(super) key: RegistryKey,
     pub(super) stream_id: String,
+}
+
+impl StreamRegistration {
+    /// Returns the requester identity to attribute requests to: the bundle-local
+    /// `session_id` for session principals, or the full `principal_id` for
+    /// relay-wide principals.
+    pub(super) fn requester_session_id(&self) -> &str {
+        match &self.key {
+            RegistryKey::Session { session_id, .. } => session_id.as_str(),
+            RegistryKey::RelayWide { principal_id } => principal_id.as_str(),
+        }
+    }
+
+    /// Returns the bound bundle name for session principals; `None` for
+    /// relay-wide principals, which carry no connection bundle binding.
+    pub(super) fn bundle_name(&self) -> Option<&str> {
+        match &self.key {
+            RegistryKey::Session { bundle_name, .. } => Some(bundle_name.as_str()),
+            RegistryKey::RelayWide { .. } => None,
+        }
+    }
 }
 
 /// Sender side of a per-connection writer task. Cloned into the stream registry
@@ -52,6 +94,10 @@ pub(super) enum IncomingFrame {
     Hello(HelloFrame),
     Request {
         request_id: Option<String>,
+        /// Explicit target bundle for this request. When present it selects the
+        /// routing bundle regardless of any connection binding; when absent the
+        /// connection's bound bundle is used (and its absence is an error).
+        bundle_name: Option<String>,
         request: RelayRequest,
     },
 }
@@ -61,12 +107,14 @@ pub(super) enum IncomingFrame {
 enum IncomingEnvelope {
     Hello {
         schema_version: String,
-        bundle_name: String,
-        session_id: String,
+        principal_id: String,
+        identity_token: String,
     },
     Request {
         #[serde(default)]
         request_id: Option<String>,
+        #[serde(default)]
+        bundle_name: Option<String>,
         request: RelayRequest,
     },
 }
@@ -76,8 +124,7 @@ enum IncomingEnvelope {
 pub(super) enum OutgoingFrame<'a> {
     HelloAck {
         schema_version: &'a str,
-        bundle_name: &'a str,
-        session_id: &'a str,
+        principal_id: &'a str,
     },
     Response {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -98,12 +145,6 @@ pub(super) struct RelayStreamEvent {
     pub(super) payload: Value,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-struct IdentityKey {
-    bundle_name: String,
-    session_id: String,
-}
-
 #[derive(Clone, Debug)]
 struct RegistryEntry {
     stream_id: Option<String>,
@@ -113,28 +154,49 @@ struct RegistryEntry {
 
 #[derive(Default)]
 struct StreamRegistry {
-    entries: Mutex<HashMap<IdentityKey, RegistryEntry>>,
+    entries: Mutex<HashMap<RegistryKey, RegistryEntry>>,
 }
 
 static STREAM_REGISTRY: OnceLock<StreamRegistry> = OnceLock::new();
+
+/// Builds the registry key for a delivery target.
+///
+/// Non-session principals (`@GLOBAL`/`@EXTERNAL`/`@RELAY`) resolve to a
+/// relay-wide key; bare member ids and bundle-local sessions resolve to a
+/// `(bundle_name, session_id)` key.
+fn registry_key_for_target(bundle_name: &str, session_id: &str) -> RegistryKey {
+    match classify_principal_id(session_id) {
+        Some(PrincipalType::User | PrincipalType::Application | PrincipalType::Relay) => {
+            RegistryKey::RelayWide {
+                principal_id: session_id.to_string(),
+            }
+        }
+        _ => RegistryKey::Session {
+            bundle_name: bundle_name.to_string(),
+            session_id: session_id.to_string(),
+        },
+    }
+}
 
 pub(super) fn parse_incoming_frame(line: &str) -> Result<IncomingFrame, io::Error> {
     let envelope = serde_json::from_str::<IncomingEnvelope>(line).map_err(io::Error::other)?;
     match envelope {
         IncomingEnvelope::Hello {
             schema_version,
-            bundle_name,
-            session_id,
+            principal_id,
+            identity_token,
         } => Ok(IncomingFrame::Hello(HelloFrame {
             schema_version,
-            bundle_name,
-            session_id,
+            principal_id,
+            identity_token,
         })),
         IncomingEnvelope::Request {
             request_id,
+            bundle_name,
             request,
         } => Ok(IncomingFrame::Request {
             request_id,
+            bundle_name,
             request,
         }),
     }
@@ -199,7 +261,7 @@ fn relay_connection_write_timeout() -> Duration {
 }
 
 pub(super) fn register_stream(
-    hello: &HelloFrame,
+    key: RegistryKey,
     session_type: SessionType,
     writer: SharedStreamWriter,
 ) -> Result<RegisterStreamOutcome, io::Error> {
@@ -208,10 +270,6 @@ pub(super) fn register_stream(
         .entries
         .lock()
         .map_err(|_| io::Error::other("failed to lock stream registry"))?;
-    let key = IdentityKey {
-        bundle_name: hello.bundle_name.clone(),
-        session_id: hello.session_id.clone(),
-    };
     if let Some(entry) = entries.get(&key)
         && entry.stream_id.is_some()
         && let Some(existing_writer) = entry.writer.as_ref()
@@ -229,7 +287,7 @@ pub(super) fn register_stream(
     }
     let stream_id = Uuid::new_v4().to_string();
     entries.insert(
-        key,
+        key.clone(),
         RegistryEntry {
             stream_id: Some(stream_id.clone()),
             session_type,
@@ -237,8 +295,7 @@ pub(super) fn register_stream(
         },
     );
     Ok(RegisterStreamOutcome::Registered(StreamRegistration {
-        bundle_name: hello.bundle_name.clone(),
-        session_id: hello.session_id.clone(),
+        key,
         stream_id,
     }))
 }
@@ -259,12 +316,8 @@ pub(super) fn registration_is_current(
         .entries
         .lock()
         .map_err(|_| io::Error::other("failed to lock stream registry"))?;
-    let key = IdentityKey {
-        bundle_name: registration.bundle_name.clone(),
-        session_id: registration.session_id.clone(),
-    };
     Ok(entries
-        .get(&key)
+        .get(&registration.key)
         .is_some_and(|entry| entry.stream_id.as_deref() == Some(registration.stream_id.as_str())))
 }
 
@@ -274,11 +327,7 @@ pub(super) fn unregister_stream(registration: &StreamRegistration) -> Result<(),
         .entries
         .lock()
         .map_err(|_| io::Error::other("failed to lock stream registry"))?;
-    let key = IdentityKey {
-        bundle_name: registration.bundle_name.clone(),
-        session_id: registration.session_id.clone(),
-    };
-    if let Some(entry) = entries.get_mut(&key)
+    if let Some(entry) = entries.get_mut(&registration.key)
         && entry
             .stream_id
             .as_deref()
@@ -299,10 +348,7 @@ pub(super) fn resolve_registered_session_type(
         .entries
         .lock()
         .map_err(|_| io::Error::other("failed to lock stream registry"))?;
-    let key = IdentityKey {
-        bundle_name: bundle_name.to_string(),
-        session_id: session_id.to_string(),
-    };
+    let key = registry_key_for_target(bundle_name, session_id);
     Ok(entries.get(&key).map(|entry| entry.session_type))
 }
 
@@ -313,9 +359,11 @@ pub(super) enum StreamEventSendOutcome {
     Disconnected,
 }
 
-// Returns the session ids of UI-class subscribers currently registered for
-// the bundle. Used by the worker thread at respawn time to construct a
-// `PermissionEventContext` without an in-flight task.
+// Returns the ids of UI-class subscribers that should receive events for the
+// bundle: bundle-local UI sessions plus every relay-wide UI principal (which
+// receives events across all bundles). Session ids are returned for
+// bundle-local entries and `principal_id`s for relay-wide entries; both forms
+// round-trip through `send_event_to_registered_ui`, which re-derives the key.
 pub(super) fn list_registered_ui_sessions_for_bundle(bundle_name: &str) -> Vec<String> {
     let registry = stream_registry();
     let Ok(entries) = registry.entries.lock() else {
@@ -324,46 +372,31 @@ pub(super) fn list_registered_ui_sessions_for_bundle(bundle_name: &str) -> Vec<S
     entries
         .iter()
         .filter_map(|(key, entry)| {
-            if key.bundle_name != bundle_name {
-                return None;
-            }
             if entry.session_type != SessionType::Ui {
                 return None;
             }
             entry.writer.as_ref()?;
-            Some(key.session_id.clone())
+            match key {
+                RegistryKey::Session {
+                    bundle_name: entry_bundle,
+                    session_id,
+                } if entry_bundle == bundle_name => Some(session_id.clone()),
+                RegistryKey::RelayWide { principal_id } => Some(principal_id.clone()),
+                RegistryKey::Session { .. } => None,
+            }
         })
         .collect()
 }
 
-// Fans an event out to every UI-class subscriber registered for the bundle.
-// Used for worker-scoped notifications that are not tied to a specific
-// operator session (e.g. ACP respawn lifecycle). The per-recipient event is
-// cloned with `target_session` rewritten to the recipient's UI session id so
-// existing per-session filtering still works.
+// Fans an event out to every UI-class subscriber relevant to the bundle
+// (bundle-local sessions and relay-wide principals). The per-recipient event is
+// cloned with `target_session` rewritten to the recipient id so existing
+// per-session filtering still works.
 pub(super) fn broadcast_event_to_bundle_ui(
     bundle_name: &str,
     template: &RelayStreamEvent,
 ) -> Vec<String> {
-    let registry = stream_registry();
-    let ui_session_ids: Vec<String> = {
-        let Ok(entries) = registry.entries.lock() else {
-            return Vec::new();
-        };
-        entries
-            .iter()
-            .filter_map(|(key, entry)| {
-                if key.bundle_name != bundle_name {
-                    return None;
-                }
-                if entry.session_type != SessionType::Ui {
-                    return None;
-                }
-                entry.writer.as_ref()?;
-                Some(key.session_id.clone())
-            })
-            .collect()
-    };
+    let ui_session_ids = list_registered_ui_sessions_for_bundle(bundle_name);
     let mut delivered = Vec::new();
     for ui_session_id in ui_session_ids {
         let mut event = template.clone();
@@ -384,15 +417,12 @@ pub(super) fn send_event_to_registered_ui(
     event: &RelayStreamEvent,
 ) -> Result<StreamEventSendOutcome, io::Error> {
     let registry = stream_registry();
+    let key = registry_key_for_target(bundle_name, session_id);
     let (session_type, writer) = {
         let entries = registry
             .entries
             .lock()
             .map_err(|_| io::Error::other("failed to lock stream registry"))?;
-        let key = IdentityKey {
-            bundle_name: bundle_name.to_string(),
-            session_id: session_id.to_string(),
-        };
         let Some(entry) = entries.get(&key) else {
             return Ok(StreamEventSendOutcome::NoUiEndpoint);
         };
@@ -411,10 +441,6 @@ pub(super) fn send_event_to_registered_ui(
         .entries
         .lock()
         .map_err(|_| io::Error::other("failed to lock stream registry"))?;
-    let key = IdentityKey {
-        bundle_name: bundle_name.to_string(),
-        session_id: session_id.to_string(),
-    };
     if let Some(entry) = entries.get_mut(&key) {
         entry.stream_id = None;
         entry.writer = None;

@@ -67,17 +67,24 @@ fn assert_and_ack_hello(
     bundle_name: &str,
     session_id: &str,
 ) {
+    let principal_id = if session_id.ends_with("@GLOBAL") {
+        session_id.to_string()
+    } else {
+        format!("{session_id}@{bundle_name}")
+    };
     let hello_payload = read_json_line(reader);
     assert_eq!(hello_payload["frame"], "hello");
-    assert_eq!(hello_payload["bundle_name"], bundle_name);
-    assert_eq!(hello_payload["session_id"], session_id);
+    assert_eq!(hello_payload["principal_id"], principal_id);
+    assert!(
+        hello_payload["identity_token"].is_string(),
+        "hello frame must carry an identity_token",
+    );
     write_json_line(
         stream,
         &json!({
             "frame": "hello_ack",
             "schema_version": "1",
-            "bundle_name": bundle_name,
-            "session_id": session_id,
+            "principal_id": principal_id,
         }),
     );
 }

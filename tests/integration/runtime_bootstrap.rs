@@ -136,8 +136,7 @@ fn handle_connection(
             let hello_ack = json!({
                 "frame": "hello_ack",
                 "schema_version": decoded["schema_version"],
-                "bundle_name": decoded["bundle_name"],
-                "session_id": decoded["session_id"],
+                "principal_id": decoded["principal_id"],
             });
             let text = serde_json::to_string(&hello_ack).expect("encode hello ack");
             stream

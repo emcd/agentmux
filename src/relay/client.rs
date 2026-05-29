@@ -1,4 +1,5 @@
 use std::{
+    fs,
     io::{self, BufRead, BufReader, Write},
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
@@ -8,7 +9,10 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use super::{RelayRequest, RelayResponse, RelayStreamEvent, SCHEMA_VERSION};
+use crate::runtime::paths::session_identity_psk_path;
+
+use super::identity::SOCKET_TRUST_TOKEN;
+use super::{RelayRequest, RelayResponse, RelayStreamEvent, SCHEMA_VERSION, canonical_session_id};
 
 const RELAY_STREAM_HELLO_ACK_TIMEOUT: Duration = Duration::from_secs(2);
 const RELAY_STREAM_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -35,11 +39,13 @@ struct RelayStreamConnection {
 enum StreamClientFrame<'a> {
     Hello {
         schema_version: &'a str,
-        bundle_name: &'a str,
-        session_id: &'a str,
+        principal_id: &'a str,
+        identity_token: &'a str,
     },
     Request {
         request_id: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        bundle_name: Option<&'a str>,
         request: &'a RelayRequest,
     },
 }
@@ -49,8 +55,7 @@ enum StreamClientFrame<'a> {
 enum StreamServerFrame {
     HelloAck {
         schema_version: String,
-        bundle_name: String,
-        session_id: String,
+        principal_id: String,
     },
     Response {
         request_id: Option<String>,
@@ -96,6 +101,7 @@ impl RelayStreamSession {
     ) -> Result<(RelayResponse, Vec<RelayStreamEvent>), io::Error> {
         self.ensure_connected()?;
         let request_id = uuid::Uuid::new_v4().to_string();
+        let bundle_name = self.bundle_name.clone();
         let result = {
             let connection = self
                 .connection
@@ -105,6 +111,7 @@ impl RelayStreamSession {
                 &mut connection.stream,
                 StreamClientFrame::Request {
                     request_id: request_id.as_str(),
+                    bundle_name: Some(bundle_name.as_str()),
                     request,
                 },
             )?;
@@ -178,14 +185,43 @@ impl RelayStreamSession {
         }
     }
 
+    /// Reads this session's PSK from the well-known credential path, falling
+    /// back to the socket-trust sentinel when no credential file is present or
+    /// readable. The relay socket lives at `<state-root>/relay.sock`, so the
+    /// state root is the socket's parent directory.
+    fn read_identity_token(&self) -> String {
+        let Some(state_root) = self.socket_path.parent() else {
+            return SOCKET_TRUST_TOKEN.to_string();
+        };
+        let psk_path = session_identity_psk_path(
+            state_root,
+            self.bundle_name.as_str(),
+            self.session_id.as_str(),
+        );
+        match fs::read_to_string(&psk_path) {
+            Ok(contents) => {
+                let trimmed = contents.trim();
+                if trimmed.is_empty() {
+                    SOCKET_TRUST_TOKEN.to_string()
+                } else {
+                    trimmed.to_string()
+                }
+            }
+            Err(_) => SOCKET_TRUST_TOKEN.to_string(),
+        }
+    }
+
     fn try_connect_once(&self) -> Result<RelayStreamConnection, ConnectAttemptError> {
+        let principal_id =
+            canonical_session_id(self.session_id.as_str(), self.bundle_name.as_str());
+        let identity_token = self.read_identity_token();
         let mut stream = UnixStream::connect(&self.socket_path).map_err(ConnectAttemptError::Io)?;
         send_stream_client_frame(
             &mut stream,
             StreamClientFrame::Hello {
                 schema_version: SCHEMA_VERSION,
-                bundle_name: self.bundle_name.as_str(),
-                session_id: self.session_id.as_str(),
+                principal_id: principal_id.as_str(),
+                identity_token: identity_token.as_str(),
             },
         )
         .map_err(ConnectAttemptError::Io)?;
@@ -220,8 +256,7 @@ impl RelayStreamSession {
             match server_frame {
                 StreamServerFrame::HelloAck {
                     schema_version,
-                    bundle_name,
-                    session_id,
+                    principal_id: acked_principal_id,
                 } => {
                     if schema_version != SCHEMA_VERSION {
                         return Err(ConnectAttemptError::Io(io::Error::other(format!(
@@ -229,7 +264,7 @@ impl RelayStreamSession {
                             SCHEMA_VERSION, schema_version
                         ))));
                     }
-                    if bundle_name != self.bundle_name || session_id != self.session_id {
+                    if acked_principal_id != principal_id {
                         return Err(ConnectAttemptError::Io(io::Error::other(
                             "relay hello acknowledgement identity mismatch",
                         )));

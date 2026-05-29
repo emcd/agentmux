@@ -62,18 +62,21 @@ send = "all:home"
 "#,
     )
     .expect("write policies configuration");
+    let global_id = global_user_id(bundle_name);
     std::fs::write(
         configuration_root.join("users.toml"),
-        r#"
+        format!(
+            r#"
 default-bundle = "example"
-default-session = "user@GLOBAL"
+default-session = "{global_id}"
 
 [[sessions]]
-id = "user@GLOBAL"
+id = "{global_id}"
 policy = "default"
 
 [sessions.ui]
-"#,
+"#
+        ),
     )
     .expect("write users configuration");
     std::fs::write(
@@ -104,11 +107,12 @@ fn spawn_relay_stream(
 ) -> (UnixStream, thread::JoinHandle<()>) {
     let (server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
     let root = configuration_root.to_path_buf();
+    let state_root = bundle_paths.state_root.clone();
     let mut map = HashMap::new();
     map.insert(bundle_paths.bundle_name.clone(), bundle_paths.clone());
     let catalog: BundleCatalog = Arc::new(map);
     let handle = thread::spawn(move || {
-        run_serve_connection(server_stream, root, catalog).expect("serve connection");
+        run_serve_connection(server_stream, root, state_root, catalog).expect("serve connection");
     });
     (client_stream, handle)
 }
@@ -118,6 +122,7 @@ fn spawn_relay_stream(
 fn run_serve_connection(
     server_stream: UnixStream,
     configuration_root: PathBuf,
+    state_root: PathBuf,
     bundle_catalog: BundleCatalog,
 ) -> Result<(), std::io::Error> {
     server_stream
@@ -132,7 +137,9 @@ fn run_serve_connection(
         serve_connection(
             stream,
             &configuration_root,
+            &state_root,
             &bundle_catalog,
+            false,
             Duration::from_secs(2),
         )
         .await
@@ -168,12 +175,61 @@ fn read_json_with_timeout(reader: &mut BufReader<UnixStream>) -> Option<Value> {
     }
 }
 
+// Derives a short, unique `@GLOBAL` operator id from a (per-test unique) bundle
+// name. Relay-wide principals are keyed in the process-wide stream registry by
+// `principal_id` alone, so concurrent tests must not share one global id.
+fn global_user_id(bundle_name: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bundle_name.hash(&mut hasher);
+    format!("g{:016x}@GLOBAL", hasher.finish())
+}
+
+// Collects stream events for `bundle_name` until the terminal `delivered`
+// outcome is seen or the deadline elapses. Relay-wide (`@GLOBAL`) UI connections
+// receive events from every bundle on the relay, and the stream registry is
+// process-wide, so a test targeting one bundle must filter foreign events out by
+// `bundle_name` rather than reading a fixed event count.
+fn collect_bundle_events(
+    stream: &UnixStream,
+    reader: &mut BufReader<UnixStream>,
+    bundle_name: &str,
+    deadline: Duration,
+) -> Vec<Value> {
+    stream
+        .set_read_timeout(Some(Duration::from_millis(100)))
+        .expect("set read timeout");
+    let end = std::time::Instant::now() + deadline;
+    let mut events = Vec::new();
+    while std::time::Instant::now() < end {
+        let Some(value) = read_json_with_timeout(reader) else {
+            continue;
+        };
+        if value["frame"] != "event" || value["event"]["bundle_name"] != bundle_name {
+            continue;
+        }
+        let terminal = value["event"]["event_type"] == "delivery_outcome"
+            && value["event"]["payload"]["phase"] == "delivered";
+        events.push(value);
+        if terminal {
+            break;
+        }
+    }
+    let _ = stream.set_read_timeout(None);
+    events
+}
+
 fn hello_payload(bundle_name: &str, session_id: &str) -> Value {
+    let principal_id = if session_id.ends_with("@GLOBAL") {
+        session_id.to_string()
+    } else {
+        format!("{session_id}@{bundle_name}")
+    };
     json!({
         "frame": "hello",
         "schema_version": "1",
-        "bundle_name": bundle_name,
-        "session_id": session_id,
+        "principal_id": principal_id,
+        "identity_token": "socket-trust",
     })
 }
 
@@ -191,7 +247,7 @@ fn relay_send_routes_to_connected_ui_stream_with_event_frames() {
 
     send_json(
         &mut ui_client,
-        hello_payload(bundle_name.as_str(), "user@GLOBAL"),
+        hello_payload(bundle_name.as_str(), &global_user_id(&bundle_name)),
     );
     let hello_ack = read_json(&mut reader);
     assert_eq!(hello_ack["frame"], "hello_ack");
@@ -201,7 +257,7 @@ fn relay_send_routes_to_connected_ui_stream_with_event_frames() {
             request_id: Some("req-1".to_string()),
             sender_session: "alpha".to_string(),
             message: "hello ui".to_string(),
-            targets: vec!["user@GLOBAL".to_string()],
+            targets: vec![global_user_id(&bundle_name)],
             broadcast: false,
             quiet_window_ms: None,
             quiescence_timeout_ms: Some(500),
@@ -218,16 +274,21 @@ fn relay_send_routes_to_connected_ui_stream_with_event_frames() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].outcome, SendOutcome::Queued);
 
-    let first_event = read_json(&mut reader);
-    let second_event = read_json(&mut reader);
-    let third_event = read_json(&mut reader);
-    let events = [&first_event, &second_event, &third_event];
+    let events = collect_bundle_events(
+        &ui_client,
+        &mut reader,
+        bundle_name.as_str(),
+        Duration::from_secs(3),
+    );
     let incoming_event = events
         .iter()
         .find(|value| value["event"]["event_type"] == "incoming_message")
         .expect("incoming event");
     assert_eq!(incoming_event["event"]["bundle_name"], bundle_name);
-    assert_eq!(incoming_event["event"]["target_session"], "user@GLOBAL");
+    assert_eq!(
+        incoming_event["event"]["target_session"],
+        global_user_id(&bundle_name)
+    );
     assert_eq!(
         incoming_event["event"]["payload"]["sender_session"],
         format!("alpha@{bundle_name}")
@@ -279,7 +340,7 @@ fn relay_send_waits_for_ui_reconnect_before_delivery() {
     let mut first_reader = BufReader::new(first_reader_stream);
     send_json(
         &mut first_client,
-        hello_payload(bundle_name.as_str(), "user@GLOBAL"),
+        hello_payload(bundle_name.as_str(), &global_user_id(&bundle_name)),
     );
     let _ = read_json(&mut first_reader);
     first_client
@@ -298,16 +359,22 @@ fn relay_send_waits_for_ui_reconnect_before_delivery() {
         thread::sleep(Duration::from_millis(150));
         send_json(
             &mut reconnect_client,
-            hello_payload(reconnect_bundle.as_str(), "user@GLOBAL"),
+            hello_payload(
+                reconnect_bundle.as_str(),
+                &global_user_id(&reconnect_bundle),
+            ),
         );
         let ack = read_json(&mut reconnect_reader);
-        let first_event = read_json(&mut reconnect_reader);
-        let second_event = read_json(&mut reconnect_reader);
-        let third_event = read_json(&mut reconnect_reader);
+        let events = collect_bundle_events(
+            &reconnect_client,
+            &mut reconnect_reader,
+            reconnect_bundle.as_str(),
+            Duration::from_secs(3),
+        );
         reconnect_client
             .shutdown(std::net::Shutdown::Both)
             .expect("shutdown reconnect stream");
-        (ack, first_event, second_event, third_event)
+        (ack, events)
     });
 
     let response = dispatch_request(
@@ -315,7 +382,7 @@ fn relay_send_waits_for_ui_reconnect_before_delivery() {
             request_id: Some("req-2".to_string()),
             sender_session: "alpha".to_string(),
             message: "wait for reconnect".to_string(),
-            targets: vec!["user@GLOBAL".to_string()],
+            targets: vec![global_user_id(&bundle_name)],
             broadcast: false,
             quiet_window_ms: None,
             quiescence_timeout_ms: Some(1_000),
@@ -336,9 +403,7 @@ fn relay_send_waits_for_ui_reconnect_before_delivery() {
     // Async dispatch returns immediately; the reconnect thread connects at
     // +150ms and still receives the terminal delivered/success event, which
     // proves the background worker held delivery until the UI reconnected.
-    let (ack, first_event, second_event, third_event) =
-        reconnect_thread.join().expect("join reconnect thread");
-    let events = [&first_event, &second_event, &third_event];
+    let (ack, events) = reconnect_thread.join().expect("join reconnect thread");
     assert_eq!(ack["frame"], "hello_ack");
     assert!(
         events
@@ -374,7 +439,7 @@ fn relay_async_send_emits_terminal_delivery_outcome_to_sender_ui_stream() {
     let mut sender_reader = BufReader::new(sender_read_stream);
     send_json(
         &mut sender_client,
-        hello_payload(bundle_name.as_str(), "user@GLOBAL"),
+        hello_payload(bundle_name.as_str(), &global_user_id(&bundle_name)),
     );
     let sender_ack = read_json(&mut sender_reader);
     assert_eq!(sender_ack["frame"], "hello_ack");
@@ -382,7 +447,7 @@ fn relay_async_send_emits_terminal_delivery_outcome_to_sender_ui_stream() {
     let response = dispatch_request(
         RelayRequest::Send {
             request_id: Some("req-async-sender".to_string()),
-            sender_session: "user@GLOBAL".to_string(),
+            sender_session: global_user_id(&bundle_name),
             message: "verify sender completion stream".to_string(),
             targets: vec!["alpha".to_string()],
             broadcast: false,
@@ -523,7 +588,7 @@ fn relay_accepts_hello_for_configured_bundle_member() {
     send_json(&mut client, hello_payload(bundle_name.as_str(), "alpha"));
     let hello_ack = read_json(&mut reader);
     assert_eq!(hello_ack["frame"], "hello_ack");
-    assert_eq!(hello_ack["session_id"], "alpha");
+    assert_eq!(hello_ack["principal_id"], format!("alpha@{bundle_name}"));
 
     client
         .shutdown(std::net::Shutdown::Both)
