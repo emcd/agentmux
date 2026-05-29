@@ -14,7 +14,9 @@ Two use cases drive the design:
 2. **Cross-relay communication**: An Infrastructure group operates a relay
    separate from the R&D relay; both relays need to exchange messages across
    relay boundaries. This makes relay-to-relay trust a first-class
-   relationship (noted here; scoped in a future slice).
+   relationship. Inbound auth (peer relay Hello recognized via `[[peers]]`)
+   is in scope for Slice 1; outbound connections and permissions masking are
+   deferred to a later slice.
 
 ## Goals / Non-Goals
 
@@ -42,38 +44,70 @@ Non-Goals (this proposal):
 
 ## Decisions
 
-**D1 — Unified Hello credential: all principals use Hello with required `identity_token`.**
-All principal types — session, application, and relay — authenticate via the
-standard Hello frame. The `identity_token` field is a required `String` (not
-optional). This is a breaking change to the Hello protocol: all existing
-clients must be updated to send the field.
+**D1 — Unified Hello credential: all principals use Hello with `principal_id` + `identity_token`.**
+All principal types — session, user, application, and relay — authenticate via
+the standard Hello frame. The frame is redesigned to `{schema_version,
+principal_id, identity_token}`, replacing the previous `{schema_version,
+bundle_name, session_id}`. Both new fields are required `String`s. This is a
+breaking change: all existing clients must be updated.
 
-Principal type is resolved at verification time by which credential partition
-the token matches:
-- Token matches a session `credential_path` entry → session principal.
-- Token matches a `[[trusted-hosts]]` entry → application principal; relay
-  grants `IdentityIntrospect` rights scoped to the entry's `scope` at
-  connection establishment.
-- Token matches a `[[trusted-relays]]` entry → relay principal (future slice).
-- Token is `"socket-trust"` → session principal, unenforced (see D1c).
-- Token unrecognized and not `"socket-trust"` → typed error rejection.
+`principal_id` is the claimed identity in `<id>@<namespace>` form:
+- Session: `<session_id>@<bundle_name>` (relay extracts bundle name for routing)
+- User: `<name>@GLOBAL`
+- Application: `<name>@EXTERNAL`
+- Peer relay: `<id>@RELAY`
+
+Principal type is resolved at verification time by namespace + token lookup:
+- Namespace `@<bundle_name>` + token matches session credential hash → verified
+  session principal; relay assigns stable `principal_id` from store.
+- Namespace `@<bundle_name>` + token is `"socket-trust"` → session principal,
+  unenforced (see D1c); no store entry created; routing uses claimed
+  `principal_id`.
+- Namespace `@GLOBAL` + token matches user credential hash → user principal.
+- Namespace `@EXTERNAL` + token matches application credential hash →
+  application principal; relay grants `IdentityIntrospect` rights scoped to
+  the associated scope at connection establishment.
+- Namespace `@RELAY` + token matches relay credential hash → relay principal;
+  authorized for scoped cross-relay message routing.
+- Any namespace + unrecognized token (and not `"socket-trust"` on a session
+  namespace) → typed error rejection.
 
 Application and relay principals always require a valid, recognized token.
 
-**D1b — Credential provisioning by principal type.**
-- **Session principals**: configured `credential_path` per session entry in
-  bundle config, loaded at relay startup and used to seed principal store
-  records. Sessions without a provisioned credential send the well-known
-  constant `"socket-trust"`. The relay recognizes this constant as an
-  intentional unenforced placeholder — not as an opaque token to verify.
-- **Application and relay principals**: CLI-generated PSK via `agentmux new
-  peer` (or `agentmux new friend`). Credential values stored in files and
-  referenced by path in config — never written inline in TOML. Rotation:
-  regenerate via CLI, distribute to both sides, and restart.
-- **Dynamic session provisioning** (`agentmux new session`) is deferred.
-  Needed for runtime session creation (e.g., AI players added from within a
-  game interface). The required `String` field with the `"socket-trust"`
-  constant leaves this path open without a further breaking change.
+**D1b — Credential provisioning: relay-generated PSK, runtime registration.**
+The relay is the sole authority for credential issuance. Credentials are never
+configured by path reference in TOML; they are registered at runtime via the
+`new peer` command (CLI or MCP `new` meta-tool).
+
+- **Session principals** (`<session_id>@<bundle_name>`): operator calls
+  `agentmux new peer <session_id>@<bundle_name>`. Relay generates a 32-byte
+  random PSK (see D11), stores the hash in the principal store, and returns the
+  raw PSK value plus a config snippet to the caller. The client reads its PSK
+  from the well-known path `<state-root>/bundles/<bundle>/sessions/<session>/identity.psk`
+  at Hello time. Sessions without a provisioned credential file send the
+  `"socket-trust"` constant.
+- **User principals** (`<name>@GLOBAL`): same `new peer` flow. For CLI/TUI
+  operators not tied to any bundle.
+- **Application principals** (`<name>@EXTERNAL`): same `new peer` flow. The
+  application stores the PSK at a path of its choosing and presents it in Hello.
+- **Relay principals** (`<id>@RELAY`): same `new peer` flow. The peer relay
+  stores the PSK at the well-known peer credential path (see D11) and presents
+  it in Hello when connecting inbound. Scope for the peer principal is set on
+  the principal store record at `new peer` time. Outbound address config
+  (`[[peers]]`) is deferred to the outbound routing slice (see D9).
+- **PSK rotation** (`agentmux change psk <principal_id>` / MCP `change` meta-tool
+  with `command="psk"`): relay generates a new PSK, replaces the hash in the
+  principal store, and returns the new PSK. No relay restart required. Slice 1
+  rotation affects new connections only — the relay caches the verified
+  `principal_id` on the connection context at Hello and does not re-check the
+  store on subsequent requests; in-flight connections continue under their
+  established `principal_id` until they disconnect. Full revocation dispatch
+  (typed error frame + connection teardown for active sessions) lands in Slice 2.
+  A future "self-rotation" policy tier may allow principals to rotate their own
+  credential without operator round-trip (compromise recovery); deferred.
+- **Dynamic session provisioning** (`agentmux new session`) is deferred. The
+  required `String` field with `"socket-trust"` leaves this path open without a
+  further breaking change.
 
 **D1c — Session credential enforcement: configurable per bundle, mandatory on TCP/IP.**
 A bundle-level `require_session_credentials` setting (default: `false`)
@@ -89,17 +123,18 @@ that transport path regardless of this setting. The Unix socket option is
 scoped to same-host, same-user trust; a network boundary requires
 cryptographic proof.
 
-**D2 — Principal store: per-bundle file in the bundle runtime directory.**
-Location: `<bundle_runtime>/identity/principals.db` (format TBD at
-implementation; a simple JSON or sqlite file is sufficient for MVP). The store
-maps `credential_hash → principal_id + metadata`. Pruned by expiry. Replace
-with a heavier store only if record count demands it.
-
-Reference model: the game engine under development maintains a state directory
-with a JSON file containing one auth token per session ID — a close analog.
-Peer relays and host applications are clearly principals. Whether agent
-sessions share the same principal store or use a separate credential index is
-an open question (see Open Questions).
+**D2 — Principal store: relay-level file in the state root.**
+Location: `<state-root>/identity/principals.json`. Peering and application
+trust are relay-wide, not bundle-scoped; a per-bundle store would fragment
+@EXTERNAL and @RELAY identity across bundles and require separate registration
+per bundle. All four principal types share one relay-level store, keyed by
+`principal_id`. The store maps `credential_hash → principal_id + metadata`.
+SHA-256 is the required hash algorithm for `credential_hash`: PSKs are 32 bytes
+of CSPRNG output, so pre-image resistance is sufficient; password-stretching
+(bcrypt/argon2) adds cost without security benefit for this input profile.
+File-backed: loaded at startup, written on every mutation (new peer, change
+psk, expiry prune). Pruned by expiry. Replace with a heavier store only if
+record count demands it.
 
 **D3 — IdentityProvider interface: embedded vs. external.**
 Introduce an `IdentityProvider` trait with two implementations:
@@ -131,47 +166,118 @@ changeset.
 **D6 — One-relay = one-identity-authority.**
 Within a single relay deployment, one relay is the sole identity authority.
 Cross-relay identity verification requires two separate authorities to establish
-mutual trust — not a shared store. A `[[trusted-relays]]` peer config
-(analogous to `[[trusted-hosts]]`) is the candidate mechanism; out of scope
-for this proposal.
+mutual trust via `[[peers]]` configuration (D9).
 
-**D8 — Principal classes: three types, one store, one connection path.**
-The principal store accommodates three principal types, distinguished by a
-`principal_type` field. All three authenticate via the standard Hello frame
-(D1); the type is resolved by credential partition at verification time.
+Cross-relay auth flow (inbound direction, Slice 1):
+- Relay A runs `agentmux new peer <relay_b_id>@RELAY`: registers the hash in
+  Relay A's relay-level principal store and returns the raw PSK.
+- Relay B stores the returned PSK at `<state-root>/peers/<relay_a_alias>.psk`
+  (named after the issuing relay — the target Relay B will connect to).
+- When Relay B connects to Relay A it sends Hello with
+  `principal_id = "<relay_b_id>@RELAY"` and `identity_token = <PSK contents>`;
+  Relay A verifies the token against its principal store.
 
-- **Session** (`session`): an agent session that connected via Hello. With a
-  verified credential, the relay issues a stable `principal_id`. Host
-  applications map this to their own authorization model (e.g., game roles,
-  code review permissions). Sessions using `"socket-trust"` are not recorded
-  in the store.
-- **Application** (`application`): a host application that authenticated via
-  a `[[trusted-hosts]]` credential in Hello. Relay grants `IdentityIntrospect`
-  rights at connection time, scoped to the entry's `scope`. In the code review
-  example, the application is the sender/recipient principal for review
-  requests; session `principal_id` values appear in attribution fields.
-- **Relay** (`relay`): a peer relay that authenticated via a
-  `[[trusted-relays]]` credential in Hello. Authorized for cross-relay message
-  routing. Out of scope for slice 1 but the store schema must accommodate it.
+Inbound authentication (peer relay presents a PSK in Hello, verified by the
+receiving relay's principal store) is in scope for Slice 1. Outbound
+relay-to-relay connections — Relay B initiating a connection to Relay A and
+reading the peer credential file — and permissions masking are deferred to a
+later slice.
+
+Cross-relay address format (deferred, documented here for routing design
+consistency): `<session_id>@<bundle_name>!<relay_id>`, where `<relay_id>` is
+the bare id portion of the peer's `[[peers]]` entry (no `@RELAY` suffix — the
+`!` encodes the relay-boundary semantics). Example: `claude@myapp!peer-relay`.
+This notation follows UUCP bang-path conventions. Display and routing code
+should use this canonical form when referencing foreign principals.
+
+**D7 — Principal store is authoritative; no credential secrets in TOML config.**
+The relay's principal store is the single source of truth for all registered
+credentials. PSK values are never written to TOML configuration files; they are
+registered at runtime via `new peer` and stored as hashes only. The `[[peers]]`
+config table (D9) carries peer relay scope metadata but no PSK. This eliminates
+credential-path-in-config footguns and prevents secrets from appearing in
+version-controlled config files. Fail-closed: unrecognized tokens are always
+rejected regardless of config state.
+
+**D8 — Principal classes: four namespaces, one store, one connection path.**
+The principal store accommodates four principal namespaces, distinguished by a
+`principal_type` field. All four authenticate via the standard Hello frame (D1);
+the type is resolved by credential partition at verification time.
+
+- **Session** (`<session_id>@<bundle_name>`): an agent session that connected
+  via Hello. With a verified credential, the relay issues a stable
+  `principal_id`. Host applications map this to their own authorization model.
+  Sessions using `"socket-trust"` are not recorded in the store.
+- **User** (`<name>@GLOBAL`): a human operator using the CLI or TUI, not tied
+  to any specific bundle. Same authentication path as session principals.
+- **Application** (`<name>@EXTERNAL`): a host application (e.g., game engine
+  sidecar). Relay grants `IdentityIntrospect` rights at connection time, scoped
+  to the associated scope. Credential registered via `new peer <name>@EXTERNAL`.
+- **Relay** (`<id>@RELAY`): a peer relay authenticated via Hello. Authorized for
+  scoped cross-relay message routing. Credential registered via
+  `new peer <id>@RELAY`. Peer relay address config lives in `[[peers]]` (D9).
 
 The unified Hello path eliminates the need for a separate peer handshake
-frame. Capability gating (e.g., `IdentityIntrospect` for application
-principals only) is enforced at request dispatch time based on the
-`principal_type` established at Hello.
+frame. Capability gating (e.g., `IdentityIntrospect` for application principals
+only) is enforced at request dispatch time based on the `principal_type`
+established at Hello.
 
-**D7 — Trusted-host config: path reference, never inline secret.**
-`[[trusted-hosts]]` entries carry `credential_path` (a filesystem path to a
-file containing the secret). This is the first secret in any Agentmux config
-file. A deliberate decision: start with pre-shared secret by path; defer
-key-management infrastructure. Unknown/unmatched credentials are rejected
-(fail-closed); there is no default-trust fallback.
+**D9 — `[[peers]]` deferred to outbound routing slice.**
+The `[[peers]]` TOML config table is not introduced in Slice 1. Inbound peer
+relay authentication works entirely via the Hello + principal store path: the
+relay recognizes the `@RELAY` namespace in `principal_id`, looks up the hash in
+the relay-level principal store, and verifies. Scope for peer relay principals
+is stored on the principal store record at `new peer @RELAY` time.
+
+`[[peers]]` lands in the outbound routing slice. At that point it will be
+relay-level config (not bundle config), since peering is relay-wide. Expected
+fields: `id` (canonical `<id>@RELAY`), `scope`, `address` (outbound endpoint).
+No credential storage in TOML — PSKs for outbound connections follow the
+well-known peer credential path (D11).
+
+**D10 — `new` and `change` meta-tools; `new.peer` and `change.psk` policy controls.**
+Two new MCP meta-tools follow the `lifecycle` meta-tool pattern (single tool,
+`command=` dispatch arm):
+- `new` tool with `command="peer"`: creates a new principal and generates its
+  PSK. Maps to `agentmux new peer <principal_id>` CLI. Optional `--output
+  <path>` writes the PSK file directly instead of returning it as output.
+- `change` tool with `command="psk"`: rotates the PSK for an existing
+  principal. Maps to `agentmux change psk <principal_id>` CLI.
+
+Two new policy controls gate these operations (dot notation per the
+`add-do-action-tool` precedent):
+- `new.peer`: operator-level; required to create principals.
+- `change.psk`: operator-level; required to rotate credentials.
+
+**D11 — PSK format: base64-encoded random bytes, well-known credential file paths.**
+PSKs are 32 bytes of CSPRNG output (`OsRng` from the `rand` crate — no
+external tooling, cross-platform). Encoding: `base64::engine::general_purpose::STANDARD_NO_PAD`
+(no `=` padding; shorter strings, no shell/URL escaping issues if PSKs appear
+in those contexts). PSK files contain the raw base64 string; readers strip
+trailing whitespace on load. All PSK files and the principal store file must be
+created with mode 0600 (owner-read/write only); on Windows, equivalent ACL
+enforcement is documented but not enforced by the relay.
+
+Well-known credential file paths:
+- **Session principals** (`<session_id>@<bundle_name>`):
+  `<state-root>/bundles/<bundle_name>/sessions/<session_id>/identity.psk`
+- **Relay principals** (`<id>@RELAY`): peer credential directory at the relay
+  state root — `<state-root>/peers/<peer_alias>.psk` — where `<peer_alias>` is
+  the portion of the `id` before the `@RELAY` suffix. Stored by the operator
+  after `new peer` returns the raw PSK; read by the outbound routing slice when
+  Relay B initiates a connection to Relay A.
+- **Application principals** (`<name>@EXTERNAL`) and **user principals**
+  (`<name>@GLOBAL`): operator-chosen paths; no well-known convention imposed.
+
+The `rand` and `base64` crates are added as dependencies for PSK generation.
 
 ## Risks / Trade-offs
 
-- **PSK rotation gap**: rotating a credential file while the relay is running
-  means in-flight sessions hold the old token. Mitigation: relay restart
-  invalidates in-memory state; reconnecting clients re-authenticate with the
-  new token. Document this constraint explicitly.
+- **Rotation window (Slice 1 only)**: `change psk` immediately replaces the
+  hash in the principal store. Until Slice 2 lands, active sessions holding the
+  old credential are not force-disconnected; they will fail on their next
+  request. Document this Slice 1 limitation. Full revocation dispatch (typed
+  error frame + connection teardown) lands in Slice 2.
 - **Principal store growth**: principals are never pruned without expiry.
   Mitigation: expiry-based pruning at startup or on access.
 - **Revocation push gap**: if a stream-event carrier is silently dead, revoked
@@ -180,9 +286,6 @@ key-management infrastructure. Unknown/unmatched credentials are rejected
 
 ## Open Questions
 
-- **Exact PSK format**: raw binary file vs. base64-encoded string vs. TOML
-  path-ref pointing to a PEM file. TBD at implementation; spec states "path
-  reference to credential file" without prescribing file format.
 - **`on_behalf_of` setting mechanism**: the sender attribution field is
   reserved in slice 3 (see Sender Attribution Schema requirement). The exact
   mechanism by which a trusted host supplies or updates this claim for a
@@ -191,11 +294,8 @@ key-management infrastructure. Unknown/unmatched credentials are rejected
   variant. Defer until application wiring clarifies the right shape.
 - **Dynamic session provisioning scope**: `agentmux new session` is deferred
   but the need is real — game engines and similar embedders will add sessions
-  at runtime (e.g., AI players joining from within game interfaces). When
-  scoped, decide whether provisioning issues a credential file that the
-  session presents at Hello, or whether the relay auto-registers dynamically
-  created sessions via an internal API. The required `String` field with
-  `"socket-trust"` constant leaves both paths open.
+  at runtime. The required `String` field with `"socket-trust"` constant leaves
+  both provisioning paths open.
 - **Cross-relay slice timing**: if the cross-relay use case requires the
   discovery document sooner, slice 4 may need to be pulled forward into a
-  follow-on proposal before slices 2-3 are complete.
+  follow-on proposal before slices 2–3 are complete.
