@@ -130,6 +130,25 @@ that transport path regardless of this setting. The Unix socket option is
 scoped to same-host, same-user trust; a network boundary requires
 cryptographic proof.
 
+**D1d — Request routing bundle: optional explicit target on the request frame.**
+Because non-session principals are not bundle-bound (D8), a request can no
+longer rely on a connection's bound bundle to choose its target. The request
+frame carries an optional `bundle_name` (routing metadata on the frame
+envelope, alongside `request_id` — not a field on every `RelayRequest`
+variant). Resolution at the relay:
+
+- `bundle_name` present → route to that bundle (catalog lookup), regardless of
+  any connection binding.
+- `bundle_name` absent + connection is bundle-bound (session principal) →
+  route to the bound bundle.
+- `bundle_name` absent + no binding (relay-wide principal) → typed error
+  rejection (`validation_missing_target_bundle`).
+
+Clients send the bundle they already target, so session connections stay
+consistent (their bound bundle equals the sent target) and `@GLOBAL` operators
+can act on any bundle without a connection binding. A future cross-relay target
+selector slots in at the same envelope layer (see D6 bang-path notation).
+
 **D2 — Principal store: relay-level file in the state root.**
 Location: `<state-root>/identity/principals.json`. Peering and application
 trust are relay-wide, not bundle-scoped; a per-bundle store would fragment

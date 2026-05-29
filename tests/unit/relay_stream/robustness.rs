@@ -20,8 +20,10 @@ fn spawn_relay_connection_capturing(
 ) -> (UnixStream, thread::JoinHandle<Result<(), std::io::Error>>) {
     let (server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
     let root = configuration_root.to_path_buf();
+    let state_root = bundle_paths.state_root.clone();
     let catalog = super::single_bundle_catalog(bundle_paths);
-    let join_handle = thread::spawn(move || run_serve_connection(server_stream, root, catalog));
+    let join_handle =
+        thread::spawn(move || run_serve_connection(server_stream, root, state_root, catalog));
     (client_stream, join_handle)
 }
 
@@ -80,8 +82,8 @@ fn agent_hello_frame(bundle_name: &str) -> Value {
     json!({
         "frame": "hello",
         "schema_version": "1",
-        "bundle_name": bundle_name,
-        "session_id": "alpha",
+        "principal_id": format!("alpha@{bundle_name}"),
+        "identity_token": "socket-trust",
     })
 }
 

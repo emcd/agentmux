@@ -13,12 +13,18 @@ const CONFIGURATION_DIRECTORY_DEFAULT: &str = ".config";
 const STATE_DIRECTORY_DEFAULT: &str = ".local/state";
 const INSCRIPTIONS_DIRECTORY_DEFAULT: &str = "inscriptions";
 const BUNDLES_DIRECTORY: &str = "bundles";
+const SESSIONS_DIRECTORY: &str = "sessions";
+const PEERS_DIRECTORY: &str = "peers";
+const IDENTITY_DIRECTORY: &str = "identity";
+const IDENTITY_PSK_FILE: &str = "identity.psk";
+const PRINCIPAL_STORE_FILE: &str = "principals.json";
 const RELAY_SOCKET_FILE: &str = "relay.sock";
 const TMUX_SOCKET_FILE: &str = "tmux.sock";
 const RELAY_LOCK_FILE: &str = "relay.lock";
 const RELAY_SPAWN_LOCK_FILE: &str = "relay.spawn.lock";
 const RELAY_READY_SENTINEL_FILE: &str = "relay.ready";
 const DIRECTORY_MODE_OWNER_ONLY: u32 = 0o700;
+const CREDENTIAL_FILE_MODE_OWNER_ONLY: u32 = 0o600;
 
 /// Optional overrides for runtime root resolution.
 #[derive(Clone, Debug, Default)]
@@ -142,6 +148,56 @@ pub fn debug_repository_inscriptions_root(repository_root: &Path) -> PathBuf {
 #[must_use]
 pub fn tmux_socket_path_for_runtime_directory(runtime_directory: &Path) -> PathBuf {
     runtime_directory.join(TMUX_SOCKET_FILE)
+}
+
+/// Resolves the session pre-shared-key path under the bundle runtime.
+///
+/// Layout: `<state-root>/bundles/<bundle>/sessions/<session>/identity.psk`.
+/// The directory tree is created on first credential provisioning; readers
+/// should treat a missing file as the absence of a credential.
+#[must_use]
+pub fn session_identity_psk_path(
+    state_root: &Path,
+    bundle_name: &str,
+    session_id: &str,
+) -> PathBuf {
+    state_root
+        .join(BUNDLES_DIRECTORY)
+        .join(bundle_name)
+        .join(SESSIONS_DIRECTORY)
+        .join(session_id)
+        .join(IDENTITY_PSK_FILE)
+}
+
+/// Resolves the peer relay PSK path under the state root.
+///
+/// Layout: `<state-root>/peers/<peer_alias>.psk`. `peer_alias` is the local
+/// portion of the peer's `<id>@RELAY` identifier. Used by the outbound
+/// routing slice; the helper is defined here so path conventions remain
+/// consistent across slices.
+#[must_use]
+pub fn peer_relay_psk_path(state_root: &Path, peer_alias: &str) -> PathBuf {
+    state_root
+        .join(PEERS_DIRECTORY)
+        .join(format!("{peer_alias}.psk"))
+}
+
+/// Resolves the principal store path at the relay-level state root.
+///
+/// Layout: `<state-root>/identity/principals.json`. The store is authoritative
+/// for credential-to-principal mappings; PSK values are never persisted here.
+#[must_use]
+pub fn principal_store_path(state_root: &Path) -> PathBuf {
+    state_root
+        .join(IDENTITY_DIRECTORY)
+        .join(PRINCIPAL_STORE_FILE)
+}
+
+/// Returns the file mode used for credential artifacts (raw PSKs and the
+/// principal store).
+#[must_use]
+pub fn credential_file_mode() -> u32 {
+    CREDENTIAL_FILE_MODE_OWNER_ONLY
 }
 
 /// Ensures the bundle runtime directory exists with owner-only permissions.

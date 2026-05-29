@@ -1,4 +1,29 @@
-use super::GLOBAL_SESSION_SUFFIX;
+// Identity-federation scaffolding. Phase B (Hello verification) consumes the
+// principal store load/lookup, SHA-256 hashing, and namespace classification
+// below via `verify_hello_credential`. The remaining unused items
+// (`generate_psk`, store mutation/persist) are consumed by Phase C
+// (`new peer` / `change psk` tooling); this allow is removed when they land.
+#![allow(dead_code)]
+
+use std::{
+    collections::HashMap,
+    fs, io,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    path::{Path, PathBuf},
+};
+
+use base64::Engine;
+use rand::TryRngCore;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
+
+use super::{GLOBAL_SESSION_SUFFIX, RelayError, relay_error};
+
+const PSK_BYTE_LENGTH: usize = 32;
+const PRINCIPAL_FILE_MODE: u32 = 0o600;
+const PRINCIPAL_STORE_FORMAT_VERSION: u32 = 1;
 
 /// Returns the canonical `session@bundle` identity for a session id.
 ///
@@ -26,4 +51,340 @@ pub(super) fn bare_session_id(session_id: &str, bundle_name: &str) -> String {
         .strip_suffix(qualifier.as_str())
         .unwrap_or(session_id)
         .to_string()
+}
+
+/// Categorizes a principal by namespace partition.
+///
+/// The variant is derived from the `<id>@<namespace>` portion of a
+/// `principal_id`. Capability gating uses this type to decide which request
+/// surfaces a Hello-authenticated connection may invoke.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PrincipalType {
+    Session,
+    User,
+    Application,
+    Relay,
+}
+
+/// Persisted record for one registered principal.
+///
+/// `credential_hash` is the lowercase hex SHA-256 of the raw PSK; the raw PSK
+/// never appears here. `scope` is meaningful for `Application` and `Relay`
+/// principals and is set at registration time.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct PrincipalRecord {
+    pub(crate) principal_id: String,
+    pub(crate) principal_type: PrincipalType,
+    pub(crate) credential_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) expires_at: Option<String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub(crate) metadata: HashMap<String, String>,
+}
+
+/// Relay-level principal store backed by `<state-root>/identity/principals.json`.
+///
+/// Loads at relay startup; writes are performed atomically with restrictive
+/// mode (0600) on every mutation.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PrincipalStore {
+    path: PathBuf,
+    records_by_hash: HashMap<String, PrincipalRecord>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct StoreEnvelope {
+    format_version: u32,
+    #[serde(default)]
+    principals: Vec<PrincipalRecord>,
+}
+
+impl PrincipalStore {
+    /// Loads the principal store at `path`, returning an empty store when the
+    /// file does not yet exist.
+    pub(crate) fn load(path: PathBuf) -> Result<Self, RelayError> {
+        let raw = match fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(Self {
+                    path,
+                    records_by_hash: HashMap::new(),
+                });
+            }
+            Err(source) => {
+                return Err(relay_error(
+                    "internal_principal_store",
+                    "failed to read principal store",
+                    Some(json!({
+                        "path": path.display().to_string(),
+                        "cause": source.to_string(),
+                    })),
+                ));
+            }
+        };
+        let envelope: StoreEnvelope = serde_json::from_str(&raw).map_err(|source| {
+            relay_error(
+                "internal_principal_store",
+                "failed to parse principal store",
+                Some(json!({
+                    "path": path.display().to_string(),
+                    "cause": source.to_string(),
+                })),
+            )
+        })?;
+        if envelope.format_version != PRINCIPAL_STORE_FORMAT_VERSION {
+            return Err(relay_error(
+                "internal_principal_store",
+                "principal store has unsupported format-version",
+                Some(json!({
+                    "path": path.display().to_string(),
+                    "format_version": envelope.format_version,
+                    "supported": PRINCIPAL_STORE_FORMAT_VERSION,
+                })),
+            ));
+        }
+        let mut records_by_hash = HashMap::with_capacity(envelope.principals.len());
+        for record in envelope.principals {
+            records_by_hash.insert(record.credential_hash.clone(), record);
+        }
+        Ok(Self {
+            path,
+            records_by_hash,
+        })
+    }
+
+    /// Returns the on-disk path the store was loaded from.
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Looks up a principal by SHA-256 hex `credential_hash` using a
+    /// constant-time per-key comparison to avoid token-equality timing leaks.
+    pub(crate) fn find_by_credential_hash(&self, hash_hex: &str) -> Option<&PrincipalRecord> {
+        let probe = hash_hex.as_bytes();
+        for (stored_hash, record) in &self.records_by_hash {
+            if stored_hash.len() == probe.len() && bool::from(stored_hash.as_bytes().ct_eq(probe)) {
+                return Some(record);
+            }
+        }
+        None
+    }
+
+    /// Inserts or replaces a principal record by `credential_hash`.
+    ///
+    /// Returns any prior record displaced by the insert; rotation uses this
+    /// to surface the old hash for revocation dispatch (Slice 2).
+    pub(crate) fn insert(&mut self, record: PrincipalRecord) -> Option<PrincipalRecord> {
+        self.records_by_hash
+            .insert(record.credential_hash.clone(), record)
+    }
+
+    /// Removes a principal by `principal_id` regardless of credential hash.
+    pub(crate) fn remove_by_principal_id(&mut self, principal_id: &str) -> Option<PrincipalRecord> {
+        let key = self
+            .records_by_hash
+            .iter()
+            .find(|(_, record)| record.principal_id == principal_id)
+            .map(|(hash, _)| hash.clone())?;
+        self.records_by_hash.remove(&key)
+    }
+
+    /// Writes the principal store to disk with mode 0600.
+    ///
+    /// Persists by writing to a sibling temporary file and renaming so that a
+    /// crash mid-write cannot corrupt an existing store.
+    pub(crate) fn persist(&self) -> Result<(), RelayError> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent).map_err(|source| self.io_error("create parent", source))?;
+            let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
+        }
+        let envelope = StoreEnvelope {
+            format_version: PRINCIPAL_STORE_FORMAT_VERSION,
+            principals: self.records_by_hash.values().cloned().collect(),
+        };
+        let serialized = serde_json::to_vec_pretty(&envelope).map_err(|source| {
+            relay_error(
+                "internal_principal_store",
+                "failed to serialize principal store",
+                Some(json!({
+                    "path": self.path.display().to_string(),
+                    "cause": source.to_string(),
+                })),
+            )
+        })?;
+        let tmp_path = self.path.with_extension("json.tmp");
+        {
+            let mut options = fs::OpenOptions::new();
+            options
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .mode(PRINCIPAL_FILE_MODE);
+            let mut file = options
+                .open(&tmp_path)
+                .map_err(|source| self.io_error("open temp", source))?;
+            io::Write::write_all(&mut file, &serialized)
+                .map_err(|source| self.io_error("write temp", source))?;
+            file.sync_all()
+                .map_err(|source| self.io_error("sync temp", source))?;
+        }
+        fs::rename(&tmp_path, &self.path)
+            .map_err(|source| self.io_error("rename store", source))?;
+        fs::set_permissions(&self.path, fs::Permissions::from_mode(PRINCIPAL_FILE_MODE))
+            .map_err(|source| self.io_error("set mode 0600", source))?;
+        Ok(())
+    }
+
+    fn io_error(&self, context: &str, source: io::Error) -> RelayError {
+        relay_error(
+            "internal_principal_store",
+            "principal store io failure",
+            Some(json!({
+                "path": self.path.display().to_string(),
+                "context": context,
+                "cause": source.to_string(),
+            })),
+        )
+    }
+}
+
+/// Generates a fresh pre-shared key: 32 bytes of OS CSPRNG output encoded as
+/// unpadded standard base64.
+pub(crate) fn generate_psk() -> String {
+    let mut bytes = [0u8; PSK_BYTE_LENGTH];
+    rand::rngs::OsRng
+        .try_fill_bytes(&mut bytes)
+        .expect("OsRng must not fail");
+    base64::engine::general_purpose::STANDARD_NO_PAD.encode(bytes)
+}
+
+/// Returns the lowercase hex SHA-256 digest of `token`.
+pub(crate) fn hash_token_sha256(token: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write;
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    out
+}
+
+/// Splits a `principal_id` of the form `<id>@<namespace>` into its components.
+///
+/// Returns `None` when the input lacks a single `@` separator or either side
+/// is empty.
+pub(crate) fn split_principal_id(principal_id: &str) -> Option<(&str, &str)> {
+    let (local, namespace) = principal_id.rsplit_once('@')?;
+    if local.is_empty() || namespace.is_empty() {
+        return None;
+    }
+    Some((local, namespace))
+}
+
+/// Classifies a `principal_id` by namespace partition.
+///
+/// `@GLOBAL` → user, `@EXTERNAL` → application, `@RELAY` → peer relay; any
+/// other non-empty namespace is treated as a bundle-scoped session principal.
+pub(crate) fn classify_principal_id(principal_id: &str) -> Option<PrincipalType> {
+    let (_, namespace) = split_principal_id(principal_id)?;
+    Some(match namespace {
+        "GLOBAL" => PrincipalType::User,
+        "EXTERNAL" => PrincipalType::Application,
+        "RELAY" => PrincipalType::Relay,
+        _ => PrincipalType::Session,
+    })
+}
+
+/// Sentinel `identity_token` presented by sessions that have no provisioned
+/// PSK file. Accepted for session and user principals only when relay-wide
+/// credential enforcement is disabled (see `verify_hello_credential`).
+pub(crate) const SOCKET_TRUST_TOKEN: &str = "socket-trust";
+
+/// Result of verifying a Hello credential against the principal store.
+pub(crate) struct VerifiedIdentity {
+    pub(crate) principal_type: PrincipalType,
+    /// True when a recognized store credential backed the identity; false for
+    /// accepted `"socket-trust"` connections, which create no store entry.
+    pub(crate) store_backed: bool,
+}
+
+/// Verifies a Hello `principal_id` + `identity_token` against the principal
+/// store and the relay-wide enforcement policy.
+///
+/// A recognized token must be registered to the claimed `principal_id`
+/// (credential-to-identity binding). The `"socket-trust"` sentinel is accepted
+/// for session and user principals only when enforcement is disabled;
+/// application and relay principals always require a recognized credential.
+/// Unrecognized non-sentinel tokens are rejected fail-closed regardless of
+/// enforcement.
+pub(crate) fn verify_hello_credential(
+    principal_id: &str,
+    identity_token: &str,
+    store: &PrincipalStore,
+    require_session_credentials: bool,
+) -> Result<VerifiedIdentity, RelayError> {
+    let Some(claimed_type) = classify_principal_id(principal_id) else {
+        return Err(relay_error(
+            "validation_invalid_principal_id",
+            "hello principal_id is not in <id>@<namespace> form",
+            Some(json!({ "principal_id": principal_id })),
+        ));
+    };
+    if identity_token == SOCKET_TRUST_TOKEN {
+        return verify_socket_trust(principal_id, claimed_type, require_session_credentials);
+    }
+    let hash = hash_token_sha256(identity_token);
+    let Some(record) = store.find_by_credential_hash(&hash) else {
+        return Err(relay_error(
+            "validation_unrecognized_credential",
+            "hello identity_token did not match any registered principal",
+            Some(json!({ "principal_id": principal_id })),
+        ));
+    };
+    if record.principal_id != principal_id {
+        return Err(relay_error(
+            "validation_identity_binding_mismatch",
+            "presented credential is registered to a different principal_id",
+            Some(json!({
+                "principal_id": principal_id,
+                "registered_principal_id": record.principal_id,
+            })),
+        ));
+    }
+    Ok(VerifiedIdentity {
+        principal_type: record.principal_type,
+        store_backed: true,
+    })
+}
+
+fn verify_socket_trust(
+    principal_id: &str,
+    claimed_type: PrincipalType,
+    require_session_credentials: bool,
+) -> Result<VerifiedIdentity, RelayError> {
+    match claimed_type {
+        PrincipalType::Application | PrincipalType::Relay => Err(relay_error(
+            "validation_credential_required",
+            "application and relay principals require a registered credential",
+            Some(json!({ "principal_id": principal_id })),
+        )),
+        PrincipalType::Session | PrincipalType::User => {
+            if require_session_credentials {
+                return Err(relay_error(
+                    "validation_credential_required",
+                    "relay requires session credentials; socket-trust is not accepted",
+                    Some(json!({ "principal_id": principal_id })),
+                ));
+            }
+            Ok(VerifiedIdentity {
+                principal_type: claimed_type,
+                store_backed: false,
+            })
+        }
+    }
 }

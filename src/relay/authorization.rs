@@ -62,6 +62,8 @@ struct PolicyControls {
     grant: PolicyScope,
     updown: PolicyScope,
     do_controls: HashMap<String, PolicyScope>,
+    new_controls: HashMap<String, PolicyScope>,
+    change_controls: HashMap<String, PolicyScope>,
 }
 
 #[derive(Clone, Debug)]
@@ -80,6 +82,8 @@ impl PolicyControls {
             grant: PolicyScope::None,
             updown: PolicyScope::None,
             do_controls: HashMap::new(),
+            new_controls: HashMap::new(),
+            change_controls: HashMap::new(),
         }
     }
 }
@@ -139,6 +143,10 @@ struct RawPolicyControls {
     updown: String,
     #[serde(default, rename = "do")]
     do_controls: HashMap<String, String>,
+    #[serde(default, rename = "new")]
+    new_controls: HashMap<String, String>,
+    #[serde(default, rename = "change")]
+    change_controls: HashMap<String, String>,
 }
 
 fn default_raww_policy_scope() -> String {
@@ -450,35 +458,32 @@ fn parse_policy_controls(
         "validation_invalid_policy_scope",
         "authorization policy updown control uses unsupported scope value",
     )?;
-    let mut do_controls = HashMap::with_capacity(controls.do_controls.len());
-    for (action_id, scope_value) in controls.do_controls {
-        let action_id = action_id.trim();
-        if action_id.is_empty() {
-            return Err(relay_error(
-                "validation_invalid_arguments",
-                "do control action id must be non-empty",
-                Some(json!({
-                    "path": policies_path.display().to_string(),
-                    "policy_id": policy_id,
-                })),
-            ));
-        }
-        let scope = parse_scope_for_control(
-            scope_value.as_str(),
-            policies_path,
-            policy_id,
-            format!("do.{action_id}").as_str(),
-            &[
-                PolicyScope::None,
-                PolicyScope::SelfOnly,
-                PolicyScope::AllHome,
-                PolicyScope::AllAll,
-            ],
-            "validation_invalid_arguments",
-            "authorization policy control uses unsupported scope value",
-        )?;
-        do_controls.insert(action_id.to_string(), scope);
-    }
+    let do_controls = parse_action_scope_map(
+        controls.do_controls,
+        "do",
+        policies_path,
+        policy_id,
+        &[
+            PolicyScope::None,
+            PolicyScope::SelfOnly,
+            PolicyScope::AllHome,
+            PolicyScope::AllAll,
+        ],
+    )?;
+    let new_controls = parse_action_scope_map(
+        controls.new_controls,
+        "new",
+        policies_path,
+        policy_id,
+        &[PolicyScope::None, PolicyScope::AllHome],
+    )?;
+    let change_controls = parse_action_scope_map(
+        controls.change_controls,
+        "change",
+        policies_path,
+        policy_id,
+        &[PolicyScope::None, PolicyScope::AllHome],
+    )?;
     Ok(PolicyControls {
         find,
         list,
@@ -488,7 +493,44 @@ fn parse_policy_controls(
         grant,
         updown,
         do_controls,
+        new_controls,
+        change_controls,
     })
+}
+
+fn parse_action_scope_map(
+    raw_map: HashMap<String, String>,
+    namespace: &str,
+    policies_path: &Path,
+    policy_id: &str,
+    allowed_scopes: &[PolicyScope],
+) -> Result<HashMap<String, PolicyScope>, RelayError> {
+    let mut result = HashMap::with_capacity(raw_map.len());
+    for (action_id, scope_value) in raw_map {
+        let action_id = action_id.trim();
+        if action_id.is_empty() {
+            return Err(relay_error(
+                "validation_invalid_arguments",
+                "policy action id must be non-empty",
+                Some(json!({
+                    "path": policies_path.display().to_string(),
+                    "policy_id": policy_id,
+                    "namespace": namespace,
+                })),
+            ));
+        }
+        let scope = parse_scope_for_control(
+            scope_value.as_str(),
+            policies_path,
+            policy_id,
+            format!("{namespace}.{action_id}").as_str(),
+            allowed_scopes,
+            "validation_invalid_arguments",
+            "authorization policy control uses unsupported scope value",
+        )?;
+        result.insert(action_id.to_string(), scope);
+    }
+    Ok(result)
 }
 
 fn parse_scope_for_control(
@@ -788,6 +830,8 @@ fn controls_for_requester<'a>(
         })?;
     let _ = controls.find;
     let _ = controls.do_controls.len();
+    let _ = controls.new_controls.len();
+    let _ = controls.change_controls.len();
     Ok(controls)
 }
 

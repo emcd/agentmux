@@ -11,17 +11,18 @@ use crate::{
     configuration::{
         SessionType, load_bundle_configuration, load_policy_ids, load_tui_configuration,
     },
-    runtime::paths::BundleRuntimePaths,
+    runtime::paths::{BundleRuntimePaths, principal_store_path},
 };
 
+use super::identity::{PrincipalStore, PrincipalType, split_principal_id, verify_hello_credential};
 use super::stream::{
-    HelloFrame, IncomingFrame, OutgoingFrame, RegisterStreamOutcome, SharedStreamWriter,
-    StreamRegistration, parse_incoming_frame, register_stream, registration_is_current,
-    spawn_stream_writer, unregister_stream, write_stream_frame_to_writer,
+    HelloFrame, IncomingFrame, OutgoingFrame, RegisterStreamOutcome, RegistryKey,
+    SharedStreamWriter, StreamRegistration, parse_incoming_frame, register_stream,
+    registration_is_current, spawn_stream_writer, unregister_stream, write_stream_frame_to_writer,
 };
 use super::{
-    GLOBAL_SESSION_SUFFIX, RelayError, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
-    dispatch_request, handlers, map_config, map_tui_config, relay_error,
+    RelayError, RelayResponse, RequestPrincipal, SCHEMA_VERSION, dispatch_request, handlers,
+    map_config, map_tui_config, relay_error,
 };
 
 /// Map from configured bundle name to its resolved runtime paths. Shared
@@ -37,10 +38,16 @@ pub type BundleCatalog = Arc<HashMap<String, BundleRuntimePaths>>;
 /// is released on every exit path (including async cancellation), so a
 /// reconnecting client with the same identity cannot be wedged into an
 /// identity-claim conflict by a stale entry.
+///
+/// `state_root` locates the relay-level principal store consulted at Hello time
+/// for credential verification; `require_session_credentials` enables relay-wide
+/// enforcement (rejecting `"socket-trust"` and unrecognized tokens).
 pub async fn serve_connection(
     stream: UnixStream,
     configuration_root: &Path,
+    state_root: &Path,
     bundle_catalog: &BundleCatalog,
+    require_session_credentials: bool,
     pre_hello_idle_timeout: Duration,
 ) -> Result<(), io::Error> {
     let (read_half, write_half) = stream.into_split();
@@ -52,7 +59,9 @@ pub async fn serve_connection(
         &writer,
         &mut guard,
         configuration_root,
+        state_root,
         bundle_catalog,
+        require_session_credentials,
         pre_hello_idle_timeout,
     )
     .await;
@@ -95,12 +104,24 @@ impl Drop for RegistrationGuard {
     }
 }
 
+/// Connection-level binding established from a verified Hello identity.
+struct HelloBinding {
+    session_type: SessionType,
+    key: RegistryKey,
+    /// Bound bundle for session principals; `None` for relay-wide principals,
+    /// whose requests must carry an explicit target bundle.
+    bound_bundle: Option<BundleRuntimePaths>,
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn serve_connection_frames(
     mut reader: BufReader<OwnedReadHalf>,
     writer: &SharedStreamWriter,
     guard: &mut RegistrationGuard,
     configuration_root: &Path,
+    state_root: &Path,
     bundle_catalog: &BundleCatalog,
+    require_session_credentials: bool,
     pre_hello_idle_timeout: Duration,
 ) -> Result<(), io::Error> {
     let mut bound_bundle: Option<BundleRuntimePaths> = None;
@@ -148,75 +169,14 @@ async fn serve_connection_frames(
 
         match frame {
             IncomingFrame::Hello(hello) => {
-                let bundle_paths = match bundle_catalog.get(hello.bundle_name.as_str()) {
-                    Some(paths) => paths.clone(),
-                    None => {
-                        let error = relay_error(
-                            "validation_unknown_bundle",
-                            "hello bundle_name is not configured on this relay",
-                            Some(json!({"bundle_name": hello.bundle_name})),
-                        );
-                        write_stream_frame_to_writer(
-                            writer,
-                            OutgoingFrame::Response {
-                                request_id: None,
-                                response: &RelayResponse::Error { error },
-                            },
-                        )?;
-                        break;
-                    }
-                };
-                let response =
-                    resolve_hello_session_type(configuration_root, &bundle_paths, &hello);
-                match response {
-                    Ok(session_type) => {
-                        match register_stream(&hello, session_type, writer.clone())? {
-                            RegisterStreamOutcome::Registered(value) => {
-                                guard.set(value);
-                            }
-                            RegisterStreamOutcome::IdentityClaimConflict {
-                                existing_connection_id,
-                            } => {
-                                let error =
-                                    identity_claim_conflict_error(&hello, existing_connection_id);
-                                write_stream_frame_to_writer(
-                                    writer,
-                                    OutgoingFrame::Response {
-                                        request_id: None,
-                                        response: &RelayResponse::Error { error },
-                                    },
-                                )?;
-                                break;
-                            }
-                        }
-                        write_stream_frame_to_writer(
-                            writer,
-                            OutgoingFrame::HelloAck {
-                                schema_version: SCHEMA_VERSION,
-                                bundle_name: hello.bundle_name.as_str(),
-                                session_id: hello.session_id.as_str(),
-                            },
-                        )?;
-                        if session_type == SessionType::Ui
-                            && let Err(error) =
-                                handlers::emit_permission_snapshot_for_ui_registration(
-                                    configuration_root,
-                                    &bundle_paths.bundle_name,
-                                    &bundle_paths.runtime_directory,
-                                    hello.session_id.as_str(),
-                                )
-                        {
-                            write_stream_frame_to_writer(
-                                writer,
-                                OutgoingFrame::Response {
-                                    request_id: None,
-                                    response: &RelayResponse::Error { error },
-                                },
-                            )?;
-                            break;
-                        }
-                        bound_bundle = Some(bundle_paths);
-                    }
+                let binding = match resolve_hello_binding(
+                    configuration_root,
+                    state_root,
+                    bundle_catalog,
+                    require_session_credentials,
+                    &hello,
+                ) {
+                    Ok(binding) => binding,
                     Err(error) => {
                         write_stream_frame_to_writer(
                             writer,
@@ -227,10 +187,53 @@ async fn serve_connection_frames(
                         )?;
                         break;
                     }
+                };
+                match register_stream(binding.key.clone(), binding.session_type, writer.clone())? {
+                    RegisterStreamOutcome::Registered(value) => {
+                        guard.set(value);
+                    }
+                    RegisterStreamOutcome::IdentityClaimConflict {
+                        existing_connection_id,
+                    } => {
+                        let error = identity_claim_conflict_error(&hello, existing_connection_id);
+                        write_stream_frame_to_writer(
+                            writer,
+                            OutgoingFrame::Response {
+                                request_id: None,
+                                response: &RelayResponse::Error { error },
+                            },
+                        )?;
+                        break;
+                    }
                 }
+                write_stream_frame_to_writer(
+                    writer,
+                    OutgoingFrame::HelloAck {
+                        schema_version: SCHEMA_VERSION,
+                        principal_id: hello.principal_id.as_str(),
+                    },
+                )?;
+                if binding.session_type == SessionType::Ui
+                    && let Err(error) = emit_registration_permission_snapshots(
+                        configuration_root,
+                        bundle_catalog,
+                        &binding,
+                    )
+                {
+                    write_stream_frame_to_writer(
+                        writer,
+                        OutgoingFrame::Response {
+                            request_id: None,
+                            response: &RelayResponse::Error { error },
+                        },
+                    )?;
+                    break;
+                }
+                bound_bundle = binding.bound_bundle;
             }
             IncomingFrame::Request {
                 request_id,
+                bundle_name: target_bundle,
                 request,
             } => {
                 let Some(active_registration) = guard.current() else {
@@ -253,8 +256,8 @@ async fn serve_connection_frames(
                         "validation_stale_stream_binding",
                         "stream binding has been replaced by a newer hello registration",
                         Some(json!({
-                            "bundle_name": active_registration.bundle_name,
-                            "session_id": active_registration.session_id,
+                            "principal_id": active_registration.requester_session_id(),
+                            "bundle_name": active_registration.bundle_name(),
                         })),
                     );
                     write_stream_frame_to_writer(
@@ -266,10 +269,24 @@ async fn serve_connection_frames(
                     )?;
                     break;
                 }
-                let bundle_paths = bound_bundle
-                    .as_ref()
-                    .expect("bound_bundle set on successful Hello");
-                let session_id = active_registration.session_id.clone();
+                let bundle_paths = match resolve_effective_bundle(
+                    bundle_catalog,
+                    target_bundle.as_deref(),
+                    bound_bundle.as_ref(),
+                ) {
+                    Ok(bundle_paths) => bundle_paths,
+                    Err(error) => {
+                        write_stream_frame_to_writer(
+                            writer,
+                            OutgoingFrame::Response {
+                                request_id: request_id.as_deref(),
+                                response: &RelayResponse::Error { error },
+                            },
+                        )?;
+                        continue;
+                    }
+                };
+                let session_id = active_registration.requester_session_id().to_string();
                 let response = dispatch_request(
                     request,
                     configuration_root,
@@ -323,18 +340,49 @@ async fn read_next_line(
     }
 }
 
+/// Resolves the routing bundle for a stream request.
+///
+/// An explicit `target_bundle` selects the routing bundle regardless of any
+/// connection binding (so relay-wide principals can address any bundle). When
+/// absent, the connection's bound bundle is used. A request with neither an
+/// explicit target nor a bound bundle is rejected.
+fn resolve_effective_bundle(
+    bundle_catalog: &BundleCatalog,
+    target_bundle: Option<&str>,
+    bound_bundle: Option<&BundleRuntimePaths>,
+) -> Result<BundleRuntimePaths, RelayError> {
+    if let Some(target) = target_bundle {
+        return bundle_catalog
+            .get(target)
+            .cloned()
+            .ok_or_else(|| unknown_bundle_error(target));
+    }
+    if let Some(bound) = bound_bundle {
+        return Ok(bound.clone());
+    }
+    Err(relay_error(
+        "validation_missing_target_bundle",
+        "stream request from a relay-wide principal requires an explicit target bundle",
+        None,
+    ))
+}
+
+fn unknown_bundle_error(bundle_name: &str) -> RelayError {
+    relay_error(
+        "validation_unknown_bundle",
+        "request target bundle is not configured on this relay",
+        Some(json!({ "bundle_name": bundle_name })),
+    )
+}
+
 fn identity_claim_conflict_error(
     hello: &HelloFrame,
     existing_connection_id: Option<String>,
 ) -> RelayError {
     let mut details = serde_json::Map::new();
     details.insert(
-        "bundle_name".to_string(),
-        Value::String(hello.bundle_name.clone()),
-    );
-    details.insert(
-        "session_id".to_string(),
-        Value::String(hello.session_id.clone()),
+        "principal_id".to_string(),
+        Value::String(hello.principal_id.clone()),
     );
     details.insert(
         "reason".to_string(),
@@ -350,17 +398,58 @@ fn identity_claim_conflict_error(
     )
 }
 
-/// Validates a hello frame against the bundle resolved from the catalog and
-/// returns the session's configured session type.
+/// Emits permission snapshots to a freshly registered UI connection.
 ///
-/// Identity lookup proceeds in order: global users in `users.toml` when
-/// `session_id` carries the `@GLOBAL` suffix, then bundle members for the
-/// resolved bundle.
-fn resolve_hello_session_type(
+/// Session UI connections receive the snapshot for their bound bundle.
+/// Relay-wide UI principals are not bundle-bound, so they replay every
+/// configured bundle's snapshot — a global operator sees pending requests
+/// across the whole relay on (re)connect.
+fn emit_registration_permission_snapshots(
     configuration_root: &Path,
-    bundle_paths: &BundleRuntimePaths,
+    bundle_catalog: &BundleCatalog,
+    binding: &HelloBinding,
+) -> Result<(), RelayError> {
+    match &binding.key {
+        RegistryKey::Session {
+            session_id,
+            bundle_name,
+        } => {
+            if let Some(bundle_paths) = binding.bound_bundle.as_ref() {
+                handlers::emit_permission_snapshot_for_ui_registration(
+                    configuration_root,
+                    bundle_name,
+                    &bundle_paths.runtime_directory,
+                    session_id,
+                )?;
+            }
+        }
+        RegistryKey::RelayWide { principal_id } => {
+            for bundle_paths in bundle_catalog.values() {
+                handlers::emit_permission_snapshot_for_ui_registration(
+                    configuration_root,
+                    &bundle_paths.bundle_name,
+                    &bundle_paths.runtime_directory,
+                    principal_id,
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Verifies the Hello credential, then resolves the connection binding from the
+/// verified principal type.
+///
+/// Session principals (`@<bundle_name>`) do a bundle-catalog lookup and bind to
+/// that bundle; non-session principals (`@GLOBAL`, `@EXTERNAL`, `@RELAY`) skip
+/// the catalog and are not bundle-bound.
+fn resolve_hello_binding(
+    configuration_root: &Path,
+    state_root: &Path,
+    bundle_catalog: &BundleCatalog,
+    require_session_credentials: bool,
     hello: &HelloFrame,
-) -> Result<SessionType, RelayError> {
+) -> Result<HelloBinding, RelayError> {
     if hello.schema_version != SCHEMA_VERSION {
         return Err(relay_error(
             "validation_invalid_schema_version",
@@ -371,50 +460,92 @@ fn resolve_hello_session_type(
             })),
         ));
     }
-    if hello.session_id.ends_with(GLOBAL_SESSION_SUFFIX) {
-        return resolve_global_user_session_type(configuration_root, bundle_paths, hello);
+    let store = PrincipalStore::load(principal_store_path(state_root))?;
+    let verified = verify_hello_credential(
+        hello.principal_id.as_str(),
+        hello.identity_token.as_str(),
+        &store,
+        require_session_credentials,
+    )?;
+    match verified.principal_type {
+        PrincipalType::Session => {
+            let (session_id, bundle_name) = split_principal_id(hello.principal_id.as_str())
+                .ok_or_else(|| {
+                    relay_error(
+                        "validation_invalid_principal_id",
+                        "session principal_id is not in <session>@<bundle> form",
+                        Some(json!({ "principal_id": hello.principal_id })),
+                    )
+                })?;
+            let bundle_paths = bundle_catalog
+                .get(bundle_name)
+                .cloned()
+                .ok_or_else(|| unknown_bundle_error(bundle_name))?;
+            let session_type =
+                resolve_bundle_member_session_type(configuration_root, bundle_name, session_id)?;
+            Ok(HelloBinding {
+                session_type,
+                key: RegistryKey::Session {
+                    bundle_name: bundle_name.to_string(),
+                    session_id: session_id.to_string(),
+                },
+                bound_bundle: Some(bundle_paths),
+            })
+        }
+        PrincipalType::User => {
+            let session_type =
+                resolve_global_user_session_type(configuration_root, hello.principal_id.as_str())?;
+            Ok(HelloBinding {
+                session_type,
+                key: RegistryKey::RelayWide {
+                    principal_id: hello.principal_id.clone(),
+                },
+                bound_bundle: None,
+            })
+        }
+        PrincipalType::Application | PrincipalType::Relay => Ok(HelloBinding {
+            session_type: SessionType::Pubsub,
+            key: RegistryKey::RelayWide {
+                principal_id: hello.principal_id.clone(),
+            },
+            bound_bundle: None,
+        }),
     }
-    resolve_bundle_member_session_type(configuration_root, &bundle_paths.bundle_name, hello)
 }
 
 /// Resolves the session type for a hello identity matching a bundle member.
 fn resolve_bundle_member_session_type(
     configuration_root: &Path,
     bundle_name: &str,
-    hello: &HelloFrame,
+    session_id: &str,
 ) -> Result<SessionType, RelayError> {
     let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
-    let Some(member) = bundle
-        .members
-        .iter()
-        .find(|member| member.id == hello.session_id)
-    else {
+    let Some(member) = bundle.members.iter().find(|member| member.id == session_id) else {
         return Err(relay_error(
             "validation_unknown_sender",
             "hello session_id is not configured in associated bundle",
             Some(json!({
                 "bundle_name": bundle.bundle_name,
-                "session_id": hello.session_id,
+                "session_id": session_id,
             })),
         ));
     };
     Ok(member.target.session_type())
 }
 
-/// Resolves the session type for a hello identity carrying the `@GLOBAL`
-/// suffix by searching `users.toml` global users.
+/// Resolves the session type for a `@GLOBAL` user principal by searching
+/// `users.toml` global users. Global users are not bundle-bound.
 fn resolve_global_user_session_type(
     configuration_root: &Path,
-    bundle_paths: &BundleRuntimePaths,
-    hello: &HelloFrame,
+    principal_id: &str,
 ) -> Result<SessionType, RelayError> {
     let Some(users_configuration) =
         load_tui_configuration(configuration_root).map_err(map_tui_config)?
     else {
-        return Err(global_user_missing_error(bundle_paths, hello));
+        return Err(global_user_missing_error(principal_id));
     };
-    let Some(user_session) = users_configuration.session_by_id(hello.session_id.as_str()) else {
-        return Err(global_user_missing_error(bundle_paths, hello));
+    let Some(user_session) = users_configuration.session_by_id(principal_id) else {
+        return Err(global_user_missing_error(principal_id));
     };
     let policy_ids = load_policy_ids(configuration_root).map_err(map_tui_config)?;
     if !policy_ids.contains(user_session.policy.as_str()) {
@@ -430,13 +561,10 @@ fn resolve_global_user_session_type(
     Ok(user_session.session_type)
 }
 
-fn global_user_missing_error(bundle_paths: &BundleRuntimePaths, hello: &HelloFrame) -> RelayError {
+fn global_user_missing_error(principal_id: &str) -> RelayError {
     relay_error(
         "validation_unknown_sender",
-        "hello session_id is not configured in global users",
-        Some(json!({
-            "bundle_name": bundle_paths.bundle_name,
-            "session_id": hello.session_id,
-        })),
+        "hello principal_id is not configured in global users",
+        Some(json!({ "principal_id": principal_id })),
     )
 }

@@ -84,16 +84,31 @@ coder = "shell"
     configuration_root
 }
 
-fn write_tui_configuration(configuration_root: &Path, policy: &str) {
+// Derives a short, unique `@GLOBAL` operator id from a (per-test unique) bundle
+// name. The stream registry is process-wide and keys relay-wide principals by
+// `principal_id` alone, so concurrent tests sharing one global id would collide;
+// hashing keeps the id distinct per test while staying within the session-id
+// length limit (the raw bundle name can exceed it).
+fn global_user_id(bundle_name: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bundle_name.hash(&mut hasher);
+    format!("g{:016x}@GLOBAL", hasher.finish())
+}
+
+// Writes a TUI configuration declaring one `@GLOBAL` operator whose id is unique
+// per test (see `global_user_id`).
+fn write_tui_configuration(configuration_root: &Path, policy: &str, bundle_name: &str) {
+    let global_id = global_user_id(bundle_name);
     std::fs::write(
         configuration_root.join("users.toml"),
         format!(
             r#"
-default-bundle = "party"
-default-session = "user@GLOBAL"
+default-bundle = "{bundle_name}"
+default-session = "{global_id}"
 
 [[sessions]]
-id = "user@GLOBAL"
+id = "{global_id}"
 policy = "{policy}"
 
 [sessions.ui]
@@ -181,9 +196,10 @@ fn spawn_relay_connection(
 ) -> (UnixStream, thread::JoinHandle<()>) {
     let (server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
     let root = configuration_root.to_path_buf();
+    let state_root = bundle_paths.state_root.clone();
     let catalog = single_bundle_catalog(bundle_paths);
     let join_handle = thread::spawn(move || {
-        run_serve_connection(server_stream, root, catalog).expect("serve connection")
+        run_serve_connection(server_stream, root, state_root, catalog).expect("serve connection")
     });
     (client_stream, join_handle)
 }
@@ -202,6 +218,7 @@ fn single_bundle_catalog(bundle_paths: &BundleRuntimePaths) -> BundleCatalog {
 fn run_serve_connection(
     server_stream: UnixStream,
     configuration_root: PathBuf,
+    state_root: PathBuf,
     bundle_catalog: BundleCatalog,
 ) -> Result<(), std::io::Error> {
     server_stream.set_nonblocking(true)?;
@@ -215,7 +232,9 @@ fn run_serve_connection(
         serve_connection(
             stream,
             &configuration_root,
+            &state_root,
             &bundle_catalog,
+            false,
             TEST_PRE_HELLO_IDLE_TIMEOUT,
         )
         .await
@@ -305,14 +324,13 @@ fn stream_hello_acknowledges_and_allows_request() {
         json!({
             "frame": "hello",
             "schema_version": "1",
-            "bundle_name": bundle_name,
-            "session_id": "alpha",
+            "principal_id": format!("alpha@{bundle_name}"),
+            "identity_token": "socket-trust",
         }),
     );
     let hello_ack = read_json(&mut reader);
     assert_eq!(hello_ack["frame"], "hello_ack");
-    assert_eq!(hello_ack["bundle_name"], bundle_name);
-    assert_eq!(hello_ack["session_id"], "alpha");
+    assert_eq!(hello_ack["principal_id"], format!("alpha@{bundle_name}"));
 
     send_json(
         &mut client_stream,
@@ -356,8 +374,8 @@ fn duplicate_live_hello_claim_is_rejected_with_identity_conflict() {
     let hello_frame = json!({
         "frame": "hello",
         "schema_version": "1",
-        "bundle_name": bundle_name,
-        "session_id": "alpha",
+        "principal_id": format!("alpha@{bundle_name}"),
+        "identity_token": "socket-trust",
     });
 
     send_json(&mut first_client, hello_frame.clone());
@@ -373,12 +391,8 @@ fn duplicate_live_hello_claim_is_rejected_with_identity_conflict() {
         "runtime_identity_claim_conflict"
     );
     assert_eq!(
-        second_response["response"]["error"]["details"]["bundle_name"],
-        bundle_name
-    );
-    assert_eq!(
-        second_response["response"]["error"]["details"]["session_id"],
-        "alpha"
+        second_response["response"]["error"]["details"]["principal_id"],
+        format!("alpha@{bundle_name}")
     );
     assert_eq!(
         second_response["response"]["error"]["details"]["reason"],
@@ -430,8 +444,8 @@ fn hello_claim_is_accepted_after_prior_owner_disconnects() {
         json!({
             "frame": "hello",
             "schema_version": "1",
-            "bundle_name": bundle_name,
-            "session_id": "alpha",
+            "principal_id": format!("alpha@{bundle_name}"),
+            "identity_token": "socket-trust",
         }),
     );
     let first_ack = read_json(&mut first_reader);
@@ -448,8 +462,8 @@ fn hello_claim_is_accepted_after_prior_owner_disconnects() {
         json!({
             "frame": "hello",
             "schema_version": "1",
-            "bundle_name": bundle_name,
-            "session_id": "alpha",
+            "principal_id": format!("alpha@{bundle_name}"),
+            "identity_token": "socket-trust",
         }),
     );
     let second_ack = read_json(&mut second_reader);

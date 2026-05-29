@@ -302,13 +302,19 @@ async fn serve_relay_host(
 
     let accept_handle = {
         let configuration_root = roots.configuration_root.clone();
+        let state_root = roots.state_root.clone();
         let stop_requested = Arc::clone(&stop_requested);
         let connection_permits = Arc::clone(&connection_permits);
         let catalog = Arc::clone(&catalog);
+        // Relay-wide session-credential enforcement. Slice 1 Phase B defaults to
+        // disabled; the `--require-credentials` CLI flag wires this in Phase D.
+        let require_session_credentials = false;
         tokio::spawn(run_relay_accept_loop(
             configuration_root,
+            state_root,
             listener,
             catalog,
+            require_session_credentials,
             stop_requested,
             connection_permits,
             max_connections,
@@ -448,10 +454,13 @@ fn remove_relay_ready_sentinel(paths: &RelayRuntimePaths) {
 /// connection, bounded by the shared connection semaphore. At the cap, new
 /// connections receive an immediate overloaded response. Bundle routing is
 /// deferred to the connection worker's Hello handling.
+#[allow(clippy::too_many_arguments)]
 async fn run_relay_accept_loop(
     configuration_root: std::path::PathBuf,
+    state_root: std::path::PathBuf,
     listener: UnixListener,
     bundle_catalog: BundleCatalog,
+    require_session_credentials: bool,
     stop_requested: Arc<AtomicBool>,
     connection_permits: Arc<Semaphore>,
     max_connections: usize,
@@ -485,7 +494,9 @@ async fn run_relay_accept_loop(
                                     permit,
                                     stream,
                                     configuration_root.clone(),
+                                    state_root.clone(),
                                     Arc::clone(&bundle_catalog),
+                                    require_session_credentials,
                                     Arc::clone(&metrics),
                                 );
                             }
@@ -526,11 +537,14 @@ async fn run_relay_accept_loop(
 /// (process shutdown), which triggers the connection's drop-guard unregister
 /// path. Per-connection writes run on a separate writer task spawned inside
 /// `serve_connection`, so no blocking call ever ties up a runtime worker.
+#[allow(clippy::too_many_arguments)]
 fn spawn_connection_worker(
     permit: OwnedSemaphorePermit,
     stream: TokioUnixStream,
     configuration_root: std::path::PathBuf,
+    state_root: std::path::PathBuf,
     bundle_catalog: BundleCatalog,
+    require_session_credentials: bool,
     metrics: Arc<RelayConnectionMetrics>,
 ) {
     metrics.active_connections.fetch_add(1, Ordering::SeqCst);
@@ -539,7 +553,9 @@ fn spawn_connection_worker(
         let result = serve_connection(
             stream,
             &configuration_root,
+            &state_root,
             &bundle_catalog,
+            require_session_credentials,
             pre_hello_idle_timeout,
         )
         .await;
