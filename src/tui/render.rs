@@ -862,9 +862,8 @@ fn render_help_overlay(frame: &mut Frame, _state: &AppState) {
         Line::from("  c: Resolve as cancelled"),
         Line::from(""),
         help_section_heading("Session Picker (F2)"),
-        Line::from("Enter: Choose recipient into To"),
-        Line::from("l: Set target, switch to Interaction"),
-        Line::from("w: Set target, switch, focus write"),
+        Line::from("Enter (Communication): Insert into To"),
+        Line::from("Enter (Interaction): Open with look"),
         Line::from("Esc / F2: Close picker"),
         Line::from("Up/Down: Move picker selection"),
     ];

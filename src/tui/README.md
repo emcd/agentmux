@@ -66,11 +66,11 @@ available in both modes.
   - help,
   - recipient picker,
   - delivery + permission events,
-- picker actions:
-  - insert recipient into `To`,
-  - set the interaction target and switch to Interaction mode (`l`),
-  - set the interaction target, switch to Interaction mode, and focus the
-    Write input (`w`),
+- picker actions (mode-aware `Enter`, no separate `l` / `w` keys):
+  - Communication mode: insert the selected recipient into `To`,
+  - Interaction mode: open the Interaction screen for the selected identity,
+    running a synchronous relay `Look` so the look pane is populated with
+    recent session history before the Write input takes focus,
 - picker bundle status header: one-line CLI-style key=value summary of
   `bundle.hosted`, `bundle.state`, `bundle.startup_health`, and reason code
   from `relay::ListedBundle`, color-coded into four severity buckets

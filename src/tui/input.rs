@@ -249,19 +249,10 @@ fn handle_picker_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeE
         }
         KeyCode::Down => state.move_picker_selection(1),
         KeyCode::Up => state.move_picker_selection(-1),
-        KeyCode::Enter => state.insert_picker_selection(),
-        KeyCode::Char(character)
-            if (character == 'l' || character == 'L')
-                && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
-        {
-            return state.look_picker_target();
-        }
-        KeyCode::Char(character)
-            if (character == 'w' || character == 'W')
-                && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
-        {
-            return state.raww_picker_target();
-        }
+        KeyCode::Enter => match state.mode {
+            ScreenMode::Communication => state.insert_picker_selection(),
+            ScreenMode::Interaction => return state.enter_interaction_from_picker(),
+        },
         _ => {}
     }
     Ok(())
