@@ -24,3 +24,9 @@ look = 'all:home'
 raww = 'all:home'
 send = 'all:home'
 updown = 'all:home'
+
+[policies.controls.new]
+peer = 'all:home'
+
+[policies.controls.change]
+psk = 'all:home'

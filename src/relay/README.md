@@ -23,7 +23,10 @@ exported from `src/relay/mod.rs`.
 - `constants.rs`
   - relay-local constants shared across submodules.
 - `identity.rs`
-  - canonical/bare session identity helpers.
+  - canonical/bare session identity helpers; principal store schema and
+    load/persist primitives; PSK generation (`generate_psk`), SHA-256 hashing
+    (`hash_token_sha256`), and `principal_id` namespace classification used
+    by Hello verification and the `new peer` / `change psk` tooling.
 - `errors.rs`
   - relay error constructors and configuration error mapping.
 - `client.rs`
@@ -76,6 +79,27 @@ exported from `src/relay/mod.rs`.
   - `results.rs`, `quiescence.rs`: shared outcome and quiescence logic.
 
 ## Runtime Behavior Notes
+
+### Identity and Credentials
+
+- The principal store at `<state-root>/identity/principals.json` is the single
+  authority for credential-to-`principal_id` mappings. PSK values are never
+  persisted; only their SHA-256 hex digests are stored.
+- PSK files (`<state-root>/bundles/<b>/sessions/<s>/identity.psk` for sessions,
+  `<state-root>/peers/<peer_alias>.psk` for peers) and the principal store
+  itself are written with mode 0600 (owner read/write only).
+- **Bootstrap lockout warning**: when `require_session_credentials = true` is
+  set on a bundle, sessions without a provisioned PSK file are rejected at
+  Hello. Operators must register at least one principal via
+  `agentmux new peer <session_id>@<bundle>` (or run with the default
+  `require_session_credentials = false`) before flipping enforcement on,
+  otherwise no client can connect to drive recovery.
+- A `change psk` rotation replaces the stored hash immediately. In Slice 1,
+  active connections caching their verified `principal_id` continue under the
+  old binding until they disconnect; full revocation dispatch (typed error
+  frame + force-close) lands in Slice 2.
+
+### Delivery
 
 - Chat delivery is async-only; `delivery_mode` is no longer part of the relay
   send API. With the field removed, an internally tagged request silently
