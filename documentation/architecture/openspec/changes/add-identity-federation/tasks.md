@@ -73,8 +73,10 @@
       (`session` | `user` | `application` | `relay`), `credential_hash`
       (SHA-256 hex), `scope` (optional; set for `@RELAY` and `@EXTERNAL`
       principals at registration), `expires_at`, and metadata. Create and load
-      `<state-root>/identity/principals.json` at relay startup. Write with mode
-      0600 on every mutation (new peer, change psk, expiry prune).
+      `<state-root>/identity/principals.json`. Loaded fresh per-Hello (not
+      cached at startup) so newly registered principals are visible to the
+      next connection without a relay restart. Write with mode 0600 on every
+      mutation (new peer, change psk, expiry prune).
 - [x] 1.9 Wire credential verification on Hello handshake: parse `principal_id`
       namespace to determine principal type; SHA-256-hash `identity_token` and
       look up in relay-level principal store; use constant-time comparison for
