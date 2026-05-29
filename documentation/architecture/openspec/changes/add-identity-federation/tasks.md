@@ -73,8 +73,13 @@
       enforcement policy (D1c); no store entry created, routing uses claimed
       `principal_id`. For `@EXTERNAL` and `@RELAY`: always require a recognized
       token.
-- [ ] 1.10 Add `require_session_credentials` to bundle configuration schema
-      (boolean, default `false`). Thread through to Hello handling.
+- [ ] 1.10 Add relay-level `require_session_credentials` setting (boolean,
+      default `false`) and thread through to Hello handling. Setting lives at
+      relay level, not bundle level: with a single relay socket all connections
+      share one transport boundary, so per-bundle enforcement is meaningless
+      (a client can claim any `principal_id` namespace). For Slice 1, wire as
+      a CLI flag (`--require-credentials`) on `agentmux host relay`; migrates
+      to `relay.toml` in the relay config OpenSpec.
 - [ ] 1.11 Implement expiry-based pruning in the principal store: prune expired
       records on startup and on access.
 - [ ] 1.12 Integration test: Hello with valid session credential →

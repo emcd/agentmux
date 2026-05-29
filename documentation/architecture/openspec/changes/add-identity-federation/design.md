@@ -109,14 +109,21 @@ configured by path reference in TOML; they are registered at runtime via the
   required `String` field with `"socket-trust"` leaves this path open without a
   further breaking change.
 
-**D1c — Session credential enforcement: configurable per bundle, mandatory on TCP/IP.**
-A bundle-level `require_session_credentials` setting (default: `false`)
-controls enforcement for Unix socket connections:
+**D1c — Session credential enforcement: relay-level setting, mandatory on TCP/IP.**
+A relay-level `require_session_credentials` setting (default: `false`) controls
+enforcement for Unix socket connections. Per-bundle enforcement is not
+supported: the relay uses a single socket for all bundles, so a client can
+claim any `principal_id` namespace regardless of which bundle they target.
+Enforcement must be applied at the relay boundary.
+
 - `false` (default): relay accepts `"socket-trust"` from session connections;
   session gets no `principal_id`. Preserves backward compatibility with all
-  existing bundle entries.
+  existing deployments.
 - `true`: `"socket-trust"` and any unrecognized token → typed error rejection.
-  Operators opt in per bundle when all sessions are credentialed.
+  Operators opt in relay-wide when all sessions are credentialed.
+
+Configured via `--require-credentials` CLI flag on `agentmux host relay` for
+Slice 1; migrates to `relay.toml` in the relay config OpenSpec.
 
 When TCP/IP transport is added, credential enforcement SHALL be mandatory on
 that transport path regardless of this setting. The Unix socket option is
