@@ -92,3 +92,29 @@ relay itself routes to these namespaces under defined protocol circumstances
 - Expanding `namespace` semantics means relay routing has two code paths
   (catalog lookup vs relay-wide registry). Keep the branching explicit and
   co-located in `resolve_effective_bundle` (or its successor).
+
+## Design Correction (post-implementation)
+
+During implementation, MCP tasks 2.1–2.2 propagated `namespace` as an explicit
+parameter on `look`, `raww`, and `send` MCP tool schemas. This was a design
+error: per-target operations do not need an explicit `namespace` parameter
+because the routing context is fully determined by the `@<namespace>` suffix on
+each target principal ID. An additional `namespace` field creates two competing
+routing mechanisms and forces callers to redundantly state information already
+present in their targets.
+
+`namespace` is appropriate only on operations with no target principal IDs
+(e.g., `List`), where there is no principal ID suffix to infer the routing
+context from.
+
+This correction also supersedes D2's `namespace = "GLOBAL"` routing path for
+Send: clients do not specify `namespace = "GLOBAL"`; instead, the relay infers
+GLOBAL routing when a target carries the `@GLOBAL` suffix.
+
+The correction is tracked in `add-global-namespace-routing`, which:
+- Removes `namespace` from `look`, `raww`, and `send` MCP tool schemas.
+- Implements suffix-based routing inference in the relay: when a target carries
+  `@GLOBAL`, the relay routes to the relay-wide registry without requiring an
+  explicit `namespace = "GLOBAL"` selector from the client.
+- Retires `validation_namespace_routing_unavailable`.
+- Keeps `namespace` on `List` as the explicit registry selector.

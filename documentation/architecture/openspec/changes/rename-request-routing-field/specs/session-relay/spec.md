@@ -57,26 +57,22 @@ routing context for the request as follows:
 
 - `namespace` present, value is a bundle name → route to that bundle via
   catalog lookup, regardless of any connection binding.
-- `namespace` present, value is a relay-wide specifier (`"GLOBAL"`) → route in
-  the relay-wide registry; resolve targets against registered relay-wide
-  connections.
 - `namespace` absent + connection is bundle-bound (session principal) → route
   to the connection's bound bundle.
 - `namespace` absent + connection is relay-wide (non-session principal) → relay
   SHALL return a typed error (`validation_missing_routing_namespace`).
+
+The relay SHALL reject client-supplied `namespace` values of `"EXTERNAL"` or
+`"RELAY"` with `validation_unsupported_namespace`; these are reserved for
+relay-internal routing only. Routing to `"GLOBAL"` and other relay-wide
+targets via target principal ID suffix inference is specified in
+`add-global-namespace-routing`.
 
 #### Scenario: Explicit bundle namespace routes to bundle
 
 - **WHEN** a registered stream submits a request with `namespace = "agentmux"`
 - **THEN** relay routes the request in the context of bundle `agentmux`
 - **AND** targets are resolved against bundle `agentmux` members
-
-#### Scenario: GLOBAL namespace routes to relay-wide registry
-
-- **WHEN** a registered stream submits a send request with `namespace = "GLOBAL"`
-  and `targets = ["operator@GLOBAL"]`
-- **AND** `operator@GLOBAL` is registered as a relay-wide UI session
-- **THEN** relay delivers the message to that relay-wide connection
 
 #### Scenario: Absent namespace uses bound bundle
 
@@ -87,3 +83,9 @@ routing context for the request as follows:
 
 - **WHEN** a relay-wide principal stream submits a request without `namespace`
 - **THEN** relay returns `validation_missing_routing_namespace`
+
+#### Scenario: EXTERNAL and RELAY namespaces are rejected
+
+- **WHEN** a client submits a request with `namespace = "EXTERNAL"` or
+  `namespace = "RELAY"`
+- **THEN** relay returns `validation_unsupported_namespace`
