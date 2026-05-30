@@ -51,6 +51,11 @@ exported from `src/relay/mod.rs`.
   - bundle up/down and list-session request handlers.
 - `handlers/permissions.rs`
   - permission snapshot, list, and decision request handlers.
+- `handlers/identity.rs`
+  - relay-wide identity administration: `new peer` credential registration and
+    `change psk` rotation. Operates on the relay-level principal store with no
+    bundle context; dispatched via `dispatch_identity_admin` before the
+    per-bundle routing path in `connection.rs`.
 - `lifecycle.rs`
   - runtime reconcile/shutdown helpers for managed sessions.
 - `stream.rs`
@@ -112,6 +117,16 @@ exported from `src/relay/mod.rs`.
   active connections caching their verified `principal_id` continue under the
   old binding until they disconnect; full revocation dispatch (typed error
   frame + force-close) lands in Slice 2.
+- Credential administration is relay-wide, not bundle-scoped. `new peer`
+  (`RelayRequest::NewPeer`) generates a PSK, stores its SHA-256 hash, and
+  returns the raw value once — or writes it to an operator-supplied absolute
+  path (refusing symlinks via `O_NOFOLLOW`, requiring an existing parent, mode
+  0600). `change psk` (`RelayRequest::ChangePsk`) rotates an existing
+  principal's hash in place. Both authorize the requester relay-wide: the
+  caller's policy preset (resolved from a session member's `policy_id` or a
+  `@GLOBAL` operator's TUI-config policy) must grant `new.peer` / `change.psk`
+  at the `all:all` tier — a bundle-relative `all:home` grant is insufficient,
+  and application/relay principals are denied fail-closed.
 
 ### Delivery
 

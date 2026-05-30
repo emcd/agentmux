@@ -167,3 +167,24 @@ pub(in crate::relay) fn dispatch_request(
         Err(error) => RelayResponse::Error { error },
     }
 }
+
+/// Dispatches a relay-wide identity administration request (`new peer`,
+/// `change psk`), which mutates the relay-level principal store and has no
+/// bundle context. `requester_principal_id` is the full claimed identity of the
+/// caller, used to resolve operator authorization relay-wide.
+pub(in crate::relay) fn dispatch_identity_admin(
+    request: RelayRequest,
+    configuration_root: &Path,
+    state_root: &Path,
+    requester_principal_id: &str,
+) -> RelayResponse {
+    match handlers::handle_identity_admin_request(
+        request,
+        configuration_root,
+        state_root,
+        requester_principal_id,
+    ) {
+        Ok(value) => value,
+        Err(error) => RelayResponse::Error { error },
+    }
+}

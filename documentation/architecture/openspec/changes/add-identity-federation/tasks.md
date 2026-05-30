@@ -50,25 +50,35 @@
 - [x] 1.4 Add `rand` (with `getrandom` backend) and `base64` to `Cargo.toml`.
       Implement a crate-internal `generate_psk() -> String` helper that produces
       a 32-byte CSPRNG output encoded as `STANDARD_NO_PAD` base64.
-- [ ] 1.5 Implement `agentmux new peer <principal_id>` CLI command and the `new`
+- [x] 1.5 Implement `agentmux new peer <principal_id>` CLI command and the `new`
       MCP meta-tool (`command="peer"`). Relay: call `generate_psk`, hash with
       SHA-256, store in principal store (see 1.8), return raw PSK + config snippet
       to caller. Optional `--output <path>` flag writes the PSK to the specified
       path instead of returning it; `--output` paths must be absolute, the relay
-      refuses to follow symlinks during write, and parent directories must already
-      exist (no auto-creation). Supported namespaces: `@<bundle>`, `@GLOBAL`,
-      `@EXTERNAL`, `@RELAY`. For `@RELAY` principals, `scope` is set on the
-      principal store record at registration time.
-- [ ] 1.6 Implement `agentmux change psk <principal_id>` CLI command and the
+      refuses to follow symlinks during write (`O_NOFOLLOW`), and parent
+      directories must already exist (no auto-creation). Supported namespaces:
+      `@<bundle>`, `@GLOBAL`, `@EXTERNAL`, `@RELAY`. For `@RELAY` principals,
+      `scope` is set on the principal store record at registration time. The
+      operation is relay-wide and authorizes against the requester's policy
+      preset relay-wide (not a bundle context), requiring an `all:all` `new.peer`
+      grant (D10); re-registering an existing `principal_id` is rejected
+      (`validation_principal_exists`) — use `change psk` to rotate.
+- [x] 1.6 Implement `agentmux change psk <principal_id>` CLI command and the
       `change` MCP meta-tool (`command="psk"`). Relay: generate new PSK, replace
       hash in principal store, return new PSK to caller. Slice 1: store update
-      only; revocation dispatch to active sessions lands in Slice 2.
+      only; revocation dispatch to active sessions lands in Slice 2. Authorizes
+      relay-wide via an `all:all` `change.psk` grant; an unregistered
+      `principal_id` is rejected (`validation_unknown_principal`).
 - [x] 1.7 Add `new.peer` and `change.psk` to `PolicyControls` in
       `src/relay/authorization.rs` (dot-notation fields, operator-level defaults
       following `add-do-action-tool` precedent). Update
       `data/configuration/policies.toml` and
       `.auxiliary/configuration/agentmux/policies.toml` operator policy to
-      include both controls.
+      include both controls. Because these operations mutate the relay-wide
+      principal store, the operator preset grants them at `all:all` and the gate
+      (`authorize_relay_action`, wired with 1.5/1.6) requires an `all:all`
+      minimum: a bundle/namespace-relative `all:home` grant is parseable but
+      insufficient, since it confers no relay-wide authority (D10).
 - [x] 1.8 Define the principal store schema: `principal_id`, `principal_type`
       (`session` | `user` | `application` | `relay`), `credential_hash`
       (SHA-256 hex), `scope` (optional; set for `@RELAY` and `@EXTERNAL`

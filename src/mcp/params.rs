@@ -21,6 +21,10 @@ pub(super) const GRANT_OUTCOME_CANCELLED: &str = "cancelled";
 pub(super) const TOOL_LIFECYCLE: &str = "lifecycle";
 pub(super) const LIFECYCLE_COMMAND_UP: &str = "up";
 pub(super) const LIFECYCLE_COMMAND_DOWN: &str = "down";
+pub(super) const TOOL_NEW: &str = "new";
+pub(super) const NEW_COMMAND_PEER: &str = "peer";
+pub(super) const TOOL_CHANGE: &str = "change";
+pub(super) const CHANGE_COMMAND_PSK: &str = "psk";
 pub(super) const NAMESPACE_AGENTMUX: &str = "agentmux";
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -177,6 +181,69 @@ pub(super) struct LifecycleParams {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub(super) struct LifecycleArgs {
+    /// Unknown fields captured for explicit validation.
+    #[serde(flatten, default)]
+    #[schemars(skip)]
+    pub(super) extra_fields: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub(super) struct NewParams {
+    /// New subcommand selector. Required; allowed value: `peer`.
+    #[serde(default)]
+    pub(super) command: Option<String>,
+    /// Command-scoped arguments.
+    #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
+    #[serde(default)]
+    pub(super) args: Value,
+    /// Unknown fields captured for explicit validation.
+    #[serde(flatten, default)]
+    #[schemars(skip)]
+    pub(super) extra_fields: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub(super) struct NewPeerArgs {
+    /// Principal identifier to register, in `<id>@<namespace>` form.
+    #[serde(default)]
+    pub(super) principal_id: Option<String>,
+    /// Optional scope recorded on the principal (set for `@RELAY`/`@EXTERNAL`).
+    #[serde(default)]
+    pub(super) scope: Option<String>,
+    /// Optional absolute path; when present the PSK is written there instead of
+    /// being returned in the response.
+    #[serde(default)]
+    pub(super) output_path: Option<String>,
+    /// Unknown fields captured for explicit validation.
+    #[serde(flatten, default)]
+    #[schemars(skip)]
+    pub(super) extra_fields: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub(super) struct ChangeParams {
+    /// Change subcommand selector. Required; allowed value: `psk`.
+    #[serde(default)]
+    pub(super) command: Option<String>,
+    /// Command-scoped arguments.
+    #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
+    #[serde(default)]
+    pub(super) args: Value,
+    /// Unknown fields captured for explicit validation.
+    #[serde(flatten, default)]
+    #[schemars(skip)]
+    pub(super) extra_fields: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub(super) struct ChangePskArgs {
+    /// Principal identifier whose credential is rotated.
+    #[serde(default)]
+    pub(super) principal_id: Option<String>,
     /// Unknown fields captured for explicit validation.
     #[serde(flatten, default)]
     #[schemars(skip)]

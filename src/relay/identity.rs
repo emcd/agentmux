@@ -1,10 +1,3 @@
-// Identity-federation scaffolding. Phase B (Hello verification) consumes the
-// principal store load/lookup, SHA-256 hashing, and namespace classification
-// below via `verify_hello_credential`. The remaining unused items
-// (`generate_psk`, store mutation/persist) are consumed by Phase C
-// (`new peer` / `change psk` tooling); this allow is removed when they land.
-#![allow(dead_code)]
-
 use std::{
     collections::HashMap,
     fs, io,
@@ -65,6 +58,18 @@ pub(crate) enum PrincipalType {
     User,
     Application,
     Relay,
+}
+
+impl PrincipalType {
+    /// Returns the snake_case wire token for this principal type.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Session => "session",
+            Self::User => "user",
+            Self::Application => "application",
+            Self::Relay => "relay",
+        }
+    }
 }
 
 /// Persisted record for one registered principal.
@@ -156,11 +161,6 @@ impl PrincipalStore {
         })
     }
 
-    /// Returns the on-disk path the store was loaded from.
-    pub(crate) fn path(&self) -> &Path {
-        &self.path
-    }
-
     /// Looks up a principal by SHA-256 hex `credential_hash` using a
     /// constant-time per-key comparison to avoid token-equality timing leaks.
     pub(crate) fn find_by_credential_hash(&self, hash_hex: &str) -> Option<&PrincipalRecord> {
@@ -171,6 +171,13 @@ impl PrincipalStore {
             }
         }
         None
+    }
+
+    /// Looks up a principal by its registered `principal_id`.
+    pub(crate) fn find_by_principal_id(&self, principal_id: &str) -> Option<&PrincipalRecord> {
+        self.records_by_hash
+            .values()
+            .find(|record| record.principal_id == principal_id)
     }
 
     /// Inserts or replaces a principal record by `credential_hash`.
@@ -261,6 +268,80 @@ pub(crate) fn generate_psk() -> String {
     base64::engine::general_purpose::STANDARD_NO_PAD.encode(bytes)
 }
 
+/// Writes `psk` to an operator-supplied absolute `path` with mode 0600.
+///
+/// The relay refuses to follow symlinks (`O_NOFOLLOW`) and does not create
+/// parent directories: the target's parent must already exist. These
+/// constraints prevent a `--output` argument from being redirected through a
+/// symlink or silently materializing an unexpected directory tree.
+pub(crate) fn write_psk_output_file(path: &Path, psk: &str) -> Result<(), RelayError> {
+    if !path.is_absolute() {
+        return Err(relay_error(
+            "validation_invalid_output_path",
+            "credential output path must be absolute",
+            Some(json!({ "path": path.display().to_string() })),
+        ));
+    }
+    let Some(parent) = path.parent() else {
+        return Err(relay_error(
+            "validation_invalid_output_path",
+            "credential output path has no parent directory",
+            Some(json!({ "path": path.display().to_string() })),
+        ));
+    };
+    if !parent.is_dir() {
+        return Err(relay_error(
+            "validation_invalid_output_path",
+            "credential output parent directory does not exist",
+            Some(json!({
+                "path": path.display().to_string(),
+                "parent": parent.display().to_string(),
+            })),
+        ));
+    }
+    let mut options = fs::OpenOptions::new();
+    options
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(PRINCIPAL_FILE_MODE)
+        .custom_flags(libc::O_NOFOLLOW);
+    let mut file = options.open(path).map_err(|source| {
+        relay_error(
+            "validation_invalid_output_path",
+            "failed to write credential output file",
+            Some(json!({
+                "path": path.display().to_string(),
+                "cause": source.to_string(),
+            })),
+        )
+    })?;
+    io::Write::write_all(&mut file, psk.as_bytes()).map_err(|source| {
+        relay_error(
+            "internal_credential_write",
+            "failed to write credential output file",
+            Some(json!({
+                "path": path.display().to_string(),
+                "cause": source.to_string(),
+            })),
+        )
+    })?;
+    // Re-assert mode in case a pre-existing file's permissions differed.
+    fs::set_permissions(path, fs::Permissions::from_mode(PRINCIPAL_FILE_MODE)).map_err(
+        |source| {
+            relay_error(
+                "internal_credential_write",
+                "failed to set credential output file mode",
+                Some(json!({
+                    "path": path.display().to_string(),
+                    "cause": source.to_string(),
+                })),
+            )
+        },
+    )?;
+    Ok(())
+}
+
 /// Returns the lowercase hex SHA-256 digest of `token`.
 pub(crate) fn hash_token_sha256(token: &str) -> String {
     let mut hasher = Sha256::new();
@@ -310,6 +391,9 @@ pub(crate) struct VerifiedIdentity {
     pub(crate) principal_type: PrincipalType,
     /// True when a recognized store credential backed the identity; false for
     /// accepted `"socket-trust"` connections, which create no store entry.
+    /// Read by Slice 2 enforcement/revocation; recorded now so the Hello path
+    /// already distinguishes store-backed from socket-trust connections.
+    #[allow(dead_code)]
     pub(crate) store_backed: bool,
 }
 

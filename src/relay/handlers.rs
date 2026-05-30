@@ -29,6 +29,7 @@ use super::{
     canonical_session_id, relay_error,
 };
 
+mod identity;
 mod listing;
 mod permissions;
 
@@ -172,6 +173,50 @@ pub(super) fn handle_request(
             runtime_directory,
             principal,
         ),
+        RelayRequest::NewPeer { .. } | RelayRequest::ChangePsk { .. } => Err(relay_error(
+            "internal_unexpected_request",
+            "identity admin request reached the per-bundle dispatcher",
+            None,
+        )),
+    }
+}
+
+/// Dispatches a relay-wide identity administration request (`new peer`,
+/// `change psk`). These bypass the per-bundle `handle_request` path: they
+/// operate on the relay-level principal store and authorize against the
+/// requester's policy preset relay-wide rather than within a bundle context.
+pub(super) fn handle_identity_admin_request(
+    request: RelayRequest,
+    configuration_root: &Path,
+    state_root: &Path,
+    requester_principal_id: &str,
+) -> Result<RelayResponse, RelayError> {
+    match request {
+        RelayRequest::NewPeer {
+            principal_id,
+            scope,
+            output_path,
+        } => identity::handle_new_peer(
+            configuration_root,
+            state_root,
+            requester_principal_id,
+            identity::NewPeerRequestContext {
+                principal_id,
+                scope,
+                output_path,
+            },
+        ),
+        RelayRequest::ChangePsk { principal_id } => identity::handle_change_psk(
+            configuration_root,
+            state_root,
+            requester_principal_id,
+            principal_id,
+        ),
+        _ => Err(relay_error(
+            "internal_unexpected_request",
+            "non-admin request routed to identity admin dispatcher",
+            None,
+        )),
     }
 }
 
@@ -231,7 +276,9 @@ fn normalize_request_identities(request: RelayRequest, bundle_name: &str) -> Rel
         request @ (RelayRequest::Up
         | RelayRequest::Down
         | RelayRequest::PermissionResolve { .. }
-        | RelayRequest::PermissionList { .. }) => request,
+        | RelayRequest::PermissionList { .. }
+        | RelayRequest::NewPeer { .. }
+        | RelayRequest::ChangePsk { .. }) => request,
     }
 }
 

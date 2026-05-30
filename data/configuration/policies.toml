@@ -25,8 +25,11 @@ raww = 'all:home'
 send = 'all:home'
 updown = 'all:home'
 
+# Relay-wide credential administration requires the all:all tier: these
+# operations mutate the relay-level principal store, so a namespace-relative
+# all:home grant is insufficient.
 [policies.controls.new]
-peer = 'all:home'
+peer = 'all:all'
 
 [policies.controls.change]
-psk = 'all:home'
+psk = 'all:all'

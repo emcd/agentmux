@@ -5,10 +5,12 @@ use std::{io::IsTerminal, path::PathBuf};
 use crate::runtime::error::RuntimeError;
 
 mod bundle;
+mod change;
 mod down;
 mod host;
 mod list;
 mod look;
+mod new;
 mod raww;
 mod send;
 mod shared;
@@ -96,6 +98,26 @@ pub(super) struct SendArguments {
 }
 
 #[derive(Clone, Debug)]
+pub(super) struct NewPeerArguments {
+    pub(super) principal_id: String,
+    pub(super) scope: Option<String>,
+    pub(super) output_path: Option<String>,
+    pub(super) bundle_name: Option<String>,
+    pub(super) session_selector: Option<String>,
+    pub(super) output_json: bool,
+    pub(super) runtime: RuntimeArguments,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct ChangePskArguments {
+    pub(super) principal_id: String,
+    pub(super) bundle_name: Option<String>,
+    pub(super) session_selector: Option<String>,
+    pub(super) output_json: bool,
+    pub(super) runtime: RuntimeArguments,
+}
+
+#[derive(Clone, Debug)]
 pub(super) struct RawwArguments {
     pub(super) bundle_name: Option<String>,
     pub(super) session_selector: Option<String>,
@@ -171,6 +193,8 @@ pub async fn run_agentmux(arguments: Vec<String>) -> Result<(), RuntimeError> {
         "list" => list::run_agentmux_list(&arguments[1..]),
         "look" => look::run_agentmux_look(&arguments[1..]),
         "raww" => raww::run_agentmux_raww(&arguments[1..]),
+        "new" => new::run_agentmux_new(&arguments[1..]),
+        "change" => change::run_agentmux_change(&arguments[1..]),
         "tui" => tui::run_agentmux_tui(&arguments[1..]),
         "send" => send::run_agentmux_send(&arguments[1..]),
         unknown => Err(RuntimeError::InvalidArgument {
@@ -210,6 +234,14 @@ fn print_agentmux_help() {
         "[--as-session NAME] [--json] [--config-directory PATH] ",
         "[--state-directory PATH] [--inscriptions-directory PATH|",
         "--logs-directory PATH] [--repository-root PATH]\n",
+        "  new peer <principal_id> [--scope SCOPE] [--output PATH] [--bundle NAME] ",
+        "[--as-session NAME] [--json] [--config-directory PATH] ",
+        "[--state-directory PATH] [--inscriptions-directory PATH|",
+        "--logs-directory PATH] [--repository-root PATH]\n",
+        "  change psk <principal_id> [--bundle NAME] [--as-session NAME] [--json] ",
+        "[--config-directory PATH] [--state-directory PATH] ",
+        "[--inscriptions-directory PATH|--logs-directory PATH] ",
+        "[--repository-root PATH]\n",
         "  tui [--bundle NAME] [--as-session NAME] [--lines N] ",
         "[--config-directory PATH] [--state-directory PATH] ",
         "[--inscriptions-directory PATH|--logs-directory PATH] ",

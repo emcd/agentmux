@@ -21,8 +21,9 @@ use super::stream::{
     registration_is_current, spawn_stream_writer, unregister_stream, write_stream_frame_to_writer,
 };
 use super::{
-    RelayError, RelayResponse, RequestPrincipal, SCHEMA_VERSION, dispatch_request, handlers,
-    map_config, map_tui_config, relay_error,
+    RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
+    canonical_session_id, dispatch_identity_admin, dispatch_request, handlers, map_config,
+    map_tui_config, relay_error,
 };
 
 /// Map from configured bundle name to its resolved runtime paths. Shared
@@ -269,6 +270,29 @@ async fn serve_connection_frames(
                     )?;
                     break;
                 }
+                // Relay-wide identity administration bypasses bundle routing:
+                // it mutates the relay-level principal store and authorizes the
+                // operator against their policy preset relay-wide.
+                if matches!(
+                    request,
+                    RelayRequest::NewPeer { .. } | RelayRequest::ChangePsk { .. }
+                ) {
+                    let requester_principal_id = full_requester_principal_id(active_registration);
+                    let response = dispatch_identity_admin(
+                        request,
+                        configuration_root,
+                        state_root,
+                        requester_principal_id.as_str(),
+                    );
+                    write_stream_frame_to_writer(
+                        writer,
+                        OutgoingFrame::Response {
+                            request_id: request_id.as_deref(),
+                            response: &response,
+                        },
+                    )?;
+                    continue;
+                }
                 let bundle_paths = match resolve_effective_bundle(
                     bundle_catalog,
                     target_bundle.as_deref(),
@@ -337,6 +361,17 @@ async fn read_next_line(
         Ok(0) => ReadLineOutcome::Eof,
         Ok(read) => ReadLineOutcome::Read(read),
         Err(source) => ReadLineOutcome::Error(source),
+    }
+}
+
+/// Reconstructs the full `<id>@<namespace>` principal_id of the requester from
+/// its stream registration. Session principals are stored bundle-local, so the
+/// bound bundle is re-applied; relay-wide principals already carry their full
+/// `principal_id`.
+fn full_requester_principal_id(registration: &StreamRegistration) -> String {
+    match registration.bundle_name() {
+        Some(bundle_name) => canonical_session_id(registration.requester_session_id(), bundle_name),
+        None => registration.requester_session_id().to_string(),
     }
 }
 
