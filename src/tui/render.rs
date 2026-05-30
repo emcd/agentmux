@@ -44,6 +44,9 @@ pub(crate) fn render(frame: &mut Frame, state: &mut AppState) {
     if state.picker_open {
         render_picker_overlay(frame, state);
     }
+    if state.bundle_picker_open {
+        render_bundle_picker_overlay(frame, state);
+    }
     if state.events_overlay_open {
         render_events_overlay(frame, state);
     }
@@ -76,7 +79,11 @@ fn render_main(frame: &mut Frame, area: Rect, state: &mut AppState) {
 }
 
 fn render_active_cursor(frame: &mut Frame, area: Rect, state: &AppState) {
-    if state.help_overlay_open || state.picker_open || state.events_overlay_open {
+    if state.help_overlay_open
+        || state.picker_open
+        || state.bundle_picker_open
+        || state.events_overlay_open
+    {
         return;
     }
     match state.mode {
@@ -722,6 +729,59 @@ fn render_picker_overlay(frame: &mut Frame, state: &mut AppState) {
     frame.render_stateful_widget(list, sections[1], &mut state.picker_state);
 }
 
+fn render_bundle_picker_overlay(frame: &mut Frame, state: &mut AppState) {
+    let popup = centered_rect(50, 50, frame.area());
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("Bundle Picker");
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .split(inner);
+
+    let active_line = Line::from(vec![
+        Span::raw("active: "),
+        Span::styled(
+            state.bundle_name.clone(),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(active_line), sections[0]);
+
+    let items = if state.available_bundles.is_empty() {
+        vec![ListItem::new("(no bundles configured)")]
+    } else {
+        state
+            .available_bundles
+            .iter()
+            .map(|name| {
+                let is_active = name == &state.bundle_name;
+                let label = if is_active {
+                    format!("{name} [active]")
+                } else {
+                    name.clone()
+                };
+                let style = if is_active {
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(Line::from(Span::styled(label, style)))
+            })
+            .collect::<Vec<_>>()
+    };
+    let list = List::new(items).highlight_style(Style::default().bg(Color::Blue).fg(Color::White));
+    frame.render_stateful_widget(list, sections[1], &mut state.bundle_picker_state);
+}
+
 fn bundle_status_header_line(status: Option<&BundleStatusDisplay>) -> Line<'static> {
     let Some(status) = status else {
         return Line::from(Span::styled(
@@ -832,6 +892,7 @@ fn render_help_overlay(frame: &mut Frame, _state: &AppState) {
         Line::from("F1: Toggle help"),
         Line::from("F2: Open recipient picker"),
         Line::from("F3: Open events overlay"),
+        Line::from("F5: Open bundle picker"),
         Line::from("Ctrl+R: Refresh recipients"),
         Line::from("Ctrl+C: Quit from anywhere"),
         Line::from(""),
@@ -866,6 +927,11 @@ fn render_help_overlay(frame: &mut Frame, _state: &AppState) {
         Line::from("Enter (Interaction): Open with look"),
         Line::from("Esc / F2: Close picker"),
         Line::from("Up/Down: Move picker selection"),
+        Line::from(""),
+        help_section_heading("Bundle Picker (F5)"),
+        Line::from("Enter: Switch active bundle"),
+        Line::from("Esc / F5: Close picker"),
+        Line::from("Up/Down: Move bundle selection"),
     ];
 
     frame.render_widget(

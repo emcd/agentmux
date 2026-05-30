@@ -41,6 +41,9 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
     if state.picker_open {
         return handle_picker_key(state, key);
     }
+    if state.bundle_picker_open {
+        return handle_bundle_picker_key(state, key);
+    }
     if state.events_overlay_open {
         return handle_events_overlay_key(state, key);
     }
@@ -50,6 +53,11 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
 
     if key.code == KeyCode::F(4) {
         state.toggle_mode();
+        return Ok(());
+    }
+
+    if key.code == KeyCode::F(5) {
+        state.open_bundle_picker();
         return Ok(());
     }
 
@@ -247,12 +255,39 @@ fn handle_picker_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeE
             state.close_picker();
             state.toggle_mode();
         }
+        KeyCode::F(5) => {
+            state.close_picker();
+            state.open_bundle_picker();
+        }
         KeyCode::Down => state.move_picker_selection(1),
         KeyCode::Up => state.move_picker_selection(-1),
         KeyCode::Enter => match state.mode {
             ScreenMode::Communication => state.insert_picker_selection(),
             ScreenMode::Interaction => return state.enter_interaction_from_picker(),
         },
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_bundle_picker_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
+    match key.code {
+        KeyCode::Esc | KeyCode::F(5) => state.close_bundle_picker(),
+        KeyCode::F(2) => {
+            state.close_bundle_picker();
+            state.open_picker();
+        }
+        KeyCode::F(3) => {
+            state.close_bundle_picker();
+            state.toggle_events_overlay();
+        }
+        KeyCode::F(4) => {
+            state.close_bundle_picker();
+            state.toggle_mode();
+        }
+        KeyCode::Down => state.move_bundle_picker_selection(1),
+        KeyCode::Up => state.move_bundle_picker_selection(-1),
+        KeyCode::Enter => return state.switch_to_selected_bundle(),
         _ => {}
     }
     Ok(())
@@ -268,6 +303,10 @@ fn handle_events_overlay_key(state: &mut AppState, key: KeyEvent) -> Result<(), 
         KeyCode::F(4) => {
             state.toggle_events_overlay();
             state.toggle_mode();
+        }
+        KeyCode::F(5) => {
+            state.toggle_events_overlay();
+            state.open_bundle_picker();
         }
         _ => {}
     }
@@ -288,6 +327,10 @@ fn handle_help_overlay_key(state: &mut AppState, key: KeyEvent) -> Result<(), Ru
         KeyCode::F(4) => {
             state.toggle_help_overlay();
             state.toggle_mode();
+        }
+        KeyCode::F(5) => {
+            state.toggle_help_overlay();
+            state.open_bundle_picker();
         }
         _ => {}
     }

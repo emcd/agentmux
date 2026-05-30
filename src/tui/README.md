@@ -16,8 +16,8 @@ a time; `F4` toggles between them. The active mode is shown in the footer.
   target header, the look snapshot, a Write input (relay `raww`), and
   permission decisioning.
 
-Help (`F1`), recipient picker (`F2`), and delivery events (`F3`) are overlays
-available in both modes.
+Help (`F1`), recipient picker (`F2`), delivery events (`F3`), and bundle
+picker (`F5`) are overlays available in both modes.
 
 ## Module Map
 
@@ -66,11 +66,27 @@ available in both modes.
   - help,
   - recipient picker,
   - delivery + permission events,
+  - bundle picker (F5): intra-bundle bundle switching — browses
+    `available_bundles` (sourced from `load_bundle_group_memberships` at TUI
+    launch), highlights the active bundle, and on Enter replaces the active
+    bundle context. The switch rebuilds the bundle-bound `RelayStreamSession`,
+    resets bundle-scoped state (recipients, `last_selected_recipient`, bundle
+    status, look snapshot, pending permissions, chat history, delivery
+    bookkeeping, write draft), and triggers `refresh_recipients` on the new
+    bundle. Selecting the active bundle is a no-op that closes the picker.
+    Cross-bundle targeting (`session@bundle` grammar) is intentionally out of
+    scope; the relay still rejects cross-bundle requests with
+    `validation_cross_bundle_unsupported`,
 - picker actions (mode-aware `Enter`, no separate `l` / `w` keys):
   - Communication mode: insert the selected recipient into `To`,
   - Interaction mode: open the Interaction screen for the selected identity,
     running a synchronous relay `Look` so the look pane is populated with
     recent session history before the Write input takes focus,
+- picker last-selected persistence: the most recently committed picker target
+  (Communication insert or Interaction open) is tracked by session name in
+  `last_selected_recipient`; when the picker reopens or the recipient list
+  refreshes, selection is resolved by name against the current list and falls
+  back deterministically to index 0 when the prior target is absent,
 - picker bundle status header: one-line CLI-style key=value summary of
   `bundle.hosted`, `bundle.state`, `bundle.startup_health`, and reason code
   from `relay::ListedBundle`, color-coded into four severity buckets

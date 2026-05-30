@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    configuration::load_bundle_configuration,
+    configuration::{load_bundle_configuration, load_bundle_group_memberships},
     runtime::{
         association::WorkspaceContext,
         bootstrap::{BootstrapOptions, bootstrap_relay, resolve_relay_program},
@@ -41,6 +41,11 @@ pub(super) fn run_agentmux_tui(arguments: &[String]) -> Result<(), RuntimeError>
     )?;
     load_bundle_configuration(&roots.configuration_root, &resolved_session.bundle_name)
         .map_err(shared::map_bundle_load_error)?;
+    let available_bundles = load_bundle_group_memberships(&roots.configuration_root)
+        .map_err(shared::map_bundle_load_error)?
+        .into_iter()
+        .map(|membership| membership.bundle_name)
+        .collect::<Vec<_>>();
     let relay_paths = RelayRuntimePaths::resolve(&roots.state_root);
     ensure_tui_relay_available(&roots, &relay_paths)?;
     crate::tui::run(crate::tui::TuiLaunchOptions {
@@ -48,6 +53,7 @@ pub(super) fn run_agentmux_tui(arguments: &[String]) -> Result<(), RuntimeError>
         sender_session: resolved_session.session_id,
         relay_socket: relay_paths.relay_socket,
         look_lines: parsed.lines,
+        available_bundles,
     })
 }
 

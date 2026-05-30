@@ -78,6 +78,15 @@ impl Workbench {
                 ready: true,
             })
             .collect::<Vec<_>>();
+        self.state.apply_recipient_list_update();
+    }
+
+    pub fn last_selected_recipient(&self) -> Option<&str> {
+        self.state.last_selected_recipient.as_deref()
+    }
+
+    pub fn picker_selected_index(&self) -> Option<usize> {
+        self.state.picker_state.selected()
     }
 
     pub fn message_cursor_line_and_column(&self) -> (usize, usize) {
@@ -133,6 +142,34 @@ impl Workbench {
 
     pub fn picker_open(&self) -> bool {
         self.state.picker_open
+    }
+
+    pub fn bundle_picker_open(&self) -> bool {
+        self.state.bundle_picker_open
+    }
+
+    pub fn bundle_picker_selected_index(&self) -> Option<usize> {
+        self.state.bundle_picker_state.selected()
+    }
+
+    pub fn bundle_name(&self) -> &str {
+        self.state.bundle_name.as_str()
+    }
+
+    pub fn available_bundles(&self) -> Vec<&str> {
+        self.state
+            .available_bundles
+            .iter()
+            .map(String::as_str)
+            .collect()
+    }
+
+    pub fn recipients(&self) -> Vec<&str> {
+        self.state
+            .recipients
+            .iter()
+            .map(|recipient| recipient.session_name.as_str())
+            .collect()
     }
 
     pub fn inject_pending_permission(&mut self, target: &str) {
