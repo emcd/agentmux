@@ -8,6 +8,8 @@
 
 use std::path::Path;
 
+use time::OffsetDateTime;
+
 use crate::relay::authorization::{RelayActionFamily, authorize_relay_action};
 use crate::relay::identity::{
     PrincipalRecord, PrincipalStore, PrincipalType, classify_principal_id, generate_psk,
@@ -39,6 +41,7 @@ pub(in crate::relay) fn handle_new_peer(
     )?;
     let principal_type = classify_target_principal(context.principal_id.as_str())?;
     let mut store = PrincipalStore::load(principal_store_path(state_root))?;
+    store.prune_expired(OffsetDateTime::now_utc());
     if store
         .find_by_principal_id(context.principal_id.as_str())
         .is_some()
@@ -97,6 +100,7 @@ pub(in crate::relay) fn handle_change_psk(
         "psk",
     )?;
     let mut store = PrincipalStore::load(principal_store_path(state_root))?;
+    store.prune_expired(OffsetDateTime::now_utc());
     let Some(existing) = store.find_by_principal_id(principal_id.as_str()).cloned() else {
         return Err(relay_error(
             "validation_unknown_principal",

@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use super::{GLOBAL_SESSION_SUFFIX, RelayError, relay_error};
 
@@ -189,6 +191,16 @@ impl PrincipalStore {
             .insert(record.credential_hash.clone(), record)
     }
 
+    /// Removes records whose `expires_at` is at or before `now`, plus records
+    /// whose `expires_at` cannot be parsed as RFC 3339 (fail-closed: a corrupt
+    /// expiry must not authenticate). Returns the number of records pruned.
+    pub(crate) fn prune_expired(&mut self, now: OffsetDateTime) -> usize {
+        let before = self.records_by_hash.len();
+        self.records_by_hash
+            .retain(|_, record| !record_is_expired(record, now));
+        before - self.records_by_hash.len()
+    }
+
     /// Removes a principal by `principal_id` regardless of credential hash.
     pub(crate) fn remove_by_principal_id(&mut self, principal_id: &str) -> Option<PrincipalRecord> {
         let key = self
@@ -340,6 +352,19 @@ pub(crate) fn write_psk_output_file(path: &Path, psk: &str) -> Result<(), RelayE
         },
     )?;
     Ok(())
+}
+
+/// Returns true when a record's `expires_at` is absent-free but at or before
+/// `now`, or is present yet unparseable. A record with no `expires_at` never
+/// expires.
+fn record_is_expired(record: &PrincipalRecord, now: OffsetDateTime) -> bool {
+    match record.expires_at.as_deref() {
+        None => false,
+        Some(raw) => match OffsetDateTime::parse(raw, &Rfc3339) {
+            Ok(expires_at) => expires_at <= now,
+            Err(_) => true,
+        },
+    }
 }
 
 /// Returns the lowercase hex SHA-256 digest of `token`.

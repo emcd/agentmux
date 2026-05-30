@@ -28,6 +28,7 @@ pub(super) struct RuntimeArguments {
 #[derive(Clone, Debug)]
 pub(super) struct RelayHostArguments {
     pub(super) no_autostart: bool,
+    pub(super) require_session_credentials: bool,
     pub(super) runtime: RuntimeArguments,
 }
 
@@ -209,7 +210,7 @@ fn print_agentmux_help() {
         "Usage: agentmux <command> [options]\n",
         "\n",
         "Commands:\n",
-        "  host relay [--no-autostart] [--config-directory PATH] ",
+        "  host relay [--no-autostart] [--require-credentials] [--config-directory PATH] ",
         "[--state-directory PATH] [--inscriptions-directory PATH|",
         "--logs-directory PATH] [--repository-root PATH]\n",
         "  host mcp [--bundle NAME] [--session-name NAME] ",

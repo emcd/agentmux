@@ -112,6 +112,10 @@ pub(super) async fn run_relay_host(arguments: RelayHostArguments) -> Result<(), 
     // were installed.
     let _signal_handlers = install_shutdown_signal_handlers()?;
 
+    // Captured before `arguments` is moved into the blocking startup closure;
+    // enforcement applies in the async serve phase, not during startup.
+    let require_session_credentials = arguments.require_session_credentials;
+
     // Startup (config load, tmux autostart, lock acquisition, socket binding) is
     // blocking, so it runs on a blocking task. The async serve phase then drives
     // the per-bundle accept loops on the runtime (tokio::net + tokio::spawn).
@@ -140,6 +144,7 @@ pub(super) async fn run_relay_host(arguments: RelayHostArguments) -> Result<(), 
                 relay_paths,
                 listener,
                 runtime_lock,
+                require_session_credentials,
             )
             .await
         }
@@ -204,6 +209,18 @@ fn prepare_relay_host(
     }
     let runtime_lock = acquire_relay_runtime_lock(&relay_paths)?;
 
+    // Prune expired principal-store records once at startup. A corrupt store is
+    // fatal here: it would otherwise reject every Hello (which loads the store),
+    // so surfacing it at startup fails fast rather than per connection.
+    let pruned_principals =
+        crate::relay::prune_principal_store(&roots.state_root).map_err(shared::map_relay_error)?;
+    if pruned_principals > 0 {
+        emit_inscription(
+            "relay.identity.store_pruned",
+            &json!({ "pruned_count": pruned_principals }),
+        );
+    }
+
     let mut outcomes = Vec::with_capacity(memberships.len());
     let mut hosted_bundles = Vec::<HostedBundle>::with_capacity(memberships.len());
     for membership in memberships {
@@ -266,6 +283,7 @@ fn prepare_relay_host(
 
 /// Drives the single relay accept loop on the async runtime until shutdown,
 /// then performs runtime cleanup.
+#[allow(clippy::too_many_arguments)]
 async fn serve_relay_host(
     roots: RuntimeRoots,
     summary: RelayHostStartupSummary,
@@ -273,6 +291,7 @@ async fn serve_relay_host(
     relay_paths: RelayRuntimePaths,
     listener: UnixListener,
     runtime_lock: RelayRuntimeLock,
+    require_session_credentials: bool,
 ) -> Result<(), RuntimeError> {
     emit_inscription("relay.startup.summary", &startup_summary_payload(&summary));
     render_startup_summary(&summary);
@@ -306,9 +325,8 @@ async fn serve_relay_host(
         let stop_requested = Arc::clone(&stop_requested);
         let connection_permits = Arc::clone(&connection_permits);
         let catalog = Arc::clone(&catalog);
-        // Relay-wide session-credential enforcement. Slice 1 Phase B defaults to
-        // disabled; the `--require-credentials` CLI flag wires this in Phase D.
-        let require_session_credentials = false;
+        // `require_session_credentials` is the relay-wide enforcement flag set by
+        // the `--require-credentials` CLI flag (default: disabled).
         tokio::spawn(run_relay_accept_loop(
             configuration_root,
             state_root,

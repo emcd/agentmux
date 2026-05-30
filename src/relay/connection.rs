@@ -1,6 +1,7 @@
 use std::{collections::HashMap, io, path::Path, sync::Arc, time::Duration};
 
 use serde_json::{Value, json};
+use time::OffsetDateTime;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     net::{UnixStream, unix::OwnedReadHalf},
@@ -495,7 +496,11 @@ fn resolve_hello_binding(
             })),
         ));
     }
-    let store = PrincipalStore::load(principal_store_path(state_root))?;
+    let mut store = PrincipalStore::load(principal_store_path(state_root))?;
+    // Prune expired records on access so an expired credential cannot
+    // authenticate (in-memory only; the file is rewritten on startup and on
+    // store mutations).
+    store.prune_expired(OffsetDateTime::now_utc());
     let verified = verify_hello_credential(
         hello.principal_id.as_str(),
         hello.identity_token.as_str(),

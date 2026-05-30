@@ -98,15 +98,23 @@
       enforcement policy (D1c); no store entry created, routing uses claimed
       `principal_id`. For `@EXTERNAL` and `@RELAY`: always require a recognized
       token.
-- [ ] 1.10 Add relay-level `require_session_credentials` setting (boolean,
+- [x] 1.10 Add relay-level `require_session_credentials` setting (boolean,
       default `false`) and thread through to Hello handling. Setting lives at
       relay level, not bundle level: with a single relay socket all connections
       share one transport boundary, so per-bundle enforcement is meaningless
       (a client can claim any `principal_id` namespace). For Slice 1, wire as
       a CLI flag (`--require-credentials`) on `agentmux host relay`; migrates
-      to `relay.toml` in the relay config OpenSpec.
-- [ ] 1.11 Implement expiry-based pruning in the principal store: prune expired
-      records on startup and on access.
+      to `relay.toml` in the relay config OpenSpec. Threaded from
+      `RelayHostArguments` through `serve_relay_host` into the accept loop and
+      `verify_hello_credential`.
+- [x] 1.11 Implement expiry-based pruning in the principal store: prune expired
+      records on startup and on access. `PrincipalStore::prune_expired` drops
+      records whose RFC 3339 `expires_at` has passed (and, fail-closed, any with
+      an unparseable `expires_at`). Run once at relay startup
+      (`relay::prune_principal_store`, persisting only when records were pruned),
+      in memory on every Hello (so expired credentials cannot authenticate),
+      and before each `new peer` / `change psk` mutation (persisting the pruned
+      set). Added the `parsing` feature to the `time` dependency.
 - [ ] 1.12 Integration test: Hello with valid session credential →
       session registered with stable `principal_id`.
 - [ ] 1.13 Integration test: Hello with `"socket-trust"` + enforcement off →

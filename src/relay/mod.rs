@@ -188,3 +188,19 @@ pub(in crate::relay) fn dispatch_identity_admin(
         Err(error) => RelayResponse::Error { error },
     }
 }
+
+/// Prunes expired records from the relay-level principal store.
+///
+/// Loads the store at `<state-root>/identity/principals.json`, drops records
+/// whose `expires_at` has passed (or cannot be parsed), and rewrites the file
+/// only when something was pruned. A missing store loads empty and no file is
+/// created. Intended to run once at relay startup; per-connection access prunes
+/// in memory, and store mutations persist the pruned set.
+pub fn prune_principal_store(state_root: &Path) -> Result<usize, RelayError> {
+    let mut store = PrincipalStore::load(crate::runtime::paths::principal_store_path(state_root))?;
+    let pruned = store.prune_expired(time::OffsetDateTime::now_utc());
+    if pruned > 0 {
+        store.persist()?;
+    }
+    Ok(pruned)
+}
