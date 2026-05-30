@@ -22,6 +22,8 @@ use tokio::runtime::Builder as TokioRuntimeBuilder;
 // the OS stream.
 const TEST_PRE_HELLO_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 
+#[path = "relay_stream/identity.rs"]
+mod identity;
 #[path = "relay_stream/permissions.rs"]
 mod permissions;
 #[path = "relay_stream/robustness.rs"]
@@ -194,12 +196,27 @@ fn spawn_relay_connection(
     configuration_root: &Path,
     bundle_paths: &BundleRuntimePaths,
 ) -> (UnixStream, thread::JoinHandle<()>) {
+    spawn_relay_connection_with_enforcement(configuration_root, bundle_paths, false)
+}
+
+fn spawn_relay_connection_with_enforcement(
+    configuration_root: &Path,
+    bundle_paths: &BundleRuntimePaths,
+    require_session_credentials: bool,
+) -> (UnixStream, thread::JoinHandle<()>) {
     let (server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
     let root = configuration_root.to_path_buf();
     let state_root = bundle_paths.state_root.clone();
     let catalog = single_bundle_catalog(bundle_paths);
     let join_handle = thread::spawn(move || {
-        run_serve_connection(server_stream, root, state_root, catalog).expect("serve connection")
+        run_serve_connection_with_enforcement(
+            server_stream,
+            root,
+            state_root,
+            catalog,
+            require_session_credentials,
+        )
+        .expect("serve connection")
     });
     (client_stream, join_handle)
 }
@@ -221,6 +238,22 @@ fn run_serve_connection(
     state_root: PathBuf,
     bundle_catalog: BundleCatalog,
 ) -> Result<(), std::io::Error> {
+    run_serve_connection_with_enforcement(
+        server_stream,
+        configuration_root,
+        state_root,
+        bundle_catalog,
+        false,
+    )
+}
+
+fn run_serve_connection_with_enforcement(
+    server_stream: UnixStream,
+    configuration_root: PathBuf,
+    state_root: PathBuf,
+    bundle_catalog: BundleCatalog,
+    require_session_credentials: bool,
+) -> Result<(), std::io::Error> {
     server_stream.set_nonblocking(true)?;
     let runtime = TokioRuntimeBuilder::new_multi_thread()
         .worker_threads(2)
@@ -234,7 +267,7 @@ fn run_serve_connection(
             &configuration_root,
             &state_root,
             &bundle_catalog,
-            false,
+            require_session_credentials,
             TEST_PRE_HELLO_IDLE_TIMEOUT,
         )
         .await

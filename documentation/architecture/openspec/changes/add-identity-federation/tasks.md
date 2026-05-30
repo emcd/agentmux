@@ -115,24 +115,25 @@
       in memory on every Hello (so expired credentials cannot authenticate),
       and before each `new peer` / `change psk` mutation (persisting the pruned
       set). Added the `parsing` feature to the `time` dependency.
-- [ ] 1.12 Integration test: Hello with valid session credential →
+- [x] 1.12 Integration test: Hello with valid session credential →
       session registered with stable `principal_id`.
-- [ ] 1.13 Integration test: Hello with `"socket-trust"` + enforcement off →
+- [x] 1.13 Integration test: Hello with `"socket-trust"` + enforcement off →
       session accepted, no principal store entry created.
-- [ ] 1.14 Integration test: Hello with `"socket-trust"` + enforcement on →
+- [x] 1.14 Integration test: Hello with `"socket-trust"` + enforcement on →
       typed error response, session not registered.
-- [ ] 1.15 Integration test: Hello with unrecognized credential →
+- [x] 1.15 Integration test: Hello with unrecognized credential →
       typed error regardless of enforcement setting.
-- [ ] 1.16 Integration test: reconnect with same credential →
+- [x] 1.16 Integration test: reconnect with same credential →
       same `principal_id` returned from store.
-- [ ] 1.17 Integration test: application principal Hello (`@EXTERNAL` token
-      registered via `new peer`) → application principal type assigned,
-      `IdentityIntrospect` right granted.
-- [ ] 1.18 Integration test: Hello with valid credential but mismatched
+- [x] 1.17 Integration test: application principal Hello (`@EXTERNAL` token
+      registered via `new peer`) → application principal type assigned (the
+      response surfaces `principal_type: "application"`). `IdentityIntrospect`
+      rights are asserted in Slice 2 (2.9), where that surface lands.
+- [x] 1.18 Integration test: Hello with valid credential but mismatched
       `principal_id` → typed error, session not registered.
-- [ ] 1.19 Integration test: `new peer` creates principal in store, returns
+- [x] 1.19 Integration test: `new peer` creates principal in store, returns
       PSK; subsequent Hello with that PSK resolves to the correct `principal_id`.
-- [ ] 1.20 Integration test: `change psk` updates store; new PSK accepted in
+- [x] 1.20 Integration test: `change psk` updates store; new PSK accepted in
       Hello; old PSK rejected.
 
 ## Slice 2 — Introspection and Revocation Surface (depends on slice 1)
