@@ -78,6 +78,15 @@ impl Workbench {
                 ready: true,
             })
             .collect::<Vec<_>>();
+        self.state.apply_recipient_list_update();
+    }
+
+    pub fn last_selected_recipient(&self) -> Option<&str> {
+        self.state.last_selected_recipient.as_deref()
+    }
+
+    pub fn picker_selected_index(&self) -> Option<usize> {
+        self.state.picker_state.selected()
     }
 
     pub fn message_cursor_line_and_column(&self) -> (usize, usize) {

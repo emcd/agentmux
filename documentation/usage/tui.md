@@ -104,6 +104,11 @@ trailing `[not ready]` marker so the state is legible even without color.
   with recent session history before the Write input takes focus
 - `Esc` / `F2`: close picker
 
+The picker remembers the most recently committed recipient by session name
+across close/reopen and across recipient list refreshes. When the prior
+target is no longer present in the current list, the selection falls back
+deterministically to the first available session.
+
 ## Status and Outcome Vocabulary
 
 Connection state labels:

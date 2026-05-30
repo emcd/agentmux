@@ -434,3 +434,88 @@ fn events_overlay_permission_action_keys_are_ignored() {
         .dispatch_event(key_event(KeyCode::Char('d'), KeyModifiers::NONE))
         .expect("d should be ignored in events overlay");
 }
+
+#[test]
+fn picker_remembers_last_selected_across_close_and_reopen() {
+    let mut state = make_state();
+    state.set_recipients(&["alpha", "bravo", "charlie"]);
+    state
+        .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
+        .expect("f2 should open picker");
+    state
+        .dispatch_event(key_event(KeyCode::Down, KeyModifiers::NONE))
+        .expect("down moves picker selection");
+    state
+        .dispatch_event(key_event(KeyCode::Down, KeyModifiers::NONE))
+        .expect("down moves picker selection");
+    state
+        .dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE))
+        .expect("enter commits selection in communication mode");
+    assert_eq!(state.last_selected_recipient(), Some("charlie"));
+    state
+        .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
+        .expect("f2 should reopen picker");
+    assert_eq!(state.picker_selected_index(), Some(2));
+}
+
+#[test]
+fn picker_restores_last_selected_after_relay_refresh_reorders_recipients() {
+    let mut state = make_state();
+    state.set_recipients(&["alpha", "bravo", "charlie"]);
+    state
+        .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
+        .expect("f2 should open picker");
+    state
+        .dispatch_event(key_event(KeyCode::Down, KeyModifiers::NONE))
+        .expect("down moves picker selection");
+    state
+        .dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE))
+        .expect("enter commits selection in communication mode");
+    assert_eq!(state.last_selected_recipient(), Some("bravo"));
+    state.set_recipients(&["charlie", "bravo", "alpha", "delta"]);
+    state
+        .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
+        .expect("f2 should reopen picker");
+    assert_eq!(state.picker_selected_index(), Some(1));
+}
+
+#[test]
+fn picker_falls_back_to_first_when_last_selected_is_absent_after_refresh() {
+    let mut state = make_state();
+    state.set_recipients(&["alpha", "bravo", "charlie"]);
+    state
+        .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
+        .expect("f2 should open picker");
+    state
+        .dispatch_event(key_event(KeyCode::Down, KeyModifiers::NONE))
+        .expect("down moves picker selection");
+    state
+        .dispatch_event(key_event(KeyCode::Down, KeyModifiers::NONE))
+        .expect("down moves picker selection");
+    state
+        .dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE))
+        .expect("enter commits selection in communication mode");
+    assert_eq!(state.last_selected_recipient(), Some("charlie"));
+    state.set_recipients(&["alpha", "bravo", "delta"]);
+    state
+        .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
+        .expect("f2 should reopen picker");
+    assert_eq!(state.picker_selected_index(), Some(0));
+}
+
+#[test]
+fn picker_has_no_selection_when_recipient_list_is_empty() {
+    let mut state = make_state();
+    state.set_recipients(&["alpha"]);
+    state
+        .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
+        .expect("f2 should open picker");
+    state
+        .dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE))
+        .expect("enter commits selection in communication mode");
+    state.set_recipients(&[]);
+    state
+        .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
+        .expect("f2 should reopen picker");
+    assert_eq!(state.picker_selected_index(), None);
+}

@@ -71,6 +71,11 @@ available in both modes.
   - Interaction mode: open the Interaction screen for the selected identity,
     running a synchronous relay `Look` so the look pane is populated with
     recent session history before the Write input takes focus,
+- picker last-selected persistence: the most recently committed picker target
+  (Communication insert or Interaction open) is tracked by session name in
+  `last_selected_recipient`; when the picker reopens or the recipient list
+  refreshes, selection is resolved by name against the current list and falls
+  back deterministically to index 0 when the prior target is absent,
 - picker bundle status header: one-line CLI-style key=value summary of
   `bundle.hosted`, `bundle.state`, `bundle.startup_health`, and reason code
   from `relay::ListedBundle`, color-coded into four severity buckets

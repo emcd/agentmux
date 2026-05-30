@@ -23,12 +23,7 @@ impl AppState {
                     })
                     .collect::<Vec<_>>();
                 self.recipients = recipients;
-                if self.recipients.is_empty() {
-                    self.recipients_state.select(None);
-                    self.picker_state.select(None);
-                } else {
-                    self.ensure_recipient_selection();
-                }
+                self.apply_recipient_list_update();
                 self.push_status(
                     None,
                     format!(
@@ -69,21 +64,6 @@ impl AppState {
                 true
             }
         }
-    }
-
-    fn ensure_recipient_selection(&mut self) {
-        if self.recipients.is_empty() {
-            self.recipients_state.select(None);
-            self.picker_state.select(None);
-            return;
-        }
-        let index = self
-            .recipients_state
-            .selected()
-            .filter(|index| *index < self.recipients.len())
-            .unwrap_or(0);
-        self.recipients_state.select(Some(index));
-        self.picker_state.select(Some(index));
     }
 
     pub(super) fn request_relay(

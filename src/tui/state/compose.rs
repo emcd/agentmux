@@ -28,8 +28,8 @@ impl AppState {
             self.picker_state.select(None);
             return;
         }
-        let selected = self.recipients_state.selected().unwrap_or(0);
-        self.picker_state.select(Some(selected));
+        let index = self.resolve_last_selected_recipient_index().unwrap_or(0);
+        self.picker_state.select(Some(index));
     }
 
     pub fn close_picker(&mut self) {
@@ -169,7 +169,7 @@ impl AppState {
                 return;
             }
         }
-        self.recipients_state.select(Some(index));
+        self.last_selected_recipient = Some(session_name.clone());
         self.picker_open = false;
         self.push_status(None, format!("Inserted recipient {session_name}."));
     }
@@ -534,6 +534,7 @@ impl AppState {
             } => {
                 let (look_snapshot_format, look_snapshot_lines, look_snapshot_entries) =
                     overlay_snapshot_from_payload(snapshot);
+                self.last_selected_recipient = Some(target_session.clone());
                 self.set_interaction_target(target_session.clone());
                 self.look_captured_at = Some(captured_at);
                 self.look_snapshot_format = Some(look_snapshot_format);
@@ -736,6 +737,22 @@ impl AppState {
             .selected()
             .and_then(|index| self.recipients.get(index))
             .map(|recipient| recipient.session_name.clone())
+    }
+
+    fn resolve_last_selected_recipient_index(&self) -> Option<usize> {
+        let name = self.last_selected_recipient.as_deref()?;
+        self.recipients
+            .iter()
+            .position(|recipient| recipient.session_name == name)
+    }
+
+    pub fn apply_recipient_list_update(&mut self) {
+        if self.recipients.is_empty() {
+            self.picker_state.select(None);
+            return;
+        }
+        let index = self.resolve_last_selected_recipient_index().unwrap_or(0);
+        self.picker_state.select(Some(index));
     }
 
     pub(super) fn ensure_pending_permission_selection(&mut self) {
