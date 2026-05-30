@@ -45,7 +45,7 @@ enum StreamClientFrame<'a> {
     Request {
         request_id: &'a str,
         #[serde(skip_serializing_if = "Option::is_none")]
-        bundle_name: Option<&'a str>,
+        namespace: Option<&'a str>,
         request: &'a RelayRequest,
     },
 }
@@ -111,7 +111,7 @@ impl RelayStreamSession {
                 &mut connection.stream,
                 StreamClientFrame::Request {
                     request_id: request_id.as_str(),
-                    bundle_name: Some(bundle_name.as_str()),
+                    namespace: Some(bundle_name.as_str()),
                     request,
                 },
             )?;

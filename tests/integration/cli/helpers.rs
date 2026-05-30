@@ -472,9 +472,9 @@ pub(super) fn spawn_fake_relay_for_bundles(
                         .cloned()
                         .expect("fake relay request envelope missing 'request' field");
                     let bundle_name = envelope
-                        .get("bundle_name")
+                        .get("namespace")
                         .and_then(Value::as_str)
-                        .expect("request envelope bundle_name")
+                        .expect("request envelope namespace")
                         .to_string();
                     if let Some(log) = request_logs.get(&bundle_name) {
                         log.lock().expect("request log lock").push(request);

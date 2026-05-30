@@ -94,10 +94,12 @@ pub(super) enum IncomingFrame {
     Hello(HelloFrame),
     Request {
         request_id: Option<String>,
-        /// Explicit target bundle for this request. When present it selects the
-        /// routing bundle regardless of any connection binding; when absent the
-        /// connection's bound bundle is used (and its absence is an error).
-        bundle_name: Option<String>,
+        /// Explicit routing namespace for this request: a bundle name, or a
+        /// relay-wide specifier (`GLOBAL`/`EXTERNAL`/`RELAY`). When present it
+        /// selects the routing context regardless of any connection binding;
+        /// when absent the connection's bound bundle is used (and its absence on
+        /// a relay-wide connection is an error).
+        namespace: Option<String>,
         request: RelayRequest,
     },
 }
@@ -114,7 +116,7 @@ enum IncomingEnvelope {
         #[serde(default)]
         request_id: Option<String>,
         #[serde(default)]
-        bundle_name: Option<String>,
+        namespace: Option<String>,
         request: RelayRequest,
     },
 }
@@ -192,11 +194,11 @@ pub(super) fn parse_incoming_frame(line: &str) -> Result<IncomingFrame, io::Erro
         })),
         IncomingEnvelope::Request {
             request_id,
-            bundle_name,
+            namespace,
             request,
         } => Ok(IncomingFrame::Request {
             request_id,
-            bundle_name,
+            namespace,
             request,
         }),
     }

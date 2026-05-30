@@ -235,7 +235,7 @@ async fn serve_connection_frames(
             }
             IncomingFrame::Request {
                 request_id,
-                bundle_name: target_bundle,
+                namespace: target_namespace,
                 request,
             } => {
                 let Some(active_registration) = guard.current() else {
@@ -296,7 +296,7 @@ async fn serve_connection_frames(
                 }
                 let bundle_paths = match resolve_effective_bundle(
                     bundle_catalog,
-                    target_bundle.as_deref(),
+                    target_namespace.as_deref(),
                     bound_bundle.as_ref(),
                 ) {
                     Ok(bundle_paths) => bundle_paths,
@@ -376,29 +376,49 @@ fn full_requester_principal_id(registration: &StreamRegistration) -> String {
     }
 }
 
-/// Resolves the routing bundle for a stream request.
+/// Resolves the routing bundle for a stream request from its namespace selector.
 ///
-/// An explicit `target_bundle` selects the routing bundle regardless of any
-/// connection binding (so relay-wide principals can address any bundle). When
-/// absent, the connection's bound bundle is used. A request with neither an
-/// explicit target nor a bound bundle is rejected.
+/// The `namespace` selects the routing context regardless of any connection
+/// binding (so relay-wide principals can address any bundle): a bundle name does
+/// a catalog lookup, while `GLOBAL`/`EXTERNAL`/`RELAY` name the relay-wide
+/// namespaces. `EXTERNAL` and `RELAY` are reserved for relay-internal routing
+/// (extension protocol handling, peer-relay forwarding), so a client selecting
+/// them is rejected with `validation_unsupported_namespace` (D7). `GLOBAL` is
+/// intended to be client-routable, but the relay-wide delivery path is not yet
+/// built — it is deferred to a follow-up slice (with the MCP `namespace`
+/// parameter and its integration tests) — so selecting it returns the distinct,
+/// temporary `validation_namespace_routing_unavailable` rather than a misleading
+/// catalog miss. When no namespace is given, the connection's bound bundle is
+/// used; a relay-wide connection with no namespace is rejected.
 fn resolve_effective_bundle(
     bundle_catalog: &BundleCatalog,
-    target_bundle: Option<&str>,
+    namespace: Option<&str>,
     bound_bundle: Option<&BundleRuntimePaths>,
 ) -> Result<BundleRuntimePaths, RelayError> {
-    if let Some(target) = target_bundle {
-        return bundle_catalog
-            .get(target)
-            .cloned()
-            .ok_or_else(|| unknown_bundle_error(target));
+    if let Some(namespace) = namespace {
+        return match namespace {
+            "GLOBAL" => Err(relay_error(
+                "validation_namespace_routing_unavailable",
+                "relay-wide GLOBAL routing is not yet available on this relay",
+                Some(json!({ "namespace": namespace })),
+            )),
+            "EXTERNAL" | "RELAY" => Err(relay_error(
+                "validation_unsupported_namespace",
+                "namespace is reserved for relay-internal routing and cannot be selected by a client",
+                Some(json!({ "namespace": namespace })),
+            )),
+            bundle_name => bundle_catalog
+                .get(bundle_name)
+                .cloned()
+                .ok_or_else(|| unknown_bundle_error(bundle_name)),
+        };
     }
     if let Some(bound) = bound_bundle {
         return Ok(bound.clone());
     }
     Err(relay_error(
-        "validation_missing_target_bundle",
-        "stream request from a relay-wide principal requires an explicit target bundle",
+        "validation_missing_routing_namespace",
+        "stream request from a relay-wide principal requires an explicit routing namespace",
         None,
     ))
 }
