@@ -41,26 +41,38 @@ relay-wide registry (registered `@GLOBAL` connections) rather than bundle
 members. `send` to `namespace = "GLOBAL"` with `targets = ["operator@GLOBAL"]`
 delivers to the registered relay-wide UI session for that principal_id.
 
-## Open Questions
+**D4 — One namespace per request (this slice).**
+A single request carries at most one namespace context; all targets in that
+request are resolved against the registry for that namespace. Cross-namespace
+fan-out — addressing targets in multiple registries in one request (e.g.,
+`agent@bundle-a` and `operator@GLOBAL` simultaneously) — is deferred to a
+separate `cross-namespace-routing` proposal. The `namespace` field design does
+not preclude per-target derivation from the `@<namespace>` suffix in a future
+slice. See `designs/relay` nb note for the draft proposal.
 
-- **Mixed targets**: can a single `send` request address both bundle-scoped
-  sessions (namespace = a bundle name) and relay-wide sessions (namespace =
-  "GLOBAL") simultaneously? Current leaning: no — one namespace per request;
-  callers issue separate sends if needed. Confirm with BE before implementation.
+**D5 — Broadcast under GLOBAL namespace is out of scope.**
+`broadcast = true` with `namespace = "GLOBAL"` (fan-out to all registered
+`@GLOBAL` sessions) is not defined in this slice. Relay-wide broadcast
+semantics require separate design consideration, including multi-operator
+scenarios.
 
-- **Broadcast semantics under GLOBAL namespace**: if `broadcast = true` and
-  `namespace = "GLOBAL"`, should relay broadcast to all registered `@GLOBAL`
-  UI sessions? Or is broadcast always within-bundle only? Likely relay-wide
-  broadcast is out of scope for this change; confirm.
+**D6 — EXTERNAL and RELAY namespace specifiers: reserved, not client-routable.**
+The relay accepts and parses `EXTERNAL` and `RELAY` as syntactically valid
+namespace values on the request envelope. If a client attempts to route directly
+to these namespaces, relay returns `validation_unsupported_namespace`. Only the
+relay itself routes to these namespaces under defined protocol circumstances
+(extension protocol handling, peer-relay forwarding).
 
-- **Error code rename**: `validation_missing_target_bundle` was coined for D1d.
-  With the rename should it become `validation_missing_routing_namespace`?
-  Low-stakes but should be consistent. Confirm preferred name.
+## Resolved Questions
 
-- **`@EXTERNAL` and `@RELAY` namespace routing**: the proposal allows these
-  specifiers in principle, but the motivating use case is only `@GLOBAL`.
-  Should `EXTERNAL` and `RELAY` be reserved but unimplemented in this slice?
-  Confirm scope boundary with BE.
+- **P.1 Mixed targets**: one namespace per request in this slice; cross-namespace
+  fan-out deferred to `cross-namespace-routing` proposal. (→ D4)
+- **P.2 Broadcast under GLOBAL**: out of scope; relay-wide broadcast semantics
+  filed for separate design review. (→ D5)
+- **P.3 Error code**: `validation_missing_target_bundle` renamed to
+  `validation_missing_routing_namespace`. (→ task 1.5)
+- **P.4 EXTERNAL/RELAY routing**: accepted/parsed but client routing rejected
+  with `validation_unsupported_namespace`; only relay routes to these. (→ D6)
 
 ## Risks / Trade-offs
 

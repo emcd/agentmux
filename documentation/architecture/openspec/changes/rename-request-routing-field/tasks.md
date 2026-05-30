@@ -1,13 +1,19 @@
-## Pre-implementation decisions (open)
+## Pre-implementation decisions (resolved)
 
-- [ ] P.1 Confirm: mixed targets (bundle + relay-wide) in one send — not
-      supported (separate sends required)? See design.md open questions.
-- [ ] P.2 Confirm: broadcast under GLOBAL namespace — out of scope for this
-      change?
-- [ ] P.3 Confirm: error code name — `validation_missing_routing_namespace` or
-      keep `validation_missing_target_bundle`?
-- [ ] P.4 Confirm: `EXTERNAL` and `RELAY` namespace routing — reserved but
-      unimplemented in this slice?
+- [x] P.1 One namespace per request in this slice. Cross-namespace fan-out
+      (mixed registries in one send, e.g. bundle + @GLOBAL targets together)
+      deferred to `cross-namespace-routing` proposal (designs/relay/6). The
+      `namespace` field design does not preclude per-target derivation later.
+      (D4)
+- [x] P.2 Broadcast under `namespace = "GLOBAL"` is out of scope for this
+      change. Relay-wide broadcast semantics filed for separate design review.
+      (D5)
+- [x] P.3 Error code: rename `validation_missing_target_bundle` →
+      `validation_missing_routing_namespace`. (D, task 1.5)
+- [x] P.4 `EXTERNAL` and `RELAY`: accept and parse as valid namespace values;
+      return `validation_unsupported_namespace` if a client attempts direct
+      routing. Only the relay routes to these namespaces under defined protocol
+      circumstances. (D6)
 
 ## 1. Relay (primary)
 
@@ -17,10 +23,14 @@
 - [ ] 1.3 Update `resolve_effective_bundle` in `src/relay/connection.rs`:
       accept relay-wide namespace specifiers (`"GLOBAL"`, `"EXTERNAL"`,
       `"RELAY"`) in addition to bundle names; route to relay-wide registry for
-      specifiers; route to bundle catalog for bundle names.
+      `"GLOBAL"`; return `validation_unsupported_namespace` for `"EXTERNAL"` and
+      `"RELAY"` (reserved — only relay routes to these); route to bundle catalog
+      for bundle names.
 - [ ] 1.4 Update all call sites that pass `bundle_name` in requests (CLI,
       tests).
-- [ ] 1.5 Rename or update error code per P.3 decision.
+- [ ] 1.5 Rename error code `validation_missing_target_bundle` →
+      `validation_missing_routing_namespace` in relay contract and all
+      call sites (tests, MCP, TUI).
 
 ## 2. MCP
 
