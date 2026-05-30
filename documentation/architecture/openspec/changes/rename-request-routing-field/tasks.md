@@ -62,10 +62,13 @@
 
 - [ ] 3.1 Integration test: session principal in bundle `A` sends with
       `namespace = "GLOBAL"` → message delivered to registered `@GLOBAL`
-      UI session.
+      UI session. BLOCKED: requires GLOBAL relay-wide delivery (follow-up
+      slice with MCP 2.2).
 - [ ] 3.2 Integration test: relay-wide `@GLOBAL` principal sends with
       `namespace = "<bundle>"` → message delivered to sessions in that bundle.
+      BLOCKED: same as 3.1.
 - [ ] 3.3 Integration test: relay-wide principal without `namespace` →
-      typed error returned.
-- [ ] 3.4 Integration test: existing bundle-scoped send flow unchanged after
-      field rename.
+      typed error returned. BLOCKED: same as 3.1.
+- [x] 3.4 Integration test: existing bundle-scoped send flow unchanged after
+      field rename. Covered by existing integration harness, which now runs
+      all bundle-scoped send/look tests under the renamed `namespace` field.
