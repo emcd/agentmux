@@ -84,6 +84,11 @@ pub(super) struct SendParams {
     /// Broadcast to all known sessions for the bundle.
     #[serde(default)]
     pub(super) broadcast: bool,
+    /// Optional routing namespace selector. Accepts a bundle name or a
+    /// relay-wide namespace specifier (`GLOBAL`). Omit to use the MCP session's
+    /// associated bundle as the routing context.
+    #[serde(default)]
+    pub(super) namespace: Option<String>,
     /// Optional quiescence timeout override in milliseconds.
     #[serde(default)]
     pub(super) quiescence_timeout_ms: Option<u64>,
@@ -101,9 +106,10 @@ pub(super) struct SendParams {
 pub(super) struct LookParams {
     /// Session identifier to inspect.
     pub(super) target_session: String,
-    /// Optional override for bundle name (MVP rejects cross-bundle requests).
+    /// Optional routing namespace selector (bundle name or relay-wide
+    /// specifier). MVP rejects cross-bundle requests.
     #[serde(default)]
-    pub(super) bundle_name: Option<String>,
+    pub(super) namespace: Option<String>,
     /// Optional number of pane snapshot lines to capture.
     #[serde(default)]
     pub(super) lines: Option<u64>,
@@ -260,6 +266,10 @@ pub(super) struct RawwParams {
     /// When true, suppress trailing Enter after raw write dispatch.
     #[serde(default)]
     pub(super) no_enter: bool,
+    /// Optional routing namespace selector (bundle name or relay-wide
+    /// specifier).
+    #[serde(default)]
+    pub(super) namespace: Option<String>,
     /// Optional client request identifier echoed in responses.
     #[serde(default)]
     pub(super) request_id: Option<String>,

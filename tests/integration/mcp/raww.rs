@@ -262,3 +262,78 @@ async fn raww_maps_authorization_forbidden_and_preserves_capability_label() {
         "raww.write"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn raww_advertises_optional_namespace_in_tool_schema() {
+    let runtime = TestRuntime::create();
+    let _relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(|_| {
+            json!({
+                "kind": "error",
+                "error": {"code": "internal_unexpected_failure", "message": "unused"},
+            })
+        }),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let response = harness.list_tools(2).await;
+    let tools = response["result"]["tools"]
+        .as_array()
+        .expect("tools list array");
+    let raww_tool = tools
+        .iter()
+        .find(|tool| tool.get("name").and_then(Value::as_str) == Some("raww"))
+        .expect("raww tool present");
+    let properties = raww_tool["inputSchema"]["properties"]
+        .as_object()
+        .expect("raww inputSchema properties object");
+    assert!(
+        properties.contains_key("namespace"),
+        "raww tool schema advertises namespace: {properties:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn raww_forwards_namespace_to_wire_envelope() {
+    let runtime = TestRuntime::create();
+    let relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("raww") => json!({
+                    "kind": "raww",
+                    "schema_version": "1",
+                    "status": "delivered",
+                    "target_session": "bravo",
+                    "transport": "tmux",
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let mut arguments = Map::new();
+    arguments.insert(
+        "target_session".to_string(),
+        Value::String("bravo".to_string()),
+    );
+    arguments.insert("text".to_string(), Value::String("hello".to_string()));
+    arguments.insert(
+        "namespace".to_string(),
+        Value::String(BUNDLE_NAME.to_string()),
+    );
+    let response = harness.call_tool(2, "raww", arguments).await;
+    decode_tool_payload(&response);
+
+    let envelopes = relay.envelopes_for_operation("raww");
+    assert_eq!(envelopes.len(), 1);
+    assert_eq!(envelopes[0]["namespace"], BUNDLE_NAME);
+}

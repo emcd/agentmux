@@ -37,7 +37,7 @@ async fn look_returns_snapshot_payload_and_forwards_request_shape() {
         Value::String("bravo".to_string()),
     );
     arguments.insert(
-        "bundle_name".to_string(),
+        "namespace".to_string(),
         Value::String(BUNDLE_NAME.to_string()),
     );
     arguments.insert("lines".to_string(), Value::Number(3.into()));
@@ -67,7 +67,6 @@ async fn look_returns_snapshot_payload_and_forwards_request_shape() {
     assert_eq!(relay_requests.len(), 1);
     assert_eq!(relay_requests[0]["requester_session"], SENDER_SESSION);
     assert_eq!(relay_requests[0]["target_session"], "bravo");
-    assert_eq!(relay_requests[0]["bundle_name"], BUNDLE_NAME);
     assert_eq!(relay_requests[0]["lines"], 3);
 }
 
@@ -378,10 +377,7 @@ async fn look_maps_cross_bundle_validation_error_from_relay() {
         "target_session".to_string(),
         Value::String("bravo".to_string()),
     );
-    arguments.insert(
-        "bundle_name".to_string(),
-        Value::String("other".to_string()),
-    );
+    arguments.insert("namespace".to_string(), Value::String("other".to_string()));
     let response = harness.call_tool(2, "look", arguments).await;
 
     assert_eq!(
@@ -431,4 +427,85 @@ async fn look_maps_unsupported_transport_error_from_relay() {
         error_code(&response),
         Some("validation_unsupported_transport")
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn look_advertises_optional_namespace_in_tool_schema() {
+    let runtime = TestRuntime::create();
+    let _relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(|_| {
+            json!({
+                "kind": "error",
+                "error": {"code": "internal_unexpected_failure", "message": "unused"},
+            })
+        }),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let response = harness.list_tools(2).await;
+    let tools = response["result"]["tools"]
+        .as_array()
+        .expect("tools list array");
+    let look_tool = tools
+        .iter()
+        .find(|tool| tool.get("name").and_then(Value::as_str) == Some("look"))
+        .expect("look tool present");
+    let properties = look_tool["inputSchema"]["properties"]
+        .as_object()
+        .expect("look inputSchema properties object");
+    assert!(
+        properties.contains_key("namespace"),
+        "look tool schema advertises namespace: {properties:?}"
+    );
+    assert!(
+        !properties.contains_key("bundle_name"),
+        "look tool schema no longer advertises bundle_name: {properties:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn look_forwards_namespace_to_wire_envelope() {
+    let runtime = TestRuntime::create();
+    let relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("look") => json!({
+                    "kind": "look",
+                    "schema_version": "1",
+                    "bundle_name": BUNDLE_NAME,
+                    "requester_session": SENDER_SESSION,
+                    "target_session": "bravo",
+                    "captured_at": "2026-03-10T00:00:00Z",
+                    "snapshot_format": "lines",
+                    "snapshot_lines": [],
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let mut arguments = Map::new();
+    arguments.insert(
+        "target_session".to_string(),
+        Value::String("bravo".to_string()),
+    );
+    arguments.insert(
+        "namespace".to_string(),
+        Value::String(BUNDLE_NAME.to_string()),
+    );
+    let response = harness.call_tool(2, "look", arguments).await;
+    decode_tool_payload(&response);
+
+    let envelopes = relay.envelopes_for_operation("look");
+    assert_eq!(envelopes.len(), 1);
+    assert_eq!(envelopes[0]["namespace"], BUNDLE_NAME);
 }

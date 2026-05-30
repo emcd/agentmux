@@ -65,6 +65,7 @@ pub(crate) struct FakeRelay {
     socket_path: PathBuf,
     stop: Arc<AtomicBool>,
     requests: Arc<Mutex<Vec<Value>>>,
+    envelopes: Arc<Mutex<Vec<Value>>>,
     thread: Option<thread::JoinHandle<()>>,
 }
 
@@ -92,8 +93,10 @@ impl FakeRelay {
 
         let stop = Arc::new(AtomicBool::new(false));
         let requests = Arc::new(Mutex::new(Vec::new()));
+        let envelopes = Arc::new(Mutex::new(Vec::new()));
         let stop_inner = Arc::clone(&stop);
         let requests_inner = Arc::clone(&requests);
+        let envelopes_inner = Arc::clone(&envelopes);
         let socket_path_inner = socket_path.clone();
         let routes = Arc::new(routes);
 
@@ -103,7 +106,8 @@ impl FakeRelay {
                     Ok((stream, _address)) => {
                         let routes = Arc::clone(&routes);
                         let requests_for_conn = Arc::clone(&requests_inner);
-                        handle_connection(stream, &requests_for_conn, &routes);
+                        let envelopes_for_conn = Arc::clone(&envelopes_inner);
+                        handle_connection(stream, &requests_for_conn, &envelopes_for_conn, &routes);
                     }
                     Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(10));
@@ -118,6 +122,7 @@ impl FakeRelay {
             socket_path,
             stop,
             requests,
+            envelopes,
             thread: Some(thread),
         }
     }
@@ -128,6 +133,22 @@ impl FakeRelay {
             .expect("fake relay requests lock")
             .iter()
             .filter(|request| request.get("operation").and_then(Value::as_str) == Some(operation))
+            .cloned()
+            .collect::<Vec<_>>()
+    }
+
+    pub(crate) fn envelopes_for_operation(&self, operation: &str) -> Vec<Value> {
+        self.envelopes
+            .lock()
+            .expect("fake relay envelopes lock")
+            .iter()
+            .filter(|envelope| {
+                envelope
+                    .get("request")
+                    .and_then(|request| request.get("operation"))
+                    .and_then(Value::as_str)
+                    == Some(operation)
+            })
             .cloned()
             .collect::<Vec<_>>()
     }
@@ -146,6 +167,7 @@ impl Drop for FakeRelay {
 fn handle_connection(
     mut stream: UnixStream,
     requests: &Arc<Mutex<Vec<Value>>>,
+    envelopes: &Arc<Mutex<Vec<Value>>>,
     routes: &Arc<HashMap<String, RelayResponder>>,
 ) {
     stream
@@ -213,6 +235,10 @@ fn handle_connection(
                 .lock()
                 .expect("fake relay requests lock")
                 .push(request.clone());
+            envelopes
+                .lock()
+                .expect("fake relay envelopes lock")
+                .push(decoded.clone());
             let response = responder(&request);
             let framed = json!({
                 "frame": "response",
