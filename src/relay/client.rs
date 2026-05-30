@@ -99,9 +99,27 @@ impl RelayStreamSession {
         &mut self,
         request: &RelayRequest,
     ) -> Result<(RelayResponse, Vec<RelayStreamEvent>), io::Error> {
+        self.request_with_namespace_and_events(request, None)
+    }
+
+    /// Sends one request with an optional explicit routing namespace.
+    ///
+    /// When `namespace_override` is `None`, the session's bound bundle is used as
+    /// the routing namespace. When `Some`, the supplied value is sent verbatim on
+    /// the wire envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns IO errors when relay transport or frame exchange fails.
+    pub fn request_with_namespace_and_events(
+        &mut self,
+        request: &RelayRequest,
+        namespace_override: Option<&str>,
+    ) -> Result<(RelayResponse, Vec<RelayStreamEvent>), io::Error> {
         self.ensure_connected()?;
         let request_id = uuid::Uuid::new_v4().to_string();
-        let bundle_name = self.bundle_name.clone();
+        let bound_bundle = self.bundle_name.clone();
+        let namespace = namespace_override.unwrap_or(bound_bundle.as_str());
         let result = {
             let connection = self
                 .connection
@@ -111,7 +129,7 @@ impl RelayStreamSession {
                 &mut connection.stream,
                 StreamClientFrame::Request {
                     request_id: request_id.as_str(),
-                    namespace: Some(bundle_name.as_str()),
+                    namespace: Some(namespace),
                     request,
                 },
             )?;

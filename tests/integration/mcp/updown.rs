@@ -3,7 +3,7 @@ use serde_json::{Map, Value, json};
 use std::sync::Arc;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn lifecycle_up_returns_bundle_transition_from_relay() {
+async fn updown_up_returns_bundle_transition_from_relay() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -40,7 +40,7 @@ async fn lifecycle_up_returns_bundle_transition_from_relay() {
 
     let mut arguments = Map::new();
     arguments.insert("command".to_string(), Value::String("up".to_string()));
-    let response = harness.call_tool(2, "lifecycle", arguments).await;
+    let response = harness.call_tool(2, "updown", arguments).await;
     let payload = decode_tool_payload(&response);
 
     assert_eq!(payload["schema_version"], "1");
@@ -59,7 +59,7 @@ async fn lifecycle_up_returns_bundle_transition_from_relay() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn lifecycle_down_returns_bundle_transition_from_relay() {
+async fn updown_down_returns_bundle_transition_from_relay() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -96,7 +96,7 @@ async fn lifecycle_down_returns_bundle_transition_from_relay() {
 
     let mut arguments = Map::new();
     arguments.insert("command".to_string(), Value::String("down".to_string()));
-    let response = harness.call_tool(2, "lifecycle", arguments).await;
+    let response = harness.call_tool(2, "updown", arguments).await;
     let payload = decode_tool_payload(&response);
 
     assert_eq!(payload["action"], "down");
@@ -109,7 +109,7 @@ async fn lifecycle_down_returns_bundle_transition_from_relay() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn lifecycle_up_forwards_skipped_outcome_unchanged() {
+async fn updown_up_forwards_skipped_outcome_unchanged() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -146,7 +146,7 @@ async fn lifecycle_up_forwards_skipped_outcome_unchanged() {
 
     let mut arguments = Map::new();
     arguments.insert("command".to_string(), Value::String("up".to_string()));
-    let response = harness.call_tool(2, "lifecycle", arguments).await;
+    let response = harness.call_tool(2, "updown", arguments).await;
     let payload = decode_tool_payload(&response);
 
     assert_eq!(payload["changed_any"], false);
@@ -157,7 +157,7 @@ async fn lifecycle_up_forwards_skipped_outcome_unchanged() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn lifecycle_preserves_authorization_forbidden_updown_capability() {
+async fn updown_preserves_authorization_forbidden_updown_capability() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -190,14 +190,14 @@ async fn lifecycle_preserves_authorization_forbidden_updown_capability() {
 
     let mut arguments = Map::new();
     arguments.insert("command".to_string(), Value::String("up".to_string()));
-    let response = harness.call_tool(2, "lifecycle", arguments).await;
+    let response = harness.call_tool(2, "updown", arguments).await;
 
     assert_eq!(error_code(&response), Some("authorization_forbidden"));
     assert_eq!(response["error"]["data"]["details"]["capability"], "updown");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn lifecycle_rejects_unknown_top_level_fields() {
+async fn updown_rejects_unknown_top_level_fields() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -208,7 +208,7 @@ async fn lifecycle_rejects_unknown_top_level_fields() {
     let mut arguments = Map::new();
     arguments.insert("command".to_string(), Value::String("up".to_string()));
     arguments.insert("stowaway".to_string(), Value::String("value".to_string()));
-    let response = harness.call_tool(2, "lifecycle", arguments).await;
+    let response = harness.call_tool(2, "updown", arguments).await;
 
     assert_unknown_field_error(&response, &["stowaway"]);
     assert!(relay.requests_for_operation("up").is_empty());
@@ -216,11 +216,11 @@ async fn lifecycle_rejects_unknown_top_level_fields() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn lifecycle_rejects_unknown_arg_fields() {
+async fn updown_rejects_unknown_arg_fields() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay should not receive lifecycle for invalid args")),
+        Arc::new(|_| panic!("relay should not receive updown for invalid args")),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -232,14 +232,14 @@ async fn lifecycle_rejects_unknown_arg_fields() {
             "stowaway_field": "value",
         }),
     );
-    let response = harness.call_tool(2, "lifecycle", arguments).await;
+    let response = harness.call_tool(2, "updown", arguments).await;
 
     assert_unknown_field_error(&response, &["args.stowaway_field"]);
     assert!(relay.requests_for_operation("up").is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn lifecycle_rejects_unknown_command_selector() {
+async fn updown_rejects_unknown_command_selector() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -249,7 +249,7 @@ async fn lifecycle_rejects_unknown_command_selector() {
 
     let mut arguments = Map::new();
     arguments.insert("command".to_string(), Value::String("garbage".to_string()));
-    let response = harness.call_tool(2, "lifecycle", arguments).await;
+    let response = harness.call_tool(2, "updown", arguments).await;
 
     assert_eq!(error_code(&response), Some("validation_invalid_params"));
     assert!(relay.requests_for_operation("up").is_empty());
@@ -257,7 +257,7 @@ async fn lifecycle_rejects_unknown_command_selector() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn lifecycle_rejects_missing_command_selector() {
+async fn updown_rejects_missing_command_selector() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -266,7 +266,7 @@ async fn lifecycle_rejects_missing_command_selector() {
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let arguments = Map::new();
-    let response = harness.call_tool(2, "lifecycle", arguments).await;
+    let response = harness.call_tool(2, "updown", arguments).await;
 
     assert_eq!(error_code(&response), Some("validation_invalid_params"));
     assert!(relay.requests_for_operation("up").is_empty());
@@ -274,7 +274,7 @@ async fn lifecycle_rejects_missing_command_selector() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn lifecycle_advertised_in_tool_inventory() {
+async fn updown_advertised_in_tool_inventory() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -296,7 +296,7 @@ async fn lifecycle_advertised_in_tool_inventory() {
         .filter_map(|tool| tool.get("name").and_then(Value::as_str))
         .collect();
     assert!(
-        names.contains(&"lifecycle"),
-        "lifecycle tool advertised: {names:?}"
+        names.contains(&"updown"),
+        "updown tool advertised: {names:?}"
     );
 }

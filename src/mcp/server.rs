@@ -32,17 +32,17 @@ use super::errors::{
 use super::help::help_tool;
 use super::params::{
     CHANGE_COMMAND_PSK, ChangeParams, ChangePskArgs, GRANT_COMMAND_LIST, GRANT_COMMAND_RESOLVE,
-    GrantListArgs, GrantParams, GrantResolveArgs, HelpParams, LIFECYCLE_COMMAND_DOWN,
-    LIFECYCLE_COMMAND_UP, LIST_COMMAND_SESSIONS, LIST_SESSIONS_SCHEMA_VERSION, LifecycleArgs,
-    LifecycleParams, ListArgs, ListParams, LookParams, NEW_COMMAND_PEER, NewParams, NewPeerArgs,
-    RawwParams, SendParams,
+    GrantListArgs, GrantParams, GrantResolveArgs, HelpParams, LIST_COMMAND_SESSIONS,
+    LIST_SESSIONS_SCHEMA_VERSION, ListArgs, ListParams, LookParams, NEW_COMMAND_PEER, NewParams,
+    NewPeerArgs, RawwParams, SendParams, UPDOWN_COMMAND_DOWN, UPDOWN_COMMAND_UP, UpdownArgs,
+    UpdownParams,
 };
 use super::validation::{
     is_relay_unavailable_error, parse_meta_tool_args, validate_change_params,
     validate_change_psk_args, validate_grant_list_args, validate_grant_params,
-    validate_grant_resolve_args, validate_help_request, validate_lifecycle_args,
-    validate_lifecycle_params, validate_list_request, validate_look_request, validate_new_params,
-    validate_new_peer_args, validate_raww_request, validate_send_request,
+    validate_grant_resolve_args, validate_help_request, validate_list_request,
+    validate_look_request, validate_new_params, validate_new_peer_args, validate_raww_request,
+    validate_send_request, validate_updown_args, validate_updown_params,
 };
 
 /// Configuration provided when booting MCP stdio service.
@@ -210,6 +210,7 @@ impl McpServer {
                 "request_id": params.request_id.clone(),
                 "targets": params.targets.clone(),
                 "broadcast": params.broadcast,
+                "namespace": params.namespace.clone(),
                 "quiescence_timeout_ms": params.quiescence_timeout_ms,
                 "acp_turn_timeout_ms": params.acp_turn_timeout_ms,
                 "message_length": params.message.len(),
@@ -239,7 +240,7 @@ impl McpServer {
             quiescence_timeout_ms: params.quiescence_timeout_ms,
             acp_turn_timeout_ms: params.acp_turn_timeout_ms,
         };
-        match self.request_relay(&request) {
+        match self.request_relay_with_namespace(&request, params.namespace.as_deref()) {
             Ok(RelayResponse::Send {
                 schema_version,
                 bundle_name,
@@ -306,7 +307,7 @@ impl McpServer {
                 "bundle_name": self.associated_bundle_name(),
                 "requester_session": self.state.configuration.sender_session.clone(),
                 "target_session": params.target_session.clone(),
-                "requested_bundle_name": params.bundle_name.clone(),
+                "namespace": params.namespace.clone(),
                 "lines": params.lines,
             }),
         );
@@ -328,9 +329,9 @@ impl McpServer {
             requester_session,
             target_session: params.target_session.clone(),
             lines: params.lines.map(|value| value as usize),
-            bundle_name: params.bundle_name.clone(),
+            bundle_name: None,
         };
-        match self.request_relay(&request) {
+        match self.request_relay_with_namespace(&request, params.namespace.as_deref()) {
             Ok(RelayResponse::Look {
                 schema_version,
                 bundle_name,
@@ -432,6 +433,7 @@ impl McpServer {
                 "bundle_name": self.associated_bundle_name(),
                 "request_id": params.request_id.clone(),
                 "target_session": params.target_session.clone(),
+                "namespace": params.namespace.clone(),
                 "text_length": params.text.len(),
                 "no_enter": params.no_enter,
             }),
@@ -458,7 +460,7 @@ impl McpServer {
             no_enter: params.no_enter,
             bundle_name: None,
         };
-        match self.request_relay(&request) {
+        match self.request_relay_with_namespace(&request, params.namespace.as_deref()) {
             Ok(RelayResponse::Raww {
                 schema_version,
                 status,
@@ -721,14 +723,14 @@ impl McpServer {
     }
 
     #[tool(
-        name = "lifecycle",
-        description = "Administer bundle runtime lifecycle. Use command=\"up\" to host the associated bundle or command=\"down\" to unhost it."
+        name = "updown",
+        description = "Administer bundle runtime updown. Use command=\"up\" to host the associated bundle or command=\"down\" to unhost it."
     )]
-    async fn tool_lifecycle(
+    async fn tool_updown(
         &self,
-        Parameters(params): Parameters<LifecycleParams>,
+        Parameters(params): Parameters<UpdownParams>,
     ) -> Result<CallToolResult, McpError> {
-        validate_lifecycle_params(&params)?;
+        validate_updown_params(&params)?;
         let command = params
             .command
             .as_deref()
@@ -741,43 +743,43 @@ impl McpServer {
                     None,
                 )
             })?;
-        let args = parse_meta_tool_args::<LifecycleArgs>(params.args.clone()).map_err(|reason| {
+        let args = parse_meta_tool_args::<UpdownArgs>(params.args.clone()).map_err(|reason| {
             validation_tool_error(
                 "validation_invalid_params",
-                "invalid args for lifecycle command",
+                "invalid args for updown command",
                 Some(json!({
                     "reason": reason,
-                    "hint": "pass args as a JSON object; use help query 'lifecycle.up' or 'lifecycle.down' for exact schema",
+                    "hint": "pass args as a JSON object; use help query 'updown.up' or 'updown.down' for exact schema",
                 })),
             )
         })?;
         match command {
-            LIFECYCLE_COMMAND_UP => {
-                validate_lifecycle_args(&args, LIFECYCLE_COMMAND_UP)?;
-                self.lifecycle_transition(LIFECYCLE_COMMAND_UP, RelayRequest::Up)
+            UPDOWN_COMMAND_UP => {
+                validate_updown_args(&args, UPDOWN_COMMAND_UP)?;
+                self.updown_transition(UPDOWN_COMMAND_UP, RelayRequest::Up)
             }
-            LIFECYCLE_COMMAND_DOWN => {
-                validate_lifecycle_args(&args, LIFECYCLE_COMMAND_DOWN)?;
-                self.lifecycle_transition(LIFECYCLE_COMMAND_DOWN, RelayRequest::Down)
+            UPDOWN_COMMAND_DOWN => {
+                validate_updown_args(&args, UPDOWN_COMMAND_DOWN)?;
+                self.updown_transition(UPDOWN_COMMAND_DOWN, RelayRequest::Down)
             }
             other => Err(validation_tool_error(
                 "validation_invalid_params",
-                "lifecycle command must be \"up\" or \"down\"",
+                "updown command must be \"up\" or \"down\"",
                 Some(json!({"command": other})),
             )),
         }
     }
 
-    fn lifecycle_transition(
+    fn updown_transition(
         &self,
         command: &str,
         request: RelayRequest,
     ) -> Result<CallToolResult, McpError> {
-        let request_event = format!("mcp.tool.lifecycle.{command}.request");
-        let success_event = format!("mcp.tool.lifecycle.{command}.success");
-        let relay_error_event = format!("mcp.tool.lifecycle.{command}.relay_error");
-        let unexpected_event = format!("mcp.tool.lifecycle.{command}.unexpected_response");
-        let io_error_event = format!("mcp.tool.lifecycle.{command}.io_error");
+        let request_event = format!("mcp.tool.updown.{command}.request");
+        let success_event = format!("mcp.tool.updown.{command}.success");
+        let relay_error_event = format!("mcp.tool.updown.{command}.relay_error");
+        let unexpected_event = format!("mcp.tool.updown.{command}.unexpected_response");
+        let io_error_event = format!("mcp.tool.updown.{command}.io_error");
         emit_inscription(
             request_event.as_str(),
             &json!({
@@ -1196,6 +1198,14 @@ impl McpServer {
     }
 
     fn request_relay(&self, request: &RelayRequest) -> Result<RelayResponse, std::io::Error> {
+        self.request_relay_with_namespace(request, None)
+    }
+
+    fn request_relay_with_namespace(
+        &self,
+        request: &RelayRequest,
+        namespace: Option<&str>,
+    ) -> Result<RelayResponse, std::io::Error> {
         let mut guard = self
             .state
             .relay_stream
@@ -1207,7 +1217,8 @@ impl McpServer {
                 "sender session is not configured for MCP relay stream",
             )
         })?;
-        let (response, events) = stream_session.request_with_events(request)?;
+        let (response, events) =
+            stream_session.request_with_namespace_and_events(request, namespace)?;
         if !events.is_empty() {
             emit_inscription(
                 "mcp.tool.stream.events_ignored",

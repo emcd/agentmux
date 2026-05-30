@@ -18,9 +18,9 @@ pub(super) const GRANT_COMMAND_LIST: &str = "list";
 pub(super) const GRANT_COMMAND_RESOLVE: &str = "resolve";
 pub(super) const GRANT_OUTCOME_SELECTED: &str = "selected";
 pub(super) const GRANT_OUTCOME_CANCELLED: &str = "cancelled";
-pub(super) const TOOL_LIFECYCLE: &str = "lifecycle";
-pub(super) const LIFECYCLE_COMMAND_UP: &str = "up";
-pub(super) const LIFECYCLE_COMMAND_DOWN: &str = "down";
+pub(super) const TOOL_UPDOWN: &str = "updown";
+pub(super) const UPDOWN_COMMAND_UP: &str = "up";
+pub(super) const UPDOWN_COMMAND_DOWN: &str = "down";
 pub(super) const TOOL_NEW: &str = "new";
 pub(super) const NEW_COMMAND_PEER: &str = "peer";
 pub(super) const TOOL_CHANGE: &str = "change";
@@ -84,6 +84,11 @@ pub(super) struct SendParams {
     /// Broadcast to all known sessions for the bundle.
     #[serde(default)]
     pub(super) broadcast: bool,
+    /// Optional routing namespace selector. Accepts a bundle name or a
+    /// relay-wide namespace specifier (`GLOBAL`). Omit to use the MCP session's
+    /// associated bundle as the routing context.
+    #[serde(default)]
+    pub(super) namespace: Option<String>,
     /// Optional quiescence timeout override in milliseconds.
     #[serde(default)]
     pub(super) quiescence_timeout_ms: Option<u64>,
@@ -101,9 +106,10 @@ pub(super) struct SendParams {
 pub(super) struct LookParams {
     /// Session identifier to inspect.
     pub(super) target_session: String,
-    /// Optional override for bundle name (MVP rejects cross-bundle requests).
+    /// Optional routing namespace selector (bundle name or relay-wide
+    /// specifier). MVP rejects cross-bundle requests.
     #[serde(default)]
-    pub(super) bundle_name: Option<String>,
+    pub(super) namespace: Option<String>,
     /// Optional number of pane snapshot lines to capture.
     #[serde(default)]
     pub(super) lines: Option<u64>,
@@ -164,8 +170,8 @@ pub(super) struct GrantResolveArgs {
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
-pub(super) struct LifecycleParams {
-    /// Lifecycle subcommand selector. Required; allowed values: `up`, `down`.
+pub(super) struct UpdownParams {
+    /// Updown subcommand selector. Required; allowed values: `up`, `down`.
     #[serde(default)]
     pub(super) command: Option<String>,
     /// Command-scoped arguments.
@@ -180,7 +186,7 @@ pub(super) struct LifecycleParams {
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
-pub(super) struct LifecycleArgs {
+pub(super) struct UpdownArgs {
     /// Unknown fields captured for explicit validation.
     #[serde(flatten, default)]
     #[schemars(skip)]
@@ -260,6 +266,10 @@ pub(super) struct RawwParams {
     /// When true, suppress trailing Enter after raw write dispatch.
     #[serde(default)]
     pub(super) no_enter: bool,
+    /// Optional routing namespace selector (bundle name or relay-wide
+    /// specifier).
+    #[serde(default)]
+    pub(super) namespace: Option<String>,
     /// Optional client request identifier echoed in responses.
     #[serde(default)]
     pub(super) request_id: Option<String>,

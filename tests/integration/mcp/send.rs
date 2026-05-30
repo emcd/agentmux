@@ -396,3 +396,133 @@ async fn send_preserves_reserved_capability_label_from_relay_denial() {
     assert_eq!(error_code(&response), Some("authorization_forbidden"));
     assert_eq!(response["error"]["data"]["details"]["capability"], "do.run");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn send_advertises_optional_namespace_in_tool_schema() {
+    let runtime = TestRuntime::create();
+    let _relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(|_| {
+            json!({
+                "kind": "error",
+                "error": {"code": "internal_unexpected_failure", "message": "unused"},
+            })
+        }),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let response = harness.list_tools(2).await;
+    let tools = response["result"]["tools"]
+        .as_array()
+        .expect("tools list array");
+    let send_tool = tools
+        .iter()
+        .find(|tool| tool.get("name").and_then(Value::as_str) == Some("send"))
+        .expect("send tool present");
+    let properties = send_tool["inputSchema"]["properties"]
+        .as_object()
+        .expect("send inputSchema properties object");
+    assert!(
+        properties.contains_key("namespace"),
+        "send tool schema advertises namespace: {properties:?}"
+    );
+    let required = send_tool["inputSchema"]["required"]
+        .as_array()
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    assert!(
+        !required.iter().any(|field| field == "namespace"),
+        "namespace is optional on send: {required:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn send_forwards_namespace_to_wire_envelope() {
+    let runtime = TestRuntime::create();
+    let relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("send") => json!({
+                    "kind": "send",
+                    "schema_version": "1",
+                    "bundle_name": BUNDLE_NAME,
+                    "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
+                    "sender_session": request.get("sender_session").cloned().unwrap_or(Value::Null),
+                    "results": [],
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let mut arguments = Map::new();
+    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments.insert(
+        "targets".to_string(),
+        Value::Array(vec![Value::String("bravo".to_string())]),
+    );
+    arguments.insert("broadcast".to_string(), Value::Bool(false));
+    arguments.insert("namespace".to_string(), Value::String("GLOBAL".to_string()));
+    let response = harness.call_tool(2, "send", arguments).await;
+    decode_tool_payload(&response);
+
+    let envelopes = relay.envelopes_for_operation("send");
+    assert_eq!(envelopes.len(), 1);
+    assert_eq!(envelopes[0]["namespace"], "GLOBAL");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn send_omitting_namespace_falls_back_to_bound_bundle() {
+    let runtime = TestRuntime::create();
+    let relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("send") => json!({
+                    "kind": "send",
+                    "schema_version": "1",
+                    "bundle_name": BUNDLE_NAME,
+                    "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
+                    "sender_session": request.get("sender_session").cloned().unwrap_or(Value::Null),
+                    "results": [],
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let mut arguments = Map::new();
+    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments.insert(
+        "targets".to_string(),
+        Value::Array(vec![Value::String("bravo".to_string())]),
+    );
+    arguments.insert("broadcast".to_string(), Value::Bool(false));
+    let response = harness.call_tool(2, "send", arguments).await;
+    decode_tool_payload(&response);
+
+    let envelopes = relay.envelopes_for_operation("send");
+    assert_eq!(envelopes.len(), 1);
+    assert_eq!(envelopes[0]["namespace"], BUNDLE_NAME);
+}
