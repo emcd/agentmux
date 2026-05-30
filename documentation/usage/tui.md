@@ -34,7 +34,7 @@ draft, and scroll state is preserved across switches.
   input, and permission decisioning for operator-driven session inspection.
 
 When Interaction mode has no target, the header shows a placeholder hint:
-open the picker (`F2`) and press `l` or `w` to choose a session.
+open the picker (`F2`) and press `Enter` to choose a session.
 
 ## Keybindings
 
@@ -45,6 +45,7 @@ open the picker (`F2`) and press `l` or `w` to choose a session.
 - `F2`: open/close recipient picker
 - `F3`: open/close delivery events overlay
 - `F4`: toggle between Communication and Interaction modes
+- `F5`: open/close bundle picker
 - `Ctrl+R`: refresh recipients
 
 ### Communication mode
@@ -108,6 +109,32 @@ The picker remembers the most recently committed recipient by session name
 across close/reopen and across recipient list refreshes. When the prior
 target is no longer present in the current list, the selection falls back
 deterministically to the first available session.
+
+### Bundle picker (`F5`)
+
+The bundle picker browses the bundles discovered at TUI launch (from configured
+bundle files) and lets the operator switch which bundle the TUI is targeting.
+
+- `Up` / `Down`: move bundle selection
+- `Enter`: switch the active bundle context
+- `Esc` / `F5`: close picker
+
+The active bundle is highlighted and labeled `[active]`. Selecting it again
+closes the picker as a no-op. Selecting a different bundle:
+
+- replaces the active bundle context (header `Bundle:` indicator reflects the
+  new bundle),
+- rebuilds the relay stream session with the new bundle,
+- clears bundle-scoped state (recipients, last-selected recipient, bundle
+  status, look snapshot, pending permissions, chat history, delivery state,
+  write draft),
+- triggers a recipient refresh against the new bundle; if the new bundle is
+  unhosted/unreachable, the refresh fails fast and surfaces a relay error in
+  the status pane (the bundle context stays switched).
+
+Cross-bundle targeting (mixing sessions from different bundles in one `To`
+field) is not supported; the relay rejects cross-bundle requests with
+`validation_cross_bundle_unsupported`.
 
 ## Status and Outcome Vocabulary
 

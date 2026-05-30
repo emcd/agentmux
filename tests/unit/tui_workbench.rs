@@ -16,6 +16,7 @@ fn make_state() -> Workbench {
         sender_session: "tui".to_string(),
         relay_socket: PathBuf::from("/tmp/agentmux-test-relay.sock"),
         look_lines: None,
+        available_bundles: vec!["agentmux".to_string(), "secondary".to_string()],
     })
 }
 
@@ -518,4 +519,119 @@ fn picker_has_no_selection_when_recipient_list_is_empty() {
         .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
         .expect("f2 should reopen picker");
     assert_eq!(state.picker_selected_index(), None);
+}
+
+#[test]
+fn bundle_picker_f5_toggles_overlay() {
+    let mut state = make_state();
+    assert!(!state.bundle_picker_open());
+    state
+        .dispatch_event(key_event(KeyCode::F(5), KeyModifiers::NONE))
+        .expect("f5 should open bundle picker");
+    assert!(state.bundle_picker_open());
+    state
+        .dispatch_event(key_event(KeyCode::F(5), KeyModifiers::NONE))
+        .expect("f5 should close bundle picker");
+    assert!(!state.bundle_picker_open());
+}
+
+#[test]
+fn bundle_picker_highlights_active_bundle_on_open() {
+    let mut state = make_state();
+    state
+        .dispatch_event(key_event(KeyCode::F(5), KeyModifiers::NONE))
+        .expect("f5 should open bundle picker");
+    let active_index = state
+        .available_bundles()
+        .iter()
+        .position(|name| *name == state.bundle_name())
+        .expect("active bundle should appear in available_bundles");
+    assert_eq!(state.bundle_picker_selected_index(), Some(active_index));
+}
+
+#[test]
+fn bundle_picker_enter_on_active_bundle_is_no_op_and_closes() {
+    let mut state = make_state();
+    state.set_recipients(&["alpha", "bravo"]);
+    state
+        .dispatch_event(key_event(KeyCode::F(5), KeyModifiers::NONE))
+        .expect("f5 should open bundle picker");
+    let original_bundle = state.bundle_name().to_string();
+    let original_recipients = state.recipients();
+    let original_recipients_owned = original_recipients
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    state
+        .dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE))
+        .expect("enter on active bundle should be a no-op");
+    assert!(!state.bundle_picker_open());
+    assert_eq!(state.bundle_name(), original_bundle.as_str());
+    assert_eq!(
+        state
+            .recipients()
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+        original_recipients_owned
+    );
+}
+
+#[test]
+fn bundle_picker_enter_on_different_bundle_switches_and_resets_bundle_scoped_state() {
+    let mut state = make_state();
+    state.set_recipients(&["alpha", "bravo"]);
+    state
+        .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
+        .expect("f2 should open recipient picker");
+    state
+        .dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE))
+        .expect("enter in communication mode should insert recipient");
+    assert_eq!(state.last_selected_recipient(), Some("alpha"));
+    state
+        .dispatch_event(key_event(KeyCode::F(5), KeyModifiers::NONE))
+        .expect("f5 should open bundle picker");
+    state
+        .dispatch_event(key_event(KeyCode::Down, KeyModifiers::NONE))
+        .expect("down moves bundle picker selection");
+    let target_index = state
+        .bundle_picker_selected_index()
+        .expect("bundle picker should have a selection");
+    let target_bundle = state.available_bundles()[target_index].to_string();
+    assert_ne!(target_bundle, state.bundle_name());
+    let result = state.dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(state.bundle_name(), target_bundle.as_str());
+    assert!(state.recipients().is_empty());
+    assert_eq!(state.last_selected_recipient(), None);
+    assert!(!state.bundle_picker_open());
+    match result {
+        Err(RuntimeError::Validation { code, .. }) => assert_eq!(code, "relay_unavailable"),
+        Err(RuntimeError::Io { source, .. }) => {
+            assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied)
+        }
+        other => panic!("unexpected result: {other:?}"),
+    }
+}
+
+#[test]
+fn bundle_picker_enter_with_no_available_bundles_returns_validation_error() {
+    let mut state = Workbench::new(TuiLaunchOptions {
+        bundle_name: "agentmux".to_string(),
+        sender_session: "tui".to_string(),
+        relay_socket: PathBuf::from("/tmp/agentmux-test-relay.sock"),
+        look_lines: None,
+        available_bundles: Vec::new(),
+    });
+    state
+        .dispatch_event(key_event(KeyCode::F(5), KeyModifiers::NONE))
+        .expect("f5 should open bundle picker");
+    assert!(state.bundle_picker_open());
+    assert_eq!(state.bundle_picker_selected_index(), None);
+    let result = state.dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE));
+    match result {
+        Err(RuntimeError::Validation { code, .. }) => {
+            assert_eq!(code, "validation_unknown_target")
+        }
+        other => panic!("unexpected result: {other:?}"),
+    }
 }

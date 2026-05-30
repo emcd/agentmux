@@ -144,6 +144,34 @@ impl Workbench {
         self.state.picker_open
     }
 
+    pub fn bundle_picker_open(&self) -> bool {
+        self.state.bundle_picker_open
+    }
+
+    pub fn bundle_picker_selected_index(&self) -> Option<usize> {
+        self.state.bundle_picker_state.selected()
+    }
+
+    pub fn bundle_name(&self) -> &str {
+        self.state.bundle_name.as_str()
+    }
+
+    pub fn available_bundles(&self) -> Vec<&str> {
+        self.state
+            .available_bundles
+            .iter()
+            .map(String::as_str)
+            .collect()
+    }
+
+    pub fn recipients(&self) -> Vec<&str> {
+        self.state
+            .recipients
+            .iter()
+            .map(|recipient| recipient.session_name.as_str())
+            .collect()
+    }
+
     pub fn inject_pending_permission(&mut self, target: &str) {
         self.state.pending_permissions.push(PendingPermissionEntry {
             permission_request_id: format!("perm-{target}"),

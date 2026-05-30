@@ -53,6 +53,7 @@ pub struct TuiLaunchOptions {
     pub sender_session: String,
     pub relay_socket: PathBuf,
     pub look_lines: Option<u64>,
+    pub available_bundles: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -110,10 +111,13 @@ pub(crate) struct AppState {
     pub recipients: Vec<Recipient>,
     pub bundle_status: Option<BundleStatusDisplay>,
     pub last_selected_recipient: Option<String>,
+    pub available_bundles: Vec<String>,
     pub picker_open: bool,
+    pub bundle_picker_open: bool,
     pub events_overlay_open: bool,
     pub help_overlay_open: bool,
     pub picker_state: ListState,
+    pub bundle_picker_state: ListState,
     pub mode: ScreenMode,
     pub focus: FocusField,
     pub to_field: String,
@@ -158,6 +162,7 @@ impl AppState {
             sender_session,
             relay_socket,
             look_lines,
+            available_bundles,
         } = options;
         let relay_stream = RelayStreamSession::new(
             relay_socket.clone(),
@@ -173,10 +178,13 @@ impl AppState {
             recipients: Vec::new(),
             bundle_status: None,
             last_selected_recipient: None,
+            available_bundles,
             picker_open: false,
+            bundle_picker_open: false,
             events_overlay_open: false,
             help_overlay_open: false,
             picker_state: ListState::default(),
+            bundle_picker_state: ListState::default(),
             mode: ScreenMode::Communication,
             focus: FocusField::To,
             to_field: String::new(),
@@ -312,6 +320,7 @@ mod tests {
             sender_session: "tui".to_string(),
             relay_socket: PathBuf::from("/tmp/agentmux-test-relay.sock"),
             look_lines: None,
+            available_bundles: vec!["agentmux".to_string()],
         })
     }
 

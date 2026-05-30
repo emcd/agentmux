@@ -16,8 +16,8 @@ a time; `F4` toggles between them. The active mode is shown in the footer.
   target header, the look snapshot, a Write input (relay `raww`), and
   permission decisioning.
 
-Help (`F1`), recipient picker (`F2`), and delivery events (`F3`) are overlays
-available in both modes.
+Help (`F1`), recipient picker (`F2`), delivery events (`F3`), and bundle
+picker (`F5`) are overlays available in both modes.
 
 ## Module Map
 
@@ -66,6 +66,17 @@ available in both modes.
   - help,
   - recipient picker,
   - delivery + permission events,
+  - bundle picker (F5): intra-bundle bundle switching — browses
+    `available_bundles` (sourced from `load_bundle_group_memberships` at TUI
+    launch), highlights the active bundle, and on Enter replaces the active
+    bundle context. The switch rebuilds the bundle-bound `RelayStreamSession`,
+    resets bundle-scoped state (recipients, `last_selected_recipient`, bundle
+    status, look snapshot, pending permissions, chat history, delivery
+    bookkeeping, write draft), and triggers `refresh_recipients` on the new
+    bundle. Selecting the active bundle is a no-op that closes the picker.
+    Cross-bundle targeting (`session@bundle` grammar) is intentionally out of
+    scope; the relay still rejects cross-bundle requests with
+    `validation_cross_bundle_unsupported`,
 - picker actions (mode-aware `Enter`, no separate `l` / `w` keys):
   - Communication mode: insert the selected recipient into `To`,
   - Interaction mode: open the Interaction screen for the selected identity,

@@ -22,6 +22,7 @@ impl AppState {
 
     pub fn open_picker(&mut self) {
         self.picker_open = true;
+        self.bundle_picker_open = false;
         self.events_overlay_open = false;
         self.help_overlay_open = false;
         if self.recipients.is_empty() {
@@ -36,10 +37,42 @@ impl AppState {
         self.picker_open = false;
     }
 
+    pub fn open_bundle_picker(&mut self) {
+        self.bundle_picker_open = true;
+        self.picker_open = false;
+        self.events_overlay_open = false;
+        self.help_overlay_open = false;
+        if self.available_bundles.is_empty() {
+            self.bundle_picker_state.select(None);
+            return;
+        }
+        let active_index = self
+            .available_bundles
+            .iter()
+            .position(|name| name == &self.bundle_name)
+            .unwrap_or(0);
+        self.bundle_picker_state.select(Some(active_index));
+    }
+
+    pub fn close_bundle_picker(&mut self) {
+        self.bundle_picker_open = false;
+    }
+
+    pub fn move_bundle_picker_selection(&mut self, delta: isize) {
+        if self.available_bundles.is_empty() {
+            self.bundle_picker_state.select(None);
+            return;
+        }
+        let current = self.bundle_picker_state.selected().unwrap_or(0);
+        let next = wrap_index(current, delta, self.available_bundles.len());
+        self.bundle_picker_state.select(Some(next));
+    }
+
     pub fn toggle_events_overlay(&mut self) {
         self.events_overlay_open = !self.events_overlay_open;
         if self.events_overlay_open {
             self.picker_open = false;
+            self.bundle_picker_open = false;
             self.help_overlay_open = false;
             self.ensure_pending_permission_selection();
         }
@@ -76,6 +109,7 @@ impl AppState {
         self.help_overlay_open = !self.help_overlay_open;
         if self.help_overlay_open {
             self.picker_open = false;
+            self.bundle_picker_open = false;
             self.events_overlay_open = false;
         }
     }
