@@ -31,7 +31,7 @@ fn permission_decision_rejects_submitter_without_grant_capability() {
         &mut client_stream,
         json!({
             "frame": "request",
-            "bundle_name": bundle_name,
+            "namespace": bundle_name,
             "request_id": "req-1",
             "request": {
                 "operation": "permission_resolve",
@@ -89,7 +89,7 @@ fn permission_decision_rejects_payload_actor_spoof_field() {
         &mut client_stream,
         json!({
             "frame": "request",
-            "bundle_name": bundle_name,
+            "namespace": bundle_name,
             "request_id": "req-1",
             "request": {
                 "operation": "permission_resolve",
@@ -144,7 +144,7 @@ fn permission_decision_denial_uses_grant_capability() {
         &mut client_stream,
         json!({
             "frame": "request",
-            "bundle_name": bundle_name,
+            "namespace": bundle_name,
             "request_id": "req-1",
             "request": {
                 "operation": "permission_resolve",
@@ -199,7 +199,7 @@ fn permission_decision_rejects_empty_option_id() {
         &mut client_stream,
         json!({
             "frame": "request",
-            "bundle_name": bundle_name,
+            "namespace": bundle_name,
             "request_id": "req-1",
             "request": {
                 "operation": "permission_resolve",
@@ -255,7 +255,7 @@ fn permission_decision_rejects_selected_without_option_id() {
         &mut client_stream,
         json!({
             "frame": "request",
-            "bundle_name": bundle_name,
+            "namespace": bundle_name,
             "request_id": "req-1",
             "request": {
                 "operation": "permission_resolve",
@@ -310,7 +310,7 @@ fn permission_decision_rejects_cancelled_with_option_id() {
         &mut client_stream,
         json!({
             "frame": "request",
-            "bundle_name": bundle_name,
+            "namespace": bundle_name,
             "request_id": "req-1",
             "request": {
                 "operation": "permission_resolve",
@@ -500,7 +500,7 @@ fn permission_resolve_selected_emits_resolved_event_with_option_id() {
         &mut client_stream,
         json!({
             "frame": "request",
-            "bundle_name": bundle_name,
+            "namespace": bundle_name,
             "request_id": "req-resolve-selected",
             "request": {
                 "operation": "permission_resolve",
@@ -570,7 +570,7 @@ fn permission_resolve_cancelled_emits_resolved_event_with_reason_code() {
         &mut client_stream,
         json!({
             "frame": "request",
-            "bundle_name": bundle_name,
+            "namespace": bundle_name,
             "request_id": "req-resolve-cancelled",
             "request": {
                 "operation": "permission_resolve",
@@ -691,7 +691,7 @@ fn permission_resolve_selected_rejects_unknown_option_id() {
         &mut client_stream,
         json!({
             "frame": "request",
-            "bundle_name": bundle_name,
+            "namespace": bundle_name,
             "request_id": "req-1",
             "request": {
                 "operation": "permission_resolve",

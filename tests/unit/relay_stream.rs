@@ -28,6 +28,8 @@ mod identity;
 mod permissions;
 #[path = "relay_stream/robustness.rs"]
 mod robustness;
+#[path = "relay_stream/routing.rs"]
+mod routing;
 
 fn write_bundle_configuration(temporary: &TempDir, bundle_name: &str) -> PathBuf {
     let configuration_root = temporary.path().join("config");
