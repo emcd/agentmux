@@ -7,8 +7,8 @@ use super::errors::validation_tool_error;
 use super::params::{
     ChangeParams, ChangePskArgs, GRANT_OUTCOME_CANCELLED, GRANT_OUTCOME_SELECTED, GrantListArgs,
     GrantParams, GrantResolveArgs, HelpParams, LIST_COMMAND_SESSIONS, LOOK_LINES_MAX,
-    LOOK_LINES_MIN, LifecycleArgs, LifecycleParams, ListArgs, ListParams, LookParams, NewParams,
-    NewPeerArgs, RawwParams, SendParams,
+    LOOK_LINES_MIN, ListArgs, ListParams, LookParams, NewParams, NewPeerArgs, RawwParams,
+    SendParams, UpdownArgs, UpdownParams,
 };
 
 pub(super) fn validate_list_params(params: &ListParams) -> Result<(), McpError> {
@@ -23,12 +23,12 @@ pub(super) fn validate_grant_params(params: &GrantParams) -> Result<(), McpError
     validate_unknown_fields("grant request", None, &params.extra_fields)
 }
 
-pub(super) fn validate_lifecycle_params(params: &LifecycleParams) -> Result<(), McpError> {
-    validate_unknown_fields("lifecycle request", None, &params.extra_fields)
+pub(super) fn validate_updown_params(params: &UpdownParams) -> Result<(), McpError> {
+    validate_unknown_fields("updown request", None, &params.extra_fields)
 }
 
-pub(super) fn validate_lifecycle_args(args: &LifecycleArgs, command: &str) -> Result<(), McpError> {
-    let context = format!("lifecycle {command} command");
+pub(super) fn validate_updown_args(args: &UpdownArgs, command: &str) -> Result<(), McpError> {
+    let context = format!("updown {command} command");
     validate_unknown_fields(context.as_str(), Some("args"), &args.extra_fields)
 }
 

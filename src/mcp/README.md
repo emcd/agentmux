@@ -9,7 +9,7 @@ This module implements the MCP stdio server for `agentmux`.
   - `help`
   - `look`
   - `grant` (requires `command="list"` or `command="resolve"`)
-  - `lifecycle` (requires `command="up"` or `command="down"`)
+  - `updown` (requires `command="up"` or `command="down"`)
   - `new` (requires `command="peer"`)
   - `change` (requires `command="psk"`)
   - `raww`
@@ -30,7 +30,7 @@ This module implements the MCP stdio server for `agentmux`.
 
 ## Data Flow
 
-1. MCP client calls `list`, `look`, `grant`, `lifecycle`, `raww`, or `send`.
+1. MCP client calls `list`, `look`, `grant`, `updown`, `raww`, or `send`.
 2. MCP client can call `help` to discover tool/command schemas.
 3. `src/mcp/mod.rs` validates parameter shape and transport-compatible options.
 4. Request is forwarded as relay contract:
@@ -40,8 +40,8 @@ This module implements the MCP stdio server for `agentmux`.
      (`RelayRequest::PermissionList`)
    - `grant` (`command="resolve"`) -> `RelayStreamSession`
      (`RelayRequest::PermissionResolve`)
-   - `lifecycle` (`command="up"`) -> `RelayStreamSession` (`RelayRequest::Up`)
-   - `lifecycle` (`command="down"`) -> `RelayStreamSession` (`RelayRequest::Down`)
+   - `updown` (`command="up"`) -> `RelayStreamSession` (`RelayRequest::Up`)
+   - `updown` (`command="down"`) -> `RelayStreamSession` (`RelayRequest::Down`)
    - `new` (`command="peer"`) -> `RelayStreamSession` (`RelayRequest::NewPeer`)
    - `change` (`command="psk"`) -> `RelayStreamSession`
      (`RelayRequest::ChangePsk`)
@@ -51,9 +51,9 @@ This module implements the MCP stdio server for `agentmux`.
    deterministic lexicographic order.
 6. Relay response is mapped back to MCP JSON payload.
 
-## Bundle Lifecycle
+## Bundle Updown
 
-- The `lifecycle` tool administers bundle runtime state for the associated
+- The `updown` tool administers bundle runtime state for the associated
   bundle:
   - `command="up"` requests `RelayRequest::Up` (host the bundle).
   - `command="down"` requests `RelayRequest::Down` (unhost the bundle).

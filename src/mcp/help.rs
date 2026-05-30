@@ -5,10 +5,10 @@ use serde_json::json;
 use super::errors::validation_tool_error;
 use super::params::{
     CHANGE_COMMAND_PSK, ChangePskArgs, GRANT_COMMAND_LIST, GRANT_COMMAND_RESOLVE,
-    GRANT_OUTCOME_SELECTED, GrantListArgs, GrantResolveArgs, HelpParams, LIFECYCLE_COMMAND_DOWN,
-    LIFECYCLE_COMMAND_UP, LIST_COMMAND_SESSIONS, LifecycleArgs, ListArgs, LookParams,
-    NAMESPACE_AGENTMUX, NEW_COMMAND_PEER, NewPeerArgs, RawwParams, SendParams, TOOL_CHANGE,
-    TOOL_GRANT, TOOL_HELP, TOOL_LIFECYCLE, TOOL_LIST, TOOL_LOOK, TOOL_NEW, TOOL_RAWW, TOOL_SEND,
+    GRANT_OUTCOME_SELECTED, GrantListArgs, GrantResolveArgs, HelpParams, LIST_COMMAND_SESSIONS,
+    ListArgs, LookParams, NAMESPACE_AGENTMUX, NEW_COMMAND_PEER, NewPeerArgs, RawwParams,
+    SendParams, TOOL_CHANGE, TOOL_GRANT, TOOL_HELP, TOOL_LIST, TOOL_LOOK, TOOL_NEW, TOOL_RAWW,
+    TOOL_SEND, TOOL_UPDOWN, UPDOWN_COMMAND_DOWN, UPDOWN_COMMAND_UP, UpdownArgs,
 };
 
 pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpError> {
@@ -17,8 +17,8 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
         "" | NAMESPACE_AGENTMUX => Ok(json!({
             "namespace": NAMESPACE_AGENTMUX,
             "shape_hints": [
-                "Call help with query='list', 'grant', 'lifecycle', 'new', or 'change' for meta-tool command lists.",
-                "Call help with query='list.sessions', 'grant.list', 'grant.resolve', 'lifecycle.up', 'lifecycle.down', 'new.peer', or 'change.psk' for command args schemas.",
+                "Call help with query='list', 'grant', 'updown', 'new', or 'change' for meta-tool command lists.",
+                "Call help with query='list.sessions', 'grant.list', 'grant.resolve', 'updown.up', 'updown.down', 'new.peer', or 'change.psk' for command args schemas.",
                 "Call help with query='send', 'look', or 'raww' for exact tool args schemas."
             ],
             "tools": [
@@ -27,7 +27,7 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
                 {"tool": TOOL_LOOK, "kind": "tool", "description": "Inspect a target session pane snapshot for this bundle."},
                 {"tool": TOOL_RAWW, "kind": "tool", "description": "Write raw text directly to one target session."},
                 {"tool": TOOL_GRANT, "kind": "meta_tool", "description": "Inspect or resolve pending ACP permission requests."},
-                {"tool": TOOL_LIFECYCLE, "kind": "meta_tool", "description": "Administer bundle runtime lifecycle (up/down)."},
+                {"tool": TOOL_UPDOWN, "kind": "meta_tool", "description": "Administer bundle runtime updown (up/down)."},
                 {"tool": TOOL_NEW, "kind": "meta_tool", "description": "Register a principal credential and mint its PSK."},
                 {"tool": TOOL_CHANGE, "kind": "meta_tool", "description": "Rotate the PSK for an existing principal."},
                 {"tool": TOOL_HELP, "kind": "tool", "description": "Return tool/command help and JSON schemas."}
@@ -153,48 +153,48 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
                 }
             }),
         )),
-        TOOL_LIFECYCLE => Ok(json!({
-            "tool": TOOL_LIFECYCLE,
+        TOOL_UPDOWN => Ok(json!({
+            "tool": TOOL_UPDOWN,
             "kind": "meta_tool",
-            "description": "Administer bundle runtime lifecycle (up/down) for the associated bundle.",
+            "description": "Administer bundle runtime updown (up/down) for the associated bundle.",
             "commands": [
                 {
-                    "command": "lifecycle.up",
+                    "command": "updown.up",
                     "description": "Host the associated bundle runtime."
                 },
                 {
-                    "command": "lifecycle.down",
+                    "command": "updown.down",
                     "description": "Unhost the associated bundle runtime."
                 }
             ],
             "invoke": {
-                "tool": TOOL_LIFECYCLE,
+                "tool": TOOL_UPDOWN,
                 "params": {
-                    "command": LIFECYCLE_COMMAND_UP,
+                    "command": UPDOWN_COMMAND_UP,
                     "args": {}
                 }
             }
         })),
-        "lifecycle.up" => Ok(command_help(
-            "lifecycle.up",
+        "updown.up" => Ok(command_help(
+            "updown.up",
             "Host the associated bundle runtime.",
-            json_schema_for::<LifecycleArgs>(),
+            json_schema_for::<UpdownArgs>(),
             json!({
-                "tool": TOOL_LIFECYCLE,
+                "tool": TOOL_UPDOWN,
                 "params": {
-                    "command": LIFECYCLE_COMMAND_UP,
+                    "command": UPDOWN_COMMAND_UP,
                     "args": {}
                 }
             }),
         )),
-        "lifecycle.down" => Ok(command_help(
-            "lifecycle.down",
+        "updown.down" => Ok(command_help(
+            "updown.down",
             "Unhost the associated bundle runtime.",
-            json_schema_for::<LifecycleArgs>(),
+            json_schema_for::<UpdownArgs>(),
             json!({
-                "tool": TOOL_LIFECYCLE,
+                "tool": TOOL_UPDOWN,
                 "params": {
-                    "command": LIFECYCLE_COMMAND_DOWN,
+                    "command": UPDOWN_COMMAND_DOWN,
                     "args": {}
                 }
             }),
@@ -261,7 +261,7 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
         )),
         _ => Err(validation_tool_error(
             "validation_invalid_params",
-            "unknown help query; try empty query, 'agentmux', 'list', 'list.sessions', 'send', 'look', 'raww', 'grant', 'grant.list', 'grant.resolve', 'lifecycle', 'lifecycle.up', 'lifecycle.down', 'new', 'new.peer', 'change', or 'change.psk'",
+            "unknown help query; try empty query, 'agentmux', 'list', 'list.sessions', 'send', 'look', 'raww', 'grant', 'grant.list', 'grant.resolve', 'updown', 'updown.up', 'updown.down', 'new', 'new.peer', 'change', or 'change.psk'",
             Some(json!({"query": query})),
         )),
     }

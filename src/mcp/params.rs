@@ -18,9 +18,9 @@ pub(super) const GRANT_COMMAND_LIST: &str = "list";
 pub(super) const GRANT_COMMAND_RESOLVE: &str = "resolve";
 pub(super) const GRANT_OUTCOME_SELECTED: &str = "selected";
 pub(super) const GRANT_OUTCOME_CANCELLED: &str = "cancelled";
-pub(super) const TOOL_LIFECYCLE: &str = "lifecycle";
-pub(super) const LIFECYCLE_COMMAND_UP: &str = "up";
-pub(super) const LIFECYCLE_COMMAND_DOWN: &str = "down";
+pub(super) const TOOL_UPDOWN: &str = "updown";
+pub(super) const UPDOWN_COMMAND_UP: &str = "up";
+pub(super) const UPDOWN_COMMAND_DOWN: &str = "down";
 pub(super) const TOOL_NEW: &str = "new";
 pub(super) const NEW_COMMAND_PEER: &str = "peer";
 pub(super) const TOOL_CHANGE: &str = "change";
@@ -164,8 +164,8 @@ pub(super) struct GrantResolveArgs {
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
-pub(super) struct LifecycleParams {
-    /// Lifecycle subcommand selector. Required; allowed values: `up`, `down`.
+pub(super) struct UpdownParams {
+    /// Updown subcommand selector. Required; allowed values: `up`, `down`.
     #[serde(default)]
     pub(super) command: Option<String>,
     /// Command-scoped arguments.
@@ -180,7 +180,7 @@ pub(super) struct LifecycleParams {
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
-pub(super) struct LifecycleArgs {
+pub(super) struct UpdownArgs {
     /// Unknown fields captured for explicit validation.
     #[serde(flatten, default)]
     #[schemars(skip)]

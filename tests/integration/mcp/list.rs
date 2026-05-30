@@ -75,12 +75,12 @@ async fn tool_catalog_contains_list_sessions_send_look_and_raww() {
             "change".to_string(),
             "grant".to_string(),
             "help".to_string(),
-            "lifecycle".to_string(),
             "list".to_string(),
             "look".to_string(),
             "new".to_string(),
             "raww".to_string(),
             "send".to_string(),
+            "updown".to_string(),
         ])
     );
 }
