@@ -18,8 +18,11 @@
 ## 1. Relay (primary)
 
 - [ ] 1.1 Rename `bundle_name` → `namespace` in `IncomingEnvelope` and
-      `IncomingFrame` in `src/relay/stream.rs`.
-- [ ] 1.2 Rename corresponding field in `src/relay/client.rs` request frame.
+      `IncomingFrame` in `src/relay/stream.rs`. Scope: the routing context
+      selector only. Per-variant `bundle_name` fields inside `RelayRequest`
+      variants (e.g., `PermissionList`) are NOT renamed here. (D4)
+- [ ] 1.2 Rename corresponding routing selector field in
+      `src/relay/client.rs` request frame. Same scope constraint as 1.1.
 - [ ] 1.3 Update `resolve_effective_bundle` in `src/relay/connection.rs`:
       accept relay-wide namespace specifiers (`"GLOBAL"`, `"EXTERNAL"`,
       `"RELAY"`) in addition to bundle names; route to relay-wide registry for

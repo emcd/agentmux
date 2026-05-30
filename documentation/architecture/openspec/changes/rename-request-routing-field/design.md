@@ -41,7 +41,17 @@ relay-wide registry (registered `@GLOBAL` connections) rather than bundle
 members. `send` to `namespace = "GLOBAL"` with `targets = ["operator@GLOBAL"]`
 delivers to the registered relay-wide UI session for that principal_id.
 
-**D4 — One namespace per request (this slice).**
+**D4 — Rename scope: envelope routing selector only.**
+The rename targets the routing context selector on `IncomingEnvelope` and the
+corresponding `client.rs` request frame field. Per-variant `bundle_name` fields
+inside `RelayRequest` variants (e.g., `PermissionList`, `IdentityIntrospect`)
+are NOT renamed in this proposal: they identify a bundle-scoped target, not a
+routing context specifier. Renaming them to `namespace` would be misleading.
+A separate vocabulary cleanup pass can evaluate those fields. This keeps the
+vocabulary consistent: `namespace` = routing context selector; `bundle_name`
+inside a variant = target identifier within that request.
+
+**D5 — One namespace per request (this slice).**
 A single request carries at most one namespace context; all targets in that
 request are resolved against the registry for that namespace. Cross-namespace
 fan-out — addressing targets in multiple registries in one request (e.g.,
@@ -50,13 +60,13 @@ separate `cross-namespace-routing` proposal. The `namespace` field design does
 not preclude per-target derivation from the `@<namespace>` suffix in a future
 slice. See `designs/relay` nb note for the draft proposal.
 
-**D5 — Broadcast under GLOBAL namespace is out of scope.**
+**D6 — Broadcast under GLOBAL namespace is out of scope.**
 `broadcast = true` with `namespace = "GLOBAL"` (fan-out to all registered
 `@GLOBAL` sessions) is not defined in this slice. Relay-wide broadcast
 semantics require separate design consideration, including multi-operator
 scenarios.
 
-**D6 — EXTERNAL and RELAY namespace specifiers: reserved, not client-routable.**
+**D7 — EXTERNAL and RELAY namespace specifiers: reserved, not client-routable.**
 The relay accepts and parses `EXTERNAL` and `RELAY` as syntactically valid
 namespace values on the request envelope. If a client attempts to route directly
 to these namespaces, relay returns `validation_unsupported_namespace`. Only the
@@ -72,7 +82,7 @@ relay itself routes to these namespaces under defined protocol circumstances
 - **P.3 Error code**: `validation_missing_target_bundle` renamed to
   `validation_missing_routing_namespace`. (→ task 1.5)
 - **P.4 EXTERNAL/RELAY routing**: accepted/parsed but client routing rejected
-  with `validation_unsupported_namespace`; only relay routes to these. (→ D6)
+  with `validation_unsupported_namespace`; only relay routes to these. (→ D7)
 
 ## Risks / Trade-offs
 

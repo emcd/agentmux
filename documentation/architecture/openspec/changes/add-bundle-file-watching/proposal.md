@@ -26,6 +26,24 @@ runtime without restarts. Tracked as `todos/runtime/9`.
 - `--no-watch` CLI flag on `agentmux host relay` opts out of watching for the
   lifetime of that process. Migrates to `relay.toml` when that config file lands.
 
+## Key Implementation Notes
+
+- **BundleCatalog mutability**: The current `BundleCatalog` is an immutable
+  `Arc<HashMap>` shared by reference across all connection handlers. Dynamic
+  reload requires converting it to shared-mutable state (e.g.,
+  `Arc<RwLock<BundleCatalog>>`). The watcher task holds the write side;
+  connection handlers hold short-lived read guards. This is the true center of
+  gravity of the change — address it in task 1.3 before building the watcher.
+- **Teardown granularity**: On a modify event, diff the PARSED config against
+  the running config. Only tear down and reload sessions whose definitions
+  actually changed. A comment or whitespace edit should not disconnect live
+  agents. See task 1.5c.
+- **Shared session-eviction mechanism**: File watching (bundle unloaded/reloaded)
+  and identity Slice 2 (credential revoked/expired) both require "emit typed
+  error frame then close connection." Build one reusable
+  `session_evict(typed_reason)` helper (task 1.6) rather than independent
+  implementations that will diverge.
+
 ## Impact
 
 - Affected specs: `session-relay`, `cli-surface`
