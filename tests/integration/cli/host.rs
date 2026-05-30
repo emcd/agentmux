@@ -1,13 +1,40 @@
 use std::{
     fs,
+    io::{BufRead, BufReader, Write},
+    os::unix::net::UnixStream,
     path::Path,
     process::{Command, Stdio},
 };
 
-use serde_json::Value;
+use agentmux::runtime::paths::RelayRuntimePaths;
+use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use super::helpers::*;
+
+/// Connects a raw client to the live relay socket, sends one Hello, and returns
+/// the first server frame (a `hello_ack` on acceptance or an error `response`
+/// on rejection). Used to exercise the relay-wide credential-enforcement flag
+/// end-to-end through the hosted binary.
+fn relay_hello_first_frame(state_root: &Path, principal_id: &str, identity_token: &str) -> Value {
+    let socket = RelayRuntimePaths::resolve(state_root).relay_socket;
+    let mut stream = UnixStream::connect(&socket).expect("connect relay socket");
+    let hello = json!({
+        "frame": "hello",
+        "schema_version": "1",
+        "principal_id": principal_id,
+        "identity_token": identity_token,
+    });
+    let encoded = serde_json::to_string(&hello).expect("encode hello");
+    stream
+        .write_all(format!("{encoded}\n").as_bytes())
+        .expect("write hello");
+    stream.flush().expect("flush hello");
+    let mut reader = BufReader::new(stream.try_clone().expect("clone relay stream"));
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("read relay frame");
+    serde_json::from_str(line.trim_end()).expect("decode relay frame")
+}
 
 fn write_bundle_configuration_with_tmux_and_acp_failure(config_root: &Path, bundle_name: &str) {
     fs::create_dir_all(config_root.join("bundles")).expect("create bundles directory");
@@ -446,4 +473,106 @@ fn host_relay_no_autostart_mode_reports_process_only_summary() {
     );
     assert_eq!(alpha["outcome"], "skipped");
     assert_eq!(alpha["reason_code"], "process_only");
+}
+
+// `--require-credentials` threads from argument parsing through `serve_relay_host`
+// and the accept loop into Hello credential verification: with the flag set, a
+// session principal presenting the `socket-trust` sentinel is rejected.
+#[test]
+fn host_relay_require_credentials_flag_rejects_socket_trust() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(true));
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "--no-autostart",
+            "--require-credentials",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay --require-credentials");
+    wait_for_relay_ready(&state_root, "alpha");
+
+    let frame = relay_hello_first_frame(&state_root, "a@alpha", "socket-trust");
+
+    shutdown_relay_if_present(&state_root, "alpha");
+    let output = child
+        .wait_with_output()
+        .expect("wait for agentmux host relay");
+    assert!(output.status.success(), "command should succeed");
+
+    assert_eq!(
+        frame["frame"], "response",
+        "expected error frame: {frame:?}"
+    );
+    assert_eq!(frame["response"]["kind"], "error");
+    assert_eq!(
+        frame["response"]["error"]["code"],
+        "validation_credential_required"
+    );
+}
+
+// Contrast for the flag above: without `--require-credentials`, the same
+// `socket-trust` Hello is accepted, confirming the flag (not an always-on
+// default) is what drives rejection.
+#[test]
+fn host_relay_without_require_credentials_accepts_socket_trust() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(true));
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "--no-autostart",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay");
+    wait_for_relay_ready(&state_root, "alpha");
+
+    let frame = relay_hello_first_frame(&state_root, "a@alpha", "socket-trust");
+
+    shutdown_relay_if_present(&state_root, "alpha");
+    let output = child
+        .wait_with_output()
+        .expect("wait for agentmux host relay");
+    assert!(output.status.success(), "command should succeed");
+
+    assert_eq!(frame["frame"], "hello_ack", "expected hello_ack: {frame:?}");
+    assert_eq!(frame["principal_id"], "a@alpha");
 }
