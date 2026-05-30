@@ -88,8 +88,11 @@ impl McpServer {
         }
     }
 
-    #[tool(description = "List sessions for one bundle or fan out across bundles.")]
-    async fn list(
+    #[tool(
+        name = "list",
+        description = "List sessions for one bundle or fan out across bundles."
+    )]
+    async fn tool_list(
         &self,
         Parameters(params): Parameters<ListParams>,
     ) -> Result<CallToolResult, McpError> {
@@ -178,9 +181,10 @@ impl McpServer {
     }
 
     #[tool(
+        name = "help",
         description = "Return tool/command help and JSON schemas. Query omitted or `agentmux` for tool list, `list` for list meta-tool commands, or `list.sessions`/`send`/`look`/`raww` for exact schemas."
     )]
-    async fn help(
+    async fn tool_help(
         &self,
         Parameters(params): Parameters<HelpParams>,
     ) -> Result<CallToolResult, McpError> {
@@ -190,8 +194,11 @@ impl McpServer {
         )?)?]))
     }
 
-    #[tool(description = "Submit a message to explicit targets or broadcast.")]
-    async fn send(
+    #[tool(
+        name = "send",
+        description = "Submit a message to explicit targets or broadcast."
+    )]
+    async fn tool_send(
         &self,
         Parameters(params): Parameters<SendParams>,
     ) -> Result<CallToolResult, McpError> {
@@ -284,8 +291,11 @@ impl McpServer {
         }
     }
 
-    #[tool(description = "Inspect a target session pane snapshot for this bundle.")]
-    async fn look(
+    #[tool(
+        name = "look",
+        description = "Inspect a target session pane snapshot for this bundle."
+    )]
+    async fn tool_look(
         &self,
         Parameters(params): Parameters<LookParams>,
     ) -> Result<CallToolResult, McpError> {
@@ -407,8 +417,11 @@ impl McpServer {
         }
     }
 
-    #[tool(description = "Write raw text directly to one target session.")]
-    async fn raww(
+    #[tool(
+        name = "raww",
+        description = "Write raw text directly to one target session."
+    )]
+    async fn tool_raww(
         &self,
         Parameters(params): Parameters<RawwParams>,
     ) -> Result<CallToolResult, McpError> {
@@ -502,9 +515,10 @@ impl McpServer {
     }
 
     #[tool(
+        name = "grant",
         description = "Inspect or resolve pending ACP permission requests. Use command=\"list\" to enumerate pending requests, command=\"resolve\" to decide one."
     )]
-    async fn grant(
+    async fn tool_grant(
         &self,
         Parameters(params): Parameters<GrantParams>,
     ) -> Result<CallToolResult, McpError> {
@@ -707,9 +721,10 @@ impl McpServer {
     }
 
     #[tool(
+        name = "lifecycle",
         description = "Administer bundle runtime lifecycle. Use command=\"up\" to host the associated bundle or command=\"down\" to unhost it."
     )]
-    async fn lifecycle(
+    async fn tool_lifecycle(
         &self,
         Parameters(params): Parameters<LifecycleParams>,
     ) -> Result<CallToolResult, McpError> {
@@ -828,7 +843,7 @@ impl McpServer {
         name = "new",
         description = "Register a principal credential. Use command=\"peer\" to mint a PSK for a principal_id and return it (or write it to an output path)."
     )]
-    async fn new_credential(
+    async fn tool_new(
         &self,
         Parameters(params): Parameters<NewParams>,
     ) -> Result<CallToolResult, McpError> {
@@ -961,9 +976,10 @@ impl McpServer {
     }
 
     #[tool(
+        name = "change",
         description = "Rotate a principal credential. Use command=\"psk\" to generate a new PSK for an existing principal_id and return it."
     )]
-    async fn change(
+    async fn tool_change(
         &self,
         Parameters(params): Parameters<ChangeParams>,
     ) -> Result<CallToolResult, McpError> {
