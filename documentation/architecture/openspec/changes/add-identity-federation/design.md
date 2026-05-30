@@ -277,6 +277,18 @@ Two new policy controls gate these operations (dot notation per the
 - `new.peer`: operator-level; required to create principals.
 - `change.psk`: operator-level; required to rotate credentials.
 
+Because both operations mutate the relay-wide principal store, authorization is
+resolved relay-wide rather than within a bundle context: the requester's policy
+preset (a session principal's bundle member `policy_id`, or a `@GLOBAL`
+operator's TUI-config policy) must grant the control at the `all:all` tier. A
+bundle/namespace-relative `all:home` grant is insufficient — it confers no
+authority beyond the requester's own namespace, so it cannot authorize a
+relay-wide mutation. (`all:home` remains parseable for these controls, leaving
+room for a future namespace-scoped minting model, but is rejected at call time
+in Slice 1.) Application and relay principals have no operator-policy mapping
+and are denied fail-closed. Re-registering an existing `principal_id` via
+`new peer` is rejected (`validation_principal_exists`); rotation is `change psk`.
+
 **D11 — PSK format: base64-encoded random bytes, well-known credential file paths.**
 PSKs are 32 bytes of CSPRNG output (`OsRng` from the `rand` crate — no
 external tooling, cross-platform). Encoding: `base64::engine::general_purpose::STANDARD_NO_PAD`

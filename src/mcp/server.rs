@@ -31,16 +31,18 @@ use super::errors::{
 };
 use super::help::help_tool;
 use super::params::{
-    GRANT_COMMAND_LIST, GRANT_COMMAND_RESOLVE, GrantListArgs, GrantParams, GrantResolveArgs,
-    HelpParams, LIFECYCLE_COMMAND_DOWN, LIFECYCLE_COMMAND_UP, LIST_COMMAND_SESSIONS,
-    LIST_SESSIONS_SCHEMA_VERSION, LifecycleArgs, LifecycleParams, ListArgs, ListParams, LookParams,
+    CHANGE_COMMAND_PSK, ChangeParams, ChangePskArgs, GRANT_COMMAND_LIST, GRANT_COMMAND_RESOLVE,
+    GrantListArgs, GrantParams, GrantResolveArgs, HelpParams, LIFECYCLE_COMMAND_DOWN,
+    LIFECYCLE_COMMAND_UP, LIST_COMMAND_SESSIONS, LIST_SESSIONS_SCHEMA_VERSION, LifecycleArgs,
+    LifecycleParams, ListArgs, ListParams, LookParams, NEW_COMMAND_PEER, NewParams, NewPeerArgs,
     RawwParams, SendParams,
 };
 use super::validation::{
-    is_relay_unavailable_error, parse_meta_tool_args, validate_grant_list_args,
-    validate_grant_params, validate_grant_resolve_args, validate_help_request,
-    validate_lifecycle_args, validate_lifecycle_params, validate_list_request,
-    validate_look_request, validate_raww_request, validate_send_request,
+    is_relay_unavailable_error, parse_meta_tool_args, validate_change_params,
+    validate_change_psk_args, validate_grant_list_args, validate_grant_params,
+    validate_grant_resolve_args, validate_help_request, validate_lifecycle_args,
+    validate_lifecycle_params, validate_list_request, validate_look_request, validate_new_params,
+    validate_new_peer_args, validate_raww_request, validate_send_request,
 };
 
 /// Configuration provided when booting MCP stdio service.
@@ -86,8 +88,11 @@ impl McpServer {
         }
     }
 
-    #[tool(description = "List sessions for one bundle or fan out across bundles.")]
-    async fn list(
+    #[tool(
+        name = "list",
+        description = "List sessions for one bundle or fan out across bundles."
+    )]
+    async fn tool_list(
         &self,
         Parameters(params): Parameters<ListParams>,
     ) -> Result<CallToolResult, McpError> {
@@ -176,9 +181,10 @@ impl McpServer {
     }
 
     #[tool(
+        name = "help",
         description = "Return tool/command help and JSON schemas. Query omitted or `agentmux` for tool list, `list` for list meta-tool commands, or `list.sessions`/`send`/`look`/`raww` for exact schemas."
     )]
-    async fn help(
+    async fn tool_help(
         &self,
         Parameters(params): Parameters<HelpParams>,
     ) -> Result<CallToolResult, McpError> {
@@ -188,8 +194,11 @@ impl McpServer {
         )?)?]))
     }
 
-    #[tool(description = "Submit a message to explicit targets or broadcast.")]
-    async fn send(
+    #[tool(
+        name = "send",
+        description = "Submit a message to explicit targets or broadcast."
+    )]
+    async fn tool_send(
         &self,
         Parameters(params): Parameters<SendParams>,
     ) -> Result<CallToolResult, McpError> {
@@ -282,8 +291,11 @@ impl McpServer {
         }
     }
 
-    #[tool(description = "Inspect a target session pane snapshot for this bundle.")]
-    async fn look(
+    #[tool(
+        name = "look",
+        description = "Inspect a target session pane snapshot for this bundle."
+    )]
+    async fn tool_look(
         &self,
         Parameters(params): Parameters<LookParams>,
     ) -> Result<CallToolResult, McpError> {
@@ -405,8 +417,11 @@ impl McpServer {
         }
     }
 
-    #[tool(description = "Write raw text directly to one target session.")]
-    async fn raww(
+    #[tool(
+        name = "raww",
+        description = "Write raw text directly to one target session."
+    )]
+    async fn tool_raww(
         &self,
         Parameters(params): Parameters<RawwParams>,
     ) -> Result<CallToolResult, McpError> {
@@ -500,9 +515,10 @@ impl McpServer {
     }
 
     #[tool(
+        name = "grant",
         description = "Inspect or resolve pending ACP permission requests. Use command=\"list\" to enumerate pending requests, command=\"resolve\" to decide one."
     )]
-    async fn grant(
+    async fn tool_grant(
         &self,
         Parameters(params): Parameters<GrantParams>,
     ) -> Result<CallToolResult, McpError> {
@@ -705,9 +721,10 @@ impl McpServer {
     }
 
     #[tool(
+        name = "lifecycle",
         description = "Administer bundle runtime lifecycle. Use command=\"up\" to host the associated bundle or command=\"down\" to unhost it."
     )]
-    async fn lifecycle(
+    async fn tool_lifecycle(
         &self,
         Parameters(params): Parameters<LifecycleParams>,
     ) -> Result<CallToolResult, McpError> {
@@ -819,6 +836,257 @@ impl McpServer {
                 ))
             }
             Err(source) => Err(self.map_relay_stream_failure(io_error_event.as_str(), source)),
+        }
+    }
+
+    #[tool(
+        name = "new",
+        description = "Register a principal credential. Use command=\"peer\" to mint a PSK for a principal_id and return it (or write it to an output path)."
+    )]
+    async fn tool_new(
+        &self,
+        Parameters(params): Parameters<NewParams>,
+    ) -> Result<CallToolResult, McpError> {
+        validate_new_params(&params)?;
+        let command = params
+            .command
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                validation_tool_error(
+                    "validation_invalid_params",
+                    "command is required; allowed value is \"peer\"",
+                    None,
+                )
+            })?;
+        match command {
+            NEW_COMMAND_PEER => {
+                let args = parse_meta_tool_args::<NewPeerArgs>(params.args.clone()).map_err(
+                    |reason| {
+                        validation_tool_error(
+                            "validation_invalid_params",
+                            "invalid args for new peer command",
+                            Some(json!({
+                                "reason": reason,
+                                "hint": "pass args as a JSON object; use help query 'new.peer' for exact schema",
+                            })),
+                        )
+                    },
+                )?;
+                self.new_peer(args)
+            }
+            other => Err(validation_tool_error(
+                "validation_invalid_params",
+                "new command must be \"peer\"",
+                Some(json!({"command": other})),
+            )),
+        }
+    }
+
+    fn new_peer(&self, args: NewPeerArgs) -> Result<CallToolResult, McpError> {
+        validate_new_peer_args(&args)?;
+        let principal_id = args
+            .principal_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                validation_tool_error(
+                    "validation_invalid_params",
+                    "principal_id is required for new peer",
+                    None,
+                )
+            })?
+            .to_string();
+        let scope = args
+            .scope
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let output_path = args
+            .output_path
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        emit_inscription(
+            "mcp.tool.new.peer.request",
+            &json!({
+                "bundle_name": self.associated_bundle_name(),
+                "principal_id": principal_id,
+                "has_output": output_path.is_some(),
+            }),
+        );
+        let request = RelayRequest::NewPeer {
+            principal_id: principal_id.clone(),
+            scope,
+            output_path,
+        };
+        match self.request_relay(&request) {
+            Ok(RelayResponse::NewPeer {
+                schema_version,
+                principal_id,
+                principal_type,
+                psk,
+                output_path,
+                config_snippet,
+            }) => {
+                let response = json!({
+                    "schema_version": schema_version,
+                    "principal_id": principal_id,
+                    "principal_type": principal_type,
+                    "psk": psk,
+                    "output_path": output_path,
+                    "config_snippet": config_snippet,
+                });
+                emit_inscription(
+                    "mcp.tool.new.peer.success",
+                    &json!({
+                        "principal_id": response["principal_id"],
+                        "principal_type": response["principal_type"],
+                        "written": output_path.is_some(),
+                    }),
+                );
+                Ok(CallToolResult::success(vec![Content::json(response)?]))
+            }
+            Ok(RelayResponse::Error { error }) => {
+                emit_inscription(
+                    "mcp.tool.new.peer.relay_error",
+                    &json!({
+                        "code": error.code.clone(),
+                        "message": error.message.clone(),
+                        "details": error.details.clone(),
+                    }),
+                );
+                Err(map_relay_error(error))
+            }
+            Ok(other) => {
+                emit_inscription(
+                    "mcp.tool.new.peer.unexpected_response",
+                    &json!({"response": other}),
+                );
+                Err(internal_tool_error(
+                    "internal_unexpected_failure",
+                    "relay returned unexpected response variant",
+                    Some(json!({"response": other})),
+                ))
+            }
+            Err(source) => Err(self.map_relay_stream_failure("mcp.tool.new.peer.io_error", source)),
+        }
+    }
+
+    #[tool(
+        name = "change",
+        description = "Rotate a principal credential. Use command=\"psk\" to generate a new PSK for an existing principal_id and return it."
+    )]
+    async fn tool_change(
+        &self,
+        Parameters(params): Parameters<ChangeParams>,
+    ) -> Result<CallToolResult, McpError> {
+        validate_change_params(&params)?;
+        let command = params
+            .command
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                validation_tool_error(
+                    "validation_invalid_params",
+                    "command is required; allowed value is \"psk\"",
+                    None,
+                )
+            })?;
+        match command {
+            CHANGE_COMMAND_PSK => {
+                let args = parse_meta_tool_args::<ChangePskArgs>(params.args.clone()).map_err(
+                    |reason| {
+                        validation_tool_error(
+                            "validation_invalid_params",
+                            "invalid args for change psk command",
+                            Some(json!({
+                                "reason": reason,
+                                "hint": "pass args as a JSON object; use help query 'change.psk' for exact schema",
+                            })),
+                        )
+                    },
+                )?;
+                self.change_psk(args)
+            }
+            other => Err(validation_tool_error(
+                "validation_invalid_params",
+                "change command must be \"psk\"",
+                Some(json!({"command": other})),
+            )),
+        }
+    }
+
+    fn change_psk(&self, args: ChangePskArgs) -> Result<CallToolResult, McpError> {
+        validate_change_psk_args(&args)?;
+        let principal_id = args
+            .principal_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                validation_tool_error(
+                    "validation_invalid_params",
+                    "principal_id is required for change psk",
+                    None,
+                )
+            })?
+            .to_string();
+        emit_inscription(
+            "mcp.tool.change.psk.request",
+            &json!({
+                "bundle_name": self.associated_bundle_name(),
+                "principal_id": principal_id,
+            }),
+        );
+        let request = RelayRequest::ChangePsk {
+            principal_id: principal_id.clone(),
+        };
+        match self.request_relay(&request) {
+            Ok(RelayResponse::ChangePsk {
+                schema_version,
+                principal_id,
+                psk,
+            }) => {
+                let response = json!({
+                    "schema_version": schema_version,
+                    "principal_id": principal_id,
+                    "psk": psk,
+                });
+                emit_inscription(
+                    "mcp.tool.change.psk.success",
+                    &json!({ "principal_id": response["principal_id"] }),
+                );
+                Ok(CallToolResult::success(vec![Content::json(response)?]))
+            }
+            Ok(RelayResponse::Error { error }) => {
+                emit_inscription(
+                    "mcp.tool.change.psk.relay_error",
+                    &json!({
+                        "code": error.code.clone(),
+                        "message": error.message.clone(),
+                        "details": error.details.clone(),
+                    }),
+                );
+                Err(map_relay_error(error))
+            }
+            Ok(other) => {
+                emit_inscription(
+                    "mcp.tool.change.psk.unexpected_response",
+                    &json!({"response": other}),
+                );
+                Err(internal_tool_error(
+                    "internal_unexpected_failure",
+                    "relay returned unexpected response variant",
+                    Some(json!({"response": other})),
+                ))
+            }
+            Err(source) => {
+                Err(self.map_relay_stream_failure("mcp.tool.change.psk.io_error", source))
+            }
         }
     }
 

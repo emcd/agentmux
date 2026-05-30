@@ -254,6 +254,16 @@ pub enum RelayRequest {
         #[serde(default)]
         bundle_name: Option<String>,
     },
+    NewPeer {
+        principal_id: String,
+        #[serde(default)]
+        scope: Option<String>,
+        #[serde(default)]
+        output_path: Option<String>,
+    },
+    ChangePsk {
+        principal_id: String,
+    },
 }
 
 /// Relay response protocol.
@@ -317,6 +327,23 @@ pub enum RelayResponse {
         schema_version: String,
         bundle_name: String,
         pending_requests: Vec<PendingPermissionEntry>,
+    },
+    NewPeer {
+        schema_version: String,
+        principal_id: String,
+        principal_type: String,
+        /// Raw PSK; omitted when the credential was written to `output_path`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        psk: Option<String>,
+        /// Absolute path the PSK was written to; present only with `--output`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output_path: Option<String>,
+        config_snippet: String,
+    },
+    ChangePsk {
+        schema_version: String,
+        principal_id: String,
+        psk: String,
     },
     Error {
         error: RelayError,

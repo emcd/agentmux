@@ -10,6 +10,8 @@ This module implements the MCP stdio server for `agentmux`.
   - `look`
   - `grant` (requires `command="list"` or `command="resolve"`)
   - `lifecycle` (requires `command="up"` or `command="down"`)
+  - `new` (requires `command="peer"`)
+  - `change` (requires `command="psk"`)
   - `raww`
   - `send`
 - Preserve canonical relay `list` and `look` success payloads without adapter
@@ -40,6 +42,9 @@ This module implements the MCP stdio server for `agentmux`.
      (`RelayRequest::PermissionResolve`)
    - `lifecycle` (`command="up"`) -> `RelayStreamSession` (`RelayRequest::Up`)
    - `lifecycle` (`command="down"`) -> `RelayStreamSession` (`RelayRequest::Down`)
+   - `new` (`command="peer"`) -> `RelayStreamSession` (`RelayRequest::NewPeer`)
+   - `change` (`command="psk"`) -> `RelayStreamSession`
+     (`RelayRequest::ChangePsk`)
    - `raww` -> `RelayStreamSession` (`RelayRequest::Raww`)
    - `send` -> `RelayStreamSession` (`RelayRequest::Send`)
 5. For `all=true`, MCP performs adapter fanout across bundle relays in
@@ -77,6 +82,21 @@ This module implements the MCP stdio server for `agentmux`.
   capability. The MCP server forwards the decision over its relay stream, and
   the relay authorizes it against the bundle policy preset. Sessions whose
   policy does not enable `grant` receive the relay submitter-gate rejection.
+
+## Credential Administration
+
+- The `new` tool (`command="peer"`) registers a principal and mints its PSK:
+  the relay generates the PSK, stores only its SHA-256 hash, and returns the raw
+  value once (or, with `args.output_path`, writes it to that absolute path and
+  omits it from the response). `args.scope` is recorded on the principal
+  (set for `@RELAY`/`@EXTERNAL`).
+- The `change` tool (`command="psk"`) rotates an existing principal's PSK and
+  returns the new value; Slice 1 is a store update only (no revocation dispatch).
+- Both are relay-wide operations: they ride the MCP server's relay stream, and
+  the relay authorizes the connection's principal against its policy preset
+  relay-wide, requiring an `all:all` `new.peer` / `change.psk` grant. A
+  bundle-relative `all:home` grant is insufficient. The MCP server's own
+  identity must therefore carry an operator policy for these tools to succeed.
 
 ## Key Types
 

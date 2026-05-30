@@ -167,3 +167,40 @@ pub(in crate::relay) fn dispatch_request(
         Err(error) => RelayResponse::Error { error },
     }
 }
+
+/// Dispatches a relay-wide identity administration request (`new peer`,
+/// `change psk`), which mutates the relay-level principal store and has no
+/// bundle context. `requester_principal_id` is the full claimed identity of the
+/// caller, used to resolve operator authorization relay-wide.
+pub(in crate::relay) fn dispatch_identity_admin(
+    request: RelayRequest,
+    configuration_root: &Path,
+    state_root: &Path,
+    requester_principal_id: &str,
+) -> RelayResponse {
+    match handlers::handle_identity_admin_request(
+        request,
+        configuration_root,
+        state_root,
+        requester_principal_id,
+    ) {
+        Ok(value) => value,
+        Err(error) => RelayResponse::Error { error },
+    }
+}
+
+/// Prunes expired records from the relay-level principal store.
+///
+/// Loads the store at `<state-root>/identity/principals.json`, drops records
+/// whose `expires_at` has passed (or cannot be parsed), and rewrites the file
+/// only when something was pruned. A missing store loads empty and no file is
+/// created. Intended to run once at relay startup; per-connection access prunes
+/// in memory, and store mutations persist the pruned set.
+pub fn prune_principal_store(state_root: &Path) -> Result<usize, RelayError> {
+    let mut store = PrincipalStore::load(crate::runtime::paths::principal_store_path(state_root))?;
+    let pruned = store.prune_expired(time::OffsetDateTime::now_utc());
+    if pruned > 0 {
+        store.persist()?;
+    }
+    Ok(pruned)
+}

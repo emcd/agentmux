@@ -4,10 +4,11 @@ use serde_json::json;
 
 use super::errors::validation_tool_error;
 use super::params::{
-    GRANT_COMMAND_LIST, GRANT_COMMAND_RESOLVE, GRANT_OUTCOME_SELECTED, GrantListArgs,
-    GrantResolveArgs, HelpParams, LIFECYCLE_COMMAND_DOWN, LIFECYCLE_COMMAND_UP,
-    LIST_COMMAND_SESSIONS, LifecycleArgs, ListArgs, LookParams, NAMESPACE_AGENTMUX, RawwParams,
-    SendParams, TOOL_GRANT, TOOL_HELP, TOOL_LIFECYCLE, TOOL_LIST, TOOL_LOOK, TOOL_RAWW, TOOL_SEND,
+    CHANGE_COMMAND_PSK, ChangePskArgs, GRANT_COMMAND_LIST, GRANT_COMMAND_RESOLVE,
+    GRANT_OUTCOME_SELECTED, GrantListArgs, GrantResolveArgs, HelpParams, LIFECYCLE_COMMAND_DOWN,
+    LIFECYCLE_COMMAND_UP, LIST_COMMAND_SESSIONS, LifecycleArgs, ListArgs, LookParams,
+    NAMESPACE_AGENTMUX, NEW_COMMAND_PEER, NewPeerArgs, RawwParams, SendParams, TOOL_CHANGE,
+    TOOL_GRANT, TOOL_HELP, TOOL_LIFECYCLE, TOOL_LIST, TOOL_LOOK, TOOL_NEW, TOOL_RAWW, TOOL_SEND,
 };
 
 pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpError> {
@@ -16,8 +17,8 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
         "" | NAMESPACE_AGENTMUX => Ok(json!({
             "namespace": NAMESPACE_AGENTMUX,
             "shape_hints": [
-                "Call help with query='list', 'grant', or 'lifecycle' for meta-tool command lists.",
-                "Call help with query='list.sessions', 'grant.list', 'grant.resolve', 'lifecycle.up', or 'lifecycle.down' for command args schemas.",
+                "Call help with query='list', 'grant', 'lifecycle', 'new', or 'change' for meta-tool command lists.",
+                "Call help with query='list.sessions', 'grant.list', 'grant.resolve', 'lifecycle.up', 'lifecycle.down', 'new.peer', or 'change.psk' for command args schemas.",
                 "Call help with query='send', 'look', or 'raww' for exact tool args schemas."
             ],
             "tools": [
@@ -27,6 +28,8 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
                 {"tool": TOOL_RAWW, "kind": "tool", "description": "Write raw text directly to one target session."},
                 {"tool": TOOL_GRANT, "kind": "meta_tool", "description": "Inspect or resolve pending ACP permission requests."},
                 {"tool": TOOL_LIFECYCLE, "kind": "meta_tool", "description": "Administer bundle runtime lifecycle (up/down)."},
+                {"tool": TOOL_NEW, "kind": "meta_tool", "description": "Register a principal credential and mint its PSK."},
+                {"tool": TOOL_CHANGE, "kind": "meta_tool", "description": "Rotate the PSK for an existing principal."},
                 {"tool": TOOL_HELP, "kind": "tool", "description": "Return tool/command help and JSON schemas."}
             ],
             "invoke": {
@@ -196,9 +199,69 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
                 }
             }),
         )),
+        TOOL_NEW => Ok(json!({
+            "tool": TOOL_NEW,
+            "kind": "meta_tool",
+            "description": "Register a principal credential and mint its PSK.",
+            "commands": [
+                {
+                    "command": "new.peer",
+                    "description": "Generate a PSK for a principal_id and return it (or write it to an output path)."
+                }
+            ],
+            "invoke": {
+                "tool": TOOL_NEW,
+                "params": {
+                    "command": NEW_COMMAND_PEER,
+                    "args": {"principal_id": "<id>@<namespace>"}
+                }
+            }
+        })),
+        "new.peer" => Ok(command_help(
+            "new.peer",
+            "Generate a PSK for a principal_id and return it (or write it to an output path).",
+            json_schema_for::<NewPeerArgs>(),
+            json!({
+                "tool": TOOL_NEW,
+                "params": {
+                    "command": NEW_COMMAND_PEER,
+                    "args": {"principal_id": "<id>@<namespace>"}
+                }
+            }),
+        )),
+        TOOL_CHANGE => Ok(json!({
+            "tool": TOOL_CHANGE,
+            "kind": "meta_tool",
+            "description": "Rotate the PSK for an existing principal.",
+            "commands": [
+                {
+                    "command": "change.psk",
+                    "description": "Generate a new PSK for an existing principal_id and return it."
+                }
+            ],
+            "invoke": {
+                "tool": TOOL_CHANGE,
+                "params": {
+                    "command": CHANGE_COMMAND_PSK,
+                    "args": {"principal_id": "<id>@<namespace>"}
+                }
+            }
+        })),
+        "change.psk" => Ok(command_help(
+            "change.psk",
+            "Generate a new PSK for an existing principal_id and return it.",
+            json_schema_for::<ChangePskArgs>(),
+            json!({
+                "tool": TOOL_CHANGE,
+                "params": {
+                    "command": CHANGE_COMMAND_PSK,
+                    "args": {"principal_id": "<id>@<namespace>"}
+                }
+            }),
+        )),
         _ => Err(validation_tool_error(
             "validation_invalid_params",
-            "unknown help query; try empty query, 'agentmux', 'list', 'list.sessions', 'send', 'look', 'raww', 'grant', 'grant.list', 'grant.resolve', 'lifecycle', 'lifecycle.up', or 'lifecycle.down'",
+            "unknown help query; try empty query, 'agentmux', 'list', 'list.sessions', 'send', 'look', 'raww', 'grant', 'grant.list', 'grant.resolve', 'lifecycle', 'lifecycle.up', 'lifecycle.down', 'new', 'new.peer', 'change', or 'change.psk'",
             Some(json!({"query": query})),
         )),
     }

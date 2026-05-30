@@ -42,6 +42,13 @@ This directory owns the unified CLI surface for `agentmux`.
   - `agentmux look`.
 - `raww.rs`
   - `agentmux raww` direct-write request surface.
+- `new.rs`
+  - `agentmux new peer <principal_id>` credential registration; relays a
+    `NewPeer` request and renders the returned PSK + config snippet (or reports
+    the `--output` path the PSK was written to).
+- `change.rs`
+  - `agentmux change psk <principal_id>` credential rotation; relays a
+    `ChangePsk` request and renders the new PSK.
 - `send.rs`
   - `agentmux send`, including stdin/message precedence and timeout fields.
 - `tui.rs`

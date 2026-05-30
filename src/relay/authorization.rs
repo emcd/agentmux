@@ -4,9 +4,14 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
-    configuration::{BundleConfiguration, BundleMember, load_tui_configuration},
+    configuration::{
+        BundleConfiguration, BundleMember, load_bundle_configuration, load_tui_configuration,
+    },
     relay::{POLICIES_FILE, POLICIES_FORMAT_VERSION, RelayError, relay_error},
 };
+
+use super::identity::{PrincipalType, classify_principal_id, split_principal_id};
+use super::map_config;
 
 const RELAY_FILE: &str = "relay.toml";
 const DEFAULT_PERMISSION_MAX_PENDING: usize = 256;
@@ -161,10 +166,15 @@ fn default_updown_policy_scope() -> String {
     "none".to_string()
 }
 
-pub(super) fn load_authorization_context(
+/// Loads and validates the authorization policy presets and the configured
+/// default policy id, independent of any bundle.
+///
+/// Shared by the per-bundle `load_authorization_context` and the relay-wide
+/// `authorize_relay_action` path, which authorizes namespace-agnostic operator
+/// actions (`new.peer`, `change.psk`) that have no bundle context.
+fn load_policy_presets(
     configuration_root: &Path,
-    bundle: &BundleConfiguration,
-) -> Result<AuthorizationContext, RelayError> {
+) -> Result<(HashMap<String, PolicyControls>, Option<String>), RelayError> {
     let policies_path = configuration_root.join(POLICIES_FILE);
     let policies_raw = fs::read_to_string(&policies_path).map_err(|source| {
         relay_error(
@@ -239,6 +249,15 @@ pub(super) fn load_authorization_context(
             })),
         ));
     }
+    Ok((presets, default_policy_id))
+}
+
+pub(super) fn load_authorization_context(
+    configuration_root: &Path,
+    bundle: &BundleConfiguration,
+) -> Result<AuthorizationContext, RelayError> {
+    let policies_path = configuration_root.join(POLICIES_FILE);
+    let (presets, default_policy_id) = load_policy_presets(configuration_root)?;
 
     let permission_max_pending = load_permission_max_pending(configuration_root)?;
 
@@ -475,14 +494,14 @@ fn parse_policy_controls(
         "new",
         policies_path,
         policy_id,
-        &[PolicyScope::None, PolicyScope::AllHome],
+        &[PolicyScope::None, PolicyScope::AllHome, PolicyScope::AllAll],
     )?;
     let change_controls = parse_action_scope_map(
         controls.change_controls,
         "change",
         policies_path,
         policy_id,
-        &[PolicyScope::None, PolicyScope::AllHome],
+        &[PolicyScope::None, PolicyScope::AllHome, PolicyScope::AllAll],
     )?;
     Ok(PolicyControls {
         find,
@@ -609,6 +628,124 @@ fn resolve_session_policy_controls<'a>(
         });
     }
     Ok(conservative_default)
+}
+
+/// Relay-level operator action family for namespace-agnostic authorization.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum RelayActionFamily {
+    New,
+    Change,
+}
+
+impl RelayActionFamily {
+    fn namespace(self) -> &'static str {
+        match self {
+            Self::New => "new",
+            Self::Change => "change",
+        }
+    }
+}
+
+/// Resolves the policy controls for a requester identified by full
+/// `principal_id`, independent of any bundle context.
+///
+/// `@GLOBAL` operators resolve their preset from the TUI configuration; session
+/// principals resolve from their bundle member entry (falling back to the
+/// default policy). Application and relay principals have no operator policy
+/// mapping and resolve to the conservative default (which grants no relay-wide
+/// action), keeping the path fail-closed.
+fn resolve_relay_principal_controls(
+    configuration_root: &Path,
+    requester_principal_id: &str,
+) -> Result<PolicyControls, RelayError> {
+    let (presets, default_policy_id) = load_policy_presets(configuration_root)?;
+    let conservative_default = PolicyControls::conservative_default();
+    let principal_type = classify_principal_id(requester_principal_id).ok_or_else(|| {
+        relay_error(
+            "validation_invalid_principal_id",
+            "requester principal_id is not in <id>@<namespace> form",
+            Some(json!({ "principal_id": requester_principal_id })),
+        )
+    })?;
+    match principal_type {
+        PrincipalType::User => {
+            let Some(tui_configuration) =
+                load_tui_configuration(configuration_root).map_err(map_tui_configuration_error)?
+            else {
+                return Ok(conservative_default);
+            };
+            let Some(session) = tui_configuration.session_by_id(requester_principal_id) else {
+                return Ok(conservative_default);
+            };
+            let Some(policy_id) = normalize_policy_id(session.policy.as_str()) else {
+                return Ok(conservative_default);
+            };
+            presets.get(policy_id).cloned().ok_or_else(|| {
+                relay_error(
+                    "validation_unknown_policy",
+                    "global user policy references unknown policy id",
+                    Some(json!({
+                        "principal_id": requester_principal_id,
+                        "policy_id": policy_id,
+                    })),
+                )
+            })
+        }
+        PrincipalType::Session => {
+            let Some((session_id, bundle_name)) = split_principal_id(requester_principal_id) else {
+                return Ok(conservative_default);
+            };
+            let bundle =
+                load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
+            let Some(member) = bundle.members.iter().find(|member| member.id == session_id) else {
+                return Ok(conservative_default);
+            };
+            let policies_path = configuration_root.join(POLICIES_FILE);
+            resolve_session_policy_controls(
+                member,
+                &presets,
+                default_policy_id.as_deref(),
+                &conservative_default,
+                policies_path.as_path(),
+            )
+            .cloned()
+        }
+        PrincipalType::Application | PrincipalType::Relay => Ok(conservative_default),
+    }
+}
+
+/// Authorizes a relay-level operator action (`new.peer`, `change.psk`).
+///
+/// These operations mutate the relay-wide principal store and therefore require
+/// a relay-wide grant: the requester's policy must grant the control at
+/// `all:all`. A bundle/namespace-relative `all:home` grant is insufficient
+/// because it confers no authority beyond the requester's own namespace.
+pub(super) fn authorize_relay_action(
+    configuration_root: &Path,
+    requester_principal_id: &str,
+    family: RelayActionFamily,
+    action: &str,
+) -> Result<(), RelayError> {
+    let controls = resolve_relay_principal_controls(configuration_root, requester_principal_id)?;
+    let scope_map = match family {
+        RelayActionFamily::New => &controls.new_controls,
+        RelayActionFamily::Change => &controls.change_controls,
+    };
+    let granted = scope_map
+        .get(action)
+        .is_some_and(|scope| scope.allows(PolicyScope::AllAll));
+    if granted {
+        return Ok(());
+    }
+    Err(authorization_forbidden(
+        format!("{}.{action}", family.namespace()).as_str(),
+        requester_principal_id,
+        "",
+        "relay-wide operator action requires an all:all grant for this control",
+        None,
+        None,
+        None,
+    ))
 }
 
 pub(super) fn authorize_list(
@@ -830,8 +967,6 @@ fn controls_for_requester<'a>(
         })?;
     let _ = controls.find;
     let _ = controls.do_controls.len();
-    let _ = controls.new_controls.len();
-    let _ = controls.change_controls.len();
     Ok(controls)
 }
 

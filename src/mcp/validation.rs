@@ -5,9 +5,10 @@ use serde_json::json;
 
 use super::errors::validation_tool_error;
 use super::params::{
-    GRANT_OUTCOME_CANCELLED, GRANT_OUTCOME_SELECTED, GrantListArgs, GrantParams, GrantResolveArgs,
-    HelpParams, LIST_COMMAND_SESSIONS, LOOK_LINES_MAX, LOOK_LINES_MIN, LifecycleArgs,
-    LifecycleParams, ListArgs, ListParams, LookParams, RawwParams, SendParams,
+    ChangeParams, ChangePskArgs, GRANT_OUTCOME_CANCELLED, GRANT_OUTCOME_SELECTED, GrantListArgs,
+    GrantParams, GrantResolveArgs, HelpParams, LIST_COMMAND_SESSIONS, LOOK_LINES_MAX,
+    LOOK_LINES_MIN, LifecycleArgs, LifecycleParams, ListArgs, ListParams, LookParams, NewParams,
+    NewPeerArgs, RawwParams, SendParams,
 };
 
 pub(super) fn validate_list_params(params: &ListParams) -> Result<(), McpError> {
@@ -29,6 +30,22 @@ pub(super) fn validate_lifecycle_params(params: &LifecycleParams) -> Result<(), 
 pub(super) fn validate_lifecycle_args(args: &LifecycleArgs, command: &str) -> Result<(), McpError> {
     let context = format!("lifecycle {command} command");
     validate_unknown_fields(context.as_str(), Some("args"), &args.extra_fields)
+}
+
+pub(super) fn validate_new_params(params: &NewParams) -> Result<(), McpError> {
+    validate_unknown_fields("new request", None, &params.extra_fields)
+}
+
+pub(super) fn validate_new_peer_args(args: &NewPeerArgs) -> Result<(), McpError> {
+    validate_unknown_fields("new peer command", Some("args"), &args.extra_fields)
+}
+
+pub(super) fn validate_change_params(params: &ChangeParams) -> Result<(), McpError> {
+    validate_unknown_fields("change request", None, &params.extra_fields)
+}
+
+pub(super) fn validate_change_psk_args(args: &ChangePskArgs) -> Result<(), McpError> {
+    validate_unknown_fields("change psk command", Some("args"), &args.extra_fields)
 }
 
 pub(super) fn validate_list_request(params: &ListParams, args: &ListArgs) -> Result<(), McpError> {

@@ -51,6 +51,11 @@ exported from `src/relay/mod.rs`.
   - bundle up/down and list-session request handlers.
 - `handlers/permissions.rs`
   - permission snapshot, list, and decision request handlers.
+- `handlers/identity.rs`
+  - relay-wide identity administration: `new peer` credential registration and
+    `change psk` rotation. Operates on the relay-level principal store with no
+    bundle context; dispatched via `dispatch_identity_admin` before the
+    per-bundle routing path in `connection.rs`.
 - `lifecycle.rs`
   - runtime reconcile/shutdown helpers for managed sessions.
 - `stream.rs`
@@ -103,15 +108,32 @@ exported from `src/relay/mod.rs`.
   itself are written with mode 0600 (owner read/write only).
 - **Bootstrap lockout warning**: `require_session_credentials` is a relay-level
   setting (a single socket serves every bundle, so per-bundle enforcement is not
-  a real boundary). When enabled, sessions without a provisioned PSK file are
-  rejected at Hello. Operators must register at least one principal via
-  `agentmux new peer <session_id>@<bundle>` (or run with the default
-  `require_session_credentials = false`) before flipping enforcement on,
-  otherwise no client can connect to drive recovery.
+  a real boundary), wired by the `--require-credentials` flag on
+  `agentmux host relay` (default disabled). When enabled, sessions without a
+  provisioned PSK file are rejected at Hello. Operators must register at least
+  one principal via `agentmux new peer <session_id>@<bundle>` (or run with the
+  default) before flipping enforcement on, otherwise no client can connect to
+  drive recovery.
+- **Expiry pruning**: records with an RFC 3339 `expires_at` in the past (and,
+  fail-closed, any with an unparseable `expires_at`) are pruned. The store is
+  pruned-and-persisted once at relay startup, pruned in memory on every Hello so
+  an expired credential cannot authenticate, and pruned before each
+  `new peer` / `change psk` mutation so the persisted file stays clean. A record
+  with no `expires_at` never expires.
 - A `change psk` rotation replaces the stored hash immediately. In Slice 1,
   active connections caching their verified `principal_id` continue under the
   old binding until they disconnect; full revocation dispatch (typed error
   frame + force-close) lands in Slice 2.
+- Credential administration is relay-wide, not bundle-scoped. `new peer`
+  (`RelayRequest::NewPeer`) generates a PSK, stores its SHA-256 hash, and
+  returns the raw value once — or writes it to an operator-supplied absolute
+  path (refusing symlinks via `O_NOFOLLOW`, requiring an existing parent, mode
+  0600). `change psk` (`RelayRequest::ChangePsk`) rotates an existing
+  principal's hash in place. Both authorize the requester relay-wide: the
+  caller's policy preset (resolved from a session member's `policy_id` or a
+  `@GLOBAL` operator's TUI-config policy) must grant `new.peer` / `change.psk`
+  at the `all:all` tier — a bundle-relative `all:home` grant is insufficient,
+  and application/relay principals are denied fail-closed.
 
 ### Delivery
 
