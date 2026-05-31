@@ -21,12 +21,15 @@ use super::delivery::{
     derive_acp_look_snapshot, enqueue_async_delivery, enqueue_sync_delivery,
     get_acp_worker_snapshot, get_acp_worker_state, prompt_batch_settings,
 };
+use super::identity::{PrincipalType, classify_principal_id};
+use super::stream::list_registered_relay_wide_sessions;
 use super::tmux::{capture_pane_tail_lines, resolve_active_pane_target};
 use super::{
-    AsyncDeliveryTask, DeliveryPayloadMode, ListedSessionTransport, LookRequestContext,
-    PermissionDecisionRequestContext, RawwRequestContext, RelayError, RelayRequest, RelayResponse,
-    RequestPrincipal, SCHEMA_VERSION, SendOutcome, SendRequestContext, SendResult, bare_session_id,
-    canonical_session_id, relay_error,
+    AsyncDeliveryTask, DeliveryPayloadMode, ListedBundle, ListedBundleState, ListedSession,
+    ListedSessionTransport, LookRequestContext, PermissionDecisionRequestContext,
+    RawwRequestContext, RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
+    SendOutcome, SendRequestContext, SendResult, bare_session_id, canonical_session_id,
+    relay_error,
 };
 
 mod identity;
@@ -178,6 +181,48 @@ pub(super) fn handle_request(
             "identity admin request reached the per-bundle dispatcher",
             None,
         )),
+    }
+}
+
+/// Returns the set of currently registered relay-wide sessions for a `List`
+/// request issued with `namespace = "GLOBAL"`.
+///
+/// Relay-wide routing has no bundle context, so this bypasses the per-bundle
+/// `handle_request` path entirely: it reads the live stream registry and
+/// projects each `RegistryKey::RelayWide` entry into a `ListedSession`. The
+/// result is shaped as a `RelayResponse::List` over a synthetic `GLOBAL` bundle
+/// view so clients reuse the existing list payload. An empty registry yields an
+/// empty session set (a `down` bundle), not an error.
+pub(super) fn handle_global_list() -> RelayResponse {
+    let mut sessions = list_registered_relay_wide_sessions()
+        .into_iter()
+        .map(|(principal_id, session_type)| ListedSession {
+            id: principal_id,
+            name: None,
+            transport: session_type.into(),
+            ready: true,
+        })
+        .collect::<Vec<_>>();
+    sessions.sort_by(|left, right| left.id.cmp(&right.id));
+    let hosted = !sessions.is_empty();
+    let state = if hosted {
+        ListedBundleState::Up
+    } else {
+        ListedBundleState::Down
+    };
+    RelayResponse::List {
+        schema_version: SCHEMA_VERSION.to_string(),
+        bundle: ListedBundle {
+            id: "GLOBAL".to_string(),
+            hosted,
+            state,
+            startup_health: None,
+            state_reason_code: None,
+            state_reason: None,
+            startup_failure_count: 0,
+            recent_startup_failures: Vec::new(),
+            sessions,
+        },
     }
 }
 
@@ -340,6 +385,32 @@ fn handle_send(
             "quiescence_timeout_ms and acp_turn_timeout_ms are mutually exclusive",
             None,
         ));
+    }
+
+    // Suffix-based routing resolves each target's registry from its
+    // `@<namespace>` suffix, so a single Send may not mix relay-wide (e.g.
+    // `@GLOBAL`) and bundle-session targets: cross-namespace fan-out in one
+    // request is out of scope for this slice. Targets are already normalized to
+    // bare bundle-local ids at this point, so a bare target classifies as a
+    // session target.
+    if !broadcast {
+        let mut has_relay_wide = false;
+        let mut has_session = false;
+        for target in &targets {
+            match classify_principal_id(target) {
+                Some(PrincipalType::User | PrincipalType::Application | PrincipalType::Relay) => {
+                    has_relay_wide = true;
+                }
+                _ => has_session = true,
+            }
+        }
+        if has_relay_wide && has_session {
+            return Err(relay_error(
+                "validation_conflicting_namespaces",
+                "send targets must not mix relay-wide and bundle-session namespaces",
+                Some(json!({ "targets": targets })),
+            ));
+        }
     }
 
     let sender = resolve_sender_identity(
