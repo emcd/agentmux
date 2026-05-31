@@ -15,7 +15,10 @@ use crate::{
     runtime::paths::{BundleRuntimePaths, principal_store_path},
 };
 
-use super::identity::{PrincipalStore, PrincipalType, split_principal_id, verify_hello_credential};
+use super::identity::{
+    PrincipalStore, PrincipalType, classify_principal_id, split_principal_id,
+    verify_hello_credential,
+};
 use super::stream::{
     HelloFrame, IncomingFrame, OutgoingFrame, RegisterStreamOutcome, RegistryKey,
     SharedStreamWriter, StreamRegistration, parse_incoming_frame, register_stream,
@@ -294,8 +297,27 @@ async fn serve_connection_frames(
                     )?;
                     continue;
                 }
+                // `List` with the `GLOBAL` namespace enumerates relay-wide
+                // sessions, which have no bundle context; it bypasses the
+                // per-bundle dispatch path and reads the stream registry
+                // directly. Other per-target operations infer their routing
+                // bundle from target suffixes inside `resolve_effective_bundle`.
+                if matches!(request, RelayRequest::List { .. })
+                    && target_namespace.as_deref() == Some("GLOBAL")
+                {
+                    let response = handlers::handle_global_list();
+                    write_stream_frame_to_writer(
+                        writer,
+                        OutgoingFrame::Response {
+                            request_id: request_id.as_deref(),
+                            response: &response,
+                        },
+                    )?;
+                    continue;
+                }
                 let bundle_paths = match resolve_effective_bundle(
                     bundle_catalog,
+                    &request,
                     target_namespace.as_deref(),
                     bound_bundle.as_ref(),
                 ) {
@@ -376,32 +398,76 @@ fn full_requester_principal_id(registration: &StreamRegistration) -> String {
     }
 }
 
-/// Resolves the routing bundle for a stream request from its namespace selector.
+/// Resolves the bundle context to load for a stream request.
 ///
-/// The `namespace` selects the routing context regardless of any connection
-/// binding (so relay-wide principals can address any bundle): a bundle name does
-/// a catalog lookup, while `GLOBAL`/`EXTERNAL`/`RELAY` name the relay-wide
-/// namespaces. `EXTERNAL` and `RELAY` are reserved for relay-internal routing
-/// (extension protocol handling, peer-relay forwarding), so a client selecting
-/// them is rejected with `validation_unsupported_namespace` (D7). `GLOBAL` is
-/// intended to be client-routable, but the relay-wide delivery path is not yet
-/// built — it is deferred to a follow-up slice (with the MCP `namespace`
-/// parameter and its integration tests) — so selecting it returns the distinct,
-/// temporary `validation_namespace_routing_unavailable` rather than a misleading
-/// catalog miss. When no namespace is given, the connection's bound bundle is
-/// used; a relay-wide connection with no namespace is rejected.
+/// Routing differs by operation:
+///
+/// - `Send` infers its routing bundle from target principal-id suffixes, not the
+///   wire `namespace` field. A session sender always routes to its bound bundle
+///   (per-target classification and any cross-namespace conflict are handled
+///   downstream in `handle_send`). A relay-wide sender, which carries no bound
+///   bundle, routes to the bundle named by the first `@<bundle>` target suffix;
+///   a relay-wide sender whose targets are all bare (no suffix) has no routing
+///   context and is rejected with `validation_missing_routing_namespace`.
+/// - All other operations use the wire `namespace` selector: a bundle name does
+///   a catalog lookup, `EXTERNAL`/`RELAY` are reserved for relay-internal
+///   routing and rejected with `validation_unsupported_namespace`, and an absent
+///   namespace falls back to the connection's bound bundle (a relay-wide
+///   connection with no namespace is rejected). `List` with the `GLOBAL`
+///   namespace is handled before this function and never reaches it.
 fn resolve_effective_bundle(
+    bundle_catalog: &BundleCatalog,
+    request: &RelayRequest,
+    namespace: Option<&str>,
+    bound_bundle: Option<&BundleRuntimePaths>,
+) -> Result<BundleRuntimePaths, RelayError> {
+    if let RelayRequest::Send { targets, .. } = request {
+        return resolve_send_routing_bundle(bundle_catalog, targets, bound_bundle);
+    }
+    resolve_namespace_routing_bundle(bundle_catalog, namespace, bound_bundle)
+}
+
+/// Resolves the routing bundle for a `Send` from its target principal-id
+/// suffixes (suffix-based routing).
+fn resolve_send_routing_bundle(
+    bundle_catalog: &BundleCatalog,
+    targets: &[String],
+    bound_bundle: Option<&BundleRuntimePaths>,
+) -> Result<BundleRuntimePaths, RelayError> {
+    if let Some(bound) = bound_bundle {
+        // A session sender routes within its bound bundle: relay-wide (`@GLOBAL`)
+        // targets are delivered via the registry from that context, and any
+        // relay-wide/session target mix is rejected in `handle_send`.
+        return Ok(bound.clone());
+    }
+    // A relay-wide sender derives its routing bundle from the first bundle-
+    // qualified target. Bare or relay-wide-only targets name no bundle to route
+    // against.
+    if let Some(bundle_name) = targets
+        .iter()
+        .find_map(|target| bundle_namespace_suffix(target.as_str()))
+    {
+        return bundle_catalog
+            .get(bundle_name)
+            .cloned()
+            .ok_or_else(|| unknown_bundle_error(bundle_name));
+    }
+    Err(relay_error(
+        "validation_missing_routing_namespace",
+        "send from a relay-wide principal requires at least one bundle-qualified target",
+        None,
+    ))
+}
+
+/// Resolves the routing bundle for namespace-selected operations from the wire
+/// `namespace` field and the connection's bound bundle.
+fn resolve_namespace_routing_bundle(
     bundle_catalog: &BundleCatalog,
     namespace: Option<&str>,
     bound_bundle: Option<&BundleRuntimePaths>,
 ) -> Result<BundleRuntimePaths, RelayError> {
     if let Some(namespace) = namespace {
         return match namespace {
-            "GLOBAL" => Err(relay_error(
-                "validation_namespace_routing_unavailable",
-                "relay-wide GLOBAL routing is not yet available on this relay",
-                Some(json!({ "namespace": namespace })),
-            )),
             "EXTERNAL" | "RELAY" => Err(relay_error(
                 "validation_unsupported_namespace",
                 "namespace is reserved for relay-internal routing and cannot be selected by a client",
@@ -421,6 +487,17 @@ fn resolve_effective_bundle(
         "stream request from a relay-wide principal requires an explicit routing namespace",
         None,
     ))
+}
+
+/// Returns the bundle name from a target's `@<bundle>` suffix, or `None` for a
+/// bare target (no suffix) or a relay-wide target (`@GLOBAL`/`@EXTERNAL`/
+/// `@RELAY`), neither of which names a bundle.
+fn bundle_namespace_suffix(target: &str) -> Option<&str> {
+    let (_, namespace) = split_principal_id(target)?;
+    match classify_principal_id(target) {
+        Some(PrincipalType::Session) => Some(namespace),
+        _ => None,
+    }
 }
 
 fn unknown_bundle_error(bundle_name: &str) -> RelayError {

@@ -390,6 +390,31 @@ pub(super) fn list_registered_ui_sessions_for_bundle(bundle_name: &str) -> Vec<S
         .collect()
 }
 
+// Returns the `(principal_id, session_type)` of every currently registered
+// relay-wide session (`RegistryKey::RelayWide`). Used by the `GLOBAL` namespace
+// list to enumerate relay-wide principals (`@GLOBAL` operators, and any other
+// non-session principals) regardless of bundle. Only live entries (those whose
+// connection still holds a writer) are returned; an entry whose connection has
+// dropped is left out.
+pub(super) fn list_registered_relay_wide_sessions() -> Vec<(String, SessionType)> {
+    let registry = stream_registry();
+    let Ok(entries) = registry.entries.lock() else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|(key, entry)| {
+            entry.writer.as_ref()?;
+            match key {
+                RegistryKey::RelayWide { principal_id } => {
+                    Some((principal_id.clone(), entry.session_type))
+                }
+                RegistryKey::Session { .. } => None,
+            }
+        })
+        .collect()
+}
+
 // Fans an event out to every UI-class subscriber relevant to the bundle
 // (bundle-local sessions and relay-wide principals). The per-recipient event is
 // cloned with `target_session` rewritten to the recipient id so existing
