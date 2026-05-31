@@ -210,7 +210,6 @@ impl McpServer {
                 "request_id": params.request_id.clone(),
                 "targets": params.targets.clone(),
                 "broadcast": params.broadcast,
-                "namespace": params.namespace.clone(),
                 "quiescence_timeout_ms": params.quiescence_timeout_ms,
                 "acp_turn_timeout_ms": params.acp_turn_timeout_ms,
                 "message_length": params.message.len(),
@@ -240,7 +239,7 @@ impl McpServer {
             quiescence_timeout_ms: params.quiescence_timeout_ms,
             acp_turn_timeout_ms: params.acp_turn_timeout_ms,
         };
-        match self.request_relay_with_namespace(&request, params.namespace.as_deref()) {
+        match self.request_relay(&request) {
             Ok(RelayResponse::Send {
                 schema_version,
                 bundle_name,
@@ -307,7 +306,6 @@ impl McpServer {
                 "bundle_name": self.associated_bundle_name(),
                 "requester_session": self.state.configuration.sender_session.clone(),
                 "target_session": params.target_session.clone(),
-                "namespace": params.namespace.clone(),
                 "lines": params.lines,
             }),
         );
@@ -331,7 +329,7 @@ impl McpServer {
             lines: params.lines.map(|value| value as usize),
             bundle_name: None,
         };
-        match self.request_relay_with_namespace(&request, params.namespace.as_deref()) {
+        match self.request_relay(&request) {
             Ok(RelayResponse::Look {
                 schema_version,
                 bundle_name,
@@ -433,7 +431,6 @@ impl McpServer {
                 "bundle_name": self.associated_bundle_name(),
                 "request_id": params.request_id.clone(),
                 "target_session": params.target_session.clone(),
-                "namespace": params.namespace.clone(),
                 "text_length": params.text.len(),
                 "no_enter": params.no_enter,
             }),
@@ -460,7 +457,7 @@ impl McpServer {
             no_enter: params.no_enter,
             bundle_name: None,
         };
-        match self.request_relay_with_namespace(&request, params.namespace.as_deref()) {
+        match self.request_relay(&request) {
             Ok(RelayResponse::Raww {
                 schema_version,
                 status,
@@ -1198,14 +1195,6 @@ impl McpServer {
     }
 
     fn request_relay(&self, request: &RelayRequest) -> Result<RelayResponse, std::io::Error> {
-        self.request_relay_with_namespace(request, None)
-    }
-
-    fn request_relay_with_namespace(
-        &self,
-        request: &RelayRequest,
-        namespace: Option<&str>,
-    ) -> Result<RelayResponse, std::io::Error> {
         let mut guard = self
             .state
             .relay_stream
@@ -1217,8 +1206,7 @@ impl McpServer {
                 "sender session is not configured for MCP relay stream",
             )
         })?;
-        let (response, events) =
-            stream_session.request_with_namespace_and_events(request, namespace)?;
+        let (response, events) = stream_session.request_with_events(request)?;
         if !events.is_empty() {
             emit_inscription(
                 "mcp.tool.stream.events_ignored",

@@ -36,10 +36,6 @@ async fn look_returns_snapshot_payload_and_forwards_request_shape() {
         "target_session".to_string(),
         Value::String("bravo".to_string()),
     );
-    arguments.insert(
-        "namespace".to_string(),
-        Value::String(BUNDLE_NAME.to_string()),
-    );
     arguments.insert("lines".to_string(), Value::Number(3.into()));
     let response = harness.call_tool(2, "look", arguments).await;
     let payload = decode_tool_payload(&response);
@@ -375,9 +371,8 @@ async fn look_maps_cross_bundle_validation_error_from_relay() {
     let mut arguments = Map::new();
     arguments.insert(
         "target_session".to_string(),
-        Value::String("bravo".to_string()),
+        Value::String("bravo@other".to_string()),
     );
-    arguments.insert("namespace".to_string(), Value::String("other".to_string()));
     let response = harness.call_tool(2, "look", arguments).await;
 
     assert_eq!(
@@ -430,42 +425,7 @@ async fn look_maps_unsupported_transport_error_from_relay() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn look_advertises_optional_namespace_in_tool_schema() {
-    let runtime = TestRuntime::create();
-    let _relay = FakeRelay::start(
-        runtime.relay_socket.clone(),
-        Arc::new(|_| {
-            json!({
-                "kind": "error",
-                "error": {"code": "internal_unexpected_failure", "message": "unused"},
-            })
-        }),
-    );
-    let mut harness = McpHarness::spawn(&runtime).await;
-
-    let response = harness.list_tools(2).await;
-    let tools = response["result"]["tools"]
-        .as_array()
-        .expect("tools list array");
-    let look_tool = tools
-        .iter()
-        .find(|tool| tool.get("name").and_then(Value::as_str) == Some("look"))
-        .expect("look tool present");
-    let properties = look_tool["inputSchema"]["properties"]
-        .as_object()
-        .expect("look inputSchema properties object");
-    assert!(
-        properties.contains_key("namespace"),
-        "look tool schema advertises namespace: {properties:?}"
-    );
-    assert!(
-        !properties.contains_key("bundle_name"),
-        "look tool schema no longer advertises bundle_name: {properties:?}"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn look_forwards_namespace_to_wire_envelope() {
+async fn look_forwards_bound_bundle_on_wire_envelope() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -497,10 +457,6 @@ async fn look_forwards_namespace_to_wire_envelope() {
     arguments.insert(
         "target_session".to_string(),
         Value::String("bravo".to_string()),
-    );
-    arguments.insert(
-        "namespace".to_string(),
-        Value::String(BUNDLE_NAME.to_string()),
     );
     let response = harness.call_tool(2, "look", arguments).await;
     decode_tool_payload(&response);
