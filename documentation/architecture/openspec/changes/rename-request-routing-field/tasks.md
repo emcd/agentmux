@@ -50,25 +50,29 @@
 
 ## 2. MCP
 
-- [ ] 2.1 Rename `bundle_name` parameter to `namespace` in `look` and `raww`
-      MCP tool schemas.
-- [ ] 2.2 Add optional `namespace` parameter to `send` MCP tool to enable
-      `@GLOBAL` targeting from bundle-bound sessions.
-- [ ] 2.3 Update MCP tool dispatch to pass `namespace` through to relay request
-      envelope.
-- [ ] 2.4 Update MCP inventory tests for changed tool schemas.
+- [x] 2.1 Rename `bundle_name` parameter to `namespace` in `look` and `raww`
+      MCP tool schemas. (Completed; then corrected by add-global-namespace-routing
+      2.1 which removed `namespace` from these tools entirely.)
+- [x] 2.2 Add optional `namespace` parameter to `send` MCP tool.
+      (Completed; then corrected by add-global-namespace-routing 2.2 which
+      removed `namespace` from `send` — design error identified during review.)
+- [x] 2.3 Update MCP tool dispatch to pass `namespace` through.
+      (Completed; then collapsed back by add-global-namespace-routing 2.3.)
+- [x] 2.4 Update MCP inventory tests for changed tool schemas.
+      (Completed; updated again by add-global-namespace-routing 2.4.)
 
 ## 3. Tests
 
-- [ ] 3.1 Integration test: session principal in bundle `A` sends with
-      `namespace = "GLOBAL"` → message delivered to registered `@GLOBAL`
-      UI session. BLOCKED: requires GLOBAL relay-wide delivery (follow-up
-      slice with MCP 2.2).
-- [ ] 3.2 Integration test: relay-wide `@GLOBAL` principal sends with
-      `namespace = "<bundle>"` → message delivered to sessions in that bundle.
-      BLOCKED: same as 3.1.
-- [ ] 3.3 Integration test: relay-wide principal without `namespace` →
-      typed error returned. BLOCKED: same as 3.1.
+- [x] 3.1 Integration test: session principal in bundle `A` sends with
+      `targets = ["operator@GLOBAL"]` → message delivered to registered `@GLOBAL`
+      UI session. Covered by add-global-namespace-routing
+      (`routing.rs::send_to_global_target_is_delivered_to_registered_operator`).
+- [x] 3.2 Integration test: relay-wide `@GLOBAL` principal sends with a
+      bundle-qualified target → message delivered. Covered by add-global-namespace-routing
+      (`routing.rs::relay_wide_send_routes_to_bundle_target_by_suffix`).
+- [x] 3.3 Integration test: relay-wide principal without namespace / bare targets →
+      `validation_missing_routing_namespace`. Covered by add-global-namespace-routing
+      (`routing.rs::relay_wide_send_with_bare_target_is_rejected`).
 - [x] 3.4 Integration test: existing bundle-scoped send flow unchanged after
       field rename. Covered by existing integration harness, which now runs
       all bundle-scoped send/look tests under the renamed `namespace` field.
