@@ -48,16 +48,3 @@ Routing context for `raww` SHALL be inferred from the `@<namespace>` suffix of
 - **WHEN** caller submits `raww` request containing sender-like field
 - **THEN** MCP rejects request with `validation_invalid_params`
 
-## REMOVED Requirements
-
-### Requirement: MCP Send Namespace Parameter
-
-**Reason**: Design correction. The `namespace` parameter on `send` creates a
-competing routing mechanism. Routing context for per-target operations is
-inferred from each target's `@<namespace>` suffix; no explicit `namespace`
-parameter is needed or accepted. Callers who previously relied on
-`namespace = "GLOBAL"` to reach relay-wide targets should instead specify
-fully-qualified target principal IDs (e.g. `"operator@GLOBAL"`).
-
-**Migration**: Remove `namespace` from `send` call sites. Ensure targets carry
-`@<namespace>` suffixes where cross-namespace routing is needed.

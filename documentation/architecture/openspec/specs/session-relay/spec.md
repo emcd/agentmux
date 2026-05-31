@@ -689,60 +689,48 @@ registration with `validation_missing_hello`.
 
 Each client stream SHALL begin with a `hello` registration frame containing:
 
-- `bundle_name`
-- `session_id`
+- `principal_id` (in `<id>@<namespace>` form)
+- `identity_token`
 - `schema_version`
 
-`hello` SHALL carry identity only. No transport class, mode, or privilege field
-is accepted; relay SHALL reject unrecognized fields.
+`hello` SHALL carry identity and credential only. No transport class, mode, or
+privilege field is accepted; relay SHALL reject unrecognized fields.
 
 The relay process hosts a single Unix socket at `<state_root>/relay.sock` and
-serves all configured bundles through that socket. The `bundle_name` field in
-`hello` SHALL serve as the bundle routing key: the relay SHALL look the value
-up in the bundle catalog supplied at host startup and bind the connection to
-that bundle's runtime for the lifetime of the stream. If `bundle_name` is not
-configured on the running relay, relay SHALL reject with
-`validation_unknown_bundle` and close the connection.
+serves all configured bundles through that socket. The namespace portion of
+`principal_id` SHALL serve as the connection type indicator:
 
-The relay SHALL hydrate canonical identity as `{session_id}@{bundle_name}` at
-registration. All subsequent internal state and wire output SHALL use the
-canonical form.
+- Session namespace (`@<bundle_name>`): relay SHALL look the bundle up in the
+  bundle catalog and bind the connection to that bundle's runtime for the
+  lifetime of the stream. If the bundle is not configured, relay SHALL reject
+  with `validation_unknown_bundle`.
+- Relay-wide namespaces (`@GLOBAL`, `@EXTERNAL`, `@RELAY`): relay SHALL NOT
+  bind the connection to any bundle; the connection is relay-wide.
 
-Identity lookup at hello registration SHALL proceed in order:
+Credential verification and principal store lookup SHALL proceed as specified
+by `add-identity-federation`.
 
-1. Bundle `[[sessions]]` for the named `bundle_name` (bundle members)
-2. Global users from `users.toml` when `session_id` carries a `@GLOBAL` suffix
-
-If no match is found, relay SHALL reject with `validation_unknown_sender`.
-
-If a second stream attempts `hello` for the same canonical identity while the
+If a second stream attempts `hello` for the same `principal_id` while the
 current owner is live, relay SHALL reject the second claim with
 `runtime_identity_claim_conflict`.
 
-#### Scenario: Accept hello for configured bundle member
+#### Scenario: Accept hello for session principal
 
-- **WHEN** a client sends valid `hello` with `bundle_name = "agentmux"` and
-  `session_id = "master"`
-- **AND** `session_id` maps to a configured bundle member
-- **THEN** relay accepts hello and binds stream to canonical identity
-  `master@agentmux`
+- **WHEN** a client sends valid `hello` with `principal_id = "master@agentmux"`
+- **AND** namespace `agentmux` maps to a configured bundle
+- **AND** `master` maps to a configured bundle member
+- **THEN** relay accepts hello and binds stream to bundle `agentmux`
 
-#### Scenario: Accept hello for configured global user
+#### Scenario: Accept hello for global user principal
 
-- **WHEN** a client sends valid `hello` with `session_id = "user@GLOBAL"`
-- **AND** `session_id` matches a configured global user entry in `users.toml`
-- **THEN** relay accepts hello and binds stream using that canonical identity
-
-#### Scenario: Reject hello for unknown session
-
-- **WHEN** a client sends `hello` with a `session_id` not present in bundle
-  members or (for `@GLOBAL` suffix) in `users.toml`
-- **THEN** relay rejects with `validation_unknown_sender`
+- **WHEN** a client sends valid `hello` with `principal_id = "operator@GLOBAL"`
+- **AND** credential is valid
+- **THEN** relay accepts hello and registers connection relay-wide (no bundle binding)
 
 #### Scenario: Reject hello for unknown bundle
 
-- **WHEN** a client sends `hello` with a `bundle_name` that is not configured
-  on the running relay
+- **WHEN** a client sends `hello` with `principal_id = "session@unknownbundle"`
+- **AND** `unknownbundle` is not configured on the running relay
 - **THEN** relay rejects with `validation_unknown_bundle`
 - **AND** closes the connection without registering a stream
 
@@ -2478,4 +2466,132 @@ Hosting predicate:
 - **AND** zero configured sessions are currently ready
 - **THEN** relay reports `state=down`
 - **AND** `state_reason_code` continues to describe the down condition
+
+### Requirement: Request Routing Namespace
+
+Request frames on a registered stream SHALL carry an optional `namespace` field
+(formerly `bundle_name`) on the request envelope. The relay SHALL resolve the
+routing context for the request as follows:
+
+- `namespace` present, value is a bundle name → route to that bundle via
+  catalog lookup, regardless of any connection binding.
+- `namespace` absent + connection is bundle-bound (session principal) → route
+  to the connection's bound bundle.
+- `namespace` absent + connection is relay-wide (non-session principal) → relay
+  SHALL return a typed error (`validation_missing_routing_namespace`).
+
+The relay SHALL reject client-supplied `namespace` values of `"EXTERNAL"` or
+`"RELAY"` with `validation_unsupported_namespace`; these are reserved for
+relay-internal routing only. Routing to `"GLOBAL"` and other relay-wide
+targets via target principal ID suffix inference is specified in
+`add-global-namespace-routing`.
+
+#### Scenario: Explicit bundle namespace routes to bundle
+
+- **WHEN** a registered stream submits a request with `namespace = "agentmux"`
+- **THEN** relay routes the request in the context of bundle `agentmux`
+- **AND** targets are resolved against bundle `agentmux` members
+
+#### Scenario: Absent namespace uses bound bundle
+
+- **WHEN** a session principal stream submits a request without `namespace`
+- **THEN** relay routes the request in the context of the connection's bound bundle
+
+#### Scenario: Absent namespace on relay-wide connection returns error
+
+- **WHEN** a relay-wide principal stream submits a request without `namespace`
+- **THEN** relay returns `validation_missing_routing_namespace`
+
+#### Scenario: EXTERNAL and RELAY namespaces are rejected
+
+- **WHEN** a client submits a request with `namespace = "EXTERNAL"` or
+  `namespace = "RELAY"`
+- **THEN** relay returns `validation_unsupported_namespace`
+
+### Requirement: Suffix-Based Target Routing
+
+The relay SHALL infer the routing registry for each target in a `Send` request
+from the `@<namespace>` suffix of the target's principal ID:
+
+- Target with `@GLOBAL` suffix → relay-wide registry (`RegistryKey::RelayWide`)
+- Target with `@<bundle>` suffix → bundle registry for `<bundle>`
+- Bare target (no suffix) → sender's bound bundle registry; error if sender
+  is relay-wide and has no bound bundle
+
+The relay SHALL NOT require an explicit `namespace` field from the client to
+route to relay-wide (`@GLOBAL`) targets. Clients specify targets as
+fully-qualified principal IDs; the relay derives the registry from the suffix.
+
+If a single `Send` request mixes relay-wide (`@GLOBAL`) and bundle-session
+targets, the relay SHALL return `validation_conflicting_namespaces`. Cross-
+namespace fan-out in one request is not supported in this slice.
+
+Any authenticated session (bundle-bound or relay-wide) MAY send to `@GLOBAL`
+targets.
+
+#### Scenario: Bundle-bound agent sends to @GLOBAL operator
+
+- **WHEN** a session principal sends `Send` with
+  `targets = ["operator@GLOBAL"]`
+- **AND** `operator@GLOBAL` is registered as a relay-wide session
+- **THEN** relay delivers the message to `operator@GLOBAL`
+
+#### Scenario: @GLOBAL principal sends to bundle session
+
+- **WHEN** a relay-wide principal sends `Send` with
+  `targets = ["agent@bundle-a"]`
+- **THEN** relay routes to bundle `bundle-a` and delivers to `agent`
+
+#### Scenario: Bare target defaults to sender's bound bundle
+
+- **WHEN** a bundle-bound session sends `Send` with `targets = ["agent"]`
+  (no `@<namespace>` suffix)
+- **THEN** relay resolves `agent` within the sender's bound bundle
+
+#### Scenario: Relay-wide sender with bare target returns error
+
+- **WHEN** a relay-wide principal sends `Send` with a bare target (no suffix)
+- **THEN** relay returns `validation_missing_routing_namespace`
+
+#### Scenario: Mixed relay-wide and bundle targets rejected
+
+- **WHEN** a sender includes both an `@GLOBAL` target and a `@<bundle>` target
+  in the same `Send` request
+- **THEN** relay returns `validation_conflicting_namespaces`
+
+#### Scenario: Unknown @GLOBAL target
+
+- **WHEN** a sender targets a principal ID with `@GLOBAL` suffix that is not
+  registered in the relay-wide registry
+- **THEN** relay returns `validation_unknown_target`
+
+### Requirement: GLOBAL Namespace List
+
+The relay SHALL return the set of currently registered relay-wide sessions
+when `List` is requested with `namespace = "GLOBAL"`.
+
+#### Scenario: List relay-wide sessions
+
+- **WHEN** a principal sends `List` with `namespace = "GLOBAL"`
+- **AND** one or more relay-wide sessions are currently registered
+- **THEN** relay returns `RelayResponse::List` containing those sessions
+
+#### Scenario: List with no relay-wide sessions registered
+
+- **WHEN** a principal sends `List` with `namespace = "GLOBAL"`
+- **AND** no relay-wide sessions are currently registered
+- **THEN** relay returns `RelayResponse::List` with an empty session set
+
+### Requirement: Retire GLOBAL Routing Stub
+
+The relay SHALL NOT return `validation_namespace_routing_unavailable`. This
+temporary error code is retired when suffix-based GLOBAL routing is
+implemented.
+
+#### Scenario: @GLOBAL target no longer returns stub error
+
+- **WHEN** a session sends `Send` with an `@GLOBAL` target
+- **THEN** the relay SHALL NOT return `validation_namespace_routing_unavailable`
+- **AND** SHALL route or return an appropriate typed error per the suffix
+  routing rules above
 

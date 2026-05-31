@@ -49,6 +49,8 @@ current owner is live, relay SHALL reject the second claim with
 - **THEN** relay rejects with `validation_unknown_bundle`
 - **AND** closes the connection without registering a stream
 
+## ADDED Requirements
+
 ### Requirement: Request Routing Namespace
 
 Request frames on a registered stream SHALL carry an optional `namespace` field

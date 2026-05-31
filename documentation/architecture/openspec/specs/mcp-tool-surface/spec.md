@@ -542,11 +542,14 @@ target raw writes.
 
 ### Requirement: MCP raww request contract
 
-MCP `raww` request fields for MVP SHALL be:
+MCP `raww` request fields SHALL be:
 - `target_session` (required)
 - `text` (required)
 - `no_enter` (optional boolean, default `false`)
 - `request_id` (optional)
+
+Routing context for `raww` SHALL be inferred from the `@<namespace>` suffix of
+`target_session`. No explicit `namespace` parameter is accepted.
 
 `raww` requests SHALL reject caller-supplied sender-like identity fields with
 `validation_invalid_params`.
