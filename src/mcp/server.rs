@@ -134,50 +134,35 @@ impl McpServer {
                 "all": parsed_args.all,
             }),
         );
-        if parsed_args.all {
-            let bundles = self.list_sessions_all_bundles(sender_session.as_str())?;
-            let response = json!({
-                "schema_version": LIST_SESSIONS_SCHEMA_VERSION,
-                "bundles": bundles,
-            });
-            emit_inscription(
-                "mcp.tool.list.success",
-                &json!({
-                    "all": true,
-                    "bundle_count": response["bundles"].as_array().map_or(0, |value| value.len()),
-                }),
-            );
-            return Ok(CallToolResult::success(vec![Content::json(response)?]));
-        }
-        let bundle_name = selected_bundle
-            .as_ref()
-            .map(ToString::to_string)
-            .or_else(|| self.home_bundle_name().map(ToString::to_string))
-            .ok_or_else(|| {
-                validation_tool_error(
-                    "validation_unknown_bundle",
-                    "bundle_name is required when MCP server is not associated with a bundle",
-                    None,
-                )
-            })?;
-        match self.list_sessions_single_bundle(bundle_name.as_str(), sender_session.as_str()) {
-            Ok(bundle) => {
-                let response = json!({
-                    "schema_version": LIST_SESSIONS_SCHEMA_VERSION,
-                    "bundle": bundle,
-                });
-                emit_inscription(
-                    "mcp.tool.list.success",
-                    &json!({
-                        "all": false,
-                        "bundle_name": response["bundle"]["id"],
-                        "session_count": response["bundle"]["sessions"].as_array().map_or(0, |value| value.len()),
-                    }),
-                );
-                Ok(CallToolResult::success(vec![Content::json(response)?]))
-            }
-            Err(error) => Err(error),
-        }
+        let mut bundles = if parsed_args.all {
+            self.list_sessions_all_bundles(sender_session.as_str())?
+        } else {
+            let bundle_name = selected_bundle
+                .as_ref()
+                .map(ToString::to_string)
+                .or_else(|| self.home_bundle_name().map(ToString::to_string))
+                .ok_or_else(|| {
+                    validation_tool_error(
+                        "validation_unknown_bundle",
+                        "bundle_name is required when MCP server is not associated with a bundle",
+                        None,
+                    )
+                })?;
+            vec![self.list_sessions_single_bundle(bundle_name.as_str(), sender_session.as_str())?]
+        };
+        bundles.push(self.list_global_sessions(sender_session.as_str())?);
+        let response = json!({
+            "schema_version": LIST_SESSIONS_SCHEMA_VERSION,
+            "bundles": bundles,
+        });
+        emit_inscription(
+            "mcp.tool.list.success",
+            &json!({
+                "all": parsed_args.all,
+                "bundle_count": response["bundles"].as_array().map_or(0, |value| value.len()),
+            }),
+        );
+        Ok(CallToolResult::success(vec![Content::json(response)?]))
     }
 
     #[tool(
@@ -1143,6 +1128,35 @@ impl McpServer {
         Ok(bundles)
     }
 
+    /// Issues a `List` with the wire-envelope namespace pinned to `GLOBAL`.
+    ///
+    /// The relay intercepts this path and returns a synthetic `ListedBundle`
+    /// (`id = "GLOBAL"`) whose sessions are relay-wide principals (operators,
+    /// external apps, peer relays). An empty registry yields a `Down` bundle
+    /// with no sessions, not an error. A relay-unavailable failure mirrors
+    /// the home-bundle fallback: the response carries an empty `GLOBAL` view
+    /// rather than failing the entire `list` call.
+    fn list_global_sessions(&self, sender_session: &str) -> Result<ListedBundle, McpError> {
+        let request = RelayRequest::List {
+            sender_session: Some(sender_session.to_string()),
+        };
+        match self.request_relay_with_namespace(&request, Some("GLOBAL")) {
+            Ok(RelayResponse::List { bundle, .. }) => Ok(bundle),
+            Ok(RelayResponse::Error { error }) => Err(map_relay_error(error)),
+            Ok(other) => Err(internal_tool_error(
+                "internal_unexpected_failure",
+                "relay returned unexpected response variant",
+                Some(json!({"response": other})),
+            )),
+            Err(source) if is_relay_unavailable_error(&source) => {
+                Ok(synthesize_empty_global_bundle())
+            }
+            Err(source) => {
+                Err(self.map_relay_stream_failure("mcp.tool.list.global.io_error", source))
+            }
+        }
+    }
+
     fn home_bundle_name(&self) -> Option<&str> {
         self.state
             .configuration
@@ -1195,6 +1209,14 @@ impl McpServer {
     }
 
     fn request_relay(&self, request: &RelayRequest) -> Result<RelayResponse, std::io::Error> {
+        self.request_relay_with_namespace(request, None)
+    }
+
+    fn request_relay_with_namespace(
+        &self,
+        request: &RelayRequest,
+        namespace: Option<&str>,
+    ) -> Result<RelayResponse, std::io::Error> {
         let mut guard = self
             .state
             .relay_stream
@@ -1206,7 +1228,8 @@ impl McpServer {
                 "sender session is not configured for MCP relay stream",
             )
         })?;
-        let (response, events) = stream_session.request_with_events(request)?;
+        let (response, events) =
+            stream_session.request_with_namespace_and_events(request, namespace)?;
         if !events.is_empty() {
             emit_inscription(
                 "mcp.tool.stream.events_ignored",
@@ -1240,6 +1263,22 @@ impl rmcp::ServerHandler for McpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions("agentmux MCP server for tmux-backed multi-agent coordination.")
+    }
+}
+
+fn synthesize_empty_global_bundle() -> ListedBundle {
+    ListedBundle {
+        id: "GLOBAL".to_string(),
+        hosted: false,
+        state: ListedBundleState::Down,
+        startup_health: None,
+        state_reason_code: Some("relay_unavailable".to_string()),
+        state_reason: Some(
+            "relay is unavailable; GLOBAL session registry not enumerable".to_string(),
+        ),
+        startup_failure_count: 0,
+        recent_startup_failures: Vec::new(),
+        sessions: Vec::new(),
     }
 }
 

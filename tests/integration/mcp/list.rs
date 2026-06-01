@@ -127,22 +127,28 @@ async fn list_sessions_returns_canonical_bundle_payload_from_relay() {
     let payload = decode_tool_payload(&response);
 
     assert_eq!(payload["schema_version"], "1");
-    assert_eq!(payload["bundle"]["id"], BUNDLE_NAME);
-    assert_eq!(payload["bundle"]["hosted"], true);
-    assert_eq!(payload["bundle"]["state"], "up");
-    assert_eq!(payload["bundle"]["startup_health"], "healthy");
-    assert_eq!(payload["bundle"]["startup_failure_count"], 0);
+    let bundles = payload["bundles"]
+        .as_array()
+        .expect("bundles must be array");
+    assert_eq!(bundles.len(), 2);
+    let configured = &bundles[0];
+    assert_eq!(configured["id"], BUNDLE_NAME);
+    assert_eq!(configured["hosted"], true);
+    assert_eq!(configured["state"], "up");
+    assert_eq!(configured["startup_health"], "healthy");
+    assert_eq!(configured["startup_failure_count"], 0);
     assert!(
-        payload["bundle"]["recent_startup_failures"]
+        configured["recent_startup_failures"]
             .as_array()
             .is_some_and(|values| values.is_empty())
     );
-    assert_eq!(payload["bundle"]["sessions"][0]["id"], "bravo");
-    assert_eq!(payload["bundle"]["sessions"][0]["name"], "Bravo");
-    assert_eq!(payload["bundle"]["sessions"][0]["ready"], true);
-    assert_eq!(payload["bundle"]["sessions"][1]["id"], "charlie");
-    assert_eq!(payload["bundle"]["sessions"][1]["transport"], "acp");
-    assert_eq!(payload["bundle"]["sessions"][1]["ready"], true);
+    assert_eq!(configured["sessions"][0]["id"], "bravo");
+    assert_eq!(configured["sessions"][0]["name"], "Bravo");
+    assert_eq!(configured["sessions"][0]["ready"], true);
+    assert_eq!(configured["sessions"][1]["id"], "charlie");
+    assert_eq!(configured["sessions"][1]["transport"], "acp");
+    assert_eq!(configured["sessions"][1]["ready"], true);
+    assert_eq!(bundles[1]["id"], "GLOBAL");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -260,23 +266,35 @@ async fn list_sessions_synthesizes_down_bundle_for_unreachable_home_bundle() {
     let payload = decode_tool_payload(&response);
 
     assert_eq!(payload["schema_version"], "1");
-    assert_eq!(payload["bundle"]["id"], BUNDLE_NAME);
-    assert_eq!(payload["bundle"]["hosted"], false);
-    assert_eq!(payload["bundle"]["state"], "down");
-    assert_eq!(payload["bundle"]["state_reason_code"], "not_started");
-    assert_eq!(payload["bundle"]["startup_failure_count"], 0);
+    let bundles = payload["bundles"]
+        .as_array()
+        .expect("bundles must be array");
+    assert_eq!(bundles.len(), 2);
+    let configured = &bundles[0];
+    assert_eq!(configured["id"], BUNDLE_NAME);
+    assert_eq!(configured["hosted"], false);
+    assert_eq!(configured["state"], "down");
+    assert_eq!(configured["state_reason_code"], "not_started");
+    assert_eq!(configured["startup_failure_count"], 0);
     assert!(
-        payload["bundle"]["recent_startup_failures"]
+        configured["recent_startup_failures"]
             .as_array()
             .is_some_and(|values| values.is_empty())
     );
-    let sessions = payload["bundle"]["sessions"]
-        .as_array()
-        .expect("sessions array");
+    let sessions = configured["sessions"].as_array().expect("sessions array");
     assert_eq!(sessions.len(), 3);
     for session in sessions {
         assert_eq!(session["ready"], false);
     }
+    let global = &bundles[1];
+    assert_eq!(global["id"], "GLOBAL");
+    assert_eq!(global["state"], "down");
+    assert_eq!(global["state_reason_code"], "relay_unavailable");
+    assert!(
+        global["sessions"]
+            .as_array()
+            .is_some_and(|values| values.is_empty())
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -390,6 +408,7 @@ async fn list_sessions_all_mode_aggregates_in_lexicographic_bundle_order() {
             },
         ),
     );
+    routes.insert("GLOBAL".to_string(), default_empty_global_responder());
     let relay = FakeRelay::start_for_bundles(runtime.relay_socket.clone(), routes);
     let mut harness = McpHarness::spawn(&runtime).await;
     let arguments = list_sessions_call(Map::from_iter([("all".to_string(), Value::Bool(true))]));
@@ -403,16 +422,118 @@ async fn list_sessions_all_mode_aggregates_in_lexicographic_bundle_order() {
         .filter_map(|bundle| bundle["id"].as_str())
         .collect::<Vec<_>>();
 
-    assert_eq!(bundle_ids, vec!["alpha", "party", "zeta"]);
+    assert_eq!(bundle_ids, vec!["alpha", "party", "zeta", "GLOBAL"]);
     assert_eq!(bundles[0]["hosted"], true);
     assert_eq!(bundles[1]["hosted"], false);
     assert_eq!(bundles[2]["hosted"], true);
+    assert_eq!(bundles[3]["hosted"], false);
     assert_eq!(bundles[0]["sessions"][0]["ready"], true);
     assert_eq!(bundles[2]["sessions"][0]["ready"], true);
     assert_eq!(bundles[1]["state"], "down");
     assert_eq!(bundles[1]["state_reason_code"], "not_started");
     assert_eq!(bundles[1]["startup_failure_count"], 0);
-    assert_eq!(relay.requests_for_operation("list").len(), 3);
+    assert_eq!(bundles[3]["state"], "down");
+    assert!(
+        bundles[3]["sessions"]
+            .as_array()
+            .is_some_and(|values| values.is_empty())
+    );
+    assert_eq!(relay.requests_for_operation("list").len(), 4);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_sessions_appends_global_bundle_with_relay_wide_principals() {
+    let runtime = TestRuntime::create();
+    let mut routes: HashMap<String, RelayResponder> = HashMap::new();
+    routes.insert(
+        BUNDLE_NAME.to_string(),
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("list") => json!({
+                    "kind": "list",
+                    "schema_version": "1",
+                    "bundle": {
+                        "id": BUNDLE_NAME,
+                        "hosted": true,
+                        "state": "up",
+                        "startup_health": "healthy",
+                        "state_reason_code": null,
+                        "state_reason": null,
+                        "startup_failure_count": 0,
+                        "recent_startup_failures": [],
+                        "sessions": [],
+                    },
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+    routes.insert(
+        "GLOBAL".to_string(),
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("list") => json!({
+                    "kind": "list",
+                    "schema_version": "1",
+                    "bundle": {
+                        "id": "GLOBAL",
+                        "hosted": true,
+                        "state": "up",
+                        "startup_health": null,
+                        "state_reason_code": null,
+                        "state_reason": null,
+                        "startup_failure_count": 0,
+                        "recent_startup_failures": [],
+                        "sessions": [
+                            {"id": "operator@GLOBAL", "transport": "ui", "ready": true},
+                            {"id": "watcher@GLOBAL", "transport": "ui", "ready": true},
+                        ],
+                    },
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+    let relay = FakeRelay::start_for_bundles(runtime.relay_socket.clone(), routes);
+    let mut harness = McpHarness::spawn(&runtime).await;
+    let response = harness
+        .call_tool(2, "list", list_sessions_call(Map::new()))
+        .await;
+    let payload = decode_tool_payload(&response);
+    let bundles = payload["bundles"]
+        .as_array()
+        .expect("bundles must be array");
+
+    assert_eq!(bundles.len(), 2);
+    assert_eq!(bundles[0]["id"], BUNDLE_NAME);
+    let global = &bundles[1];
+    assert_eq!(global["id"], "GLOBAL");
+    assert_eq!(global["hosted"], true);
+    assert_eq!(global["state"], "up");
+    assert_eq!(global["sessions"][0]["id"], "operator@GLOBAL");
+    assert_eq!(global["sessions"][0]["transport"], "ui");
+    assert_eq!(global["sessions"][0]["ready"], true);
+    assert_eq!(global["sessions"][1]["id"], "watcher@GLOBAL");
+
+    let envelopes = relay.envelopes_for_operation("list");
+    let namespaces = envelopes
+        .iter()
+        .filter_map(|envelope| envelope["namespace"].as_str())
+        .collect::<Vec<_>>();
+    assert!(namespaces.contains(&BUNDLE_NAME));
+    assert!(namespaces.contains(&"GLOBAL"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

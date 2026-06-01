@@ -92,6 +92,10 @@ impl RelayStreamSession {
 
     /// Sends one request over a persistent stream and returns response + events.
     ///
+    /// The wire envelope namespace is the session's bound bundle. Callers that
+    /// need to route a request elsewhere (notably `List` with the relay-wide
+    /// `GLOBAL` namespace) use `request_with_namespace_and_events`.
+    ///
     /// # Errors
     ///
     /// Returns IO errors when relay transport or frame exchange fails.
@@ -99,9 +103,27 @@ impl RelayStreamSession {
         &mut self,
         request: &RelayRequest,
     ) -> Result<(RelayResponse, Vec<RelayStreamEvent>), io::Error> {
+        self.request_with_namespace_and_events(request, None)
+    }
+
+    /// Sends one request with an explicit wire-envelope namespace override.
+    ///
+    /// Passing `None` for `namespace` uses the session's bound bundle. The
+    /// override exists for routing exceptions such as `List` against the
+    /// relay-wide `GLOBAL` namespace.
+    ///
+    /// # Errors
+    ///
+    /// Returns IO errors when relay transport or frame exchange fails.
+    pub fn request_with_namespace_and_events(
+        &mut self,
+        request: &RelayRequest,
+        namespace: Option<&str>,
+    ) -> Result<(RelayResponse, Vec<RelayStreamEvent>), io::Error> {
         self.ensure_connected()?;
         let request_id = uuid::Uuid::new_v4().to_string();
-        let namespace = self.bundle_name.clone();
+        let bound = self.bundle_name.clone();
+        let namespace = namespace.unwrap_or(bound.as_str());
         let result = {
             let connection = self
                 .connection
@@ -111,7 +133,7 @@ impl RelayStreamSession {
                 &mut connection.stream,
                 StreamClientFrame::Request {
                     request_id: request_id.as_str(),
-                    namespace: Some(namespace.as_str()),
+                    namespace: Some(namespace),
                     request,
                 },
             )?;

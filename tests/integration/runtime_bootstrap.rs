@@ -826,6 +826,12 @@ async fn mcp_uses_repository_root_debug_state_override() {
         )
         .await;
     let payload = decode_tool_payload(&response);
-    assert_eq!(payload["bundle"]["id"], "party");
-    assert_eq!(relay.requests_for_operation("list").len(), 1);
+    let bundles = payload["bundles"]
+        .as_array()
+        .expect("bundles must be array");
+    assert_eq!(bundles[0]["id"], "party");
+    // Two list calls: the configured bundle and the relay-wide GLOBAL fetch.
+    // The local FakeRelay returns the same canned payload to both; this test
+    // verifies only that the debug-override socket was reachable.
+    assert_eq!(relay.requests_for_operation("list").len(), 2);
 }
