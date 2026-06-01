@@ -1,15 +1,16 @@
 use std::{
     fs,
     io::{self, BufRead, BufReader, Write},
-    os::unix::net::UnixStream,
+    os::unix::{io::AsRawFd, net::UnixStream},
     path::{Path, PathBuf},
     thread,
     time::{Duration, Instant},
 };
 
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
-use crate::runtime::paths::session_identity_psk_path;
+use crate::runtime::{inscriptions::emit_inscription, paths::session_identity_psk_path};
 
 use super::identity::SOCKET_TRUST_TOKEN;
 use super::{RelayRequest, RelayResponse, RelayStreamEvent, SCHEMA_VERSION, canonical_session_id};
@@ -174,9 +175,64 @@ impl RelayStreamSession {
         result
     }
 
+    /// Probes the held connection with a non-blocking 1-byte peek so a dropped
+    /// relay socket is observed before a request write. Without this, the next
+    /// `request_*` call writes into a half-closed socket, then blocks on the
+    /// response read until the 5-second response timeout fires.
+    ///
+    /// Uses `libc::recv` with `MSG_PEEK | MSG_DONTWAIT` because the standard
+    /// `UnixStream::peek` is still unstable.
+    fn peek_connection_liveness(&mut self) -> Liveness {
+        let Some(connection) = self.connection.as_ref() else {
+            return Liveness::Dead {
+                reason: "no_connection",
+            };
+        };
+        let fd = connection.stream.as_raw_fd();
+        let mut buf = [0u8; 1];
+        // SAFETY: `fd` is owned by the live `UnixStream` for the duration of
+        // this call; `buf` is a valid writable byte slice.
+        let observed = unsafe {
+            libc::recv(
+                fd,
+                buf.as_mut_ptr().cast(),
+                buf.len(),
+                libc::MSG_PEEK | libc::MSG_DONTWAIT,
+            )
+        };
+        if observed == 0 {
+            return Liveness::Dead { reason: "eof" };
+        }
+        if observed > 0 {
+            return Liveness::Alive;
+        }
+        let source = io::Error::last_os_error();
+        if source.kind() == io::ErrorKind::WouldBlock {
+            return Liveness::Alive;
+        }
+        if is_retriable_stream_error(Some(&source)) {
+            return Liveness::Dead { reason: "io_error" };
+        }
+        Liveness::Error(source)
+    }
+
     fn ensure_connected(&mut self) -> Result<(), io::Error> {
         if self.connection.is_some() {
-            return Ok(());
+            match self.peek_connection_liveness() {
+                Liveness::Alive => return Ok(()),
+                Liveness::Dead { reason } => {
+                    emit_inscription(
+                        "mcp.relay.reconnecting",
+                        &json!({
+                            "bundle_name": self.bundle_name,
+                            "session_id": self.session_id,
+                            "reason": reason,
+                        }),
+                    );
+                    self.connection = None;
+                }
+                Liveness::Error(source) => return Err(source),
+            }
         }
         let deadline = Instant::now() + Duration::from_millis(HELLO_CONFLICT_RETRY_TIMEOUT_MS);
         loop {
@@ -323,6 +379,12 @@ impl RelayStreamSession {
 enum ConnectAttemptError {
     Io(io::Error),
     IdentityClaimConflict { message: String },
+}
+
+enum Liveness {
+    Alive,
+    Dead { reason: &'static str },
+    Error(io::Error),
 }
 
 fn send_stream_client_frame(
