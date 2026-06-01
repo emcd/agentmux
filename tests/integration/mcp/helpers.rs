@@ -73,6 +73,7 @@ impl FakeRelay {
     pub(crate) fn start(socket_path: PathBuf, responder: RelayResponder) -> Self {
         let mut routes: HashMap<String, RelayResponder> = HashMap::new();
         routes.insert(BUNDLE_NAME.to_string(), responder);
+        routes.insert("GLOBAL".to_string(), default_empty_global_responder());
         Self::start_for_bundles(socket_path, routes)
     }
 
@@ -220,12 +221,18 @@ fn handle_connection(
             stream.flush().expect("flush fake relay hello ack");
             continue;
         }
-        let bundle = bound_bundle
+        let bound = bound_bundle
             .as_deref()
             .expect("fake relay received request before hello");
-        let responder = routes
-            .get(bundle)
-            .unwrap_or_else(|| panic!("fake relay missing responder for bundle {bundle}"));
+        // Per-request envelope namespace selects the routing bundle; absent
+        // it the request lands on the Hello-bound bundle.
+        let routing_namespace = decoded
+            .get("namespace")
+            .and_then(Value::as_str)
+            .unwrap_or(bound);
+        let responder = routes.get(routing_namespace).unwrap_or_else(|| {
+            panic!("fake relay missing responder for namespace {routing_namespace}")
+        });
         if decoded.get("frame").and_then(Value::as_str) == Some("request") {
             let request = decoded
                 .get("request")
@@ -452,6 +459,38 @@ send = "all:home"
         .join("bundles")
         .join(format!("{bundle_name}.toml"));
     fs::write(path, bundle).expect("write bundle config");
+}
+
+/// Default responder for the relay-wide `GLOBAL` namespace used by tests that
+/// don't care about its content: returns a `down` bundle with no sessions, the
+/// shape the real relay produces when no relay-wide principals are registered.
+pub(crate) fn default_empty_global_responder() -> RelayResponder {
+    Arc::new(
+        |request| match request.get("operation").and_then(Value::as_str) {
+            Some("list") => json!({
+                "kind": "list",
+                "schema_version": "1",
+                "bundle": {
+                    "id": "GLOBAL",
+                    "hosted": false,
+                    "state": "down",
+                    "startup_health": null,
+                    "state_reason_code": null,
+                    "state_reason": null,
+                    "startup_failure_count": 0,
+                    "recent_startup_failures": [],
+                    "sessions": [],
+                },
+            }),
+            _ => json!({
+                "kind": "error",
+                "error": {
+                    "code": "internal_unexpected_failure",
+                    "message": "unexpected operation",
+                },
+            }),
+        },
+    )
 }
 
 pub(crate) fn temporary_root(prefix: &str) -> PathBuf {
