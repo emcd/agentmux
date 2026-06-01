@@ -357,3 +357,112 @@ fn stream_client_reports_exhausted_hello_conflict_as_timeout() {
     let _ = UnixStream::connect(&socket_path);
     server.join().expect("join server");
 }
+
+#[test]
+fn stream_client_detects_idle_disconnect_and_reconnects_on_next_request() {
+    // Verifies the liveness check in `ensure_connected`: after the relay
+    // closes the connection between requests, the next request must observe
+    // the dead socket via the non-blocking peek and reconnect transparently
+    // in the SAME call, rather than writing into a half-closed socket and
+    // blocking on the 5-second response timeout.
+    let (_temporary, socket_path) = temporary_socket_path("relay-stream-client-idle-drop");
+    let listener = UnixListener::bind(&socket_path).expect("bind unix listener");
+    let server = thread::spawn(move || {
+        // First stream: hello, one list request, full response, then shutdown.
+        let (mut first_stream, _) = listener.accept().expect("accept first client");
+        let mut first_reader = BufReader::new(first_stream.try_clone().expect("clone first"));
+        assert_and_ack_hello(&mut first_reader, &mut first_stream, "party", "alpha");
+        let first_request = read_json_line(&mut first_reader);
+        let first_request_id = first_request["request_id"]
+            .as_str()
+            .map(ToOwned::to_owned)
+            .expect("first request id");
+        write_json_line(
+            &mut first_stream,
+            &json!({
+                "frame": "response",
+                "request_id": first_request_id,
+                "response": {
+                    "kind": "list",
+                    "schema_version": "1",
+                    "bundle": {
+                        "id": "party",
+                        "hosted": true,
+                        "state": "up",
+                        "startup_health": "healthy",
+                        "startup_failure_count": 0,
+                        "recent_startup_failures": [],
+                        "sessions": [],
+                    },
+                }
+            }),
+        );
+        shutdown_stream(&first_stream, "shutdown first stream after response");
+
+        // Second stream: a fresh hello + request must arrive on the next call.
+        let (mut second_stream, _) = listener.accept().expect("accept second client");
+        let mut second_reader = BufReader::new(second_stream.try_clone().expect("clone second"));
+        assert_and_ack_hello(&mut second_reader, &mut second_stream, "party", "alpha");
+        let second_request = read_json_line(&mut second_reader);
+        let second_request_id = second_request["request_id"]
+            .as_str()
+            .map(ToOwned::to_owned)
+            .expect("second request id");
+        write_json_line(
+            &mut second_stream,
+            &json!({
+                "frame": "response",
+                "request_id": second_request_id,
+                "response": {
+                    "kind": "list",
+                    "schema_version": "1",
+                    "bundle": {
+                        "id": "party",
+                        "hosted": true,
+                        "state": "up",
+                        "startup_health": "healthy",
+                        "startup_failure_count": 0,
+                        "recent_startup_failures": [],
+                        "sessions": [],
+                    },
+                }
+            }),
+        );
+    });
+
+    let mut session =
+        RelayStreamSession::new(socket_path, "party".to_string(), "alpha".to_string());
+    let (first_response, _) = session
+        .request_with_events(&agentmux::relay::RelayRequest::List {
+            sender_session: Some("alpha".to_string()),
+        })
+        .expect("first request should succeed");
+    match first_response {
+        agentmux::relay::RelayResponse::List { bundle, .. } => assert_eq!(bundle.id, "party"),
+        other => panic!("unexpected first response: {other:?}"),
+    }
+
+    // Wait briefly so the server's shutdown propagates to the client's
+    // socket recv path before the next `ensure_connected` call peeks.
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    let started_at = Instant::now();
+    let (second_response, _) = session
+        .request_with_events(&agentmux::relay::RelayRequest::List {
+            sender_session: Some("alpha".to_string()),
+        })
+        .expect("second request should reconnect transparently on the SAME call");
+    let elapsed = started_at.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "liveness check must trigger reconnect well before the response timeout; took {elapsed:?}",
+    );
+    match second_response {
+        agentmux::relay::RelayResponse::List { bundle, .. } => assert_eq!(bundle.id, "party"),
+        other => panic!("unexpected second response: {other:?}"),
+    }
+    server.join().expect("join server");
+}
