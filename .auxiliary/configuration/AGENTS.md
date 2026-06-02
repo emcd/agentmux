@@ -232,7 +232,17 @@ Use a coordinator-plus-specialists model:
 
 - Stay focused on owned subsystem scope unless coordinator requests otherwise.
 - Raise an OpenSpec delta or question when subsystem work becomes cross-cutting.
-- Rebase onto latest `master` before requesting review/merge.
+- Follow this sequence before requesting review:
+  1. **Commit** — pre-commit hooks (fmt, clippy, full test suite) run here and
+     are the quality gate.
+  2. **Rebase** onto latest `master`.
+  3. **Request review** — reference the commit hash in the message.
+  4. **Amend** if the reviewer requests a change (only while the commit is
+     unmerged; once merged, add a follow-up commit instead).
+- Prefer reviews of committed changes over uncommitted diffs. A committed
+  change is reviewable by hash with `git show`, cannot silently change between
+  report and review, and has already passed the hook quality gate. Uncommitted
+  diffs require reaching into the worktree and cannot be referenced by hash.
 - Maintain a current rolling handoff note under `coordination/<component>`
   (update-in-place), including:
   - summary of behavior change,
