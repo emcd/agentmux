@@ -2,6 +2,7 @@ mod coalescing;
 pub(crate) mod helpers;
 mod lifecycle;
 mod look;
+mod prompt_wait;
 mod raww;
 mod recovery;
 mod replay_buffer;

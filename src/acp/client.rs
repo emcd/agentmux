@@ -396,21 +396,36 @@ impl AcpStdioClient {
         Arc::clone(&self.replay_buffer)
     }
 
-    // Block until the most recent `prompt()` call has fully completed -- either
-    // the background reader fired its `on_completion` handler (response arrived
-    // or transport closed) or the synchronous dispatch path itself failed and
-    // cleared the active prompt. Returns immediately if no prompt has been
-    // submitted since the last wait. Used by the per-target worker thread to
-    // serialize the single-flight ACP prompt invariant after a fire-and-forget
-    // dispatch.
-    pub fn wait_for_prompt_complete(&self) {
-        let receiver = self
+    // Bounded, resumable wait for the most recent `prompt()` call to complete.
+    //
+    // Returns `true` once completion is observed -- the background reader fired
+    // its `on_completion` handler (response arrived or transport closed), or the
+    // synchronous dispatch path failed and cleared the active prompt -- both of
+    // which drop the prompt's `_completion_signal` sender and surface here as
+    // `Disconnected`. Also returns `true` immediately when no prompt has been
+    // submitted since the last completed wait.
+    //
+    // Returns `false` if `timeout` elapsed with the prompt still in flight; the
+    // pending receiver is retained so the caller can poll again (for example,
+    // interleaving a `shutdown_requested()` check between polls). The per-target
+    // worker uses this to serialize the single-flight ACP prompt invariant
+    // without an unbounded `recv()` that could pin its blocking thread across
+    // process shutdown (an agent whose turn never completes would otherwise
+    // block clean teardown until SIGKILL).
+    pub fn wait_for_prompt_complete(&self, timeout: Duration) -> bool {
+        let mut guard = self
             .last_prompt_signal
             .lock()
-            .expect("last_prompt_signal mutex")
-            .take();
-        if let Some(receiver) = receiver {
-            let _ = receiver.recv();
+            .expect("last_prompt_signal mutex");
+        let Some(receiver) = guard.as_ref() else {
+            return true;
+        };
+        match receiver.recv_timeout(timeout) {
+            Ok(()) | Err(RecvTimeoutError::Disconnected) => {
+                *guard = None;
+                true
+            }
+            Err(RecvTimeoutError::Timeout) => false,
         }
     }
 
