@@ -76,6 +76,20 @@ Use consistent tags for discoverability:
 - Track todos: Use `nb.todo`, `nb.tasks`, `nb.do`, `nb.undo`.
 - Organize with folders: `nb.folders`, `nb.mkdir`.
 
+### Choosing `nb.todo` vs `nb.add`
+
+- Use **`nb.todo`** for any item with actionable state (open/done): todos AND
+  bugs/issues. This gives the note a checkbox, enables `nb.do`/`nb.undo`
+  state tracking, and makes it appear in `nb.tasks` output.
+- Use **`nb.add`** for everything else: coordination notes, decisions, designs,
+  reference material, handoffs, and meeting notes.
+- **Always specify a `folder`** when creating a note. A note created without a
+  folder lands at the notebook root and is invisible to folder-scoped list
+  views.
+- Do not duplicate: if a bug is already tracked in `issues/<component>/`,
+  do not also create a matching todo. Reference the issue selector in
+  coordination notes or the relevant todo body instead.
+
 ### Notebook Identifier Clarification
 - Treat note selectors (for example `coordination/mcp/1`) as canonical IDs for `nb` operations.
 - `nb` MCP responses may include notebook-scoped identifiers (for example `agentmux:coordination/...`) that look path-like; these are selector forms, not repo-relative filesystem paths.
@@ -86,6 +100,7 @@ Use consistent tags for discoverability:
 - Prefer a folder taxonomy of `<issue-type>/<component>` (max depth 2) and avoid mixing top-level component folders with top-level issue-type folders.
 - Recommended top-level issue types are:
     - `todos/`
+    - `issues/`
     - `coordination/`
     - `designs/` (pre-OpenSpec drafts; use `designs/<component>/` until scaffolded into `openspec/`)
     - `decisions/` (optional for durable rationale notes)
