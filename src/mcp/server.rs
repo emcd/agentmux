@@ -231,10 +231,11 @@ impl McpServer {
                 request_id,
                 sender_session,
                 sender_display_name,
+                authenticated_identity,
+                on_behalf_of,
                 results,
-                ..
             }) => {
-                let response = json!({
+                let mut response = json!({
                     "schema_version": schema_version,
                     "bundle_name": bundle_name,
                     "request_id": request_id,
@@ -242,6 +243,12 @@ impl McpServer {
                     "sender_display_name": sender_display_name,
                     "results": results,
                 });
+                if let Some(identity) = authenticated_identity {
+                    response["authenticated_identity"] = Value::String(identity);
+                }
+                if let Some(delegate) = on_behalf_of {
+                    response["on_behalf_of"] = Value::String(delegate);
+                }
                 emit_inscription(
                     "mcp.tool.send.success",
                     &json!({
@@ -322,8 +329,9 @@ impl McpServer {
                 requester_session,
                 target_session,
                 captured_at,
+                authenticated_identity,
+                on_behalf_of,
                 snapshot,
-                ..
             }) => {
                 let mut response_map = serde_json::Map::new();
                 response_map.insert("schema_version".to_string(), Value::String(schema_version));
@@ -334,6 +342,15 @@ impl McpServer {
                 );
                 response_map.insert("target_session".to_string(), Value::String(target_session));
                 response_map.insert("captured_at".to_string(), Value::String(captured_at));
+                if let Some(identity) = authenticated_identity {
+                    response_map.insert(
+                        "authenticated_identity".to_string(),
+                        Value::String(identity),
+                    );
+                }
+                if let Some(delegate) = on_behalf_of {
+                    response_map.insert("on_behalf_of".to_string(), Value::String(delegate));
+                }
                 let snapshot_count = match snapshot {
                     LookSnapshotPayload::Lines { snapshot_lines } => {
                         let count = snapshot_lines.len();

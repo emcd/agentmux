@@ -58,6 +58,8 @@ async fn look_returns_snapshot_payload_and_forwards_request_shape() {
     assert!(payload.get("snapshot_source").is_none());
     assert!(payload.get("stale_reason_code").is_none());
     assert!(payload.get("snapshot_age_ms").is_none());
+    assert!(payload.get("authenticated_identity").is_none());
+    assert!(payload.get("on_behalf_of").is_none());
 
     let relay_requests = relay.requests_for_operation("look");
     assert_eq!(relay_requests.len(), 1);
@@ -464,4 +466,48 @@ async fn look_forwards_bound_bundle_on_wire_envelope() {
     let envelopes = relay.envelopes_for_operation("look");
     assert_eq!(envelopes.len(), 1);
     assert_eq!(envelopes[0]["namespace"], BUNDLE_NAME);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn look_surfaces_authenticated_identity_from_relay() {
+    let runtime = TestRuntime::create();
+    let _relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("look") => json!({
+                    "kind": "look",
+                    "schema_version": "1",
+                    "bundle_name": BUNDLE_NAME,
+                    "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
+                    "target_session": request.get("target_session").cloned().unwrap_or(Value::Null),
+                    "captured_at": "2026-03-10T00:00:00Z",
+                    "authenticated_identity": "alpha@agentmux",
+                    "snapshot_format": "lines",
+                    "snapshot_lines": ["LOOK-A"],
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let mut arguments = Map::new();
+    arguments.insert(
+        "target_session".to_string(),
+        Value::String("bravo".to_string()),
+    );
+    let response = harness.call_tool(2, "look", arguments).await;
+    let payload = decode_tool_payload(&response);
+
+    assert_eq!(payload["authenticated_identity"], "alpha@agentmux");
+    // `on_behalf_of` is reserved and absent on the wire, so it is omitted
+    // entirely rather than surfaced as null.
+    assert!(payload.get("on_behalf_of").is_none());
 }

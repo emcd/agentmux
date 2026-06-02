@@ -23,6 +23,16 @@ This module implements the MCP stdio server for `agentmux`.
   - `look` tmux: `snapshot_format="lines"` + `snapshot_lines`
   - `look` ACP: `snapshot_format="acp_entries_v1"` + `snapshot_entries`
     (+ freshness fields)
+  - `send` and `look` both surface sender-attribution fields when the relay
+    populates them:
+    - `authenticated_identity` (optional): the relay-verified `principal_id`
+      of the caller, present only for store-backed credential connections and
+      omitted for socket-trust sessions.
+    - `on_behalf_of` (optional): the delegated principal the caller is acting
+      for. Reserved — always omitted for now; surfaced in the schema so callers
+      can consume it without a breaking change once delegation activates.
+    Both follow the relay's `skip_serializing_if` semantics: omitted entirely
+    (not `null`) when absent.
 - Validate MCP request payloads.
 - Forward valid requests to relay over the bundle Unix socket.
 - Preserve relay error taxonomy/details when relay returns structured errors.
