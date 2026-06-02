@@ -470,6 +470,88 @@ fn change_psk_rotates_credential() {
     );
 }
 
+// --- Credential revocation: change psk tears down live sessions (Slice 2, task 2.11) ---
+
+// 2.11 `change psk` on a principal with a live, store-backed session ->
+// the session receives a `runtime_identity_revoked` error frame and its
+// connection is then closed.
+#[test]
+fn change_psk_revokes_live_session_holding_old_credential() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "ident_revoke_live";
+    let configuration_root = write_identity_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let principal_id = format!("alpha@{bundle_name}");
+
+    let psk = register_peer(
+        &configuration_root,
+        &bundle_paths,
+        bundle_name,
+        &principal_id,
+        None,
+    );
+
+    // Bring up a live, store-backed session and keep its connection open.
+    let (mut alpha_client, alpha_join) = spawn_relay_connection(&configuration_root, &bundle_paths);
+    let mut alpha_reader = BufReader::new(alpha_client.try_clone().expect("clone alpha stream"));
+    send_json(
+        &mut alpha_client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "principal_id": principal_id,
+            "identity_token": psk,
+        }),
+    );
+    assert_eq!(
+        read_json(&mut alpha_reader)["frame"],
+        "hello_ack",
+        "alpha hello not acked"
+    );
+
+    // Rotate the credential from the operator connection; alpha holds the old
+    // credential and must be revoked. `operator_request` only returns after the
+    // rotation handler has run, by which point the revocation frame is queued.
+    let rotation = operator_request(
+        &configuration_root,
+        &bundle_paths,
+        bundle_name,
+        json!({"operation": "change_psk", "principal_id": principal_id}),
+    );
+    assert_eq!(
+        rotation["response"]["kind"], "change_psk",
+        "change psk rejected: {rotation:?}"
+    );
+
+    // The live session observes the revocation frame ahead of EOF.
+    let revoked = read_json_skipping_hello_ack(&mut alpha_reader);
+    assert_eq!(revoked["frame"], "response", "revoked frame: {revoked:?}");
+    assert_eq!(revoked["response"]["kind"], "error", "{revoked:?}");
+    assert_eq!(
+        revoked["response"]["error"]["code"], "runtime_identity_revoked",
+        "revoked frame: {revoked:?}"
+    );
+    assert_eq!(
+        revoked["response"]["error"]["details"]["principal_id"], principal_id,
+        "revoked frame must name the rotated principal: {revoked:?}"
+    );
+
+    // The connection is then closed: the next read observes EOF.
+    use std::io::BufRead;
+    let mut trailing = String::new();
+    let read = alpha_reader
+        .read_line(&mut trailing)
+        .expect("read after revocation");
+    assert_eq!(
+        read, 0,
+        "connection must close after revocation; got {trailing:?}"
+    );
+
+    shutdown_stream(&alpha_client, "shutdown alpha stream");
+    alpha_join.join().expect("join alpha relay thread");
+}
+
 // --- Sender attribution: authenticated_identity on Send (Slice 3, tasks 3.1/3.5/3.6) ---
 
 /// Connects an `@GLOBAL` operator as a relay-wide receiver, then connects as

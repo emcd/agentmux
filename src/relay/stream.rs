@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     io,
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
 
@@ -10,7 +10,10 @@ use serde_json::Value;
 use tokio::{
     io::AsyncWriteExt,
     net::unix::OwnedWriteHalf,
-    sync::mpsc::{self, UnboundedSender, error::SendError},
+    sync::{
+        Notify,
+        mpsc::{self, UnboundedSender, error::SendError},
+    },
     task::JoinHandle,
     time::timeout,
 };
@@ -89,6 +92,12 @@ impl StreamRegistration {
 /// exits when every clone is dropped or when a write attempt fails.
 pub(super) type SharedStreamWriter = UnboundedSender<Vec<u8>>;
 
+/// Per-connection teardown signal. The connection task races this against its
+/// read loop (see `serve_connection`); firing it closes the connection. A clone
+/// is held in the stream registry so credential revocation can tear the
+/// connection down from another connection's request path.
+pub(super) type StreamRevokeSignal = Arc<Notify>;
+
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum IncomingFrame {
     Hello(HelloFrame),
@@ -152,6 +161,13 @@ struct RegistryEntry {
     stream_id: Option<String>,
     session_type: SessionType,
     writer: Option<SharedStreamWriter>,
+    /// Verified `principal_id` of the connection, set only for store-backed
+    /// credentials; `None` for socket-trust connections. Indexes the registry
+    /// for credential revocation, which targets connections holding a rotated
+    /// credential — never socket-trust connections, which hold none.
+    authenticated_identity: Option<String>,
+    /// Teardown signal for the connection, fired to revoke a rotated credential.
+    revoke: Option<StreamRevokeSignal>,
 }
 
 #[derive(Default)]
@@ -266,6 +282,8 @@ pub(super) fn register_stream(
     key: RegistryKey,
     session_type: SessionType,
     writer: SharedStreamWriter,
+    authenticated_identity: Option<String>,
+    revoke: StreamRevokeSignal,
 ) -> Result<RegisterStreamOutcome, io::Error> {
     let registry = stream_registry();
     let mut entries = registry
@@ -294,6 +312,8 @@ pub(super) fn register_stream(
             stream_id: Some(stream_id.clone()),
             session_type,
             writer: Some(writer),
+            authenticated_identity,
+            revoke: Some(revoke),
         },
     );
     Ok(RegisterStreamOutcome::Registered(StreamRegistration {
@@ -337,8 +357,57 @@ pub(super) fn unregister_stream(registration: &StreamRegistration) -> Result<(),
     {
         entry.stream_id = None;
         entry.writer = None;
+        entry.revoke = None;
     }
     Ok(())
+}
+
+/// Tears down every live stream whose verified `authenticated_identity` matches
+/// `principal_id`, writing `response` to each before signalling its read loop to
+/// close. Used by `change psk` to revoke a rotated credential: a connection that
+/// authenticated with the old credential is force-disconnected.
+///
+/// The registry entry is evicted before the teardown signal fires so a
+/// reconnect presenting the rotated credential is not wedged into an
+/// identity-claim conflict against the dying connection. The connection's writer
+/// task drains its queue (flushing the `response` frame) before exiting, so the
+/// revoked client observes the error frame ahead of EOF. Returns the number of
+/// connections torn down. Socket-trust connections carry no
+/// `authenticated_identity` and are never matched: they hold no credential to
+/// revoke.
+pub(super) fn revoke_streams_for_identity(principal_id: &str, response: &RelayResponse) -> usize {
+    let registry = stream_registry();
+    let targets = {
+        let Ok(mut entries) = registry.entries.lock() else {
+            return 0;
+        };
+        let mut targets = Vec::new();
+        for entry in entries.values_mut() {
+            if entry.authenticated_identity.as_deref() != Some(principal_id) {
+                continue;
+            }
+            let (Some(writer), Some(revoke)) = (entry.writer.clone(), entry.revoke.clone()) else {
+                continue;
+            };
+            entry.stream_id = None;
+            entry.writer = None;
+            entry.revoke = None;
+            targets.push((writer, revoke));
+        }
+        targets
+    };
+    let count = targets.len();
+    for (writer, revoke) in targets {
+        let _ = write_stream_frame_to_writer(
+            &writer,
+            OutgoingFrame::Response {
+                request_id: None,
+                response,
+            },
+        );
+        revoke.notify_one();
+    }
+    count
 }
 
 pub(super) fn resolve_registered_session_type(
@@ -471,6 +540,7 @@ pub(super) fn send_event_to_registered_ui(
     if let Some(entry) = entries.get_mut(&key) {
         entry.stream_id = None;
         entry.writer = None;
+        entry.revoke = None;
     }
     Ok(StreamEventSendOutcome::Disconnected)
 }

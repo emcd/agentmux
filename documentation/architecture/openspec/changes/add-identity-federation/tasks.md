@@ -138,7 +138,7 @@
 
 ## Slice 2 — Introspection and Revocation Surface (depends on slice 1)
 
-- [ ] 2.1 Implement `change psk` revocation dispatch: when the principal store
+- [x] 2.1 Implement `change psk` revocation dispatch: when the principal store
       hash is replaced, send `runtime_identity_revoked` to any active session
       holding the old credential and close the connection.
 - [ ] 2.2 At Hello verification, when principal type resolves to `application`,
@@ -163,7 +163,7 @@
       → returns `principal_id`, `expires_at`, `verified: true`.
 - [ ] 2.10 Integration test: session principal issues IdentityIntrospect
       → authorization denial, no identity data returned.
-- [ ] 2.11 Integration test: `change psk` on active session → session receives
+- [x] 2.11 Integration test: `change psk` on active session → session receives
       `runtime_identity_revoked` frame before connection closes.
 - [ ] 2.12 Integration test: principal expires → session receives
       `runtime_identity_expired` frame before connection closes.

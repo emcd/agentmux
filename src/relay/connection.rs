@@ -5,6 +5,7 @@ use time::OffsetDateTime;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     net::{UnixStream, unix::OwnedReadHalf},
+    sync::Notify,
     time::error::Elapsed,
 };
 
@@ -24,8 +25,9 @@ use super::identity::{
 };
 use super::stream::{
     HelloFrame, IncomingFrame, OutgoingFrame, RegisterStreamOutcome, RegistryKey,
-    SharedStreamWriter, StreamRegistration, parse_incoming_frame, register_stream,
-    registration_is_current, spawn_stream_writer, unregister_stream, write_stream_frame_to_writer,
+    SharedStreamWriter, StreamRegistration, StreamRevokeSignal, parse_incoming_frame,
+    register_stream, registration_is_current, spawn_stream_writer, unregister_stream,
+    write_stream_frame_to_writer,
 };
 use super::{
     RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
@@ -62,6 +64,10 @@ pub async fn serve_connection(
     let (writer, mut writer_handle) = spawn_stream_writer(write_half);
     let reader = BufReader::new(read_half);
     let mut guard = RegistrationGuard::default();
+    // Per-connection teardown signal. Registered alongside the stream so a
+    // `change psk` rotation on another connection can revoke this one's
+    // credential by firing it; the read loop below races it.
+    let revoke = Arc::new(Notify::new());
 
     // Race the read loop against the writer task. The writer task only exits
     // ahead of the read loop when a relay-to-client write fails or times out
@@ -83,6 +89,7 @@ pub async fn serve_connection(
             bundle_catalog,
             require_session_credentials,
             pre_hello_idle_timeout,
+            revoke.clone(),
         );
         tokio::pin!(frames);
         tokio::select! {
@@ -90,6 +97,10 @@ pub async fn serve_connection(
             result = &mut frames => result,
             _ = &mut writer_handle => {
                 emit_inscription("relay.connection.writer_exit_teardown", &json!({}));
+                Ok(())
+            }
+            _ = revoke.notified() => {
+                emit_inscription("relay.connection.identity_revoked_teardown", &json!({}));
                 Ok(())
             }
         }
@@ -159,6 +170,7 @@ async fn serve_connection_frames(
     bundle_catalog: &BundleCatalog,
     require_session_credentials: bool,
     pre_hello_idle_timeout: Duration,
+    revoke: StreamRevokeSignal,
 ) -> Result<(), io::Error> {
     let mut bound_bundle: Option<BundleRuntimePaths> = None;
     // Verified principal_id of the connection, set on a store-backed Hello and
@@ -228,7 +240,17 @@ async fn serve_connection_frames(
                         break;
                     }
                 };
-                match register_stream(binding.key.clone(), binding.session_type, writer.clone())? {
+                // Verified `principal_id` of a store-backed connection; `None`
+                // for socket-trust. Recorded on the registry entry so a
+                // `change psk` rotation can find and revoke this connection.
+                let connection_identity = binding.store_backed.then(|| hello.principal_id.clone());
+                match register_stream(
+                    binding.key.clone(),
+                    binding.session_type,
+                    writer.clone(),
+                    connection_identity.clone(),
+                    revoke.clone(),
+                )? {
                     RegisterStreamOutcome::Registered(value) => {
                         guard.set(value);
                     }
@@ -269,7 +291,7 @@ async fn serve_connection_frames(
                     )?;
                     break;
                 }
-                authenticated_identity = binding.store_backed.then(|| hello.principal_id.clone());
+                authenticated_identity = connection_identity;
                 bound_bundle = binding.bound_bundle;
             }
             IncomingFrame::Request {
