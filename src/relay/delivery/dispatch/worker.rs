@@ -31,6 +31,10 @@ use super::super::permission_state::{PermissionEventContext, invalidate_pending_
 
 const RESPAWN_BACKOFF_MAX_MS_ENVVAR: &str = "AGENTMUX_RELAY_ACP_RESPAWN_BACKOFF_MAX_MS";
 const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;
+/// Slice length for the single-flight ACP prompt-completion wait. Bounds how
+/// long the worker's blocking thread parks before re-checking the shutdown gate
+/// so a never-completing agent turn cannot pin teardown.
+const ACP_PROMPT_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const RESPAWN_SLEEP_POLL_MS: u64 = 50;
 const RESPAWN_BACKOFF_INITIAL_MS: u64 = 1_000;
 const RESPAWN_BACKOFF_CAP_DEFAULT_MS: u64 = 30_000;
@@ -457,12 +461,25 @@ async fn deliver_batch_blocking(
 
 /// Awaits the per-target single-flight prompt completion on the blocking pool.
 /// Returns the runtime so the worker loop retains ownership for the next task.
+///
+/// The wait is polled in bounded slices so process shutdown can abandon it
+/// promptly: without this the worker's blocking thread could `recv()` forever
+/// on an agent that never completes its turn, pinning the runtime's blocking
+/// pool and blocking clean shutdown. On a shutdown abandon the worker returns
+/// and drops its ACP runtime, whose `Drop` kills the child.
 async fn wait_for_prompt_complete_blocking(
     acp_runtime: Option<PersistentAcpWorkerRuntime>,
 ) -> Option<PersistentAcpWorkerRuntime> {
     tokio::task::spawn_blocking(move || {
         if let Some(runtime) = acp_runtime.as_ref() {
-            runtime.client.wait_for_prompt_complete();
+            while !runtime
+                .client
+                .wait_for_prompt_complete(ACP_PROMPT_WAIT_POLL_INTERVAL)
+            {
+                if shutdown_requested() {
+                    break;
+                }
+            }
         }
         acp_runtime
     })

@@ -169,7 +169,16 @@ exported from `src/relay/mod.rs`.
   back to a process-wide multi-thread runtime created on demand. Worker
   shutdown is observed via `shutdown_requested()` polled between receives,
   the same signal the registry-empty drain in
-  `wait_for_async_delivery_shutdown` waits on.
+  `wait_for_async_delivery_shutdown` waits on. The single-flight ACP
+  prompt-completion wait also polls that gate: it is a bounded, resumable
+  `wait_for_prompt_complete(timeout)` rather than an unbounded `recv()`, so an
+  agent whose turn never completes cannot pin the worker's blocking thread
+  across shutdown (which would block clean teardown until SIGKILL). On a
+  shutdown abandon the worker returns and drops its ACP runtime, whose `Drop`
+  kills the child. As a final guarantee the relay binary tears its runtime down
+  with `Runtime::shutdown_timeout` instead of an implicit drop, so any residual
+  stuck blocking task is abandoned within a bounded window rather than hanging
+  the process.
 - Each worker iteration coalesces a burst of pending envelope-mode tasks
   into one transport delivery. After the first task is received, the worker
   drains additional ready tasks via `try_recv` up to
