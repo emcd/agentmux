@@ -12,7 +12,10 @@ use crate::{
     configuration::{
         SessionType, load_bundle_configuration, load_policy_ids, load_tui_configuration,
     },
-    runtime::paths::{BundleRuntimePaths, principal_store_path},
+    runtime::{
+        inscriptions::emit_inscription,
+        paths::{BundleRuntimePaths, principal_store_path},
+    },
 };
 
 use super::identity::{
@@ -56,29 +59,53 @@ pub async fn serve_connection(
     pre_hello_idle_timeout: Duration,
 ) -> Result<(), io::Error> {
     let (read_half, write_half) = stream.into_split();
-    let (writer, writer_handle) = spawn_stream_writer(write_half);
+    let (writer, mut writer_handle) = spawn_stream_writer(write_half);
     let reader = BufReader::new(read_half);
     let mut guard = RegistrationGuard::default();
-    let outcome = serve_connection_frames(
-        reader,
-        &writer,
-        &mut guard,
-        configuration_root,
-        state_root,
-        bundle_catalog,
-        require_session_credentials,
-        pre_hello_idle_timeout,
-    )
-    .await;
-    // Drop the local writer clone and unregister synchronously before awaiting
-    // the writer task. The registry entry's writer clone is released here so
-    // the writer task can observe its receiver close and drain remaining bytes
-    // (e.g., a final error response) before exiting. Without this ordering,
-    // the writer task would either be cancelled by runtime drop or wait for
-    // senders that the caller has not yet released.
+
+    // Race the read loop against the writer task. The writer task only exits
+    // ahead of the read loop when a relay-to-client write fails or times out
+    // (`RELAY_CONNECTION_WRITE_TIMEOUT`) -- for example an idle `SessionType::Ui`
+    // stream whose peer has stopped draining the events the relay pushes. In
+    // that case the read loop is parked on `read_line` with no incoming frame
+    // and no EOF, so without this race it would never observe the dead writer
+    // and the connection would linger half-open: write side shut, read loop
+    // pinned, registry entry stale. Selecting on the writer handle cancels the
+    // read loop deterministically; dropping the guard below then unregisters the
+    // stream, so the client sees a clean EOF on both halves and reconnects.
+    let outcome = {
+        let frames = serve_connection_frames(
+            reader,
+            &writer,
+            &mut guard,
+            configuration_root,
+            state_root,
+            bundle_catalog,
+            require_session_credentials,
+            pre_hello_idle_timeout,
+        );
+        tokio::pin!(frames);
+        tokio::select! {
+            biased;
+            result = &mut frames => result,
+            _ = &mut writer_handle => {
+                emit_inscription("relay.connection.writer_exit_teardown", &json!({}));
+                Ok(())
+            }
+        }
+    };
+
+    // Release our sender clone and unregister on every exit path. On a normal
+    // read-loop exit the writer task may still hold queued bytes (e.g. a final
+    // error response written just before the loop broke); awaiting it lets those
+    // flush before it exits. If the writer task already exited (the write-failure
+    // arm above), it is finished, so skip the await to avoid polling a completed
+    // `JoinHandle`.
     drop(writer);
     drop(guard);
-    let _ = writer_handle.await;
+    if !writer_handle.is_finished() {
+        let _ = writer_handle.await;
+    }
     outcome
 }
 

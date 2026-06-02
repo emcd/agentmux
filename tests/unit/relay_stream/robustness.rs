@@ -79,12 +79,44 @@ fn join_within(
 }
 
 fn agent_hello_frame(bundle_name: &str) -> Value {
+    hello_frame_for("alpha", bundle_name)
+}
+
+fn hello_frame_for(session_id: &str, bundle_name: &str) -> Value {
     json!({
         "frame": "hello",
         "schema_version": "1",
-        "principal_id": format!("alpha@{bundle_name}"),
+        "principal_id": format!("{session_id}@{bundle_name}"),
         "identity_token": "socket-trust",
     })
+}
+
+// Overwrites the bundle file with a tmux sender `alpha` plus a coder-less UI
+// member `panel`. Delivery to a UI member is pushed over its registered stream
+// (no live tmux pane needed), which lets a sender flood events at an idle UI
+// connection to drive the relay-to-client write timeout.
+fn write_sender_and_ui_bundle(configuration_root: &Path, bundle_name: &str) {
+    let bundles_directory = configuration_root.join("bundles");
+    std::fs::write(
+        bundles_directory.join(format!("{bundle_name}.toml")),
+        r#"
+format-version = 1
+
+[[sessions]]
+id = "alpha"
+name = "Alpha"
+directory = "/tmp"
+coder = "shell"
+
+[[sessions]]
+id = "panel"
+name = "Panel"
+directory = "/tmp"
+
+[sessions.ui]
+"#,
+    )
+    .expect("write sender+ui bundle configuration");
 }
 
 #[test]
@@ -170,6 +202,98 @@ fn stalled_client_write_timeout_releases_connection_worker() {
     send_json(&mut reconnect_client, agent_hello_frame(bundle_name));
     let reconnect_ack = read_json(&mut reconnect_reader);
     assert_eq!(reconnect_ack["frame"], "hello_ack");
+    shutdown_stream(&reconnect_client, "shutdown reconnect client");
+    reconnect_handle
+        .join()
+        .expect("join reconnect relay thread");
+}
+
+#[test]
+fn idle_ui_stream_write_timeout_tears_down_connection() {
+    ensure_fast_write_timeout_for_tests();
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "party_idle_ui_timeout";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    write_sender_and_ui_bundle(&configuration_root, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+
+    // UI client: register, read the ack, shrink its receive buffer, then go
+    // idle -- it never sends another frame and never reads again. This is the
+    // TUI-regression shape: an idle SessionType::Ui stream the relay keeps
+    // pushing events to. Captured so we can assert the worker returns instead
+    // of pinning on a parked read loop behind a dead writer.
+    let (mut ui_client, ui_handle) =
+        spawn_relay_connection_capturing(&configuration_root, &bundle_paths);
+    let ui_read = ui_client.try_clone().expect("clone ui stream");
+    let mut ui_reader = BufReader::new(ui_read);
+    send_json(&mut ui_client, hello_frame_for("panel", bundle_name));
+    assert_eq!(read_json(&mut ui_reader)["frame"], "hello_ack");
+    let rcvbuf_bytes = minimize_receive_buffer(&ui_client);
+    // Stop draining: every event the relay now pushes accumulates unread.
+    drop(ui_reader);
+
+    // Size the flooded message to the shrunk receive buffer so a single pushed
+    // incoming_message event overruns it: the relay-to-client write then blocks
+    // past the 300 ms timeout almost immediately, rather than needing hundreds
+    // of tiny events to fill the buffer. A 4 KiB floor covers platforms whose
+    // minimum SO_RCVBUF getsockopt reports something small.
+    let large_message = "x".repeat(rcvbuf_bytes.max(4096));
+
+    // Sender: floods chat messages at the idle UI member so the relay pushes
+    // one incoming_message event per send onto the UI stream. Once the shrunk
+    // buffer fills, the relay-to-client write blocks past the 300 ms timeout,
+    // the writer task exits, and the connection must tear down.
+    let (mut sender_client, sender_handle) =
+        spawn_relay_connection(&configuration_root, &bundle_paths);
+    let sender_read = sender_client.try_clone().expect("clone sender stream");
+    let mut sender_reader = BufReader::new(sender_read);
+    send_json(&mut sender_client, agent_hello_frame(bundle_name));
+    assert_eq!(read_json(&mut sender_reader)["frame"], "hello_ack");
+
+    for index in 0..64 {
+        if ui_handle.is_finished() {
+            break;
+        }
+        send_json(
+            &mut sender_client,
+            json!({
+                "frame": "request",
+                "request_id": format!("flood-{index}"),
+                "request": {
+                    "operation": "send",
+                    "sender_session": "alpha",
+                    "message": large_message,
+                    "targets": ["panel"],
+                    "broadcast": false,
+                },
+            }),
+        );
+        // Drain the send response so the sender's own buffer never backs up.
+        let _ = read_json(&mut sender_reader);
+    }
+
+    // Without the writer-arm teardown the parked UI read loop would never see
+    // the dead writer and `join_within` would panic on the pinned worker.
+    let outcome = join_within(ui_handle, Duration::from_secs(5));
+    assert!(
+        outcome.is_ok(),
+        "idle UI write-timeout teardown should be a clean exit: {outcome:?}"
+    );
+
+    shutdown_stream(&sender_client, "shutdown sender client");
+    sender_handle.join().expect("join sender relay thread");
+
+    // The torn-down connection must have released its registry entry: the same
+    // UI identity reconnects without an identity-claim conflict.
+    let (mut reconnect_client, reconnect_handle) =
+        spawn_relay_connection(&configuration_root, &bundle_paths);
+    let reconnect_read = reconnect_client
+        .try_clone()
+        .expect("clone reconnect stream");
+    let mut reconnect_reader = BufReader::new(reconnect_read);
+    send_json(&mut reconnect_client, hello_frame_for("panel", bundle_name));
+    assert_eq!(read_json(&mut reconnect_reader)["frame"], "hello_ack");
     shutdown_stream(&reconnect_client, "shutdown reconnect client");
     reconnect_handle
         .join()
