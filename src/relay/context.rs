@@ -2,6 +2,7 @@ use std::{path::PathBuf, sync::mpsc};
 
 use crate::{configuration::BundleConfiguration, envelope::PromptBatchSettings};
 
+use super::identity::IdentityIntrospectRights;
 use super::{DeliveryPayloadMode, RelayError, SendResult, delivery::QuiescenceOptions};
 
 #[derive(Clone, Debug)]
@@ -49,6 +50,12 @@ pub(super) struct RequestPrincipal {
     /// Verified `principal_id` of the requester, set only when the connection
     /// presented a store-backed credential; `None` for socket-trust sessions.
     pub(super) authenticated_identity: Option<String>,
+    /// Introspection rights for an application principal, recorded at Hello;
+    /// `None` for every other connection. Request dispatch gates
+    /// `IdentityIntrospect` on this (task 2.5). Recorded now; first read by that
+    /// gate, which has not landed yet.
+    #[allow(dead_code)]
+    pub(super) introspect_rights: Option<IdentityIntrospectRights>,
 }
 
 #[derive(Clone, Debug)]

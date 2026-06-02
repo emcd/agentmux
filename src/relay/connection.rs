@@ -20,8 +20,8 @@ use crate::{
 };
 
 use super::identity::{
-    PrincipalStore, PrincipalType, classify_principal_id, split_principal_id,
-    verify_hello_credential,
+    IdentityIntrospectRights, PrincipalStore, PrincipalType, VerifiedIdentity,
+    classify_principal_id, split_principal_id, verify_hello_credential,
 };
 use super::stream::{
     HelloFrame, IncomingFrame, OutgoingFrame, RegisterStreamOutcome, RegistryKey,
@@ -158,6 +158,10 @@ struct HelloBinding {
     /// accepted socket-trust connections. Distinguishes authenticated senders
     /// from socket-trust ones for sender-attribution responses.
     store_backed: bool,
+    /// Introspection rights for an application principal; `None` for every
+    /// other principal type. Recorded on the connection context so request
+    /// dispatch can gate `IdentityIntrospect` (task 2.5).
+    introspect_rights: Option<IdentityIntrospectRights>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -177,6 +181,10 @@ async fn serve_connection_frames(
     // attached to each dispatched request for sender attribution; stays `None`
     // for socket-trust connections.
     let mut authenticated_identity: Option<String> = None;
+    // Introspection rights for an application principal, recorded at Hello and
+    // attached to each dispatched request so dispatch can gate
+    // `IdentityIntrospect` (task 2.5); stays `None` for every other connection.
+    let mut introspect_rights: Option<IdentityIntrospectRights> = None;
     let mut line = String::new();
     loop {
         line.clear();
@@ -292,6 +300,7 @@ async fn serve_connection_frames(
                     break;
                 }
                 authenticated_identity = connection_identity;
+                introspect_rights = binding.introspect_rights;
                 bound_bundle = binding.bound_bundle;
             }
             IncomingFrame::Request {
@@ -400,6 +409,7 @@ async fn serve_connection_frames(
                     Some(RequestPrincipal {
                         session_id,
                         authenticated_identity: authenticated_identity.clone(),
+                        introspect_rights: introspect_rights.clone(),
                     }),
                     bundle_catalog,
                 );
@@ -666,7 +676,12 @@ fn resolve_hello_binding(
         &store,
         require_session_credentials,
     )?;
-    match verified.principal_type {
+    let VerifiedIdentity {
+        principal_type,
+        store_backed,
+        introspect_rights,
+    } = verified;
+    match principal_type {
         PrincipalType::Session => {
             let (session_id, bundle_name) = split_principal_id(hello.principal_id.as_str())
                 .ok_or_else(|| {
@@ -689,7 +704,8 @@ fn resolve_hello_binding(
                     session_id: session_id.to_string(),
                 },
                 bound_bundle: Some(bundle_paths),
-                store_backed: verified.store_backed,
+                store_backed,
+                introspect_rights,
             })
         }
         PrincipalType::User => {
@@ -701,7 +717,8 @@ fn resolve_hello_binding(
                     principal_id: hello.principal_id.clone(),
                 },
                 bound_bundle: None,
-                store_backed: verified.store_backed,
+                store_backed,
+                introspect_rights,
             })
         }
         PrincipalType::Application | PrincipalType::Relay => Ok(HelloBinding {
@@ -710,7 +727,8 @@ fn resolve_hello_binding(
                 principal_id: hello.principal_id.clone(),
             },
             bound_bundle: None,
-            store_backed: verified.store_backed,
+            store_backed,
+            introspect_rights,
         }),
     }
 }
