@@ -232,6 +232,7 @@ impl McpServer {
                 sender_session,
                 sender_display_name,
                 results,
+                ..
             }) => {
                 let response = json!({
                     "schema_version": schema_version,
@@ -322,6 +323,7 @@ impl McpServer {
                 target_session,
                 captured_at,
                 snapshot,
+                ..
             }) => {
                 let mut response_map = serde_json::Map::new();
                 response_map.insert("schema_version".to_string(), Value::String(schema_version));

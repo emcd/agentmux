@@ -46,6 +46,9 @@ pub(super) struct PermissionDecisionRequestContext {
 #[derive(Clone, Debug)]
 pub(super) struct RequestPrincipal {
     pub(super) session_id: String,
+    /// Verified `principal_id` of the requester, set only when the connection
+    /// presented a store-backed credential; `None` for socket-trust sessions.
+    pub(super) authenticated_identity: Option<String>,
 }
 
 #[derive(Clone, Debug)]

@@ -44,6 +44,8 @@ fn look_returns_canonical_json_payload() {
             requester_session: "user".to_string(),
             target_session: "bravo".to_string(),
             captured_at: "2026-03-08T00:00:00Z".to_string(),
+            authenticated_identity: None,
+            on_behalf_of: None,
             snapshot: LookSnapshotPayload::Lines {
                 snapshot_lines: vec!["LOOK-A".to_string(), "LOOK-B".to_string()],
             },
@@ -120,6 +122,8 @@ fn look_preserves_additive_acp_freshness_fields_in_machine_output() {
             requester_session: "user".to_string(),
             target_session: "bravo".to_string(),
             captured_at: "2026-03-08T00:00:00Z".to_string(),
+            authenticated_identity: None,
+            on_behalf_of: None,
             snapshot: LookSnapshotPayload::AcpEntriesV1 {
                 snapshot_entries: vec![],
                 freshness: agentmux::relay::AcpLookFreshness::Stale,
@@ -206,6 +210,8 @@ fn look_preserves_structured_acp_entries_in_machine_output() {
             requester_session: "user".to_string(),
             target_session: "bravo".to_string(),
             captured_at: "2026-03-08T00:00:00Z".to_string(),
+            authenticated_identity: None,
+            on_behalf_of: None,
             snapshot: LookSnapshotPayload::AcpEntriesV1 {
                 snapshot_entries: snapshot_entries.clone(),
                 freshness: agentmux::relay::AcpLookFreshness::Fresh,

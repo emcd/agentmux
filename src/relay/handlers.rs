@@ -119,6 +119,7 @@ pub(super) fn handle_request(
             runtime_directory,
             configuration_root,
             bundle_catalog,
+            principal.as_ref(),
         ),
         RelayRequest::Look {
             requester_session,
@@ -135,6 +136,7 @@ pub(super) fn handle_request(
                 bundle_name: request_bundle_name,
             },
             runtime_directory,
+            principal.as_ref(),
         ),
         RelayRequest::Raww {
             request_id,
@@ -342,6 +344,7 @@ fn handle_send(
     runtime_directory: &Path,
     configuration_root: &Path,
     bundle_catalog: &BundleCatalog,
+    principal: Option<&RequestPrincipal>,
 ) -> Result<RelayResponse, RelayError> {
     let SendRequestContext {
         request_id,
@@ -574,6 +577,9 @@ fn handle_send(
             bundle.bundle_name.as_str(),
         ),
         sender_display_name: sender.display_name.clone(),
+        authenticated_identity: principal
+            .and_then(|principal| principal.authenticated_identity.clone()),
+        on_behalf_of: None,
         results,
     };
     if let RelayResponse::Send {
@@ -605,6 +611,7 @@ fn handle_look(
     authorization: &AuthorizationContext,
     request: LookRequestContext,
     runtime_directory: &Path,
+    principal: Option<&RequestPrincipal>,
 ) -> Result<RelayResponse, RelayError> {
     let LookRequestContext {
         requester_session,
@@ -741,6 +748,9 @@ fn handle_look(
         captured_at: time::OffsetDateTime::now_utc()
             .format(&Rfc3339)
             .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string()),
+        authenticated_identity: principal
+            .and_then(|principal| principal.authenticated_identity.clone()),
+        on_behalf_of: None,
         snapshot,
     };
     if let RelayResponse::Look {

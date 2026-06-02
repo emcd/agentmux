@@ -143,6 +143,10 @@ struct HelloBinding {
     /// Bound bundle for session principals; `None` for relay-wide principals,
     /// whose requests must carry an explicit target bundle.
     bound_bundle: Option<BundleRuntimePaths>,
+    /// True when a store-backed credential verified the identity; false for
+    /// accepted socket-trust connections. Distinguishes authenticated senders
+    /// from socket-trust ones for sender-attribution responses.
+    store_backed: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -157,6 +161,10 @@ async fn serve_connection_frames(
     pre_hello_idle_timeout: Duration,
 ) -> Result<(), io::Error> {
     let mut bound_bundle: Option<BundleRuntimePaths> = None;
+    // Verified principal_id of the connection, set on a store-backed Hello and
+    // attached to each dispatched request for sender attribution; stays `None`
+    // for socket-trust connections.
+    let mut authenticated_identity: Option<String> = None;
     let mut line = String::new();
     loop {
         line.clear();
@@ -261,6 +269,7 @@ async fn serve_connection_frames(
                     )?;
                     break;
                 }
+                authenticated_identity = binding.store_backed.then(|| hello.principal_id.clone());
                 bound_bundle = binding.bound_bundle;
             }
             IncomingFrame::Request {
@@ -366,7 +375,10 @@ async fn serve_connection_frames(
                     configuration_root,
                     &bundle_paths.bundle_name,
                     &bundle_paths.runtime_directory,
-                    Some(RequestPrincipal { session_id }),
+                    Some(RequestPrincipal {
+                        session_id,
+                        authenticated_identity: authenticated_identity.clone(),
+                    }),
                     bundle_catalog,
                 );
                 write_stream_frame_to_writer(
@@ -655,6 +667,7 @@ fn resolve_hello_binding(
                     session_id: session_id.to_string(),
                 },
                 bound_bundle: Some(bundle_paths),
+                store_backed: verified.store_backed,
             })
         }
         PrincipalType::User => {
@@ -666,6 +679,7 @@ fn resolve_hello_binding(
                     principal_id: hello.principal_id.clone(),
                 },
                 bound_bundle: None,
+                store_backed: verified.store_backed,
             })
         }
         PrincipalType::Application | PrincipalType::Relay => Ok(HelloBinding {
@@ -674,6 +688,7 @@ fn resolve_hello_binding(
                 principal_id: hello.principal_id.clone(),
             },
             bound_bundle: None,
+            store_backed: verified.store_backed,
         }),
     }
 }

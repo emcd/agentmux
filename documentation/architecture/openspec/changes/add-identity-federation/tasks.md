@@ -172,10 +172,10 @@
 
 ## Slice 3 — Sender Attribution Schema (additive; can overlap with slice 2)
 
-- [ ] 3.1 Add `authenticated_identity: Option<String>` to `RelayResponse::Send`
+- [x] 3.1 Add `authenticated_identity: Option<String>` to `RelayResponse::Send`
       and `RelayResponse::Look` in `src/relay/contract.rs`. Populate from
       session's `principal_id` when verified; omit when unverified.
-- [ ] 3.2 Add `on_behalf_of: Option<String>` to the same response variants as
+- [x] 3.2 Add `on_behalf_of: Option<String>` to the same response variants as
       a reserved field (always `None`/absent until setting mechanism is
       specified in a follow-on delta). Include the field in the schema so
       consumers can handle it without a breaking change when it is activated.

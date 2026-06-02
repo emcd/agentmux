@@ -87,6 +87,8 @@ fn send_accepts_message_flag_when_piped_stdin_is_empty() {
             request_id: None,
             sender_session: "user".to_string(),
             sender_display_name: Some("Operator".to_string()),
+            authenticated_identity: None,
+            on_behalf_of: None,
             results: vec![SendResult {
                 target_session: "bravo".to_string(),
                 message_id: "msg-1".to_string(),
@@ -217,6 +219,8 @@ fn send_preserves_valid_explicit_session_in_relay_request() {
             request_id: None,
             sender_session: "user".to_string(),
             sender_display_name: Some("Alpha".to_string()),
+            authenticated_identity: None,
+            on_behalf_of: None,
             results: vec![SendResult {
                 target_session: "bravo".to_string(),
                 message_id: "msg-1".to_string(),
@@ -390,6 +394,8 @@ fn send_uses_tui_defaults_for_bundle_and_session() {
             request_id: None,
             sender_session: "user".to_string(),
             sender_display_name: Some("Operator".to_string()),
+            authenticated_identity: None,
+            on_behalf_of: None,
             results: vec![SendResult {
                 target_session: "bravo".to_string(),
                 message_id: "msg-1".to_string(),

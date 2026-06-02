@@ -57,6 +57,7 @@ pub(super) fn run_agentmux_look(arguments: &[String]) -> Result<(), RuntimeError
             target_session,
             captured_at,
             snapshot,
+            ..
         } => {
             let mut payload = Map::new();
             payload.insert("schema_version".to_string(), Value::String(schema_version));

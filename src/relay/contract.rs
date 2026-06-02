@@ -290,6 +290,17 @@ pub enum RelayResponse {
         sender_session: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         sender_display_name: Option<String>,
+        /// Verified `principal_id` of the sender, present only when the sender's
+        /// connection presented a store-backed credential; absent for
+        /// socket-trust sessions.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        authenticated_identity: Option<String>,
+        /// Delegated principal the sender is acting on behalf of. Reserved: the
+        /// setting mechanism lands in a later delta, so this is always absent for
+        /// now. Defined here so consumers can handle it without a breaking change
+        /// when it is activated.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_behalf_of: Option<String>,
         results: Vec<SendResult>,
     },
     Look {
@@ -298,6 +309,17 @@ pub enum RelayResponse {
         requester_session: String,
         target_session: String,
         captured_at: String,
+        /// Verified `principal_id` of the requester, present only when the
+        /// requester's connection presented a store-backed credential; absent
+        /// for socket-trust sessions.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        authenticated_identity: Option<String>,
+        /// Delegated principal the requester is acting on behalf of. Reserved:
+        /// the setting mechanism lands in a later delta, so this is always absent
+        /// for now. Defined here so consumers can handle it without a breaking
+        /// change when it is activated.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_behalf_of: Option<String>,
         #[serde(flatten)]
         snapshot: LookSnapshotPayload,
     },
