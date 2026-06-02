@@ -57,6 +57,9 @@ Before implementing code changes, consult these files in `.auxiliary/instruction
 ### Scope and Noise Control
 - Prefer to update an existing related note/todo over creating a new one when context already exists.
 - Avoid logging routine, immediately completed mechanical actions in separate notes.
+  Treat rolling handoffs as checkpoint notes, not activity logs: update them near
+  compaction, after a major milestone, or after an agenda/ownership change
+  discussed with the human.
 - Create new notes/todos when information is likely to be useful across sessions or for other collaborators.
 
 ### Tagging Conventions
@@ -86,10 +89,14 @@ Use consistent tags for discoverability:
     - `coordination/`
     - `designs/` (pre-OpenSpec drafts; use `designs/<component>/` until scaffolded into `openspec/`)
     - `decisions/` (optional for durable rationale notes)
+    - `ideas/`
+    - `procedures/`
+    - `reviews/`
+    - `artifacts/` (preserved reference material: completed POCs, historical analysis)
 - Example component names include `engine`, `mcp`, `tui`, `web`, `handbook`, and `data-models`.
 - This project should define and document its specific component-folder conventions in the **Project Notes** section.
 - For cross-component work, prefer `coordination/general` and use multiple `#component-*` tags.
-- For per-component rolling handoffs, prefer `coordination/<component>` (single continuously updated note) instead of creating history chains under `handoffs/*`.
+- For per-component rolling handoffs, prefer `coordination/<component>` (one stable note updated at checkpoints).
 - Keep notebook lifecycle hygiene:
     - prune completed todos quickly,
     - keep only active/near-term coordination checkpoints,
@@ -127,14 +134,13 @@ Use consistent tags for discoverability:
 - When conversation volume rises, coordinator may enforce "blockers-only" mode until the queue is under control.
 
 ## Tests Development
-
 - Prefer tests under `tests/unit` and `tests/integration` over inline `#[cfg(test)]` modules in `src/**`.
 - Prefer tests that exercise public interfaces; avoid source-inclusion patterns used only to reach private internals.
 - Inline `#[cfg(test)]` is permitted only when ALL of the following hold:
   1. The tested item is crate-private **by design** (not by oversight or laziness) and making it testable externally would require widening its visibility or adding a `#[doc(hidden)] pub` escape hatch that would itself become unintended API surface.
   2. No existing public interface exercises the same code path.
   3. The inline test block contains at most **one** `#[test]` function.
-  If a candidate inline test fails any of these conditions, move it to `tests/unit` and widen visibility or restructure as needed. Do not default to inline to avoid that conversation — the friction is intentional.
+- If a candidate inline test fails any of these conditions, move it to `tests/unit` and widen visibility or restructure as needed. Do not default to inline to avoid that conversation; the friction is intentional.
 
 ## OpenSpec Instructions
 
@@ -155,6 +161,7 @@ Use `openspec/AGENTS.md` to learn:
 - Use `git status` to ensure all relevant changes are in the changeset.
 - Do **not** commit without explicit user approval. Unless the user has requested the commit, **ask first** for a review of your work.
 - Do **not** bypass commit safety checks (e.g., `--no-verify`, `--no-gpg-sign`) unless the user explicitly approves doing so.
+- If a commit hook rejects a commit, fix the issue, restage the intended files, and rerun `git commit` with the same message. Do **not** amend a previous commit unless the user explicitly asked for an amend.
 - Use present tense, imperative mood verbs (e.g., "Fix" not "Fixed").
 - Write sentences with proper punctuation.
 - Include a `Co-Authored-By:` field as the final line. Should include the model name and a no-reply address.
