@@ -65,6 +65,7 @@ pub(super) fn run_agentmux_send(arguments: &[String]) -> Result<(), RuntimeError
             sender_session,
             sender_display_name,
             results,
+            ..
         } => json!({
             "schema_version": schema_version,
             "bundle_name": bundle_name,

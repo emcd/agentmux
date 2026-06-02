@@ -416,9 +416,8 @@ pub(crate) struct VerifiedIdentity {
     pub(crate) principal_type: PrincipalType,
     /// True when a recognized store credential backed the identity; false for
     /// accepted `"socket-trust"` connections, which create no store entry.
-    /// Read by Slice 2 enforcement/revocation; recorded now so the Hello path
-    /// already distinguishes store-backed from socket-trust connections.
-    #[allow(dead_code)]
+    /// Drives sender-attribution (`authenticated_identity`) and distinguishes
+    /// store-backed from socket-trust connections on the Hello path.
     pub(crate) store_backed: bool,
 }
 
