@@ -398,6 +398,91 @@ async fn send_preserves_reserved_capability_label_from_relay_denial() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn send_surfaces_authenticated_identity_from_relay() {
+    let runtime = TestRuntime::create();
+    let _relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("send") => json!({
+                    "kind": "send",
+                    "schema_version": "1",
+                    "bundle_name": BUNDLE_NAME,
+                    "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
+                    "sender_session": request.get("sender_session").cloned().unwrap_or(Value::Null),
+                    "authenticated_identity": "alpha@agentmux",
+                    "results": [],
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let mut arguments = Map::new();
+    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments.insert(
+        "targets".to_string(),
+        Value::Array(vec![Value::String("bravo".to_string())]),
+    );
+    arguments.insert("broadcast".to_string(), Value::Bool(false));
+    let response = harness.call_tool(2, "send", arguments).await;
+    let payload = decode_tool_payload(&response);
+
+    assert_eq!(payload["authenticated_identity"], "alpha@agentmux");
+    // `on_behalf_of` is reserved and absent on the wire, so it is omitted
+    // entirely rather than surfaced as null.
+    assert!(payload.get("on_behalf_of").is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn send_omits_sender_attribution_when_relay_omits_it() {
+    let runtime = TestRuntime::create();
+    let _relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("send") => json!({
+                    "kind": "send",
+                    "schema_version": "1",
+                    "bundle_name": BUNDLE_NAME,
+                    "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
+                    "sender_session": request.get("sender_session").cloned().unwrap_or(Value::Null),
+                    "results": [],
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let mut arguments = Map::new();
+    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments.insert(
+        "targets".to_string(),
+        Value::Array(vec![Value::String("bravo".to_string())]),
+    );
+    arguments.insert("broadcast".to_string(), Value::Bool(false));
+    let response = harness.call_tool(2, "send", arguments).await;
+    let payload = decode_tool_payload(&response);
+
+    assert!(payload.get("authenticated_identity").is_none());
+    assert!(payload.get("on_behalf_of").is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn send_forwards_bound_bundle_on_wire_envelope() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(

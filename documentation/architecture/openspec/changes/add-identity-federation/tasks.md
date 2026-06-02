@@ -179,7 +179,7 @@
       a reserved field (always `None`/absent until setting mechanism is
       specified in a follow-on delta). Include the field in the schema so
       consumers can handle it without a breaking change when it is activated.
-- [ ] 3.3 Update MCP send and look response schemas to surface
+- [x] 3.3 Update MCP send and look response schemas to surface
       `authenticated_identity` when present; include `on_behalf_of` as a
       reserved optional field.
 - [x] 3.4 Thread `authenticated_identity` into the delivered message envelope
@@ -187,9 +187,9 @@
       not just the sender-side acknowledgement). Recipients need the sender's
       verified identity to build authorization on top. Update the envelope schema
       and relay delivery path accordingly.
-- [ ] 3.5 Integration test: Send response for authenticated session includes
+- [x] 3.5 Integration test: Send response for authenticated session includes
       `authenticated_identity` set to `principal_id`.
-- [ ] 3.6 Integration test: Send response for unauthenticated session omits
+- [x] 3.6 Integration test: Send response for unauthenticated session omits
       `authenticated_identity`.
 - [x] 3.7 Integration test: delivered envelope on recipient stream includes
       `authenticated_identity` from the sender's verified `principal_id`.
