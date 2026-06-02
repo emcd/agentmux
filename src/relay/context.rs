@@ -51,6 +51,10 @@ pub(super) struct RequestPrincipal {
 #[derive(Clone, Debug)]
 pub(super) struct AsyncDeliveryTask {
     pub(super) bundle: BundleConfiguration,
+    /// Home bundle of the sender. Differs from `bundle` (the delivery context)
+    /// for cross-bundle fan-out, where `bundle` is the target's bundle; used to
+    /// attribute and route the sender independently of the target's namespace.
+    pub(super) sender_bundle_name: String,
     pub(super) sender: crate::configuration::BundleMember,
     pub(super) all_target_sessions: Vec<String>,
     pub(super) target_session: String,

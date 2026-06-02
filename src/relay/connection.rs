@@ -340,6 +340,7 @@ async fn serve_connection_frames(
                     &bundle_paths.bundle_name,
                     &bundle_paths.runtime_directory,
                     Some(RequestPrincipal { session_id }),
+                    bundle_catalog,
                 );
                 write_stream_frame_to_writer(
                     writer,

@@ -55,7 +55,12 @@ pub(super) fn deliver_one_target_ui(
             created_at: timestamp_rfc3339(),
             payload: json!({
                 "message_id": message_id.clone(),
-                "sender_session": canonical_session_id(sender_session, bundle_name),
+                // The sender is attributed to its home bundle, which differs
+                // from `bundle_name` (the target's bundle) for cross-bundle sends.
+                "sender_session": canonical_session_id(
+                    sender_session,
+                    task.sender_bundle_name.as_str(),
+                ),
                 "body": message,
                 "cc_sessions": if cc_sessions.is_empty() {
                     Value::Null

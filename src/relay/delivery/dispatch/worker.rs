@@ -787,6 +787,7 @@ mod coalesce_batch_tests {
                 groups: Vec::new(),
                 members: vec![member.clone()],
             },
+            sender_bundle_name: "party".to_string(),
             sender: member.clone(),
             all_target_sessions: vec!["bravo".to_string()],
             target_session: "bravo".to_string(),
