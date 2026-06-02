@@ -20,7 +20,7 @@ use crate::configuration::{
 };
 use crate::relay::{
     ListedBundle, ListedBundleState, ListedSession, LookSnapshotPayload, RelayRequest,
-    RelayResponse, RelayStreamSession, load_startup_failures, request_relay,
+    RelayResponse, RelayStreamSession, load_startup_failures,
 };
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::paths::{BundleRuntimePaths, RelayRuntimePaths};
@@ -1087,14 +1087,14 @@ impl McpServer {
             load_bundle_configuration(&self.state.configuration.configuration_root, bundle_name)
                 .map_err(map_configuration_error)?;
         let relay_socket = relay_paths.relay_socket;
-        match request_relay(
-            &relay_socket,
-            bundle_name,
-            sender_session,
-            &RelayRequest::List {
-                sender_session: Some(sender_session.to_string()),
-            },
-        ) {
+        let request = RelayRequest::List {
+            sender_session: Some(sender_session.to_string()),
+        };
+        // Route through the persistent stream session so this call shares the
+        // MCP server's cached Hello-registered connection. Issuing a fresh
+        // single-shot Hello with the same `principal_id` would conflict with
+        // that registration (`runtime_identity_claim_conflict`) and time out.
+        match self.request_relay_with_namespace(&request, Some(bundle_name)) {
             Ok(RelayResponse::List { bundle, .. }) => Ok(bundle),
             Ok(RelayResponse::Error { error }) => Err(map_relay_error(error)),
             Ok(other) => Err(internal_tool_error(

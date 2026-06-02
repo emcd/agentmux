@@ -34,7 +34,7 @@ This module implements the MCP stdio server for `agentmux`.
 2. MCP client can call `help` to discover tool/command schemas.
 3. `src/mcp/mod.rs` validates parameter shape and transport-compatible options.
 4. Request is forwarded as relay contract:
-   - `list` (`command="sessions"`) -> one-shot `request_relay` probes (`RelayRequest::List`)
+   - `list` (`command="sessions"`) -> `RelayStreamSession` (`RelayRequest::List`)
    - `look` -> `RelayStreamSession` (`RelayRequest::Look`)
    - `grant` (`command="list"`) -> `RelayStreamSession`
      (`RelayRequest::PermissionList`)
