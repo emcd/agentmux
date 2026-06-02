@@ -10,9 +10,12 @@
 //!   sessions (and excludes bundle sessions);
 //! - `Send` infers each target's registry from its `@<namespace>` suffix: a
 //!   bundle-bound session reaches an `@GLOBAL` operator, a relay-wide sender
-//!   routes to a bundle via a bundle-qualified target, a relay-wide sender with
-//!   a bare target is rejected, and mixing relay-wide and session targets is
-//!   rejected;
+//!   routes to a bundle via a bundle-qualified target, and a relay-wide sender
+//!   with a bare target is rejected;
+//! - a single `Send` fans out across namespaces (cross-bundle `@<bundle>` plus
+//!   relay-wide `@GLOBAL`), unknown bundles and reserved `@EXTERNAL`/`@RELAY`
+//!   targets are rejected, and mixing `@GLOBAL` with `@<bundle>` targets is no
+//!   longer rejected (add-cross-namespace-routing);
 //! - the retired `validation_namespace_routing_unavailable` stub no longer
 //!   appears.
 
@@ -330,13 +333,16 @@ fn relay_wide_send_with_bare_target_is_rejected() {
     );
 }
 
-/// Task 3.5: a single `Send` that mixes a relay-wide (`@GLOBAL`) target and a
-/// bundle-session target is rejected; cross-namespace fan-out is out of scope.
+/// Task 2.4 (regression): a single `Send` that mixes a relay-wide (`@GLOBAL`)
+/// target with a bundle-session target is no longer rejected — it fans out and
+/// returns a per-target result for each. `validation_conflicting_namespaces` is
+/// retired.
 #[test]
-fn send_mixing_relay_wide_and_session_targets_is_rejected() {
+fn send_mixing_relay_wide_and_session_targets_fans_out() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_mixed_targets";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_root, "default", bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let operator_id = global_user_id(bundle_name);
@@ -364,6 +370,178 @@ fn send_mixing_relay_wide_and_session_targets_is_rejected() {
                 "message": "mixed targets",
                 "targets": [operator_id, "bravo"],
                 "broadcast": false,
+                "quiescence_timeout_ms": 200,
+            },
+        }),
+    );
+    let mut response = read_json(&mut reader);
+    while response["frame"] != "response" {
+        response = read_json(&mut reader);
+    }
+    shutdown_stream(&client, "shutdown client stream");
+    join.join().expect("join relay thread");
+
+    assert_eq!(response["response"]["kind"], "send");
+    assert_ne!(
+        response["response"]["error"]["code"],
+        "validation_conflicting_namespaces"
+    );
+    let results = response["response"]["results"]
+        .as_array()
+        .expect("results array");
+    assert_eq!(results.len(), 2, "both targets receive a per-target result");
+}
+
+/// Task 2.1: a single `Send` from a bundle-a session targets both a peer-bundle
+/// session (`agent@bundle-b`) and the relay-wide operator (`operator@GLOBAL`);
+/// the relay fans out and delivers to each in its own namespace.
+#[test]
+fn send_fans_out_across_bundle_and_global_namespaces() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_a = "party_fanout_a";
+    let bundle_b = "party_fanout_b";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_a);
+    write_tui_configuration(&configuration_root, "default", bundle_a);
+    write_ui_bundle(&configuration_root, bundle_b);
+    let state_root = temporary.path().join("state");
+    let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
+    let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b).expect("bundle-b paths");
+    let catalog = multi_bundle_catalog(&[paths_a.clone(), paths_b.clone()]);
+    let operator_id = global_user_id(bundle_a);
+
+    // The relay-wide operator registers and stays connected.
+    let (mut operator_client, operator_join) =
+        spawn_relay_connection_with_catalog(&configuration_root, &state_root, catalog.clone());
+    let mut operator_reader =
+        BufReader::new(operator_client.try_clone().expect("clone operator stream"));
+    send_json(
+        &mut operator_client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "principal_id": operator_id,
+            "identity_token": "socket-trust",
+        }),
+    );
+    assert_eq!(read_json(&mut operator_reader)["frame"], "hello_ack");
+
+    // The `agent` UI session in bundle-b registers and stays connected.
+    let (mut agent_client, agent_join) =
+        spawn_relay_connection_with_catalog(&configuration_root, &state_root, catalog.clone());
+    let mut agent_reader = BufReader::new(agent_client.try_clone().expect("clone agent stream"));
+    send_json(
+        &mut agent_client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "principal_id": format!("agent@{bundle_b}"),
+            "identity_token": "socket-trust",
+        }),
+    );
+    assert_eq!(read_json(&mut agent_reader)["frame"], "hello_ack");
+
+    // A bundle-a session fans one Send out to both namespaces.
+    let (mut alpha_client, alpha_join) =
+        spawn_relay_connection_with_catalog(&configuration_root, &state_root, catalog.clone());
+    let mut alpha_reader = BufReader::new(alpha_client.try_clone().expect("clone alpha stream"));
+    send_json(
+        &mut alpha_client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "principal_id": format!("alpha@{bundle_a}"),
+            "identity_token": "socket-trust",
+        }),
+    );
+    assert_eq!(read_json(&mut alpha_reader)["frame"], "hello_ack");
+    send_json(
+        &mut alpha_client,
+        json!({
+            "frame": "request",
+            "request_id": "req-1",
+            "request": {
+                "operation": "send",
+                "sender_session": "alpha",
+                "message": "fan out",
+                "targets": [format!("agent@{bundle_b}"), operator_id],
+                "broadcast": false,
+                "quiescence_timeout_ms": 2000,
+            },
+        }),
+    );
+    let mut response = read_json(&mut alpha_reader);
+    while response["frame"] != "response" {
+        response = read_json(&mut alpha_reader);
+    }
+    assert_eq!(response["response"]["kind"], "send");
+    let results = response["response"]["results"]
+        .as_array()
+        .expect("results array");
+    assert_eq!(results.len(), 2);
+    assert!(
+        results
+            .iter()
+            .any(|result| result["target_session"] == format!("agent@{bundle_b}")),
+        "cross-bundle target resolved in its own bundle"
+    );
+    assert!(
+        results
+            .iter()
+            .any(|result| result["target_session"] == operator_id),
+        "relay-wide target resolved"
+    );
+
+    // Both recipients observe the delivered message on their own streams.
+    let agent_event = read_until_event_type(&mut agent_reader, "incoming_message");
+    assert_eq!(agent_event["event"]["target_session"], "agent");
+    assert_eq!(
+        agent_event["event"]["payload"]["sender_session"],
+        format!("alpha@{bundle_a}")
+    );
+    let operator_event = read_until_event_type(&mut operator_reader, "incoming_message");
+    assert_eq!(operator_event["event"]["target_session"], operator_id);
+
+    shutdown_stream(&alpha_client, "shutdown alpha stream");
+    shutdown_stream(&agent_client, "shutdown agent stream");
+    shutdown_stream(&operator_client, "shutdown operator stream");
+    alpha_join.join().expect("join alpha thread");
+    agent_join.join().expect("join agent thread");
+    operator_join.join().expect("join operator thread");
+}
+
+/// Task 2.2: a `Send` to a target qualified with an unconfigured bundle is
+/// rejected as an unknown target.
+#[test]
+fn send_to_unknown_bundle_target_is_rejected() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "party_unknown_bundle";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+
+    let (mut client, join) = spawn_relay_connection(&configuration_root, &bundle_paths);
+    let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
+    send_json(
+        &mut client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "principal_id": format!("alpha@{bundle_name}"),
+            "identity_token": "socket-trust",
+        }),
+    );
+    assert_eq!(read_json(&mut reader)["frame"], "hello_ack");
+    send_json(
+        &mut client,
+        json!({
+            "frame": "request",
+            "request_id": "req-1",
+            "request": {
+                "operation": "send",
+                "sender_session": "alpha",
+                "message": "to nowhere",
+                "targets": ["agent@no_such_bundle"],
+                "broadcast": false,
             },
         }),
     );
@@ -377,7 +555,61 @@ fn send_mixing_relay_wide_and_session_targets_is_rejected() {
     assert_eq!(response["response"]["kind"], "error");
     assert_eq!(
         response["response"]["error"]["code"],
-        "validation_conflicting_namespaces"
+        "validation_unknown_target"
+    );
+}
+
+/// Task 2.3: a `Send` to a target in the reserved `@EXTERNAL` namespace is
+/// rejected as an unsupported namespace.
+#[test]
+fn send_to_external_namespace_target_is_rejected() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "party_external_target";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+
+    let (mut client, join) = spawn_relay_connection(&configuration_root, &bundle_paths);
+    let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
+    send_json(
+        &mut client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "principal_id": format!("alpha@{bundle_name}"),
+            "identity_token": "socket-trust",
+        }),
+    );
+    assert_eq!(read_json(&mut reader)["frame"], "hello_ack");
+    send_json(
+        &mut client,
+        json!({
+            "frame": "request",
+            "request_id": "req-1",
+            "request": {
+                "operation": "send",
+                "sender_session": "alpha",
+                "message": "to external",
+                "targets": ["service@EXTERNAL"],
+                "broadcast": false,
+            },
+        }),
+    );
+    let mut response = read_json(&mut reader);
+    while response["frame"] != "response" {
+        response = read_json(&mut reader);
+    }
+    shutdown_stream(&client, "shutdown client stream");
+    join.join().expect("join relay thread");
+
+    assert_eq!(response["response"]["kind"], "error");
+    assert_eq!(
+        response["response"]["error"]["code"],
+        "validation_unsupported_namespace"
+    );
+    assert_eq!(
+        response["response"]["error"]["details"]["namespace"],
+        "EXTERNAL"
     );
 }
 

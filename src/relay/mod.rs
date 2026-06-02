@@ -41,12 +41,18 @@ pub fn handle_request(
     bundle_name: &str,
     runtime_directory: &Path,
 ) -> Result<RelayResponse, RelayError> {
+    // The non-stream entry point routes within a single bundle; cross-bundle
+    // fan-out is reachable only over the stream path, which threads the live
+    // catalog through `dispatch_request`. An empty catalog confines this path
+    // to same-bundle and relay-wide (`@GLOBAL`) targets.
+    let bundle_catalog = BundleCatalog::default();
     handle_request_with_principal(
         request,
         configuration_root,
         bundle_name,
         runtime_directory,
         None,
+        &bundle_catalog,
     )
 }
 
@@ -56,6 +62,7 @@ fn handle_request_with_principal(
     bundle_name: &str,
     runtime_directory: &Path,
     principal: Option<RequestPrincipal>,
+    bundle_catalog: &BundleCatalog,
 ) -> Result<RelayResponse, RelayError> {
     let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
     let authorization = load_authorization_context(configuration_root, &bundle)?;
@@ -65,6 +72,8 @@ fn handle_request_with_principal(
         &authorization,
         runtime_directory,
         principal,
+        configuration_root,
+        bundle_catalog,
     )
 }
 
@@ -155,6 +164,7 @@ pub(in crate::relay) fn dispatch_request(
     bundle_name: &str,
     runtime_directory: &Path,
     principal: Option<RequestPrincipal>,
+    bundle_catalog: &BundleCatalog,
 ) -> RelayResponse {
     match handle_request_with_principal(
         request,
@@ -162,6 +172,7 @@ pub(in crate::relay) fn dispatch_request(
         bundle_name,
         runtime_directory,
         principal,
+        bundle_catalog,
     ) {
         Ok(value) => value,
         Err(error) => RelayResponse::Error { error },

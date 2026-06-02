@@ -229,6 +229,53 @@ fn single_bundle_catalog(bundle_paths: &BundleRuntimePaths) -> BundleCatalog {
     Arc::new(map)
 }
 
+fn multi_bundle_catalog(bundle_paths: &[BundleRuntimePaths]) -> BundleCatalog {
+    let mut map = HashMap::new();
+    for paths in bundle_paths {
+        map.insert(paths.bundle_name.clone(), paths.clone());
+    }
+    Arc::new(map)
+}
+
+// Writes an additional bundle whose sole session `agent` is a coder-less UI
+// target. Cross-bundle delivery to a UI session is observable on a registered
+// relay stream (unlike a tmux member, which needs a live pane), so this backs
+// the cross-namespace fan-out delivery assertions.
+fn write_ui_bundle(configuration_root: &Path, bundle_name: &str) {
+    let bundles_directory = configuration_root.join("bundles");
+    std::fs::write(
+        bundles_directory.join(format!("{bundle_name}.toml")),
+        r#"
+format-version = 1
+
+[[sessions]]
+id = "agent"
+name = "Agent"
+directory = "/tmp"
+
+[sessions.ui]
+"#,
+    )
+    .expect("write ui bundle configuration");
+}
+
+// Spawns a connection served against an explicit (typically multi-bundle)
+// catalog, so a Send can fan out to peer bundles the connection is not bound to.
+fn spawn_relay_connection_with_catalog(
+    configuration_root: &Path,
+    state_root: &Path,
+    catalog: BundleCatalog,
+) -> (UnixStream, thread::JoinHandle<()>) {
+    let (server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
+    let root = configuration_root.to_path_buf();
+    let state = state_root.to_path_buf();
+    let join_handle = thread::spawn(move || {
+        run_serve_connection_with_enforcement(server_stream, root, state, catalog, false)
+            .expect("serve connection")
+    });
+    (client_stream, join_handle)
+}
+
 // Bridges a synchronous unit test to the async `serve_connection`. Each
 // connection gets its own two-worker tokio runtime so the writer task can
 // observe its write timeout while the connection task is in a tight

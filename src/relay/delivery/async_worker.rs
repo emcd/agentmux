@@ -456,8 +456,10 @@ fn emit_sender_delivery_outcome_event(
             .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string()),
         payload: serde_json::Value::Object(payload),
     };
+    // Route the sender's delivery-outcome event back to the sender within its
+    // home bundle, which differs from the target's bundle for cross-bundle sends.
     let _ = send_event_to_registered_ui(
-        task.bundle.bundle_name.as_str(),
+        task.sender_bundle_name.as_str(),
         task.sender.id.as_str(),
         &event,
     );

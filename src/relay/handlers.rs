@@ -1,4 +1,5 @@
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use serde_json::json;
 use time::format_description::well_known::Rfc3339;
@@ -7,6 +8,7 @@ use uuid::Uuid;
 use crate::{
     configuration::{
         BundleConfiguration, BundleMember, TargetConfiguration, TmuxTargetConfiguration,
+        load_bundle_configuration,
     },
     relay::{AcpLookFreshness, AcpLookSnapshotSource, LookSnapshotPayload},
     runtime::{inscriptions::emit_inscription, paths::tmux_socket_path_for_runtime_directory},
@@ -14,21 +16,23 @@ use crate::{
 
 use super::authorization::{
     AuthorizationContext, authorize_look, authorize_raww, authorize_send, authorize_updown,
-    grant_authorized_ui_sessions, has_ui_session, permission_max_pending, ui_session_display_name,
+    grant_authorized_ui_sessions, has_ui_session, load_authorization_context,
+    permission_max_pending, ui_session_display_name,
 };
+use super::connection::BundleCatalog;
 use super::delivery::{
     QuiescenceOptions, await_acp_worker_prime_for_look, deliver_one_target,
     derive_acp_look_snapshot, enqueue_async_delivery, enqueue_sync_delivery,
     get_acp_worker_snapshot, get_acp_worker_state, prompt_batch_settings,
 };
-use super::identity::{PrincipalType, classify_principal_id};
+use super::identity::{PrincipalType, classify_principal_id, split_principal_id};
 use super::stream::list_registered_relay_wide_sessions;
 use super::tmux::{capture_pane_tail_lines, resolve_active_pane_target};
 use super::{
     AsyncDeliveryTask, DeliveryPayloadMode, ListedBundle, ListedBundleState, ListedSession,
     ListedSessionTransport, LookRequestContext, PermissionDecisionRequestContext,
     RawwRequestContext, RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
-    SendOutcome, SendRequestContext, SendResult, bare_session_id, canonical_session_id,
+    SendOutcome, SendRequestContext, SendResult, bare_session_id, canonical_session_id, map_config,
     relay_error,
 };
 
@@ -74,6 +78,8 @@ pub(super) fn handle_request(
     authorization: &AuthorizationContext,
     runtime_directory: &Path,
     principal: Option<RequestPrincipal>,
+    configuration_root: &Path,
+    bundle_catalog: &BundleCatalog,
 ) -> Result<RelayResponse, RelayError> {
     let request = normalize_request_identities(request, bundle.bundle_name.as_str());
     match request {
@@ -111,6 +117,8 @@ pub(super) fn handle_request(
                 acp_turn_timeout_ms,
             },
             runtime_directory,
+            configuration_root,
+            bundle_catalog,
         ),
         RelayRequest::Look {
             requester_session,
@@ -332,6 +340,8 @@ fn handle_send(
     authorization: &AuthorizationContext,
     request: SendRequestContext,
     runtime_directory: &Path,
+    configuration_root: &Path,
+    bundle_catalog: &BundleCatalog,
 ) -> Result<RelayResponse, RelayError> {
     let SendRequestContext {
         request_id,
@@ -387,32 +397,6 @@ fn handle_send(
         ));
     }
 
-    // Suffix-based routing resolves each target's registry from its
-    // `@<namespace>` suffix, so a single Send may not mix relay-wide (e.g.
-    // `@GLOBAL`) and bundle-session targets: cross-namespace fan-out in one
-    // request is out of scope for this slice. Targets are already normalized to
-    // bare bundle-local ids at this point, so a bare target classifies as a
-    // session target.
-    if !broadcast {
-        let mut has_relay_wide = false;
-        let mut has_session = false;
-        for target in &targets {
-            match classify_principal_id(target) {
-                Some(PrincipalType::User | PrincipalType::Application | PrincipalType::Relay) => {
-                    has_relay_wide = true;
-                }
-                _ => has_session = true,
-            }
-        }
-        if has_relay_wide && has_session {
-            return Err(relay_error(
-                "validation_conflicting_namespaces",
-                "send targets must not mix relay-wide and bundle-session namespaces",
-                Some(json!({ "targets": targets })),
-            ));
-        }
-    }
-
     let sender = resolve_sender_identity(
         bundle,
         authorization,
@@ -420,8 +404,6 @@ fn handle_send(
         "sender_session",
     )?;
     let sender_member = sender.to_bundle_member();
-    let permission_decider_sessions = grant_authorized_ui_sessions(authorization, bundle);
-    let queue_max_pending = permission_max_pending(authorization);
 
     emit_inscription(
         "relay.send.request",
@@ -435,41 +417,65 @@ fn handle_send(
         }),
     );
 
-    let resolved_targets = if broadcast {
-        bundle
-            .members
-            .iter()
-            .filter(|member| member.id != sender.session_id)
-            .map(|member| member.id.clone())
-            .collect::<Vec<_>>()
+    // Resolve every target into a per-namespace delivery group up front, so a
+    // single Send can fan out across the sender's bundle, peer bundles, and the
+    // relay-wide (`@GLOBAL`) registry. Broadcast stays bundle-scoped.
+    let groups = if broadcast {
+        vec![DeliveryGroup {
+            bundle: bundle.clone(),
+            runtime_directory: runtime_directory.to_path_buf(),
+            permission_decider_sessions: grant_authorized_ui_sessions(authorization, bundle),
+            permission_max_pending: permission_max_pending(authorization),
+            targets: bundle
+                .members
+                .iter()
+                .filter(|member| member.id != sender.session_id)
+                .map(|member| ResolvedTarget {
+                    session_id: member.id.clone(),
+                    is_ui: false,
+                })
+                .collect(),
+        }]
     } else {
-        resolve_explicit_targets(bundle, authorization, &targets)?
+        resolve_target_groups(
+            bundle,
+            authorization,
+            runtime_directory,
+            configuration_root,
+            bundle_catalog,
+            &targets,
+        )?
     };
 
+    // Timeout-vs-transport validation spans every resolved target, regardless of
+    // which bundle hosts it. Relay-wide (`is_ui`) targets carry no tmux/ACP
+    // transport and are skipped.
     let mut has_tmux_target = false;
     let mut has_acp_target = false;
-    for target_session in &resolved_targets {
-        if let Some(target_member) = bundle
-            .members
-            .iter()
-            .find(|member| member.id == *target_session)
-        {
-            match &target_member.target {
-                crate::configuration::TargetConfiguration::Tmux(_) => has_tmux_target = true,
-                crate::configuration::TargetConfiguration::Acp(_) => has_acp_target = true,
-                crate::configuration::TargetConfiguration::Ui
-                | crate::configuration::TargetConfiguration::Pubsub => {}
+    for group in &groups {
+        for target in &group.targets {
+            if target.is_ui {
+                continue;
             }
-            continue;
+            match group
+                .bundle
+                .members
+                .iter()
+                .find(|member| member.id == target.session_id)
+                .map(|member| &member.target)
+            {
+                Some(TargetConfiguration::Tmux(_)) => has_tmux_target = true,
+                Some(TargetConfiguration::Acp(_)) => has_acp_target = true,
+                Some(TargetConfiguration::Ui | TargetConfiguration::Pubsub) => {}
+                None => {
+                    return Err(relay_error(
+                        "internal_unexpected_failure",
+                        "resolved target session has no configured transport",
+                        Some(json!({ "target_session": target.session_id })),
+                    ));
+                }
+            }
         }
-        if has_ui_session(authorization, target_session) {
-            continue;
-        }
-        return Err(relay_error(
-            "internal_unexpected_failure",
-            "resolved target session has no configured transport",
-            Some(json!({"target_session": target_session})),
-        ));
     }
 
     if quiescence_timeout_ms.is_some() && has_acp_target {
@@ -493,69 +499,72 @@ fn handle_send(
             })),
         ));
     }
+    // Send authorization gates the sender's capability within its own bundle;
+    // cross-bundle delivery is permit-all this slice (see design D5).
+    let all_resolved_targets = groups
+        .iter()
+        .flat_map(|group| group.targets.iter().map(|target| target.session_id.clone()))
+        .collect::<Vec<_>>();
     authorize_send(
         bundle,
         authorization,
         sender.session_id.as_str(),
-        resolved_targets.as_slice(),
+        all_resolved_targets.as_slice(),
     )?;
 
-    let all_target_sessions = resolved_targets.clone();
     let batch_settings = prompt_batch_settings();
     let quiescence =
         QuiescenceOptions::for_async(quiet_window_ms, quiescence_timeout_ms, acp_turn_timeout_ms);
-    let mut results = Vec::with_capacity(resolved_targets.len());
-    for target_session in resolved_targets {
-        let message_id = Uuid::new_v4().to_string();
-        let target_is_ui = has_ui_session(authorization, target_session.as_str())
-            && bundle
-                .members
-                .iter()
-                .all(|member| member.id != target_session);
-        let task = AsyncDeliveryTask {
-            bundle: bundle.clone(),
-            sender: sender_member.clone(),
-            all_target_sessions: all_target_sessions.clone(),
-            target_session: target_session.clone(),
-            target_is_ui,
-            message: message.clone(),
-            message_id: message_id.clone(),
-            quiescence,
-            batch_settings,
-            runtime_directory: runtime_directory.to_path_buf(),
-            completion_sender: None,
-            payload_mode: DeliveryPayloadMode::EnvelopeMessage,
-            append_enter: true,
-            permission_decider_sessions: permission_decider_sessions.clone(),
-            permission_max_pending: queue_max_pending,
-        };
-        enqueue_async_delivery(task)?;
-        emit_inscription(
-            "relay.send.async.queued",
-            &json!({
-                "bundle_name": bundle.bundle_name,
-                "sender_session": sender.session_id,
-                "target_session": target_session,
-                "message_id": message_id,
-            }),
-        );
-        results.push(SendResult {
-            target_session,
-            message_id,
-            outcome: SendOutcome::Queued,
-            reason_code: None,
-            reason: None,
-            details: None,
-        });
+    let mut results = Vec::with_capacity(all_resolved_targets.len());
+    for group in &groups {
+        let group_target_sessions = group
+            .targets
+            .iter()
+            .map(|target| target.session_id.clone())
+            .collect::<Vec<_>>();
+        for target in &group.targets {
+            let message_id = Uuid::new_v4().to_string();
+            let task = AsyncDeliveryTask {
+                bundle: group.bundle.clone(),
+                sender_bundle_name: bundle.bundle_name.clone(),
+                sender: sender_member.clone(),
+                all_target_sessions: group_target_sessions.clone(),
+                target_session: target.session_id.clone(),
+                target_is_ui: target.is_ui,
+                message: message.clone(),
+                message_id: message_id.clone(),
+                quiescence,
+                batch_settings,
+                runtime_directory: group.runtime_directory.clone(),
+                completion_sender: None,
+                payload_mode: DeliveryPayloadMode::EnvelopeMessage,
+                append_enter: true,
+                permission_decider_sessions: group.permission_decider_sessions.clone(),
+                permission_max_pending: group.permission_max_pending,
+            };
+            enqueue_async_delivery(task)?;
+            emit_inscription(
+                "relay.send.async.queued",
+                &json!({
+                    "bundle_name": group.bundle.bundle_name,
+                    "sender_session": sender.session_id,
+                    "target_session": target.session_id,
+                    "message_id": message_id,
+                }),
+            );
+            results.push(SendResult {
+                target_session: canonical_session_id(
+                    target.session_id.as_str(),
+                    group.bundle.bundle_name.as_str(),
+                ),
+                message_id,
+                outcome: SendOutcome::Queued,
+                reason_code: None,
+                reason: None,
+                details: None,
+            });
+        }
     }
-    let results = results
-        .into_iter()
-        .map(|mut result| {
-            result.target_session =
-                canonical_session_id(result.target_session.as_str(), bundle.bundle_name.as_str());
-            result
-        })
-        .collect::<Vec<_>>();
     let response = RelayResponse::Send {
         schema_version: SCHEMA_VERSION.to_string(),
         bundle_name: bundle.bundle_name.clone(),
@@ -894,6 +903,7 @@ fn handle_raww(
     let queue_max_pending = permission_max_pending(authorization);
     let task = AsyncDeliveryTask {
         bundle: bundle.clone(),
+        sender_bundle_name: bundle.bundle_name.clone(),
         sender: sender_member,
         all_target_sessions: vec![target_member.id.clone()],
         target_session: target_member.id.clone(),
@@ -1042,13 +1052,76 @@ fn resolve_sender_identity(
     ))
 }
 
-fn resolve_explicit_targets(
-    bundle: &BundleConfiguration,
-    authorization: &AuthorizationContext,
+/// One namespace-scoped delivery group: a target bundle's configuration plus
+/// the runtime context and permission deciders used to dispatch its targets.
+struct DeliveryGroup {
+    bundle: BundleConfiguration,
+    runtime_directory: PathBuf,
+    permission_decider_sessions: Vec<String>,
+    permission_max_pending: usize,
+    targets: Vec<ResolvedTarget>,
+}
+
+/// One validated target within a delivery group. `is_ui` marks relay-wide
+/// (`@GLOBAL`) targets, whose registry key is re-derived from the suffix rather
+/// than from the group's bundle members.
+struct ResolvedTarget {
+    session_id: String,
+    is_ui: bool,
+}
+
+/// Reason a `@<bundle>` target could not be resolved to a delivery group.
+enum BundleGroupError {
+    /// The named bundle is not configured on this relay; the caller folds this
+    /// into the request's accumulated `validation_unknown_target` set.
+    UnknownBundle,
+    /// Loading the bundle's configuration or authorization failed.
+    Relay(RelayError),
+}
+
+/// Resolves a Send's explicit targets into per-namespace delivery groups,
+/// validating every target before any delivery (design D2).
+///
+/// Each target's `@<namespace>` suffix selects its registry (design D1):
+/// `@GLOBAL` rides the dispatch-bundle group as a relay-wide UI target;
+/// `@EXTERNAL` / `@RELAY` are reserved and rejected; `@<bundle>` routes to that
+/// bundle's group (loaded from the catalog); a bare target resolves within the
+/// dispatch bundle. A relay-wide sender with no bundle-qualified target is
+/// rejected upstream (`resolve_send_routing_bundle`), so it never reaches here.
+/// Unknown targets across any namespace accumulate into a single
+/// `validation_unknown_target`.
+fn resolve_target_groups(
+    sender_bundle: &BundleConfiguration,
+    sender_authorization: &AuthorizationContext,
+    sender_runtime_directory: &Path,
+    configuration_root: &Path,
+    bundle_catalog: &BundleCatalog,
     targets: &[String],
-) -> Result<Vec<String>, RelayError> {
-    let mut resolved = Vec::with_capacity(targets.len());
-    let mut unknown_targets = Vec::new();
+) -> Result<Vec<DeliveryGroup>, RelayError> {
+    // Seed the dispatch-bundle group: the session sender's bound bundle, or a
+    // relay-wide sender's routing bundle (its first `@<bundle>` target). It
+    // hosts bare targets and relay-wide `@GLOBAL` targets in addition to any
+    // targets qualified with its own bundle name. A relay-wide sender whose
+    // targets are all bare carries no routing bundle and is rejected earlier, at
+    // the connection layer (`resolve_send_routing_bundle`); any bare target that
+    // reaches here resolves within the dispatch bundle.
+    let mut group_order: Vec<String> = vec![sender_bundle.bundle_name.clone()];
+    let mut groups_by_bundle: HashMap<String, DeliveryGroup> = HashMap::new();
+    groups_by_bundle.insert(
+        sender_bundle.bundle_name.clone(),
+        DeliveryGroup {
+            bundle: sender_bundle.clone(),
+            runtime_directory: sender_runtime_directory.to_path_buf(),
+            permission_decider_sessions: grant_authorized_ui_sessions(
+                sender_authorization,
+                sender_bundle,
+            ),
+            permission_max_pending: permission_max_pending(sender_authorization),
+            targets: Vec::new(),
+        },
+    );
+
+    let mut unknown_targets: Vec<String> = Vec::new();
 
     for target in targets {
         let requested = target.trim();
@@ -1056,23 +1129,158 @@ fn resolve_explicit_targets(
             unknown_targets.push(target.clone());
             continue;
         }
-        if let Some(member) = bundle.members.iter().find(|member| member.id == requested) {
-            resolved.push(member.id.clone());
-            continue;
+        match classify_principal_id(requested) {
+            Some(PrincipalType::Application | PrincipalType::Relay) => {
+                let namespace = split_principal_id(requested)
+                    .map(|(_, namespace)| namespace)
+                    .unwrap_or_default();
+                return Err(relay_error(
+                    "validation_unsupported_namespace",
+                    "target namespace is reserved for relay-internal routing",
+                    Some(json!({ "target": requested, "namespace": namespace })),
+                ));
+            }
+            Some(PrincipalType::User) => {
+                // Relay-wide `@GLOBAL` target: delivered as a UI event keyed off
+                // the suffix, so it rides the dispatch-bundle group context.
+                if has_ui_session(sender_authorization, requested) {
+                    push_target(
+                        &mut groups_by_bundle,
+                        &sender_bundle.bundle_name,
+                        ResolvedTarget {
+                            session_id: requested.to_string(),
+                            is_ui: true,
+                        },
+                    );
+                } else {
+                    unknown_targets.push(target.clone());
+                }
+            }
+            Some(PrincipalType::Session) => {
+                let (session_id, bundle_name) = split_principal_id(requested)
+                    .expect("session classification implies a parseable suffix");
+                match ensure_bundle_group(
+                    bundle_name,
+                    sender_bundle,
+                    configuration_root,
+                    bundle_catalog,
+                    &mut group_order,
+                    &mut groups_by_bundle,
+                ) {
+                    Ok(()) => {
+                        let is_member = groups_by_bundle.get(bundle_name).is_some_and(|group| {
+                            group
+                                .bundle
+                                .members
+                                .iter()
+                                .any(|member| member.id == session_id)
+                        });
+                        if is_member {
+                            push_target(
+                                &mut groups_by_bundle,
+                                bundle_name,
+                                ResolvedTarget {
+                                    session_id: session_id.to_string(),
+                                    is_ui: false,
+                                },
+                            );
+                        } else {
+                            unknown_targets.push(target.clone());
+                        }
+                    }
+                    Err(BundleGroupError::UnknownBundle) => unknown_targets.push(target.clone()),
+                    Err(BundleGroupError::Relay(error)) => return Err(error),
+                }
+            }
+            None => {
+                // Bare target (no `@<namespace>` suffix) resolves within the
+                // dispatch bundle. Canonical `<id>@<dispatch-bundle>` targets are
+                // normalized to this bare form before dispatch, so this also
+                // covers a relay-wide sender's targets qualified with its routing
+                // bundle.
+                let is_member = sender_bundle
+                    .members
+                    .iter()
+                    .any(|member| member.id == requested);
+                if is_member || has_ui_session(sender_authorization, requested) {
+                    push_target(
+                        &mut groups_by_bundle,
+                        &sender_bundle.bundle_name,
+                        ResolvedTarget {
+                            session_id: requested.to_string(),
+                            is_ui: !is_member,
+                        },
+                    );
+                } else {
+                    unknown_targets.push(target.clone());
+                }
+            }
         }
-        if has_ui_session(authorization, requested) {
-            resolved.push(requested.to_string());
-            continue;
-        }
-        unknown_targets.push(target.clone());
     }
 
     if !unknown_targets.is_empty() {
         return Err(relay_error(
             "validation_unknown_target",
             "one or more targets are not canonical configured target identifiers",
-            Some(json!({"unknown_targets": unknown_targets})),
+            Some(json!({ "unknown_targets": unknown_targets })),
         ));
     }
-    Ok(resolved)
+
+    // Preserve target-discovery order and drop the seeded dispatch group when no
+    // target landed in it (a relay-wide sender targeting only peer bundles).
+    Ok(group_order
+        .into_iter()
+        .filter_map(|bundle_name| groups_by_bundle.remove(&bundle_name))
+        .filter(|group| !group.targets.is_empty())
+        .collect())
+}
+
+/// Appends a resolved target to its bundle group. The group is guaranteed to
+/// exist by the time this is called.
+fn push_target(
+    groups_by_bundle: &mut HashMap<String, DeliveryGroup>,
+    bundle_name: &str,
+    target: ResolvedTarget,
+) {
+    if let Some(group) = groups_by_bundle.get_mut(bundle_name) {
+        group.targets.push(target);
+    }
+}
+
+/// Ensures a delivery group exists for `bundle_name`, loading the bundle's
+/// configuration and authorization from the catalog when first seen. The
+/// dispatch bundle is already seeded; an unconfigured bundle is reported so the
+/// caller can fold it into `validation_unknown_target`.
+fn ensure_bundle_group(
+    bundle_name: &str,
+    sender_bundle: &BundleConfiguration,
+    configuration_root: &Path,
+    bundle_catalog: &BundleCatalog,
+    group_order: &mut Vec<String>,
+    groups_by_bundle: &mut HashMap<String, DeliveryGroup>,
+) -> Result<(), BundleGroupError> {
+    if bundle_name == sender_bundle.bundle_name || groups_by_bundle.contains_key(bundle_name) {
+        return Ok(());
+    }
+    let Some(paths) = bundle_catalog.get(bundle_name) else {
+        return Err(BundleGroupError::UnknownBundle);
+    };
+    let bundle = load_bundle_configuration(configuration_root, bundle_name)
+        .map_err(|error| BundleGroupError::Relay(map_config(error)))?;
+    let authorization =
+        load_authorization_context(configuration_root, &bundle).map_err(BundleGroupError::Relay)?;
+    let permission_decider_sessions = grant_authorized_ui_sessions(&authorization, &bundle);
+    let permission_max_pending = permission_max_pending(&authorization);
+    group_order.push(bundle_name.to_string());
+    groups_by_bundle.insert(
+        bundle_name.to_string(),
+        DeliveryGroup {
+            bundle,
+            runtime_directory: paths.runtime_directory.clone(),
+            permission_decider_sessions,
+            permission_max_pending,
+            targets: Vec::new(),
+        },
+    );
+    Ok(())
 }
