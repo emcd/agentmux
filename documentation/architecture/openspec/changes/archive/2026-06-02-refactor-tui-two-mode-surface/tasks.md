@@ -63,12 +63,12 @@
 
 ## 3. Validation
 
-- [ ] 3.1 Operator E2E smoke: launch TUI; verify default Communication mode;
+- [x] 3.1 Operator E2E smoke: launch TUI; verify default Communication mode;
       press `F4`, verify Interaction mode with empty-target placeholder;
       open picker, press `l` on a tmux target, verify Interaction shows look
       snapshot for that session; press `w`, verify raww input is focused;
       clear raww input and produce a pending permission for the target,
       verify permission pane replaces raww region; resolve permission,
       verify raww region returns.
-- [ ] 3.2 Idle CPU still effectively zero after refactor (regression check
+- [x] 3.2 Idle CPU still effectively zero after refactor (regression check
       against issues/tui/8).

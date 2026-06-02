@@ -240,7 +240,7 @@ would be indistinguishable from `relay_unavailable` at the client.
 
 ### Requirement: Sender Attribution Schema
 
-Relay Chat and Look responses SHALL include an `authenticated_identity` field
+Relay Send and Look responses SHALL include an `authenticated_identity` field
 when the requesting session has a verified `principal_id`. The field SHALL
 carry the stable `principal_id` of the sender, not the ephemeral `session_id`.
 
@@ -260,13 +260,13 @@ mechanism is specified.
 
 #### Scenario: Authenticated sender shows principal_id in response
 
-- **WHEN** a Chat or Look response is issued for a session with a verified
+- **WHEN** a Send or Look response is issued for a session with a verified
   principal
 - **THEN** the response includes `authenticated_identity` set to the session's
   `principal_id`
 
 #### Scenario: Unauthenticated sender omits attribution field
 
-- **WHEN** a Chat or Look response is issued for a session without a verified
+- **WHEN** a Send or Look response is issued for a session without a verified
   principal
 - **THEN** the response does not include `authenticated_identity`

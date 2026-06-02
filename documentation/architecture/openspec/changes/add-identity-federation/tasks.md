@@ -172,7 +172,7 @@
 
 ## Slice 3 — Sender Attribution Schema (additive; can overlap with slice 2)
 
-- [ ] 3.1 Add `authenticated_identity: Option<String>` to `RelayResponse::Chat`
+- [ ] 3.1 Add `authenticated_identity: Option<String>` to `RelayResponse::Send`
       and `RelayResponse::Look` in `src/relay/contract.rs`. Populate from
       session's `principal_id` when verified; omit when unverified.
 - [ ] 3.2 Add `on_behalf_of: Option<String>` to the same response variants as
@@ -187,9 +187,9 @@
       not just the sender-side acknowledgement). Recipients need the sender's
       verified identity to build authorization on top. Update the envelope schema
       and relay delivery path accordingly.
-- [ ] 3.5 Integration test: Chat response for authenticated session includes
+- [ ] 3.5 Integration test: Send response for authenticated session includes
       `authenticated_identity` set to `principal_id`.
-- [ ] 3.6 Integration test: Chat response for unauthenticated session omits
+- [ ] 3.6 Integration test: Send response for unauthenticated session omits
       `authenticated_identity`.
 - [ ] 3.7 Integration test: delivered envelope on recipient stream includes
       `authenticated_identity` from the sender's verified `principal_id`.
