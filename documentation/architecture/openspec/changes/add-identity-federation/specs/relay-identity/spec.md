@@ -270,3 +270,15 @@ mechanism is specified.
 - **WHEN** a Send or Look response is issued for a session without a verified
   principal
 - **THEN** the response does not include `authenticated_identity`
+
+#### Scenario: Authenticated sender's identity carried in delivered envelope
+
+- **WHEN** a Send is dispatched from a session with a verified principal
+- **THEN** each UI-stream recipient's `incoming_message` stream event includes
+  `authenticated_identity` set to the sender's `principal_id`
+
+#### Scenario: Socket-trust sender omitted from delivered envelope
+
+- **WHEN** a Send is dispatched from a socket-trust session
+- **THEN** the `incoming_message` stream event does not include
+  `authenticated_identity`
