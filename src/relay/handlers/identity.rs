@@ -15,7 +15,9 @@ use crate::relay::identity::{
     PrincipalRecord, PrincipalStore, PrincipalType, classify_principal_id, generate_psk,
     hash_token_sha256, split_principal_id, write_psk_output_file,
 };
+use crate::relay::stream::revoke_streams_for_identity;
 use crate::relay::{RelayError, RelayResponse, SCHEMA_VERSION, relay_error};
+use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::paths::{peer_relay_psk_path, principal_store_path, session_identity_psk_path};
 
 /// Inputs for a `new peer` registration.
@@ -84,9 +86,10 @@ pub(in crate::relay) fn handle_new_peer(
 }
 
 /// Rotates the PSK for an existing principal, preserving its type, scope, and
-/// metadata. Slice 1 performs a store update only; active connections holding
-/// the old credential are not force-disconnected (revocation dispatch is
-/// Slice 2).
+/// metadata. After the store update, any active connection that authenticated
+/// with the old credential is force-disconnected: it receives a
+/// `runtime_identity_revoked` error frame and its connection is closed, so a
+/// rotated credential cannot keep a live session.
 pub(in crate::relay) fn handle_change_psk(
     configuration_root: &Path,
     state_root: &Path,
@@ -120,6 +123,26 @@ pub(in crate::relay) fn handle_change_psk(
         metadata: existing.metadata,
     });
     store.persist()?;
+
+    // Revoke any live connection still holding the rotated credential. The
+    // store update alone keeps an already-authenticated session alive until it
+    // reconnects; this force-disconnects it so rotation takes effect at once.
+    let revoked_frame = RelayResponse::Error {
+        error: relay_error(
+            "runtime_identity_revoked",
+            "identity credential was rotated; reconnect with the new credential",
+            Some(serde_json::json!({ "principal_id": principal_id })),
+        ),
+    };
+    let revoked_connections = revoke_streams_for_identity(principal_id.as_str(), &revoked_frame);
+    emit_inscription(
+        "relay.identity.psk_rotated",
+        &serde_json::json!({
+            "principal_id": principal_id,
+            "revoked_connections": revoked_connections,
+        }),
+    );
+
     Ok(RelayResponse::ChangePsk {
         schema_version: SCHEMA_VERSION.to_string(),
         principal_id,

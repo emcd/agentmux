@@ -120,10 +120,14 @@ exported from `src/relay/mod.rs`.
   an expired credential cannot authenticate, and pruned before each
   `new peer` / `change psk` mutation so the persisted file stays clean. A record
   with no `expires_at` never expires.
-- A `change psk` rotation replaces the stored hash immediately. In Slice 1,
-  active connections caching their verified `principal_id` continue under the
-  old binding until they disconnect; full revocation dispatch (typed error
-  frame + force-close) lands in Slice 2.
+- A `change psk` rotation replaces the stored hash immediately and revokes any
+  live connection that authenticated with the old credential: the connection
+  receives a `runtime_identity_revoked` error frame and is force-closed (Slice
+  2). Revocation is keyed by the connection's verified `principal_id`, recorded
+  on its stream-registry entry at Hello; socket-trust connections carry no
+  verified identity and are never revoked. The registry entry is evicted before
+  the teardown signal fires, so a reconnect presenting the rotated credential is
+  not wedged into an identity-claim conflict against the dying connection.
 - Credential administration is relay-wide, not bundle-scoped. `new peer`
   (`RelayRequest::NewPeer`) generates a PSK, stores its SHA-256 hash, and
   returns the raw value once — or writes it to an operator-supplied absolute
