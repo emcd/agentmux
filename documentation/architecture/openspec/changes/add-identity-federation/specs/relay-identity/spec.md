@@ -158,6 +158,9 @@ An introspection result SHALL include:
 - `principal_id`: the stable identity assigned at credential verification.
 - `expires_at`: the expiry timestamp for the principal (ISO 8601).
 - `on_behalf_of`: optional opaque host-supplied string carried by the relay.
+  This is the same reserved field as in the Sender Attribution Schema: it SHALL
+  be included in the response schema but left absent until its setting mechanism
+  is specified in a follow-on delta.
 - `verified`: boolean indicating the principal passed live verification.
 
 The introspection endpoint is the authoritative source for any

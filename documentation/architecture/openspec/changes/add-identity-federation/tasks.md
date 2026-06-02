@@ -144,12 +144,13 @@
 - [x] 2.2 At Hello verification, when principal type resolves to `application`,
       record scoped `IdentityIntrospect` rights on the connection context for
       use by request dispatch.
-- [ ] 2.3 Add `RelayRequest::IdentityIntrospect` variant to
+- [x] 2.3 Add `RelayRequest::IdentityIntrospect` variant to
       `src/relay/contract.rs` with fields `target_session: String` and optional
       `bundle_name: Option<String>`.
-- [ ] 2.4 Add `RelayResponse::IdentityIntrospect` variant: `principal_id`,
-      `expires_at`, `on_behalf_of: Option<String>` (reserved — always `null`
-      until setting mechanism is specified), `verified: bool`.
+- [x] 2.4 Add `RelayResponse::IdentityIntrospect` variant: `principal_id`,
+      `expires_at`, `on_behalf_of: Option<String>` (reserved — always
+      `None`/absent until setting mechanism is specified, matching the
+      `Send`/`Look` treatment in 3.2), `verified: bool`.
 - [ ] 2.5 Gate `IdentityIntrospect` dispatch on `application` principal type;
       return authorization denial for session and unauthenticated connections.
 - [ ] 2.6 Implement `identity.snapshot` stream event on trusted-host stream
