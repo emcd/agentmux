@@ -411,6 +411,23 @@ pub(crate) fn classify_principal_id(principal_id: &str) -> Option<PrincipalType>
 /// credential enforcement is disabled (see `verify_hello_credential`).
 pub(crate) const SOCKET_TRUST_TOKEN: &str = "socket-trust";
 
+/// Introspection rights recorded on an application principal's connection at
+/// Hello, so request dispatch (task 2.5) can gate `IdentityIntrospect` on them.
+///
+/// Present only for `Application` principals (which always present a recognized
+/// credential). The `scope` is the principal store record's `scope` field, set
+/// at `new peer` registration for `@EXTERNAL` principals; `None` means the
+/// principal was registered without a scope bound. How a `None` scope bounds
+/// introspection is decided by the dispatch gate in task 2.5; this type only
+/// records what was registered.
+#[derive(Clone, Debug)]
+pub(crate) struct IdentityIntrospectRights {
+    // Recorded at Hello (task 2.2); first read by the IdentityIntrospect
+    // dispatch gate (task 2.5), which has not landed yet.
+    #[allow(dead_code)]
+    pub(crate) scope: Option<String>,
+}
+
 /// Result of verifying a Hello credential against the principal store.
 pub(crate) struct VerifiedIdentity {
     pub(crate) principal_type: PrincipalType,
@@ -419,6 +436,11 @@ pub(crate) struct VerifiedIdentity {
     /// Drives sender-attribution (`authenticated_identity`) and distinguishes
     /// store-backed from socket-trust connections on the Hello path.
     pub(crate) store_backed: bool,
+    /// Introspection rights for an `Application` principal, carrying its
+    /// registered scope; `None` for every other principal type. Recorded on the
+    /// connection context so request dispatch can gate `IdentityIntrospect`
+    /// (task 2.5).
+    pub(crate) introspect_rights: Option<IdentityIntrospectRights>,
 }
 
 /// Verifies a Hello `principal_id` + `identity_token` against the principal
@@ -464,9 +486,14 @@ pub(crate) fn verify_hello_credential(
             })),
         ));
     }
+    let introspect_rights =
+        (record.principal_type == PrincipalType::Application).then(|| IdentityIntrospectRights {
+            scope: record.scope.clone(),
+        });
     Ok(VerifiedIdentity {
         principal_type: record.principal_type,
         store_backed: true,
+        introspect_rights,
     })
 }
 
@@ -492,6 +519,10 @@ fn verify_socket_trust(
             Ok(VerifiedIdentity {
                 principal_type: claimed_type,
                 store_backed: false,
+                // Socket-trust is accepted only for session and user
+                // principals, never `Application`, so it grants no introspect
+                // rights.
+                introspect_rights: None,
             })
         }
     }

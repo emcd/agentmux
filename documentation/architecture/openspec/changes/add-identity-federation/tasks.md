@@ -141,7 +141,7 @@
 - [x] 2.1 Implement `change psk` revocation dispatch: when the principal store
       hash is replaced, send `runtime_identity_revoked` to any active session
       holding the old credential and close the connection.
-- [ ] 2.2 At Hello verification, when principal type resolves to `application`,
+- [x] 2.2 At Hello verification, when principal type resolves to `application`,
       record scoped `IdentityIntrospect` rights on the connection context for
       use by request dispatch.
 - [ ] 2.3 Add `RelayRequest::IdentityIntrospect` variant to
