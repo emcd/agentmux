@@ -48,31 +48,38 @@ pub(super) fn deliver_one_target_ui(
             };
         }
 
+        let mut payload = json!({
+            "message_id": message_id.clone(),
+            // The sender is attributed to its home bundle, which differs
+            // from `bundle_name` (the target's bundle) for cross-bundle sends.
+            "sender_session": canonical_session_id(
+                sender_session,
+                task.sender_bundle_name.as_str(),
+            ),
+            "body": message,
+            "cc_sessions": if cc_sessions.is_empty() {
+                Value::Null
+            } else {
+                json!(
+                    cc_sessions
+                        .iter()
+                        .map(|cc| canonical_session_id(cc, bundle_name))
+                        .collect::<Vec<_>>()
+                )
+            },
+        });
+        // Carry the sender's verified principal_id to the recipient so it can
+        // build authorization on top. Omitted (not null) for socket-trust
+        // senders, mirroring the Send response.
+        if let Some(authenticated_identity) = task.authenticated_identity.as_deref() {
+            payload["authenticated_identity"] = Value::String(authenticated_identity.to_string());
+        }
         let incoming_event = RelayStreamEvent {
             event_type: "incoming_message".to_string(),
             bundle_name: bundle_name.to_string(),
             target_session: target_session.clone(),
             created_at: timestamp_rfc3339(),
-            payload: json!({
-                "message_id": message_id.clone(),
-                // The sender is attributed to its home bundle, which differs
-                // from `bundle_name` (the target's bundle) for cross-bundle sends.
-                "sender_session": canonical_session_id(
-                    sender_session,
-                    task.sender_bundle_name.as_str(),
-                ),
-                "body": message,
-                "cc_sessions": if cc_sessions.is_empty() {
-                    Value::Null
-                } else {
-                    json!(
-                        cc_sessions
-                            .iter()
-                            .map(|cc| canonical_session_id(cc, bundle_name))
-                            .collect::<Vec<_>>()
-                    )
-                },
-            }),
+            payload,
         };
         let routed_outcome = emit_delivery_outcome_event(
             bundle_name,

@@ -182,7 +182,7 @@
 - [ ] 3.3 Update MCP send and look response schemas to surface
       `authenticated_identity` when present; include `on_behalf_of` as a
       reserved optional field.
-- [ ] 3.4 Thread `authenticated_identity` into the delivered message envelope
+- [x] 3.4 Thread `authenticated_identity` into the delivered message envelope
       on the recipient side (the message that lands on the recipient's stream,
       not just the sender-side acknowledgement). Recipients need the sender's
       verified identity to build authorization on top. Update the envelope schema
@@ -191,5 +191,5 @@
       `authenticated_identity` set to `principal_id`.
 - [ ] 3.6 Integration test: Send response for unauthenticated session omits
       `authenticated_identity`.
-- [ ] 3.7 Integration test: delivered envelope on recipient stream includes
+- [x] 3.7 Integration test: delivered envelope on recipient stream includes
       `authenticated_identity` from the sender's verified `principal_id`.
