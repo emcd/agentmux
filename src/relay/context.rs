@@ -59,6 +59,11 @@ pub(super) struct AsyncDeliveryTask {
     /// attribute and route the sender independently of the target's namespace.
     pub(super) sender_bundle_name: String,
     pub(super) sender: crate::configuration::BundleMember,
+    /// Verified `principal_id` of the sender, carried into the delivered
+    /// message envelope on the recipient side. `None` for socket-trust senders
+    /// and for delivery paths that do not attribute a verified identity (e.g.
+    /// raw input).
+    pub(super) authenticated_identity: Option<String>,
     pub(super) all_target_sessions: Vec<String>,
     pub(super) target_session: String,
     pub(super) target_is_ui: bool,

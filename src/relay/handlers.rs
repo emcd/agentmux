@@ -407,6 +407,10 @@ fn handle_send(
         "sender_session",
     )?;
     let sender_member = sender.to_bundle_member();
+    // Verified principal_id of the sender, carried both on the Send response
+    // and into each recipient's delivered envelope; `None` for socket-trust.
+    let authenticated_identity =
+        principal.and_then(|principal| principal.authenticated_identity.clone());
 
     emit_inscription(
         "relay.send.request",
@@ -531,6 +535,7 @@ fn handle_send(
                 bundle: group.bundle.clone(),
                 sender_bundle_name: bundle.bundle_name.clone(),
                 sender: sender_member.clone(),
+                authenticated_identity: authenticated_identity.clone(),
                 all_target_sessions: group_target_sessions.clone(),
                 target_session: target.session_id.clone(),
                 target_is_ui: target.is_ui,
@@ -577,8 +582,7 @@ fn handle_send(
             bundle.bundle_name.as_str(),
         ),
         sender_display_name: sender.display_name.clone(),
-        authenticated_identity: principal
-            .and_then(|principal| principal.authenticated_identity.clone()),
+        authenticated_identity: authenticated_identity.clone(),
         on_behalf_of: None,
         results,
     };
@@ -915,6 +919,9 @@ fn handle_raww(
         bundle: bundle.clone(),
         sender_bundle_name: bundle.bundle_name.clone(),
         sender: sender_member,
+        // Raw input does not carry verified sender attribution, and its targets
+        // are never UI streams.
+        authenticated_identity: None,
         all_target_sessions: vec![target_member.id.clone()],
         target_session: target_member.id.clone(),
         target_is_ui: false,
