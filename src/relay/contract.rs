@@ -264,6 +264,11 @@ pub enum RelayRequest {
     ChangePsk {
         principal_id: String,
     },
+    IdentityIntrospect {
+        target_session: String,
+        #[serde(default)]
+        bundle_name: Option<String>,
+    },
 }
 
 /// Relay response protocol.
@@ -366,6 +371,22 @@ pub enum RelayResponse {
         schema_version: String,
         principal_id: String,
         psk: String,
+    },
+    IdentityIntrospect {
+        schema_version: String,
+        /// Verified `principal_id` of the introspected session.
+        principal_id: String,
+        /// Expiry of the introspected principal's credential, ISO 8601.
+        expires_at: String,
+        /// Delegated principal the introspected session is acting on behalf of.
+        /// Reserved: the setting mechanism lands in a later delta, so this is
+        /// always absent for now. Defined here so consumers can handle it
+        /// without a breaking change when it is activated.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_behalf_of: Option<String>,
+        /// True when the introspected session presented a store-backed
+        /// credential; false for socket-trust sessions.
+        verified: bool,
     },
     Error {
         error: RelayError,

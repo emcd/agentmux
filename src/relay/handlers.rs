@@ -191,6 +191,11 @@ pub(super) fn handle_request(
             "identity admin request reached the per-bundle dispatcher",
             None,
         )),
+        RelayRequest::IdentityIntrospect { .. } => Err(relay_error(
+            "internal_unexpected_request",
+            "identity introspect dispatch is not wired yet (task 2.5)",
+            None,
+        )),
     }
 }
 
@@ -333,7 +338,8 @@ fn normalize_request_identities(request: RelayRequest, bundle_name: &str) -> Rel
         | RelayRequest::PermissionResolve { .. }
         | RelayRequest::PermissionList { .. }
         | RelayRequest::NewPeer { .. }
-        | RelayRequest::ChangePsk { .. }) => request,
+        | RelayRequest::ChangePsk { .. }
+        | RelayRequest::IdentityIntrospect { .. }) => request,
     }
 }
 
