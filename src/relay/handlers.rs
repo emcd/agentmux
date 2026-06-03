@@ -25,8 +25,10 @@ use super::delivery::{
     derive_acp_look_snapshot, enqueue_async_delivery, enqueue_sync_delivery,
     get_acp_worker_snapshot, get_acp_worker_state, prompt_batch_settings,
 };
-use super::identity::{PrincipalType, classify_principal_id, split_principal_id};
-use super::stream::list_registered_relay_wide_sessions;
+use super::identity::{
+    IdentityIntrospectRights, PrincipalType, classify_principal_id, split_principal_id,
+};
+use super::stream::{RelayStreamEvent, list_registered_relay_wide_sessions};
 use super::tmux::{capture_pane_tail_lines, resolve_active_pane_target};
 use super::{
     AsyncDeliveryTask, DeliveryPayloadMode, ListedBundle, ListedBundleState, ListedSession,
@@ -289,6 +291,17 @@ pub(super) fn handle_identity_introspect(
     bundle_name: Option<&str>,
 ) -> Result<RelayResponse, RelayError> {
     identity::handle_identity_introspect(state_root, principal, target_session, bundle_name)
+}
+
+/// Builds the `identity.snapshot` stream event for a trusted-host connection's
+/// registered scope (delivered once, right after Hello). See
+/// `identity::build_identity_snapshot_event`.
+pub(super) fn build_identity_snapshot_event(
+    state_root: &Path,
+    host_principal_id: &str,
+    rights: &IdentityIntrospectRights,
+) -> Result<RelayStreamEvent, RelayError> {
+    identity::build_identity_snapshot_event(state_root, host_principal_id, rights)
 }
 
 /// Rewrites canonical `session@bundle` identities in an incoming request to

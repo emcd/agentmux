@@ -302,6 +302,33 @@ async fn serve_connection_frames(
                 authenticated_identity = connection_identity;
                 introspect_rights = binding.introspect_rights;
                 bound_bundle = binding.bound_bundle;
+                // A trusted-host (application principal) receives an
+                // `identity.snapshot` of the active principals within its scope
+                // immediately after Hello, so it can seed its view without an
+                // initial introspect round-trip. Other principal types carry no
+                // introspect rights and get no snapshot.
+                if let Some(rights) = introspect_rights.as_ref() {
+                    match handlers::build_identity_snapshot_event(
+                        state_root,
+                        hello.principal_id.as_str(),
+                        rights,
+                    ) {
+                        Ok(event) => write_stream_frame_to_writer(
+                            writer,
+                            OutgoingFrame::Event { event: &event },
+                        )?,
+                        Err(error) => {
+                            write_stream_frame_to_writer(
+                                writer,
+                                OutgoingFrame::Response {
+                                    request_id: None,
+                                    response: &RelayResponse::Error { error },
+                                },
+                            )?;
+                            break;
+                        }
+                    }
+                }
             }
             IncomingFrame::Request {
                 request_id,

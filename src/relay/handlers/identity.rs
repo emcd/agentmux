@@ -8,15 +8,18 @@
 
 use std::path::Path;
 
+use serde_json::Value;
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use crate::relay::authorization::{RelayActionFamily, authorize_relay_action};
 use crate::relay::context::RequestPrincipal;
 use crate::relay::identity::{
-    PrincipalRecord, PrincipalStore, PrincipalType, canonical_session_id, classify_principal_id,
-    generate_psk, hash_token_sha256, split_principal_id, write_psk_output_file,
+    IdentityIntrospectRights, PrincipalRecord, PrincipalStore, PrincipalType, canonical_session_id,
+    classify_principal_id, generate_psk, hash_token_sha256, split_principal_id,
+    write_psk_output_file,
 };
-use crate::relay::stream::revoke_streams_for_identity;
+use crate::relay::stream::{RelayStreamEvent, revoke_streams_for_identity};
 use crate::relay::{RelayError, RelayResponse, SCHEMA_VERSION, relay_error};
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::paths::{peer_relay_psk_path, principal_store_path, session_identity_psk_path};
@@ -224,6 +227,58 @@ fn introspect_denied(target_principal_id: &str) -> RelayError {
             "target_principal_id": target_principal_id,
         })),
     )
+}
+
+/// Builds the `identity.snapshot` stream event delivered to a trusted-host
+/// (application principal) connection right after Hello.
+///
+/// The snapshot carries the active (non-expired) principal records within the
+/// host's registered scope, so the host can seed its identity view without an
+/// initial introspect round-trip. Expired records are omitted (the snapshot is
+/// the set of *active* principals); the host re-verifies any specific principal
+/// through `IdentityIntrospect`. The store is loaded without pruning, but the
+/// expiry filter keeps expired records out of the snapshot regardless.
+pub(in crate::relay) fn build_identity_snapshot_event(
+    state_root: &Path,
+    host_principal_id: &str,
+    rights: &IdentityIntrospectRights,
+) -> Result<RelayStreamEvent, RelayError> {
+    let store = PrincipalStore::load(principal_store_path(state_root))?;
+    let now = OffsetDateTime::now_utc();
+    let principals: Vec<Value> = store
+        .records()
+        .filter(|record| !record.is_expired(now))
+        .filter(|record| scope_permits(rights.scope.as_deref(), record.principal_id.as_str()))
+        .map(snapshot_principal_entry)
+        .collect();
+    // The host is a relay-wide principal with no bundle; label the event with
+    // its namespace (e.g. `EXTERNAL`) rather than a bundle name.
+    let namespace = split_principal_id(host_principal_id)
+        .map(|(_, namespace)| namespace.to_string())
+        .unwrap_or_default();
+    Ok(RelayStreamEvent {
+        event_type: "identity.snapshot".to_string(),
+        bundle_name: namespace,
+        target_session: host_principal_id.to_string(),
+        created_at: now.format(&Rfc3339).unwrap_or_default(),
+        payload: serde_json::json!({ "principals": principals }),
+    })
+}
+
+/// Renders one active, in-scope principal record for the identity snapshot.
+/// `expires_at` is omitted when the principal never expires, matching the
+/// optional-field treatment in the introspect response.
+fn snapshot_principal_entry(record: &PrincipalRecord) -> Value {
+    let mut entry = serde_json::Map::new();
+    entry.insert(
+        "principal_id".to_string(),
+        Value::String(record.principal_id.clone()),
+    );
+    if let Some(expires_at) = record.expires_at.as_ref() {
+        entry.insert("expires_at".to_string(), Value::String(expires_at.clone()));
+    }
+    entry.insert("verified".to_string(), Value::Bool(true));
+    Value::Object(entry)
 }
 
 /// Validates and classifies the target `principal_id` for registration.

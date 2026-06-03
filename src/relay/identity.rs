@@ -185,6 +185,13 @@ impl PrincipalStore {
         None
     }
 
+    /// Iterates every loaded principal record in arbitrary order, without expiry
+    /// filtering. Callers that need only active records filter on
+    /// [`PrincipalRecord::is_expired`].
+    pub(crate) fn records(&self) -> impl Iterator<Item = &PrincipalRecord> {
+        self.records_by_hash.values()
+    }
+
     /// Looks up a principal by its registered `principal_id`.
     pub(crate) fn find_by_principal_id(&self, principal_id: &str) -> Option<&PrincipalRecord> {
         self.records_by_hash
