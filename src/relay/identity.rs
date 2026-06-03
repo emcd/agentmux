@@ -92,6 +92,16 @@ pub(crate) struct PrincipalRecord {
     pub(crate) metadata: HashMap<String, String>,
 }
 
+impl PrincipalRecord {
+    /// Returns true when this record's `expires_at` has passed (or cannot be
+    /// parsed; fail-closed). A record with no `expires_at` never expires. Used
+    /// by identity introspection to report `verified` without mutating the
+    /// store (an expired record must still surface as `verified: false`).
+    pub(crate) fn is_expired(&self, now: OffsetDateTime) -> bool {
+        record_is_expired(self, now)
+    }
+}
+
 /// Relay-level principal store backed by `<state-root>/identity/principals.json`.
 ///
 /// Loads at relay startup; writes are performed atomically with restrictive
@@ -412,19 +422,15 @@ pub(crate) fn classify_principal_id(principal_id: &str) -> Option<PrincipalType>
 pub(crate) const SOCKET_TRUST_TOKEN: &str = "socket-trust";
 
 /// Introspection rights recorded on an application principal's connection at
-/// Hello, so request dispatch (task 2.5) can gate `IdentityIntrospect` on them.
+/// Hello, so request dispatch can gate `IdentityIntrospect` on them.
 ///
 /// Present only for `Application` principals (which always present a recognized
 /// credential). The `scope` is the principal store record's `scope` field, set
 /// at `new peer` registration for `@EXTERNAL` principals; `None` means the
-/// principal was registered without a scope bound. How a `None` scope bounds
-/// introspection is decided by the dispatch gate in task 2.5; this type only
-/// records what was registered.
+/// principal was registered without a scope bound, which the dispatch gate
+/// treats as fail-closed (no target is in scope).
 #[derive(Clone, Debug)]
 pub(crate) struct IdentityIntrospectRights {
-    // Recorded at Hello (task 2.2); first read by the IdentityIntrospect
-    // dispatch gate (task 2.5), which has not landed yet.
-    #[allow(dead_code)]
     pub(crate) scope: Option<String>,
 }
 

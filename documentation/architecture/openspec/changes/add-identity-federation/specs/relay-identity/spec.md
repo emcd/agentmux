@@ -156,7 +156,9 @@ typed authorization denial.
 
 An introspection result SHALL include:
 - `principal_id`: the stable identity assigned at credential verification.
-- `expires_at`: the expiry timestamp for the principal (ISO 8601).
+- `expires_at`: the expiry timestamp for the principal (ISO 8601). Present only
+  when the principal has a bounded expiry; absent for principals that never
+  expire, rather than carrying a placeholder timestamp.
 - `on_behalf_of`: optional opaque host-supplied string carried by the relay.
   This is the same reserved field as in the Sender Attribution Schema: it SHALL
   be included in the response schema but left absent until its setting mechanism

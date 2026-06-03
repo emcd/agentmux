@@ -31,8 +31,8 @@ use super::stream::{
 };
 use super::{
     RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
-    canonical_session_id, dispatch_identity_admin, dispatch_request, handlers, map_config,
-    map_tui_config, relay_error,
+    canonical_session_id, dispatch_identity_admin, dispatch_identity_introspect, dispatch_request,
+    handlers, map_config, map_tui_config, relay_error,
 };
 
 /// Map from configured bundle name to its resolved runtime paths. Shared
@@ -355,6 +355,26 @@ async fn serve_connection_frames(
                         state_root,
                         requester_principal_id.as_str(),
                     );
+                    write_stream_frame_to_writer(
+                        writer,
+                        OutgoingFrame::Response {
+                            request_id: request_id.as_deref(),
+                            response: &response,
+                        },
+                    )?;
+                    continue;
+                }
+                // Identity introspection is relay-wide: it reads the relay-level
+                // principal store and its target may be a bundle-less principal,
+                // so it bypasses per-bundle routing. The gate is the connection's
+                // recorded `introspect_rights`, carried on the request principal.
+                if matches!(request, RelayRequest::IdentityIntrospect { .. }) {
+                    let principal = RequestPrincipal {
+                        session_id: active_registration.requester_session_id().to_string(),
+                        authenticated_identity: authenticated_identity.clone(),
+                        introspect_rights: introspect_rights.clone(),
+                    };
+                    let response = dispatch_identity_introspect(request, state_root, &principal);
                     write_stream_frame_to_writer(
                         writer,
                         OutgoingFrame::Response {
