@@ -186,14 +186,11 @@ pub(super) fn handle_request(
             runtime_directory,
             principal,
         ),
-        RelayRequest::NewPeer { .. } | RelayRequest::ChangePsk { .. } => Err(relay_error(
+        RelayRequest::NewPeer { .. }
+        | RelayRequest::ChangePsk { .. }
+        | RelayRequest::IdentityIntrospect { .. } => Err(relay_error(
             "internal_unexpected_request",
-            "identity admin request reached the per-bundle dispatcher",
-            None,
-        )),
-        RelayRequest::IdentityIntrospect { .. } => Err(relay_error(
-            "internal_unexpected_request",
-            "identity introspect dispatch is not wired yet (task 2.5)",
+            "relay-wide identity request reached the per-bundle dispatcher",
             None,
         )),
     }
@@ -278,6 +275,20 @@ pub(super) fn handle_identity_admin_request(
             None,
         )),
     }
+}
+
+/// Dispatches a relay-wide `IdentityIntrospect` request. Like the identity admin
+/// handlers this bypasses the per-bundle `handle_request` path: introspection
+/// reads the relay-level principal store and its target may be a bundle-less
+/// principal. The connection gate (the recorded `introspect_rights` and their
+/// scope) is enforced inside the handler.
+pub(super) fn handle_identity_introspect(
+    state_root: &Path,
+    principal: &RequestPrincipal,
+    target_session: &str,
+    bundle_name: Option<&str>,
+) -> Result<RelayResponse, RelayError> {
+    identity::handle_identity_introspect(state_root, principal, target_session, bundle_name)
 }
 
 /// Rewrites canonical `session@bundle` identities in an incoming request to

@@ -52,9 +52,7 @@ pub(super) struct RequestPrincipal {
     pub(super) authenticated_identity: Option<String>,
     /// Introspection rights for an application principal, recorded at Hello;
     /// `None` for every other connection. Request dispatch gates
-    /// `IdentityIntrospect` on this (task 2.5). Recorded now; first read by that
-    /// gate, which has not landed yet.
-    #[allow(dead_code)]
+    /// `IdentityIntrospect` on this.
     pub(super) introspect_rights: Option<IdentityIntrospectRights>,
 }
 

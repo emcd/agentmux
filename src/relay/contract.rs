@@ -376,8 +376,11 @@ pub enum RelayResponse {
         schema_version: String,
         /// Verified `principal_id` of the introspected session.
         principal_id: String,
-        /// Expiry of the introspected principal's credential, ISO 8601.
-        expires_at: String,
+        /// Expiry of the introspected principal's credential (ISO 8601).
+        /// Present only when the principal has a bounded expiry; absent for
+        /// principals that never expire, rather than a placeholder timestamp.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expires_at: Option<String>,
         /// Delegated principal the introspected session is acting on behalf of.
         /// Reserved: the setting mechanism lands in a later delta, so this is
         /// always absent for now. Defined here so consumers can handle it

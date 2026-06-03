@@ -11,9 +11,10 @@ use std::path::Path;
 use time::OffsetDateTime;
 
 use crate::relay::authorization::{RelayActionFamily, authorize_relay_action};
+use crate::relay::context::RequestPrincipal;
 use crate::relay::identity::{
-    PrincipalRecord, PrincipalStore, PrincipalType, classify_principal_id, generate_psk,
-    hash_token_sha256, split_principal_id, write_psk_output_file,
+    PrincipalRecord, PrincipalStore, PrincipalType, canonical_session_id, classify_principal_id,
+    generate_psk, hash_token_sha256, split_principal_id, write_psk_output_file,
 };
 use crate::relay::stream::revoke_streams_for_identity;
 use crate::relay::{RelayError, RelayResponse, SCHEMA_VERSION, relay_error};
@@ -148,6 +149,81 @@ pub(in crate::relay) fn handle_change_psk(
         principal_id,
         psk,
     })
+}
+
+/// Resolves an `IdentityIntrospect` request against the relay-wide principal
+/// store, gated on the connection's recorded introspection rights.
+///
+/// Only an application principal carries `introspect_rights` (recorded at
+/// Hello), and only targets within its registered scope may be introspected; a
+/// connection without rights, or a target outside scope, receives an
+/// authorization denial. The store is read without pruning so an expired
+/// principal still surfaces (with `verified: false`) rather than vanishing.
+pub(in crate::relay) fn handle_identity_introspect(
+    state_root: &Path,
+    principal: &RequestPrincipal,
+    target_session: &str,
+    bundle_name: Option<&str>,
+) -> Result<RelayResponse, RelayError> {
+    let target_principal_id = match bundle_name {
+        Some(bundle) => canonical_session_id(target_session, bundle),
+        None => target_session.to_string(),
+    };
+    let Some(rights) = principal.introspect_rights.as_ref() else {
+        return Err(introspect_denied(target_principal_id.as_str()));
+    };
+    if !scope_permits(rights.scope.as_deref(), target_principal_id.as_str()) {
+        return Err(introspect_denied(target_principal_id.as_str()));
+    }
+    let store = PrincipalStore::load(principal_store_path(state_root))?;
+    let Some(record) = store.find_by_principal_id(target_principal_id.as_str()) else {
+        return Err(relay_error(
+            "validation_unknown_principal",
+            "no registered principal matches the introspection target",
+            Some(serde_json::json!({ "principal_id": target_principal_id })),
+        ));
+    };
+    let verified = !record.is_expired(OffsetDateTime::now_utc());
+    Ok(RelayResponse::IdentityIntrospect {
+        schema_version: SCHEMA_VERSION.to_string(),
+        principal_id: record.principal_id.clone(),
+        expires_at: record.expires_at.clone(),
+        on_behalf_of: None,
+        verified,
+    })
+}
+
+/// Decides whether a host's registered `scope` permits introspecting
+/// `target_principal_id`.
+///
+/// The store records a single scope entry as either a canonical
+/// `session_id@bundle_name` identity (exact match) or a bare `bundle_name`
+/// (matches every session in that bundle namespace). A `None` scope is
+/// fail-closed: no target is in scope.
+fn scope_permits(scope: Option<&str>, target_principal_id: &str) -> bool {
+    let Some(scope) = scope else {
+        return false;
+    };
+    if scope == target_principal_id {
+        return true;
+    }
+    matches!(
+        split_principal_id(target_principal_id),
+        Some((_, namespace)) if scope == namespace
+    )
+}
+
+/// Builds the authorization denial returned for an introspection the connection
+/// is not permitted to perform (no rights, or target outside scope).
+fn introspect_denied(target_principal_id: &str) -> RelayError {
+    relay_error(
+        "authorization_forbidden",
+        "request denied by authorization policy",
+        Some(serde_json::json!({
+            "capability": "identity.introspect",
+            "target_principal_id": target_principal_id,
+        })),
+    )
 }
 
 /// Validates and classifies the target `principal_id` for registration.

@@ -552,6 +552,158 @@ fn change_psk_revokes_live_session_holding_old_credential() {
     alpha_join.join().expect("join alpha relay thread");
 }
 
+// --- Identity introspection: IdentityIntrospect dispatch gate (Slice 2, tasks 2.9/2.10) ---
+
+/// Connects with `principal_id` + `identity_token`, issues one
+/// `IdentityIntrospect` for `target_session` (optionally qualified by
+/// `bundle_name`), and returns the response frame. The connection is closed
+/// before returning.
+fn introspect_request(
+    configuration_root: &Path,
+    bundle_paths: &BundleRuntimePaths,
+    principal_id: &str,
+    identity_token: &str,
+    target_session: &str,
+    bundle_name: Option<&str>,
+) -> Value {
+    let (mut client, join) = spawn_relay_connection(configuration_root, bundle_paths);
+    let mut reader = BufReader::new(client.try_clone().expect("clone introspect stream"));
+    send_json(
+        &mut client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "principal_id": principal_id,
+            "identity_token": identity_token,
+        }),
+    );
+    assert_eq!(
+        read_json(&mut reader)["frame"],
+        "hello_ack",
+        "introspect client hello not acked"
+    );
+    let mut request = json!({
+        "operation": "identity_introspect",
+        "target_session": target_session,
+    });
+    if let Some(bundle_name) = bundle_name {
+        request["bundle_name"] = Value::String(bundle_name.to_string());
+    }
+    send_json(
+        &mut client,
+        json!({
+            "frame": "request",
+            "request_id": "introspect-1",
+            "request": request,
+        }),
+    );
+    let mut response = read_json(&mut reader);
+    while response["frame"] != "response" {
+        response = read_json(&mut reader);
+    }
+    shutdown_stream(&client, "shutdown introspect stream");
+    join.join().expect("join introspect relay thread");
+    response
+}
+
+// 2.9 An application principal introspects an in-scope session and receives the
+// target's principal_id, expires_at, and verified: true.
+#[test]
+fn application_principal_introspects_active_session() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "ident_introspect_ok";
+    let configuration_root = write_identity_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let target_principal_id = format!("alpha@{bundle_name}");
+
+    // Register the introspection target as a session principal in the store.
+    register_peer(
+        &configuration_root,
+        &bundle_paths,
+        bundle_name,
+        &target_principal_id,
+        None,
+    );
+    // Register the application principal scoped to the whole bundle (bare-bundle
+    // scope covers every session in that namespace).
+    let app_psk = register_peer(
+        &configuration_root,
+        &bundle_paths,
+        bundle_name,
+        "engine@EXTERNAL",
+        Some(bundle_name),
+    );
+
+    let response = introspect_request(
+        &configuration_root,
+        &bundle_paths,
+        "engine@EXTERNAL",
+        &app_psk,
+        "alpha",
+        Some(bundle_name),
+    );
+
+    assert_eq!(
+        response["response"]["kind"], "identity_introspect",
+        "expected introspect response: {response:?}"
+    );
+    assert_eq!(
+        response["response"]["principal_id"], target_principal_id,
+        "introspection must surface the target's stable principal_id"
+    );
+    assert_eq!(
+        response["response"]["verified"], true,
+        "an unexpired principal must verify"
+    );
+    // The target was registered without an expiry, so `expires_at` is absent
+    // rather than a placeholder timestamp (it is an optional ISO 8601 field).
+    assert!(
+        response["response"]["expires_at"].is_null(),
+        "expires_at must be absent for a principal that never expires: {response:?}"
+    );
+    assert!(
+        response["response"]["on_behalf_of"].is_null(),
+        "on_behalf_of must be absent until its setting mechanism lands"
+    );
+}
+
+// 2.10 A session principal issuing IdentityIntrospect is denied: it carries no
+// introspection rights, so the gate returns an authorization denial and no
+// identity data.
+#[test]
+fn session_principal_introspect_is_denied() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "ident_introspect_denied";
+    let configuration_root = write_identity_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+
+    // A socket-trust session principal: accepted at Hello (enforcement off) but
+    // granted no introspection rights.
+    let response = introspect_request(
+        &configuration_root,
+        &bundle_paths,
+        &format!("alpha@{bundle_name}"),
+        "socket-trust",
+        "alpha",
+        Some(bundle_name),
+    );
+
+    assert_eq!(
+        response["response"]["kind"], "error",
+        "session introspect must be rejected: {response:?}"
+    );
+    assert_eq!(
+        response["response"]["error"]["code"], "authorization_forbidden",
+        "session introspect must be an authorization denial: {response:?}"
+    );
+    assert!(
+        response["response"]["principal_id"].is_null(),
+        "a denied introspection must not leak identity data"
+    );
+}
+
 // --- Sender attribution: authenticated_identity on Send (Slice 3, tasks 3.1/3.5/3.6) ---
 
 /// Connects an `@GLOBAL` operator as a relay-wide receiver, then connects as

@@ -151,7 +151,7 @@
       `expires_at`, `on_behalf_of: Option<String>` (reserved — always
       `None`/absent until setting mechanism is specified, matching the
       `Send`/`Look` treatment in 3.2), `verified: bool`.
-- [ ] 2.5 Gate `IdentityIntrospect` dispatch on `application` principal type;
+- [x] 2.5 Gate `IdentityIntrospect` dispatch on `application` principal type;
       return authorization denial for session and unauthenticated connections.
 - [ ] 2.6 Implement `identity.snapshot` stream event on trusted-host stream
       connect: deliver current active principal records within the host's scope.
@@ -160,9 +160,9 @@
       explicit revocation).
 - [ ] 2.8 Implement relay-side session teardown on expiry: emit typed error
       response frame (`runtime_identity_expired`) before closing the connection.
-- [ ] 2.9 Integration test: application principal introspects active session
+- [x] 2.9 Integration test: application principal introspects active session
       → returns `principal_id`, `expires_at`, `verified: true`.
-- [ ] 2.10 Integration test: session principal issues IdentityIntrospect
+- [x] 2.10 Integration test: session principal issues IdentityIntrospect
       → authorization denial, no identity data returned.
 - [x] 2.11 Integration test: `change psk` on active session → session receives
       `runtime_identity_revoked` frame before connection closes.

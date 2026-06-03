@@ -200,6 +200,39 @@ pub(in crate::relay) fn dispatch_identity_admin(
     }
 }
 
+/// Dispatches a relay-wide `IdentityIntrospect` request. Introspection reads the
+/// relay-level principal store and its target may be a bundle-less principal, so
+/// like the identity admin requests it bypasses the per-bundle path. The gate is
+/// the connection's recorded `introspect_rights`, carried on `principal`.
+pub(in crate::relay) fn dispatch_identity_introspect(
+    request: RelayRequest,
+    state_root: &Path,
+    principal: &RequestPrincipal,
+) -> RelayResponse {
+    let RelayRequest::IdentityIntrospect {
+        target_session,
+        bundle_name,
+    } = request
+    else {
+        return RelayResponse::Error {
+            error: relay_error(
+                "internal_unexpected_request",
+                "non-introspect request routed to identity introspect dispatcher",
+                None,
+            ),
+        };
+    };
+    match handlers::handle_identity_introspect(
+        state_root,
+        principal,
+        target_session.as_str(),
+        bundle_name.as_deref(),
+    ) {
+        Ok(value) => value,
+        Err(error) => RelayResponse::Error { error },
+    }
+}
+
 /// Prunes expired records from the relay-level principal store.
 ///
 /// Loads the store at `<state-root>/identity/principals.json`, drops records
