@@ -720,16 +720,19 @@ fn resolve_hello_binding(
             })),
         ));
     }
-    let mut store = PrincipalStore::load(principal_store_path(state_root))?;
-    // Prune expired records on access so an expired credential cannot
-    // authenticate (in-memory only; the file is rewritten on startup and on
-    // store mutations).
-    store.prune_expired(OffsetDateTime::now_utc());
+    let store = PrincipalStore::load(principal_store_path(state_root))?;
+    // Expiry is enforced inside `verify_hello_credential` (against `now`) rather
+    // than by pruning the store first: an expired-but-recognized credential is
+    // rejected with the distinct `runtime_identity_expired` error and its
+    // connection is closed, instead of being silently indistinguishable from an
+    // unregistered one. The on-disk store is rewritten by startup/mutation
+    // pruning, so this read-only path leaves the file untouched.
     let verified = verify_hello_credential(
         hello.principal_id.as_str(),
         hello.identity_token.as_str(),
         &store,
         require_session_credentials,
+        OffsetDateTime::now_utc(),
     )?;
     let VerifiedIdentity {
         principal_type,

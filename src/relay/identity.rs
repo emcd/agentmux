@@ -485,11 +485,18 @@ pub(crate) struct VerifiedIdentity {
 /// application and relay principals always require a recognized credential.
 /// Unrecognized non-sentinel tokens are rejected fail-closed regardless of
 /// enforcement.
+///
+/// Expiry is detected here rather than by pruning the store before lookup: a
+/// recognized credential whose record has expired is rejected with the distinct
+/// `runtime_identity_expired` error (carrying `now`), so an expiring session is
+/// told its credential lapsed rather than receiving the generic
+/// `validation_unrecognized_credential`.
 pub(crate) fn verify_hello_credential(
     principal_id: &str,
     identity_token: &str,
     store: &PrincipalStore,
     require_session_credentials: bool,
+    now: OffsetDateTime,
 ) -> Result<VerifiedIdentity, RelayError> {
     let Some(claimed_type) = classify_principal_id(principal_id) else {
         return Err(relay_error(
@@ -516,6 +523,16 @@ pub(crate) fn verify_hello_credential(
             Some(json!({
                 "principal_id": principal_id,
                 "registered_principal_id": record.principal_id,
+            })),
+        ));
+    }
+    if record.is_expired(now) {
+        return Err(relay_error(
+            "runtime_identity_expired",
+            "identity credential has expired; re-register or rotate the credential",
+            Some(json!({
+                "principal_id": principal_id,
+                "expires_at": record.expires_at,
             })),
         ));
     }

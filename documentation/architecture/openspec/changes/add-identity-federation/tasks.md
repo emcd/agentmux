@@ -158,7 +158,7 @@
 - [x] 2.7 Implement `identity.revoked` event dispatch on the existing
       stream-event carrier when a principal is revoked (via `change psk` or
       explicit revocation).
-- [ ] 2.8 Implement relay-side session teardown on expiry: emit typed error
+- [x] 2.8 Implement relay-side session teardown on expiry: emit typed error
       response frame (`runtime_identity_expired`) before closing the connection.
 - [x] 2.9 Integration test: application principal introspects active session
       → returns `principal_id`, `expires_at`, `verified: true`.
@@ -166,9 +166,9 @@
       → authorization denial, no identity data returned.
 - [x] 2.11 Integration test: `change psk` on active session → session receives
       `runtime_identity_revoked` frame before connection closes.
-- [ ] 2.12 Integration test: principal expires → session receives
+- [x] 2.12 Integration test: principal expires → session receives
       `runtime_identity_expired` frame before connection closes.
-- [ ] 2.13 Integration test: typed error codes are distinct from
+- [x] 2.13 Integration test: typed error codes are distinct from
       `relay_unavailable`.
 
 ## Slice 3 — Sender Attribution Schema (additive; can overlap with slice 2)

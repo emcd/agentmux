@@ -116,10 +116,19 @@ exported from `src/relay/mod.rs`.
   drive recovery.
 - **Expiry pruning**: records with an RFC 3339 `expires_at` in the past (and,
   fail-closed, any with an unparseable `expires_at`) are pruned. The store is
-  pruned-and-persisted once at relay startup, pruned in memory on every Hello so
-  an expired credential cannot authenticate, and pruned before each
+  pruned-and-persisted once at relay startup and pruned before each
   `new peer` / `change psk` mutation so the persisted file stays clean. A record
   with no `expires_at` never expires.
+- **Expiry teardown at Hello**: the Hello path does not pre-prune the store;
+  instead `verify_hello_credential` checks the matched record against the
+  current time, and a recognized-but-expired credential is rejected with the
+  distinct `runtime_identity_expired` error frame before the connection is
+  closed (Slice 2). This tells an expiring session its credential lapsed rather
+  than collapsing the case into the generic `validation_unrecognized_credential`
+  it would see if the record had simply been pruned away. It mirrors the
+  `change psk` revocation teardown below; both deliver a typed
+  `runtime_identity_*` frame ahead of the close, distinct from the
+  transport-level `relay_unavailable`.
 - A `change psk` rotation replaces the stored hash immediately and revokes any
   live connection that authenticated with the old credential: the connection
   receives a `runtime_identity_revoked` error frame and is force-closed (Slice
