@@ -60,9 +60,15 @@ fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
+        Span::raw("  Bundle: "),
+        Span::styled(
+            state.bundle_name.clone(),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw(format!(
-            "  Bundle: {}  Sender: {}  Pending Deliveries: {}",
-            state.bundle_name,
+            "  Sender: {}  Pending Deliveries: {}",
             state.sender_session,
             state.pending_deliveries_count()
         )),
@@ -875,7 +881,7 @@ fn help_section_heading(text: &'static str) -> Line<'static> {
 }
 
 fn render_help_overlay(frame: &mut Frame, _state: &AppState) {
-    let popup = centered_rect(72, 70, frame.area());
+    let popup = centered_rect(72, 80, frame.area());
     frame.render_widget(Clear, popup);
     let block = Block::default().borders(Borders::ALL).title("Help");
     let inner = block.inner(popup);
@@ -907,6 +913,12 @@ fn render_help_overlay(frame: &mut Frame, _state: &AppState) {
         Line::from("Esc in Message: Snap history to latest"),
         Line::from("PgUp/PgDn: Scroll chat history"),
         Line::from("Mouse wheel: Scroll chat history"),
+        Line::from(""),
+        help_section_heading("To Field Grammar"),
+        Line::from("session — route to active bundle"),
+        Line::from("session@bundle — route to named bundle"),
+        Line::from("session@GLOBAL — relay-wide user"),
+        Line::from("Comma-separate multiple recipients"),
     ];
     let right_lines = vec![
         help_section_heading("Interaction Mode"),

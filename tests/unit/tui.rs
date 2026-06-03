@@ -27,6 +27,66 @@ fn parses_at_prefixed_target_identifier() {
 }
 
 #[test]
+fn parses_session_at_active_bundle_to_bare_session() {
+    let resolved = parse_tui_target_identifier("relay@agentmux", "agentmux").expect("target");
+    assert_eq!(resolved, "relay");
+}
+
+#[test]
+fn parses_session_at_peer_bundle_preserves_canonical_form() {
+    let resolved = parse_tui_target_identifier("relay@other-bundle", "agentmux").expect("target");
+    assert_eq!(resolved, "relay@other-bundle");
+}
+
+#[test]
+fn parses_global_user_target_identifier() {
+    let resolved = parse_tui_target_identifier("operator@GLOBAL", "agentmux").expect("target");
+    assert_eq!(resolved, "operator@GLOBAL");
+}
+
+#[test]
+fn parses_at_prefixed_canonical_target_identifier() {
+    let resolved = parse_tui_target_identifier("@relay@other-bundle", "agentmux").expect("target");
+    assert_eq!(resolved, "relay@other-bundle");
+}
+
+#[test]
+fn rejects_empty_session_in_canonical_target() {
+    let error = parse_tui_target_identifier("@@relay", "agentmux").expect_err("must reject");
+    assert!(error.to_string().contains("validation_unknown_target"));
+}
+
+#[test]
+fn rejects_empty_bundle_in_canonical_target() {
+    let error = parse_tui_target_identifier("relay@", "agentmux").expect_err("must reject");
+    assert!(error.to_string().contains("validation_unknown_target"));
+}
+
+#[test]
+fn rejects_multiple_at_separators_in_target_identifier() {
+    let error = parse_tui_target_identifier("relay@one@two", "agentmux").expect_err("must reject");
+    assert!(error.to_string().contains("validation_unknown_target"));
+}
+
+#[test]
+fn rejects_slash_in_bundle_qualifier() {
+    let error = parse_tui_target_identifier("relay@bun/dle", "agentmux").expect_err("must reject");
+    assert!(error.to_string().contains("validation_unknown_target"));
+}
+
+#[test]
+fn merge_dedupes_canonical_and_bare_intra_bundle_targets() {
+    let targets = merge_tui_targets("relay, relay@agentmux", "agentmux").expect("targets");
+    assert_eq!(targets, vec!["relay"]);
+}
+
+#[test]
+fn merge_preserves_peer_bundle_target_alongside_local() {
+    let targets = merge_tui_targets("relay, mcp@other-bundle", "agentmux").expect("targets");
+    assert_eq!(targets, vec!["relay", "mcp@other-bundle"]);
+}
+
+#[test]
 fn merges_to_field_into_deterministic_targets() {
     let targets = merge_tui_targets("relay, mcp, tui", "agentmux").expect("targets");
     assert_eq!(targets, vec!["relay", "mcp", "tui"]);

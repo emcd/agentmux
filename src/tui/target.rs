@@ -21,25 +21,58 @@ pub(super) struct RecipientTokenContext {
 /// Parses one recipient identifier for TUI target workflows.
 ///
 /// Accepted forms:
-/// - local: `<session-id>`
+/// - bare: `<session-id>` — routed to the associated bundle.
+/// - canonical: `<session-id>@<bundle>` — routed to the named bundle. When the
+///   bundle qualifier matches the associated bundle, the qualifier is dropped
+///   from the emitted identifier; otherwise the canonical form is preserved so
+///   the relay can route the target to its owning bundle (or to the relay-wide
+///   `@GLOBAL` registry for user sessions).
+/// - autocomplete-trigger prefix: a single leading `@` is permitted on either
+///   form and stripped before parsing.
 pub fn parse_tui_target_identifier(
     identifier: &str,
-    _associated_bundle: &str,
+    associated_bundle: &str,
 ) -> Result<String, RuntimeError> {
-    let trimmed = identifier.trim().trim_start_matches('@');
-    if trimmed.is_empty() {
+    let trimmed = identifier.trim();
+    let after_prefix = trimmed.strip_prefix('@').unwrap_or(trimmed);
+    if after_prefix.is_empty() {
         return Err(RuntimeError::validation(
             "validation_unknown_target",
             "target identifier must be non-empty",
         ));
     }
-    if trimmed.contains('/') {
+    if after_prefix.contains('/') {
         return Err(RuntimeError::validation(
             "validation_unknown_target",
-            format!("target identifier '{trimmed}' is invalid; use session id only"),
+            format!("target identifier '{after_prefix}' is invalid; '/' is not allowed"),
         ));
     }
-    Ok(trimmed.to_string())
+    let mut parts = after_prefix.splitn(2, '@');
+    let session = parts.next().unwrap_or("");
+    let bundle = parts.next();
+    if session.is_empty() {
+        return Err(RuntimeError::validation(
+            "validation_unknown_target",
+            format!(
+                "session identifier must be non-empty in 'session@bundle' (got '{after_prefix}')"
+            ),
+        ));
+    }
+    match bundle {
+        None => Ok(session.to_string()),
+        Some("") => Err(RuntimeError::validation(
+            "validation_unknown_target",
+            format!(
+                "bundle qualifier must be non-empty in 'session@bundle' (got '{after_prefix}')"
+            ),
+        )),
+        Some(bundle_name) if bundle_name.contains('@') => Err(RuntimeError::validation(
+            "validation_unknown_target",
+            format!("target identifier '{after_prefix}' may contain at most one '@' separator"),
+        )),
+        Some(bundle_name) if bundle_name == associated_bundle => Ok(session.to_string()),
+        Some(bundle_name) => Ok(format!("{session}@{bundle_name}")),
+    }
 }
 
 /// Merges the To recipient field into a deterministic target set.

@@ -49,7 +49,12 @@ picker (`F5`) are overlays available in both modes.
 - recipient discovery from relay `list` responses,
 - two co-equal screen modes (Communication, Interaction) toggled with `F4`;
   per-mode cursor, draft, and scroll state preserved across switches,
-- explicit `To` recipient field with deterministic target parsing,
+- explicit `To` recipient field with deterministic target parsing:
+  - bare `session` routes to the active bundle,
+  - canonical `session@bundle` routes to the named bundle (peer bundle or the
+    relay-wide `@GLOBAL` user registry),
+  - `parse_tui_target_identifier` rejects empty halves, `/`, and more than one
+    `@` separator at compose time,
 - async send workflow with local pending tracking and terminal outcome updates,
 - session identity precedence:
   - `--as-session`
@@ -66,7 +71,7 @@ picker (`F5`) are overlays available in both modes.
   - help,
   - recipient picker,
   - delivery + permission events,
-  - bundle picker (F5): intra-bundle bundle switching — browses
+  - bundle picker (F5): active bundle switching — browses
     `available_bundles` (sourced from `load_bundle_group_memberships` at TUI
     launch), highlights the active bundle, and on Enter replaces the active
     bundle context. The switch rebuilds the bundle-bound `RelayStreamSession`,
@@ -74,9 +79,10 @@ picker (`F5`) are overlays available in both modes.
     status, look snapshot, pending permissions, chat history, delivery
     bookkeeping, write draft), and triggers `refresh_recipients` on the new
     bundle. Selecting the active bundle is a no-op that closes the picker.
-    Cross-bundle targeting (`session@bundle` grammar) is intentionally out of
-    scope; the relay still rejects cross-bundle requests with
-    `validation_cross_bundle_unsupported`,
+    Cross-bundle targeting for `Send` is handled separately via the
+    `session@bundle` grammar in the `To` field; `Look` and `Raww` remain
+    intra-bundle and the relay still rejects cross-bundle attempts on those
+    paths with `validation_cross_bundle_unsupported`,
 - picker actions (mode-aware `Enter`, no separate `l` / `w` keys):
   - Communication mode: insert the selected recipient into `To`,
   - Interaction mode: open the Interaction screen for the selected identity,
