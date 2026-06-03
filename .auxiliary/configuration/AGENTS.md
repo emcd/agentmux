@@ -93,15 +93,19 @@ Use consistent tags for discoverability:
 
 ### Recommended `nb` Organization (Project-Defined)
 - Prefer a folder taxonomy of `<issue-type>/<component>` (max depth 2) and avoid mixing top-level component folders with top-level issue-type folders.
-- Standard top-level folders are:
-    - `todos/` — task tracking
-    - `issues/` — bug tracking and known issues
-    - `coordination/` — handoffs, org chart, team workflow
-    - `ideas/` — rough ideas and early-stage proposals; tag `#task-proposal` for OpenSpec drafts
-    - `procedures/` — how-to guides and checklists
-    - `reviews/` — code and proposal reviews
-    - `artifacts/` — preserved reference material: completed POCs, historical analysis
-- Design rationale belongs in `src/**/README.md` and OpenSpec specs, not in a notebook folder.
+
+| Category | Location | Purpose |
+|----------|----------|---------|
+| `coordination/` | notebook | Handoffs, org chart, team workflow |
+| `ideas/` | notebook | Rough ideas, early-stage proposals; tag `#task-proposal` for OpenSpec drafts |
+| `issues/` | notebook | Bug tracking, known issues |
+| `reviews/` | notebook | Code and proposal reviews |
+| `procedures/` | notebook | How-to guides, checklists |
+| `todos/` | notebook | Task tracking |
+| `artifacts/` | notebook | Preserved reference material: completed POCs, historical analysis |
+| OpenSpec | filesystem | Formal proposals, specs, designs |
+| `src/**/README.md` | filesystem | Architecture, constraints, design rationale |
+
 - When an idea promotes to a formal OpenSpec proposal, delete the notebook draft — the OpenSpec file is the canonical record.
 - For cross-component work, prefer `coordination/general` and use multiple `#component-*` tags.
 - For per-component rolling handoffs, prefer `coordination/<component>` (one stable note updated at checkpoints).
@@ -134,7 +138,7 @@ Default to low-noise coordination. Send messages only when:
 - you are handing off completed work with validation results,
 - you are reporting a material risk, failure, or scope change.
 
-Batch related updates into one message. Use `Cc` only for agents who need to act or review. When conversation volume rises, coordinator may enforce "blockers-only" mode.
+Batch related updates into one message. When conversation volume rises, coordinator may enforce "blockers-only" mode.
 
 ## Tests Development
 - Prefer tests under `tests/unit` and `tests/integration` over inline `#[cfg(test)]` modules in `src/**`.
