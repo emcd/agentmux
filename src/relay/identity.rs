@@ -409,6 +409,26 @@ pub(crate) fn split_principal_id(principal_id: &str) -> Option<(&str, &str)> {
     Some((local, namespace))
 }
 
+/// Decides whether a host's registered `scope` permits introspecting (or
+/// observing revocation of) `target_principal_id`.
+///
+/// The store records a single scope entry as either a canonical
+/// `session_id@bundle_name` identity (exact match) or a bare `bundle_name`
+/// (matches every session in that bundle namespace). A `None` scope is
+/// fail-closed: no target is in scope.
+pub(crate) fn scope_permits(scope: Option<&str>, target_principal_id: &str) -> bool {
+    let Some(scope) = scope else {
+        return false;
+    };
+    if scope == target_principal_id {
+        return true;
+    }
+    matches!(
+        split_principal_id(target_principal_id),
+        Some((_, namespace)) if scope == namespace
+    )
+}
+
 /// Classifies a `principal_id` by namespace partition.
 ///
 /// `@GLOBAL` → user, `@EXTERNAL` → application, `@RELAY` → peer relay; any

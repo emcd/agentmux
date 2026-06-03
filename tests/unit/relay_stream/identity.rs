@@ -804,6 +804,87 @@ fn application_principal_receives_identity_snapshot_on_connect() {
     );
 }
 
+// 2.7 change psk on an in-scope principal fans out an identity.revoked event to
+// every connected trusted host whose scope covers the revoked principal.
+#[test]
+fn change_psk_fans_out_identity_revoked_to_trusted_hosts() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "ident_revoked_fanout";
+    let configuration_root = write_identity_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let target_principal_id = format!("alpha@{bundle_name}");
+    let app_principal_id = format!("engine_{bundle_name}@EXTERNAL");
+
+    // An in-scope session principal to revoke, plus a trusted host scoped to the
+    // whole bundle.
+    register_peer(
+        &configuration_root,
+        &bundle_paths,
+        bundle_name,
+        &target_principal_id,
+        None,
+    );
+    let app_psk = register_peer(
+        &configuration_root,
+        &bundle_paths,
+        bundle_name,
+        &app_principal_id,
+        Some(bundle_name),
+    );
+
+    // Connect the trusted host and keep its connection open; it receives the
+    // connect-time identity.snapshot first, which the revoked-event read skips.
+    let (mut app_client, app_join) = spawn_relay_connection(&configuration_root, &bundle_paths);
+    let mut app_reader = BufReader::new(app_client.try_clone().expect("clone app stream"));
+    send_json(
+        &mut app_client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "principal_id": app_principal_id.as_str(),
+            "identity_token": app_psk,
+        }),
+    );
+    assert_eq!(
+        read_json(&mut app_reader)["frame"],
+        "hello_ack",
+        "app hello not acked"
+    );
+
+    // Rotate the target's credential from the operator connection.
+    // `operator_request` returns only after the rotation handler has run, by
+    // which point the fan-out event is queued to the host's writer.
+    let rotation = operator_request(
+        &configuration_root,
+        &bundle_paths,
+        bundle_name,
+        json!({"operation": "change_psk", "principal_id": target_principal_id}),
+    );
+    assert_eq!(
+        rotation["response"]["kind"], "change_psk",
+        "change psk rejected: {rotation:?}"
+    );
+
+    let event = read_until_event_type(&mut app_reader, "identity.revoked");
+    shutdown_stream(&app_client, "shutdown app stream");
+    app_join.join().expect("join app relay thread");
+
+    assert_eq!(
+        event["event"]["payload"]["principal_id"], target_principal_id,
+        "revoked event must name the rotated principal: {event:?}"
+    );
+    assert!(
+        event["event"]["payload"]["revoked_at"].is_string(),
+        "revoked event must carry a revoked_at timestamp: {event:?}"
+    );
+    assert_eq!(
+        event["event"]["target_session"],
+        app_principal_id.as_str(),
+        "revoked event must be routed to the watching host"
+    );
+}
+
 // --- Sender attribution: authenticated_identity on Send (Slice 3, tasks 3.1/3.5/3.6) ---
 
 /// Connects an `@GLOBAL` operator as a relay-wide receiver, then connects as
