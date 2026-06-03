@@ -22,7 +22,7 @@ use uuid::Uuid;
 use crate::configuration::SessionType;
 use crate::runtime::inscriptions::emit_inscription;
 
-use super::identity::{PrincipalType, classify_principal_id};
+use super::identity::{PrincipalType, classify_principal_id, scope_permits, split_principal_id};
 use super::{RelayRequest, RelayResponse};
 
 // Bounded write timeout for relay-to-client writes. A stalled client whose
@@ -168,6 +168,10 @@ struct RegistryEntry {
     authenticated_identity: Option<String>,
     /// Teardown signal for the connection, fired to revoke a rotated credential.
     revoke: Option<StreamRevokeSignal>,
+    /// Introspection scope of an application principal's connection, recorded so
+    /// revocation fan-out can filter hosts by scope; `None` for every other
+    /// principal type (which receives no identity events).
+    scope: Option<String>,
 }
 
 #[derive(Default)]
@@ -284,6 +288,7 @@ pub(super) fn register_stream(
     writer: SharedStreamWriter,
     authenticated_identity: Option<String>,
     revoke: StreamRevokeSignal,
+    scope: Option<String>,
 ) -> Result<RegisterStreamOutcome, io::Error> {
     let registry = stream_registry();
     let mut entries = registry
@@ -314,6 +319,7 @@ pub(super) fn register_stream(
             writer: Some(writer),
             authenticated_identity,
             revoke: Some(revoke),
+            scope,
         },
     );
     Ok(RegisterStreamOutcome::Registered(StreamRegistration {
@@ -406,6 +412,55 @@ pub(super) fn revoke_streams_for_identity(principal_id: &str, response: &RelayRe
             },
         );
         revoke.notify_one();
+    }
+    count
+}
+
+/// Fans an `identity.revoked` event out to every live trusted-host (application
+/// principal) connection whose registered scope covers `revoked_principal_id`.
+///
+/// The revoked principal's own session is torn down separately by
+/// [`revoke_streams_for_identity`]; this is the notification to *watching*
+/// hosts so they can drop any cached view of the revoked identity. Only entries
+/// carrying a scope are considered, and `scope` is set only for application
+/// principals, so non-host connections are skipped (a `None` scope is
+/// fail-closed in [`scope_permits`]). The per-recipient event is cloned with
+/// `target_session`/`bundle_name` rewritten to the recipient host, matching the
+/// relay-wide event convention used by the snapshot. Writers are collected under
+/// the registry lock and written after it is released. Returns the number of
+/// hosts notified.
+pub(super) fn notify_trusted_hosts_of_revocation(
+    revoked_principal_id: &str,
+    template: &RelayStreamEvent,
+) -> usize {
+    let registry = stream_registry();
+    let targets = {
+        let Ok(entries) = registry.entries.lock() else {
+            return 0;
+        };
+        let mut targets = Vec::new();
+        for (key, entry) in entries.iter() {
+            let Some(writer) = entry.writer.clone() else {
+                continue;
+            };
+            if !scope_permits(entry.scope.as_deref(), revoked_principal_id) {
+                continue;
+            }
+            let RegistryKey::RelayWide { principal_id } = key else {
+                continue;
+            };
+            targets.push((writer, principal_id.clone()));
+        }
+        targets
+    };
+    let count = targets.len();
+    for (writer, host_principal_id) in targets {
+        let mut event = template.clone();
+        event.target_session = host_principal_id.clone();
+        if let Some((_, namespace)) = split_principal_id(host_principal_id.as_str()) {
+            event.bundle_name = namespace.to_string();
+        }
+        let _ = write_stream_frame_to_writer(&writer, OutgoingFrame::Event { event: &event });
     }
     count
 }

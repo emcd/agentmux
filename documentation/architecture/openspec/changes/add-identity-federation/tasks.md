@@ -155,7 +155,7 @@
       return authorization denial for session and unauthenticated connections.
 - [x] 2.6 Implement `identity.snapshot` stream event on trusted-host stream
       connect: deliver current active principal records within the host's scope.
-- [ ] 2.7 Implement `identity.revoked` event dispatch on the existing
+- [x] 2.7 Implement `identity.revoked` event dispatch on the existing
       stream-event carrier when a principal is revoked (via `change psk` or
       explicit revocation).
 - [ ] 2.8 Implement relay-side session teardown on expiry: emit typed error

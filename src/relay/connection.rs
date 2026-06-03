@@ -252,12 +252,20 @@ async fn serve_connection_frames(
                 // for socket-trust. Recorded on the registry entry so a
                 // `change psk` rotation can find and revoke this connection.
                 let connection_identity = binding.store_backed.then(|| hello.principal_id.clone());
+                // Introspection scope of an application principal, recorded on
+                // the registry entry so revocation fan-out can filter watching
+                // hosts by scope; `None` for every other principal type.
+                let connection_scope = binding
+                    .introspect_rights
+                    .as_ref()
+                    .and_then(|rights| rights.scope.clone());
                 match register_stream(
                     binding.key.clone(),
                     binding.session_type,
                     writer.clone(),
                     connection_identity.clone(),
                     revoke.clone(),
+                    connection_scope,
                 )? {
                     RegisterStreamOutcome::Registered(value) => {
                         guard.set(value);

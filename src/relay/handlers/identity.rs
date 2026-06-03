@@ -16,10 +16,12 @@ use crate::relay::authorization::{RelayActionFamily, authorize_relay_action};
 use crate::relay::context::RequestPrincipal;
 use crate::relay::identity::{
     IdentityIntrospectRights, PrincipalRecord, PrincipalStore, PrincipalType, canonical_session_id,
-    classify_principal_id, generate_psk, hash_token_sha256, split_principal_id,
+    classify_principal_id, generate_psk, hash_token_sha256, scope_permits, split_principal_id,
     write_psk_output_file,
 };
-use crate::relay::stream::{RelayStreamEvent, revoke_streams_for_identity};
+use crate::relay::stream::{
+    RelayStreamEvent, notify_trusted_hosts_of_revocation, revoke_streams_for_identity,
+};
 use crate::relay::{RelayError, RelayResponse, SCHEMA_VERSION, relay_error};
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::paths::{peer_relay_psk_path, principal_store_path, session_identity_psk_path};
@@ -139,11 +141,33 @@ pub(in crate::relay) fn handle_change_psk(
         ),
     };
     let revoked_connections = revoke_streams_for_identity(principal_id.as_str(), &revoked_frame);
+
+    // Notify every connected trusted host whose scope covers the revoked
+    // principal so they can drop any cached view of it. This is distinct from
+    // the teardown above: the revoked principal's own session receives a typed
+    // error frame, while watching hosts receive an `identity.revoked` event.
+    let revoked_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_default();
+    let revoked_event = RelayStreamEvent {
+        event_type: "identity.revoked".to_string(),
+        // `bundle_name`/`target_session` are rewritten per recipient host by the
+        // fan-out; the revoked principal is carried in the payload.
+        bundle_name: String::new(),
+        target_session: String::new(),
+        created_at: revoked_at.clone(),
+        payload: serde_json::json!({
+            "principal_id": principal_id,
+            "revoked_at": revoked_at,
+        }),
+    };
+    let notified_hosts = notify_trusted_hosts_of_revocation(principal_id.as_str(), &revoked_event);
     emit_inscription(
         "relay.identity.psk_rotated",
         &serde_json::json!({
             "principal_id": principal_id,
             "revoked_connections": revoked_connections,
+            "notified_hosts": notified_hosts,
         }),
     );
 
@@ -194,26 +218,6 @@ pub(in crate::relay) fn handle_identity_introspect(
         on_behalf_of: None,
         verified,
     })
-}
-
-/// Decides whether a host's registered `scope` permits introspecting
-/// `target_principal_id`.
-///
-/// The store records a single scope entry as either a canonical
-/// `session_id@bundle_name` identity (exact match) or a bare `bundle_name`
-/// (matches every session in that bundle namespace). A `None` scope is
-/// fail-closed: no target is in scope.
-fn scope_permits(scope: Option<&str>, target_principal_id: &str) -> bool {
-    let Some(scope) = scope else {
-        return false;
-    };
-    if scope == target_principal_id {
-        return true;
-    }
-    matches!(
-        split_principal_id(target_principal_id),
-        Some((_, namespace)) if scope == namespace
-    )
 }
 
 /// Builds the authorization denial returned for an introspection the connection
