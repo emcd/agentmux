@@ -21,11 +21,11 @@
       (b) disappeared file → evict all active sessions for that bundle via the
           shared eviction mechanism (task 1.6) with `runtime_bundle_unloaded`;
           unload from catalog.
-      (c) modified file → diff the PARSED config against the running config;
-          only evict and reload sessions whose definitions actually changed
-          (comment/whitespace edits must not disconnect live agents); emit
-          `runtime_bundle_reloaded` to affected sessions via task 1.6; reload
-          changed bundle config.
+      (c) modified file → treat as disappear + reappear: evict ALL active
+          sessions for that bundle via the shared eviction mechanism (task 1.6)
+          with `runtime_bundle_reloaded`; reload the bundle with the new
+          configuration. (Smart reload — diffing parsed config to disconnect
+          only changed sessions — is deferred as a follow-on.)
 - [ ] 1.6 Build shared session-eviction mechanism: a reusable
       `session_evict(session_id, typed_reason)` helper that emits the typed
       error frame to the target session and closes the connection. Used by
@@ -39,10 +39,8 @@
 - [ ] 1.9 Integration test: remove a bundle file at runtime → active sessions
       receive `runtime_bundle_unloaded` before disconnect; subsequent connection
       attempts to that bundle fail with `validation_unknown_bundle`.
-- [ ] 1.10 Integration test: modify a bundle file at runtime → only sessions
-      whose config definitions changed receive `runtime_bundle_reloaded`;
-      sessions in unchanged definitions remain connected.
-- [ ] 1.11 Integration test: modify a bundle file with whitespace/comment only
-      → no sessions are disconnected.
-- [ ] 1.12 Integration test: `--no-watch` → add or remove a bundle file at
+- [ ] 1.10 Integration test: modify a bundle file at runtime → all active
+      sessions in that bundle receive `runtime_bundle_reloaded` before
+      disconnect; relay reloads the bundle with the new configuration.
+- [ ] 1.11 Integration test: `--no-watch` → add or remove a bundle file at
       runtime; relay does not reconcile; restart required.

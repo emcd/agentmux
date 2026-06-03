@@ -21,8 +21,10 @@ runtime without restarts. Tracked as `todos/runtime/9`.
   `runtime_bundle_unloaded` to all active sessions in that bundle, close
   connections, unload bundle. Principal store entries for those sessions are
   retained (relay-level store; no identity data is lost on bundle unload).
-- Bundle file modified: treat as remove + add — emit `runtime_bundle_reloaded`,
-  disconnect sessions, reload with new configuration.
+- Bundle file modified: treat as remove + add — emit `runtime_bundle_reloaded`
+  to all active sessions in that bundle, disconnect them, reload with new
+  configuration. Smart reload (disconnecting only sessions whose definitions
+  changed) is deferred as a follow-on.
 - `--no-watch` CLI flag on `agentmux host relay` opts out of watching for the
   lifetime of that process. Migrates to `relay.toml` when that config file lands.
 
@@ -34,10 +36,12 @@ runtime without restarts. Tracked as `todos/runtime/9`.
   `Arc<RwLock<BundleCatalog>>`). The watcher task holds the write side;
   connection handlers hold short-lived read guards. This is the true center of
   gravity of the change — address it in task 1.3 before building the watcher.
-- **Teardown granularity**: On a modify event, diff the PARSED config against
-  the running config. Only tear down and reload sessions whose definitions
-  actually changed. A comment or whitespace edit should not disconnect live
-  agents. See task 1.5c.
+- **Modify = full teardown (v0.7.0)**: A modify event is handled as a disappear
+  followed by a new file — evict all active sessions in the bundle with
+  `runtime_bundle_reloaded`, then reload with the new configuration. No
+  parsed-config diffing in this change; smart reload (disconnecting only
+  sessions whose definitions actually changed) is deferred as a follow-on per
+  `designs/relay/5`. See task 1.5c.
 - **Shared session-eviction mechanism**: File watching (bundle unloaded/reloaded)
   and identity Slice 2 (credential revoked/expired) both require "emit typed
   error frame then close connection." Build one reusable
