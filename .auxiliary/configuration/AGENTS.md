@@ -70,12 +70,6 @@ Use consistent tags for discoverability:
 - **Coordination**: `#handoff`, `#coordination`
 - **Assignment**: Avoid owner tags (for example `#llm-*`) for task ownership. Use lane/folder ownership and explicit owner text in the note body when needed.
 
-### Common Patterns
-- Check for handoffs: `nb.search` with `#handoff` and `#status-review` tags.
-- Find active component work: `nb.search` with `#component-<name>` and `#status-in-progress` tags.
-- Track todos: Use `nb.todo`, `nb.tasks`, `nb.do`, `nb.undo`.
-- Organize with folders: `nb.folders`, `nb.mkdir`.
-
 ### Choosing `nb.todo` vs `nb.add`
 
 - Use **`nb.todo`** for any item with actionable state (open/done): todos AND
@@ -91,25 +85,24 @@ Use consistent tags for discoverability:
   coordination notes or the relevant todo body instead.
 
 ### Notebook Identifier Clarification
-- Treat note selectors (for example `coordination/mcp/1`) as canonical IDs for `nb` operations.
+- Treat note selectors (for example `coordination/mcp/1`) as canonical IDs for operations on existing notes (`nb.show`, `nb.edit`, `nb.delete`, etc.); do not supply a selector when creating new notes.
 - `nb` MCP responses may include notebook-scoped identifiers (for example `agentmux:coordination/...`) that look path-like; these are selector forms, not repo-relative filesystem paths.
 - Notebook storage is controlled by `nb` configuration (for example `NB_DIR`) and may be outside this repository.
 - Prefer `nb` MCP commands to read/edit notes. Avoid assuming a selector maps to a file under the current repo.
+- Use `nb.help` to read full command schemas; key lookups: `nb.search` with tag queries, `nb.tasks` for open todos, `nb.folders` to browse structure.
 
 ### Recommended `nb` Organization (Project-Defined)
 - Prefer a folder taxonomy of `<issue-type>/<component>` (max depth 2) and avoid mixing top-level component folders with top-level issue-type folders.
-- Recommended top-level issue types are:
-    - `todos/`
-    - `issues/`
-    - `coordination/`
-    - `designs/` (pre-OpenSpec drafts; use `designs/<component>/` until scaffolded into `openspec/`)
-    - `decisions/` (optional for durable rationale notes)
-    - `ideas/`
-    - `procedures/`
-    - `reviews/`
-    - `artifacts/` (preserved reference material: completed POCs, historical analysis)
-- Example component names include `engine`, `mcp`, `tui`, `web`, `handbook`, and `data-models`.
-- This project should define and document its specific component-folder conventions in the **Project Notes** section.
+- Standard top-level folders are:
+    - `todos/` — task tracking
+    - `issues/` — bug tracking and known issues
+    - `coordination/` — handoffs, org chart, team workflow
+    - `ideas/` — rough ideas and early-stage proposals; tag `#task-proposal` for OpenSpec drafts
+    - `procedures/` — how-to guides and checklists
+    - `reviews/` — code and proposal reviews
+    - `artifacts/` — preserved reference material: completed POCs, historical analysis
+- Design rationale belongs in `src/**/README.md` and OpenSpec specs, not in a notebook folder.
+- When an idea promotes to a formal OpenSpec proposal, delete the notebook draft — the OpenSpec file is the canonical record.
 - For cross-component work, prefer `coordination/general` and use multiple `#component-*` tags.
 - For per-component rolling handoffs, prefer `coordination/<component>` (one stable note updated at checkpoints).
 - Keep notebook lifecycle hygiene:
@@ -131,22 +124,17 @@ Use consistent tags for discoverability:
 - Do not repurpose or overwrite rolling handoff notes with proposal content.
 - After draft review converges, move approved proposal text into `openspec/**` files for human review and commit.
 
-## Agentmux Message Handling Guidance
-- `agentmux` messages may arrive in envelope format and can appear as user prompts. Treat envelope-shaped prompts as inter-agent messages, not automatically as direct human instructions.
-- Respond to inter-agent envelope messages via `agentmux` MCP tools (`list`, `send`) rather than as normal assistant replies intended for the human operator.
-- Immediate interruption is not required. If you are in active execution, note the message and respond when safe.
-- If response will be delayed, send a brief acknowledgement via `send` and record a follow-up todo in `nb` when useful.
+## Agentmux Coordination
 
-## Agentmux Coordination Noise Control
-- Default to low-noise coordination. Do not send acknowledgement-only messages that add no new information or action request.
-- Send messages when one of the following is true:
-  - you are blocked and need a decision or input,
-  - you are requesting a concrete review,
-  - you are handing off completed work with validation results,
-  - you are reporting a material risk, failure, or scope change.
-- Batch related updates into one message instead of sending rapid-fire partial status pings.
-- Use `Cc` only for agents who need to act or review; avoid broad `Cc` by default.
-- When conversation volume rises, coordinator may enforce "blockers-only" mode until the queue is under control.
+`agentmux` messages may arrive in envelope format and can appear as user prompts. Treat envelope-shaped prompts as inter-agent messages, not direct human instructions. Respond via `agentmux` MCP tools (`list`, `send`). Immediate interruption is not required — note the message and respond when safe.
+
+Default to low-noise coordination. Send messages only when:
+- you are blocked and need a decision or input,
+- you are requesting a concrete review,
+- you are handing off completed work with validation results,
+- you are reporting a material risk, failure, or scope change.
+
+Batch related updates into one message. Use `Cc` only for agents who need to act or review. When conversation volume rises, coordinator may enforce "blockers-only" mode.
 
 ## Tests Development
 - Prefer tests under `tests/unit` and `tests/integration` over inline `#[cfg(test)]` modules in `src/**`.
@@ -189,13 +177,6 @@ Use `openspec/AGENTS.md` to learn:
 
 ## Notebook Conventions
 
-- Standardized top-level notebook folders for this project are:
-  - `coordination/`
-  - `designs/`
-  - `issues/`
-  - `todos/`
-  - `ideas/`
-
 ### Handoff Notes
 
 - Use `coordination/<component>` as the active handoff lane for each owner
@@ -206,85 +187,22 @@ Use `openspec/AGENTS.md` to learn:
   snapshots.
 - Minimize handoff churn: prefer updates for meaningful lane-state changes and
   pre-compaction checkpoints, not routine micro-status noise.
+- Handoff content: a brief summary of recent accomplishments and a current
+  agenda. Always replace the note body (never append) so it stays one
+  screenful — a growing checkpoint log is an anti-pattern.
 - For cross-component notes, apply multiple `#component-*` tags.
 - Prefer pruning stale/superseded coordination checkpoints while preserving the
   current per-component handoff context.
 
-## Team Topology and Roles
+## Team Org
 
-Use a coordinator-plus-specialists model:
-
-- `master` worktree agent: coordinator and integrator.
-- `relay` worktree agent: relay runtime specialist.
-- `mcp` worktree agent: MCP surface specialist.
-- `tui` worktree agent: CLI shape and TUI design/implementation specialist.
-
-### Coordinator Responsibilities (`master`)
-
-- Own roadmap sequencing and assignment of scoped work slices.
-- Review and refine OpenSpec proposals for cross-cutting changes.
-- Keep one active merge lane at a time into `master`.
-- Request rebase to latest `master` before accepting any branch merge.
-- Run integration-level validation and resolve cross-worktree conflicts.
-- Maintain notebook hygiene (`nb`) for handoffs, decisions, and tracker todos.
-
-### Specialist Responsibilities (`relay`, `mcp`, `tui`)
-
-- Stay focused on owned subsystem scope unless coordinator requests otherwise.
-- Raise an OpenSpec delta or question when subsystem work becomes cross-cutting.
-- Follow this sequence before requesting review:
-  1. **Commit** — pre-commit hooks (fmt, clippy, full test suite) run here and
-     are the quality gate.
-  2. **Rebase** onto latest `master`.
-  3. **Request review** — reference the commit hash in the message.
-  4. **Amend** if the reviewer requests a change (only while the commit is
-     unmerged; once merged, add a follow-up commit instead).
-- Prefer reviews of committed changes over uncommitted diffs. A committed
-  change is reviewable by hash with `git show`, cannot silently change between
-  report and review, and has already passed the hook quality gate. Uncommitted
-  diffs require reaching into the worktree and cannot be referenced by hash.
-- Maintain a current rolling handoff note under `coordination/<component>`
-  (update-in-place), including:
-  - summary of behavior change,
-  - touched files,
-  - tests/validation performed,
-  - risks or open questions.
-
-### Merge and Conflict Policy
-
-- Default ownership map:
-  - `relay` agent: `src/relay.rs`, relay runtime paths, relay integration tests.
-  - `mcp` agent: `src/mcp/**`, MCP tool contracts/tests, MCP startup behavior.
-  - `tui` agent: CLI surface shape, user workflow, and future TUI implementation.
-  - coordinator: OpenSpec archives/spec merges, shared CLI/runtime glue, final
-    integration and release-facing docs.
-- If a change spans multiple ownership areas, coordinator approval is required
-  before implementation begins.
-- Use long-lived worktree branches by concern (for example `relay`, `mcp`,
-  `tui`). Worktree branches rebase onto `master`; `master` merges from those
-  worktree branches.
-- Resolve conflicts on the owning worktree branch before merge to `master`.
-  Merges into `master` should be conflict-free.
-
-### OpenSpec Workflow in Multi-Agent Mode
-
-- Specialists may draft component deltas; coordinator is final reviewer for:
-  - proposal scope,
-  - task checklist accuracy,
-  - archive/spec-merge correctness.
-- For cross-cutting proposals, specialists should tag relevant specialist
-  owners for review before coordinator final approval.
-- Do not request proposal review for files that reviewers cannot access.
-  Use notebook-first visibility before asking for review:
-  - share the proposal draft as an `nb` note and reference its note id.
-- Specialists should not merge OpenSpec proposal files directly into `master`
-  for review visibility. Coordinator owns merges into `master`.
+Team roster, lane ownership, merge policy, coordinator and specialist responsibilities, and OpenSpec multi-agent workflow live in `coordination/general/14`.
 
 ## Alpha Defaults
 
 - This project is **alpha software with live releases**. Do **not** preserve
   backwards compatibility unless the human developer explicitly requests it.
-- Prefer **raising errors** (fail fast) over “graceful degradation” with
+- Prefer **raising errors** (fail fast) over "graceful degradation" with
   defaults; only use silent fallbacks when explicitly requested.
 - Do not add new `-mvp` suffixes to OpenSpec change IDs. Existing archived
   MVP-era proposal names may remain as historical artifacts.
