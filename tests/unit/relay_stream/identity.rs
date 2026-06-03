@@ -316,11 +316,14 @@ fn application_principal_hello_is_accepted() {
     let configuration_root = write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
-    let principal_id = "engine@EXTERNAL";
+    // Relay-wide principals register under their `principal_id` as the registry
+    // key (bundle-independent), so application ids must be unique per test or
+    // parallel runs collide with `runtime_identity_claim_conflict`.
+    let principal_id = format!("engine_{bundle_name}@EXTERNAL");
 
     let request = json!({
         "operation": "new_peer",
-        "principal_id": principal_id,
+        "principal_id": principal_id.as_str(),
         "scope": "introspect",
     });
     let registration = operator_request(&configuration_root, &bundle_paths, bundle_name, request);
@@ -337,12 +340,12 @@ fn application_principal_hello_is_accepted() {
     let frame = hello_first_frame(
         &configuration_root,
         &bundle_paths,
-        principal_id,
+        principal_id.as_str(),
         &psk,
         false,
     );
     assert_eq!(frame["frame"], "hello_ack", "expected ack: {frame:?}");
-    assert_eq!(frame["principal_id"], principal_id);
+    assert_eq!(frame["principal_id"], principal_id.as_str());
 }
 
 // 1.18 Hello with a valid credential but mismatched principal_id -> typed error,
@@ -616,6 +619,9 @@ fn application_principal_introspects_active_session() {
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let target_principal_id = format!("alpha@{bundle_name}");
+    // Unique application id per test: the relay-wide registry keys on the
+    // `principal_id`, so a shared `@EXTERNAL` id collides across parallel runs.
+    let app_principal_id = format!("engine_{bundle_name}@EXTERNAL");
 
     // Register the introspection target as a session principal in the store.
     register_peer(
@@ -631,14 +637,14 @@ fn application_principal_introspects_active_session() {
         &configuration_root,
         &bundle_paths,
         bundle_name,
-        "engine@EXTERNAL",
+        &app_principal_id,
         Some(bundle_name),
     );
 
     let response = introspect_request(
         &configuration_root,
         &bundle_paths,
-        "engine@EXTERNAL",
+        &app_principal_id,
         &app_psk,
         "alpha",
         Some(bundle_name),
@@ -701,6 +707,100 @@ fn session_principal_introspect_is_denied() {
     assert!(
         response["response"]["principal_id"].is_null(),
         "a denied introspection must not leak identity data"
+    );
+}
+
+// 2.6 A trusted-host (application principal) connection receives an
+// identity.snapshot event immediately after Hello, carrying the active
+// principal records within its registered scope.
+#[test]
+fn application_principal_receives_identity_snapshot_on_connect() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "ident_snapshot_connect";
+    let configuration_root = write_identity_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let target_principal_id = format!("alpha@{bundle_name}");
+    // Unique application id per test: the relay-wide registry keys on the
+    // `principal_id`, so a shared `@EXTERNAL` id collides across parallel runs.
+    let app_principal_id = format!("engine_{bundle_name}@EXTERNAL");
+
+    // An in-scope session principal in the store, plus the application principal
+    // scoped to the whole bundle (bare-bundle scope covers every session in it).
+    register_peer(
+        &configuration_root,
+        &bundle_paths,
+        bundle_name,
+        &target_principal_id,
+        None,
+    );
+    let app_psk = register_peer(
+        &configuration_root,
+        &bundle_paths,
+        bundle_name,
+        &app_principal_id,
+        Some(bundle_name),
+    );
+
+    let (mut client, join) = spawn_relay_connection(&configuration_root, &bundle_paths);
+    let mut reader = BufReader::new(client.try_clone().expect("clone app stream"));
+    send_json(
+        &mut client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "principal_id": app_principal_id.as_str(),
+            "identity_token": app_psk,
+        }),
+    );
+    assert_eq!(
+        read_json(&mut reader)["frame"],
+        "hello_ack",
+        "app hello not acked"
+    );
+
+    // The snapshot is the very next frame after the ack (no permission snapshot
+    // is emitted for a non-UI application principal).
+    let frame = read_json(&mut reader);
+    shutdown_stream(&client, "shutdown app stream");
+    join.join().expect("join app relay thread");
+
+    assert_eq!(
+        frame["frame"], "event",
+        "expected snapshot event: {frame:?}"
+    );
+    assert_eq!(
+        frame["event"]["event_type"], "identity.snapshot",
+        "{frame:?}"
+    );
+    assert_eq!(frame["event"]["target_session"], app_principal_id.as_str());
+    let principals = frame["event"]["payload"]["principals"]
+        .as_array()
+        .expect("principals array in snapshot payload");
+    let ids: Vec<&str> = principals
+        .iter()
+        .filter_map(|entry| entry["principal_id"].as_str())
+        .collect();
+    assert!(
+        ids.contains(&target_principal_id.as_str()),
+        "snapshot must carry the in-scope target: {frame:?}"
+    );
+    // The host's own @EXTERNAL record is outside the bundle scope and omitted.
+    assert!(
+        !ids.contains(&app_principal_id.as_str()),
+        "out-of-scope principals must not appear in the snapshot: {frame:?}"
+    );
+    let target_entry = principals
+        .iter()
+        .find(|entry| entry["principal_id"] == json!(target_principal_id))
+        .expect("target entry in snapshot");
+    assert_eq!(
+        target_entry["verified"], true,
+        "an active principal is verified in the snapshot"
+    );
+    assert!(
+        target_entry["expires_at"].is_null(),
+        "a never-expiring principal omits expires_at: {frame:?}"
     );
 }
 

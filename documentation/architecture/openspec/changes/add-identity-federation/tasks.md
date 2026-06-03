@@ -153,7 +153,7 @@
       `Send`/`Look` treatment in 3.2), `verified: bool`.
 - [x] 2.5 Gate `IdentityIntrospect` dispatch on `application` principal type;
       return authorization denial for session and unauthenticated connections.
-- [ ] 2.6 Implement `identity.snapshot` stream event on trusted-host stream
+- [x] 2.6 Implement `identity.snapshot` stream event on trusted-host stream
       connect: deliver current active principal records within the host's scope.
 - [ ] 2.7 Implement `identity.revoked` event dispatch on the existing
       stream-event carrier when a principal is revoked (via `change psk` or
