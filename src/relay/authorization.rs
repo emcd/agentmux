@@ -791,24 +791,51 @@ pub(super) fn authorize_send(
     )
 }
 
+/// Authorizes a requester's `look` capability against a target session.
+///
+/// The requester's controls are always resolved in its own (the request's
+/// dispatch) bundle context — a session is a member only of its home bundle.
+/// `cross_bundle` reflects whether the target lives in a peer bundle; it
+/// deliberately raises the bar rather than copying Send's permit-all stance:
+///
+/// - same-bundle inspection of another session requires `all:home`;
+/// - inspecting a peer bundle's session requires `all:all`, mirroring how
+///   relay-wide operator actions treat `all:home` as conferring no authority
+///   beyond the requester's own namespace.
+///
+/// The self-inspection shortcut applies only to same-bundle looks; a peer-bundle
+/// target is never the requester itself, so the cross-bundle path always
+/// evaluates the scope.
 pub(super) fn authorize_look(
     bundle: &BundleConfiguration,
     authorization: &AuthorizationContext,
     requester_session: &str,
     target_session: &str,
+    cross_bundle: bool,
 ) -> Result<(), RelayError> {
-    if requester_session == target_session {
+    if !cross_bundle && requester_session == target_session {
         return Ok(());
     }
     let controls = controls_for_requester(authorization, bundle, requester_session)?;
+    let (minimum_scope, reason) = if cross_bundle {
+        (
+            PolicyScope::AllAll,
+            "look policy scope does not permit cross-bundle inspection (requires all:all)",
+        )
+    } else {
+        (
+            PolicyScope::AllHome,
+            "look policy scope permits self-only inspection",
+        )
+    };
     authorize_scope(
         controls.look,
-        PolicyScope::AllHome,
+        minimum_scope,
         AuthorizationDecisionContext {
             capability: "look.inspect",
             requester_session,
             bundle_name: bundle.bundle_name.as_str(),
-            reason: "look policy scope permits self-only inspection",
+            reason,
             target_session: Some(target_session),
             targets: None,
         },

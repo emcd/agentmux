@@ -399,7 +399,7 @@ async fn look_maps_authorization_forbidden_error_from_relay() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn look_maps_cross_bundle_validation_error_from_relay() {
+async fn look_maps_unknown_peer_bundle_error_from_relay() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -408,11 +408,10 @@ async fn look_maps_cross_bundle_validation_error_from_relay() {
                 Some("look") => json!({
                     "kind": "error",
                     "error": {
-                        "code": "validation_cross_bundle_unsupported",
-                        "message": "look is limited to the associated bundle in MVP",
+                        "code": "validation_unknown_bundle",
+                        "message": "look target bundle is not configured on this relay",
                         "details": {
-                            "associated_bundle_name": BUNDLE_NAME,
-                            "requested_bundle_name": "other",
+                            "bundle_name": "other",
                         },
                     },
                 }),
@@ -428,6 +427,9 @@ async fn look_maps_cross_bundle_validation_error_from_relay() {
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
+    // The MCP `look` tool forwards a `session@bundle` target verbatim; the relay
+    // now resolves it cross-bundle and the peer-bundle validation error maps
+    // through unchanged.
     let mut arguments = Map::new();
     arguments.insert(
         "target_session".to_string(),
@@ -435,10 +437,7 @@ async fn look_maps_cross_bundle_validation_error_from_relay() {
     );
     let response = harness.call_tool(2, "look", arguments).await;
 
-    assert_eq!(
-        error_code(&response),
-        Some("validation_cross_bundle_unsupported")
-    );
+    assert_eq!(error_code(&response), Some("validation_unknown_bundle"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

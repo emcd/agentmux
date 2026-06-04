@@ -144,6 +144,8 @@ pub(super) fn handle_request(
                 bundle_name: request_bundle_name,
             },
             runtime_directory,
+            configuration_root,
+            bundle_catalog,
             principal.as_ref(),
         ),
         RelayRequest::Raww {
@@ -653,6 +655,8 @@ fn handle_look(
     authorization: &AuthorizationContext,
     request: LookRequestContext,
     runtime_directory: &Path,
+    configuration_root: &Path,
+    bundle_catalog: &BundleCatalog,
     principal: Option<&RequestPrincipal>,
 ) -> Result<RelayResponse, RelayError> {
     let LookRequestContext {
@@ -660,20 +664,11 @@ fn handle_look(
         target_session,
         lines,
         offset,
-        bundle_name: request_bundle_name,
+        // Peer routing is driven by the `@<bundle>` suffix on `target_session`
+        // (Send-consistent); the dispatch bundle is already resolved at the
+        // connection layer, so the historical per-request selector is unused.
+        bundle_name: _request_bundle_name,
     } = request;
-    if let Some(request_bundle_name) = request_bundle_name.as_deref()
-        && request_bundle_name != bundle.bundle_name
-    {
-        return Err(relay_error(
-            "validation_cross_bundle_unsupported",
-            "look is limited to the associated bundle in MVP",
-            Some(json!({
-                "associated_bundle_name": bundle.bundle_name,
-                "requested_bundle_name": request_bundle_name,
-            })),
-        ));
-    }
 
     // Validate the caller-supplied window size against the shared bound; the
     // transport-specific default is applied per branch below, since ACP entries
@@ -693,28 +688,68 @@ fn handle_look(
     }
     let offset = offset.unwrap_or(0);
 
+    // The requester is always a member of the dispatch (connection) bundle; a
+    // session is only ever a member of its home bundle.
     let requester = resolve_sender_identity(
         bundle,
         authorization,
         requester_session.as_str(),
         "requester_session",
     )?;
-    let target = bundle
+
+    // Resolve the target's hosting bundle from any `@<bundle>` suffix. A bare
+    // target — or one qualified with the dispatch bundle, already stripped by
+    // identity normalization — stays in the dispatch bundle.
+    let (target_bundle_name, target_session_id) =
+        resolve_look_target_bundle(bundle.bundle_name.as_str(), target_session.as_str())?;
+    let cross_bundle = target_bundle_name != bundle.bundle_name;
+
+    // For a peer-bundle target, load its configuration and runtime context from
+    // the catalog; same-bundle looks reuse the dispatch bundle as-is.
+    let peer_bundle;
+    let (look_bundle, look_runtime_directory) = if cross_bundle {
+        let Some(paths) = bundle_catalog.lookup(target_bundle_name) else {
+            return Err(relay_error(
+                "validation_unknown_bundle",
+                "look target bundle is not configured on this relay",
+                Some(json!({ "bundle_name": target_bundle_name })),
+            ));
+        };
+        peer_bundle = load_bundle_configuration(configuration_root, target_bundle_name)
+            .map_err(map_config)?;
+        (&peer_bundle, paths.runtime_directory.clone())
+    } else {
+        (bundle, runtime_directory.to_path_buf())
+    };
+
+    let target = look_bundle
         .members
         .iter()
-        .find(|member| member.id == target_session)
+        .find(|member| member.id == target_session_id)
         .ok_or_else(|| {
             relay_error(
                 "validation_unknown_target",
                 "target_session is not in bundle configuration",
-                Some(json!({"target_session": target_session})),
+                Some(json!({
+                    "target_session": canonical_session_id(target_session_id, target_bundle_name),
+                })),
             )
         })?;
+
+    // Authorize the requester against its own (dispatch-bundle) policy; the
+    // cross-bundle path deliberately requires the higher `all:all` scope.
+    let authorized_target = canonical_session_id(target.id.as_str(), target_bundle_name);
+    let authorized_target = if cross_bundle {
+        authorized_target.as_str()
+    } else {
+        target.id.as_str()
+    };
     authorize_look(
         bundle,
         authorization,
         requester.session_id.as_str(),
-        target.id.as_str(),
+        authorized_target,
+        cross_bundle,
     )?;
 
     let snapshot = match &target.target {
@@ -730,7 +765,8 @@ fn handle_look(
                 ));
             }
             let requested_lines = lines.unwrap_or(LOOK_LINES_DEFAULT);
-            let tmux_socket = tmux_socket_path_for_runtime_directory(runtime_directory);
+            let tmux_socket =
+                tmux_socket_path_for_runtime_directory(look_runtime_directory.as_path());
             let pane_target = resolve_active_pane_target(tmux_socket.as_path(), target.id.as_str())
                 .map_err(|reason| {
                     relay_error(
@@ -761,24 +797,26 @@ fn handle_look(
             ));
         }
         crate::configuration::TargetConfiguration::Acp(_) => {
-            let prime_timed_out =
-                await_acp_worker_prime_for_look(bundle, target, runtime_directory).map_err(
-                    |reason| {
-                        relay_error(
-                            "internal_unexpected_failure",
-                            "failed to await ACP worker prime for look",
-                            Some(json!({"target_session": target.id, "cause": reason})),
-                        )
-                    },
-                )?;
+            let prime_timed_out = await_acp_worker_prime_for_look(
+                look_bundle,
+                target,
+                look_runtime_directory.as_path(),
+            )
+            .map_err(|reason| {
+                relay_error(
+                    "internal_unexpected_failure",
+                    "failed to await ACP worker prime for look",
+                    Some(json!({"target_session": target.id, "cause": reason})),
+                )
+            })?;
             let worker_state = get_acp_worker_state(
-                bundle.bundle_name.as_str(),
-                runtime_directory,
+                look_bundle.bundle_name.as_str(),
+                look_runtime_directory.as_path(),
                 target.id.as_str(),
             );
             let worker_snapshot = get_acp_worker_snapshot(
-                bundle.bundle_name.as_str(),
-                runtime_directory,
+                look_bundle.bundle_name.as_str(),
+                look_runtime_directory.as_path(),
                 target.id.as_str(),
             );
             let requested_entries = lines.unwrap_or(ACP_LOOK_ENTRIES_DEFAULT);
@@ -802,12 +840,12 @@ fn handle_look(
     };
     let response = RelayResponse::Look {
         schema_version: SCHEMA_VERSION.to_string(),
-        bundle_name: bundle.bundle_name.clone(),
+        bundle_name: look_bundle.bundle_name.clone(),
         requester_session: canonical_session_id(
             requester.session_id.as_str(),
             bundle.bundle_name.as_str(),
         ),
-        target_session: canonical_session_id(target.id.as_str(), bundle.bundle_name.as_str()),
+        target_session: canonical_session_id(target.id.as_str(), look_bundle.bundle_name.as_str()),
         captured_at: time::OffsetDateTime::now_utc()
             .format(&Rfc3339)
             .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string()),
@@ -1132,6 +1170,38 @@ fn resolve_sender_identity(
             "value": sender_session,
         })),
     ))
+}
+
+/// Resolves a look target's hosting bundle and bundle-local session id from its
+/// principal-id form.
+///
+/// Mirrors Send's suffix-based routing: a target qualified with a peer bundle
+/// (`<session>@<bundle>`) routes to that bundle, while a bare target — or one
+/// qualified with the dispatch bundle, already stripped during identity
+/// normalization — resolves within the dispatch bundle. Relay-wide namespaces
+/// (`@GLOBAL`/`@EXTERNAL`/`@RELAY`) name no inspectable session and are rejected.
+fn resolve_look_target_bundle<'a>(
+    dispatch_bundle_name: &'a str,
+    target_session: &'a str,
+) -> Result<(&'a str, &'a str), RelayError> {
+    match classify_principal_id(target_session) {
+        Some(PrincipalType::Session) => {
+            let (session_id, bundle_name) = split_principal_id(target_session)
+                .expect("session classification implies a parseable suffix");
+            Ok((bundle_name, session_id))
+        }
+        Some(PrincipalType::User | PrincipalType::Application | PrincipalType::Relay) => {
+            let namespace = split_principal_id(target_session)
+                .map(|(_, namespace)| namespace)
+                .unwrap_or_default();
+            Err(relay_error(
+                "validation_unsupported_namespace",
+                "look target namespace is reserved and names no inspectable session",
+                Some(json!({ "target_session": target_session, "namespace": namespace })),
+            ))
+        }
+        None => Ok((dispatch_bundle_name, target_session)),
+    }
 }
 
 /// One namespace-scoped delivery group: a target bundle's configuration plus

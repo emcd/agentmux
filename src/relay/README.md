@@ -46,7 +46,10 @@ exported from `src/relay/mod.rs`.
 - `authorization.rs`
   - policy loading and operation-level authorization checks.
 - `handlers.rs`
-  - request dispatcher plus chat/look/raww handlers.
+  - request dispatcher plus chat/look/raww handlers. `Look` resolves a peer
+    bundle from the target's `@<bundle>` suffix (Send-consistent) via the
+    catalog; the requester's `look` capability is authorized in its own
+    (dispatch) bundle, tightened to `all:all` for cross-bundle inspection.
 - `handlers/listing.rs`
   - bundle up/down and list-session request handlers.
 - `handlers/permissions.rs`
@@ -162,6 +165,54 @@ exported from `src/relay/mod.rs`.
   `@GLOBAL` operator's TUI-config policy) must grant `new.peer` / `change.psk`
   at the `all:all` tier — a bundle-relative `all:home` grant is insufficient,
   and application/relay principals are denied fail-closed.
+
+### Cross-bundle inspection
+
+- `Look` accepts a `session@<peer-bundle>` target and reads the peer bundle's
+  session snapshot, mirroring cross-bundle `Send`'s suffix-based routing: the
+  peer bundle is resolved from the target suffix against the live catalog and
+  the capture runs in that bundle's runtime directory. Unknown peers surface as
+  `validation_unknown_bundle` and unknown peer sessions as
+  `validation_unknown_target` (the retired `validation_cross_bundle_unsupported`
+  stub no longer appears for `Look`).
+- Cross-bundle look is authorized more strictly than cross-bundle send (which is
+  permit-all this slice): the requester's `look` control is evaluated in its own
+  (dispatch) bundle and must be `all:all` to cross the bundle boundary, where
+  `all:home` suffices for same-bundle inspection. This matches the relay-wide
+  operator-action stance that `all:home` confers no authority beyond the
+  requester's own namespace. The non-stream entry point carries an empty catalog,
+  so it stays confined to same-bundle looks. `Raww` remains intra-bundle.
+
+#### Authorization model: origin-side capability, no target-side filter
+
+- Cross-bundle authorization today is **origin-side only**: the requester's home
+  policy decides whether it may reach across the bundle boundary (`all:all`).
+  The target bundle has no say over who inspects or messages its sessions. This
+  is a capability model — the grant travels with the principal — and within a
+  single relay it is sufficient and non-redundant, because the relay mediates
+  both ends inside one trust domain.
+- A target-side filter (a bundle declaring "who may look/send/list into me") was
+  considered and **deliberately deferred**. It is a different authority axis
+  (target exposure, "who may touch me") that *composes* with the origin
+  capability rather than replacing it, and it is not yet justified intra-relay:
+  a second inbound-policy site can drift from or contradict the origin scope, and
+  the relay already enforces ingress. Two related axes are kept distinct: *who
+  decides* (origin vs target) and *how granular* (today `all:all` is a blanket
+  cross-bundle grant; finer "may inspect bundle-b but not bundle-c" control, if
+  needed, is cheaper expressed as scoped origin-side grants than as target ACLs).
+- The forcing function for target-side filtering is **cross-relay**, where the
+  trust boundary makes a target relay's ingress filter load-bearing (a target
+  relay cannot assume the origin enforced anything; its sensible default is
+  deny-by-default for foreign origins, the opposite of the intra-relay
+  default-open stance). The intent is to design that filter first and only then
+  decide whether to project the proven shape down onto intra-relay bundles —
+  rather than mirroring it onto bundles for symmetry alone. The one piece meant
+  to be consistent across both layers is a **global/relay-principal exempt
+  tier** (trusted operators that act across all bundles by design). The natural
+  insertion point already exists: `handle_look` / `handle_send` resolve and load
+  the peer bundle's `AuthorizationContext` at the routing seam, so an ingress
+  hook is a localized addition, not a re-plumb. See `ideas/relay` (inter-relay
+  target filtering) for the open design thread.
 
 ### Delivery
 
