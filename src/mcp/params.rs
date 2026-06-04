@@ -102,9 +102,13 @@ pub(super) struct LookParams {
     /// Session identifier to inspect. Routing context is inferred from the
     /// `@<namespace>` suffix; no explicit namespace parameter is accepted.
     pub(super) target_session: String,
-    /// Optional number of pane snapshot lines to capture.
+    /// Optional snapshot window size: tmux pane lines, or ACP replay entries.
     #[serde(default)]
     pub(super) lines: Option<u64>,
+    /// Optional entries to skip from the newest end before the tail-N window,
+    /// for walking backward through older ACP replay context. ACP targets only.
+    #[serde(default)]
+    pub(super) offset: Option<u64>,
     /// Unknown fields captured for explicit validation.
     #[serde(flatten, default)]
     #[schemars(skip)]

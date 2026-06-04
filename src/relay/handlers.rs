@@ -44,6 +44,10 @@ mod permissions;
 
 const LOOK_LINES_DEFAULT: usize = 120;
 const LOOK_LINES_MAX: usize = 1000;
+/// Default ACP look window. ACP replay entries are far larger than tmux lines
+/// (each can be a full message or tool invocation), so a small default keeps
+/// the response under the MCP payload limit while still showing recent context.
+const ACP_LOOK_ENTRIES_DEFAULT: usize = 50;
 
 #[derive(Clone, Debug)]
 struct SenderIdentity {
@@ -127,6 +131,7 @@ pub(super) fn handle_request(
             requester_session,
             target_session,
             lines,
+            offset,
             bundle_name: request_bundle_name,
         } => handle_look(
             bundle,
@@ -135,6 +140,7 @@ pub(super) fn handle_request(
                 requester_session,
                 target_session,
                 lines,
+                offset,
                 bundle_name: request_bundle_name,
             },
             runtime_directory,
@@ -335,11 +341,13 @@ fn normalize_request_identities(request: RelayRequest, bundle_name: &str) -> Rel
             requester_session,
             target_session,
             lines,
+            offset,
             bundle_name: request_bundle_name,
         } => RelayRequest::Look {
             requester_session: bare(requester_session),
             target_session: bare(target_session),
             lines,
+            offset,
             bundle_name: request_bundle_name,
         },
         RelayRequest::Raww {
@@ -651,6 +659,7 @@ fn handle_look(
         requester_session,
         target_session,
         lines,
+        offset,
         bundle_name: request_bundle_name,
     } = request;
     if let Some(request_bundle_name) = request_bundle_name.as_deref()
@@ -666,8 +675,12 @@ fn handle_look(
         ));
     }
 
-    let requested_lines = lines.unwrap_or(LOOK_LINES_DEFAULT);
-    if !(1..=LOOK_LINES_MAX).contains(&requested_lines) {
+    // Validate the caller-supplied window size against the shared bound; the
+    // transport-specific default is applied per branch below, since ACP entries
+    // and tmux lines have very different size profiles.
+    if let Some(requested_lines) = lines
+        && !(1..=LOOK_LINES_MAX).contains(&requested_lines)
+    {
         return Err(relay_error(
             "validation_invalid_lines",
             "lines must be between 1 and 1000",
@@ -678,6 +691,7 @@ fn handle_look(
             })),
         ));
     }
+    let offset = offset.unwrap_or(0);
 
     let requester = resolve_sender_identity(
         bundle,
@@ -705,6 +719,17 @@ fn handle_look(
 
     let snapshot = match &target.target {
         crate::configuration::TargetConfiguration::Tmux(_) => {
+            if offset != 0 {
+                return Err(relay_error(
+                    "validation_offset_unsupported",
+                    "offset is only supported for ACP look targets",
+                    Some(json!({
+                        "target_session": target.id,
+                        "offset": offset,
+                    })),
+                ));
+            }
+            let requested_lines = lines.unwrap_or(LOOK_LINES_DEFAULT);
             let tmux_socket = tmux_socket_path_for_runtime_directory(runtime_directory);
             let pane_target = resolve_active_pane_target(tmux_socket.as_path(), target.id.as_str())
                 .map_err(|reason| {
@@ -756,14 +781,18 @@ fn handle_look(
                 runtime_directory,
                 target.id.as_str(),
             );
+            let requested_entries = lines.unwrap_or(ACP_LOOK_ENTRIES_DEFAULT);
             let snapshot = derive_acp_look_snapshot(
                 worker_state,
                 worker_snapshot.as_deref().map(Vec::as_slice),
-                requested_lines,
+                requested_entries,
+                offset,
                 prime_timed_out,
             );
             LookSnapshotPayload::AcpEntriesV1 {
                 snapshot_entries: snapshot.snapshot_entries,
+                entries_total: snapshot.entries_total,
+                returned_entries_count: snapshot.returned_entries_count,
                 freshness: snapshot.freshness,
                 snapshot_source: snapshot.snapshot_source,
                 stale_reason_code: snapshot.stale_reason_code,
@@ -798,23 +827,27 @@ fn handle_look(
         let (
             snapshot_format,
             snapshot_count,
+            entries_total,
             freshness_label,
             snapshot_source_label,
             stale_reason_code,
             snapshot_age_ms,
         ) = match snapshot {
             LookSnapshotPayload::Lines { snapshot_lines } => {
-                ("lines", snapshot_lines.len(), None, None, None, None)
+                ("lines", snapshot_lines.len(), None, None, None, None, None)
             }
             LookSnapshotPayload::AcpEntriesV1 {
                 snapshot_entries,
+                entries_total,
                 freshness,
                 snapshot_source,
                 stale_reason_code,
                 snapshot_age_ms,
+                ..
             } => (
                 "acp_entries_v1",
                 snapshot_entries.len(),
+                Some(*entries_total),
                 Some(match freshness {
                     AcpLookFreshness::Fresh => "fresh",
                     AcpLookFreshness::Stale => "stale",
@@ -835,7 +868,9 @@ fn handle_look(
                 "target_session": target_session,
                 "snapshot_format": snapshot_format,
                 "snapshot_count": snapshot_count,
-                "lines_requested": requested_lines,
+                "entries_total": entries_total,
+                "lines_requested": lines,
+                "offset": offset,
                 "freshness": freshness_label,
                 "snapshot_source": snapshot_source_label,
                 "stale_reason_code": stale_reason_code,

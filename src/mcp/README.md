@@ -22,7 +22,17 @@ This module implements the MCP stdio server for `agentmux`.
     every configured session.
   - `look` tmux: `snapshot_format="lines"` + `snapshot_lines`
   - `look` ACP: `snapshot_format="acp_entries_v1"` + `snapshot_entries`
-    (+ freshness fields)
+    (+ freshness fields), plus `entries_total` (full replay-buffer size) and
+    `returned_entries_count` (entries in this window) so callers can detect
+    truncation and bound backward walks.
+  - `look` windowing parameters (both forwarded to the relay):
+    - `lines` (optional): window size. tmux pane lines (default 120) or ACP
+      replay entries (default 50 — ACP entries are far larger than tmux lines,
+      so the smaller default keeps responses under the MCP payload limit).
+    - `offset` (optional): entries to skip from the newest end before the
+      tail-N window, for walking backward through older ACP context. ACP
+      targets only; a non-zero `offset` against a tmux target is rejected with
+      `validation_offset_unsupported`.
   - `send` and `look` both surface sender-attribution fields when the relay
     populates them:
     - `authenticated_identity` (optional): the relay-verified `principal_id`

@@ -75,6 +75,12 @@ pub enum LookSnapshotPayload {
     },
     AcpEntriesV1 {
         snapshot_entries: Vec<AcpSnapshotEntry>,
+        /// Total entries available in the replay buffer before tail/offset
+        /// windowing. Lets callers detect truncation and bound backward walks.
+        entries_total: usize,
+        /// Count of entries actually returned in `snapshot_entries` after
+        /// applying the tail-N window and `offset`.
+        returned_entries_count: usize,
         freshness: AcpLookFreshness,
         snapshot_source: AcpLookSnapshotSource,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -227,6 +233,11 @@ pub enum RelayRequest {
         target_session: String,
         #[serde(default)]
         lines: Option<usize>,
+        /// Entries to skip from the newest end before applying the tail-N
+        /// window. Enables backward walking of the ACP replay buffer for older
+        /// context. Ignored for tmux targets, which capture pane scrollback.
+        #[serde(default)]
+        offset: Option<usize>,
         #[serde(default)]
         bundle_name: Option<String>,
     },

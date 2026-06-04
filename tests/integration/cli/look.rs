@@ -126,6 +126,8 @@ fn look_preserves_additive_acp_freshness_fields_in_machine_output() {
             on_behalf_of: None,
             snapshot: LookSnapshotPayload::AcpEntriesV1 {
                 snapshot_entries: vec![],
+                entries_total: 0,
+                returned_entries_count: 0,
                 freshness: agentmux::relay::AcpLookFreshness::Stale,
                 snapshot_source: agentmux::relay::AcpLookSnapshotSource::None,
                 stale_reason_code: Some("acp_snapshot_prime_timeout".to_string()),
@@ -158,6 +160,8 @@ fn look_preserves_additive_acp_freshness_fields_in_machine_output() {
     assert_eq!(payload["freshness"], "stale");
     assert_eq!(payload["snapshot_source"], "none");
     assert_eq!(payload["stale_reason_code"], "acp_snapshot_prime_timeout");
+    assert_eq!(payload["entries_total"], serde_json::json!(0));
+    assert_eq!(payload["returned_entries_count"], serde_json::json!(0));
 }
 
 #[test]
@@ -214,6 +218,8 @@ fn look_preserves_structured_acp_entries_in_machine_output() {
             on_behalf_of: None,
             snapshot: LookSnapshotPayload::AcpEntriesV1 {
                 snapshot_entries: snapshot_entries.clone(),
+                entries_total: snapshot_entries.len(),
+                returned_entries_count: snapshot_entries.len(),
                 freshness: agentmux::relay::AcpLookFreshness::Fresh,
                 snapshot_source: agentmux::relay::AcpLookSnapshotSource::LiveBuffer,
                 stale_reason_code: None,
@@ -249,6 +255,8 @@ fn look_preserves_structured_acp_entries_in_machine_output() {
         payload["snapshot_entries"],
         serde_json::to_value(snapshot_entries).expect("serialize snapshot entries")
     );
+    assert_eq!(payload["entries_total"], serde_json::json!(5));
+    assert_eq!(payload["returned_entries_count"], serde_json::json!(5));
 }
 
 #[test]

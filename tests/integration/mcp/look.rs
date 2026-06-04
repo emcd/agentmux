@@ -69,6 +69,58 @@ async fn look_returns_snapshot_payload_and_forwards_request_shape() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn look_forwards_offset_to_relay_request() {
+    let runtime = TestRuntime::create();
+    let relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("look") => json!({
+                    "kind": "look",
+                    "schema_version": "1",
+                    "bundle_name": BUNDLE_NAME,
+                    "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
+                    "target_session": request.get("target_session").cloned().unwrap_or(Value::Null),
+                    "captured_at": "2026-03-10T00:00:00Z",
+                    "snapshot_format": "acp_entries_v1",
+                    "snapshot_entries": [{"kind": "agent", "lines": ["older context"]}],
+                    "entries_total": 10,
+                    "returned_entries_count": 1,
+                    "freshness": "fresh",
+                    "snapshot_source": "live_buffer",
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let mut arguments = Map::new();
+    arguments.insert(
+        "target_session".to_string(),
+        Value::String("bravo".to_string()),
+    );
+    arguments.insert("lines".to_string(), Value::Number(1.into()));
+    arguments.insert("offset".to_string(), Value::Number(3.into()));
+    let response = harness.call_tool(2, "look", arguments).await;
+    let payload = decode_tool_payload(&response);
+
+    assert_eq!(payload["entries_total"], 10);
+    assert_eq!(payload["returned_entries_count"], 1);
+
+    let relay_requests = relay.requests_for_operation("look");
+    assert_eq!(relay_requests.len(), 1);
+    assert_eq!(relay_requests[0]["lines"], 1);
+    assert_eq!(relay_requests[0]["offset"], 3);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn look_preserves_additive_acp_freshness_fields() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
@@ -84,6 +136,8 @@ async fn look_preserves_additive_acp_freshness_fields() {
                     "captured_at": "2026-03-10T00:00:00Z",
                     "snapshot_format": "acp_entries_v1",
                     "snapshot_entries": [],
+                    "entries_total": 0,
+                    "returned_entries_count": 0,
                     "freshness": "stale",
                     "snapshot_source": "none",
                     "stale_reason_code": "acp_snapshot_prime_timeout",
@@ -153,6 +207,8 @@ async fn look_preserves_structured_acp_entries_passthrough() {
                             "lines": ["done"]
                         }
                     ],
+                    "entries_total": 12,
+                    "returned_entries_count": 4,
                     "freshness": "fresh",
                     "snapshot_source": "live_buffer",
                     "snapshot_age_ms": 42,
@@ -208,6 +264,8 @@ async fn look_preserves_structured_acp_entries_passthrough() {
     assert_eq!(payload["snapshot_source"], "live_buffer");
     assert_eq!(payload["snapshot_age_ms"], 42);
     assert!(payload.get("stale_reason_code").is_none());
+    assert_eq!(payload["entries_total"], 12);
+    assert_eq!(payload["returned_entries_count"], 4);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
