@@ -23,6 +23,8 @@ const TEST_PRE_HELLO_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[path = "relay_stream/identity.rs"]
 mod identity;
+#[path = "relay_stream/look.rs"]
+mod look;
 #[path = "relay_stream/permissions.rs"]
 mod permissions;
 #[path = "relay_stream/robustness.rs"]

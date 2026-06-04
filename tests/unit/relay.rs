@@ -676,25 +676,28 @@ fn send_rejects_conflicting_timeout_fields() {
 }
 
 #[test]
-fn look_rejects_cross_bundle_scope() {
+fn look_rejects_unknown_peer_bundle() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
 
+    // A peer-qualified target routes by suffix; the non-stream entry point
+    // carries an empty catalog, so an unconfigured peer bundle is rejected
+    // fail-closed rather than the retired cross-bundle stub.
     let response = dispatch_request(
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
-            target_session: "bravo".to_string(),
+            target_session: "bravo@other".to_string(),
             lines: Some(3),
             offset: None,
-            bundle_name: Some("other".to_string()),
+            bundle_name: None,
         },
         &config_root,
         "party",
         &tmux_socket,
     )
     .expect_err("look should fail");
-    assert_eq!(response.code, "validation_cross_bundle_unsupported");
+    assert_eq!(response.code, "validation_unknown_bundle");
 }
 
 #[test]

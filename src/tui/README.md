@@ -79,10 +79,13 @@ picker (`F5`) are overlays available in both modes.
     status, look snapshot, pending permissions, chat history, delivery
     bookkeeping, write draft), and triggers `refresh_recipients` on the new
     bundle. Selecting the active bundle is a no-op that closes the picker.
-    Cross-bundle targeting for `Send` is handled separately via the
-    `session@bundle` grammar in the `To` field; `Look` and `Raww` remain
-    intra-bundle and the relay still rejects cross-bundle attempts on those
-    paths with `validation_cross_bundle_unsupported`,
+    Cross-bundle targeting for `Send` and `Look` is handled separately via the
+    `session@bundle` grammar in the `To` / look-target field: the relay resolves
+    the peer bundle by suffix and authorizes the requester's `look` capability at
+    the tightened `all:all` scope (unknown peers/targets surface as
+    `validation_unknown_bundle` / `validation_unknown_target`). `Raww` remains
+    intra-bundle and the relay still rejects cross-bundle attempts there with
+    `validation_cross_bundle_unsupported`,
 - picker actions (mode-aware `Enter`, no separate `l` / `w` keys):
   - Communication mode: insert the selected recipient into `To`,
   - Interaction mode: open the Interaction screen for the selected identity,
