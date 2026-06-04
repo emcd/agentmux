@@ -18,6 +18,7 @@ mod lifecycle;
 mod startup_state;
 mod stream;
 mod tmux;
+mod watcher;
 
 use self::authorization::load_authorization_context;
 
@@ -33,6 +34,7 @@ pub use self::delivery::observability::{
 };
 use self::errors::*;
 use self::identity::*;
+pub use self::watcher::{BundleWatcher, spawn_bundle_watcher};
 
 /// Executes one relay request for a configured bundle.
 pub fn handle_request(

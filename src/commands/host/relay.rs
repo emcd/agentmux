@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     env,
     os::unix::net::UnixListener,
     sync::{
@@ -20,7 +19,7 @@ use crate::{
     configuration::load_bundle_group_memberships,
     relay::{
         BundleCatalog, append_startup_failure, serve_connection, shutdown_bundle_runtime,
-        startup_bundle, wait_for_async_delivery_shutdown,
+        spawn_bundle_watcher, startup_bundle, wait_for_async_delivery_shutdown,
     },
     runtime::{
         bootstrap::{
@@ -113,8 +112,9 @@ pub(super) async fn run_relay_host(arguments: RelayHostArguments) -> Result<(), 
     let _signal_handlers = install_shutdown_signal_handlers()?;
 
     // Captured before `arguments` is moved into the blocking startup closure;
-    // enforcement applies in the async serve phase, not during startup.
+    // enforcement and watching apply in the async serve phase, not during startup.
     let require_session_credentials = arguments.require_session_credentials;
+    let watch_bundles = arguments.watch_bundles;
 
     // Startup (config load, tmux autostart, lock acquisition, socket binding) is
     // blocking, so it runs on a blocking task. The async serve phase then drives
@@ -145,6 +145,7 @@ pub(super) async fn run_relay_host(arguments: RelayHostArguments) -> Result<(), 
                 listener,
                 runtime_lock,
                 require_session_credentials,
+                watch_bundles,
             )
             .await
         }
@@ -292,6 +293,7 @@ async fn serve_relay_host(
     listener: UnixListener,
     runtime_lock: RelayRuntimeLock,
     require_session_credentials: bool,
+    watch_bundles: bool,
 ) -> Result<(), RuntimeError> {
     emit_inscription("relay.startup.summary", &startup_summary_payload(&summary));
     render_startup_summary(&summary);
@@ -302,16 +304,10 @@ async fn serve_relay_host(
 
     // Build the bundle catalog: map from bundle_name to per-bundle paths.
     // Connection workers consult this on Hello to route to the correct bundle.
-    let bundle_paths_for_cleanup: Vec<BundleRuntimePaths> = hosted_bundles
-        .iter()
-        .map(|hosted| hosted.paths.clone())
-        .collect();
-    let catalog: BundleCatalog = Arc::new(
-        hosted_bundles
-            .into_iter()
-            .map(|hosted| (hosted.paths.bundle_name.clone(), hosted.paths))
-            .collect::<HashMap<_, _>>(),
-    );
+    // The catalog is the live source of truth once the watcher can mutate it, so
+    // the shutdown cleanup list is taken from it after the watcher is stopped
+    // (below) rather than from this initial set.
+    let catalog = BundleCatalog::from_paths(hosted_bundles.into_iter().map(|hosted| hosted.paths));
 
     // Remove any stale sentinel left by a crashed predecessor before we publish
     // ours. Otherwise a waiter could observe "stale sentinel + new socket
@@ -324,7 +320,7 @@ async fn serve_relay_host(
         let state_root = roots.state_root.clone();
         let stop_requested = Arc::clone(&stop_requested);
         let connection_permits = Arc::clone(&connection_permits);
-        let catalog = Arc::clone(&catalog);
+        let catalog = catalog.clone();
         // `require_session_credentials` is the relay-wide enforcement flag set by
         // the `--require-credentials` CLI flag (default: disabled).
         tokio::spawn(run_relay_accept_loop(
@@ -345,12 +341,47 @@ async fn serve_relay_host(
     // gate for callers waiting on relay startup.
     write_relay_ready_sentinel(&relay_paths)?;
 
+    // Start watching the bundles configuration directory for runtime
+    // add/remove/modify unless `--no-watch` was given. The guard is held for the
+    // serving lifetime and dropped (stopping the watch) before cleanup tears the
+    // hosted bundles down. A watcher that cannot be created (e.g. the platform
+    // lacks filesystem notifications) is non-fatal: the relay keeps serving
+    // without dynamic reconciliation.
+    let bundle_watcher = if watch_bundles {
+        match spawn_bundle_watcher(
+            &roots.configuration_root,
+            &roots.state_root,
+            catalog.clone(),
+        ) {
+            Ok(watcher) => Some(watcher),
+            Err(error) => {
+                emit_inscription(
+                    "relay.bundle.watch.unavailable",
+                    &json!({ "cause": error.to_string() }),
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let accept_outcome = supervise_accept_loop(&stop_requested, accept_handle).await;
 
     if shutdown_requested() {
         emit_inscription("relay.shutdown.signal", &json!({"signal": "termination"}));
     }
     stop_requested.store(true, Ordering::SeqCst);
+
+    // Stop watching before cleanup unloads the bundles, so a reconcile cannot
+    // race the teardown. Dropping the watcher joins its reconcile thread, so any
+    // in-flight reload runs to completion before this returns.
+    drop(bundle_watcher);
+
+    // Snapshot the live catalog for cleanup now that the watcher is stopped: this
+    // reflects bundles loaded or unloaded at runtime, so a runtime-added bundle's
+    // tmux runtime is still torn down (and a runtime-removed one is not retried).
+    let bundle_paths_for_cleanup = catalog.snapshot();
 
     // Cleanup (async-delivery drain, socket removal, tmux shutdown per bundle)
     // is blocking. The relay-level runtime lock is held until cleanup returns.
@@ -513,7 +544,7 @@ async fn run_relay_accept_loop(
                                     stream,
                                     configuration_root.clone(),
                                     state_root.clone(),
-                                    Arc::clone(&bundle_catalog),
+                                    bundle_catalog.clone(),
                                     require_session_credentials,
                                     Arc::clone(&metrics),
                                 );

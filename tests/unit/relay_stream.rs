@@ -1,9 +1,8 @@
 use std::{
-    collections::HashMap,
     io::{BufRead, BufReader, Write},
     os::unix::{io::AsRawFd, net::UnixStream},
     path::{Path, PathBuf},
-    sync::{Arc, OnceLock},
+    sync::OnceLock,
     thread,
     time::{Duration, Instant},
 };
@@ -224,17 +223,11 @@ fn spawn_relay_connection_with_enforcement(
 }
 
 fn single_bundle_catalog(bundle_paths: &BundleRuntimePaths) -> BundleCatalog {
-    let mut map = HashMap::new();
-    map.insert(bundle_paths.bundle_name.clone(), bundle_paths.clone());
-    Arc::new(map)
+    BundleCatalog::from_paths([bundle_paths.clone()])
 }
 
 fn multi_bundle_catalog(bundle_paths: &[BundleRuntimePaths]) -> BundleCatalog {
-    let mut map = HashMap::new();
-    for paths in bundle_paths {
-        map.insert(paths.bundle_name.clone(), paths.clone());
-    }
-    Arc::new(map)
+    BundleCatalog::from_paths(bundle_paths.iter().cloned())
 }
 
 // Writes an additional bundle whose sole session `agent` is a coder-less UI

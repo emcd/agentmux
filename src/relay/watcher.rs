@@ -1,0 +1,425 @@
+//! Runtime bundle file watcher.
+//!
+//! Watches the bundles configuration directory and reconciles the loaded bundle
+//! set against the on-disk set whenever a debounced filesystem change arrives.
+//! New bundle files are loaded and started; removed files unload their bundle
+//! (evicting active sessions with `runtime_bundle_unloaded`); modified files are
+//! treated as a full teardown + reload (evicting active sessions with
+//! `runtime_bundle_reloaded`). Smart reload (disconnecting only sessions whose
+//! definitions changed) is deferred as a follow-on; this change tears down every
+//! session in a modified bundle.
+
+use std::{
+    collections::{HashMap, HashSet},
+    io,
+    path::Path,
+    sync::mpsc,
+    thread,
+    time::Duration,
+};
+
+use notify_debouncer_full::{
+    DebounceEventResult, Debouncer, RecommendedCache, new_debouncer,
+    notify::{RecommendedWatcher, RecursiveMode},
+};
+use serde_json::json;
+use sha2::{Digest, Sha256};
+
+use crate::configuration::{bundle_configuration_path, bundles_configuration_directory};
+use crate::runtime::error::RuntimeError;
+use crate::runtime::inscriptions::emit_inscription;
+use crate::runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory};
+
+use super::connection::BundleCatalog;
+use super::lifecycle::{shutdown_bundle_runtime, startup_bundle};
+use super::stream::evict_streams_for_bundle;
+use super::{RelayError, RelayResponse};
+
+/// Debounce window for coalescing rapid filesystem events. Long enough to ride
+/// over an editor's write-temp-then-rename save sequence (so a single logical
+/// edit reconciles once), short enough to feel responsive interactively.
+const BUNDLE_WATCH_DEBOUNCE: Duration = Duration::from_millis(200);
+
+type BundleDebouncer = Debouncer<RecommendedWatcher, RecommendedCache>;
+
+/// Live bundle file watcher. Owns the debouncer (whose drop stops watching and
+/// closes the event channel) and the consumer thread that runs reconciliation.
+/// Dropping the watcher stops watching and joins the consumer thread.
+pub struct BundleWatcher {
+    // Dropped before the consumer is joined (see `Drop`): dropping the debouncer
+    // closes the event channel so the consumer's receive loop terminates.
+    debouncer: Option<BundleDebouncer>,
+    consumer: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for BundleWatcher {
+    fn drop(&mut self) {
+        // Drop the debouncer first: this stops the filesystem watch and closes
+        // the event channel, which ends the consumer's `for result in rx` loop.
+        self.debouncer.take();
+        if let Some(consumer) = self.consumer.take() {
+            let _ = consumer.join();
+        }
+    }
+}
+
+/// Spawns the bundle file watcher over the bundles configuration directory.
+///
+/// The returned [`BundleWatcher`] must be held for as long as watching should
+/// continue; dropping it tears the watcher down cleanly. Reconciliation runs on
+/// a dedicated thread (filesystem and tmux operations are blocking), never on
+/// the async runtime.
+///
+/// # Errors
+///
+/// Returns `RuntimeError` when the filesystem watcher cannot be created, the
+/// bundles directory cannot be watched, or the consumer thread cannot be
+/// spawned. The relay host treats this as non-fatal and continues serving
+/// without dynamic reconciliation.
+pub fn spawn_bundle_watcher(
+    configuration_root: impl AsRef<Path>,
+    state_root: impl AsRef<Path>,
+    catalog: BundleCatalog,
+) -> Result<BundleWatcher, RuntimeError> {
+    let configuration_root = configuration_root.as_ref().to_path_buf();
+    let state_root = state_root.as_ref().to_path_buf();
+    let bundles_directory = bundles_configuration_directory(&configuration_root);
+
+    let (sender, receiver) = mpsc::channel::<DebounceEventResult>();
+    let mut debouncer = new_debouncer(BUNDLE_WATCH_DEBOUNCE, None, sender).map_err(|source| {
+        RuntimeError::validation(
+            "runtime_bundle_watch_unavailable",
+            format!("failed to create bundle file watcher: {source}"),
+        )
+    })?;
+    debouncer
+        .watch(&bundles_directory, RecursiveMode::NonRecursive)
+        .map_err(|source| {
+            RuntimeError::validation(
+                "runtime_bundle_watch_unavailable",
+                format!(
+                    "failed to watch bundles directory {}: {source}",
+                    bundles_directory.display()
+                ),
+            )
+        })?;
+
+    // Seed reconciliation state from the bundles already loaded at startup so the
+    // first real change is diffed against their current on-disk content.
+    let mut state = ReconcileState {
+        fingerprints: seed_fingerprints(&configuration_root, &catalog),
+        failed: HashMap::new(),
+    };
+
+    let consumer = thread::Builder::new()
+        .name("agentmux-bundle-watcher".to_string())
+        .spawn(move || {
+            for result in receiver {
+                match result {
+                    Ok(_events) => {
+                        reconcile_bundles(&configuration_root, &state_root, &catalog, &mut state);
+                    }
+                    Err(errors) => {
+                        emit_inscription(
+                            "relay.bundle.watch.error",
+                            &json!({ "cause": format!("{errors:?}") }),
+                        );
+                    }
+                }
+            }
+        })
+        .map_err(|source| RuntimeError::io("spawn bundle watcher thread", source))?;
+
+    emit_inscription(
+        "relay.bundle.watch.started",
+        &json!({ "bundles_directory": bundles_directory.display().to_string() }),
+    );
+
+    Ok(BundleWatcher {
+        debouncer: Some(debouncer),
+        consumer: Some(consumer),
+    })
+}
+
+/// Reconciliation bookkeeping carried across debounced notifications. Content
+/// fingerprints distinguish a genuine bundle-file modification from filesystem
+/// noise that leaves the file unchanged; the failed set suppresses repeated load
+/// attempts (and repeated failure inscriptions) for an unchanged broken file.
+struct ReconcileState {
+    /// Content fingerprint of each loaded bundle's `.toml`, keyed by bundle name.
+    fingerprints: HashMap<String, [u8; 32]>,
+    /// Fingerprint of the last failed load attempt, keyed by bundle name.
+    failed: HashMap<String, [u8; 32]>,
+}
+
+/// Re-scans the bundles directory and reconciles it against the loaded set.
+fn reconcile_bundles(
+    configuration_root: &Path,
+    state_root: &Path,
+    catalog: &BundleCatalog,
+    state: &mut ReconcileState,
+) {
+    let bundles_directory = bundles_configuration_directory(configuration_root);
+    let on_disk = match scan_bundle_names(&bundles_directory) {
+        Ok(names) => names,
+        Err(source) => {
+            // An unreadable directory is treated as transient: take no
+            // destructive action rather than unload every bundle.
+            emit_inscription(
+                "relay.bundle.watch.scan_failed",
+                &json!({
+                    "bundles_directory": bundles_directory.display().to_string(),
+                    "cause": source.to_string(),
+                }),
+            );
+            return;
+        }
+    };
+    let loaded = catalog.loaded_bundle_names();
+
+    // Disappeared: loaded bundles whose file is no longer on disk.
+    for bundle_name in loaded.difference(&on_disk) {
+        unload_bundle(catalog, bundle_name, state);
+    }
+
+    // New or modified bundles present on disk.
+    for bundle_name in &on_disk {
+        let fingerprint = match fingerprint_bundle_file(configuration_root, bundle_name) {
+            Ok(fingerprint) => fingerprint,
+            // The file vanished between scan and read; a later event reconciles it.
+            Err(_) => continue,
+        };
+        if loaded.contains(bundle_name) {
+            if state.fingerprints.get(bundle_name) == Some(&fingerprint) {
+                continue;
+            }
+            reload_bundle(
+                configuration_root,
+                state_root,
+                catalog,
+                bundle_name,
+                fingerprint,
+                state,
+            );
+        } else {
+            if state.failed.get(bundle_name) == Some(&fingerprint) {
+                continue;
+            }
+            load_new_bundle(
+                configuration_root,
+                state_root,
+                catalog,
+                bundle_name,
+                fingerprint,
+                state,
+            );
+        }
+    }
+}
+
+/// Loads and starts a newly detected bundle file. A validation or startup
+/// failure is recorded and the bundle is left unloaded; other bundles continue
+/// serving.
+fn load_new_bundle(
+    configuration_root: &Path,
+    state_root: &Path,
+    catalog: &BundleCatalog,
+    bundle_name: &str,
+    fingerprint: [u8; 32],
+    state: &mut ReconcileState,
+) {
+    let paths = match BundleRuntimePaths::resolve(state_root, bundle_name) {
+        Ok(paths) => paths,
+        Err(source) => {
+            record_load_failure(bundle_name, &source.to_string(), state, fingerprint);
+            return;
+        }
+    };
+    if let Err(source) = ensure_bundle_runtime_directory(&paths) {
+        record_load_failure(bundle_name, &source.to_string(), state, fingerprint);
+        return;
+    }
+    match startup_bundle(configuration_root, bundle_name, &paths.runtime_directory) {
+        Ok(report) if report.ready_session_count > 0 => {
+            catalog.insert(paths);
+            state
+                .fingerprints
+                .insert(bundle_name.to_string(), fingerprint);
+            state.failed.remove(bundle_name);
+            emit_inscription(
+                "relay.bundle.loaded",
+                &json!({
+                    "bundle_name": bundle_name,
+                    "ready_session_count": report.ready_session_count,
+                }),
+            );
+        }
+        Ok(_report) => {
+            record_load_failure(
+                bundle_name,
+                "zero configured sessions reached ready state",
+                state,
+                fingerprint,
+            );
+        }
+        Err(error) => {
+            record_load_failure(bundle_name, &error.message, state, fingerprint);
+        }
+    }
+}
+
+/// Reloads a modified bundle: evict every active session, tear the runtime down,
+/// then bring it back up with the new configuration. If the new configuration is
+/// invalid the bundle is left unloaded with a recorded failure.
+fn reload_bundle(
+    configuration_root: &Path,
+    state_root: &Path,
+    catalog: &BundleCatalog,
+    bundle_name: &str,
+    fingerprint: [u8; 32],
+    state: &mut ReconcileState,
+) {
+    let evicted_session_count =
+        evict_streams_for_bundle(bundle_name, &bundle_reloaded_response(bundle_name));
+    let paths = match BundleRuntimePaths::resolve(state_root, bundle_name) {
+        Ok(paths) => paths,
+        Err(source) => {
+            catalog.remove(bundle_name);
+            state.fingerprints.remove(bundle_name);
+            record_load_failure(bundle_name, &source.to_string(), state, fingerprint);
+            return;
+        }
+    };
+    // Tear the existing runtime down (best effort) before reloading; a teardown
+    // failure should not block the reload attempt.
+    let _ = shutdown_bundle_runtime(&paths.tmux_socket);
+
+    match startup_bundle(configuration_root, bundle_name, &paths.runtime_directory) {
+        Ok(report) if report.ready_session_count > 0 => {
+            catalog.insert(paths);
+            state
+                .fingerprints
+                .insert(bundle_name.to_string(), fingerprint);
+            state.failed.remove(bundle_name);
+            emit_inscription(
+                "relay.bundle.reloaded",
+                &json!({
+                    "bundle_name": bundle_name,
+                    "evicted_session_count": evicted_session_count,
+                    "ready_session_count": report.ready_session_count,
+                }),
+            );
+        }
+        outcome => {
+            // The teardown already happened; a failed reload leaves the bundle
+            // unloaded so new connections fail fast with validation_unknown_bundle.
+            catalog.remove(bundle_name);
+            state.fingerprints.remove(bundle_name);
+            let reason = match outcome {
+                Err(error) => error.message,
+                _ => "zero configured sessions reached ready state".to_string(),
+            };
+            record_load_failure(bundle_name, &reason, state, fingerprint);
+        }
+    }
+}
+
+/// Unloads a bundle whose file disappeared: evict every active session, remove it
+/// from the catalog so new connections fail fast, and tear the runtime down.
+fn unload_bundle(catalog: &BundleCatalog, bundle_name: &str, state: &mut ReconcileState) {
+    let removed = catalog.remove(bundle_name);
+    let evicted_session_count =
+        evict_streams_for_bundle(bundle_name, &bundle_unloaded_response(bundle_name));
+    if let Some(paths) = removed {
+        let _ = shutdown_bundle_runtime(&paths.tmux_socket);
+    }
+    state.fingerprints.remove(bundle_name);
+    state.failed.remove(bundle_name);
+    emit_inscription(
+        "relay.bundle.unloaded",
+        &json!({
+            "bundle_name": bundle_name,
+            "evicted_session_count": evicted_session_count,
+        }),
+    );
+}
+
+fn record_load_failure(
+    bundle_name: &str,
+    reason: &str,
+    state: &mut ReconcileState,
+    fingerprint: [u8; 32],
+) {
+    state.failed.insert(bundle_name.to_string(), fingerprint);
+    emit_inscription(
+        "relay.bundle.load_failed",
+        &json!({
+            "bundle_name": bundle_name,
+            "reason": reason,
+        }),
+    );
+}
+
+fn bundle_unloaded_response(bundle_name: &str) -> RelayResponse {
+    RelayResponse::Error {
+        error: RelayError {
+            code: "runtime_bundle_unloaded".to_string(),
+            message: "bundle configuration file was removed; the relay unloaded the bundle"
+                .to_string(),
+            details: Some(json!({ "bundle_name": bundle_name })),
+        },
+    }
+}
+
+fn bundle_reloaded_response(bundle_name: &str) -> RelayResponse {
+    RelayResponse::Error {
+        error: RelayError {
+            code: "runtime_bundle_reloaded".to_string(),
+            message: "bundle configuration file changed; the relay reloaded the bundle".to_string(),
+            details: Some(json!({ "bundle_name": bundle_name })),
+        },
+    }
+}
+
+/// Seeds content fingerprints for the bundles already loaded at startup.
+fn seed_fingerprints(
+    configuration_root: &Path,
+    catalog: &BundleCatalog,
+) -> HashMap<String, [u8; 32]> {
+    catalog
+        .loaded_bundle_names()
+        .into_iter()
+        .filter_map(|bundle_name| {
+            fingerprint_bundle_file(configuration_root, &bundle_name)
+                .ok()
+                .map(|fingerprint| (bundle_name, fingerprint))
+        })
+        .collect()
+}
+
+/// Lists the bundle names present on disk (the `<name>.toml` files in the
+/// bundles configuration directory). A missing directory yields an empty set.
+fn scan_bundle_names(bundles_directory: &Path) -> io::Result<HashSet<String>> {
+    if !bundles_directory.exists() {
+        return Ok(HashSet::new());
+    }
+    let mut names = HashSet::new();
+    for entry in std::fs::read_dir(bundles_directory)? {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let Some(file_name) = file_name.to_str() else {
+            continue;
+        };
+        if let Some(bundle_name) = file_name.strip_suffix(".toml") {
+            names.insert(bundle_name.to_string());
+        }
+    }
+    Ok(names)
+}
+
+/// Computes the SHA-256 content fingerprint of a bundle definition file.
+fn fingerprint_bundle_file(configuration_root: &Path, bundle_name: &str) -> io::Result<[u8; 32]> {
+    let path = bundle_configuration_path(configuration_root, bundle_name);
+    let bytes = std::fs::read(&path)?;
+    Ok(Sha256::digest(&bytes).into())
+}

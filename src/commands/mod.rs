@@ -29,6 +29,9 @@ pub(super) struct RuntimeArguments {
 pub(super) struct RelayHostArguments {
     pub(super) no_autostart: bool,
     pub(super) require_session_credentials: bool,
+    /// Whether the relay watches the bundles configuration directory for runtime
+    /// add/remove/modify. Enabled by default; disabled by `--no-watch`.
+    pub(super) watch_bundles: bool,
     pub(super) runtime: RuntimeArguments,
 }
 
@@ -210,7 +213,7 @@ fn print_agentmux_help() {
         "Usage: agentmux <command> [options]\n",
         "\n",
         "Commands:\n",
-        "  host relay [--no-autostart] [--require-credentials] [--config-directory PATH] ",
+        "  host relay [--no-autostart] [--require-credentials] [--no-watch] [--config-directory PATH] ",
         "[--state-directory PATH] [--inscriptions-directory PATH|",
         "--logs-directory PATH] [--repository-root PATH]\n",
         "  host mcp [--bundle NAME] [--session-name NAME] ",

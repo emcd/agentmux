@@ -4,6 +4,8 @@ use std::{
     os::unix::net::UnixStream,
     path::Path,
     process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 use agentmux::runtime::paths::RelayRuntimePaths;
@@ -575,4 +577,359 @@ fn host_relay_without_require_credentials_accepts_socket_trust() {
 
     assert_eq!(frame["frame"], "hello_ack", "expected hello_ack: {frame:?}");
     assert_eq!(frame["principal_id"], "a@alpha");
+}
+
+/// Opens a persistent stream connection, sends one Hello, and returns the live
+/// stream, a buffered reader (with a read timeout so a missing frame fails the
+/// test rather than hanging), and the first server frame. Held open so a
+/// later watcher-driven eviction frame can be observed on the same connection.
+fn relay_hello_keepalive(
+    state_root: &Path,
+    principal_id: &str,
+    identity_token: &str,
+) -> (UnixStream, BufReader<UnixStream>, Value) {
+    let socket = RelayRuntimePaths::resolve(state_root).relay_socket;
+    let mut stream = UnixStream::connect(&socket).expect("connect relay socket");
+    let reader_stream = stream.try_clone().expect("clone relay stream");
+    reader_stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("set relay read timeout");
+    let hello = json!({
+        "frame": "hello",
+        "schema_version": "1",
+        "principal_id": principal_id,
+        "identity_token": identity_token,
+    });
+    let encoded = serde_json::to_string(&hello).expect("encode hello");
+    stream
+        .write_all(format!("{encoded}\n").as_bytes())
+        .expect("write hello");
+    stream.flush().expect("flush hello");
+    let mut reader = BufReader::new(reader_stream);
+    let frame = read_next_frame(&mut reader).expect("hello frame");
+    (stream, reader, frame)
+}
+
+/// Reads the next newline-delimited frame, or `None` on EOF or read timeout.
+fn read_next_frame(reader: &mut BufReader<UnixStream>) -> Option<Value> {
+    let mut line = String::new();
+    match reader.read_line(&mut line) {
+        Ok(0) => None,
+        Ok(_) => Some(serde_json::from_str(line.trim_end()).expect("decode relay frame")),
+        Err(_) => None,
+    }
+}
+
+/// Repeatedly opens a fresh Hello connection until `accept` matches the returned
+/// frame or the deadline passes. Used to observe the watcher's eventual catalog
+/// state (a newly loaded bundle accepting Hello, or an unloaded one rejecting).
+fn poll_hello_first_frame(
+    state_root: &Path,
+    principal_id: &str,
+    identity_token: &str,
+    accept: impl Fn(&Value) -> bool,
+) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let frame = relay_hello_first_frame(state_root, principal_id, identity_token);
+        if accept(&frame) || Instant::now() >= deadline {
+            return frame;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+// A bundle TOML file added at runtime is picked up by the watcher: the relay
+// loads and starts the bundle without a restart, and a new connection to that
+// bundle succeeds where it was previously rejected as an unknown bundle.
+#[test]
+fn host_relay_watcher_loads_new_bundle_file_at_runtime() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        Some(&["dev"]),
+        &["a"],
+        Some(true),
+    );
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay");
+    wait_for_relay_ready(&state_root, "alpha");
+
+    // The bravo bundle does not exist yet: Hello is rejected as unknown.
+    let before = relay_hello_first_frame(&state_root, "b@bravo", "socket-trust");
+    // Add the bravo bundle file at runtime; the watcher should load it.
+    write_bundle_configuration_with_options(
+        &config_root,
+        "bravo",
+        Some(&["dev"]),
+        &["b"],
+        Some(true),
+    );
+    let added = poll_hello_first_frame(&state_root, "b@bravo", "socket-trust", |frame| {
+        frame["frame"] == "hello_ack"
+    });
+
+    shutdown_relay_if_present(&state_root, "alpha");
+    let output = child
+        .wait_with_output()
+        .expect("wait for agentmux host relay");
+    assert!(output.status.success(), "command should succeed");
+
+    assert_eq!(
+        before["frame"], "response",
+        "expected error frame: {before:?}"
+    );
+    assert_eq!(
+        before["response"]["error"]["code"],
+        "validation_unknown_bundle"
+    );
+    assert_eq!(
+        added["frame"], "hello_ack",
+        "expected hello_ack after add: {added:?}"
+    );
+    assert_eq!(added["principal_id"], "b@bravo");
+}
+
+// A bundle TOML file removed at runtime unloads the bundle: active sessions
+// receive a `runtime_bundle_unloaded` error frame before disconnect, and
+// subsequent connection attempts to that bundle are rejected as unknown.
+#[test]
+fn host_relay_watcher_unloads_removed_bundle_file_at_runtime() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        Some(&["dev"]),
+        &["a"],
+        Some(true),
+    );
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay");
+    wait_for_relay_ready(&state_root, "alpha");
+
+    let (_stream, mut reader, hello) =
+        relay_hello_keepalive(&state_root, "a@alpha", "socket-trust");
+    fs::remove_file(config_root.join("bundles").join("alpha.toml")).expect("remove bundle file");
+    // The active session's connection receives the typed unload frame.
+    let eviction = read_next_frame(&mut reader).expect("eviction frame");
+    // The catalog is updated before the eviction frame is written, so a new
+    // Hello to the unloaded bundle is now rejected as unknown.
+    let after = relay_hello_first_frame(&state_root, "a@alpha", "socket-trust");
+
+    shutdown_relay_if_present(&state_root, "alpha");
+    let output = child
+        .wait_with_output()
+        .expect("wait for agentmux host relay");
+    assert!(output.status.success(), "command should succeed");
+
+    assert_eq!(hello["frame"], "hello_ack", "expected hello_ack: {hello:?}");
+    assert_eq!(
+        eviction["frame"], "response",
+        "expected eviction frame: {eviction:?}"
+    );
+    assert_eq!(
+        eviction["response"]["error"]["code"],
+        "runtime_bundle_unloaded"
+    );
+    assert_eq!(
+        after["frame"], "response",
+        "expected unknown-bundle frame: {after:?}"
+    );
+    assert_eq!(
+        after["response"]["error"]["code"],
+        "validation_unknown_bundle"
+    );
+}
+
+// A bundle TOML file modified at runtime is treated as a full teardown +
+// reload: active sessions receive a `runtime_bundle_reloaded` error frame before
+// disconnect, and the relay reloads the bundle (a fresh connection succeeds).
+#[test]
+fn host_relay_watcher_reloads_modified_bundle_file_at_runtime() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        Some(&["dev"]),
+        &["a"],
+        Some(true),
+    );
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay");
+    wait_for_relay_ready(&state_root, "alpha");
+
+    let (_stream, mut reader, hello) =
+        relay_hello_keepalive(&state_root, "a@alpha", "socket-trust");
+    // Modify the alpha bundle file (add a session): the watcher reloads it.
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        Some(&["dev"]),
+        &["a", "c"],
+        Some(true),
+    );
+    let eviction = read_next_frame(&mut reader).expect("eviction frame");
+    // After reload the bundle is still loaded: a fresh Hello succeeds.
+    let after = poll_hello_first_frame(&state_root, "a@alpha", "socket-trust", |frame| {
+        frame["frame"] == "hello_ack"
+    });
+
+    shutdown_relay_if_present(&state_root, "alpha");
+    let output = child
+        .wait_with_output()
+        .expect("wait for agentmux host relay");
+    assert!(output.status.success(), "command should succeed");
+
+    assert_eq!(hello["frame"], "hello_ack", "expected hello_ack: {hello:?}");
+    assert_eq!(
+        eviction["frame"], "response",
+        "expected eviction frame: {eviction:?}"
+    );
+    assert_eq!(
+        eviction["response"]["error"]["code"],
+        "runtime_bundle_reloaded"
+    );
+    assert_eq!(
+        after["frame"], "hello_ack",
+        "expected hello_ack after reload: {after:?}"
+    );
+    assert_eq!(after["principal_id"], "a@alpha");
+}
+
+// With `--no-watch`, a bundle file added at runtime is not reconciled: the relay
+// continues to reject connections to the new bundle until a restart.
+#[test]
+fn host_relay_no_watch_flag_disables_runtime_reconcile() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        Some(&["dev"]),
+        &["a"],
+        Some(true),
+    );
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "--no-watch",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay --no-watch");
+    wait_for_relay_ready(&state_root, "alpha");
+
+    write_bundle_configuration_with_options(
+        &config_root,
+        "bravo",
+        Some(&["dev"]),
+        &["b"],
+        Some(true),
+    );
+    // Give a watcher (if one existed) ample time to reconcile, then confirm the
+    // bundle is still unknown: no reconciliation happened.
+    thread::sleep(Duration::from_secs(1));
+    let frame = relay_hello_first_frame(&state_root, "b@bravo", "socket-trust");
+
+    shutdown_relay_if_present(&state_root, "alpha");
+    let output = child
+        .wait_with_output()
+        .expect("wait for agentmux host relay");
+    assert!(output.status.success(), "command should succeed");
+
+    assert_eq!(
+        frame["frame"], "response",
+        "expected error frame: {frame:?}"
+    );
+    assert_eq!(
+        frame["response"]["error"]["code"],
+        "validation_unknown_bundle"
+    );
 }

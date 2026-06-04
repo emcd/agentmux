@@ -1,4 +1,10 @@
-use std::{collections::HashMap, io, path::Path, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    io,
+    path::Path,
+    sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    time::Duration,
+};
 
 use serde_json::{Value, json};
 use time::OffsetDateTime;
@@ -35,10 +41,81 @@ use super::{
     handlers, map_config, map_tui_config, relay_error,
 };
 
-/// Map from configured bundle name to its resolved runtime paths. Shared
-/// across all connection workers so each accepted connection can look up
-/// its bundle from the Hello frame.
-pub type BundleCatalog = Arc<HashMap<String, BundleRuntimePaths>>;
+/// Shared, mutable map from configured bundle name to its resolved runtime
+/// paths. Cloned by reference (`Arc`) across all connection workers so each
+/// accepted connection can look up its bundle from the Hello frame.
+///
+/// The map is wrapped in an `RwLock` so the bundle file watcher can load,
+/// unload, and reload bundles at runtime (the write side) while connection
+/// handlers take short-lived read guards (the read side). No accessor holds a
+/// guard across an `.await`: each one copies out what it needs and drops the
+/// guard before returning, so the `await_holding_lock` lint is never tripped.
+#[derive(Clone, Default)]
+pub struct BundleCatalog {
+    bundles: Arc<RwLock<HashMap<String, BundleRuntimePaths>>>,
+}
+
+impl BundleCatalog {
+    /// Builds a catalog from an initial set of hosted bundle paths.
+    pub fn from_paths(paths: impl IntoIterator<Item = BundleRuntimePaths>) -> Self {
+        let bundles = paths
+            .into_iter()
+            .map(|paths| (paths.bundle_name.clone(), paths))
+            .collect();
+        Self {
+            bundles: Arc::new(RwLock::new(bundles)),
+        }
+    }
+
+    /// Returns the runtime paths for `bundle_name`, or `None` when no such
+    /// bundle is currently loaded.
+    pub(super) fn lookup(&self, bundle_name: &str) -> Option<BundleRuntimePaths> {
+        self.read().get(bundle_name).cloned()
+    }
+
+    /// Returns a snapshot of every currently loaded bundle's paths. Used by the
+    /// relay host to derive its shutdown cleanup list from the live catalog (so
+    /// bundles loaded or unloaded at runtime are reflected) and internally to
+    /// replay relay-wide UI snapshots across every loaded bundle.
+    pub fn snapshot(&self) -> Vec<BundleRuntimePaths> {
+        self.read().values().cloned().collect()
+    }
+
+    /// Returns the set of currently loaded bundle names. Used by the watcher to
+    /// diff the loaded set against the on-disk set during reconciliation.
+    pub(super) fn loaded_bundle_names(&self) -> HashSet<String> {
+        self.read().keys().cloned().collect()
+    }
+
+    /// Inserts or replaces a loaded bundle's paths. Held by the watcher's write
+    /// side when a new bundle file is detected or a modified bundle is reloaded.
+    pub(super) fn insert(&self, paths: BundleRuntimePaths) {
+        self.write().insert(paths.bundle_name.clone(), paths);
+    }
+
+    /// Removes a loaded bundle, returning its paths when present. Held by the
+    /// watcher's write side when a bundle file disappears.
+    pub(super) fn remove(&self, bundle_name: &str) -> Option<BundleRuntimePaths> {
+        self.write().remove(bundle_name)
+    }
+
+    /// Acquires the read guard, recovering from poisoning.
+    ///
+    /// A poisoned lock means a writer panicked mid-update; the map itself stays
+    /// internally consistent, so recovering the guard is preferable to
+    /// propagating the panic to every connection handler that looks up a bundle.
+    fn read(&self) -> RwLockReadGuard<'_, HashMap<String, BundleRuntimePaths>> {
+        self.bundles
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn write(&self) -> RwLockWriteGuard<'_, HashMap<String, BundleRuntimePaths>> {
+        self.bundles
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
 
 /// Serves one relay socket connection on the async runtime.
 ///
@@ -575,8 +652,7 @@ fn resolve_send_routing_bundle(
         .find_map(|target| bundle_namespace_suffix(target.as_str()))
     {
         return bundle_catalog
-            .get(bundle_name)
-            .cloned()
+            .lookup(bundle_name)
             .ok_or_else(|| unknown_bundle_error(bundle_name));
     }
     Err(relay_error(
@@ -601,8 +677,7 @@ fn resolve_namespace_routing_bundle(
                 Some(json!({ "namespace": namespace })),
             )),
             bundle_name => bundle_catalog
-                .get(bundle_name)
-                .cloned()
+                .lookup(bundle_name)
                 .ok_or_else(|| unknown_bundle_error(bundle_name)),
         };
     }
@@ -684,7 +759,7 @@ fn emit_registration_permission_snapshots(
             }
         }
         RegistryKey::RelayWide { principal_id } => {
-            for bundle_paths in bundle_catalog.values() {
+            for bundle_paths in bundle_catalog.snapshot() {
                 handlers::emit_permission_snapshot_for_ui_registration(
                     configuration_root,
                     &bundle_paths.bundle_name,
@@ -750,8 +825,7 @@ fn resolve_hello_binding(
                     )
                 })?;
             let bundle_paths = bundle_catalog
-                .get(bundle_name)
-                .cloned()
+                .lookup(bundle_name)
                 .ok_or_else(|| unknown_bundle_error(bundle_name))?;
             let session_type =
                 resolve_bundle_member_session_type(configuration_root, bundle_name, session_id)?;

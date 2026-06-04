@@ -9,6 +9,7 @@ pub(super) fn parse_host_relay_arguments(
     let mut parsed = RelayHostArguments {
         no_autostart: false,
         require_session_credentials: false,
+        watch_bundles: true,
         runtime: RuntimeArguments::default(),
     };
     let mut index = 0usize;
@@ -20,6 +21,7 @@ pub(super) fn parse_host_relay_arguments(
         match arguments[index].as_str() {
             "--no-autostart" => parsed.no_autostart = true,
             "--require-credentials" => parsed.require_session_credentials = true,
+            "--no-watch" => parsed.watch_bundles = false,
             "--all" | "--include-bundle" | "--exclude-bundle" => {
                 return Err(RuntimeError::validation(
                     "validation_invalid_arguments",

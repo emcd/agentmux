@@ -368,28 +368,31 @@ pub(super) fn unregister_stream(registration: &StreamRegistration) -> Result<(),
     Ok(())
 }
 
-/// Tears down every live stream whose verified `authenticated_identity` matches
-/// `principal_id`, writing `response` to each before signalling its read loop to
-/// close. Used by `change psk` to revoke a rotated credential: a connection that
-/// authenticated with the old credential is force-disconnected.
+/// Tears down every live stream entry the `selector` matches, writing
+/// `response` to each before signalling its read loop to close.
 ///
-/// The registry entry is evicted before the teardown signal fires so a
-/// reconnect presenting the rotated credential is not wedged into an
+/// This is the single session-eviction mechanism shared by credential
+/// revocation (matched by verified `authenticated_identity`) and bundle
+/// unload/reload (matched by bound bundle name). The registry entry is evicted
+/// before the teardown signal fires so a reconnect is not wedged into an
 /// identity-claim conflict against the dying connection. The connection's writer
 /// task drains its queue (flushing the `response` frame) before exiting, so the
-/// revoked client observes the error frame ahead of EOF. Returns the number of
-/// connections torn down. Socket-trust connections carry no
-/// `authenticated_identity` and are never matched: they hold no credential to
-/// revoke.
-pub(super) fn revoke_streams_for_identity(principal_id: &str, response: &RelayResponse) -> usize {
+/// client observes the typed error frame ahead of EOF. Writers and teardown
+/// signals are collected under the registry lock and acted on after it is
+/// released. Returns the number of connections torn down. An entry without a
+/// live writer/teardown signal is already disconnected and is never matched.
+fn evict_streams<F>(selector: F, response: &RelayResponse) -> usize
+where
+    F: Fn(&RegistryKey, &RegistryEntry) -> bool,
+{
     let registry = stream_registry();
     let targets = {
         let Ok(mut entries) = registry.entries.lock() else {
             return 0;
         };
         let mut targets = Vec::new();
-        for entry in entries.values_mut() {
-            if entry.authenticated_identity.as_deref() != Some(principal_id) {
+        for (key, entry) in entries.iter_mut() {
+            if !selector(key, entry) {
                 continue;
             }
             let (Some(writer), Some(revoke)) = (entry.writer.clone(), entry.revoke.clone()) else {
@@ -414,6 +417,36 @@ pub(super) fn revoke_streams_for_identity(principal_id: &str, response: &RelayRe
         revoke.notify_one();
     }
     count
+}
+
+/// Tears down every live stream whose verified `authenticated_identity` matches
+/// `principal_id`. Used by `change psk` to revoke a rotated credential: a
+/// connection that authenticated with the old credential is force-disconnected.
+/// Socket-trust connections carry no `authenticated_identity` and are never
+/// matched: they hold no credential to revoke. Returns the number torn down.
+pub(super) fn revoke_streams_for_identity(principal_id: &str, response: &RelayResponse) -> usize {
+    evict_streams(
+        |_key, entry| entry.authenticated_identity.as_deref() == Some(principal_id),
+        response,
+    )
+}
+
+/// Tears down every live session connection bound to `bundle_name`. Used by the
+/// bundle file watcher when a bundle is unloaded (file removed) or reloaded
+/// (file modified): each affected session receives the supplied typed error
+/// frame (`runtime_bundle_unloaded` / `runtime_bundle_reloaded`) ahead of EOF.
+/// Relay-wide principals (`@GLOBAL`/`@EXTERNAL`/`@RELAY`) are never bundle-bound
+/// and are left untouched. Returns the number of connections torn down.
+pub(super) fn evict_streams_for_bundle(bundle_name: &str, response: &RelayResponse) -> usize {
+    evict_streams(
+        |key, _entry| {
+            matches!(
+                key,
+                RegistryKey::Session { bundle_name: bound, .. } if bound == bundle_name
+            )
+        },
+        response,
+    )
 }
 
 /// Fans an `identity.revoked` event out to every live trusted-host (application

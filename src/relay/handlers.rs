@@ -1344,7 +1344,7 @@ fn ensure_bundle_group(
     if bundle_name == sender_bundle.bundle_name || groups_by_bundle.contains_key(bundle_name) {
         return Ok(());
     }
-    let Some(paths) = bundle_catalog.get(bundle_name) else {
+    let Some(paths) = bundle_catalog.lookup(bundle_name) else {
         return Err(BundleGroupError::UnknownBundle);
     };
     let bundle = load_bundle_configuration(configuration_root, bundle_name)
