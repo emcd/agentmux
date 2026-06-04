@@ -57,6 +57,17 @@ find = "self"
 list = "all:home"
 look = "self"
 send = "all:home"
+
+# A relay-wide operator's home namespace is GLOBAL, so reaching into a bundle is
+# cross-namespace and requires all:all.
+[[policies]]
+id = "operator"
+
+[policies.controls]
+find = "self"
+list = "all:all"
+look = "all:all"
+send = "all:all"
 "#,
     )
     .expect("write policies configuration");
@@ -70,7 +81,7 @@ default-session = "{global_id}"
 
 [[sessions]]
 id = "{global_id}"
-policy = "default"
+policy = "operator"
 
 [sessions.ui]
 "#

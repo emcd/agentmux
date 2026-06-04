@@ -43,15 +43,28 @@ exported from `src/relay/mod.rs`.
     `bundle_name` selects the routing bundle (overriding any binding); absent
     that, the bound bundle is used, and a relay-wide principal with neither is
     rejected.
+- `routing.rs`
+  - operation-agnostic routing/authorization spine. Defines the `OperationProfile`
+    (which capability/control an operation reads) and the resolved-route types
+    (`ResolvedRoute` / `ResolvedTarget`), and maps each target's relationship to
+    the requester (self / same-bundle / peer bundle) onto a uniform scope tier
+    (`self` / `all:home` / `all:all`). Consumed by the authorization stage.
 - `authorization.rs`
-  - policy loading and operation-level authorization checks.
+  - policy loading plus the uniform, data-driven authorization stage
+    (`authorize_route`): the requester's controls are always resolved in the
+    dispatch (home) bundle and the maximum required tier across the route's
+    targets is checked against the requester's configured scope for the
+    operation's capability.
 - `handlers.rs`
-  - request dispatcher plus chat/look/raww handlers. `Look` resolves a peer
-    bundle from the target's `@<bundle>` suffix (Send-consistent) via the
-    catalog; the requester's `look` capability is authorized in its own
-    (dispatch) bundle, tightened to `all:all` for cross-bundle inspection.
+  - request dispatcher plus chat/look/raww handlers. `Send` and `Look` build a
+    `ResolvedRoute` and authorize through the shared spine: a peer-bundle target
+    raises the required tier to `all:all` while same-bundle access needs only
+    `all:home` (self-inspection needs only `self`).
 - `handlers/listing.rs`
-  - bundle up/down and list-session request handlers.
+  - bundle up/down and list-session request handlers. `handle_list_routed`
+    separates the requester's home (dispatch) bundle — where its `list` control
+    resolves — from the enumerated bundle, so a session may list a peer bundle
+    under `all:all` without being looked up in the wrong bundle's members.
 - `handlers/permissions.rs`
   - permission snapshot, list, and decision request handlers.
 - `handlers/identity.rs`
@@ -166,22 +179,56 @@ exported from `src/relay/mod.rs`.
   at the `all:all` tier — a bundle-relative `all:home` grant is insufficient,
   and application/relay principals are denied fail-closed.
 
-### Cross-bundle inspection
+### Cross-bundle routing and the uniform authorization model
 
+- `Send`, `Look`, and `List` share one routing/authorization spine (`routing.rs`
+  plus `authorize_route`). The invariant: the requester is always authorized in
+  its home/dispatch bundle, and a peer bundle supplies only target existence and
+  runtime/transport context — never the requester's policy controls.
+- Authorization is **fully data-driven**: no operation carries a hardcoded
+  cross-bundle policy in code. The spine classifies each resolved target's
+  relationship to the requester (self / same-namespace / other namespace), maps
+  it to a uniform scope tier (`self` / `all:home` / `all:all`), and checks the
+  requester's *configured* scope for the operation's capability against the
+  maximum tier the route demands. Whether a capability can ever reach the
+  cross-namespace (`all:all`) tier is governed solely by the policy schema's
+  per-capability allowed-scope set (`parse_policy_controls`).
+- **Home is the principal's native namespace**, not whichever bundle a request
+  routes through (`requester_home_namespace`): a session's home is its bundle; a
+  relay-wide principal's home is its reserved namespace (`GLOBAL` / `EXTERNAL` /
+  `RELAY`). There is no "global operator" exemption — `all:home` confers authority
+  only within the principal's own namespace, so a `@GLOBAL` operator can act
+  within `GLOBAL` under `all:home` but needs `all:all` to reach into any bundle.
+- Concretely, for cross-namespace targets every operation requires `all:all`;
+  same-namespace access of another principal requires `all:home`; self-access
+  requires only `self`. A relay-wide (`@GLOBAL`) target of a `Send` is the one
+  exception on the *target* axis: it is delivered via the registry rather than by
+  crossing into a peer bundle, so it rides the dispatch bundle at the home tier
+  and does not by itself demand `all:all`.
+- `Send` cross-bundle delivery requires `all:all`. Earlier slices left it
+  effectively permit-all (the old `authorize_send` used a `self` floor that any
+  configured `send` scope cleared); the spine corrects this to match the
+  long-standing `Relay Send Scope Control` spec. **This is a breaking change**
+  for callers that relied on permit-all cross-bundle send under `all:home`.
 - `Look` accepts a `session@<peer-bundle>` target and reads the peer bundle's
-  session snapshot, mirroring cross-bundle `Send`'s suffix-based routing: the
-  peer bundle is resolved from the target suffix against the live catalog and
-  the capture runs in that bundle's runtime directory. Unknown peers surface as
-  `validation_unknown_bundle` and unknown peer sessions as
-  `validation_unknown_target` (the retired `validation_cross_bundle_unsupported`
-  stub no longer appears for `Look`).
-- Cross-bundle look is authorized more strictly than cross-bundle send (which is
-  permit-all this slice): the requester's `look` control is evaluated in its own
-  (dispatch) bundle and must be `all:all` to cross the bundle boundary, where
-  `all:home` suffices for same-bundle inspection. This matches the relay-wide
-  operator-action stance that `all:home` confers no authority beyond the
-  requester's own namespace. The non-stream entry point carries an empty catalog,
-  so it stays confined to same-bundle looks. `Raww` remains intra-bundle.
+  session snapshot; the peer bundle is resolved from the target suffix against
+  the live catalog and the capture runs in that bundle's runtime directory.
+- `List` accepts a peer bundle via the wire `namespace` selector and enumerates
+  that bundle's sessions; the requester's `list` control is resolved in its home
+  namespace, so a session can list a peer bundle under `all:all` (this removed the
+  prior defect where a cross-bundle list was rejected as an unknown sender
+  because the requester was looked up in the enumerated bundle's members). A
+  relay-wide principal's home is `GLOBAL`: it lists the `GLOBAL` namespace under
+  `all:home` (via the relay-wide registry path) but needs `all:all` to enumerate
+  any bundle. Its controls resolve from the enumerated bundle's authorization
+  context (where the TUI-config controls are replicated), but its *home* for the
+  tier check is `GLOBAL`, not that bundle.
+- Unknown peers surface as `validation_unknown_bundle` and unknown peer sessions
+  as `validation_unknown_target`. The non-stream entry point carries an empty
+  catalog, so it stays confined to same-bundle operations. `Raww` remains
+  intra-bundle: the policy schema caps the `raww` control at `all:home`, so it
+  can never satisfy the cross-bundle `all:all` threshold — no code override is
+  involved.
 
 #### Authorization model: origin-side capability, no target-side filter
 
@@ -206,13 +253,15 @@ exported from `src/relay/mod.rs`.
   deny-by-default for foreign origins, the opposite of the intra-relay
   default-open stance). The intent is to design that filter first and only then
   decide whether to project the proven shape down onto intra-relay bundles —
-  rather than mirroring it onto bundles for symmetry alone. The one piece meant
-  to be consistent across both layers is a **global/relay-principal exempt
-  tier** (trusted operators that act across all bundles by design). The natural
-  insertion point already exists: `handle_look` / `handle_send` resolve and load
-  the peer bundle's `AuthorizationContext` at the routing seam, so an ingress
-  hook is a localized addition, not a re-plumb. See `ideas/relay` (inter-relay
-  target filtering) for the open design thread.
+  rather than mirroring it onto bundles for symmetry alone. Note that there is no
+  "global/relay-principal exempt tier": a relay-wide principal's home is its own
+  namespace (`GLOBAL` / `RELAY`), so it reaches bundles through the same uniform
+  `all:all` threshold as anyone else, just configured on a privileged operator
+  preset. The natural insertion point for a future target-side filter now exists
+  as a single seam: the `authorize_route` stage is the one place every target
+  operation passes through, so an ingress hook is a localized addition there
+  rather than N per-operation edits. See `ideas/relay` (inter-relay target
+  filtering) for the open design thread.
 
 ### Delivery
 

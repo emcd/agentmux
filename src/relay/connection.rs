@@ -37,8 +37,8 @@ use super::stream::{
 };
 use super::{
     RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
-    canonical_session_id, dispatch_identity_admin, dispatch_identity_introspect, dispatch_request,
-    handlers, map_config, map_tui_config, relay_error,
+    canonical_session_id, dispatch_identity_admin, dispatch_identity_introspect, dispatch_list,
+    dispatch_request, handlers, map_config, map_tui_config, relay_error,
 };
 
 /// Shared, mutable map from configured bundle name to its resolved runtime
@@ -505,6 +505,50 @@ async fn serve_connection_frames(
                     && target_namespace.as_deref() == Some("GLOBAL")
                 {
                     let response = handlers::handle_global_list();
+                    write_stream_frame_to_writer(
+                        writer,
+                        OutgoingFrame::Response {
+                            request_id: request_id.as_deref(),
+                            response: &response,
+                        },
+                    )?;
+                    continue;
+                }
+                // Every other `List` routes its home (dispatch) bundle separately
+                // from the enumerated bundle, so a session can list a peer bundle
+                // without being looked up in the wrong bundle's members. The
+                // enumerated bundle is the wire `namespace` (or the bound bundle);
+                // the dispatch bundle is the requester's bound bundle, or — for a
+                // relay-wide principal with no home bundle — the enumerated bundle,
+                // where its TUI-config controls resolve (preserving relay-wide list
+                // reach).
+                if matches!(request, RelayRequest::List { .. }) {
+                    let enumerate_paths = match resolve_namespace_routing_bundle(
+                        bundle_catalog,
+                        target_namespace.as_deref(),
+                        bound_bundle.as_ref(),
+                    ) {
+                        Ok(paths) => paths,
+                        Err(error) => {
+                            write_stream_frame_to_writer(
+                                writer,
+                                OutgoingFrame::Response {
+                                    request_id: request_id.as_deref(),
+                                    response: &RelayResponse::Error { error },
+                                },
+                            )?;
+                            continue;
+                        }
+                    };
+                    let dispatch_paths = bound_bundle
+                        .clone()
+                        .unwrap_or_else(|| enumerate_paths.clone());
+                    let response = dispatch_list(
+                        request,
+                        configuration_root,
+                        &dispatch_paths,
+                        &enumerate_paths,
+                    );
                     write_stream_frame_to_writer(
                         writer,
                         OutgoingFrame::Response {

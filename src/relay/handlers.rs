@@ -15,7 +15,7 @@ use crate::{
 };
 
 use super::authorization::{
-    AuthorizationContext, authorize_look, authorize_raww, authorize_send, authorize_updown,
+    AuthorizationContext, authorize_raww, authorize_route, authorize_updown,
     grant_authorized_ui_sessions, has_ui_session, load_authorization_context,
     permission_max_pending, ui_session_display_name,
 };
@@ -27,6 +27,10 @@ use super::delivery::{
 };
 use super::identity::{
     IdentityIntrospectRights, PrincipalType, classify_principal_id, split_principal_id,
+};
+use super::routing::{
+    Addressing, Capability, OperationProfile, ResolvedRoute, ResolvedTarget as RouteTarget,
+    requester_home_namespace,
 };
 use super::stream::{RelayStreamEvent, list_registered_relay_wide_sessions};
 use super::tmux::{capture_pane_tail_lines, resolve_active_pane_target};
@@ -41,6 +45,8 @@ use super::{
 mod identity;
 mod listing;
 mod permissions;
+
+pub(in crate::relay) use listing::handle_list_routed;
 
 const LOOK_LINES_DEFAULT: usize = 120;
 const LOOK_LINES_MAX: usize = 1000;
@@ -97,9 +103,13 @@ pub(super) fn handle_request(
             authorize_bundle_principal(bundle, authorization, principal.as_ref())?;
             listing::handle_bundle_down(bundle, runtime_directory)
         }
-        RelayRequest::List { sender_session } => {
-            listing::handle_list(bundle, authorization, sender_session, runtime_directory)
-        }
+        RelayRequest::List { sender_session } => listing::handle_list_routed(
+            bundle,
+            authorization,
+            bundle,
+            runtime_directory,
+            sender_session,
+        ),
         RelayRequest::Send {
             request_id,
             sender_session,
@@ -546,23 +556,43 @@ fn handle_send(
             })),
         ));
     }
-    // Send authorization gates the sender's capability within its own bundle;
-    // cross-bundle delivery is permit-all this slice (see design D5).
-    let all_resolved_targets = groups
-        .iter()
-        .flat_map(|group| group.targets.iter().map(|target| target.session_id.clone()))
-        .collect::<Vec<_>>();
-    authorize_send(
+    // Send authorization runs through the uniform routing/authorization spine:
+    // the sender's `send` control is resolved in its dispatch bundle, and the
+    // required scope tier is the maximum across every resolved target. A
+    // cross-bundle (peer) target therefore demands `all:all`; relay-wide
+    // (`@GLOBAL`) and same-bundle targets stay at the `all:home` tier.
+    let route = ResolvedRoute {
+        dispatch_bundle_name: requester_home_namespace(
+            sender.session_id.as_str(),
+            bundle.bundle_name.as_str(),
+        )
+        .to_string(),
+        requester_session: sender.session_id.clone(),
+        targets: groups
+            .iter()
+            .flat_map(|group| {
+                group.targets.iter().map(|target| RouteTarget {
+                    bundle_name: group.bundle.bundle_name.clone(),
+                    session_id: Some(target.session_id.clone()),
+                    relay_wide: target.is_ui,
+                })
+            })
+            .collect(),
+    };
+    authorize_route(
         bundle,
         authorization,
-        sender.session_id.as_str(),
-        all_resolved_targets.as_slice(),
+        OperationProfile {
+            capability: Capability::Send,
+            addressing: Addressing::MultiTarget,
+        },
+        &route,
     )?;
 
     let batch_settings = prompt_batch_settings();
     let quiescence =
         QuiescenceOptions::for_async(quiet_window_ms, quiescence_timeout_ms, acp_turn_timeout_ms);
-    let mut results = Vec::with_capacity(all_resolved_targets.len());
+    let mut results = Vec::with_capacity(route.targets.len());
     for group in &groups {
         let group_target_sessions = group
             .targets
@@ -736,20 +766,31 @@ fn handle_look(
             )
         })?;
 
-    // Authorize the requester against its own (dispatch-bundle) policy; the
-    // cross-bundle path deliberately requires the higher `all:all` scope.
-    let authorized_target = canonical_session_id(target.id.as_str(), target_bundle_name);
-    let authorized_target = if cross_bundle {
-        authorized_target.as_str()
-    } else {
-        target.id.as_str()
+    // Authorize through the uniform routing/authorization spine: the requester's
+    // `look` control is resolved in its dispatch bundle, and a peer-bundle target
+    // raises the required tier to `all:all` while same-bundle inspection of
+    // another session needs `all:home` (self-inspection needs only `self`).
+    let route = ResolvedRoute {
+        dispatch_bundle_name: requester_home_namespace(
+            requester.session_id.as_str(),
+            bundle.bundle_name.as_str(),
+        )
+        .to_string(),
+        requester_session: requester.session_id.clone(),
+        targets: vec![RouteTarget {
+            bundle_name: target_bundle_name.to_string(),
+            session_id: Some(target_session_id.to_string()),
+            relay_wide: false,
+        }],
     };
-    authorize_look(
+    authorize_route(
         bundle,
         authorization,
-        requester.session_id.as_str(),
-        authorized_target,
-        cross_bundle,
+        OperationProfile {
+            capability: Capability::Look,
+            addressing: Addressing::SingleTarget,
+        },
+        &route,
     )?;
 
     let snapshot = match &target.target {

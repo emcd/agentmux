@@ -4,19 +4,28 @@
 
 Target operations SHALL share one fully data-driven authorization model. The
 relay SHALL resolve the requester's policy controls in the requester's dispatch
-(home) bundle, classify the requester-to-target relationship, and require a
-scope tier on the policy scope ladder:
+context, classify the requester-to-target relationship relative to the
+requester's **home namespace**, and require a scope tier on the policy scope
+ladder:
 
 - self target → `self`
-- same-bundle non-self target → `all:home`
-- cross-bundle target → `all:all`
+- same-namespace non-self target → `all:home`
+- other-namespace target → `all:all`
+
+A principal's home namespace SHALL be its native namespace: a session's home is
+its bundle, and a relay-wide principal's home is its reserved namespace
+(`GLOBAL` / `EXTERNAL` / `RELAY`). `all:home` SHALL therefore confer authority
+only within the principal's own namespace; a relay-wide principal (for example a
+`@GLOBAL` operator) SHALL require `all:all` to reach into any bundle, since a
+bundle is not its home namespace. There SHALL be no global/relay-principal
+exemption from this threshold.
 
 The relay SHALL then check whether the requester's configured scope for the
 operation's capability meets that tier. The relay SHALL NOT apply any
-per-operation cross-bundle policy in code; reach SHALL be determined solely by
-the requester's configured scope versus the uniform threshold. A peer bundle
+per-operation cross-namespace policy in code; reach SHALL be determined solely by
+the requester's configured scope versus the uniform threshold. A peer namespace
 SHALL supply only target existence and runtime/transport context; the
-requester's membership in the peer bundle SHALL NOT be required.
+requester's membership in the peer namespace SHALL NOT be required.
 
 Whether a capability can be configured to a cross-bundle (`all:all`) scope SHALL
 be governed by the policy schema's per-capability allowed-scope set, not by
@@ -44,6 +53,15 @@ cross-bundle until the policy schema is widened, with no code override involved.
   sessions
 - **THEN** relay returns the peer bundle's session listing rather than rejecting
   the requester as unknown
+
+#### Scenario: Relay-wide principal needs all-all to reach a bundle
+
+- **WHEN** a relay-wide principal (for example a `@GLOBAL` operator) issues a
+  `list` or `send` targeting a bundle namespace
+- **AND** its configured scope for that capability is `all:home`
+- **THEN** relay returns `authorization_forbidden`, because the bundle is not the
+  principal's home (`GLOBAL`) namespace
+- **AND** the same principal under `all:all` is permitted
 
 #### Scenario: Capability not configurable to cross-bundle scope fails uniformly
 

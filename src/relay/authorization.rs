@@ -12,6 +12,9 @@ use crate::{
 
 use super::identity::{PrincipalType, classify_principal_id, split_principal_id};
 use super::map_config;
+use super::routing::{
+    Addressing, Capability, OperationProfile, ResolvedRoute, ScopeTier, required_tier,
+};
 
 const RELAY_FILE: &str = "relay.toml";
 const DEFAULT_PERMISSION_MAX_PENDING: usize = 256;
@@ -748,98 +751,93 @@ pub(super) fn authorize_relay_action(
     ))
 }
 
-pub(super) fn authorize_list(
-    bundle: &BundleConfiguration,
-    authorization: &AuthorizationContext,
-    requester_session: &str,
-) -> Result<(), RelayError> {
-    let controls = controls_for_requester(authorization, bundle, requester_session)?;
-    authorize_scope(
-        controls.list,
-        PolicyScope::SelfOnly,
-        AuthorizationDecisionContext {
-            capability: "list.read",
-            requester_session,
-            bundle_name: bundle.bundle_name.as_str(),
-            reason: "list policy scope does not allow recipient visibility",
-            target_session: None,
-            targets: None,
-        },
-    )
-}
-
-pub(super) fn authorize_send(
-    bundle: &BundleConfiguration,
-    authorization: &AuthorizationContext,
-    requester_session: &str,
-    target_sessions: &[String],
-) -> Result<(), RelayError> {
-    let controls = controls_for_requester(authorization, bundle, requester_session)?;
-    // MVP target resolution is same-bundle only; cross-bundle target selection
-    // is not part of the current runtime contract.
-    authorize_scope(
-        controls.send,
-        PolicyScope::SelfOnly,
-        AuthorizationDecisionContext {
-            capability: "send.deliver",
-            requester_session,
-            bundle_name: bundle.bundle_name.as_str(),
-            reason: "send policy scope does not allow delivery",
-            target_session: None,
-            targets: Some(target_sessions),
-        },
-    )
-}
-
-/// Authorizes a requester's `look` capability against a target session.
+/// Uniform, fully data-driven authorization for the target operations
+/// (`look`, `send`, `list`).
 ///
-/// The requester's controls are always resolved in its own (the request's
-/// dispatch) bundle context — a session is a member only of its home bundle.
-/// `cross_bundle` reflects whether the target lives in a peer bundle; it
-/// deliberately raises the bar rather than copying Send's permit-all stance:
+/// The requester's controls are always resolved in the dispatch (home) bundle —
+/// a session is a member only of its home bundle, and a peer bundle never
+/// supplies the requester's policy. Each resolved target's relationship to the
+/// requester is mapped to a uniform scope tier (self / all:home / all:all), and
+/// the maximum required tier across the route is checked against the requester's
+/// *configured* scope for the operation's capability.
 ///
-/// - same-bundle inspection of another session requires `all:home`;
-/// - inspecting a peer bundle's session requires `all:all`, mirroring how
-///   relay-wide operator actions treat `all:home` as conferring no authority
-///   beyond the requester's own namespace.
-///
-/// The self-inspection shortcut applies only to same-bundle looks; a peer-bundle
-/// target is never the requester itself, so the cross-bundle path always
-/// evaluates the scope.
-pub(super) fn authorize_look(
-    bundle: &BundleConfiguration,
+/// No operation supplies a cross-bundle policy: the relay never decides per
+/// operation whether crossing is allowed. Whether a capability can ever be
+/// configured to the cross-bundle (`all:all`) tier is governed solely by the
+/// policy schema's per-capability allowed-scope set (`parse_policy_controls`) —
+/// `raww`, for instance, is capped at `all:home` there, so it can never satisfy
+/// the cross-bundle threshold without a schema change, no code override needed.
+pub(super) fn authorize_route(
+    dispatch_bundle: &BundleConfiguration,
     authorization: &AuthorizationContext,
-    requester_session: &str,
-    target_session: &str,
-    cross_bundle: bool,
+    profile: OperationProfile,
+    route: &ResolvedRoute,
 ) -> Result<(), RelayError> {
-    if !cross_bundle && requester_session == target_session {
-        return Ok(());
-    }
-    let controls = controls_for_requester(authorization, bundle, requester_session)?;
-    let (minimum_scope, reason) = if cross_bundle {
-        (
-            PolicyScope::AllAll,
-            "look policy scope does not permit cross-bundle inspection (requires all:all)",
-        )
-    } else {
-        (
-            PolicyScope::AllHome,
-            "look policy scope permits self-only inspection",
-        )
+    let controls = controls_for_requester(
+        authorization,
+        dispatch_bundle,
+        route.requester_session.as_str(),
+    )?;
+    let scope = scope_for_capability(controls, profile.capability);
+    let minimum = minimum_scope_for_tier(required_tier(route));
+    let target_identifiers = route_target_identifiers(route);
+    let (target_session, targets) = match profile.addressing {
+        Addressing::SingleTarget => (target_identifiers.first().map(String::as_str), None),
+        Addressing::MultiTarget => (None, Some(target_identifiers.as_slice())),
+        Addressing::BundleEnumerate => (None, None),
     };
     authorize_scope(
-        controls.look,
-        minimum_scope,
+        scope,
+        minimum,
         AuthorizationDecisionContext {
-            capability: "look.inspect",
-            requester_session,
-            bundle_name: bundle.bundle_name.as_str(),
-            reason,
-            target_session: Some(target_session),
-            targets: None,
+            capability: profile.capability.label(),
+            requester_session: route.requester_session.as_str(),
+            bundle_name: dispatch_bundle.bundle_name.as_str(),
+            reason: tier_denial_reason(minimum),
+            target_session,
+            targets,
         },
     )
+}
+
+fn scope_for_capability(controls: &PolicyControls, capability: Capability) -> PolicyScope {
+    match capability {
+        Capability::Look => controls.look,
+        Capability::Send => controls.send,
+        Capability::List => controls.list,
+    }
+}
+
+fn minimum_scope_for_tier(tier: ScopeTier) -> PolicyScope {
+    match tier {
+        ScopeTier::Own => PolicyScope::SelfOnly,
+        ScopeTier::Home => PolicyScope::AllHome,
+        ScopeTier::All => PolicyScope::AllAll,
+    }
+}
+
+/// Canonical `<session>@<bundle>` identifiers for a route's session targets,
+/// preserving discovery order. Bundle-level entries (a `List` enumeration) carry
+/// no session and contribute nothing. Used only for error diagnostics.
+fn route_target_identifiers(route: &ResolvedRoute) -> Vec<String> {
+    route
+        .targets
+        .iter()
+        .filter_map(|target| {
+            target.session_id.as_ref().map(|session_id| {
+                super::canonical_session_id(session_id.as_str(), target.bundle_name.as_str())
+            })
+        })
+        .collect()
+}
+
+fn tier_denial_reason(minimum: PolicyScope) -> &'static str {
+    match minimum {
+        PolicyScope::AllAll => {
+            "policy scope does not permit cross-bundle access (requires all:all)"
+        }
+        _ => "policy scope does not permit this access",
+    }
 }
 
 pub(super) fn authorize_raww(

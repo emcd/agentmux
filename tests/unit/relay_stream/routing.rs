@@ -283,12 +283,16 @@ fn send_to_global_target_is_delivered_to_registered_operator() {
 
 /// Task 3.2: a relay-wide principal sends to a bundle session named by its
 /// `@<bundle>` suffix; the relay infers the bundle and resolves the target.
+///
+/// A relay-wide operator's home namespace is `GLOBAL`, so reaching into a bundle
+/// is cross-namespace and requires `all:all` send scope.
 #[test]
 fn relay_wide_send_routes_to_bundle_target_by_suffix() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_relay_wide_to_bundle";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_root, "default", bundle_name);
+    write_policies_with_send(&configuration_root, "all:all");
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
 
@@ -306,6 +310,37 @@ fn relay_wide_send_routes_to_bundle_target_by_suffix() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0]["target_session"], format!("alpha@{bundle_name}"));
     assert_eq!(results[0]["outcome"], "queued");
+}
+
+/// A relay-wide operator reaching into a bundle under only `all:home` send scope
+/// is denied: `all:home` confers authority only within the operator's own
+/// (`GLOBAL`) namespace, not into bundle namespaces.
+#[test]
+fn relay_wide_send_into_bundle_denied_under_home_scope() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "party_relay_wide_home_denied";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_root, "default", bundle_name);
+    write_policies_with_send(&configuration_root, "all:home");
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+
+    let response = relay_wide_operator_send(
+        &configuration_root,
+        &bundle_paths,
+        bundle_name,
+        json!([format!("alpha@{bundle_name}")]),
+    );
+
+    assert_eq!(response["response"]["kind"], "error");
+    assert_eq!(
+        response["response"]["error"]["code"],
+        "authorization_forbidden"
+    );
+    assert_eq!(
+        response["response"]["error"]["details"]["capability"],
+        "send.deliver"
+    );
 }
 
 /// Task 3.3: a relay-wide principal whose targets are all bare (no suffix) has
@@ -403,6 +438,9 @@ fn send_fans_out_across_bundle_and_global_namespaces() {
     let configuration_root = write_bundle_configuration(&temporary, bundle_a);
     write_tui_configuration(&configuration_root, "default", bundle_a);
     write_ui_bundle(&configuration_root, bundle_b);
+    // The fan-out crosses into peer bundle-b, which now requires `all:all` send
+    // scope (the uniform cross-bundle threshold).
+    write_policies_with_send(&configuration_root, "all:all");
     let state_root = temporary.path().join("state");
     let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
     let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b).expect("bundle-b paths");
@@ -507,6 +545,123 @@ fn send_fans_out_across_bundle_and_global_namespaces() {
     alpha_join.join().expect("join alpha thread");
     agent_join.join().expect("join agent thread");
     operator_join.join().expect("join operator thread");
+}
+
+/// A cross-bundle `Send` is denied when the sender's `send` scope is only
+/// `all:home`. This is the uniform cross-bundle threshold (`all:all`) correcting
+/// the prior permit-all stance; same-bundle delivery under `all:home` is
+/// unaffected. **BREAKING** for callers that relied on permit-all cross-bundle
+/// send.
+#[test]
+fn cross_bundle_send_denied_under_home_scope() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_a = "party_send_home_a";
+    let bundle_b = "party_send_home_b";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_a);
+    write_ui_bundle(&configuration_root, bundle_b);
+    write_policies_with_send(&configuration_root, "all:home");
+    let state_root = temporary.path().join("state");
+    let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
+    let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b).expect("bundle-b paths");
+    let catalog = multi_bundle_catalog(&[paths_a, paths_b]);
+
+    let (mut client, join) =
+        spawn_relay_connection_with_catalog(&configuration_root, &state_root, catalog);
+    let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
+    send_json(
+        &mut client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "principal_id": format!("alpha@{bundle_a}"),
+            "identity_token": "socket-trust",
+        }),
+    );
+    assert_eq!(read_json(&mut reader)["frame"], "hello_ack");
+    send_json(
+        &mut client,
+        json!({
+            "frame": "request",
+            "request_id": "req-1",
+            "request": {
+                "operation": "send",
+                "sender_session": "alpha",
+                "message": "across the boundary",
+                "targets": [format!("agent@{bundle_b}")],
+                "broadcast": false,
+                "quiescence_timeout_ms": 2000,
+            },
+        }),
+    );
+    let mut response = read_json(&mut reader);
+    while response["frame"] != "response" {
+        response = read_json(&mut reader);
+    }
+    shutdown_stream(&client, "shutdown client stream");
+    join.join().expect("join relay thread");
+
+    assert_eq!(response["response"]["kind"], "error");
+    assert_eq!(
+        response["response"]["error"]["code"],
+        "authorization_forbidden"
+    );
+    assert_eq!(
+        response["response"]["error"]["details"]["capability"],
+        "send.deliver"
+    );
+}
+
+/// Same-bundle delivery is unaffected by the cross-bundle threshold: a session
+/// sends to a peer in its own bundle under `all:home` and the message is queued.
+#[test]
+fn same_bundle_send_permitted_under_home_scope() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "party_send_same_home";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    write_policies_with_send(&configuration_root, "all:home");
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+
+    let (mut client, join) = spawn_relay_connection(&configuration_root, &bundle_paths);
+    let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
+    send_json(
+        &mut client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "principal_id": format!("alpha@{bundle_name}"),
+            "identity_token": "socket-trust",
+        }),
+    );
+    assert_eq!(read_json(&mut reader)["frame"], "hello_ack");
+    send_json(
+        &mut client,
+        json!({
+            "frame": "request",
+            "request_id": "req-1",
+            "request": {
+                "operation": "send",
+                "sender_session": "alpha",
+                "message": "same bundle",
+                "targets": [format!("bravo@{bundle_name}")],
+                "broadcast": false,
+                "quiescence_timeout_ms": 2000,
+            },
+        }),
+    );
+    let mut response = read_json(&mut reader);
+    while response["frame"] != "response" {
+        response = read_json(&mut reader);
+    }
+    shutdown_stream(&client, "shutdown client stream");
+    join.join().expect("join relay thread");
+
+    assert_eq!(response["response"]["kind"], "send");
+    let results = response["response"]["results"]
+        .as_array()
+        .expect("results array");
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["outcome"], "queued");
 }
 
 /// Task 2.2: a `Send` to a target qualified with an unconfigured bundle is
