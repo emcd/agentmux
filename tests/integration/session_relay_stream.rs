@@ -1,9 +1,7 @@
 use std::{
-    collections::HashMap,
     io::{BufRead, BufReader, ErrorKind, Write},
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
-    sync::Arc,
     thread,
     time::{Duration, Instant},
 };
@@ -108,9 +106,7 @@ fn spawn_relay_stream(
     let (server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
     let root = configuration_root.to_path_buf();
     let state_root = bundle_paths.state_root.clone();
-    let mut map = HashMap::new();
-    map.insert(bundle_paths.bundle_name.clone(), bundle_paths.clone());
-    let catalog: BundleCatalog = Arc::new(map);
+    let catalog = BundleCatalog::from_paths([bundle_paths.clone()]);
     let handle = thread::spawn(move || {
         run_serve_connection(server_stream, root, state_root, catalog).expect("serve connection");
     });

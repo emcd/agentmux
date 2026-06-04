@@ -7,6 +7,13 @@ pub fn coders_configuration_path(configuration_root: &Path) -> PathBuf {
     configuration_root.join(CODERS_FILE)
 }
 
+/// Resolves the directory that holds per-bundle definition files. This is the
+/// directory the relay bundle file watcher observes for runtime add/remove/
+/// modify of bundle configurations.
+pub fn bundles_configuration_directory(configuration_root: &Path) -> PathBuf {
+    configuration_root.join(BUNDLES_DIRECTORY)
+}
+
 /// Resolves path to one bundle definition file.
 pub fn bundle_configuration_path(configuration_root: &Path, bundle_name: &str) -> PathBuf {
     configuration_root

@@ -14,8 +14,8 @@ pub use loaders::{
     load_policy_ids, load_tui_configuration, load_tui_configuration_file,
 };
 pub use paths::{
-    bundle_configuration_path, coders_configuration_path, policies_configuration_path,
-    tui_configuration_path,
+    bundle_configuration_path, bundles_configuration_directory, coders_configuration_path,
+    policies_configuration_path, tui_configuration_path,
 };
 pub use types::{
     AcpChannel, AcpTargetConfiguration, BundleConfiguration, BundleGroupMembership, BundleMember,

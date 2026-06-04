@@ -60,7 +60,22 @@ exported from `src/relay/mod.rs`.
   - runtime reconcile/shutdown helpers for managed sessions.
 - `stream.rs`
   - hello-frame parser, stream registry, identity collision handling, and event
-    writer routing.
+    writer routing. Hosts the shared session-eviction core (`evict_streams`):
+    a selector matches live registry entries, each is evicted (entry nulled,
+    typed error frame written, teardown signal fired). `revoke_streams_for_identity`
+    (matched by verified `authenticated_identity`, used by `change psk`) and
+    `evict_streams_for_bundle` (matched by bound bundle name, used by the bundle
+    watcher) are thin wrappers over it — there is no independent per-feature
+    eviction path.
+- `watcher.rs`
+  - runtime bundle file watcher. Watches the bundles configuration directory
+    (debounced ~200ms via `notify`) and reconciles the loaded `BundleCatalog`
+    against the on-disk set on each change: new files load and start the bundle,
+    disappeared files unload it (evicting sessions with `runtime_bundle_unloaded`),
+    modified files are torn down and reloaded (evicting sessions with
+    `runtime_bundle_reloaded`). Content fingerprints distinguish a real edit from
+    filesystem noise. Runs on a dedicated thread (filesystem/tmux work is
+    blocking); the host disables it with `--no-watch`.
 - `tmux.rs`
   - tmux/process adapters used by delivery and look paths.
 - `delivery/`

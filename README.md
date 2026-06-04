@@ -40,6 +40,20 @@ Optional: start relay without autostarting bundle runtimes:
 agentmux host relay --no-autostart
 ```
 
+By default the relay watches the bundles configuration directory and reconciles
+running bundles when their files change: a new bundle file is loaded and
+started, a removed file unloads its bundle, and a **modified file triggers a
+full teardown** of that bundle — every active session in it is disconnected and
+the bundle's runtime is torn down and restarted with the new configuration.
+That is a sharp edge: editing a live bundle file cuts off its agents mid-
+operation. Edit bundle files only when that bundle is idle, or start the relay
+with `--no-watch` to disable runtime reconciliation entirely (changes then take
+effect only on the next relay restart):
+
+```bash
+agentmux host relay --no-watch
+```
+
 2. Start MCP host:
 
 ```bash
@@ -73,9 +87,10 @@ artifact locations, see
 ## Architecture At A Glance
 
 - Relay host:
-  - Command: `agentmux host relay [--no-autostart]`
+  - Command: `agentmux host relay [--no-autostart] [--no-watch]`
   - Responsibility: start one relay process that serves configured bundles
-    ("agent teams") and routes envelopes to target runtimes.
+    ("agent teams") and routes envelopes to target runtimes. Watches bundle
+    config files for runtime add/remove/modify unless `--no-watch` is set.
 - MCP host:
   - Command: `agentmux host mcp`
   - Responsibility: expose MCP tools (`list`, `help`, `look`, `send`) and forward
@@ -92,7 +107,7 @@ logs.
 ## CLI Surface
 
 ```text
-agentmux host relay [--no-autostart]
+agentmux host relay [--no-autostart] [--no-watch]
 agentmux host mcp [--bundle NAME] [--session-name NAME]
 agentmux up (<bundle-id> | --group GROUP)
 agentmux down (<bundle-id> | --group GROUP)

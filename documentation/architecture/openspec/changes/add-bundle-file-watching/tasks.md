@@ -1,18 +1,18 @@
 ## 1. Implementation
 
-- [ ] 1.1 Add `notify` crate (with debouncer feature) to `Cargo.toml`.
-- [ ] 1.2 Add `--no-watch` flag to the `agentmux host relay` subcommand in
+- [x] 1.1 Add `notify` crate (with debouncer feature) to `Cargo.toml`.
+- [x] 1.2 Add `--no-watch` flag to the `agentmux host relay` subcommand in
       `src/commands/host/relay.rs`.
-- [ ] 1.3 Convert `BundleCatalog` from immutable `Arc<HashMap>` to shared-
+- [x] 1.3 Convert `BundleCatalog` from immutable `Arc<HashMap>` to shared-
       mutable state (e.g., `Arc<RwLock<BundleCatalog>>`). Thread the write
       side through the relay host; connection handlers take short-lived read
       guards. This is the foundational change that enables dynamic reload;
       complete before implementing the watcher task.
-- [ ] 1.4 Implement `BundleWatcher` background task: spawned after initial
+- [x] 1.4 Implement `BundleWatcher` background task: spawned after initial
       bundle load completes, watching the bundles configuration directory (not
       the runtime state directory). Debounce window ~200ms. Shutdown cleanly
       when the relay host process exits.
-- [ ] 1.5 Implement reconcile-on-change handler: on debounced notification,
+- [x] 1.5 Implement reconcile-on-change handler: on debounced notification,
       re-scan the full bundles directory and diff against the loaded bundle set.
       Three cases:
       (a) new file → validate config; on success load and start the bundle
@@ -26,21 +26,31 @@
           with `runtime_bundle_reloaded`; reload the bundle with the new
           configuration. (Smart reload — diffing parsed config to disconnect
           only changed sessions — is deferred as a follow-on.)
-- [ ] 1.6 Build shared session-eviction mechanism: a reusable
+- [x] 1.6 Build shared session-eviction mechanism: a reusable
       `session_evict(session_id, typed_reason)` helper that emits the typed
       error frame to the target session and closes the connection. Used by
       file-watching (unloaded/reloaded) and identity Slice 2
       (revoked/expired). Single implementation; do not build independent
       per-feature eviction paths.
-- [ ] 1.7 Add `runtime_bundle_unloaded` and `runtime_bundle_reloaded` typed
+- [x] 1.7 Add `runtime_bundle_unloaded` and `runtime_bundle_reloaded` typed
       error codes to the relay error contract.
-- [ ] 1.8 Integration test: add a bundle TOML file at runtime → relay starts
+- [x] 1.8 Integration test: add a bundle TOML file at runtime → relay starts
       the bundle without restart; new connections to that bundle succeed.
-- [ ] 1.9 Integration test: remove a bundle file at runtime → active sessions
+- [x] 1.9 Integration test: remove a bundle file at runtime → active sessions
       receive `runtime_bundle_unloaded` before disconnect; subsequent connection
       attempts to that bundle fail with `validation_unknown_bundle`.
-- [ ] 1.10 Integration test: modify a bundle file at runtime → all active
+- [x] 1.10 Integration test: modify a bundle file at runtime → all active
       sessions in that bundle receive `runtime_bundle_reloaded` before
       disconnect; relay reloads the bundle with the new configuration.
-- [ ] 1.11 Integration test: `--no-watch` → add or remove a bundle file at
+- [x] 1.11 Integration test: `--no-watch` → add or remove a bundle file at
       runtime; relay does not reconcile; restart required.
+
+## Implementation Notes
+
+- Task 1.6 landed as a selector-based shared core (`evict_streams`) in
+  `src/relay/stream.rs` with two named wrappers — `revoke_streams_for_identity`
+  (matched by verified `authenticated_identity`) and `evict_streams_for_bundle`
+  (matched by bound bundle name). Bundle unload/reload is inherently a bulk
+  teardown, so the canonical mechanism is selector-based rather than a single
+  `session_evict(session_id, ...)` signature; the credential-revocation path was
+  refactored onto the same core so no independent eviction path remains.

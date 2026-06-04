@@ -23,8 +23,9 @@ This directory owns the unified CLI surface for `agentmux`.
   - `agentmux host mcp` association resolution, inscription setup, and MCP
     stdio service startup.
 - `host/relay.rs`
-  - relay listener/process loop, no-autostart mode, startup orchestration, and
-    connection-worker orchestration.
+  - relay listener/process loop, no-autostart mode, startup orchestration,
+    connection-worker orchestration, and bundle file watcher lifecycle (spawned
+    after startup unless `--no-watch`, dropped before cleanup).
 - `host/router.rs`
   - `agentmux host` mode dispatch.
 - `host/summary.rs`
@@ -62,6 +63,9 @@ This directory owns the unified CLI surface for `agentmux`.
 - Bare `agentmux` dispatches to TUI only in interactive TTY mode.
 - `host relay --no-autostart` is process-only mode and must not report
   autostart failures for bundles.
+- `host relay` watches the bundles configuration directory by default and
+  reconciles loaded bundles on change (add/remove/modify); `--no-watch` disables
+  this for the process lifetime.
 - Worker-pool overload and pre-hello idle handling are implemented in
   `host/relay.rs` and covered by integration tests under `tests/integration/cli/`
   and `tests/integration/relay_delivery_runtime.rs`.
