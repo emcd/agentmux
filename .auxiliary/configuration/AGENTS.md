@@ -1,8 +1,8 @@
 # Context
 
 - Overview and Quick Start: README.{md,rst}
-- Architecture and Design: @documentation/architecture/
-- Development Practices: @.auxiliary/instructions/
+- Architecture and Design: src/**/README.md (subsystem-specific)
+- Development Practices: documentation/development-practices.md
 
 - Use the 'context7' MCP server to retrieve up-to-date documentation for any SDKs or APIs.
 - Use the 'nb' MCP server for project note-taking, issue tracking, and collaboration. The server provides LLM-friendly access to the `nb` note-taking system with proper escaping and project-specific notebook context.
@@ -23,11 +23,9 @@ and coordinate work across multiple worktrees with clear contracts.
 
 # Development Standards
 
-Before implementing code changes, consult these files in `.auxiliary/instructions/`:
-- `practices.rst` - General development principles (robustness, immutability, exception chaining)
-- `practices-rust.rst` - Rust-specific patterns (error handling, trait design, module organization)
-- `nomenclature.rst` - Naming conventions for variables, functions, classes, exceptions
-- `style.rst` - Code formatting standards (spacing, line length, documentation mood)
+Before implementing code changes, consult `documentation/development-practices.md` for
+project-specific guidance on naming conventions, TOML practices, testing, code comments,
+and module organization.
 
 # Operation
 
