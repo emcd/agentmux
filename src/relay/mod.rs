@@ -15,6 +15,7 @@ mod errors;
 mod handlers;
 mod identity;
 mod lifecycle;
+mod routing;
 mod startup_state;
 mod stream;
 mod tmux;
@@ -176,6 +177,52 @@ pub(in crate::relay) fn dispatch_request(
         principal,
         bundle_catalog,
     ) {
+        Ok(value) => value,
+        Err(error) => RelayResponse::Error { error },
+    }
+}
+
+/// Dispatches a stream `List` request through the routing/authorization spine.
+///
+/// `dispatch_paths` locate the requester's home (authorization) bundle and
+/// `enumerate_paths` the bundle whose sessions are listed; they coincide for a
+/// same-bundle list and differ for a cross-bundle list. The requester's `list`
+/// control is always resolved in the dispatch bundle — a peer bundle never
+/// supplies the requester's policy — while the enumerated bundle supplies the
+/// session listing and runtime context. This is the seam that lets a session
+/// list a peer bundle without being rejected as unknown in the wrong bundle's
+/// members.
+pub(in crate::relay) fn dispatch_list(
+    request: RelayRequest,
+    configuration_root: &Path,
+    dispatch_paths: &crate::runtime::paths::BundleRuntimePaths,
+    enumerate_paths: &crate::runtime::paths::BundleRuntimePaths,
+) -> RelayResponse {
+    let result = (|| {
+        let RelayRequest::List { sender_session } = request else {
+            return Err(relay_error(
+                "internal_unexpected_request",
+                "non-list request routed to the list dispatcher",
+                None,
+            ));
+        };
+        let dispatch_bundle =
+            load_bundle_configuration(configuration_root, &dispatch_paths.bundle_name)
+                .map_err(map_config)?;
+        let dispatch_authorization =
+            load_authorization_context(configuration_root, &dispatch_bundle)?;
+        let enumerate_bundle =
+            load_bundle_configuration(configuration_root, &enumerate_paths.bundle_name)
+                .map_err(map_config)?;
+        handlers::handle_list_routed(
+            &dispatch_bundle,
+            &dispatch_authorization,
+            &enumerate_bundle,
+            &enumerate_paths.runtime_directory,
+            sender_session,
+        )
+    })();
+    match result {
         Ok(value) => value,
         Err(error) => RelayResponse::Error { error },
     }

@@ -56,7 +56,10 @@ id = "default"
 
 [policies.controls]
 find = "self"
-list = "all:home"
+# The CLI operates this bundle as the relay-wide `user@GLOBAL` operator, whose
+# home namespace is GLOBAL; cross-namespace list/send into a bundle requires
+# all:all.
+list = "all:all"
 look = "self"
 send = "all:home"
 
@@ -66,10 +69,10 @@ id = "operator"
 [policies.controls]
 find = "self"
 grant = "all:home"
-list = "all:home"
-look = "all:home"
+list = "all:all"
+look = "all:all"
 raww = "all:home"
-send = "all:home"
+send = "all:all"
 updown = "all:home"
 "#,
     )
@@ -150,7 +153,10 @@ id = "default"
 
 [policies.controls]
 find = "self"
-list = "all:home"
+# The CLI operates this bundle as the relay-wide `user@GLOBAL` operator, whose
+# home namespace is GLOBAL; cross-namespace list/send into a bundle requires
+# all:all.
+list = "all:all"
 look = "self"
 send = "all:home"
 
@@ -160,10 +166,10 @@ id = "operator"
 [policies.controls]
 find = "self"
 grant = "all:home"
-list = "all:home"
-look = "all:home"
+list = "all:all"
+look = "all:all"
 raww = "all:home"
-send = "all:home"
+send = "all:all"
 updown = "all:home"
 "#,
     )

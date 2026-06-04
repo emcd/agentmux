@@ -93,6 +93,17 @@ find = "self"
 list = "all:home"
 look = "self"
 send = "all:home"
+
+# A privileged cross-namespace operator: a relay-wide principal's home is the
+# GLOBAL namespace, so reaching into a bundle requires all:all.
+[[policies]]
+id = "operator"
+
+[policies.controls]
+find = "self"
+list = "all:all"
+look = "all:all"
+send = "all:all"
 "#,
     )
     .expect("write policies file");
@@ -195,6 +206,16 @@ find = "self"
 list = "all:home"
 look = "self"
 send = "all:home"
+
+# Privileged cross-namespace operator (see write_bundle).
+[[policies]]
+id = "operator"
+
+[policies.controls]
+find = "self"
+list = "all:all"
+look = "all:all"
+send = "all:all"
 "#,
     )
     .expect("write policies file");
@@ -294,7 +315,9 @@ fn list_returns_all_configured_sessions_with_transport() {
 fn list_allows_ui_sender_from_global_tui_sessions() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
-    write_tui_configuration(&config_root, "default");
+    // A relay-wide operator's home is GLOBAL, so listing a bundle is
+    // cross-namespace and requires all:all (the privileged operator preset).
+    write_tui_configuration(&config_root, "operator");
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_request(
         RelayRequest::List {
@@ -343,7 +366,8 @@ fn list_rejects_ui_sender_with_unknown_policy_reference() {
 fn list_reports_down_when_no_acp_worker_registered() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_acp_bundle(&temporary, "party");
-    write_tui_configuration(&config_root, "default");
+    // Cross-namespace list from a GLOBAL operator requires all:all.
+    write_tui_configuration(&config_root, "operator");
     let tmux_socket = temporary.path().join("tmux.sock");
 
     let response = dispatch_request(
@@ -846,5 +870,7 @@ fn look_denies_same_bundle_non_self_target_under_default_self_scope() {
     assert_eq!(details["capability"], "look.inspect");
     assert_eq!(details["requester_session"], "alpha");
     assert_eq!(details["bundle_name"], "party");
-    assert_eq!(details["target_session"], "bravo");
+    // The routing/authorization spine reports the canonical `<session>@<bundle>`
+    // target uniformly (same-bundle and cross-bundle alike).
+    assert_eq!(details["target_session"], "bravo@party");
 }

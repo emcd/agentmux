@@ -23,6 +23,8 @@ const TEST_PRE_HELLO_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[path = "relay_stream/identity.rs"]
 mod identity;
+#[path = "relay_stream/list.rs"]
+mod list;
 #[path = "relay_stream/look.rs"]
 mod look;
 #[path = "relay_stream/permissions.rs"]
@@ -138,6 +140,56 @@ id = "default"
 find = "self"
 grant = "{grant}"
 list = "all:home"
+look = "self"
+send = "all:home"
+"#
+        ),
+    )
+    .expect("write policies configuration");
+}
+
+// Overwrites the policy artifact so the `default` preset's `send` control uses
+// the given scope, leaving the other controls at workable defaults. Cross-bundle
+// send requires `all:all`; `all:home` permits only same-bundle delivery.
+fn write_policies_with_send(configuration_root: &Path, send: &str) {
+    std::fs::write(
+        configuration_root.join("policies.toml"),
+        format!(
+            r#"
+format-version = 1
+default = "default"
+
+[[policies]]
+id = "default"
+
+[policies.controls]
+find = "self"
+list = "all:home"
+look = "self"
+send = "{send}"
+"#
+        ),
+    )
+    .expect("write policies configuration");
+}
+
+// Overwrites the policy artifact so the `default` preset's `list` control uses
+// the given scope. Cross-bundle list requires `all:all`; `all:home` permits only
+// same-bundle enumeration.
+fn write_policies_with_list(configuration_root: &Path, list: &str) {
+    std::fs::write(
+        configuration_root.join("policies.toml"),
+        format!(
+            r#"
+format-version = 1
+default = "default"
+
+[[policies]]
+id = "default"
+
+[policies.controls]
+find = "self"
+list = "{list}"
 look = "self"
 send = "all:home"
 "#

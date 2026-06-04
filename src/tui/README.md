@@ -81,10 +81,11 @@ picker (`F5`) are overlays available in both modes.
     bundle. Selecting the active bundle is a no-op that closes the picker.
     Cross-bundle targeting for `Send` and `Look` is handled separately via the
     `session@bundle` grammar in the `To` / look-target field: the relay resolves
-    the peer bundle by suffix and authorizes the requester's `look` capability at
-    the tightened `all:all` scope (unknown peers/targets surface as
-    `validation_unknown_bundle` / `validation_unknown_target`). `Raww` remains
-    intra-bundle and the relay still rejects cross-bundle attempts there with
+    the peer bundle by suffix and authorizes the requester's capability at the
+    uniform cross-bundle `all:all` scope (the same threshold for `send` and
+    `look`; unknown peers/targets surface as `validation_unknown_bundle` /
+    `validation_unknown_target`). `Raww` remains intra-bundle and the relay still
+    rejects cross-bundle attempts there with
     `validation_cross_bundle_unsupported`,
 - picker actions (mode-aware `Enter`, no separate `l` / `w` keys):
   - Communication mode: insert the selected recipient into `To`,

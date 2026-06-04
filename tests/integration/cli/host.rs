@@ -72,7 +72,10 @@ id = "default"
 
 [policies.controls]
 find = "self"
-list = "all:home"
+# The CLI lists this bundle as the relay-wide `user@GLOBAL` operator, whose home
+# namespace is GLOBAL; reaching into a bundle is cross-namespace and requires
+# all:all.
+list = "all:all"
 look = "self"
 send = "all:home"
 "#,

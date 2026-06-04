@@ -7,9 +7,13 @@ use crate::{
     runtime::{inscriptions::emit_inscription, paths::tmux_socket_path_for_runtime_directory},
 };
 
-use super::super::authorization::{AuthorizationContext, authorize_list};
+use super::super::authorization::{AuthorizationContext, authorize_route};
 use super::super::delivery::acp_session_ready_for_startup;
 use super::super::lifecycle::{reconcile_loaded_bundle, shutdown_bundle_runtime};
+use super::super::routing::{
+    Addressing, Capability, OperationProfile, ResolvedRoute, ResolvedTarget,
+    requester_home_namespace,
+};
 use super::super::tmux::resolve_active_pane_target;
 use super::super::{
     BundleTransitionEntry, ListedBundle, ListedBundleStartupHealth, ListedBundleState,
@@ -85,13 +89,26 @@ pub(super) fn handle_bundle_down(
     })
 }
 
-pub(super) fn handle_list(
-    bundle: &BundleConfiguration,
-    authorization: &AuthorizationContext,
+/// Lists a bundle's sessions through the uniform routing/authorization spine.
+///
+/// `dispatch_bundle` carries the authorization context in which the requester's
+/// `list` control resolves (its home bundle for a session; for a relay-wide
+/// principal, the enumerated bundle, whose context replicates the TUI-config
+/// controls). The requester's *home namespace* — used for the cross-namespace
+/// tier — is derived from its principal id, so a relay-wide principal's home is
+/// `GLOBAL`, not whichever bundle it is listing. `enumerate_bundle` is the bundle
+/// whose sessions are listed: the same bundle for a same-namespace list, or a
+/// peer bundle for a cross-namespace list. A cross-namespace enumeration requires
+/// the requester's `list` scope to reach the `all:all` tier; a same-namespace
+/// enumeration needs only `all:home`.
+pub(in crate::relay) fn handle_list_routed(
+    dispatch_bundle: &BundleConfiguration,
+    dispatch_authorization: &AuthorizationContext,
+    enumerate_bundle: &BundleConfiguration,
+    enumerate_runtime_directory: &Path,
     sender_session: Option<String>,
-    runtime_directory: &Path,
 ) -> Result<RelayResponse, RelayError> {
-    let tmux_socket = tmux_socket_path_for_runtime_directory(runtime_directory);
+    let tmux_socket = tmux_socket_path_for_runtime_directory(enumerate_runtime_directory);
     let sender_session = sender_session.ok_or_else(|| {
         relay_error(
             "validation_unknown_sender",
@@ -100,35 +117,61 @@ pub(super) fn handle_list(
         )
     })?;
     let sender = super::resolve_sender_identity(
-        bundle,
-        authorization,
+        dispatch_bundle,
+        dispatch_authorization,
         sender_session.as_str(),
         "sender_session",
     )?;
-    authorize_list(bundle, authorization, sender.session_id.as_str())?;
-    let sessions = bundle
+    authorize_route(
+        dispatch_bundle,
+        dispatch_authorization,
+        OperationProfile {
+            capability: Capability::List,
+            addressing: Addressing::BundleEnumerate,
+        },
+        &ResolvedRoute {
+            dispatch_bundle_name: requester_home_namespace(
+                sender.session_id.as_str(),
+                dispatch_bundle.bundle_name.as_str(),
+            )
+            .to_string(),
+            requester_session: sender.session_id.clone(),
+            targets: vec![ResolvedTarget {
+                bundle_name: enumerate_bundle.bundle_name.clone(),
+                session_id: None,
+                relay_wide: false,
+            }],
+        },
+    )?;
+    let sessions = enumerate_bundle
         .members
         .iter()
         .map(|member| ListedSession {
-            id: canonical_session_id(member.id.as_str(), bundle.bundle_name.as_str()),
+            id: canonical_session_id(member.id.as_str(), enumerate_bundle.bundle_name.as_str()),
             name: member.name.clone(),
             transport: member.target.session_type().into(),
-            ready: session_ready_for_list(bundle, runtime_directory, tmux_socket.as_path(), member),
+            ready: session_ready_for_list(
+                enumerate_bundle,
+                enumerate_runtime_directory,
+                tmux_socket.as_path(),
+                member,
+            ),
         })
         .collect::<Vec<_>>();
 
-    let recent_startup_failures = load_startup_failures(runtime_directory).map_err(|cause| {
-        relay_error(
-            "internal_unexpected_failure",
-            "failed to load startup failure history",
-            Some(json!({
-                "bundle_name": bundle.bundle_name,
-                "cause": cause,
-            })),
-        )
-    })?;
+    let recent_startup_failures =
+        load_startup_failures(enumerate_runtime_directory).map_err(|cause| {
+            relay_error(
+                "internal_unexpected_failure",
+                "failed to load startup failure history",
+                Some(json!({
+                    "bundle_name": enumerate_bundle.bundle_name,
+                    "cause": cause,
+                })),
+            )
+        })?;
     let startup_failure_count = recent_startup_failures.len();
-    let configured_session_count = bundle.members.len();
+    let configured_session_count = enumerate_bundle.members.len();
     let ready_session_count = sessions.iter().filter(|session| session.ready).count();
     let (state, startup_health, state_reason_code, state_reason) =
         list_bundle_state(configured_session_count, ready_session_count);
@@ -137,7 +180,7 @@ pub(super) fn handle_list(
     let response = RelayResponse::List {
         schema_version: SCHEMA_VERSION.to_string(),
         bundle: ListedBundle {
-            id: bundle.bundle_name.clone(),
+            id: enumerate_bundle.bundle_name.clone(),
             hosted,
             state,
             startup_health,
