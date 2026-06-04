@@ -132,6 +132,80 @@ fn acp_look_enforces_bounded_retention_and_tail_selection() {
 }
 
 #[test]
+fn acp_look_offset_walks_backward_through_replay_buffer_with_metadata() {
+    let temporary = TempDir::new().expect("temporary");
+    let options = AcpStubOptions {
+        update_count: 10,
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let tmux_socket = temporary.path().join("tmux.sock");
+    let response = dispatch_send(&config_root, &tmux_socket, Some(1_000));
+    let result = send_result(response);
+    assert_eq!(result.outcome, SendOutcome::Queued);
+
+    // Settle the replay buffer, then capture the full ordered window so the
+    // offset assertions stay robust regardless of any leading prompt entry.
+    let full_look = wait_for_look(
+        &config_root,
+        &tmux_socket,
+        "bravo",
+        "bravo",
+        Some(1_000),
+        |lines| lines.last().map(String::as_str) == Some("ACP-LINE-10"),
+    );
+    let full = expect_acp_snapshot(full_look);
+    let total = full.entries_total;
+    assert_eq!(full.returned_entries_count, total);
+    assert_eq!(full.entries.len(), total);
+    assert!(total >= 10, "expected at least ten buffered entries");
+
+    // offset = 0 returns the newest window (tail-N). Windowing is over replay
+    // entries, not flattened lines, so compare the entry slices directly.
+    let newest = expect_acp_snapshot(dispatch_look_with_offset(
+        &config_root,
+        &tmux_socket,
+        "bravo",
+        "bravo",
+        Some(5),
+        Some(0),
+    ));
+    assert_eq!(newest.entries_total, total);
+    assert_eq!(newest.returned_entries_count, 5);
+    assert_eq!(newest.entries, full.entries[total - 5..].to_vec());
+
+    // offset = 5 skips the newest five and returns the five before them.
+    let older = expect_acp_snapshot(dispatch_look_with_offset(
+        &config_root,
+        &tmux_socket,
+        "bravo",
+        "bravo",
+        Some(5),
+        Some(5),
+    ));
+    assert_eq!(older.entries_total, total);
+    assert_eq!(older.returned_entries_count, 5);
+    assert_eq!(older.entries, full.entries[total - 10..total - 5].to_vec());
+
+    // Walking past the start yields an empty window over a still-live buffer.
+    let past_start = expect_acp_snapshot(dispatch_look_with_offset(
+        &config_root,
+        &tmux_socket,
+        "bravo",
+        "bravo",
+        Some(5),
+        Some(total),
+    ));
+    assert_eq!(past_start.entries_total, total);
+    assert_eq!(past_start.returned_entries_count, 0);
+    assert!(past_start.lines.is_empty());
+    assert_eq!(
+        past_start.snapshot_source,
+        AcpLookSnapshotSource::LiveBuffer
+    );
+}
+
+#[test]
 fn acp_look_returns_empty_snapshot_when_no_updates_exist() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions::default();
@@ -329,6 +403,8 @@ fn wait_for_look(
 struct AcpSnapshotView {
     entries: Vec<agentmux::acp::AcpSnapshotEntry>,
     lines: Vec<String>,
+    entries_total: usize,
+    returned_entries_count: usize,
     freshness: AcpLookFreshness,
     snapshot_source: AcpLookSnapshotSource,
     stale_reason_code: Option<String>,
@@ -340,6 +416,8 @@ fn expect_acp_snapshot(look: RelayResponse) -> AcpSnapshotView {
     };
     let LookSnapshotPayload::AcpEntriesV1 {
         snapshot_entries,
+        entries_total,
+        returned_entries_count,
         freshness,
         snapshot_source,
         stale_reason_code,
@@ -351,6 +429,8 @@ fn expect_acp_snapshot(look: RelayResponse) -> AcpSnapshotView {
     AcpSnapshotView {
         entries: snapshot_entries.clone(),
         lines: snapshot_entries_to_plain_lines(snapshot_entries.as_slice()),
+        entries_total,
+        returned_entries_count,
         freshness,
         snapshot_source,
         stale_reason_code,

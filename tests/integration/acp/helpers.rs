@@ -560,12 +560,31 @@ pub(super) fn dispatch_look(
     target_session: &str,
     lines: Option<usize>,
 ) -> RelayResponse {
+    dispatch_look_with_offset(
+        config_root,
+        tmux_socket,
+        requester_session,
+        target_session,
+        lines,
+        None,
+    )
+}
+
+pub(super) fn dispatch_look_with_offset(
+    config_root: &Path,
+    tmux_socket: &Path,
+    requester_session: &str,
+    target_session: &str,
+    lines: Option<usize>,
+    offset: Option<usize>,
+) -> RelayResponse {
     startup_bundle(config_root, tmux_socket).expect("relay startup should parse");
     dispatch_request(
         RelayRequest::Look {
             requester_session: requester_session.to_string(),
             target_session: target_session.to_string(),
             lines,
+            offset,
             bundle_name: None,
         },
         config_root,
@@ -587,6 +606,7 @@ pub(super) fn dispatch_look_without_startup(
             requester_session: requester_session.to_string(),
             target_session: target_session.to_string(),
             lines,
+            offset: None,
             bundle_name: None,
         },
         config_root,

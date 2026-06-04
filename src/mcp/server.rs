@@ -300,6 +300,7 @@ impl McpServer {
                 "requester_session": self.state.configuration.sender_session.clone(),
                 "target_session": params.target_session.clone(),
                 "lines": params.lines,
+                "offset": params.offset,
             }),
         );
         let requester_session = self
@@ -320,6 +321,7 @@ impl McpServer {
             requester_session,
             target_session: params.target_session.clone(),
             lines: params.lines.map(|value| value as usize),
+            offset: params.offset.map(|value| value as usize),
             bundle_name: None,
         };
         match self.request_relay(&request) {
@@ -360,6 +362,8 @@ impl McpServer {
                     }
                     LookSnapshotPayload::AcpEntriesV1 {
                         snapshot_entries,
+                        entries_total,
+                        returned_entries_count,
                         freshness,
                         snapshot_source,
                         stale_reason_code,
@@ -369,6 +373,11 @@ impl McpServer {
                         response_map.insert("snapshot_format".to_string(), json!("acp_entries_v1"));
                         response_map
                             .insert("snapshot_entries".to_string(), json!(snapshot_entries));
+                        response_map.insert("entries_total".to_string(), json!(entries_total));
+                        response_map.insert(
+                            "returned_entries_count".to_string(),
+                            json!(returned_entries_count),
+                        );
                         response_map.insert("freshness".to_string(), json!(freshness));
                         response_map.insert("snapshot_source".to_string(), json!(snapshot_source));
                         if let Some(value) = stale_reason_code {

@@ -45,6 +45,7 @@ pub(super) fn run_agentmux_look(arguments: &[String]) -> Result<(), RuntimeError
             requester_session: resolved_session.session_id.clone(),
             target_session: parsed.target_session,
             lines: parsed.lines.map(|value| value as usize),
+            offset: None,
             bundle_name: Some(resolved_session.bundle_name.clone()),
         },
     )
@@ -75,6 +76,8 @@ pub(super) fn run_agentmux_look(arguments: &[String]) -> Result<(), RuntimeError
                 }
                 LookSnapshotPayload::AcpEntriesV1 {
                     snapshot_entries,
+                    entries_total,
+                    returned_entries_count,
                     freshness,
                     snapshot_source,
                     stale_reason_code,
@@ -82,6 +85,11 @@ pub(super) fn run_agentmux_look(arguments: &[String]) -> Result<(), RuntimeError
                 } => {
                     payload.insert("snapshot_format".to_string(), json!("acp_entries_v1"));
                     payload.insert("snapshot_entries".to_string(), json!(snapshot_entries));
+                    payload.insert("entries_total".to_string(), json!(entries_total));
+                    payload.insert(
+                        "returned_entries_count".to_string(),
+                        json!(returned_entries_count),
+                    );
                     payload.insert("freshness".to_string(), json!(freshness));
                     payload.insert("snapshot_source".to_string(), json!(snapshot_source));
                     if let Some(value) = stale_reason_code {

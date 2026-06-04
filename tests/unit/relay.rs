@@ -686,6 +686,7 @@ fn look_rejects_cross_bundle_scope() {
             requester_session: "alpha".to_string(),
             target_session: "bravo".to_string(),
             lines: Some(3),
+            offset: None,
             bundle_name: Some("other".to_string()),
         },
         &config_root,
@@ -707,6 +708,7 @@ fn look_rejects_out_of_range_lines() {
             requester_session: "alpha".to_string(),
             target_session: "bravo".to_string(),
             lines: Some(1001),
+            offset: None,
             bundle_name: None,
         },
         &config_root,
@@ -715,6 +717,54 @@ fn look_rejects_out_of_range_lines() {
     )
     .expect_err("look should fail");
     assert_eq!(response.code, "validation_invalid_lines");
+}
+
+#[test]
+fn look_rejects_offset_for_tmux_target() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    let response = dispatch_request(
+        RelayRequest::Look {
+            requester_session: "bravo".to_string(),
+            target_session: "bravo".to_string(),
+            lines: None,
+            offset: Some(2),
+            bundle_name: None,
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect_err("look should fail");
+    assert_eq!(response.code, "validation_offset_unsupported");
+}
+
+#[test]
+fn look_allows_zero_offset_for_tmux_target() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    // A zero offset (explicit or defaulted) is a valid no-op for tmux targets;
+    // only a nonzero offset is rejected. Pane capture fails afterward because no
+    // tmux server is running, so the error code must be anything other than the
+    // offset gate — proving Some(0) passed the gate rather than tripping it.
+    let response = dispatch_request(
+        RelayRequest::Look {
+            requester_session: "bravo".to_string(),
+            target_session: "bravo".to_string(),
+            lines: None,
+            offset: Some(0),
+            bundle_name: None,
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect_err("look should fail on absent tmux server");
+    assert_ne!(response.code, "validation_offset_unsupported");
 }
 
 #[test]
@@ -728,6 +778,7 @@ fn look_rejects_unknown_target() {
             requester_session: "alpha".to_string(),
             target_session: "missing".to_string(),
             lines: Some(5),
+            offset: None,
             bundle_name: None,
         },
         &config_root,
@@ -749,6 +800,7 @@ fn look_returns_empty_snapshot_for_acp_target_without_recorded_updates() {
             requester_session: "bravo".to_string(),
             target_session: "bravo".to_string(),
             lines: Some(5),
+            offset: None,
             bundle_name: None,
         },
         &config_root,
@@ -778,6 +830,7 @@ fn look_denies_same_bundle_non_self_target_under_default_self_scope() {
             requester_session: "alpha".to_string(),
             target_session: "bravo".to_string(),
             lines: Some(3),
+            offset: None,
             bundle_name: None,
         },
         &config_root,

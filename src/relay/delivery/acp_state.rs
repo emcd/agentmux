@@ -33,6 +33,8 @@ pub(super) struct PersistedAcpSessionState {
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::relay) struct AcpLookSnapshot {
     pub snapshot_entries: Vec<crate::acp::AcpSnapshotEntry>,
+    pub entries_total: usize,
+    pub returned_entries_count: usize,
     pub freshness: AcpLookFreshness,
     pub snapshot_source: AcpLookSnapshotSource,
     pub stale_reason_code: Option<String>,
@@ -89,19 +91,25 @@ pub(in crate::relay) fn derive_acp_look_snapshot(
     worker_state: Option<AcpWorkerReadinessState>,
     snapshot: Option<&[ReplayEntry]>,
     requested_entries: usize,
+    offset: usize,
     prime_timed_out: bool,
 ) -> AcpLookSnapshot {
     let entries = snapshot
         .map(replay_entries_to_snapshot_entries)
         .unwrap_or_default();
-    let count = entries.len();
-    let snapshot_entries = if requested_entries >= count {
-        entries
-    } else {
-        entries[count - requested_entries..].to_vec()
-    };
-    let has_snapshot = !snapshot_entries.is_empty();
-    let snapshot_source = if has_snapshot {
+    let entries_total = entries.len();
+    // Tail-N window: skip `offset` entries from the newest end, then take the
+    // last `requested_entries` of what remains. `offset` past the buffer start
+    // yields an empty window without underflow.
+    let window_end = entries_total.saturating_sub(offset);
+    let window_start = window_end.saturating_sub(requested_entries);
+    let snapshot_entries = entries[window_start..window_end].to_vec();
+    let returned_entries_count = snapshot_entries.len();
+    // Source reflects whether the replay buffer holds any entries, independent
+    // of whether this particular window landed on them; an over-large offset
+    // still walked a live buffer.
+    let has_buffer = entries_total > 0;
+    let snapshot_source = if has_buffer {
         AcpLookSnapshotSource::LiveBuffer
     } else {
         AcpLookSnapshotSource::None
@@ -113,6 +121,8 @@ pub(in crate::relay) fn derive_acp_look_snapshot(
     ) {
         return AcpLookSnapshot {
             snapshot_entries,
+            entries_total,
+            returned_entries_count,
             freshness: AcpLookFreshness::Stale,
             snapshot_source,
             stale_reason_code: Some(ACP_STALE_REASON_WORKER_UNAVAILABLE.to_string()),
@@ -123,6 +133,8 @@ pub(in crate::relay) fn derive_acp_look_snapshot(
     if matches!(worker_state, Some(AcpWorkerReadinessState::Recovering)) {
         return AcpLookSnapshot {
             snapshot_entries,
+            entries_total,
+            returned_entries_count,
             freshness: AcpLookFreshness::Stale,
             snapshot_source,
             stale_reason_code: Some(ACP_STALE_REASON_WORKER_RECOVERING.to_string()),
@@ -130,7 +142,7 @@ pub(in crate::relay) fn derive_acp_look_snapshot(
         };
     }
 
-    if !has_snapshot {
+    if !has_buffer {
         let stale_reason = if prime_timed_out {
             ACP_STALE_REASON_SNAPSHOT_PRIME_TIMEOUT
         } else {
@@ -138,6 +150,8 @@ pub(in crate::relay) fn derive_acp_look_snapshot(
         };
         return AcpLookSnapshot {
             snapshot_entries,
+            entries_total,
+            returned_entries_count,
             freshness: AcpLookFreshness::Stale,
             snapshot_source,
             stale_reason_code: Some(stale_reason.to_string()),
@@ -164,6 +178,8 @@ pub(in crate::relay) fn derive_acp_look_snapshot(
     };
     AcpLookSnapshot {
         snapshot_entries,
+        entries_total,
+        returned_entries_count,
         freshness,
         snapshot_source,
         stale_reason_code,

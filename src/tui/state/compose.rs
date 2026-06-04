@@ -556,6 +556,7 @@ impl AppState {
             requester_session: self.sender_session.clone(),
             target_session: target.clone(),
             lines: self.look_lines.map(|value| value as usize),
+            offset: None,
             bundle_name: None,
         })?;
 
