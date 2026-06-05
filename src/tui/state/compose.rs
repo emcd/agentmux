@@ -606,7 +606,7 @@ impl AppState {
         let text = self.raww_draft.clone();
         let response = self.request_relay(&RelayRequest::Raww {
             request_id: None,
-            sender_session: self.sender_session.clone(),
+            requester_session: self.sender_session.clone(),
             target_session: target.clone(),
             text,
             no_enter: false,

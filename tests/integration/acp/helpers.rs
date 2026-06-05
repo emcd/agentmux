@@ -332,7 +332,7 @@ coder = "acp"
 fn acp_send_request(acp_turn_timeout_ms: Option<u64>) -> RelayRequest {
     RelayRequest::Send {
         request_id: Some("req-acp".to_string()),
-        sender_session: "alpha".to_string(),
+        requester_session: "alpha".to_string(),
         message: "status?".to_string(),
         targets: vec!["bravo".to_string()],
         broadcast: false,
@@ -619,7 +619,7 @@ pub(super) fn dispatch_look_without_startup(
 pub(super) fn dispatch_raww(
     config_root: &Path,
     tmux_socket: &Path,
-    sender_session: &str,
+    requester_session: &str,
     target_session: &str,
     text: &str,
     no_enter: bool,
@@ -628,7 +628,7 @@ pub(super) fn dispatch_raww(
     dispatch_request(
         RelayRequest::Raww {
             request_id: Some("req-acp-raww".to_string()),
-            sender_session: sender_session.to_string(),
+            requester_session: requester_session.to_string(),
             target_session: target_session.to_string(),
             text: text.to_string(),
             no_enter,

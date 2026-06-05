@@ -18,12 +18,12 @@ async fn raww_rejects_sender_like_fields_before_relay_request() {
     );
     arguments.insert("text".to_string(), Value::String("hello".to_string()));
     arguments.insert(
-        "sender_session".to_string(),
+        "requester_session".to_string(),
         Value::String("spoof".to_string()),
     );
     let response = harness.call_tool(2, "raww", arguments).await;
 
-    assert_unknown_field_error(&response, &["sender_session"]);
+    assert_unknown_field_error(&response, &["requester_session"]);
     assert!(relay.requests_for_operation("raww").is_empty());
 }
 
@@ -82,7 +82,7 @@ async fn raww_returns_accepted_payload_and_forwards_request_shape() {
 
     let relay_requests = relay.requests_for_operation("raww");
     assert_eq!(relay_requests.len(), 1);
-    assert_eq!(relay_requests[0]["sender_session"], SENDER_SESSION);
+    assert_eq!(relay_requests[0]["requester_session"], SENDER_SESSION);
     assert_eq!(relay_requests[0]["target_session"], "bravo");
     assert_eq!(relay_requests[0]["text"], "hello");
     assert_eq!(relay_requests[0]["no_enter"], true);

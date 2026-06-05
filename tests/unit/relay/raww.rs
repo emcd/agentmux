@@ -9,7 +9,7 @@ fn raww_rejects_unknown_target() {
     let response = dispatch_request(
         RelayRequest::Raww {
             request_id: None,
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             target_session: "missing".to_string(),
             text: "hello".to_string(),
             no_enter: false,
@@ -33,7 +33,7 @@ fn raww_rejects_cross_bundle_selector() {
     let response = dispatch_request(
         RelayRequest::Raww {
             request_id: None,
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             target_session: "bravo".to_string(),
             text: "hello".to_string(),
             no_enter: false,
@@ -60,7 +60,7 @@ fn raww_rejects_ui_target_class() {
     let response = dispatch_request(
         RelayRequest::Raww {
             request_id: None,
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             target_session: "ui@GLOBAL".to_string(),
             text: "hello".to_string(),
             no_enter: false,
@@ -87,7 +87,7 @@ fn raww_rejects_oversized_text() {
     let response = dispatch_request(
         RelayRequest::Raww {
             request_id: None,
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             target_session: "bravo".to_string(),
             text,
             no_enter: false,
@@ -143,7 +143,7 @@ raww = "self"
     let response = dispatch_request(
         RelayRequest::Raww {
             request_id: None,
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             target_session: "bravo".to_string(),
             text: "hello".to_string(),
             no_enter: false,

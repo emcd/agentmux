@@ -43,7 +43,7 @@ pub(super) fn run_agentmux_list(arguments: &[String]) -> Result<(), RuntimeError
         parsed.session_selector.as_deref(),
     )?;
     let home_bundle_name = resolved_session.bundle_name.clone();
-    let sender_session = resolved_session.session_id.clone();
+    let requester_session = resolved_session.session_id.clone();
 
     let payload = if parsed.all_bundles {
         let memberships = load_bundle_group_memberships(&roots.configuration_root)
@@ -61,7 +61,7 @@ pub(super) fn run_agentmux_list(arguments: &[String]) -> Result<(), RuntimeError
             let listed = request_listed_bundle(
                 &roots,
                 &bundle_name,
-                sender_session.as_str(),
+                requester_session.as_str(),
                 home_bundle_name.as_str(),
             )?;
             schema_version = listed.schema_version;
@@ -75,7 +75,7 @@ pub(super) fn run_agentmux_list(arguments: &[String]) -> Result<(), RuntimeError
         let listed = request_listed_bundle(
             &roots,
             &resolved_session.bundle_name,
-            sender_session.as_str(),
+            requester_session.as_str(),
             home_bundle_name.as_str(),
         )?;
         json!({
@@ -173,7 +173,7 @@ struct ListedBundleResult {
 fn request_listed_bundle(
     roots: &crate::runtime::paths::RuntimeRoots,
     bundle_name: &str,
-    sender_session: &str,
+    requester_session: &str,
     home_bundle_name: &str,
 ) -> Result<ListedBundleResult, RuntimeError> {
     let bundle = load_bundle_configuration(&roots.configuration_root, bundle_name)
@@ -183,9 +183,9 @@ fn request_listed_bundle(
     let response = request_relay(
         &relay_paths.relay_socket,
         bundle_name,
-        sender_session,
+        requester_session,
         &RelayRequest::List {
-            sender_session: Some(sender_session.to_string()),
+            requester_session: Some(requester_session.to_string()),
         },
     );
     let response = match response {

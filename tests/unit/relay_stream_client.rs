@@ -197,14 +197,14 @@ fn stream_client_does_not_auto_retry_request_after_disconnect() {
         RelayStreamSession::new(socket_path, "party".to_string(), "alpha".to_string());
     let first_error = session
         .request_with_events(&agentmux::relay::RelayRequest::List {
-            sender_session: Some("alpha".to_string()),
+            requester_session: Some("alpha".to_string()),
         })
         .expect_err("disconnect should fail first request");
     assert_eq!(first_error.kind(), std::io::ErrorKind::UnexpectedEof);
 
     let (response, events) = session
         .request_with_events(&agentmux::relay::RelayRequest::List {
-            sender_session: Some("alpha".to_string()),
+            requester_session: Some("alpha".to_string()),
         })
         .expect("second request should reconnect and succeed");
     assert!(events.is_empty());
@@ -280,7 +280,7 @@ fn stream_client_retries_hello_after_identity_claim_conflict() {
         RelayStreamSession::new(socket_path, "party".to_string(), "alpha".to_string());
     let (response, events) = session
         .request_with_events(&agentmux::relay::RelayRequest::List {
-            sender_session: Some("alpha".to_string()),
+            requester_session: Some("alpha".to_string()),
         })
         .expect("retry after hello conflict should succeed");
     assert!(events.is_empty());
@@ -337,7 +337,7 @@ fn stream_client_reports_exhausted_hello_conflict_as_timeout() {
     );
     let error = session
         .request_with_events(&agentmux::relay::RelayRequest::List {
-            sender_session: Some("alpha".to_string()),
+            requester_session: Some("alpha".to_string()),
         })
         .expect_err("persistent hello conflict should fail the request");
     assert_eq!(
@@ -434,7 +434,7 @@ fn stream_client_detects_idle_disconnect_and_reconnects_on_next_request() {
         RelayStreamSession::new(socket_path, "party".to_string(), "alpha".to_string());
     let (first_response, _) = session
         .request_with_events(&agentmux::relay::RelayRequest::List {
-            sender_session: Some("alpha".to_string()),
+            requester_session: Some("alpha".to_string()),
         })
         .expect("first request should succeed");
     match first_response {
@@ -452,7 +452,7 @@ fn stream_client_detects_idle_disconnect_and_reconnects_on_next_request() {
     let started_at = Instant::now();
     let (second_response, _) = session
         .request_with_events(&agentmux::relay::RelayRequest::List {
-            sender_session: Some("alpha".to_string()),
+            requester_session: Some("alpha".to_string()),
         })
         .expect("second request should reconnect transparently on the SAME call");
     let elapsed = started_at.elapsed();

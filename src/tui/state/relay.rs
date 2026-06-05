@@ -10,7 +10,7 @@ use super::{AppState, BundleStatusDisplay, Recipient, map_relay_error, map_relay
 impl AppState {
     pub fn refresh_recipients(&mut self) -> Result<(), RuntimeError> {
         let response = self.request_relay(&RelayRequest::List {
-            sender_session: Some(self.sender_session.clone()),
+            requester_session: Some(self.sender_session.clone()),
         })?;
         match response {
             RelayResponse::List { bundle, .. } => {

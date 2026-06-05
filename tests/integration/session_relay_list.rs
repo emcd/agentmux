@@ -89,7 +89,7 @@ coder = "shell"
 fn list_bundle(config_root: &Path, bundle_name: &str, runtime_directory: &Path) -> RelayResponse {
     handle_request(
         RelayRequest::List {
-            sender_session: Some("alpha".to_string()),
+            requester_session: Some("alpha".to_string()),
         },
         config_root,
         bundle_name,

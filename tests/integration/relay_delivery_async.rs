@@ -44,7 +44,7 @@ fn relay_send_async_processes_repeated_target_messages_in_fifo_order() {
     let first = dispatch_request(
         RelayRequest::Send {
             request_id: Some("req-fifo-1".to_string()),
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             message: first_marker.to_string(),
             targets: vec!["bravo".to_string()],
             broadcast: false,
@@ -70,7 +70,7 @@ fn relay_send_async_processes_repeated_target_messages_in_fifo_order() {
     let second = dispatch_request(
         RelayRequest::Send {
             request_id: Some("req-fifo-2".to_string()),
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             message: second_marker.to_string(),
             targets: vec!["bravo".to_string()],
             broadcast: false,
@@ -153,7 +153,7 @@ fn relay_send_async_without_timeout_waits_for_late_quiescence() {
     let response = dispatch_request(
         RelayRequest::Send {
             request_id: Some("req-async-default".to_string()),
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             message: marker.to_string(),
             targets: vec!["bravo".to_string()],
             broadcast: false,
@@ -215,7 +215,7 @@ fn relay_send_async_timeout_override_stops_wait_before_late_quiescence() {
     let response = dispatch_request(
         RelayRequest::Send {
             request_id: Some("req-async-timeout".to_string()),
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             message: marker.to_string(),
             targets: vec!["bravo".to_string()],
             broadcast: false,

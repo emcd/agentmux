@@ -636,7 +636,7 @@ async fn mcp_auto_discovers_association_from_non_git_cwd() {
                     "schema_version": "1",
                     "bundle_name": "relay",
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
-                    "sender_session": request.get("sender_session").cloned().unwrap_or(Value::Null),
+                    "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
                     "results": [{
                         "target_session": "bravo",
                         "message_id": "msg-1",
@@ -676,11 +676,11 @@ async fn mcp_auto_discovers_association_from_non_git_cwd() {
     arguments.insert("broadcast".to_string(), Value::Bool(false));
     let response = harness.call_tool(2, "send", arguments).await;
     let payload = decode_tool_payload(&response);
-    assert_eq!(payload["sender_session"], "relay");
+    assert_eq!(payload["requester_session"], "relay");
 
     let send_requests = relay.requests_for_operation("send");
     assert_eq!(send_requests.len(), 1);
-    assert_eq!(send_requests[0]["sender_session"], "relay");
+    assert_eq!(send_requests[0]["requester_session"], "relay");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -709,7 +709,7 @@ async fn mcp_falls_back_to_directory_match_when_auto_sender_is_not_member() {
                     "schema_version": "1",
                     "bundle_name": "master",
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
-                    "sender_session": request.get("sender_session").cloned().unwrap_or(Value::Null),
+                    "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
                     "results": [{
                         "target_session": "bravo",
                         "message_id": "msg-1",
@@ -749,11 +749,11 @@ async fn mcp_falls_back_to_directory_match_when_auto_sender_is_not_member() {
     arguments.insert("broadcast".to_string(), Value::Bool(false));
     let response = harness.call_tool(2, "send", arguments).await;
     let payload = decode_tool_payload(&response);
-    assert_eq!(payload["sender_session"], "coordinator");
+    assert_eq!(payload["requester_session"], "coordinator");
 
     let send_requests = relay.requests_for_operation("send");
     assert_eq!(send_requests.len(), 1);
-    assert_eq!(send_requests[0]["sender_session"], "coordinator");
+    assert_eq!(send_requests[0]["requester_session"], "coordinator");
 }
 
 #[cfg(debug_assertions)]

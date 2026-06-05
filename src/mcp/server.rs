@@ -107,7 +107,7 @@ impl McpServer {
             )
         })?;
         validate_list_request(&params, &parsed_args)?;
-        let sender_session = self
+        let requester_session = self
             .state
             .configuration
             .sender_session
@@ -128,14 +128,14 @@ impl McpServer {
         emit_inscription(
             "mcp.tool.list.request",
             &json!({
-                "sender_session": sender_session,
+                "requester_session": requester_session,
                 "command": LIST_COMMAND_SESSIONS,
                 "bundle_name": selected_bundle,
                 "all": parsed_args.all,
             }),
         );
         let mut bundles = if parsed_args.all {
-            self.list_sessions_all_bundles(sender_session.as_str())?
+            self.list_sessions_all_bundles(requester_session.as_str())?
         } else {
             let bundle_name = selected_bundle
                 .as_ref()
@@ -148,9 +148,11 @@ impl McpServer {
                         None,
                     )
                 })?;
-            vec![self.list_sessions_single_bundle(bundle_name.as_str(), sender_session.as_str())?]
+            vec![
+                self.list_sessions_single_bundle(bundle_name.as_str(), requester_session.as_str())?,
+            ]
         };
-        bundles.push(self.list_global_sessions(sender_session.as_str())?);
+        bundles.push(self.list_global_sessions(requester_session.as_str())?);
         let response = json!({
             "schema_version": LIST_SESSIONS_SCHEMA_VERSION,
             "bundles": bundles,
@@ -200,7 +202,7 @@ impl McpServer {
                 "message_length": params.message.len(),
             }),
         );
-        let sender_session = self
+        let requester_session = self
             .state
             .configuration
             .sender_session
@@ -216,7 +218,7 @@ impl McpServer {
 
         let request = RelayRequest::Send {
             request_id: params.request_id.clone(),
-            sender_session,
+            requester_session,
             message: params.message.clone(),
             targets: params.targets.clone(),
             broadcast: params.broadcast,
@@ -229,7 +231,7 @@ impl McpServer {
                 schema_version,
                 bundle_name,
                 request_id,
-                sender_session,
+                requester_session,
                 sender_display_name,
                 authenticated_identity,
                 on_behalf_of,
@@ -239,7 +241,7 @@ impl McpServer {
                     "schema_version": schema_version,
                     "bundle_name": bundle_name,
                     "request_id": request_id,
-                    "sender_session": sender_session,
+                    "requester_session": requester_session,
                     "sender_display_name": sender_display_name,
                     "results": results,
                 });
@@ -448,7 +450,7 @@ impl McpServer {
                 "no_enter": params.no_enter,
             }),
         );
-        let sender_session = self
+        let requester_session = self
             .state
             .configuration
             .sender_session
@@ -464,7 +466,7 @@ impl McpServer {
 
         let request = RelayRequest::Raww {
             request_id: params.request_id.clone(),
-            sender_session,
+            requester_session,
             target_session: params.target_session.clone(),
             text: params.text.clone(),
             no_enter: params.no_enter,
@@ -1105,7 +1107,7 @@ impl McpServer {
     fn list_sessions_single_bundle(
         &self,
         bundle_name: &str,
-        sender_session: &str,
+        requester_session: &str,
     ) -> Result<ListedBundle, McpError> {
         let bundle_paths =
             BundleRuntimePaths::resolve(&self.state.configuration.state_root, bundle_name)
@@ -1116,7 +1118,7 @@ impl McpServer {
                 .map_err(map_configuration_error)?;
         let relay_socket = relay_paths.relay_socket;
         let request = RelayRequest::List {
-            sender_session: Some(sender_session.to_string()),
+            requester_session: Some(requester_session.to_string()),
         };
         // Route through the persistent stream session so this call shares the
         // MCP server's cached Hello-registered connection. Issuing a fresh
@@ -1142,15 +1144,15 @@ impl McpServer {
 
     fn list_sessions_all_bundles(
         &self,
-        sender_session: &str,
+        requester_session: &str,
     ) -> Result<Vec<ListedBundle>, McpError> {
         let memberships =
             load_bundle_group_memberships(&self.state.configuration.configuration_root)
                 .map_err(map_configuration_error)?;
         let mut bundles = Vec::with_capacity(memberships.len());
         for membership in memberships {
-            let listed =
-                self.list_sessions_single_bundle(membership.bundle_name.as_str(), sender_session)?;
+            let listed = self
+                .list_sessions_single_bundle(membership.bundle_name.as_str(), requester_session)?;
             bundles.push(listed);
         }
         Ok(bundles)
@@ -1164,9 +1166,9 @@ impl McpServer {
     /// with no sessions, not an error. A relay-unavailable failure mirrors
     /// the home-bundle fallback: the response carries an empty `GLOBAL` view
     /// rather than failing the entire `list` call.
-    fn list_global_sessions(&self, sender_session: &str) -> Result<ListedBundle, McpError> {
+    fn list_global_sessions(&self, requester_session: &str) -> Result<ListedBundle, McpError> {
         let request = RelayRequest::List {
-            sender_session: Some(sender_session.to_string()),
+            requester_session: Some(requester_session.to_string()),
         };
         match self.request_relay_with_namespace(&request, Some("GLOBAL")) {
             Ok(RelayResponse::List { bundle, .. }) => Ok(bundle),

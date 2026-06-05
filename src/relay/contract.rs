@@ -213,11 +213,11 @@ pub enum RelayRequest {
     Up,
     Down,
     List {
-        sender_session: Option<String>,
+        requester_session: Option<String>,
     },
     Send {
         request_id: Option<String>,
-        sender_session: String,
+        requester_session: String,
         message: String,
         targets: Vec<String>,
         broadcast: bool,
@@ -243,7 +243,7 @@ pub enum RelayRequest {
     },
     Raww {
         request_id: Option<String>,
-        sender_session: String,
+        requester_session: String,
         target_session: String,
         text: String,
         #[serde(default)]
@@ -303,15 +303,15 @@ pub enum RelayResponse {
         schema_version: String,
         bundle_name: String,
         request_id: Option<String>,
-        sender_session: String,
+        requester_session: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         sender_display_name: Option<String>,
-        /// Verified `principal_id` of the sender, present only when the sender's
-        /// connection presented a store-backed credential; absent for
+        /// Verified `principal_id` of the requester, present only when the
+        /// requester's connection presented a store-backed credential; absent for
         /// socket-trust sessions.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         authenticated_identity: Option<String>,
-        /// Delegated principal the sender is acting on behalf of. Reserved: the
+        /// Delegated principal the requester is acting on behalf of. Reserved: the
         /// setting mechanism lands in a later delta, so this is always absent for
         /// now. Defined here so consumers can handle it without a breaking change
         /// when it is activated.

@@ -165,7 +165,7 @@ fn stalled_client_write_timeout_releases_connection_worker() {
         for _ in 0..flood_count {
             let encoded = serde_json::to_string(&json!({
                 "frame": "request",
-                "request": {"operation": "list", "sender_session": "alpha"}
+                "request": {"operation": "list", "requester_session": "alpha"}
             }))
             .expect("encode request");
             if client_stream
@@ -262,7 +262,7 @@ fn idle_ui_stream_write_timeout_tears_down_connection() {
                 "request_id": format!("flood-{index}"),
                 "request": {
                     "operation": "send",
-                    "sender_session": "alpha",
+                    "requester_session": "alpha",
                     "message": large_message,
                     "targets": ["panel"],
                     "broadcast": false,

@@ -20,7 +20,7 @@ impl AppState {
         let message_body = self.message_field.clone();
         let response = self.request_relay(&RelayRequest::Send {
             request_id: None,
-            sender_session: self.sender_session.clone(),
+            requester_session: self.sender_session.clone(),
             message: message_body.clone(),
             targets,
             broadcast: false,

@@ -103,16 +103,16 @@ pub(super) fn handle_request(
             authorize_bundle_principal(bundle, authorization, principal.as_ref())?;
             listing::handle_bundle_down(bundle, runtime_directory)
         }
-        RelayRequest::List { sender_session } => listing::handle_list_routed(
+        RelayRequest::List { requester_session } => listing::handle_list_routed(
             bundle,
             authorization,
             bundle,
             runtime_directory,
-            sender_session,
+            requester_session,
         ),
         RelayRequest::Send {
             request_id,
-            sender_session,
+            requester_session,
             message,
             targets,
             broadcast,
@@ -124,7 +124,7 @@ pub(super) fn handle_request(
             authorization,
             SendRequestContext {
                 request_id,
-                sender_session,
+                requester_session,
                 message,
                 targets,
                 broadcast,
@@ -160,7 +160,7 @@ pub(super) fn handle_request(
         ),
         RelayRequest::Raww {
             request_id,
-            sender_session,
+            requester_session,
             target_session,
             text,
             no_enter,
@@ -170,7 +170,7 @@ pub(super) fn handle_request(
             authorization,
             RawwRequestContext {
                 request_id,
-                sender_session,
+                requester_session,
                 target_session,
                 text,
                 no_enter,
@@ -327,12 +327,12 @@ pub(super) fn build_identity_snapshot_event(
 fn normalize_request_identities(request: RelayRequest, bundle_name: &str) -> RelayRequest {
     let bare = |id: String| bare_session_id(id.as_str(), bundle_name);
     match request {
-        RelayRequest::List { sender_session } => RelayRequest::List {
-            sender_session: sender_session.map(bare),
+        RelayRequest::List { requester_session } => RelayRequest::List {
+            requester_session: requester_session.map(bare),
         },
         RelayRequest::Send {
             request_id,
-            sender_session,
+            requester_session,
             message,
             targets,
             broadcast,
@@ -341,7 +341,7 @@ fn normalize_request_identities(request: RelayRequest, bundle_name: &str) -> Rel
             acp_turn_timeout_ms,
         } => RelayRequest::Send {
             request_id,
-            sender_session: bare(sender_session),
+            requester_session: bare(requester_session),
             message,
             targets: targets.into_iter().map(bare).collect(),
             broadcast,
@@ -364,14 +364,14 @@ fn normalize_request_identities(request: RelayRequest, bundle_name: &str) -> Rel
         },
         RelayRequest::Raww {
             request_id,
-            sender_session,
+            requester_session,
             target_session,
             text,
             no_enter,
             bundle_name: request_bundle_name,
         } => RelayRequest::Raww {
             request_id,
-            sender_session: bare(sender_session),
+            requester_session: bare(requester_session),
             target_session: bare(target_session),
             text,
             no_enter,
@@ -398,7 +398,7 @@ fn handle_send(
 ) -> Result<RelayResponse, RelayError> {
     let SendRequestContext {
         request_id,
-        sender_session,
+        requester_session,
         message,
         targets,
         broadcast,
@@ -453,8 +453,8 @@ fn handle_send(
     let sender = resolve_sender_identity(
         bundle,
         authorization,
-        sender_session.as_str(),
-        "sender_session",
+        requester_session.as_str(),
+        "requester_session",
     )?;
     let sender_member = sender.to_bundle_member();
     // Verified principal_id of the sender, carried both on the Send response
@@ -466,7 +466,7 @@ fn handle_send(
         "relay.send.request",
         &json!({
             "bundle_name": bundle.bundle_name,
-            "sender_session": sender.session_id,
+            "requester_session": sender.session_id,
             "broadcast": broadcast,
             "target_count": targets.len(),
             "message_length": message.len(),
@@ -647,7 +647,7 @@ fn handle_send(
         schema_version: SCHEMA_VERSION.to_string(),
         bundle_name: bundle.bundle_name.clone(),
         request_id,
-        sender_session: canonical_session_id(
+        requester_session: canonical_session_id(
             sender.session_id.as_str(),
             bundle.bundle_name.as_str(),
         ),
@@ -658,7 +658,7 @@ fn handle_send(
     };
     if let RelayResponse::Send {
         bundle_name,
-        sender_session,
+        requester_session,
         results,
         ..
     } = &response
@@ -671,7 +671,7 @@ fn handle_send(
             "relay.send.response",
             &json!({
             "bundle_name": bundle_name,
-            "sender_session": sender_session,
+            "requester_session": requester_session,
             "result_count": results.len(),
             "delivered_count": delivered_count,
             }),
@@ -968,7 +968,7 @@ fn handle_raww(
 ) -> Result<RelayResponse, RelayError> {
     let RawwRequestContext {
         request_id,
-        sender_session,
+        requester_session,
         target_session,
         text,
         no_enter,
@@ -1010,8 +1010,8 @@ fn handle_raww(
     let sender = resolve_sender_identity(
         bundle,
         authorization,
-        sender_session.as_str(),
-        "sender_session",
+        requester_session.as_str(),
+        "requester_session",
     )?;
     let target_member = if let Some(member) = bundle
         .members

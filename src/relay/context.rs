@@ -8,7 +8,7 @@ use super::{DeliveryPayloadMode, RelayError, SendResult, delivery::QuiescenceOpt
 #[derive(Clone, Debug)]
 pub(super) struct SendRequestContext {
     pub(super) request_id: Option<String>,
-    pub(super) sender_session: String,
+    pub(super) requester_session: String,
     pub(super) message: String,
     pub(super) targets: Vec<String>,
     pub(super) broadcast: bool,
@@ -29,7 +29,7 @@ pub(super) struct LookRequestContext {
 #[derive(Clone, Debug)]
 pub(super) struct RawwRequestContext {
     pub(super) request_id: Option<String>,
-    pub(super) sender_session: String,
+    pub(super) requester_session: String,
     pub(super) target_session: String,
     pub(super) text: String,
     pub(super) no_enter: bool,
