@@ -18,11 +18,11 @@ use tempfile::TempDir;
 use super::helpers::*;
 
 #[test]
-fn list_sessions_rejects_conflicting_bundle_and_all_selectors() {
+fn list_principals_rejects_reserved_namespace_token() {
     let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
-        .args(["list", "sessions", "--bundle", "alpha", "--all"])
+        .args(["list", "principals", "--namespace", "EXTERNAL"])
         .output()
-        .expect("run list sessions with conflicting selectors");
+        .expect("run list principals with reserved namespace");
     assert!(!output.status.success(), "command should fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -78,7 +78,7 @@ fn list_sessions_single_bundle_json_uses_canonical_bundle_shape() {
                 state_reason: None,
                 startup_failure_count: 0,
                 recent_startup_failures: Vec::new(),
-                sessions: vec![
+                principals: vec![
                     ListedSession {
                         id: "tui".to_string(),
                         name: Some("GPT (Frontend Engineer)".to_string()),
@@ -100,7 +100,7 @@ fn list_sessions_single_bundle_json_uses_canonical_bundle_shape() {
     let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
         .args([
             "list",
-            "sessions",
+            "principals",
             "--json",
             "--config-directory",
             &config_root.to_string_lossy(),
@@ -131,7 +131,7 @@ fn list_sessions_single_bundle_json_uses_canonical_bundle_shape() {
         "legacy recipients payload must not be present: {payload}"
     );
     assert_eq!(
-        payload["bundle"]["sessions"]
+        payload["bundle"]["principals"]
             .as_array()
             .expect("sessions array")
             .len(),
@@ -183,7 +183,7 @@ fn list_sessions_all_json_orders_bundles_lexicographically() {
                 state_reason: None,
                 startup_failure_count: 0,
                 recent_startup_failures: Vec::new(),
-                sessions: vec![ListedSession {
+                principals: vec![ListedSession {
                     id: "tui".to_string(),
                     name: None,
                     transport: ListedSessionTransport::Tmux,
@@ -205,7 +205,7 @@ fn list_sessions_all_json_orders_bundles_lexicographically() {
                 state_reason: None,
                 startup_failure_count: 0,
                 recent_startup_failures: Vec::new(),
-                sessions: vec![ListedSession {
+                principals: vec![ListedSession {
                     id: "tui".to_string(),
                     name: None,
                     transport: ListedSessionTransport::Tmux,
@@ -227,8 +227,9 @@ fn list_sessions_all_json_orders_bundles_lexicographically() {
     let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
         .args([
             "list",
-            "sessions",
-            "--all",
+            "principals",
+            "--namespace",
+            "*",
             "--json",
             "--config-directory",
             &config_root.to_string_lossy(),
@@ -293,8 +294,9 @@ fn list_sessions_all_fails_fast_on_first_authorization_denial() {
     let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
         .args([
             "list",
-            "sessions",
-            "--all",
+            "principals",
+            "--namespace",
+            "*",
             "--json",
             "--config-directory",
             &config_root.to_string_lossy(),
@@ -359,7 +361,7 @@ fn list_sessions_uses_ui_session_identity_defaults_outside_associated_workspace(
                 state_reason: None,
                 startup_failure_count: 0,
                 recent_startup_failures: Vec::new(),
-                sessions: vec![],
+                principals: vec![],
             },
         },
         Arc::clone(&request_log),
@@ -369,8 +371,8 @@ fn list_sessions_uses_ui_session_identity_defaults_outside_associated_workspace(
         .current_dir(&workspace_root)
         .args([
             "list",
-            "sessions",
-            "--bundle",
+            "principals",
+            "--namespace",
             "infrastructure",
             "--json",
             "--config-directory",

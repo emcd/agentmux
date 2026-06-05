@@ -188,7 +188,7 @@ pub(in crate::relay) fn handle_list_routed(
             state_reason,
             startup_failure_count,
             recent_startup_failures,
-            sessions,
+            principals: sessions,
         },
     };
     if let RelayResponse::List { bundle, .. } = &response {
@@ -201,7 +201,7 @@ pub(in crate::relay) fn handle_list_routed(
                 "state": bundle.state,
                 "startup_health": bundle.startup_health,
                 "startup_failure_count": bundle.startup_failure_count,
-                "session_count": bundle.sessions.len(),
+                "principal_count": bundle.principals.len(),
             }),
         );
     }

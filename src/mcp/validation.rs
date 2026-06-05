@@ -6,7 +6,7 @@ use serde_json::json;
 use super::errors::validation_tool_error;
 use super::params::{
     ChangeParams, ChangePskArgs, GRANT_OUTCOME_CANCELLED, GRANT_OUTCOME_SELECTED, GrantListArgs,
-    GrantParams, GrantResolveArgs, HelpParams, LIST_COMMAND_SESSIONS, LOOK_LINES_MAX,
+    GrantParams, GrantResolveArgs, HelpParams, LIST_COMMAND_PRINCIPALS, LOOK_LINES_MAX,
     LOOK_LINES_MIN, ListArgs, ListParams, LookParams, NewParams, NewPeerArgs, RawwParams,
     SendParams, UpdownArgs, UpdownParams,
 };
@@ -59,31 +59,28 @@ pub(super) fn validate_list_request(params: &ListParams, args: &ListArgs) -> Res
         .ok_or_else(|| {
             validation_tool_error(
                 "validation_invalid_params",
-                "command is required and must equal \"sessions\"",
+                "command is required and must equal \"principals\"",
                 None,
             )
         })?;
-    if command != LIST_COMMAND_SESSIONS {
+    if command != LIST_COMMAND_PRINCIPALS {
         return Err(validation_tool_error(
             "validation_invalid_params",
-            "command is required and must equal \"sessions\"",
+            "command is required and must equal \"principals\"",
             Some(json!({"command": command})),
         ));
     }
-    if args.all && args.bundle_name.is_some() {
-        return Err(validation_tool_error(
-            "validation_invalid_params",
-            "bundle_name and all=true are mutually exclusive",
-            None,
-        ));
-    }
-    if let Some(bundle_name) = args.bundle_name.as_ref()
-        && bundle_name.trim().is_empty()
+    if let Some(namespace) = args
+        .namespace
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        && matches!(namespace, "ALL" | "EXTERNAL" | "RELAY")
     {
         return Err(validation_tool_error(
             "validation_invalid_params",
-            "bundle_name must be non-empty when provided",
-            None,
+            "namespace must be a bundle name, \"GLOBAL\", or \"*\"",
+            Some(json!({"namespace": namespace})),
         ));
     }
     Ok(())

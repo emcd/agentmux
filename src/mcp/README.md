@@ -5,7 +5,8 @@ This module implements the MCP stdio server for `agentmux`.
 ## Responsibilities
 
 - Advertise and handle MCP tools:
-  - `list` (MVP requires `command="sessions"`)
+  - `list` (requires `command="principals"`; `args.namespace` selects the
+    scope: omitted/home bundle, a bundle name, `GLOBAL`, or `*` for fan-out)
   - `help`
   - `look`
   - `grant` (requires `command="list"` or `command="resolve"`)
@@ -54,7 +55,7 @@ This module implements the MCP stdio server for `agentmux`.
 2. MCP client can call `help` to discover tool/command schemas.
 3. `src/mcp/mod.rs` validates parameter shape and transport-compatible options.
 4. Request is forwarded as relay contract:
-   - `list` (`command="sessions"`) -> `RelayStreamSession` (`RelayRequest::List`)
+   - `list` (`command="principals"`) -> `RelayStreamSession` (`RelayRequest::List`)
    - `look` -> `RelayStreamSession` (`RelayRequest::Look`)
    - `grant` (`command="list"`) -> `RelayStreamSession`
      (`RelayRequest::PermissionList`)

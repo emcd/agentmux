@@ -810,7 +810,7 @@ fn list_global_namespace_returns_registered_relay_wide_sessions() {
 
     assert_eq!(response["response"]["kind"], "list");
     assert_eq!(response["response"]["bundle"]["id"], "GLOBAL");
-    let sessions = response["response"]["bundle"]["sessions"]
+    let sessions = response["response"]["bundle"]["principals"]
         .as_array()
         .expect("sessions array");
     let operator = sessions
@@ -840,7 +840,7 @@ fn list_global_namespace_excludes_bundle_sessions() {
 
     assert_eq!(response["response"]["kind"], "list");
     assert_eq!(response["response"]["bundle"]["id"], "GLOBAL");
-    let sessions = response["response"]["bundle"]["sessions"]
+    let sessions = response["response"]["bundle"]["principals"]
         .as_array()
         .expect("sessions array");
     assert!(

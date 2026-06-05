@@ -186,7 +186,7 @@ fn stream_client_does_not_auto_retry_request_after_disconnect() {
                         "startup_health": "healthy",
                         "startup_failure_count": 0,
                         "recent_startup_failures": [],
-                        "sessions": [],
+                        "principals": [],
                     },
                 }
             }),
@@ -211,7 +211,7 @@ fn stream_client_does_not_auto_retry_request_after_disconnect() {
     match response {
         agentmux::relay::RelayResponse::List { bundle, .. } => {
             assert_eq!(bundle.id, "party");
-            assert!(bundle.sessions.is_empty());
+            assert!(bundle.principals.is_empty());
         }
         other => panic!("unexpected response: {other:?}"),
     }
@@ -269,7 +269,7 @@ fn stream_client_retries_hello_after_identity_claim_conflict() {
                         "startup_health": "healthy",
                         "startup_failure_count": 0,
                         "recent_startup_failures": [],
-                        "sessions": [],
+                        "principals": [],
                     },
                 }
             }),
@@ -287,7 +287,7 @@ fn stream_client_retries_hello_after_identity_claim_conflict() {
     match response {
         agentmux::relay::RelayResponse::List { bundle, .. } => {
             assert_eq!(bundle.id, "party");
-            assert!(bundle.sessions.is_empty());
+            assert!(bundle.principals.is_empty());
         }
         other => panic!("unexpected response: {other:?}"),
     }
@@ -392,7 +392,7 @@ fn stream_client_detects_idle_disconnect_and_reconnects_on_next_request() {
                         "startup_health": "healthy",
                         "startup_failure_count": 0,
                         "recent_startup_failures": [],
-                        "sessions": [],
+                        "principals": [],
                     },
                 }
             }),
@@ -423,7 +423,7 @@ fn stream_client_detects_idle_disconnect_and_reconnects_on_next_request() {
                         "startup_health": "healthy",
                         "startup_failure_count": 0,
                         "recent_startup_failures": [],
-                        "sessions": [],
+                        "principals": [],
                     },
                 }
             }),

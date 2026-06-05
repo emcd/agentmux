@@ -118,7 +118,7 @@ pub struct ListedBundle {
     pub state_reason: Option<String>,
     pub startup_failure_count: usize,
     pub recent_startup_failures: Vec<StartupFailureRecord>,
-    pub sessions: Vec<ListedSession>,
+    pub principals: Vec<ListedSession>,
 }
 
 /// Per-target delivery result for one `send` request.

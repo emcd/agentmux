@@ -35,24 +35,23 @@ async fn help_list_query_returns_meta_tool_command_catalog() {
 
     assert_eq!(payload["tool"], "list");
     assert_eq!(payload["kind"], "meta_tool");
-    assert_eq!(payload["commands"][0]["command"], "list.sessions");
+    assert_eq!(payload["commands"][0]["command"], "list.principals");
     assert_eq!(payload["invoke"]["tool"], "list");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn help_list_sessions_query_returns_args_schema() {
+async fn help_list_principals_query_returns_args_schema() {
     let runtime = TestRuntime::create();
     let mut harness = McpHarness::spawn(&runtime).await;
     let response = harness
-        .call_tool(2, "help", help_call(Some("list.sessions")))
+        .call_tool(2, "help", help_call(Some("list.principals")))
         .await;
     let payload = decode_tool_payload(&response);
 
-    assert_eq!(payload["command"], "list.sessions");
-    assert!(payload["args_schema"]["properties"]["bundle_name"].is_object());
-    assert!(payload["args_schema"]["properties"]["all"].is_object());
+    assert_eq!(payload["command"], "list.principals");
+    assert!(payload["args_schema"]["properties"]["namespace"].is_object());
     assert_eq!(payload["invoke"]["tool"], "list");
-    assert_eq!(payload["invoke"]["params"]["command"], "sessions");
+    assert_eq!(payload["invoke"]["params"]["command"], "principals");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

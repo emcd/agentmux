@@ -32,7 +32,7 @@ use super::errors::{
 use super::help::help_tool;
 use super::params::{
     CHANGE_COMMAND_PSK, ChangeParams, ChangePskArgs, GRANT_COMMAND_LIST, GRANT_COMMAND_RESOLVE,
-    GrantListArgs, GrantParams, GrantResolveArgs, HelpParams, LIST_COMMAND_SESSIONS,
+    GrantListArgs, GrantParams, GrantResolveArgs, HelpParams, LIST_COMMAND_PRINCIPALS,
     LIST_SESSIONS_SCHEMA_VERSION, ListArgs, ListParams, LookParams, NEW_COMMAND_PEER, NewParams,
     NewPeerArgs, RawwParams, SendParams, UPDOWN_COMMAND_DOWN, UPDOWN_COMMAND_UP, UpdownArgs,
     UpdownParams,
@@ -90,7 +90,7 @@ impl McpServer {
 
     #[tool(
         name = "list",
-        description = "List sessions for one bundle or fan out across bundles."
+        description = "List principals for one namespace or fan out across namespaces."
     )]
     async fn tool_list(
         &self,
@@ -102,7 +102,7 @@ impl McpServer {
                 "invalid args for list command",
                 Some(json!({
                     "reason": reason,
-                    "hint": "pass args as a JSON object; use help query 'list.sessions' for exact schema",
+                    "hint": "pass args as a JSON object; use help query 'list.principals' for exact schema",
                 })),
             )
         })?;
@@ -120,8 +120,8 @@ impl McpServer {
                     None,
                 )
             })?;
-        let selected_bundle = parsed_args
-            .bundle_name
+        let namespace = parsed_args
+            .namespace
             .as_ref()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
@@ -129,28 +129,32 @@ impl McpServer {
             "mcp.tool.list.request",
             &json!({
                 "requester_session": requester_session,
-                "command": LIST_COMMAND_SESSIONS,
-                "bundle_name": selected_bundle,
-                "all": parsed_args.all,
+                "command": LIST_COMMAND_PRINCIPALS,
+                "namespace": namespace,
             }),
         );
-        let mut bundles = if parsed_args.all {
-            self.list_sessions_all_bundles(requester_session.as_str())?
-        } else {
-            let bundle_name = selected_bundle
-                .as_ref()
-                .map(ToString::to_string)
-                .or_else(|| self.home_bundle_name().map(ToString::to_string))
-                .ok_or_else(|| {
-                    validation_tool_error(
-                        "validation_unknown_bundle",
-                        "bundle_name is required when MCP server is not associated with a bundle",
-                        None,
-                    )
-                })?;
-            vec![
-                self.list_sessions_single_bundle(bundle_name.as_str(), requester_session.as_str())?,
-            ]
+        let mut bundles = match namespace.as_deref() {
+            Some("*") => self.list_sessions_all_bundles(requester_session.as_str())?,
+            Some("GLOBAL") => Vec::new(),
+            Some(bundle_name) => {
+                vec![self.list_sessions_single_bundle(bundle_name, requester_session.as_str())?]
+            }
+            None => {
+                let bundle_name = self
+                    .home_bundle_name()
+                    .map(ToString::to_string)
+                    .ok_or_else(|| {
+                        validation_tool_error(
+                            "validation_unknown_bundle",
+                            "namespace is required when MCP server is not associated with a bundle",
+                            None,
+                        )
+                    })?;
+                vec![self.list_sessions_single_bundle(
+                    bundle_name.as_str(),
+                    requester_session.as_str(),
+                )?]
+            }
         };
         bundles.push(self.list_global_sessions(requester_session.as_str())?);
         let response = json!({
@@ -160,7 +164,7 @@ impl McpServer {
         emit_inscription(
             "mcp.tool.list.success",
             &json!({
-                "all": parsed_args.all,
+                "namespace": namespace,
                 "bundle_count": response["bundles"].as_array().map_or(0, |value| value.len()),
             }),
         );
@@ -169,7 +173,7 @@ impl McpServer {
 
     #[tool(
         name = "help",
-        description = "Return tool/command help and JSON schemas. Query omitted or `agentmux` for tool list, `list` for list meta-tool commands, or `list.sessions`/`send`/`look`/`raww` for exact schemas."
+        description = "Return tool/command help and JSON schemas. Query omitted or `agentmux` for tool list, `list` for list meta-tool commands, or `list.principals`/`send`/`look`/`raww` for exact schemas."
     )]
     async fn tool_help(
         &self,
@@ -1230,7 +1234,7 @@ impl McpServer {
             state_reason,
             startup_failure_count,
             recent_startup_failures,
-            sessions: list_sessions_from_bundle_configuration(bundle),
+            principals: list_sessions_from_bundle_configuration(bundle),
         }
     }
 
@@ -1304,7 +1308,7 @@ fn synthesize_empty_global_bundle() -> ListedBundle {
         ),
         startup_failure_count: 0,
         recent_startup_failures: Vec::new(),
-        sessions: Vec::new(),
+        principals: Vec::new(),
     }
 }
 

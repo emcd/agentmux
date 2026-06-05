@@ -249,7 +249,7 @@ pub(super) fn handle_global_list() -> RelayResponse {
             state_reason: None,
             startup_failure_count: 0,
             recent_startup_failures: Vec::new(),
-            sessions,
+            principals: sessions,
         },
     }
 }

@@ -7,7 +7,7 @@ use serde_json::Value;
 pub(super) const LOOK_LINES_MIN: u64 = 1;
 pub(super) const LOOK_LINES_MAX: u64 = 1000;
 pub(super) const LIST_SESSIONS_SCHEMA_VERSION: &str = "1";
-pub(super) const LIST_COMMAND_SESSIONS: &str = "sessions";
+pub(super) const LIST_COMMAND_PRINCIPALS: &str = "principals";
 pub(super) const TOOL_HELP: &str = "help";
 pub(super) const TOOL_LIST: &str = "list";
 pub(super) const TOOL_LOOK: &str = "look";
@@ -30,7 +30,7 @@ pub(super) const NAMESPACE_AGENTMUX: &str = "agentmux";
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub(super) struct ListParams {
-    /// List command selector. MVP requires command="sessions".
+    /// List command selector. Requires command="principals".
     #[serde(default)]
     pub(super) command: Option<String>,
     /// Command-scoped arguments.
@@ -46,7 +46,7 @@ pub(super) struct ListParams {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub(super) struct HelpParams {
-    /// Namespace, tool, or command query (for example `list` or `list.sessions`).
+    /// Namespace, tool, or command query (for example `list` or `list.principals`).
     #[serde(default)]
     pub(super) query: Option<String>,
     /// Unknown fields captured for explicit validation.
@@ -58,12 +58,11 @@ pub(super) struct HelpParams {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub(super) struct ListArgs {
-    /// Optional bundle selector. Mutually exclusive with all=true.
+    /// Listing scope selector. Omitted/null selects the associated/home bundle;
+    /// a bundle name selects that bundle; `GLOBAL` selects relay-wide
+    /// principals; `*` fans out across all namespaces.
     #[serde(default)]
-    pub(super) bundle_name: Option<String>,
-    /// Optional all-bundles fanout selector.
-    #[serde(default)]
-    pub(super) all: bool,
+    pub(super) namespace: Option<String>,
     /// Unknown fields captured for explicit validation.
     #[serde(flatten, default)]
     #[schemars(skip)]

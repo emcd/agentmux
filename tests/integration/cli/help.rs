@@ -78,7 +78,7 @@ fn list_help_output_includes_sessions_subcommand() {
     assert!(output.status.success(), "list help should succeed");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("Usage: agentmux list sessions"),
+        stdout.contains("Usage: agentmux list principals"),
         "unexpected list help output: {stdout}"
     );
 }
@@ -99,8 +99,8 @@ fn bare_agentmux_without_tty_prints_help_and_fails() {
         "unexpected stdout: {stdout}"
     );
     assert!(
-        stdout.contains("list sessions [--bundle NAME|--all] [--as-session NAME]"),
-        "top-level help should advertise relocked list sessions surface: {stdout}"
+        stdout.contains("list principals [--namespace NAME|GLOBAL|*] [--as-session NAME]"),
+        "top-level help should advertise relocked list principals surface: {stdout}"
     );
     assert!(
         !stdout.contains("\\n"),

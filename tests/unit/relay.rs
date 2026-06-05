@@ -299,16 +299,16 @@ fn list_returns_all_configured_sessions_with_transport() {
     );
     assert_eq!(bundle.startup_failure_count, 0);
     assert!(bundle.recent_startup_failures.is_empty());
-    assert_eq!(bundle.sessions.len(), 2);
-    assert_eq!(bundle.sessions[0].id, "alpha@party");
-    assert_eq!(bundle.sessions[0].transport, ListedSessionTransport::Tmux);
+    assert_eq!(bundle.principals.len(), 2);
+    assert_eq!(bundle.principals[0].id, "alpha@party");
+    assert_eq!(bundle.principals[0].transport, ListedSessionTransport::Tmux);
     assert!(
-        !bundle.sessions[0].ready,
+        !bundle.principals[0].ready,
         "tmux session without resolvable pane reports ready=false"
     );
-    assert_eq!(bundle.sessions[1].id, "bravo@party");
-    assert_eq!(bundle.sessions[1].transport, ListedSessionTransport::Tmux);
-    assert!(!bundle.sessions[1].ready);
+    assert_eq!(bundle.principals[1].id, "bravo@party");
+    assert_eq!(bundle.principals[1].transport, ListedSessionTransport::Tmux);
+    assert!(!bundle.principals[1].ready);
 }
 
 #[test]
@@ -339,9 +339,9 @@ fn list_allows_ui_sender_from_global_tui_sessions() {
     assert_eq!(bundle.state, ListedBundleState::Down);
     assert!(bundle.startup_health.is_none());
     assert_eq!(bundle.startup_failure_count, 0);
-    assert_eq!(bundle.sessions.len(), 2);
-    assert_eq!(bundle.sessions[0].id, "alpha@party");
-    assert_eq!(bundle.sessions[1].id, "bravo@party");
+    assert_eq!(bundle.principals.len(), 2);
+    assert_eq!(bundle.principals[0].id, "alpha@party");
+    assert_eq!(bundle.principals[1].id, "bravo@party");
 }
 
 #[test]
@@ -389,9 +389,9 @@ fn list_reports_down_when_no_acp_worker_registered() {
     );
     assert_eq!(bundle.state, ListedBundleState::Down);
     assert!(bundle.startup_health.is_none());
-    assert_eq!(bundle.sessions.len(), 2);
+    assert_eq!(bundle.principals.len(), 2);
     assert!(
-        bundle.sessions.iter().all(|session| !session.ready),
+        bundle.principals.iter().all(|session| !session.ready),
         "every acp session without a registered worker reports ready=false"
     );
 }

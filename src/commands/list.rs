@@ -36,52 +36,74 @@ pub(super) fn run_agentmux_list(arguments: &[String]) -> Result<(), RuntimeError
     let workspace = WorkspaceContext::discover(&current_directory)?;
     let roots = shared::resolve_roots(&parsed.runtime, &workspace, None)?;
     ensure_starter_configuration_layout(&roots.configuration_root)?;
+    let namespace = parsed
+        .namespace
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    // Only a concrete bundle namespace seeds the identity-resolution hint; the
+    // fan-out (`*`) and relay-wide (`GLOBAL`) selectors resolve the requester
+    // in the associated/home bundle.
+    let bundle_hint = match namespace {
+        Some("*") | Some("GLOBAL") => None,
+        other => other,
+    };
     let resolved_session = resolve_tui_session_identity(
         &roots.configuration_root,
         &workspace.workspace_root,
-        parsed.bundle_name.as_deref(),
+        bundle_hint,
         parsed.session_selector.as_deref(),
     )?;
     let home_bundle_name = resolved_session.bundle_name.clone();
     let requester_session = resolved_session.session_id.clone();
 
-    let payload = if parsed.all_bundles {
-        let memberships = load_bundle_group_memberships(&roots.configuration_root)
-            .map_err(shared::map_bundle_load_error)?;
-        let mut bundle_names = memberships
-            .into_iter()
-            .map(|membership| membership.bundle_name)
-            .collect::<Vec<_>>();
-        bundle_names.sort_unstable();
-        bundle_names.dedup();
+    let payload = match namespace {
+        Some("*") => {
+            let memberships = load_bundle_group_memberships(&roots.configuration_root)
+                .map_err(shared::map_bundle_load_error)?;
+            let mut bundle_names = memberships
+                .into_iter()
+                .map(|membership| membership.bundle_name)
+                .collect::<Vec<_>>();
+            bundle_names.sort_unstable();
+            bundle_names.dedup();
 
-        let mut schema_version = "1".to_string();
-        let mut bundles = Vec::<ListedBundle>::new();
-        for bundle_name in bundle_names {
+            let mut schema_version = "1".to_string();
+            let mut bundles = Vec::<ListedBundle>::new();
+            for bundle_name in bundle_names {
+                let listed = request_listed_bundle(
+                    &roots,
+                    &bundle_name,
+                    requester_session.as_str(),
+                    home_bundle_name.as_str(),
+                )?;
+                schema_version = listed.schema_version;
+                bundles.push(listed.bundle);
+            }
+            json!({
+                "schema_version": schema_version,
+                "bundles": bundles,
+            })
+        }
+        Some("GLOBAL") => {
+            let listed = request_global_listed_bundle(&roots, requester_session.as_str())?;
+            json!({
+                "schema_version": listed.schema_version,
+                "bundle": listed.bundle,
+            })
+        }
+        _ => {
             let listed = request_listed_bundle(
                 &roots,
-                &bundle_name,
+                &resolved_session.bundle_name,
                 requester_session.as_str(),
                 home_bundle_name.as_str(),
             )?;
-            schema_version = listed.schema_version;
-            bundles.push(listed.bundle);
+            json!({
+                "schema_version": listed.schema_version,
+                "bundle": listed.bundle,
+            })
         }
-        json!({
-            "schema_version": schema_version,
-            "bundles": bundles,
-        })
-    } else {
-        let listed = request_listed_bundle(
-            &roots,
-            &resolved_session.bundle_name,
-            requester_session.as_str(),
-            home_bundle_name.as_str(),
-        )?;
-        json!({
-            "schema_version": listed.schema_version,
-            "bundle": listed.bundle,
-        })
     };
 
     if parsed.output_json {
@@ -113,10 +135,10 @@ fn parse_list_arguments(arguments: &[String]) -> Result<ListArguments, RuntimeEr
     let Some(subcommand) = arguments.first().map(String::as_str) else {
         return Err(RuntimeError::validation(
             "validation_invalid_params",
-            "missing list subcommand; expected 'sessions'".to_string(),
+            "missing list subcommand; expected 'principals'".to_string(),
         ));
     };
-    if subcommand != "sessions" {
+    if subcommand != "principals" {
         return Err(RuntimeError::InvalidArgument {
             argument: subcommand.to_string(),
             message: "unknown list subcommand".to_string(),
@@ -131,14 +153,13 @@ fn parse_list_arguments(arguments: &[String]) -> Result<ListArguments, RuntimeEr
             continue;
         }
         match arguments[index].as_str() {
-            "--bundle" | "--bundle-name" => {
-                parsed.bundle_name = Some(shared::take_value(arguments, &mut index, "--bundle")?);
+            "--namespace" => {
+                parsed.namespace = Some(shared::take_value(arguments, &mut index, "--namespace")?);
             }
             "--as-session" => {
                 parsed.session_selector =
                     Some(shared::take_value(arguments, &mut index, "--as-session")?);
             }
-            "--all" => parsed.all_bundles = true,
             "--json" => parsed.output_json = true,
             unknown => {
                 return Err(RuntimeError::InvalidArgument {
@@ -149,10 +170,16 @@ fn parse_list_arguments(arguments: &[String]) -> Result<ListArguments, RuntimeEr
         }
         index += 1;
     }
-    if parsed.bundle_name.is_some() && parsed.all_bundles {
+    if let Some(namespace) = parsed
+        .namespace
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        && matches!(namespace, "ALL" | "EXTERNAL" | "RELAY")
+    {
         return Err(RuntimeError::validation(
             "validation_invalid_params",
-            "list sessions accepts either --bundle or --all, not both".to_string(),
+            "namespace must be a bundle name, \"GLOBAL\", or \"*\"".to_string(),
         ));
     }
     Ok(parsed)
@@ -160,7 +187,7 @@ fn parse_list_arguments(arguments: &[String]) -> Result<ListArguments, RuntimeEr
 
 pub(super) fn print_list_help() {
     println!(
-        "Usage: agentmux list sessions [--bundle NAME|--all] [--as-session NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux list principals [--namespace NAME|GLOBAL|*] [--as-session NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }
 
@@ -201,6 +228,40 @@ fn request_listed_bundle(
             return Err(error);
         }
     };
+    match response {
+        RelayResponse::List {
+            schema_version,
+            bundle,
+        } => Ok(ListedBundleResult {
+            schema_version,
+            bundle,
+        }),
+        RelayResponse::Error { error } => Err(shared::map_relay_error(error)),
+        other => Err(RuntimeError::validation(
+            "internal_unexpected_failure",
+            format!("relay returned unexpected response variant: {other:?}"),
+        )),
+    }
+}
+
+/// Lists relay-wide principals by pinning the wire-envelope namespace to
+/// `GLOBAL`. Unlike a bundle namespace there is no bundle configuration or
+/// runtime directory to load, and the home-bundle unreachable fallback does not
+/// apply: an unreachable relay surfaces `relay_unavailable`.
+fn request_global_listed_bundle(
+    roots: &crate::runtime::paths::RuntimeRoots,
+    requester_session: &str,
+) -> Result<ListedBundleResult, RuntimeError> {
+    let relay_paths = RelayRuntimePaths::resolve(&roots.state_root);
+    let response = request_relay(
+        &relay_paths.relay_socket,
+        "GLOBAL",
+        requester_session,
+        &RelayRequest::List {
+            requester_session: Some(requester_session.to_string()),
+        },
+    )
+    .map_err(|source| shared::map_relay_request_failure(&relay_paths.relay_socket, source))?;
     match response {
         RelayResponse::List {
             schema_version,
@@ -267,7 +328,7 @@ fn synthesize_unreachable_bundle(
         state_reason,
         startup_failure_count,
         recent_startup_failures,
-        sessions: bundle
+        principals: bundle
             .members
             .iter()
             .map(|member| ListedSession {
@@ -306,8 +367,8 @@ fn print_human_bundle(bundle: &serde_json::Map<String, Value>) {
     }
     println!("{header}");
 
-    if let Some(sessions) = bundle.get("sessions").and_then(Value::as_array) {
-        for session in sessions {
+    if let Some(principals) = bundle.get("principals").and_then(Value::as_array) {
+        for session in principals {
             let id = session
                 .get("id")
                 .and_then(Value::as_str)
