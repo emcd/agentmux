@@ -2614,7 +2614,15 @@ targets, the relay SHALL return `validation_conflicting_namespaces`. Cross-
 namespace fan-out in one request is not supported in this slice.
 
 Any authenticated session (bundle-bound or relay-wide) MAY send to `@GLOBAL`
-targets.
+targets. This is a routing invariant, not a relaxation of the scope ladder: a
+relay-wide (`@GLOBAL`) target is delivered through the session registry (keyed by
+`principal_id`) rather than by crossing into a peer bundle, so it classifies at
+the `all:home` tier under the Uniform Cross-Bundle Authorization Model and never
+demands `all:all`. This holds whether the sender is bundle-bound (an agent
+replying to the operator) or itself relay-wide (one relay-wide principal
+messaging another). It is asymmetric with a relay-wide *requester* reaching
+*into* a bundle, which the uniform model classifies as cross-namespace and which
+therefore does require `all:all`.
 
 #### Scenario: Bundle-bound agent sends to @GLOBAL operator
 
@@ -2801,6 +2809,14 @@ only within the principal's own namespace; a relay-wide principal (for example a
 `@GLOBAL` operator) SHALL require `all:all` to reach into any bundle, since a
 bundle is not its home namespace. There SHALL be no global/relay-principal
 exemption from this threshold.
+
+This requester-axis rule has a target-axis counterpart: a relay-wide
+(`@GLOBAL`) *target* SHALL classify at the `all:home` tier rather than `all:all`,
+because relay-wide principals are delivered through the session registry rather
+than by crossing into a peer bundle (see Suffix-Based Target Routing). Reaching a
+relay-wide target — an agent messaging the operator, or one relay-wide principal
+messaging another — is therefore not a cross-namespace act and SHALL NOT demand
+`all:all`. This is a routing invariant, not a per-operation policy exemption.
 
 The relay SHALL then check whether the requester's configured scope for the
 operation's capability meets that tier. The relay SHALL NOT apply any

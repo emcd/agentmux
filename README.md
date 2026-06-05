@@ -191,6 +191,17 @@ Global user and authorization configuration:
 - `<config-root>/users.toml`: maps session identities to policy presets
 - `<config-root>/policies.toml`: defines policy presets with per-control scopes
 
+Per-control scopes form a ladder — `self` (act only on yourself), `all:home`
+(act on any principal in your own/home namespace), `all:all` (act across
+namespaces). A principal's *home* is its native namespace: a session's home is
+its bundle, and a relay-wide principal (such as a `@GLOBAL` operator) lives in
+its reserved namespace (`GLOBAL`/`EXTERNAL`/`RELAY`). Reaching *into* a bundle
+you do not live in requires `all:all`, so a `@GLOBAL` operator needs `all:all` to
+list or message a bundle's sessions. Messaging the operator is the common case
+that does not: a relay-wide (`@GLOBAL`) target is always reachable from any
+bundle under `all:home`, so an agent can reply to the operator without
+cross-namespace scope.
+
 Global TUI session configuration:
 
 - normal config file: `<config-root>/tui.toml`

@@ -112,21 +112,40 @@ impl ScopeTier {
 }
 
 impl ResolvedTarget {
+    /// Whether this target is reachable at the requester's *home* tier — without
+    /// crossing a namespace boundary.
+    ///
+    /// True for a same-bundle target and, as a **routing invariant (not a policy
+    /// control)**, for any relay-wide (`@GLOBAL`) target. Relay-wide targets are
+    /// delivered through the session *registry* keyed by `principal_id`, not by
+    /// crossing into a peer bundle, so reaching one is not a cross-namespace act
+    /// and never raises the bar to `all:all`. This is what lets a bundle-bound
+    /// agent message an `@GLOBAL` operator (and one relay-wide principal message
+    /// another) under `all:home`.
+    ///
+    /// It is asymmetric with a relay-wide *requester* reaching *into* a bundle:
+    /// there the bundle is not the requester's home namespace (see
+    /// [`requester_home_namespace`]), so that direction does require `all:all`.
+    /// The asymmetry is intentional — see `tests/integration` and `todos/relay/75`
+    /// (the `home+` follow-up).
+    fn reachable_at_home_tier(&self, dispatch_bundle_name: &str) -> bool {
+        self.relay_wide || self.bundle_name == dispatch_bundle_name
+    }
+
     /// Classifies this target's relationship to the requester within the
     /// dispatch bundle into a uniform scope tier.
     fn tier(&self, dispatch_bundle_name: &str, requester_session: &str) -> ScopeTier {
-        // A relay-wide (`@GLOBAL`) target rides the dispatch bundle's context and
-        // is delivered via the registry, not by crossing a bundle boundary, so it
-        // stays at the home tier rather than demanding `all:all`.
-        if self.relay_wide || self.bundle_name == dispatch_bundle_name {
-            return match self.session_id.as_deref() {
-                Some(session_id) if session_id == requester_session && !self.relay_wide => {
-                    ScopeTier::Own
-                }
-                _ => ScopeTier::Home,
-            };
+        if !self.reachable_at_home_tier(dispatch_bundle_name) {
+            return ScopeTier::All;
         }
-        ScopeTier::All
+        // A relay-wide target is never `Own`: self-action via the relay-wide
+        // registry path is not modeled, so it floors at `Home`.
+        match self.session_id.as_deref() {
+            Some(session_id) if session_id == requester_session && !self.relay_wide => {
+                ScopeTier::Own
+            }
+            _ => ScopeTier::Home,
+        }
     }
 }
 
