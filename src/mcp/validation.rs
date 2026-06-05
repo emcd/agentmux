@@ -210,15 +210,6 @@ pub(super) fn validate_raww_request(params: &RawwParams) -> Result<(), McpError>
 
 pub(super) fn validate_grant_list_args(args: &GrantListArgs) -> Result<(), McpError> {
     validate_unknown_fields("grant list command", Some("args"), &args.extra_fields)?;
-    if let Some(bundle_name) = args.bundle_name.as_ref()
-        && bundle_name.trim().is_empty()
-    {
-        return Err(validation_tool_error(
-            "validation_invalid_params",
-            "bundle_name must be non-empty when provided",
-            None,
-        ));
-    }
     Ok(())
 }
 
@@ -286,15 +277,6 @@ pub(super) fn validate_grant_resolve_args(args: &GrantResolveArgs) -> Result<(),
                 Some(json!({"field": "outcome", "value": other})),
             ));
         }
-    }
-    if let Some(bundle_name) = args.bundle_name.as_ref()
-        && bundle_name.trim().is_empty()
-    {
-        return Err(validation_tool_error(
-            "validation_invalid_params",
-            "bundle_name must be non-empty when provided",
-            None,
-        ));
     }
     Ok(())
 }

@@ -23,7 +23,6 @@ pub(super) struct LookRequestContext {
     pub(super) target_session: String,
     pub(super) lines: Option<usize>,
     pub(super) offset: Option<usize>,
-    pub(super) bundle_name: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -33,7 +32,6 @@ pub(super) struct RawwRequestContext {
     pub(super) target_session: String,
     pub(super) text: String,
     pub(super) no_enter: bool,
-    pub(super) bundle_name: Option<String>,
 }
 
 #[derive(Clone, Debug)]

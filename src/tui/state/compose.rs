@@ -557,7 +557,6 @@ impl AppState {
             target_session: target.clone(),
             lines: self.look_lines.map(|value| value as usize),
             offset: None,
-            bundle_name: None,
         })?;
 
         match response {
@@ -610,7 +609,6 @@ impl AppState {
             target_session: target.clone(),
             text,
             no_enter: false,
-            bundle_name: None,
         })?;
 
         match response {

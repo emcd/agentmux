@@ -134,9 +134,6 @@ pub(super) struct GrantParams {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub(super) struct GrantListArgs {
-    /// Optional bundle selector. When present must equal the associated bundle.
-    #[serde(default)]
-    pub(super) bundle_name: Option<String>,
     /// Unknown fields captured for explicit validation.
     #[serde(flatten, default)]
     #[schemars(skip)]
@@ -155,9 +152,6 @@ pub(super) struct GrantResolveArgs {
     /// Required option_id when outcome is `selected`; forbidden when `cancelled`.
     #[serde(default)]
     pub(super) option_id: Option<String>,
-    /// Optional bundle selector. When present must equal the associated bundle.
-    #[serde(default)]
-    pub(super) bundle_name: Option<String>,
     /// Unknown fields captured for explicit validation.
     #[serde(flatten, default)]
     #[schemars(skip)]
