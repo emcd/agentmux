@@ -705,7 +705,11 @@ fn render_picker_overlay(frame: &mut Frame, state: &mut AppState) {
 
     let sections = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
         .split(inner);
 
     let status_line = bundle_status_header_line(state.bundle_status.as_ref());
@@ -733,6 +737,38 @@ fn render_picker_overlay(frame: &mut Frame, state: &mut AppState) {
     };
     let list = List::new(items).highlight_style(Style::default().bg(Color::Blue).fg(Color::White));
     frame.render_stateful_widget(list, sections[1], &mut state.picker_state);
+
+    frame.render_widget(Paragraph::new(picker_hint_line(state.mode)), sections[2]);
+}
+
+/// Builds the one-line keybinding hint strip shown at the foot of the recipient
+/// picker overlay. The `Enter` action is context-sensitive: in Communication
+/// mode it inserts the selection into the To field; in Interaction mode it opens
+/// the selected session in the look+raww view.
+fn picker_hint_line(mode: ScreenMode) -> Line<'static> {
+    let choose_action = match mode {
+        ScreenMode::Communication => "Insert into To",
+        ScreenMode::Interaction => "Open (look+raww)",
+    };
+    Line::from(vec![
+        picker_hint_key("Enter"),
+        Span::raw(format!(" {choose_action}")),
+        Span::raw("   "),
+        picker_hint_key("Esc"),
+        Span::raw(" Close"),
+        Span::raw("   "),
+        picker_hint_key("Up/Down"),
+        Span::raw(" Move"),
+    ])
+}
+
+fn picker_hint_key(label: &str) -> Span<'static> {
+    Span::styled(
+        label.to_string(),
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    )
 }
 
 fn render_bundle_picker_overlay(frame: &mut Frame, state: &mut AppState) {
