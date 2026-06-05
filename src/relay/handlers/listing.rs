@@ -106,21 +106,21 @@ pub(in crate::relay) fn handle_list_routed(
     dispatch_authorization: &AuthorizationContext,
     enumerate_bundle: &BundleConfiguration,
     enumerate_runtime_directory: &Path,
-    sender_session: Option<String>,
+    requester_session: Option<String>,
 ) -> Result<RelayResponse, RelayError> {
     let tmux_socket = tmux_socket_path_for_runtime_directory(enumerate_runtime_directory);
-    let sender_session = sender_session.ok_or_else(|| {
+    let requester_session = requester_session.ok_or_else(|| {
         relay_error(
             "validation_unknown_sender",
-            "sender_session is required for list authorization",
+            "requester_session is required for list authorization",
             None,
         )
     })?;
     let sender = super::resolve_sender_identity(
         dispatch_bundle,
         dispatch_authorization,
-        sender_session.as_str(),
-        "sender_session",
+        requester_session.as_str(),
+        "requester_session",
     )?;
     authorize_route(
         dispatch_bundle,
@@ -196,7 +196,7 @@ pub(in crate::relay) fn handle_list_routed(
             "relay.list.response",
             &json!({
                 "bundle_name": bundle.id,
-                "sender_session": sender.session_id,
+                "requester_session": sender.session_id,
                 "hosted": bundle.hosted,
                 "state": bundle.state,
                 "startup_health": bundle.startup_health,

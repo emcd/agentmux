@@ -187,7 +187,7 @@ async fn send_forwards_quiescence_timeout_override() {
                     "schema_version": "1",
                     "bundle_name": BUNDLE_NAME,
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
-                    "sender_session": request.get("sender_session").cloned().unwrap_or(Value::Null),
+                    "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
                     "results": [],
                 }),
                 _ => json!({
@@ -233,7 +233,7 @@ async fn send_forwards_acp_turn_timeout_override() {
                     "schema_version": "1",
                     "bundle_name": BUNDLE_NAME,
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
-                    "sender_session": request.get("sender_session").cloned().unwrap_or(Value::Null),
+                    "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
                     "results": [],
                 }),
                 _ => json!({
@@ -275,8 +275,8 @@ async fn send_maps_unknown_sender_error_from_relay() {
                     "kind": "error",
                     "error": {
                         "code": "validation_unknown_sender",
-                        "message": "sender_session is not in bundle configuration",
-                        "details": {"sender_session": SENDER_SESSION},
+                        "message": "requester_session is not in bundle configuration",
+                        "details": {"requester_session": SENDER_SESSION},
                     },
                 }),
                 _ => json!({
@@ -409,7 +409,7 @@ async fn send_surfaces_authenticated_identity_from_relay() {
                     "schema_version": "1",
                     "bundle_name": BUNDLE_NAME,
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
-                    "sender_session": request.get("sender_session").cloned().unwrap_or(Value::Null),
+                    "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
                     "authenticated_identity": "alpha@agentmux",
                     "results": [],
                 }),
@@ -453,7 +453,7 @@ async fn send_omits_sender_attribution_when_relay_omits_it() {
                     "schema_version": "1",
                     "bundle_name": BUNDLE_NAME,
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
-                    "sender_session": request.get("sender_session").cloned().unwrap_or(Value::Null),
+                    "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
                     "results": [],
                 }),
                 _ => json!({
@@ -494,7 +494,7 @@ async fn send_forwards_bound_bundle_on_wire_envelope() {
                     "schema_version": "1",
                     "bundle_name": BUNDLE_NAME,
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
-                    "sender_session": request.get("sender_session").cloned().unwrap_or(Value::Null),
+                    "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
                     "results": [],
                 }),
                 _ => json!({

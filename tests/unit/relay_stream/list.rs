@@ -39,7 +39,7 @@ fn cross_bundle_list(
             "frame": "request",
             "request_id": "req-1",
             "namespace": namespace,
-            "request": {"operation": "list", "sender_session": "alpha"},
+            "request": {"operation": "list", "requester_session": "alpha"},
         }),
     );
     let mut response = read_json(&mut reader);
@@ -172,7 +172,7 @@ fn relay_wide_list(
             "frame": "request",
             "request_id": "req-1",
             "namespace": namespace,
-            "request": {"operation": "list", "sender_session": operator_id},
+            "request": {"operation": "list", "requester_session": operator_id},
         }),
     );
     let mut response = read_json(&mut reader);

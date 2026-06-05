@@ -47,7 +47,7 @@ fn bundle_session_list_with_namespace(
             "frame": "request",
             "request_id": "req-1",
             "namespace": namespace,
-            "request": {"operation": "list", "sender_session": "alpha"},
+            "request": {"operation": "list", "requester_session": "alpha"},
         }),
     );
     let mut response = read_json(&mut reader);
@@ -88,7 +88,7 @@ fn relay_wide_operator_send(
             "request_id": "req-1",
             "request": {
                 "operation": "send",
-                "sender_session": operator_id,
+                "requester_session": operator_id,
                 "message": "operator to bundle",
                 "targets": targets,
                 "broadcast": false,
@@ -187,7 +187,7 @@ fn relay_wide_principal_without_namespace_is_rejected() {
         json!({
             "frame": "request",
             "request_id": "req-1",
-            "request": {"operation": "list", "sender_session": "alpha"},
+            "request": {"operation": "list", "requester_session": "alpha"},
         }),
     );
     let mut response = read_json(&mut reader);
@@ -253,7 +253,7 @@ fn send_to_global_target_is_delivered_to_registered_operator() {
             "request_id": "req-1",
             "request": {
                 "operation": "send",
-                "sender_session": "alpha",
+                "requester_session": "alpha",
                 "message": "hello operator",
                 "targets": [operator_id],
                 "broadcast": false,
@@ -401,7 +401,7 @@ fn send_mixing_relay_wide_and_session_targets_fans_out() {
             "request_id": "req-1",
             "request": {
                 "operation": "send",
-                "sender_session": "alpha",
+                "requester_session": "alpha",
                 "message": "mixed targets",
                 "targets": [operator_id, "bravo"],
                 "broadcast": false,
@@ -499,7 +499,7 @@ fn send_fans_out_across_bundle_and_global_namespaces() {
             "request_id": "req-1",
             "request": {
                 "operation": "send",
-                "sender_session": "alpha",
+                "requester_session": "alpha",
                 "message": "fan out",
                 "targets": [format!("agent@{bundle_b}"), operator_id],
                 "broadcast": false,
@@ -585,7 +585,7 @@ fn cross_bundle_send_denied_under_home_scope() {
             "request_id": "req-1",
             "request": {
                 "operation": "send",
-                "sender_session": "alpha",
+                "requester_session": "alpha",
                 "message": "across the boundary",
                 "targets": [format!("agent@{bundle_b}")],
                 "broadcast": false,
@@ -641,7 +641,7 @@ fn same_bundle_send_permitted_under_home_scope() {
             "request_id": "req-1",
             "request": {
                 "operation": "send",
-                "sender_session": "alpha",
+                "requester_session": "alpha",
                 "message": "same bundle",
                 "targets": [format!("bravo@{bundle_name}")],
                 "broadcast": false,
@@ -693,7 +693,7 @@ fn send_to_unknown_bundle_target_is_rejected() {
             "request_id": "req-1",
             "request": {
                 "operation": "send",
-                "sender_session": "alpha",
+                "requester_session": "alpha",
                 "message": "to nowhere",
                 "targets": ["agent@no_such_bundle"],
                 "broadcast": false,
@@ -743,7 +743,7 @@ fn send_to_external_namespace_target_is_rejected() {
             "request_id": "req-1",
             "request": {
                 "operation": "send",
-                "sender_session": "alpha",
+                "requester_session": "alpha",
                 "message": "to external",
                 "targets": ["service@EXTERNAL"],
                 "broadcast": false,
@@ -798,7 +798,7 @@ fn list_global_namespace_returns_registered_relay_wide_sessions() {
             "frame": "request",
             "request_id": "req-1",
             "namespace": "GLOBAL",
-            "request": {"operation": "list", "sender_session": operator_id},
+            "request": {"operation": "list", "requester_session": operator_id},
         }),
     );
     let mut response = read_json(&mut reader);
@@ -898,7 +898,7 @@ fn global_routing_no_longer_returns_unavailable_stub() {
             "request_id": "req-1",
             "request": {
                 "operation": "send",
-                "sender_session": "alpha",
+                "requester_session": "alpha",
                 "message": "stub check",
                 "targets": [operator_id],
                 "broadcast": false,

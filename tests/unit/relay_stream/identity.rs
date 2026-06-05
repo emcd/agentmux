@@ -1134,7 +1134,7 @@ fn alpha_send_response_with_token(
             "request_id": "send-attribution",
             "request": {
                 "operation": "send",
-                "sender_session": "alpha",
+                "requester_session": "alpha",
                 "message": "attribution probe",
                 "targets": [operator_id],
                 "broadcast": false,
@@ -1265,7 +1265,7 @@ fn operator_incoming_message_for_alpha_send(
             "request_id": "send-delivery-attribution",
             "request": {
                 "operation": "send",
-                "sender_session": "alpha",
+                "requester_session": "alpha",
                 "message": "delivery attribution probe",
                 "targets": [operator_id],
                 "broadcast": false,

@@ -262,7 +262,7 @@ fn relay_send_routes_to_connected_ui_stream_with_event_frames() {
     let response = dispatch_request(
         RelayRequest::Send {
             request_id: Some("req-1".to_string()),
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             message: "hello ui".to_string(),
             targets: vec![global_user_id(&bundle_name)],
             broadcast: false,
@@ -387,7 +387,7 @@ fn relay_send_waits_for_ui_reconnect_before_delivery() {
     let response = dispatch_request(
         RelayRequest::Send {
             request_id: Some("req-2".to_string()),
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             message: "wait for reconnect".to_string(),
             targets: vec![global_user_id(&bundle_name)],
             broadcast: false,
@@ -454,7 +454,7 @@ fn relay_async_send_emits_terminal_delivery_outcome_to_sender_ui_stream() {
     let response = dispatch_request(
         RelayRequest::Send {
             request_id: Some("req-async-sender".to_string()),
-            sender_session: global_user_id(&bundle_name),
+            requester_session: global_user_id(&bundle_name),
             message: "verify sender completion stream".to_string(),
             targets: vec!["alpha".to_string()],
             broadcast: false,

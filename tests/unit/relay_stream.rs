@@ -421,7 +421,7 @@ fn stream_request_before_hello_is_rejected() {
         &mut client_stream,
         json!({
             "frame": "request",
-            "request": {"operation": "list", "sender_session": "alpha"}
+            "request": {"operation": "list", "requester_session": "alpha"}
         }),
     );
     let frame = read_json(&mut reader);
@@ -466,7 +466,7 @@ fn stream_hello_acknowledges_and_allows_request() {
         json!({
             "frame": "request",
             "request_id": "req-1",
-            "request": {"operation": "list", "sender_session": "alpha"}
+            "request": {"operation": "list", "requester_session": "alpha"}
         }),
     );
     let mut response = read_json(&mut reader);
@@ -532,7 +532,7 @@ fn duplicate_live_hello_claim_is_rejected_with_identity_conflict() {
         &mut first_client,
         json!({
             "frame": "request",
-            "request": {"operation": "list", "sender_session": "alpha"}
+            "request": {"operation": "list", "requester_session": "alpha"}
         }),
     );
     // The production client tolerates a stray `hello_ack` and the legacy

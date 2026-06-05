@@ -275,7 +275,7 @@ fn list_returns_all_configured_sessions_with_transport() {
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_request(
         RelayRequest::List {
-            sender_session: Some("alpha".to_string()),
+            requester_session: Some("alpha".to_string()),
         },
         &config_root,
         "party",
@@ -321,7 +321,7 @@ fn list_allows_ui_sender_from_global_tui_sessions() {
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_request(
         RelayRequest::List {
-            sender_session: Some("user@GLOBAL".to_string()),
+            requester_session: Some("user@GLOBAL".to_string()),
         },
         &config_root,
         "party",
@@ -352,7 +352,7 @@ fn list_rejects_ui_sender_with_unknown_policy_reference() {
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_request(
         RelayRequest::List {
-            sender_session: Some("user@GLOBAL".to_string()),
+            requester_session: Some("user@GLOBAL".to_string()),
         },
         &config_root,
         "party",
@@ -372,7 +372,7 @@ fn list_reports_down_when_no_acp_worker_registered() {
 
     let response = dispatch_request(
         RelayRequest::List {
-            sender_session: Some("user@GLOBAL".to_string()),
+            requester_session: Some("user@GLOBAL".to_string()),
         },
         &config_root,
         "party",
@@ -404,7 +404,7 @@ fn send_rejects_unknown_target() {
     let response = dispatch_request(
         RelayRequest::Send {
             request_id: None,
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             message: "hello".to_string(),
             targets: vec!["missing".to_string()],
             broadcast: false,
@@ -428,7 +428,7 @@ fn send_rejects_target_by_configured_session_name_alias() {
     let response = dispatch_request(
         RelayRequest::Send {
             request_id: None,
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             message: "hello".to_string(),
             targets: vec!["Bravo".to_string()],
             broadcast: false,
@@ -453,7 +453,7 @@ fn send_accepts_global_ui_target_not_in_bundle_configuration() {
     let response = dispatch_request(
         RelayRequest::Send {
             request_id: None,
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             message: "hello".to_string(),
             targets: vec!["user@GLOBAL".to_string()],
             broadcast: false,
@@ -484,7 +484,7 @@ fn send_prefers_bundle_member_when_target_id_overlaps_with_ui_session_id() {
     let response = dispatch_request(
         RelayRequest::Send {
             request_id: None,
-            sender_session: "bravo".to_string(),
+            requester_session: "bravo".to_string(),
             message: "hello".to_string(),
             targets: vec!["alpha".to_string()],
             broadcast: false,
@@ -517,7 +517,7 @@ fn send_broadcast_excludes_sender_session() {
     let response = dispatch_request(
         RelayRequest::Send {
             request_id: None,
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             message: "hello".to_string(),
             targets: Vec::new(),
             broadcast: true,
@@ -546,7 +546,7 @@ fn send_async_returns_accepted_and_queued_outcome() {
     let response = dispatch_request(
         RelayRequest::Send {
             request_id: None,
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             message: "hello".to_string(),
             targets: vec!["bravo".to_string()],
             broadcast: false,
@@ -576,7 +576,7 @@ fn send_rejects_zero_timeout_override() {
     let response = dispatch_request(
         RelayRequest::Send {
             request_id: None,
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             message: "hello".to_string(),
             targets: vec!["bravo".to_string()],
             broadcast: false,
@@ -601,7 +601,7 @@ fn send_broadcast_with_only_sender_returns_empty_results() {
     let response = dispatch_request(
         RelayRequest::Send {
             request_id: None,
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             message: "hello".to_string(),
             targets: Vec::new(),
             broadcast: true,
@@ -629,7 +629,7 @@ fn send_rejects_quiescence_timeout_for_acp_target() {
     let response = dispatch_request(
         RelayRequest::Send {
             request_id: None,
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             message: "hello".to_string(),
             targets: vec!["bravo".to_string()],
             broadcast: false,
@@ -656,7 +656,7 @@ fn send_rejects_acp_turn_timeout_for_tmux_target() {
     let response = dispatch_request(
         RelayRequest::Send {
             request_id: None,
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             message: "hello".to_string(),
             targets: vec!["bravo".to_string()],
             broadcast: false,
@@ -683,7 +683,7 @@ fn send_rejects_conflicting_timeout_fields() {
     let response = dispatch_request(
         RelayRequest::Send {
             request_id: None,
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             message: "hello".to_string(),
             targets: vec!["bravo".to_string()],
             broadcast: false,

@@ -43,7 +43,7 @@ pub(super) fn run_agentmux_raww(arguments: &[String]) -> Result<(), RuntimeError
         &resolved_session.session_id,
         &RelayRequest::Raww {
             request_id: None,
-            sender_session: resolved_session.session_id.clone(),
+            requester_session: resolved_session.session_id.clone(),
             target_session: parsed.target_session,
             text: parsed.text,
             no_enter: parsed.no_enter,

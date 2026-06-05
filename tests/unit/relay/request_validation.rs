@@ -19,7 +19,7 @@ coder = "shell"
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_request(
         RelayRequest::List {
-            sender_session: Some("alpha".to_string()),
+            requester_session: Some("alpha".to_string()),
         },
         &config_root,
         "party",
@@ -48,7 +48,7 @@ coder = "shell"
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_request(
         RelayRequest::List {
-            sender_session: Some("alpha".to_string()),
+            requester_session: Some("alpha".to_string()),
         },
         &config_root,
         "party",
@@ -92,7 +92,7 @@ send = "all:home"
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_request(
         RelayRequest::List {
-            sender_session: Some("alpha".to_string()),
+            requester_session: Some("alpha".to_string()),
         },
         &config_root,
         "party",
@@ -137,7 +137,7 @@ raww = "all:all"
 
     let response = dispatch_request(
         RelayRequest::List {
-            sender_session: Some("alpha".to_string()),
+            requester_session: Some("alpha".to_string()),
         },
         &config_root,
         "party",
@@ -183,7 +183,7 @@ grant = "self"
 
     let response = dispatch_request(
         RelayRequest::List {
-            sender_session: Some("alpha".to_string()),
+            requester_session: Some("alpha".to_string()),
         },
         &config_root,
         "party",

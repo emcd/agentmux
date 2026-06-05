@@ -47,7 +47,7 @@ pub(super) fn run_agentmux_send(arguments: &[String]) -> Result<(), RuntimeError
         &resolved_session.session_id,
         &RelayRequest::Send {
             request_id: parsed.request_id.clone(),
-            sender_session: resolved_session.session_id.clone(),
+            requester_session: resolved_session.session_id.clone(),
             message: parsed.message.clone(),
             targets: parsed.targets.clone(),
             broadcast: parsed.broadcast,
@@ -62,7 +62,7 @@ pub(super) fn run_agentmux_send(arguments: &[String]) -> Result<(), RuntimeError
             schema_version,
             bundle_name,
             request_id,
-            sender_session,
+            requester_session,
             sender_display_name,
             results,
             ..
@@ -70,7 +70,7 @@ pub(super) fn run_agentmux_send(arguments: &[String]) -> Result<(), RuntimeError
             "schema_version": schema_version,
             "bundle_name": bundle_name,
             "request_id": request_id,
-            "sender_session": sender_session,
+            "requester_session": requester_session,
             "sender_display_name": sender_display_name,
             "results": results,
         }),

@@ -199,7 +199,7 @@ pub(in crate::relay) fn dispatch_list(
     enumerate_paths: &crate::runtime::paths::BundleRuntimePaths,
 ) -> RelayResponse {
     let result = (|| {
-        let RelayRequest::List { sender_session } = request else {
+        let RelayRequest::List { requester_session } = request else {
             return Err(relay_error(
                 "internal_unexpected_request",
                 "non-list request routed to the list dispatcher",
@@ -219,7 +219,7 @@ pub(in crate::relay) fn dispatch_list(
             &dispatch_authorization,
             &enumerate_bundle,
             &enumerate_paths.runtime_directory,
-            sender_session,
+            requester_session,
         )
     })();
     match result {

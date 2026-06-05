@@ -91,7 +91,7 @@ async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
         "alpha",
         &RelayRequest::Send {
             request_id: Some("req-shutdown-drop".to_string()),
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             message: "queued async message".to_string(),
             targets: vec!["alpha".to_string()],
             broadcast: false,
@@ -236,7 +236,7 @@ async fn relay_sigint_exits_with_active_stream_connection() {
     );
     let stream_list_response = stream_session
         .request(&RelayRequest::List {
-            sender_session: Some("alpha".to_string()),
+            requester_session: Some("alpha".to_string()),
         })
         .expect("list request on persistent stream");
     let RelayResponse::List { .. } = stream_list_response else {
@@ -298,7 +298,7 @@ async fn relay_accepts_new_connections_while_registered_stream_stays_open() {
     );
     let stream_list_response = stream_session
         .request(&RelayRequest::List {
-            sender_session: Some("alpha".to_string()),
+            requester_session: Some("alpha".to_string()),
         })
         .expect("list request on persistent stream");
     let RelayResponse::List { .. } = stream_list_response else {
@@ -314,7 +314,7 @@ async fn relay_accepts_new_connections_while_registered_stream_stays_open() {
                 "party",
                 "bravo",
                 &RelayRequest::List {
-                    sender_session: Some("alpha".to_string()),
+                    requester_session: Some("alpha".to_string()),
                 },
             )
         }),
@@ -362,7 +362,7 @@ async fn relay_rejects_connections_when_worker_queue_is_full() {
     );
     let first_response = stream_session
         .request(&RelayRequest::List {
-            sender_session: Some("alpha".to_string()),
+            requester_session: Some("alpha".to_string()),
         })
         .expect("first stream list request");
     let RelayResponse::List { .. } = first_response else {
@@ -451,7 +451,7 @@ async fn relay_reaps_pre_hello_idle_connections_and_recovers_worker_capacity() {
                 "party",
                 "alpha",
                 &RelayRequest::List {
-                    sender_session: Some("alpha".to_string()),
+                    requester_session: Some("alpha".to_string()),
                 },
             )
         }),
@@ -499,7 +499,7 @@ async fn relay_delivery_sends_submit_in_separate_tmux_command() {
         "alpha",
         &RelayRequest::Send {
             request_id: Some("req-submit-separate-enter".to_string()),
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             message: "A".repeat(6_000),
             targets: vec!["alpha".to_string()],
             broadcast: false,
@@ -637,7 +637,7 @@ async fn relay_async_delivery_does_not_inject_while_pane_in_mode() {
         "alpha",
         &RelayRequest::Send {
             request_id: Some("req-interaction-mode".to_string()),
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             message: "interaction marker".to_string(),
             targets: vec!["alpha".to_string()],
             broadcast: false,
@@ -693,7 +693,7 @@ async fn relay_raww_tmux_default_appends_enter_and_reports_dispatched_phase() {
         "alpha",
         &RelayRequest::Raww {
             request_id: Some("req-raww-default-enter".to_string()),
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             target_session: "alpha".to_string(),
             text: "hello from raww".to_string(),
             no_enter: false,
@@ -774,7 +774,7 @@ async fn relay_raww_tmux_no_enter_omits_enter_command() {
         "alpha",
         &RelayRequest::Raww {
             request_id: Some("req-raww-no-enter".to_string()),
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             target_session: "alpha".to_string(),
             text: "hello without enter".to_string(),
             no_enter: true,

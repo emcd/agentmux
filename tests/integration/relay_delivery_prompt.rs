@@ -82,7 +82,7 @@ fn relay_send_delivers_when_prompt_readiness_template_matches() {
     let response = dispatch_request(
         RelayRequest::Send {
             request_id: Some("req-ready".to_string()),
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             message: marker.to_string(),
             targets: vec!["bravo".to_string()],
             broadcast: false,
@@ -175,7 +175,7 @@ fn relay_send_times_out_when_prompt_readiness_never_matches() {
     let response = dispatch_request(
         RelayRequest::Send {
             request_id: Some("req-unready".to_string()),
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             message: marker.to_string(),
             targets: vec!["bravo".to_string()],
             broadcast: false,
@@ -274,7 +274,7 @@ fn relay_send_delivers_when_prompt_idle_column_matches() {
     let response = dispatch_request(
         RelayRequest::Send {
             request_id: Some("req-idle-match".to_string()),
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             message: marker.to_string(),
             targets: vec!["bravo".to_string()],
             broadcast: false,
@@ -372,7 +372,7 @@ fn relay_send_delivers_when_prompt_regex_requires_blank_separator_line() {
     let response = dispatch_request(
         RelayRequest::Send {
             request_id: Some("req-blank-line".to_string()),
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             message: marker.to_string(),
             targets: vec!["bravo".to_string()],
             broadcast: false,
@@ -479,7 +479,7 @@ fn relay_send_times_out_when_prompt_idle_column_does_not_match() {
     let response = dispatch_request(
         RelayRequest::Send {
             request_id: Some("req-idle-mismatch".to_string()),
-            sender_session: "alpha".to_string(),
+            requester_session: "alpha".to_string(),
             message: marker.to_string(),
             targets: vec!["bravo".to_string()],
             broadcast: false,

@@ -85,7 +85,7 @@ fn send_accepts_message_flag_when_piped_stdin_is_empty() {
             schema_version: "1".to_string(),
             bundle_name: "agentmux".to_string(),
             request_id: None,
-            sender_session: "user".to_string(),
+            requester_session: "user".to_string(),
             sender_display_name: Some("Operator".to_string()),
             authenticated_identity: None,
             on_behalf_of: None,
@@ -217,7 +217,7 @@ fn send_preserves_valid_explicit_session_in_relay_request() {
             schema_version: "1".to_string(),
             bundle_name: "agentmux".to_string(),
             request_id: None,
-            sender_session: "user".to_string(),
+            requester_session: "user".to_string(),
             sender_display_name: Some("Alpha".to_string()),
             authenticated_identity: None,
             on_behalf_of: None,
@@ -264,12 +264,12 @@ fn send_preserves_valid_explicit_session_in_relay_request() {
 
     assert!(output.status.success(), "command should succeed");
     let payload: Value = serde_json::from_slice(&output.stdout).expect("decode send json payload");
-    assert_eq!(payload["sender_session"], "user");
+    assert_eq!(payload["requester_session"], "user");
 
     let requests = request_log.lock().expect("request log lock");
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0]["operation"], "send");
-    assert_eq!(requests[0]["sender_session"], "user@GLOBAL");
+    assert_eq!(requests[0]["requester_session"], "user@GLOBAL");
 }
 
 #[test]
@@ -392,7 +392,7 @@ fn send_uses_tui_defaults_for_bundle_and_session() {
             schema_version: "1".to_string(),
             bundle_name: "agentmux".to_string(),
             request_id: None,
-            sender_session: "user".to_string(),
+            requester_session: "user".to_string(),
             sender_display_name: Some("Operator".to_string()),
             authenticated_identity: None,
             on_behalf_of: None,
@@ -437,5 +437,5 @@ fn send_uses_tui_defaults_for_bundle_and_session() {
     let requests = request_log.lock().expect("request log lock");
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0]["operation"], "send");
-    assert_eq!(requests[0]["sender_session"], "user@GLOBAL");
+    assert_eq!(requests[0]["requester_session"], "user@GLOBAL");
 }
