@@ -127,7 +127,7 @@ fn list_reports_hosted_round_trip_for_tmux_bundle() {
     );
     assert_eq!(pre_bundle.state, ListedBundleState::Down);
     assert!(
-        pre_bundle.sessions.iter().all(|session| !session.ready),
+        pre_bundle.principals.iter().all(|session| !session.ready),
         "no session should be ready before reconcile"
     );
 
@@ -147,7 +147,7 @@ fn list_reports_hosted_round_trip_for_tmux_bundle() {
         "bundle should report hosted=true after reconcile created owned tmux session"
     );
     assert!(
-        hosted_bundle.sessions.iter().all(|session| session.ready),
+        hosted_bundle.principals.iter().all(|session| session.ready),
         "every tmux session should report ready=true after reconcile"
     );
 
@@ -167,7 +167,7 @@ fn list_reports_hosted_round_trip_for_tmux_bundle() {
     );
     assert_eq!(post_bundle.state, ListedBundleState::Down);
     assert!(
-        post_bundle.sessions.iter().all(|session| !session.ready),
+        post_bundle.principals.iter().all(|session| !session.ready),
         "every tmux session should report ready=false after shutdown"
     );
 }

@@ -76,7 +76,7 @@ fn cross_bundle_list_permitted_under_all_scope_enumerates_peer() {
 
     assert_eq!(response["response"]["kind"], "list");
     assert_eq!(response["response"]["bundle"]["id"], bundle_b);
-    let sessions = response["response"]["bundle"]["sessions"]
+    let sessions = response["response"]["bundle"]["principals"]
         .as_array()
         .expect("sessions array");
     assert!(

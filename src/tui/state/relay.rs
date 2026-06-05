@@ -16,7 +16,7 @@ impl AppState {
             RelayResponse::List { bundle, .. } => {
                 self.bundle_status = Some(BundleStatusDisplay::from_listed_bundle(&bundle));
                 let recipients = bundle
-                    .sessions
+                    .principals
                     .into_iter()
                     .map(|session| Recipient {
                         session_name: session.id,

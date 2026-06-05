@@ -4,9 +4,12 @@ use serde_json::{Map, Value, json};
 
 use super::helpers::*;
 
-fn list_sessions_call(args: Map<String, Value>) -> Map<String, Value> {
+fn list_principals_call(args: Map<String, Value>) -> Map<String, Value> {
     Map::from_iter([
-        ("command".to_string(), Value::String("sessions".to_string())),
+        (
+            "command".to_string(),
+            Value::String("principals".to_string()),
+        ),
         ("args".to_string(), Value::Object(args)),
     ])
 }
@@ -28,7 +31,7 @@ async fn tool_catalog_contains_list_sessions_send_look_and_raww() {
                         "startup_health": "healthy",
                         "startup_failure_count": 0,
                         "recent_startup_failures": [],
-                        "sessions": [],
+                        "principals": [],
                     },
                 }),
                 Some("send") => json!({
@@ -104,7 +107,7 @@ async fn list_sessions_returns_canonical_bundle_payload_from_relay() {
                         "state_reason": null,
                         "startup_failure_count": 0,
                         "recent_startup_failures": [],
-                        "sessions": [
+                        "principals": [
                             {"id": "bravo", "name": "Bravo", "transport": "tmux", "ready": true},
                             {"id": "charlie", "transport": "acp", "ready": true},
                         ],
@@ -122,7 +125,7 @@ async fn list_sessions_returns_canonical_bundle_payload_from_relay() {
     );
     let mut harness = McpHarness::spawn(&runtime).await;
     let response = harness
-        .call_tool(2, "list", list_sessions_call(Map::new()))
+        .call_tool(2, "list", list_principals_call(Map::new()))
         .await;
     let payload = decode_tool_payload(&response);
 
@@ -142,29 +145,31 @@ async fn list_sessions_returns_canonical_bundle_payload_from_relay() {
             .as_array()
             .is_some_and(|values| values.is_empty())
     );
-    assert_eq!(configured["sessions"][0]["id"], "bravo");
-    assert_eq!(configured["sessions"][0]["name"], "Bravo");
-    assert_eq!(configured["sessions"][0]["ready"], true);
-    assert_eq!(configured["sessions"][1]["id"], "charlie");
-    assert_eq!(configured["sessions"][1]["transport"], "acp");
-    assert_eq!(configured["sessions"][1]["ready"], true);
+    assert_eq!(configured["principals"][0]["id"], "bravo");
+    assert_eq!(configured["principals"][0]["name"], "Bravo");
+    assert_eq!(configured["principals"][0]["ready"], true);
+    assert_eq!(configured["principals"][1]["id"], "charlie");
+    assert_eq!(configured["principals"][1]["transport"], "acp");
+    assert_eq!(configured["principals"][1]["ready"], true);
     assert_eq!(bundles[1]["id"], "GLOBAL");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_sessions_rejects_conflicting_bundle_and_all_selectors() {
+async fn list_rejects_reserved_namespace_tokens() {
     let runtime = TestRuntime::create();
     let mut harness = McpHarness::spawn(&runtime).await;
-    let arguments = list_sessions_call(Map::from_iter([
-        (
-            "bundle_name".to_string(),
-            Value::String(BUNDLE_NAME.to_string()),
-        ),
-        ("all".to_string(), Value::Bool(true)),
-    ]));
-    let response = harness.call_tool(2, "list", arguments).await;
-
-    assert_eq!(error_code(&response), Some("validation_invalid_params"));
+    for token in ["ALL", "EXTERNAL", "RELAY"] {
+        let arguments = list_principals_call(Map::from_iter([(
+            "namespace".to_string(),
+            Value::String(token.to_string()),
+        )]));
+        let response = harness.call_tool(2, "list", arguments).await;
+        assert_eq!(
+            error_code(&response),
+            Some("validation_invalid_params"),
+            "namespace={token} should be rejected"
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -200,7 +205,10 @@ async fn list_rejects_unknown_top_level_fields() {
             2,
             "list",
             Map::from_iter([
-                ("command".to_string(), Value::String("sessions".to_string())),
+                (
+                    "command".to_string(),
+                    Value::String("principals".to_string()),
+                ),
                 ("bogus".to_string(), Value::Bool(true)),
             ]),
         )
@@ -217,7 +225,7 @@ async fn list_sessions_rejects_unknown_arg_fields() {
         .call_tool(
             2,
             "list",
-            list_sessions_call(Map::from_iter([(
+            list_principals_call(Map::from_iter([(
                 "stowaway".to_string(),
                 Value::String("value".to_string()),
             )])),
@@ -236,10 +244,13 @@ async fn list_rejects_stringified_args_with_informative_validation_error() {
             2,
             "list",
             Map::from_iter([
-                ("command".to_string(), Value::String("sessions".to_string())),
+                (
+                    "command".to_string(),
+                    Value::String("principals".to_string()),
+                ),
                 (
                     "args".to_string(),
-                    Value::String("{\"all\":true}".to_string()),
+                    Value::String("{\"namespace\":\"*\"}".to_string()),
                 ),
             ]),
         )
@@ -261,7 +272,7 @@ async fn list_sessions_synthesizes_down_bundle_for_unreachable_home_bundle() {
     let runtime = TestRuntime::create();
     let mut harness = McpHarness::spawn(&runtime).await;
     let response = harness
-        .call_tool(2, "list", list_sessions_call(Map::new()))
+        .call_tool(2, "list", list_principals_call(Map::new()))
         .await;
     let payload = decode_tool_payload(&response);
 
@@ -281,7 +292,7 @@ async fn list_sessions_synthesizes_down_bundle_for_unreachable_home_bundle() {
             .as_array()
             .is_some_and(|values| values.is_empty())
     );
-    let sessions = configured["sessions"].as_array().expect("sessions array");
+    let sessions = configured["principals"].as_array().expect("sessions array");
     assert_eq!(sessions.len(), 3);
     for session in sessions {
         assert_eq!(session["ready"], false);
@@ -291,7 +302,7 @@ async fn list_sessions_synthesizes_down_bundle_for_unreachable_home_bundle() {
     assert_eq!(global["state"], "down");
     assert_eq!(global["state_reason_code"], "relay_unavailable");
     assert!(
-        global["sessions"]
+        global["principals"]
             .as_array()
             .is_some_and(|values| values.is_empty())
     );
@@ -302,8 +313,8 @@ async fn list_sessions_rejects_unreachable_non_home_bundle_with_relay_unavailabl
     let runtime = TestRuntime::create();
     write_bundle_configuration(&runtime.config_root, "zeta", &["zeta"]);
     let mut harness = McpHarness::spawn(&runtime).await;
-    let arguments = list_sessions_call(Map::from_iter([(
-        "bundle_name".to_string(),
+    let arguments = list_principals_call(Map::from_iter([(
+        "namespace".to_string(),
         Value::String("zeta".to_string()),
     )]));
     let response = harness.call_tool(2, "list", arguments).await;
@@ -337,7 +348,7 @@ async fn list_sessions_all_mode_aggregates_in_lexicographic_bundle_order() {
                         "state_reason": null,
                         "startup_failure_count": 0,
                         "recent_startup_failures": [],
-                        "sessions": [{"id": "alpha", "transport": "tmux", "ready": true}],
+                        "principals": [{"id": "alpha", "transport": "tmux", "ready": true}],
                     },
                 }),
                 _ => json!({
@@ -366,7 +377,7 @@ async fn list_sessions_all_mode_aggregates_in_lexicographic_bundle_order() {
                         "state_reason": null,
                         "startup_failure_count": 0,
                         "recent_startup_failures": [],
-                        "sessions": [{"id": "zeta", "transport": "acp", "ready": true}],
+                        "principals": [{"id": "zeta", "transport": "acp", "ready": true}],
                     },
                 }),
                 _ => json!({
@@ -395,7 +406,7 @@ async fn list_sessions_all_mode_aggregates_in_lexicographic_bundle_order() {
                         "state_reason": "bundle runtime not started",
                         "startup_failure_count": 0,
                         "recent_startup_failures": [],
-                        "sessions": [],
+                        "principals": [],
                     },
                 }),
                 _ => json!({
@@ -411,7 +422,10 @@ async fn list_sessions_all_mode_aggregates_in_lexicographic_bundle_order() {
     routes.insert("GLOBAL".to_string(), default_empty_global_responder());
     let relay = FakeRelay::start_for_bundles(runtime.relay_socket.clone(), routes);
     let mut harness = McpHarness::spawn(&runtime).await;
-    let arguments = list_sessions_call(Map::from_iter([("all".to_string(), Value::Bool(true))]));
+    let arguments = list_principals_call(Map::from_iter([(
+        "namespace".to_string(),
+        Value::String("*".to_string()),
+    )]));
     let response = harness.call_tool(2, "list", arguments).await;
     let payload = decode_tool_payload(&response);
     let bundles = payload["bundles"]
@@ -427,14 +441,14 @@ async fn list_sessions_all_mode_aggregates_in_lexicographic_bundle_order() {
     assert_eq!(bundles[1]["hosted"], false);
     assert_eq!(bundles[2]["hosted"], true);
     assert_eq!(bundles[3]["hosted"], false);
-    assert_eq!(bundles[0]["sessions"][0]["ready"], true);
-    assert_eq!(bundles[2]["sessions"][0]["ready"], true);
+    assert_eq!(bundles[0]["principals"][0]["ready"], true);
+    assert_eq!(bundles[2]["principals"][0]["ready"], true);
     assert_eq!(bundles[1]["state"], "down");
     assert_eq!(bundles[1]["state_reason_code"], "not_started");
     assert_eq!(bundles[1]["startup_failure_count"], 0);
     assert_eq!(bundles[3]["state"], "down");
     assert!(
-        bundles[3]["sessions"]
+        bundles[3]["principals"]
             .as_array()
             .is_some_and(|values| values.is_empty())
     );
@@ -461,7 +475,7 @@ async fn list_sessions_appends_global_bundle_with_relay_wide_principals() {
                         "state_reason": null,
                         "startup_failure_count": 0,
                         "recent_startup_failures": [],
-                        "sessions": [],
+                        "principals": [],
                     },
                 }),
                 _ => json!({
@@ -490,7 +504,7 @@ async fn list_sessions_appends_global_bundle_with_relay_wide_principals() {
                         "state_reason": null,
                         "startup_failure_count": 0,
                         "recent_startup_failures": [],
-                        "sessions": [
+                        "principals": [
                             {"id": "operator@GLOBAL", "transport": "ui", "ready": true},
                             {"id": "watcher@GLOBAL", "transport": "ui", "ready": true},
                         ],
@@ -509,7 +523,7 @@ async fn list_sessions_appends_global_bundle_with_relay_wide_principals() {
     let relay = FakeRelay::start_for_bundles(runtime.relay_socket.clone(), routes);
     let mut harness = McpHarness::spawn(&runtime).await;
     let response = harness
-        .call_tool(2, "list", list_sessions_call(Map::new()))
+        .call_tool(2, "list", list_principals_call(Map::new()))
         .await;
     let payload = decode_tool_payload(&response);
     let bundles = payload["bundles"]
@@ -522,10 +536,10 @@ async fn list_sessions_appends_global_bundle_with_relay_wide_principals() {
     assert_eq!(global["id"], "GLOBAL");
     assert_eq!(global["hosted"], true);
     assert_eq!(global["state"], "up");
-    assert_eq!(global["sessions"][0]["id"], "operator@GLOBAL");
-    assert_eq!(global["sessions"][0]["transport"], "ui");
-    assert_eq!(global["sessions"][0]["ready"], true);
-    assert_eq!(global["sessions"][1]["id"], "watcher@GLOBAL");
+    assert_eq!(global["principals"][0]["id"], "operator@GLOBAL");
+    assert_eq!(global["principals"][0]["transport"], "ui");
+    assert_eq!(global["principals"][0]["ready"], true);
+    assert_eq!(global["principals"][1]["id"], "watcher@GLOBAL");
 
     let envelopes = relay.envelopes_for_operation("list");
     let namespaces = envelopes
@@ -534,6 +548,65 @@ async fn list_sessions_appends_global_bundle_with_relay_wide_principals() {
         .collect::<Vec<_>>();
     assert!(namespaces.contains(&BUNDLE_NAME));
     assert!(namespaces.contains(&"GLOBAL"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_global_namespace_returns_only_relay_wide_principals() {
+    let runtime = TestRuntime::create();
+    let mut routes: HashMap<String, RelayResponder> = HashMap::new();
+    routes.insert(
+        "GLOBAL".to_string(),
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("list") => json!({
+                    "kind": "list",
+                    "schema_version": "1",
+                    "bundle": {
+                        "id": "GLOBAL",
+                        "hosted": true,
+                        "state": "up",
+                        "startup_health": null,
+                        "state_reason_code": null,
+                        "state_reason": null,
+                        "startup_failure_count": 0,
+                        "recent_startup_failures": [],
+                        "principals": [
+                            {"id": "operator@GLOBAL", "transport": "ui", "ready": true},
+                        ],
+                    },
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+    let relay = FakeRelay::start_for_bundles(runtime.relay_socket.clone(), routes);
+    let mut harness = McpHarness::spawn(&runtime).await;
+    let arguments = list_principals_call(Map::from_iter([(
+        "namespace".to_string(),
+        Value::String("GLOBAL".to_string()),
+    )]));
+    let response = harness.call_tool(2, "list", arguments).await;
+    let payload = decode_tool_payload(&response);
+    let bundles = payload["bundles"]
+        .as_array()
+        .expect("bundles must be array");
+
+    // GLOBAL selector returns only the relay-wide bundle: no home-bundle query.
+    assert_eq!(bundles.len(), 1);
+    assert_eq!(bundles[0]["id"], "GLOBAL");
+    assert_eq!(bundles[0]["principals"][0]["id"], "operator@GLOBAL");
+    let namespaces = relay
+        .envelopes_for_operation("list")
+        .iter()
+        .filter_map(|envelope| envelope["namespace"].as_str().map(str::to_string))
+        .collect::<Vec<_>>();
+    assert_eq!(namespaces, vec!["GLOBAL".to_string()]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -585,7 +658,7 @@ async fn list_sessions_all_mode_fails_fast_on_first_authorization_denial() {
                         "state_reason": null,
                         "startup_failure_count": 0,
                         "recent_startup_failures": [],
-                        "sessions": [{"id": BUNDLE_NAME, "transport": "tmux", "ready": true}],
+                        "principals": [{"id": BUNDLE_NAME, "transport": "tmux", "ready": true}],
                     },
                 }),
                 _ => json!({
@@ -614,7 +687,7 @@ async fn list_sessions_all_mode_fails_fast_on_first_authorization_denial() {
                         "state_reason": null,
                         "startup_failure_count": 0,
                         "recent_startup_failures": [],
-                        "sessions": [{"id": "zeta", "transport": "tmux", "ready": true}],
+                        "principals": [{"id": "zeta", "transport": "tmux", "ready": true}],
                     },
                 }),
                 _ => json!({
@@ -629,7 +702,10 @@ async fn list_sessions_all_mode_fails_fast_on_first_authorization_denial() {
     );
     let relay = FakeRelay::start_for_bundles(runtime.relay_socket.clone(), routes);
     let mut harness = McpHarness::spawn(&runtime).await;
-    let arguments = list_sessions_call(Map::from_iter([("all".to_string(), Value::Bool(true))]));
+    let arguments = list_principals_call(Map::from_iter([(
+        "namespace".to_string(),
+        Value::String("*".to_string()),
+    )]));
     let response = harness.call_tool(2, "list", arguments).await;
 
     assert_eq!(error_code(&response), Some("authorization_forbidden"));

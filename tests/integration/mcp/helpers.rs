@@ -479,7 +479,7 @@ pub(crate) fn default_empty_global_responder() -> RelayResponder {
                     "state_reason": null,
                     "startup_failure_count": 0,
                     "recent_startup_failures": [],
-                    "sessions": [],
+                    "principals": [],
                 },
             }),
             _ => json!({

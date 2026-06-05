@@ -266,8 +266,8 @@ fn host_relay_records_startup_failures_and_list_reports_degraded_health() {
     let listed = Command::new(env!("CARGO_BIN_EXE_agentmux"))
         .args([
             "list",
-            "sessions",
-            "--bundle",
+            "principals",
+            "--namespace",
             "alpha",
             "--json",
             "--config-directory",
@@ -377,8 +377,8 @@ fn host_relay_clears_startup_failures_for_sessions_that_start_successfully() {
     let listed = Command::new(env!("CARGO_BIN_EXE_agentmux"))
         .args([
             "list",
-            "sessions",
-            "--bundle",
+            "principals",
+            "--namespace",
             "alpha",
             "--json",
             "--config-directory",

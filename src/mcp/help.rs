@@ -5,7 +5,7 @@ use serde_json::json;
 use super::errors::validation_tool_error;
 use super::params::{
     CHANGE_COMMAND_PSK, ChangePskArgs, GRANT_COMMAND_LIST, GRANT_COMMAND_RESOLVE,
-    GRANT_OUTCOME_SELECTED, GrantListArgs, GrantResolveArgs, HelpParams, LIST_COMMAND_SESSIONS,
+    GRANT_OUTCOME_SELECTED, GrantListArgs, GrantResolveArgs, HelpParams, LIST_COMMAND_PRINCIPALS,
     ListArgs, LookParams, NAMESPACE_AGENTMUX, NEW_COMMAND_PEER, NewPeerArgs, RawwParams,
     SendParams, TOOL_CHANGE, TOOL_GRANT, TOOL_HELP, TOOL_LIST, TOOL_LOOK, TOOL_NEW, TOOL_RAWW,
     TOOL_SEND, TOOL_UPDOWN, UPDOWN_COMMAND_DOWN, UPDOWN_COMMAND_UP, UpdownArgs,
@@ -18,11 +18,11 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
             "namespace": NAMESPACE_AGENTMUX,
             "shape_hints": [
                 "Call help with query='list', 'grant', 'updown', 'new', or 'change' for meta-tool command lists.",
-                "Call help with query='list.sessions', 'grant.list', 'grant.resolve', 'updown.up', 'updown.down', 'new.peer', or 'change.psk' for command args schemas.",
+                "Call help with query='list.principals', 'grant.list', 'grant.resolve', 'updown.up', 'updown.down', 'new.peer', or 'change.psk' for command args schemas.",
                 "Call help with query='send', 'look', or 'raww' for exact tool args schemas."
             ],
             "tools": [
-                {"tool": TOOL_LIST, "kind": "meta_tool", "description": "List sessions for one bundle or fan out across bundles."},
+                {"tool": TOOL_LIST, "kind": "meta_tool", "description": "List principals for one namespace or fan out across namespaces."},
                 {"tool": TOOL_SEND, "kind": "tool", "description": "Submit a message to explicit targets or broadcast."},
                 {"tool": TOOL_LOOK, "kind": "tool", "description": "Inspect a target session pane snapshot for this bundle."},
                 {"tool": TOOL_RAWW, "kind": "tool", "description": "Write raw text directly to one target session."},
@@ -40,29 +40,29 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
         TOOL_LIST => Ok(json!({
             "tool": TOOL_LIST,
             "kind": "meta_tool",
-            "description": "List sessions for one bundle or fan out across bundles.",
+            "description": "List principals for one namespace or fan out across namespaces.",
             "commands": [
                 {
-                    "command": "list.sessions",
-                    "description": "List sessions for one bundle or fan out across bundles."
+                    "command": "list.principals",
+                    "description": "List principals for one namespace or fan out across namespaces."
                 }
             ],
             "invoke": {
                 "tool": TOOL_LIST,
                 "params": {
-                    "command": LIST_COMMAND_SESSIONS,
+                    "command": LIST_COMMAND_PRINCIPALS,
                     "args": {}
                 }
             }
         })),
-        "list.sessions" => Ok(command_help(
-            "list.sessions",
-            "List sessions for one bundle or fan out across bundles.",
+        "list.principals" => Ok(command_help(
+            "list.principals",
+            "List principals for one namespace or fan out across namespaces.",
             json_schema_for::<ListArgs>(),
             json!({
                 "tool": TOOL_LIST,
                 "params": {
-                    "command": LIST_COMMAND_SESSIONS,
+                    "command": LIST_COMMAND_PRINCIPALS,
                     "args": {}
                 }
             }),
@@ -261,7 +261,7 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
         )),
         _ => Err(validation_tool_error(
             "validation_invalid_params",
-            "unknown help query; try empty query, 'agentmux', 'list', 'list.sessions', 'send', 'look', 'raww', 'grant', 'grant.list', 'grant.resolve', 'updown', 'updown.up', 'updown.down', 'new', 'new.peer', 'change', or 'change.psk'",
+            "unknown help query; try empty query, 'agentmux', 'list', 'list.principals', 'send', 'look', 'raww', 'grant', 'grant.list', 'grant.resolve', 'updown', 'updown.up', 'updown.down', 'new', 'new.peer', 'change', or 'change.psk'",
             Some(json!({"query": query})),
         )),
     }

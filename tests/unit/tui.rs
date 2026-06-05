@@ -193,7 +193,7 @@ fn listed_bundle(
         state_reason: None,
         startup_failure_count,
         recent_startup_failures: Vec::new(),
-        sessions: vec![ListedSession {
+        principals: vec![ListedSession {
             id: "alpha".to_string(),
             name: None,
             transport: ListedSessionTransport::Tmux,
