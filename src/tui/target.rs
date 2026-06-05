@@ -21,17 +21,25 @@ pub(super) struct RecipientTokenContext {
 /// Parses one recipient identifier for TUI target workflows.
 ///
 /// Accepted forms:
-/// - bare: `<session-id>` — routed to the associated bundle.
+/// - bare: `<session-id>` — routed to the bound bundle.
 /// - canonical: `<session-id>@<bundle>` — routed to the named bundle. When the
-///   bundle qualifier matches the associated bundle, the qualifier is dropped
-///   from the emitted identifier; otherwise the canonical form is preserved so
-///   the relay can route the target to its owning bundle (or to the relay-wide
-///   `@GLOBAL` registry for user sessions).
+///   bundle qualifier matches the sender's bound bundle, the qualifier is
+///   dropped from the emitted identifier; otherwise the canonical form is
+///   preserved so the relay can route the target to its owning bundle (or to the
+///   relay-wide `@GLOBAL` registry for user sessions).
 /// - autocomplete-trigger prefix: a single leading `@` is permitted on either
 ///   form and stripped before parsing.
+///
+/// `bound_bundle` is the bundle the sender is bound to, or `None` for a
+/// relay-wide (unbound) sender. The suffix-strip optimization fires only against
+/// the bound bundle: a relay-wide sender has no bound bundle, so every `@bundle`
+/// suffix is preserved verbatim. This matters because the relay derives `Send`
+/// routing for a relay-wide principal entirely from the target `@bundle`
+/// suffixes — stripping one would strand the target with no routing namespace
+/// and the relay rejects the send with `validation_missing_routing_namespace`.
 pub fn parse_tui_target_identifier(
     identifier: &str,
-    associated_bundle: &str,
+    bound_bundle: Option<&str>,
 ) -> Result<String, RuntimeError> {
     let trimmed = identifier.trim();
     let after_prefix = trimmed.strip_prefix('@').unwrap_or(trimmed);
@@ -70,15 +78,19 @@ pub fn parse_tui_target_identifier(
             "validation_unknown_target",
             format!("target identifier '{after_prefix}' may contain at most one '@' separator"),
         )),
-        Some(bundle_name) if bundle_name == associated_bundle => Ok(session.to_string()),
+        Some(bundle_name) if bound_bundle == Some(bundle_name) => Ok(session.to_string()),
         Some(bundle_name) => Ok(format!("{session}@{bundle_name}")),
     }
 }
 
 /// Merges the To recipient field into a deterministic target set.
+///
+/// `bound_bundle` is the sender's bound bundle, or `None` for a relay-wide
+/// sender; it is forwarded to [`parse_tui_target_identifier`] to govern the
+/// suffix-strip behavior.
 pub fn merge_tui_targets(
     to_field: &str,
-    associated_bundle: &str,
+    bound_bundle: Option<&str>,
 ) -> Result<Vec<String>, RuntimeError> {
     let mut targets = Vec::<String>::new();
     let mut seen = HashSet::<String>::new();
@@ -88,7 +100,7 @@ pub fn merge_tui_targets(
         .map(str::trim)
         .filter(|token| !token.is_empty())
     {
-        let normalized = parse_tui_target_identifier(token, associated_bundle)?;
+        let normalized = parse_tui_target_identifier(token, bound_bundle)?;
         if seen.insert(normalized.clone()) {
             targets.push(normalized);
         }

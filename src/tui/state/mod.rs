@@ -27,6 +27,7 @@ const STATUS_HISTORY_MAXIMUM: usize = 6;
 const EVENT_HISTORY_MAXIMUM: usize = 64;
 const CHAT_HISTORY_MAXIMUM: usize = 256;
 const SEEN_STREAM_IDS_MAXIMUM: usize = 1024;
+const GLOBAL_SESSION_SUFFIX: &str = "@GLOBAL";
 
 #[derive(Clone, Debug)]
 pub(crate) enum ChatHistoryDirection {
@@ -223,6 +224,20 @@ impl AppState {
             relay_stream_poll_error_reported: false,
             to_completion: None,
             should_quit: false,
+        }
+    }
+
+    /// Returns the bundle the sender is bound to, or `None` when the sender is a
+    /// relay-wide principal (its session id carries the `@GLOBAL` suffix).
+    ///
+    /// A relay-wide sender has no bound bundle, so target `@bundle` suffixes must
+    /// be preserved verbatim for relay-side `Send` routing; see
+    /// [`merge_tui_targets`].
+    pub(crate) fn bound_bundle(&self) -> Option<&str> {
+        if self.sender_session.ends_with(GLOBAL_SESSION_SUFFIX) {
+            None
+        } else {
+            Some(self.bundle_name.as_str())
         }
     }
 
@@ -588,5 +603,24 @@ mod tests {
         let filtered = state.look_pending_permissions();
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].permission_request_id, "perm-1");
+    }
+
+    #[test]
+    fn bound_bundle_reflects_sender_principal_scope() {
+        // A bundle-bound session sender exposes its bundle, so intra-bundle
+        // suffixes are stripped on send.
+        let bound = make_state();
+        assert_eq!(bound.bound_bundle(), Some("agentmux"));
+
+        // A relay-wide sender (`@GLOBAL`) has no bound bundle; target suffixes
+        // must be preserved so the relay can route the send (todos/tui/46).
+        let relay_wide = AppState::new(TuiLaunchOptions {
+            bundle_name: "agentmux".to_string(),
+            sender_session: "operator@GLOBAL".to_string(),
+            relay_socket: PathBuf::from("/tmp/agentmux-test-relay.sock"),
+            look_lines: None,
+            available_bundles: vec!["agentmux".to_string()],
+        });
+        assert_eq!(relay_wide.bound_bundle(), None);
     }
 }
