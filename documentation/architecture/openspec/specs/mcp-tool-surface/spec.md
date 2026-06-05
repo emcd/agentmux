@@ -229,7 +229,7 @@ Caller-supplied sender-like payload fields SHALL NOT override that principal.
 - `schema_version`
 - `bundle_name`
 - `request_id` (when provided by caller)
-- `sender_session`
+- `requester_session`
 - `sender_display_name` (optional)
 - `results` (per-target entries)
 

@@ -172,50 +172,6 @@ async fn raww_maps_unknown_target_validation_error_from_relay() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn raww_maps_cross_bundle_validation_error_from_relay() {
-    let runtime = TestRuntime::create();
-    let _relay = FakeRelay::start(
-        runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
-                Some("raww") => json!({
-                    "kind": "error",
-                    "error": {
-                        "code": "validation_cross_bundle_unsupported",
-                        "message": "raww is limited to the associated bundle in MVP",
-                        "details": {
-                            "associated_bundle_name": BUNDLE_NAME,
-                            "requested_bundle_name": "other",
-                        },
-                    },
-                }),
-                _ => json!({
-                    "kind": "error",
-                    "error": {
-                        "code": "internal_unexpected_failure",
-                        "message": "unexpected operation",
-                    },
-                }),
-            },
-        ),
-    );
-    let mut harness = McpHarness::spawn(&runtime).await;
-
-    let mut arguments = Map::new();
-    arguments.insert(
-        "target_session".to_string(),
-        Value::String("bravo".to_string()),
-    );
-    arguments.insert("text".to_string(), Value::String("hello".to_string()));
-    let response = harness.call_tool(2, "raww", arguments).await;
-
-    assert_eq!(
-        error_code(&response),
-        Some("validation_cross_bundle_unsupported")
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn raww_maps_authorization_forbidden_and_preserves_capability_label() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(

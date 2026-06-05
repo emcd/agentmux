@@ -445,47 +445,6 @@ async fn grant_resolve_preserves_authorization_forbidden_grant_capability() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn grant_list_preserves_cross_bundle_rejection() {
-    let runtime = TestRuntime::create();
-    let _relay = FakeRelay::start(
-        runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
-                Some("permission_list") => json!({
-                    "kind": "error",
-                    "error": {
-                        "code": "validation_cross_bundle_unsupported",
-                        "message": "permission list is limited to the associated bundle",
-                        "details": {
-                            "associated_bundle_name": BUNDLE_NAME,
-                            "requested_bundle_name": "other",
-                        },
-                    },
-                }),
-                _ => json!({
-                    "kind": "error",
-                    "error": {
-                        "code": "internal_unexpected_failure",
-                        "message": "unexpected operation",
-                    },
-                }),
-            },
-        ),
-    );
-    let mut harness = McpHarness::spawn(&runtime).await;
-
-    let mut arguments = Map::new();
-    arguments.insert("command".to_string(), Value::String("list".to_string()));
-    arguments.insert("args".to_string(), json!({"bundle_name": "other"}));
-    let response = harness.call_tool(2, "grant", arguments).await;
-
-    assert_eq!(
-        error_code(&response),
-        Some("validation_cross_bundle_unsupported")
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn grant_advertised_in_tool_inventory() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(

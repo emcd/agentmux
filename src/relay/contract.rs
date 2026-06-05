@@ -238,8 +238,6 @@ pub enum RelayRequest {
         /// context. Ignored for tmux targets, which capture pane scrollback.
         #[serde(default)]
         offset: Option<usize>,
-        #[serde(default)]
-        bundle_name: Option<String>,
     },
     Raww {
         request_id: Option<String>,
@@ -248,8 +246,6 @@ pub enum RelayRequest {
         text: String,
         #[serde(default)]
         no_enter: bool,
-        #[serde(default)]
-        bundle_name: Option<String>,
     },
     PermissionResolve {
         permission_request_id: String,

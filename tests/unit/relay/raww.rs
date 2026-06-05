@@ -13,7 +13,6 @@ fn raww_rejects_unknown_target() {
             target_session: "missing".to_string(),
             text: "hello".to_string(),
             no_enter: false,
-            bundle_name: None,
         },
         &config_root,
         "party",
@@ -22,30 +21,6 @@ fn raww_rejects_unknown_target() {
     .expect_err("raww should fail");
 
     assert_eq!(response.code, "validation_unknown_target");
-}
-
-#[test]
-fn raww_rejects_cross_bundle_selector() {
-    let temporary = TempDir::new().expect("temporary");
-    let config_root = write_bundle(&temporary, "party");
-    let tmux_socket = temporary.path().join("tmux.sock");
-
-    let response = dispatch_request(
-        RelayRequest::Raww {
-            request_id: None,
-            requester_session: "alpha".to_string(),
-            target_session: "bravo".to_string(),
-            text: "hello".to_string(),
-            no_enter: false,
-            bundle_name: Some("other".to_string()),
-        },
-        &config_root,
-        "party",
-        &tmux_socket,
-    )
-    .expect_err("raww should fail");
-
-    assert_eq!(response.code, "validation_cross_bundle_unsupported");
 }
 
 #[test]
@@ -64,7 +39,6 @@ fn raww_rejects_ui_target_class() {
             target_session: "ui@GLOBAL".to_string(),
             text: "hello".to_string(),
             no_enter: false,
-            bundle_name: None,
         },
         &config_root,
         "party",
@@ -91,7 +65,6 @@ fn raww_rejects_oversized_text() {
             target_session: "bravo".to_string(),
             text,
             no_enter: false,
-            bundle_name: None,
         },
         &config_root,
         "party",
@@ -147,7 +120,6 @@ raww = "self"
             target_session: "bravo".to_string(),
             text: "hello".to_string(),
             no_enter: false,
-            bundle_name: None,
         },
         &config_root,
         "party",

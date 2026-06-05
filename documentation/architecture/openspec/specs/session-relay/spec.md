@@ -2447,18 +2447,18 @@ Canonical identity SHALL be hydrated at `hello` registration:
 `{session_id}@{bundle_name}`. The hydrated form SHALL be used for all
 subsequent operations on that stream and in all relay responses and events.
 
-Wire fields carrying session identity (`target_session`, `sender_session`,
+Wire fields carrying session identity (`target_session`, `requester_session`,
 `session_id` in listing responses, `decided_by` in decision responses) SHALL
 emit the canonical form.
 
 Global users (from `users.toml`) carry `@GLOBAL` in their `session_id`;
 their canonical form is their configured `id` unchanged.
 
-#### Scenario: Emit canonical sender identity in send response
+#### Scenario: Emit canonical requester identity in send response
 
 - **WHEN** a session with `session_id = "master"` in bundle `"agentmux"` sends
   a message
-- **THEN** relay send response includes `sender_session = "master@agentmux"`
+- **THEN** relay send response includes `requester_session = "master@agentmux"`
 
 #### Scenario: Emit canonical target identity in delivery event
 

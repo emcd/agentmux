@@ -46,7 +46,6 @@ pub(super) fn run_agentmux_look(arguments: &[String]) -> Result<(), RuntimeError
             target_session: parsed.target_session,
             lines: parsed.lines.map(|value| value as usize),
             offset: None,
-            bundle_name: Some(resolved_session.bundle_name.clone()),
         },
     )
     .map_err(|source| shared::map_relay_request_failure(&relay_paths.relay_socket, source))?;

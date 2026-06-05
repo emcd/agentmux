@@ -142,7 +142,6 @@ pub(super) fn handle_request(
             target_session,
             lines,
             offset,
-            bundle_name: request_bundle_name,
         } => handle_look(
             bundle,
             authorization,
@@ -151,7 +150,6 @@ pub(super) fn handle_request(
                 target_session,
                 lines,
                 offset,
-                bundle_name: request_bundle_name,
             },
             runtime_directory,
             configuration_root,
@@ -164,7 +162,6 @@ pub(super) fn handle_request(
             target_session,
             text,
             no_enter,
-            bundle_name: request_bundle_name,
         } => handle_raww(
             bundle,
             authorization,
@@ -174,7 +171,6 @@ pub(super) fn handle_request(
                 target_session,
                 text,
                 no_enter,
-                bundle_name: request_bundle_name,
             },
             runtime_directory,
         ),
@@ -354,13 +350,11 @@ fn normalize_request_identities(request: RelayRequest, bundle_name: &str) -> Rel
             target_session,
             lines,
             offset,
-            bundle_name: request_bundle_name,
         } => RelayRequest::Look {
             requester_session: bare(requester_session),
             target_session: bare(target_session),
             lines,
             offset,
-            bundle_name: request_bundle_name,
         },
         RelayRequest::Raww {
             request_id,
@@ -368,14 +362,12 @@ fn normalize_request_identities(request: RelayRequest, bundle_name: &str) -> Rel
             target_session,
             text,
             no_enter,
-            bundle_name: request_bundle_name,
         } => RelayRequest::Raww {
             request_id,
             requester_session: bare(requester_session),
             target_session: bare(target_session),
             text,
             no_enter,
-            bundle_name: request_bundle_name,
         },
         request @ (RelayRequest::Up
         | RelayRequest::Down
@@ -694,10 +686,6 @@ fn handle_look(
         target_session,
         lines,
         offset,
-        // Peer routing is driven by the `@<bundle>` suffix on `target_session`
-        // (Send-consistent); the dispatch bundle is already resolved at the
-        // connection layer, so the historical per-request selector is unused.
-        bundle_name: _request_bundle_name,
     } = request;
 
     // Validate the caller-supplied window size against the shared bound; the
@@ -972,21 +960,8 @@ fn handle_raww(
         target_session,
         text,
         no_enter,
-        bundle_name: request_bundle_name,
     } = request;
 
-    if let Some(request_bundle_name) = request_bundle_name.as_deref()
-        && request_bundle_name != bundle.bundle_name
-    {
-        return Err(relay_error(
-            "validation_cross_bundle_unsupported",
-            "raww is limited to the associated bundle in MVP",
-            Some(json!({
-                "associated_bundle_name": bundle.bundle_name,
-                "requested_bundle_name": request_bundle_name,
-            })),
-        ));
-    }
     if target_session.trim().is_empty() {
         return Err(relay_error(
             "validation_invalid_params",

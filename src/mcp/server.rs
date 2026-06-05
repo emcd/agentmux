@@ -324,7 +324,6 @@ impl McpServer {
             target_session: params.target_session.clone(),
             lines: params.lines.map(|value| value as usize),
             offset: params.offset.map(|value| value as usize),
-            bundle_name: None,
         };
         match self.request_relay(&request) {
             Ok(RelayResponse::Look {
@@ -470,7 +469,6 @@ impl McpServer {
             target_session: params.target_session.clone(),
             text: params.text.clone(),
             no_enter: params.no_enter,
-            bundle_name: None,
         };
         match self.request_relay(&request) {
             Ok(RelayResponse::Raww {
@@ -594,9 +592,7 @@ impl McpServer {
                 "bundle_name": self.associated_bundle_name(),
             }),
         );
-        let request = RelayRequest::PermissionList {
-            bundle_name: args.bundle_name.clone(),
-        };
+        let request = RelayRequest::PermissionList { bundle_name: None };
         match self.request_relay(&request) {
             Ok(RelayResponse::PermissionList {
                 schema_version,
@@ -675,7 +671,7 @@ impl McpServer {
             permission_request_id: permission_request_id.clone(),
             outcome: outcome.clone(),
             option_id: option_id.clone(),
-            bundle_name: args.bundle_name.clone(),
+            bundle_name: None,
             ui_session_id: None,
         };
         match self.request_relay(&request) {

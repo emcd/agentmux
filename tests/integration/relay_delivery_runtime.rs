@@ -697,7 +697,6 @@ async fn relay_raww_tmux_default_appends_enter_and_reports_dispatched_phase() {
             target_session: "alpha".to_string(),
             text: "hello from raww".to_string(),
             no_enter: false,
-            bundle_name: None,
         },
     )
     .expect("raww request should succeed");
@@ -778,7 +777,6 @@ async fn relay_raww_tmux_no_enter_omits_enter_command() {
             target_session: "alpha".to_string(),
             text: "hello without enter".to_string(),
             no_enter: true,
-            bundle_name: None,
         },
     )
     .expect("raww request should succeed");
