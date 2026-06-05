@@ -5,7 +5,7 @@ use agentmux::relay::{
 use agentmux::tui::{
     BundleStatusDisplay, BundleStatusSeverity, RecipientReadiness, autocomplete_recipient_input,
     bundle_status_severity, format_bundle_status_line, format_recipient_picker_label,
-    merge_tui_targets, parse_tui_target_identifier,
+    merge_tui_targets, parse_tui_target_identifier, sender_bound_bundle,
 };
 
 #[test]
@@ -112,6 +112,20 @@ fn merge_dedupes_canonical_and_bare_intra_bundle_targets() {
 fn merge_preserves_peer_bundle_target_alongside_local() {
     let targets = merge_tui_targets("relay, mcp@other-bundle", Some("agentmux")).expect("targets");
     assert_eq!(targets, vec!["relay", "mcp@other-bundle"]);
+}
+
+#[test]
+fn sender_bound_bundle_exposes_active_bundle_for_session_principal() {
+    // A bundle-bound session sender (bare id, no `@GLOBAL`) is bound to the
+    // active bundle, so intra-bundle suffixes are stripped on send.
+    assert_eq!(sender_bound_bundle("tui", "agentmux"), Some("agentmux"));
+}
+
+#[test]
+fn sender_bound_bundle_is_none_for_relay_wide_principal() {
+    // A relay-wide sender (`@GLOBAL`) has no bound bundle; target suffixes must
+    // be preserved so the relay can route the send (todos/tui/46).
+    assert_eq!(sender_bound_bundle("operator@GLOBAL", "agentmux"), None);
 }
 
 #[test]

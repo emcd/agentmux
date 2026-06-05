@@ -2,6 +2,24 @@ use std::collections::HashSet;
 
 use crate::runtime::error::RuntimeError;
 
+const GLOBAL_SESSION_SUFFIX: &str = "@GLOBAL";
+
+/// Returns the bundle a sender is bound to, or `None` for a relay-wide sender.
+///
+/// A sender whose session id carries the `@GLOBAL` suffix is a relay-wide
+/// principal with no bound bundle; otherwise the sender is bound to
+/// `active_bundle`. The result governs target suffix-stripping in
+/// [`merge_tui_targets`]: a relay-wide sender (`None`) preserves every `@bundle`
+/// suffix verbatim, since the relay derives `Send` routing for it solely from
+/// those suffixes.
+pub fn sender_bound_bundle<'a>(sender_session: &str, active_bundle: &'a str) -> Option<&'a str> {
+    if sender_session.ends_with(GLOBAL_SESSION_SUFFIX) {
+        None
+    } else {
+        Some(active_bundle)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct ToCompletionState {
     pub token_start: usize,
