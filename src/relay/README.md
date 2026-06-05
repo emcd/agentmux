@@ -201,10 +201,22 @@ exported from `src/relay/mod.rs`.
   within `GLOBAL` under `all:home` but needs `all:all` to reach into any bundle.
 - Concretely, for cross-namespace targets every operation requires `all:all`;
   same-namespace access of another principal requires `all:home`; self-access
-  requires only `self`. A relay-wide (`@GLOBAL`) target of a `Send` is the one
-  exception on the *target* axis: it is delivered via the registry rather than by
-  crossing into a peer bundle, so it rides the dispatch bundle at the home tier
-  and does not by itself demand `all:all`.
+  requires only `self`.
+- **The `@GLOBAL`-target routing invariant.** A relay-wide (`@GLOBAL`) *target*
+  is the one exception on the *target* axis, and it is a **routing invariant, not
+  a policy control**: relay-wide principals are delivered through the session
+  registry (keyed by `principal_id`) rather than by crossing into a peer bundle,
+  so reaching one is not a cross-namespace act. Such a target classifies at the
+  home tier in `ResolvedTarget::tier` and never raises the bar to `all:all`. This
+  is what lets a bundle-bound agent message an `@GLOBAL` operator — and one
+  relay-wide principal message another (relay-wide → relay-wide) — under
+  `all:home` instead of forcing `all:all` for ordinary agent→operator
+  messaging. The invariant is asymmetric with a relay-wide *requester* reaching
+  *into* a bundle: there the bundle is not the requester's home namespace, so
+  that direction does require `all:all` (a `@GLOBAL` operator listing or
+  messaging a bundle is the privileged-operator-preset case above). The
+  asymmetry — and a possible future `home+` scope that would fold the `GLOBAL`
+  namespace into a principal's home tier — is tracked in `todos/relay/75`.
 - `Send` cross-bundle delivery requires `all:all`. Earlier slices left it
   effectively permit-all (the old `authorize_send` used a `self` floor that any
   configured `send` scope cleared); the spine corrects this to match the
