@@ -14,8 +14,8 @@ The system SHALL expose the following MCP tools for relay MVP:
 - `raww`
 - `grant`
 
-The relocked pre-stable MCP surface removes `list.sessions` with no
-compatibility alias.
+The relocked pre-stable MCP surface uses `list.principals` with no
+compatibility alias for the prior `list.sessions` shape.
 
 #### Scenario: Advertise relocked list meta-tool
 
@@ -37,7 +37,7 @@ tool/command discovery metadata and JSON argument schemas.
 
 - no query (or `query="agentmux"`) returns namespace-level tool inventory
 - `query="list"` returns list meta-tool command catalog
-- `query="list.sessions"` returns exact `list` command argument schema and
+- `query="list.principals"` returns exact `list` command argument schema and
   invoke shape
 - `query="send"` or `query="look"` or `query="raww"` returns exact tool
   argument schemas and invoke shapes
@@ -59,14 +59,14 @@ Unknown help queries SHALL fail fast with `validation_invalid_params`.
 
 - **WHEN** an MCP client calls `help` with `query="list"`
 - **THEN** the response lists supported `list` commands
-- **AND** includes `list.sessions`
+- **AND** includes `list.principals`
 
-#### Scenario: Return list.sessions argument schema
+#### Scenario: Return list.principals argument schema
 
-- **WHEN** an MCP client calls `help` with `query="list.sessions"`
+- **WHEN** an MCP client calls `help` with `query="list.principals"`
 - **THEN** the response includes JSON schema for command-scoped `args`
 - **AND** includes canonical invoke shape with top-level tool `list`
-- **AND** includes `command="sessions"`
+- **AND** includes `command="principals"`
 
 #### Scenario: Return grant meta-tool command catalog
 
@@ -82,18 +82,6 @@ Unknown help queries SHALL fail fast with `validation_invalid_params`.
 - **AND** includes canonical invoke shape with top-level tool `grant`
 - **AND** includes `command="list"`
 
-#### Scenario: Return grant.resolve argument schema
-
-- **WHEN** an MCP client calls `help` with `query="grant.resolve"`
-- **THEN** the response includes JSON schema for command-scoped `args`
-- **AND** includes canonical invoke shape with top-level tool `grant`
-- **AND** includes `command="resolve"`
-
-#### Scenario: Reject unknown help query
-
-- **WHEN** an MCP client calls `help` with unknown `query`
-- **THEN** MCP returns `validation_invalid_params`
-
 ### Requirement: Manual Bundle Configuration for MVP
 
 The system SHALL treat bundle definitions as operator-managed configuration in
@@ -106,7 +94,8 @@ MVP and SHALL NOT expose MCP tools that mutate bundle configuration.
 
 ### Requirement: Recipient Listing Contract
 
-`list` with `command="sessions"` SHALL return bundle session listing payloads.
+`list` with `command="principals"` SHALL return bundle principal listing
+payloads.
 
 Single-bundle successful responses SHALL include:
 
@@ -120,9 +109,9 @@ Single-bundle successful responses SHALL include:
   - `state_reason` (optional)
   - `startup_failure_count` (required integer)
   - `recent_startup_failures` (required array; may be empty)
-  - `sessions[]`
+  - `principals[]`
 
-Each session entry SHALL include:
+Each `principals[]` entry SHALL include:
 
 - `id`
 - `name` (optional)
@@ -145,7 +134,7 @@ successful list payload.
 
 #### Scenario: Include startup health and startup-failure fields in successful list payload
 
-- **WHEN** `list` with `command="sessions"` succeeds for one bundle
+- **WHEN** `list` with `command="principals"` succeeds for one bundle
 - **THEN** MCP response includes required startup health/state fields
 - **AND** includes required startup failure history fields
 
@@ -160,7 +149,7 @@ successful list payload.
 - **WHEN** requester identity is valid
 - **AND** policy denies list visibility for requester
 - **THEN** MCP returns `authorization_forbidden`
-- **AND** does not return successful `bundle.sessions[]` output
+- **AND** does not return successful `bundle.principals[]` output
 
 ### Requirement: Send Target Selection
 
@@ -454,36 +443,59 @@ MCP SHALL NOT parse or reinterpret ACP `snapshot_entries` content.
 
 ### Requirement: MCP List Sessions Selectors
 
-`list` request parameters for MVP sessions listing SHALL be:
+`list` request parameters for principals listing SHALL be:
 
-- `command` (required, must equal `"sessions"`)
+- `command` (required, must equal `"principals"`)
 - `args` (optional object)
-  - `bundle_name` (optional)
-  - `all` (optional bool; default `false`)
+  - `namespace` (optional string)
 
-`bundle_name` and `all=true` SHALL be mutually exclusive.
-If neither selector is provided, MCP SHALL resolve associated/home bundle.
+`namespace` SHALL select the listing scope:
+
+- omitted or null → associated/home bundle (default)
+- a bundle name → that specific bundle
+- `"GLOBAL"` → relay-wide principals
+- `"*"` → adapter-owned fan-out across all namespaces
+
+`"*"` SHALL be the only fan-out token; no `"ALL"` alias SHALL be accepted.
+`"EXTERNAL"` and `"RELAY"` SHALL NOT be valid `list` selectors. The prior
+`bundle_name` and `all` selectors are removed with no compatibility alias.
 
 #### Scenario: Reject missing or unsupported list command
 
-- **WHEN** caller omits `command` or provides a value other than `"sessions"`
+- **WHEN** caller omits `command` or provides a value other than `"principals"`
 - **THEN** MCP rejects request with `validation_invalid_params`
 
-#### Scenario: Reject conflicting list selectors
+#### Scenario: Resolve home bundle when namespace omitted
 
-- **WHEN** caller provides `bundle_name` and `all=true`
+- **WHEN** caller omits `namespace`
+- **THEN** MCP resolves the associated/home bundle
+
+#### Scenario: Select relay-wide principals with GLOBAL namespace
+
+- **WHEN** caller provides `namespace="GLOBAL"`
+- **THEN** MCP lists relay-wide principals
+
+#### Scenario: Fan out across all namespaces with star token
+
+- **WHEN** caller provides `namespace="*"`
+- **THEN** MCP performs adapter-owned fan-out across all namespaces
+
+#### Scenario: Reject ALL alias as fan-out token
+
+- **WHEN** caller provides `namespace="ALL"`
 - **THEN** MCP rejects request with `validation_invalid_params`
 
 ### Requirement: MCP List Sessions All-Mode Aggregation
 
-When `list` is called with `command="sessions"` and `all=true`, MCP SHALL perform
-adapter-owned fanout in lexicographic bundle-id order and return aggregate
+When `list` is called with `command="principals"` and `namespace="*"`, MCP SHALL
+perform adapter-owned fanout in lexicographic bundle-id order and return aggregate
 payload:
 
 - `schema_version`
 - `bundles[]` (array of canonical single-bundle `bundle` objects)
 
-Relay all-bundle list requests are not used in MVP.
+Relay all-bundle list requests are not used; the relay accepts only a single
+resolved namespace (a bundle name or `GLOBAL`) and never receives `"*"`.
 
 On first `authorization_forbidden` during fanout, MCP SHALL:
 
@@ -493,7 +505,7 @@ On first `authorization_forbidden` during fanout, MCP SHALL:
 
 #### Scenario: Fail fast on first authorization denial in all-mode
 
-- **WHEN** `all=true` fanout encounters first `authorization_forbidden`
+- **WHEN** `namespace="*"` fanout encounters first `authorization_forbidden`
 - **THEN** MCP stops fanout and returns non-aggregate error response
 
 ### Requirement: MCP List Sessions Unreachable Relay Fallback
@@ -510,7 +522,7 @@ If unreachable target is not associated/home bundle, MCP SHALL return
 In single-bundle mode, authorized home-bundle fallback SHALL return canonical
 single-bundle payload shape.
 
-In `all=true` mode, encountering unreachable non-home bundle SHALL fail with
+In `namespace="*"` mode, encountering unreachable non-home bundle SHALL fail with
 `relay_unavailable` and terminate fanout.
 
 Home-bundle fallback startup-failure fields
