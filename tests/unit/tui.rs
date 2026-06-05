@@ -10,97 +10,134 @@ use agentmux::tui::{
 
 #[test]
 fn parses_local_target_identifier() {
-    let resolved = parse_tui_target_identifier("relay", "agentmux").expect("target");
+    let resolved = parse_tui_target_identifier("relay", Some("agentmux")).expect("target");
     assert_eq!(resolved, "relay");
 }
 
 #[test]
 fn rejects_slash_qualified_target_identifier() {
-    let error = parse_tui_target_identifier("agentmux/relay", "agentmux").expect_err("must reject");
+    let error =
+        parse_tui_target_identifier("agentmux/relay", Some("agentmux")).expect_err("must reject");
     assert!(error.to_string().contains("validation_unknown_target"));
 }
 
 #[test]
 fn parses_at_prefixed_target_identifier() {
-    let resolved = parse_tui_target_identifier("@relay", "agentmux").expect("target");
+    let resolved = parse_tui_target_identifier("@relay", Some("agentmux")).expect("target");
     assert_eq!(resolved, "relay");
 }
 
 #[test]
 fn parses_session_at_active_bundle_to_bare_session() {
-    let resolved = parse_tui_target_identifier("relay@agentmux", "agentmux").expect("target");
+    let resolved = parse_tui_target_identifier("relay@agentmux", Some("agentmux")).expect("target");
     assert_eq!(resolved, "relay");
 }
 
 #[test]
 fn parses_session_at_peer_bundle_preserves_canonical_form() {
-    let resolved = parse_tui_target_identifier("relay@other-bundle", "agentmux").expect("target");
+    let resolved =
+        parse_tui_target_identifier("relay@other-bundle", Some("agentmux")).expect("target");
     assert_eq!(resolved, "relay@other-bundle");
 }
 
 #[test]
 fn parses_global_user_target_identifier() {
-    let resolved = parse_tui_target_identifier("operator@GLOBAL", "agentmux").expect("target");
+    let resolved =
+        parse_tui_target_identifier("operator@GLOBAL", Some("agentmux")).expect("target");
     assert_eq!(resolved, "operator@GLOBAL");
 }
 
 #[test]
+fn relay_wide_sender_preserves_bundle_suffix_matching_display_bundle() {
+    // A relay-wide sender (no bound bundle, modelled as `None`) must preserve a
+    // peer-bundle suffix even when it equals the TUI's displayed active bundle.
+    // The relay derives Send routing from this suffix; stripping it would strand
+    // the target with no routing namespace.
+    let resolved = parse_tui_target_identifier("qa-partner@agentmux-qa", None).expect("target");
+    assert_eq!(resolved, "qa-partner@agentmux-qa");
+}
+
+#[test]
+fn relay_wide_sender_preserves_all_bundle_suffixes() {
+    let resolved = parse_tui_target_identifier("relay@agentmux", None).expect("target");
+    assert_eq!(resolved, "relay@agentmux");
+}
+
+#[test]
+fn relay_wide_sender_leaves_bare_target_unqualified() {
+    let resolved = parse_tui_target_identifier("relay", None).expect("target");
+    assert_eq!(resolved, "relay");
+}
+
+#[test]
 fn parses_at_prefixed_canonical_target_identifier() {
-    let resolved = parse_tui_target_identifier("@relay@other-bundle", "agentmux").expect("target");
+    let resolved =
+        parse_tui_target_identifier("@relay@other-bundle", Some("agentmux")).expect("target");
     assert_eq!(resolved, "relay@other-bundle");
 }
 
 #[test]
 fn rejects_empty_session_in_canonical_target() {
-    let error = parse_tui_target_identifier("@@relay", "agentmux").expect_err("must reject");
+    let error = parse_tui_target_identifier("@@relay", Some("agentmux")).expect_err("must reject");
     assert!(error.to_string().contains("validation_unknown_target"));
 }
 
 #[test]
 fn rejects_empty_bundle_in_canonical_target() {
-    let error = parse_tui_target_identifier("relay@", "agentmux").expect_err("must reject");
+    let error = parse_tui_target_identifier("relay@", Some("agentmux")).expect_err("must reject");
     assert!(error.to_string().contains("validation_unknown_target"));
 }
 
 #[test]
 fn rejects_multiple_at_separators_in_target_identifier() {
-    let error = parse_tui_target_identifier("relay@one@two", "agentmux").expect_err("must reject");
+    let error =
+        parse_tui_target_identifier("relay@one@two", Some("agentmux")).expect_err("must reject");
     assert!(error.to_string().contains("validation_unknown_target"));
 }
 
 #[test]
 fn rejects_slash_in_bundle_qualifier() {
-    let error = parse_tui_target_identifier("relay@bun/dle", "agentmux").expect_err("must reject");
+    let error =
+        parse_tui_target_identifier("relay@bun/dle", Some("agentmux")).expect_err("must reject");
     assert!(error.to_string().contains("validation_unknown_target"));
 }
 
 #[test]
 fn merge_dedupes_canonical_and_bare_intra_bundle_targets() {
-    let targets = merge_tui_targets("relay, relay@agentmux", "agentmux").expect("targets");
+    let targets = merge_tui_targets("relay, relay@agentmux", Some("agentmux")).expect("targets");
     assert_eq!(targets, vec!["relay"]);
 }
 
 #[test]
 fn merge_preserves_peer_bundle_target_alongside_local() {
-    let targets = merge_tui_targets("relay, mcp@other-bundle", "agentmux").expect("targets");
+    let targets = merge_tui_targets("relay, mcp@other-bundle", Some("agentmux")).expect("targets");
     assert_eq!(targets, vec!["relay", "mcp@other-bundle"]);
 }
 
 #[test]
+fn merge_relay_wide_sender_preserves_cross_bundle_target() {
+    // Regression for todos/tui/46: a relay-wide TUI principal sending to a peer
+    // bundle must keep the `@bundle` suffix so the relay can resolve routing,
+    // even when the target bundle equals the displayed active bundle.
+    let targets = merge_tui_targets("qa-partner@agentmux-qa", None).expect("targets");
+    assert_eq!(targets, vec!["qa-partner@agentmux-qa"]);
+}
+
+#[test]
 fn merges_to_field_into_deterministic_targets() {
-    let targets = merge_tui_targets("relay, mcp, tui", "agentmux").expect("targets");
+    let targets = merge_tui_targets("relay, mcp, tui", Some("agentmux")).expect("targets");
     assert_eq!(targets, vec!["relay", "mcp", "tui"]);
 }
 
 #[test]
 fn merge_rejects_slash_qualified_target() {
-    let error = merge_tui_targets("relay, agentmux/mcp", "agentmux").expect_err("must fail");
+    let error = merge_tui_targets("relay, agentmux/mcp", Some("agentmux")).expect_err("must fail");
     assert!(error.to_string().contains("validation_unknown_target"));
 }
 
 #[test]
 fn merge_rejects_empty_target_set() {
-    let error = merge_tui_targets("", "agentmux").expect_err("must fail");
+    let error = merge_tui_targets("", Some("agentmux")).expect_err("must fail");
     assert!(error.to_string().contains("validation_empty_targets"));
 }
 
