@@ -74,7 +74,11 @@ picker (`F5`) are overlays available in both modes.
 - `@`-prefixed tokens trigger immediate completion proposals after one suffix character,
 - overlays:
   - help,
-  - recipient picker,
+  - recipient picker: lists routable recipients with a one-line hint strip at
+    the foot showing the active keybindings. The `Enter` hint is
+    context-sensitive — it reads `Insert into To` in Communication mode and
+    `Open (look+raww)` in Interaction mode — alongside `Esc` Close and
+    `Up/Down` Move.
   - delivery + permission events,
   - bundle picker (F5): active bundle switching — browses
     `available_bundles` (sourced from `load_bundle_group_memberships` at TUI
