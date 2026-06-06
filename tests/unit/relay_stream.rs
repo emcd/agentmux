@@ -173,6 +173,33 @@ send = "{send}"
     .expect("write policies configuration");
 }
 
+// Overwrites the policy artifact so the `default` preset's `raww` control uses
+// the given scope. A relay-wide (`@GLOBAL`) principal reaching a bundle is
+// cross-namespace, so `all:all` is required there; `all:home` permits only
+// same-bundle raww.
+fn write_policies_with_raww(configuration_root: &Path, raww: &str) {
+    std::fs::write(
+        configuration_root.join("policies.toml"),
+        format!(
+            r#"
+format-version = 1
+default = "default"
+
+[[policies]]
+id = "default"
+
+[policies.controls]
+find = "self"
+list = "all:home"
+look = "self"
+raww = "{raww}"
+send = "all:home"
+"#
+        ),
+    )
+    .expect("write policies configuration");
+}
+
 // Overwrites the policy artifact so the `default` preset's `list` control uses
 // the given scope. Cross-bundle list requires `all:all`; `all:home` permits only
 // same-bundle enumeration.

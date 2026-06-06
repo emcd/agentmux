@@ -241,13 +241,16 @@ exported from `src/relay/mod.rs`.
   `Send`'s suffix inference: a bound session routes within its bound bundle, and
   a relay-wide (`@GLOBAL`) principal derives the routing bundle from the target's
   `@<bundle>` suffix, so a `@GLOBAL` operator can raww into a bundle target
-  (`issues/relay/24`). Unlike `Send`, `raww` authorizes through a flat scope
-  check (`authorize_raww` → `authorize_scope`), not the cross-bundle route spine,
-  so its `all:home`-capped control gates it without an `all:all` tier ever
-  applying. A bound session still cannot raww into a peer bundle — its routing
-  bundle is fixed to its binding and the peer target is not one of its members —
-  so true cross-bundle (bundle-A → bundle-B) raww remains blocked
-  (`todos/relay/76`).
+  (`issues/relay/24`). `Raww` authorizes through the same uniform route spine as
+  `Send`/`Look` (`authorize_route` / `required_tier`): the requester's `raww`
+  control resolves in its dispatch bundle, a same-bundle target stays at
+  `all:home`, and a cross-namespace reach — including a `@GLOBAL` operator
+  reaching into a bundle — requires `all:all`. The `raww` policy control accepts
+  `all:all` (the shipped `operator` preset sets it, since a `@GLOBAL` operator's
+  home namespace holds only relay-wide UI sessions, which reject raww — so every
+  usable raww target is cross-namespace). A bound session reaching a peer bundle
+  is the same cross-namespace case and likewise needs `all:all`; true
+  bundle-A → bundle-B raww routing remains a separate effort (`todos/relay/76`).
 
 #### Authorization model: origin-side capability, no target-side filter
 

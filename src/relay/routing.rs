@@ -26,6 +26,7 @@ pub(super) enum Capability {
     Look,
     Send,
     List,
+    Raww,
 }
 
 impl Capability {
@@ -36,6 +37,7 @@ impl Capability {
             Self::Look => "look.inspect",
             Self::Send => "send.deliver",
             Self::List => "list.read",
+            Self::Raww => "raww.write",
         }
     }
 }

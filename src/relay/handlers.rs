@@ -15,9 +15,8 @@ use crate::{
 };
 
 use super::authorization::{
-    AuthorizationContext, authorize_raww, authorize_route, authorize_updown,
-    grant_authorized_ui_sessions, has_ui_session, load_authorization_context,
-    permission_max_pending, ui_session_display_name,
+    AuthorizationContext, authorize_route, authorize_updown, grant_authorized_ui_sessions,
+    has_ui_session, load_authorization_context, permission_max_pending, ui_session_display_name,
 };
 use super::connection::BundleCatalog;
 use super::delivery::{
@@ -1013,11 +1012,33 @@ fn handle_raww(
             })),
         ));
     };
-    authorize_raww(
+    // Raww authorizes through the uniform routing/authz spine like Send and Look:
+    // the requester's `raww` control is resolved in its dispatch (home) bundle,
+    // and the single target's relationship sets the required tier. A relay-wide
+    // (`@GLOBAL`) requester reaching into a bundle is cross-namespace and so
+    // requires `all:all`; a same-bundle target stays at `all:home`, and a
+    // self-target floors at `self`.
+    let route = ResolvedRoute {
+        dispatch_bundle_name: requester_home_namespace(
+            sender.session_id.as_str(),
+            bundle.bundle_name.as_str(),
+        )
+        .to_string(),
+        requester_session: sender.session_id.clone(),
+        targets: vec![RouteTarget {
+            bundle_name: bundle.bundle_name.clone(),
+            session_id: Some(target_member.id.clone()),
+            relay_wide: false,
+        }],
+    };
+    authorize_route(
         bundle,
         authorization,
-        sender.session_id.as_str(),
-        target_member.id.as_str(),
+        OperationProfile {
+            capability: Capability::Raww,
+            addressing: Addressing::SingleTarget,
+        },
+        &route,
     )?;
 
     let transport = match &target_member.target {

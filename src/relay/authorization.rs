@@ -458,6 +458,7 @@ fn parse_policy_controls(
             PolicyScope::None,
             PolicyScope::SelfOnly,
             PolicyScope::AllHome,
+            PolicyScope::AllAll,
         ],
         "validation_invalid_policy_scope",
         "authorization policy raww control uses unsupported scope value",
@@ -752,7 +753,7 @@ pub(super) fn authorize_relay_action(
 }
 
 /// Uniform, fully data-driven authorization for the target operations
-/// (`look`, `send`, `list`).
+/// (`look`, `send`, `list`, `raww`).
 ///
 /// The requester's controls are always resolved in the dispatch (home) bundle —
 /// a session is a member only of its home bundle, and a peer bundle never
@@ -765,8 +766,9 @@ pub(super) fn authorize_relay_action(
 /// operation whether crossing is allowed. Whether a capability can ever be
 /// configured to the cross-bundle (`all:all`) tier is governed solely by the
 /// policy schema's per-capability allowed-scope set (`parse_policy_controls`) —
-/// `raww`, for instance, is capped at `all:home` there, so it can never satisfy
-/// the cross-bundle threshold without a schema change, no code override needed.
+/// `grant` and `updown`, for instance, are capped at `all:home` there, so they
+/// can never satisfy the cross-bundle threshold without a schema change, no code
+/// override needed.
 pub(super) fn authorize_route(
     dispatch_bundle: &BundleConfiguration,
     authorization: &AuthorizationContext,
@@ -805,6 +807,7 @@ fn scope_for_capability(controls: &PolicyControls, capability: Capability) -> Po
         Capability::Look => controls.look,
         Capability::Send => controls.send,
         Capability::List => controls.list,
+        Capability::Raww => controls.raww,
     }
 }
 
@@ -838,32 +841,6 @@ fn tier_denial_reason(minimum: PolicyScope) -> &'static str {
         }
         _ => "policy scope does not permit this access",
     }
-}
-
-pub(super) fn authorize_raww(
-    bundle: &BundleConfiguration,
-    authorization: &AuthorizationContext,
-    requester_session: &str,
-    target_session: &str,
-) -> Result<(), RelayError> {
-    let controls = controls_for_requester(authorization, bundle, requester_session)?;
-    let minimum_scope = if requester_session == target_session {
-        PolicyScope::SelfOnly
-    } else {
-        PolicyScope::AllHome
-    };
-    authorize_scope(
-        controls.raww,
-        minimum_scope,
-        AuthorizationDecisionContext {
-            capability: "raww.write",
-            requester_session,
-            bundle_name: bundle.bundle_name.as_str(),
-            reason: "raww policy scope does not allow target write",
-            target_session: Some(target_session),
-            targets: None,
-        },
-    )
 }
 
 pub(super) fn authorize_grant(

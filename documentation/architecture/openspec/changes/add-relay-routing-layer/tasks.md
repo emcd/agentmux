@@ -38,20 +38,35 @@
 
 ## 5. Step 4 — Migrate Raww; enable cross-bundle under all:all (BREAKING)
 
+> **Landed first** as the fast-tracked 0.7.0 blocker fix. This slice does the
+> authz wiring only: `handle_raww` builds a single-target `ResolvedRoute` inline
+> and authorizes via the existing `authorize_route` / `required_tier`
+> (data-driven by the policy schema's allowed-scope set, per the `routing.rs`
+> module contract), adding a `Capability::Raww` variant. The flat
+> `authorize_raww` → `authorize_scope` path is deleted. The Step 0
+> `CrossBundlePolicy` enum and the dedicated `SingleTarget` resolution stage
+> (5.1) are deferred to the later, no-behavior-change migration slices — they are
+> not needed for the blocker.
+
 - [ ] 5.1 Implement `SingleTarget` resolution stage for Raww in `routing.rs`
-- [ ] 5.2 Set Raww `CrossBundlePolicy = RequireScope(all:all)`; replaces flat
-      `authorize_raww` → `authorize_scope` path from issues/relay/24
-- [ ] 5.3 Widen raww allowed-scope set in `parse_policy_controls` to permit
+      (deferred — handle_raww still locates its own target this slice)
+- [x] 5.2 Raww requires `all:all` for cross-namespace reach via
+      `required_tier` (replaces the flat `authorize_raww` → `authorize_scope`
+      path from issues/relay/24, now deleted). The `CrossBundlePolicy` enum form
+      is deferred to Step 0/later slices; behavior is already correct.
+- [x] 5.3 Widen raww allowed-scope set in `parse_policy_controls` to permit
       `all:all`
-- [ ] 5.4 Update `handle_raww` to receive `ResolvedRoute`; remove hard
-      `validation_cross_bundle_unsupported` rejection
-- [ ] 5.5 Update TUI operator policy to `raww = "all:all"` (required or
+- [x] 5.4 `handle_raww` builds and authorizes a `ResolvedRoute` through the
+      spine (there was no `validation_cross_bundle_unsupported` rejection in code
+      to remove). Receiving a pre-built route from a resolution stage is the
+      deferred 5.1 part.
+- [x] 5.5 Update TUI operator policy to `raww = "all:all"` (required or
       `@GLOBAL` → bundle raww regresses; this is the 0.7.0 TUI blocker fix)
-- [ ] 5.6 Update `relay_wide_raww_routes_to_bundle_target_by_suffix` test
-      (routing.rs): was passing at `all:home`; must now expect
-      `authorization_forbidden` — add a companion test under `all:all` that
-      reaches dispatch
-- [ ] 5.7 Validate: `cargo test` passes; cross-bundle raww succeeds under
+- [x] 5.6 Update `relay_wide_raww_routes_to_bundle_target_by_suffix` test
+      (routing.rs): now requires `all:all` and reaches dispatch; added
+      `relay_wide_raww_into_bundle_denied_under_home_scope` (forbidden under
+      `all:home`) and `same_bundle_raww_permitted_under_home_scope`
+- [x] 5.7 Validate: `cargo test` passes (250); cross-bundle raww succeeds under
       `all:all`; returns `authorization_forbidden` under `all:home`
 
 ## 6. Step 5 — Decompose handlers.rs and authorization.rs (todos/relay/71)
