@@ -657,6 +657,10 @@ fn full_requester_principal_id(registration: &StreamRegistration) -> String {
 ///   bundle, routes to the bundle named by the first `@<bundle>` target suffix;
 ///   a relay-wide sender whose targets are all bare (no suffix) has no routing
 ///   context and is rejected with `validation_missing_routing_namespace`.
+/// - `Raww` mirrors `Send` for its single target: a session sender routes within
+///   its bound bundle, and a relay-wide sender derives the bundle from the
+///   target's `@<bundle>` suffix. A bare or relay-wide target names no bundle, so
+///   routing falls back to the wire `namespace` selector below.
 /// - All other operations use the wire `namespace` selector: a bundle name does
 ///   a catalog lookup, `EXTERNAL`/`RELAY` are reserved for relay-internal
 ///   routing and rejected with `validation_unsupported_namespace`, and an absent
@@ -669,8 +673,19 @@ fn resolve_effective_bundle(
     namespace: Option<&str>,
     bound_bundle: Option<&BundleRuntimePaths>,
 ) -> Result<BundleRuntimePaths, RelayError> {
-    if let RelayRequest::Send { targets, .. } = request {
-        return resolve_send_routing_bundle(bundle_catalog, targets, bound_bundle);
+    match request {
+        RelayRequest::Send { targets, .. } => {
+            return resolve_send_routing_bundle(bundle_catalog, targets, bound_bundle);
+        }
+        RelayRequest::Raww { target_session, .. } => {
+            return resolve_raww_routing_bundle(
+                bundle_catalog,
+                target_session,
+                namespace,
+                bound_bundle,
+            );
+        }
+        _ => {}
     }
     resolve_namespace_routing_bundle(bundle_catalog, namespace, bound_bundle)
 }
@@ -704,6 +719,30 @@ fn resolve_send_routing_bundle(
         "send from a relay-wide principal requires at least one bundle-qualified target",
         None,
     ))
+}
+
+/// Resolves the routing bundle for a `Raww` from its single target's bundle
+/// suffix (suffix-based routing), mirroring `Send`.
+fn resolve_raww_routing_bundle(
+    bundle_catalog: &BundleCatalog,
+    target_session: &str,
+    namespace: Option<&str>,
+    bound_bundle: Option<&BundleRuntimePaths>,
+) -> Result<BundleRuntimePaths, RelayError> {
+    if let Some(bound) = bound_bundle {
+        // A session sender routes within its bound bundle, exactly as `Send`
+        // does; the target's namespace is reconciled downstream.
+        return Ok(bound.clone());
+    }
+    // A relay-wide sender derives its routing bundle from the bundle-qualified
+    // target. A bare or relay-wide target names no bundle to route against, so
+    // fall back to the wire namespace selector (and its error path).
+    if let Some(bundle_name) = bundle_namespace_suffix(target_session) {
+        return bundle_catalog
+            .lookup(bundle_name)
+            .ok_or_else(|| unknown_bundle_error(bundle_name));
+    }
+    resolve_namespace_routing_bundle(bundle_catalog, namespace, bound_bundle)
 }
 
 /// Resolves the routing bundle for namespace-selected operations from the wire
