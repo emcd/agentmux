@@ -43,10 +43,11 @@ therefore does require `all:all`.
   `targets = ["agent@bundle-a"]`
 - **THEN** relay routes to bundle `bundle-a` and delivers to `agent`
 
-#### Scenario: @GLOBAL principal rawws to bundle session
+#### Scenario: @GLOBAL principal rawws to bundle session under all:all
 
 - **WHEN** a relay-wide principal issues a Raww request with
   `target_session = "agent@bundle-a"`
+- **AND** the requester's configured `raww` scope is `all:all`
 - **THEN** relay routes to bundle `bundle-a` and delivers to `agent`
 
 #### Scenario: Bare target defaults to sender's bound bundle
