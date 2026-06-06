@@ -64,6 +64,12 @@ cross-bundle reach.
 - **AND** the requester's configured `raww` scope is `all:home` or narrower
 - **THEN** relay returns `authorization_forbidden`
 
+Note: for a relay-wide (`@GLOBAL`) principal, `all:home` covers only the
+`GLOBAL` namespace, which is populated exclusively by UI sessions. UI sessions
+are rejected by `handle_raww` as an unsupported target class, so `all:home`
+confers zero effective raww reach. `all:all` is the only meaningful tier for
+cross-bundle raww from a relay-wide principal.
+
 #### Scenario: Cross-bundle Raww permitted under all:all
 
 - **WHEN** a requester issues a Raww request to a target in a different bundle
