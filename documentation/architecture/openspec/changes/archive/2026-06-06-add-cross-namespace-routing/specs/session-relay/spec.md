@@ -72,16 +72,3 @@ targets or to `@<bundle>` targets in any known bundle.
 
 - **WHEN** a sender includes a target with `@EXTERNAL` or `@RELAY` suffix
 - **THEN** relay returns `validation_unsupported_namespace`
-
-## REMOVED Requirements
-
-### Requirement: Mixed-Namespace Send Rejection
-
-**Reason**: Superseded by cross-namespace fan-out. Mixed-namespace sends
-(`@GLOBAL` + `@<bundle>` in one request) are now fully supported; the relay
-delivers to each target in its namespace. `validation_conflicting_namespaces`
-is retired.
-
-**Migration**: No action required. Callers that previously received
-`validation_conflicting_namespaces` will now receive successful delivery to
-all targets.

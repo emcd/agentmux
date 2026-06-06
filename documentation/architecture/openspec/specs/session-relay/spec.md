@@ -2602,27 +2602,21 @@ from the `@<namespace>` suffix of the target's principal ID:
 
 - Target with `@GLOBAL` suffix → relay-wide registry (`RegistryKey::RelayWide`)
 - Target with `@<bundle>` suffix → bundle registry for `<bundle>`
+- Target with `@EXTERNAL` or `@RELAY` suffix → `validation_unsupported_namespace`
 - Bare target (no suffix) → sender's bound bundle registry; error if sender
   is relay-wide and has no bound bundle
 
 The relay SHALL NOT require an explicit `namespace` field from the client to
-route to relay-wide (`@GLOBAL`) targets. Clients specify targets as
-fully-qualified principal IDs; the relay derives the registry from the suffix.
+route to relay-wide (`@GLOBAL`) or cross-bundle (`@<bundle>`) targets. Clients
+specify targets as fully-qualified principal IDs; the relay derives the registry
+from the suffix.
 
-If a single `Send` request mixes relay-wide (`@GLOBAL`) and bundle-session
-targets, the relay SHALL return `validation_conflicting_namespaces`. Cross-
-namespace fan-out in one request is not supported in this slice.
+A single `Send` request MAY mix relay-wide (`@GLOBAL`) and bundle-session
+targets. The relay SHALL validate all targets before any delivery and SHALL fan
+out delivery to each target in its respective namespace independently.
 
 Any authenticated session (bundle-bound or relay-wide) MAY send to `@GLOBAL`
-targets. This is a routing invariant, not a relaxation of the scope ladder: a
-relay-wide (`@GLOBAL`) target is delivered through the session registry (keyed by
-`principal_id`) rather than by crossing into a peer bundle, so it classifies at
-the `all:home` tier under the Uniform Cross-Bundle Authorization Model and never
-demands `all:all`. This holds whether the sender is bundle-bound (an agent
-replying to the operator) or itself relay-wide (one relay-wide principal
-messaging another). It is asymmetric with a relay-wide *requester* reaching
-*into* a bundle, which the uniform model classifies as cross-namespace and which
-therefore does require `all:all`.
+targets or to `@<bundle>` targets in any known bundle.
 
 #### Scenario: Bundle-bound agent sends to @GLOBAL operator
 
@@ -2637,6 +2631,14 @@ therefore does require `all:all`.
   `targets = ["agent@bundle-a"]`
 - **THEN** relay routes to bundle `bundle-a` and delivers to `agent`
 
+#### Scenario: Send fans out across multiple namespaces
+
+- **WHEN** a sender includes targets from different namespaces in one `Send`
+  (e.g., `["agent@bundle-b", "operator@GLOBAL"]`)
+- **AND** all targets are registered in their respective namespaces
+- **THEN** relay delivers the message to each target independently and returns
+  per-target results in `RelayResponse::Send`
+
 #### Scenario: Bare target defaults to sender's bound bundle
 
 - **WHEN** a bundle-bound session sends `Send` with `targets = ["agent"]`
@@ -2648,17 +2650,23 @@ therefore does require `all:all`.
 - **WHEN** a relay-wide principal sends `Send` with a bare target (no suffix)
 - **THEN** relay returns `validation_missing_routing_namespace`
 
-#### Scenario: Mixed relay-wide and bundle targets rejected
-
-- **WHEN** a sender includes both an `@GLOBAL` target and a `@<bundle>` target
-  in the same `Send` request
-- **THEN** relay returns `validation_conflicting_namespaces`
-
 #### Scenario: Unknown @GLOBAL target
 
 - **WHEN** a sender targets a principal ID with `@GLOBAL` suffix that is not
   registered in the relay-wide registry
 - **THEN** relay returns `validation_unknown_target`
+
+#### Scenario: Unknown @<bundle> target
+
+- **WHEN** a sender targets a principal ID with `@<bundle>` suffix where
+  `<bundle>` is not a configured bundle, or the bare session ID is not a
+  member of that bundle
+- **THEN** relay returns `validation_unknown_target`
+
+#### Scenario: @EXTERNAL or @RELAY target rejected
+
+- **WHEN** a sender includes a target with `@EXTERNAL` or `@RELAY` suffix
+- **THEN** relay returns `validation_unsupported_namespace`
 
 ### Requirement: GLOBAL Namespace List
 
