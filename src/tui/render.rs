@@ -252,9 +252,7 @@ fn interaction_raww_pane_area(area: Rect) -> Rect {
 fn render_interaction_target_header(frame: &mut Frame, area: Rect, state: &AppState) {
     let label = match state.look_target.as_deref() {
         Some(target) => format!("  Interaction target: {target}  "),
-        None => {
-            "  Interaction target: (none) — press F2 to choose a session, then l or w  ".to_string()
-        }
+        None => "  Interaction target: (none) — press F2 to choose a session  ".to_string(),
     };
     let paragraph = Paragraph::new(Line::from(Span::styled(
         label,
