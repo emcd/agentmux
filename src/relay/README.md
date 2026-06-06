@@ -237,10 +237,17 @@ exported from `src/relay/mod.rs`.
   tier check is `GLOBAL`, not that bundle.
 - Unknown peers surface as `validation_unknown_bundle` and unknown peer sessions
   as `validation_unknown_target`. The non-stream entry point carries an empty
-  catalog, so it stays confined to same-bundle operations. `Raww` remains
-  intra-bundle: the policy schema caps the `raww` control at `all:home`, so it
-  can never satisfy the cross-bundle `all:all` threshold — no code override is
-  involved.
+  catalog, so it stays confined to same-bundle operations. `Raww` routing mirrors
+  `Send`'s suffix inference: a bound session routes within its bound bundle, and
+  a relay-wide (`@GLOBAL`) principal derives the routing bundle from the target's
+  `@<bundle>` suffix, so a `@GLOBAL` operator can raww into a bundle target
+  (`issues/relay/24`). Unlike `Send`, `raww` authorizes through a flat scope
+  check (`authorize_raww` → `authorize_scope`), not the cross-bundle route spine,
+  so its `all:home`-capped control gates it without an `all:all` tier ever
+  applying. A bound session still cannot raww into a peer bundle — its routing
+  bundle is fixed to its binding and the peer target is not one of its members —
+  so true cross-bundle (bundle-A → bundle-B) raww remains blocked
+  (`todos/relay/76`).
 
 #### Authorization model: origin-side capability, no target-side filter
 

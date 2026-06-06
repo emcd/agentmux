@@ -105,6 +105,108 @@ fn relay_wide_operator_send(
     response
 }
 
+/// Connects as the bundle's `@GLOBAL` operator (a relay-wide principal with no
+/// bound bundle), sends one `raww` request to the given target, and returns the
+/// response frame.
+fn relay_wide_operator_raww(
+    configuration_root: &Path,
+    bundle_paths: &BundleRuntimePaths,
+    bundle_name: &str,
+    target: &str,
+) -> Value {
+    let (mut client, join) = spawn_relay_connection(configuration_root, bundle_paths);
+    let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
+    let operator_id = global_user_id(bundle_name);
+    send_json(
+        &mut client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "principal_id": operator_id,
+            "identity_token": "socket-trust",
+        }),
+    );
+    assert_eq!(read_json(&mut reader)["frame"], "hello_ack");
+    send_json(
+        &mut client,
+        json!({
+            "frame": "request",
+            "request_id": "req-1",
+            "request": {
+                "operation": "raww",
+                "requester_session": operator_id,
+                "target_session": target,
+                "text": "operator raw input",
+            },
+        }),
+    );
+    let mut response = read_json(&mut reader);
+    while response["frame"] != "response" {
+        response = read_json(&mut reader);
+    }
+    shutdown_stream(&client, "shutdown operator stream");
+    join.join().expect("join relay thread");
+    response
+}
+
+/// issues/relay/24: a relay-wide (`@GLOBAL`) principal raww's to a bundle target
+/// named by its `@<bundle>` suffix. The relay infers the routing bundle from the
+/// single target's suffix, mirroring `Send`, instead of rejecting with
+/// `validation_missing_routing_namespace`. Routing and authorization succeed, so
+/// the request reaches dispatch (and fails there only because the target has no
+/// live pane in this harness).
+#[test]
+fn relay_wide_raww_routes_to_bundle_target_by_suffix() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "party_relay_wide_raww_to_bundle";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_root, "default", bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+
+    let response = relay_wide_operator_raww(
+        &configuration_root,
+        &bundle_paths,
+        bundle_name,
+        &format!("alpha@{bundle_name}"),
+    );
+
+    assert_eq!(response["response"]["kind"], "error");
+    // Routing resolved the bundle and authorization passed; the only remaining
+    // failure is the absent tmux pane in this harness. The pre-fix routing
+    // rejection (`validation_missing_routing_namespace`) must not appear.
+    assert_ne!(
+        response["response"]["error"]["code"],
+        "validation_missing_routing_namespace"
+    );
+    assert_eq!(
+        response["response"]["error"]["code"],
+        "runtime_transport_write_failed"
+    );
+}
+
+/// issues/relay/24 (companion): a relay-wide principal whose raww target is bare
+/// (no `@<bundle>` suffix) names no routing bundle, so it still falls through to
+/// the namespace-selector error path and is rejected.
+#[test]
+fn relay_wide_raww_with_bare_target_is_rejected() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "party_relay_wide_raww_bare";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_root, "default", bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+
+    let response =
+        relay_wide_operator_raww(&configuration_root, &bundle_paths, bundle_name, "alpha");
+
+    assert_eq!(response["response"]["kind"], "error");
+    assert_eq!(
+        response["response"]["error"]["code"],
+        "validation_missing_routing_namespace"
+    );
+}
+
 #[test]
 fn request_namespace_external_is_rejected_as_reserved() {
     let temporary = TempDir::new().expect("temporary directory");
