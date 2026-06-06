@@ -149,18 +149,62 @@ fn relay_wide_operator_raww(
     response
 }
 
-/// issues/relay/24: a relay-wide (`@GLOBAL`) principal raww's to a bundle target
-/// named by its `@<bundle>` suffix. The relay infers the routing bundle from the
-/// single target's suffix, mirroring `Send`, instead of rejecting with
-/// `validation_missing_routing_namespace`. Routing and authorization succeed, so
-/// the request reaches dispatch (and fails there only because the target has no
-/// live pane in this harness).
+/// Connects as a bundle-bound `alpha` session and sends one `raww` request to a
+/// same-bundle target, returning the response frame.
+fn bundle_session_raww(
+    configuration_root: &Path,
+    bundle_paths: &BundleRuntimePaths,
+    bundle_name: &str,
+    target: &str,
+) -> Value {
+    let (mut client, join) = spawn_relay_connection(configuration_root, bundle_paths);
+    let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
+    send_json(
+        &mut client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "principal_id": format!("alpha@{bundle_name}"),
+            "identity_token": "socket-trust",
+        }),
+    );
+    assert_eq!(read_json(&mut reader)["frame"], "hello_ack");
+    send_json(
+        &mut client,
+        json!({
+            "frame": "request",
+            "request_id": "req-1",
+            "request": {
+                "operation": "raww",
+                "requester_session": "alpha",
+                "target_session": target,
+                "text": "alpha raw input",
+            },
+        }),
+    );
+    let mut response = read_json(&mut reader);
+    while response["frame"] != "response" {
+        response = read_json(&mut reader);
+    }
+    shutdown_stream(&client, "shutdown session stream");
+    join.join().expect("join relay thread");
+    response
+}
+
+/// A relay-wide (`@GLOBAL`) principal rawws to a bundle target named by its
+/// `@<bundle>` suffix. The relay infers the routing bundle from the single
+/// target's suffix (mirroring `Send`) and, under `raww = all:all`, authorizes the
+/// cross-namespace reach: a `@GLOBAL` operator's home is `GLOBAL`, so reaching
+/// into a bundle is cross-namespace and requires `all:all`. Routing and
+/// authorization succeed, so the request reaches dispatch (and fails there only
+/// because the target has no live pane in this harness).
 #[test]
 fn relay_wide_raww_routes_to_bundle_target_by_suffix() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_relay_wide_raww_to_bundle";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_root, "default", bundle_name);
+    write_policies_with_raww(&configuration_root, "all:all");
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
 
@@ -172,13 +216,63 @@ fn relay_wide_raww_routes_to_bundle_target_by_suffix() {
     );
 
     assert_eq!(response["response"]["kind"], "error");
-    // Routing resolved the bundle and authorization passed; the only remaining
-    // failure is the absent tmux pane in this harness. The pre-fix routing
-    // rejection (`validation_missing_routing_namespace`) must not appear.
-    assert_ne!(
+    // Routing resolved the bundle and authorization passed at `all:all`; the only
+    // remaining failure is the absent tmux pane in this harness. Neither the
+    // routing rejection (`validation_missing_routing_namespace`) nor an authz
+    // denial (`authorization_forbidden`) must appear.
+    assert_eq!(
         response["response"]["error"]["code"],
-        "validation_missing_routing_namespace"
+        "runtime_transport_write_failed"
     );
+}
+
+/// A relay-wide (`@GLOBAL`) principal rawwing into a bundle under only `all:home`
+/// raww scope is denied: reaching a bundle is cross-namespace for a `@GLOBAL`
+/// principal (its home is `GLOBAL`), so it requires `all:all`. Mirrors
+/// `relay_wide_send_into_bundle_denied_under_home_scope`.
+#[test]
+fn relay_wide_raww_into_bundle_denied_under_home_scope() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "party_relay_wide_raww_home_denied";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_root, "default", bundle_name);
+    write_policies_with_raww(&configuration_root, "all:home");
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+
+    let response = relay_wide_operator_raww(
+        &configuration_root,
+        &bundle_paths,
+        bundle_name,
+        &format!("alpha@{bundle_name}"),
+    );
+
+    assert_eq!(response["response"]["kind"], "error");
+    assert_eq!(
+        response["response"]["error"]["code"],
+        "authorization_forbidden"
+    );
+    assert_eq!(
+        response["response"]["error"]["details"]["capability"],
+        "raww.write"
+    );
+}
+
+/// A bundle-bound session rawwing a same-bundle peer is unaffected by the
+/// cross-namespace threshold: it is a home-tier act and succeeds under
+/// `all:home`, reaching dispatch (and failing only on the absent harness pane).
+#[test]
+fn same_bundle_raww_permitted_under_home_scope() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "party_same_bundle_raww_home";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    write_policies_with_raww(&configuration_root, "all:home");
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+
+    let response = bundle_session_raww(&configuration_root, &bundle_paths, bundle_name, "bravo");
+
+    assert_eq!(response["response"]["kind"], "error");
     assert_eq!(
         response["response"]["error"]["code"],
         "runtime_transport_write_failed"

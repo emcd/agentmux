@@ -131,5 +131,7 @@ raww = "self"
     let details = response.details.expect("authorization details");
     assert_eq!(details["capability"], "raww.write");
     assert_eq!(details["requester_session"], "alpha");
-    assert_eq!(details["target_session"], "bravo");
+    // Raww now authorizes through the shared routing spine, which reports the
+    // target with its canonical `<session>@<bundle>` identifier (as Send/Look do).
+    assert_eq!(details["target_session"], "bravo@party");
 }

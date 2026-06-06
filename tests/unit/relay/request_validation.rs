@@ -129,7 +129,7 @@ find = "self"
 list = "all:home"
 look = "self"
 send = "all:home"
-raww = "all:all"
+raww = "all:everything"
 "#,
         ),
     );
