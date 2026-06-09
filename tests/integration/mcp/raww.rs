@@ -220,7 +220,7 @@ async fn raww_maps_authorization_forbidden_and_preserves_capability_label() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn raww_forwards_bound_bundle_on_wire_envelope() {
+async fn raww_omits_wire_envelope_namespace_for_suffix_routing() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -254,7 +254,13 @@ async fn raww_forwards_bound_bundle_on_wire_envelope() {
     let response = harness.call_tool(2, "raww", arguments).await;
     decode_tool_payload(&response);
 
+    // Raww is suffix-routed (mirrors Send): the relay derives the routing bundle
+    // from the target's `@<bundle>` suffix, so the client omits the wire namespace.
     let envelopes = relay.envelopes_for_operation("raww");
     assert_eq!(envelopes.len(), 1);
-    assert_eq!(envelopes[0]["namespace"], BUNDLE_NAME);
+    assert!(
+        envelopes[0].get("namespace").is_none(),
+        "raww must not carry a wire-envelope namespace: {:?}",
+        envelopes[0]
+    );
 }

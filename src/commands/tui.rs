@@ -5,14 +5,14 @@ use std::{
 };
 
 use crate::{
-    configuration::{load_bundle_configuration, load_bundle_group_memberships},
+    configuration::load_bundle_group_memberships,
     runtime::{
         association::WorkspaceContext,
         bootstrap::{BootstrapOptions, bootstrap_relay, resolve_relay_program},
         error::RuntimeError,
         paths::{RelayRuntimePaths, RuntimeRoots},
         starter::ensure_starter_configuration_layout,
-        tui_session::resolve_tui_session_identity,
+        tui_session::resolve_tui_launch_identity,
     },
 };
 
@@ -33,19 +33,23 @@ pub(super) fn run_agentmux_tui(arguments: &[String]) -> Result<(), RuntimeError>
     let workspace = WorkspaceContext::discover(&current_directory)?;
     let roots = shared::resolve_roots(&parsed.runtime, &workspace, None)?;
     ensure_starter_configuration_layout(&roots.configuration_root)?;
-    let resolved_session = resolve_tui_session_identity(
-        &roots.configuration_root,
-        &workspace.workspace_root,
-        parsed.bundle_name.as_deref(),
-        parsed.session_selector.as_deref(),
-    )?;
-    load_bundle_configuration(&roots.configuration_root, &resolved_session.bundle_name)
-        .map_err(shared::map_bundle_load_error)?;
+    // The interactive TUI does not require a default bundle to launch: a fresh
+    // install ships no `default-bundle` (and the example bundle is empty), so an
+    // eager bundle load here would crash startup (issues/tui/11, issues/runtime/3).
+    // Resolve available bundles first and seed the browsing context from the
+    // first one when no bundle is configured; the operator picks from there.
     let available_bundles = load_bundle_group_memberships(&roots.configuration_root)
         .map_err(shared::map_bundle_load_error)?
         .into_iter()
         .map(|membership| membership.bundle_name)
         .collect::<Vec<_>>();
+    let resolved_session = resolve_tui_launch_identity(
+        &roots.configuration_root,
+        &workspace.workspace_root,
+        parsed.bundle_name.as_deref(),
+        parsed.session_selector.as_deref(),
+        available_bundles.first().map(String::as_str),
+    )?;
     let relay_paths = RelayRuntimePaths::resolve(&roots.state_root);
     ensure_tui_relay_available(&roots, &relay_paths)?;
     crate::tui::run(crate::tui::TuiLaunchOptions {

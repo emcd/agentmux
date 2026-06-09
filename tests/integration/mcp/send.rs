@@ -483,7 +483,7 @@ async fn send_omits_sender_attribution_when_relay_omits_it() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn send_forwards_bound_bundle_on_wire_envelope() {
+async fn send_omits_wire_envelope_namespace_for_suffix_routing() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -519,7 +519,13 @@ async fn send_forwards_bound_bundle_on_wire_envelope() {
     let response = harness.call_tool(2, "send", arguments).await;
     decode_tool_payload(&response);
 
+    // Send is suffix-routed: the relay derives the routing bundle from each
+    // target's `@<bundle>` suffix, so the client omits the wire namespace.
     let envelopes = relay.envelopes_for_operation("send");
     assert_eq!(envelopes.len(), 1);
-    assert_eq!(envelopes[0]["namespace"], BUNDLE_NAME);
+    assert!(
+        envelopes[0].get("namespace").is_none(),
+        "send must not carry a wire-envelope namespace: {:?}",
+        envelopes[0]
+    );
 }
