@@ -12,6 +12,7 @@ mod listing;
 mod look;
 mod permissions;
 mod raww;
+mod routed;
 mod send;
 mod sender;
 
@@ -20,4 +21,6 @@ pub(in crate::relay) use dispatch::{
     handle_global_list, handle_identity_admin_request, handle_identity_introspect, handle_request,
 };
 pub(in crate::relay) use listing::handle_list_routed;
+pub(in crate::relay) use look::handle_look_routed;
+pub(in crate::relay) use raww::handle_raww_routed;
 pub(in crate::relay) use send::handle_send_routed;

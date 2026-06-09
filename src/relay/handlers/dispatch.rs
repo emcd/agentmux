@@ -8,24 +8,24 @@ use std::path::Path;
 use crate::configuration::BundleConfiguration;
 
 use super::super::authorization::{AuthorizationContext, authorize_updown};
-use super::super::connection::BundleCatalog;
 use super::super::identity::IdentityIntrospectRights;
 use super::super::stream::{RelayStreamEvent, list_registered_relay_wide_sessions};
 use super::super::{
-    ListedBundle, ListedBundleState, ListedSession, LookRequestContext,
-    PermissionDecisionRequestContext, RawwRequestContext, RelayError, RelayRequest, RelayResponse,
-    RequestPrincipal, SCHEMA_VERSION, bare_session_id, relay_error,
+    ListedBundle, ListedBundleState, ListedSession, PermissionDecisionRequestContext, RelayError,
+    RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION, bare_session_id, relay_error,
 };
-use super::{identity, listing, look, permissions, raww};
+use super::{identity, listing, permissions};
 
+/// Per-bundle dispatcher for the operations whose subject is a bundle the
+/// requester is a member of (`Up`/`Down`, `List`, permission decisions). The
+/// target operations (`Send`/`Look`/`Raww`) are dispatched through their
+/// namespace-centric paths and never reach here.
 pub(in crate::relay) fn handle_request(
     request: RelayRequest,
     bundle: &BundleConfiguration,
     authorization: &AuthorizationContext,
     runtime_directory: &Path,
     principal: Option<RequestPrincipal>,
-    configuration_root: &Path,
-    bundle_catalog: &BundleCatalog,
 ) -> Result<RelayResponse, RelayError> {
     let request = normalize_request_identities(request, bundle.bundle_name.as_str());
     match request {
@@ -44,48 +44,17 @@ pub(in crate::relay) fn handle_request(
             runtime_directory,
             requester_session,
         ),
-        RelayRequest::Send { .. } => Err(relay_error(
-            "internal_unexpected_request",
-            "Send is dispatched through the namespace-centric send path, not the per-bundle dispatcher",
-            None,
-        )),
-        RelayRequest::Look {
-            requester_session,
-            target_session,
-            lines,
-            offset,
-        } => look::handle_look(
-            bundle,
-            authorization,
-            LookRequestContext {
-                requester_session,
-                target_session,
-                lines,
-                offset,
-            },
-            runtime_directory,
-            configuration_root,
-            bundle_catalog,
-            principal.as_ref(),
-        ),
-        RelayRequest::Raww {
-            request_id,
-            requester_session,
-            target_session,
-            text,
-            no_enter,
-        } => raww::handle_raww(
-            bundle,
-            authorization,
-            RawwRequestContext {
-                request_id,
-                requester_session,
-                target_session,
-                text,
-                no_enter,
-            },
-            runtime_directory,
-        ),
+        // Send, Look, and Raww are dispatched through the namespace-centric paths
+        // (`handle_send_routed` / `handle_look_routed` / `handle_raww_routed`),
+        // which resolve the requester in its home namespace rather than a borrowed
+        // dispatch bundle. They never reach the per-bundle dispatcher.
+        RelayRequest::Send { .. } | RelayRequest::Look { .. } | RelayRequest::Raww { .. } => {
+            Err(relay_error(
+                "internal_unexpected_request",
+                "target operation reached the per-bundle dispatcher instead of its namespace-centric path",
+                None,
+            ))
+        }
         RelayRequest::PermissionResolve {
             permission_request_id,
             outcome,

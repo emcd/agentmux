@@ -284,9 +284,12 @@ fn same_bundle_raww_permitted_under_home_scope() {
     );
 }
 
-/// issues/relay/24 (companion): a relay-wide principal whose raww target is bare
-/// (no `@<bundle>` suffix) names no routing bundle, so it still falls through to
-/// the namespace-selector error path and is rejected.
+/// A relay-wide principal whose raww target is bare (no `@<namespace>` suffix) is
+/// rejected with `validation_unqualified_target`. The relay requires
+/// fully-qualified targets and no longer infers a routing bundle from the sender
+/// or the wire namespace, so the bare target is rejected uniformly at the
+/// config-free resolution stage rather than via the old
+/// `validation_missing_routing_namespace` routing-bundle artifact.
 #[test]
 fn relay_wide_raww_with_bare_target_is_rejected() {
     let temporary = TempDir::new().expect("temporary directory");
@@ -302,7 +305,125 @@ fn relay_wide_raww_with_bare_target_is_rejected() {
     assert_eq!(response["response"]["kind"], "error");
     assert_eq!(
         response["response"]["error"]["code"],
-        "validation_missing_routing_namespace"
+        "validation_unqualified_target"
+    );
+}
+
+/// Connects as a bundle-bound `alpha` session in `bundle_name` and issues one
+/// cross-bundle `raww` at `target_session`, returning the response frame. Unlike
+/// `bundle_session_raww`, this uses a multi-bundle catalog so the peer target's
+/// bundle is resolvable.
+fn cross_bundle_raww(
+    configuration_root: &Path,
+    state_root: &Path,
+    catalog: BundleCatalog,
+    bundle_name: &str,
+    target_session: &str,
+) -> Value {
+    let (mut client, join) =
+        spawn_relay_connection_with_catalog(configuration_root, state_root, catalog);
+    let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
+    send_json(
+        &mut client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "principal_id": format!("alpha@{bundle_name}"),
+            "identity_token": "socket-trust",
+        }),
+    );
+    assert_eq!(read_json(&mut reader)["frame"], "hello_ack");
+    send_json(
+        &mut client,
+        json!({
+            "frame": "request",
+            "request_id": "req-1",
+            "request": {
+                "operation": "raww",
+                "requester_session": "alpha",
+                "target_session": target_session,
+                "text": "alpha raw input",
+            },
+        }),
+    );
+    let mut response = read_json(&mut reader);
+    while response["frame"] != "response" {
+        response = read_json(&mut reader);
+    }
+    shutdown_stream(&client, "shutdown cross-bundle raww client");
+    join.join().expect("join relay thread");
+    response
+}
+
+/// Cross-namespace raww sender fix (routing-layer Steps 6-7): a bundle-bound
+/// session reaching a session in a peer bundle is authorized in its **home**
+/// namespace and resolves the peer member — rather than failing because the relay
+/// dispatched the raww through a borrowed (target) bundle, where the home session
+/// is unknown. Under `raww = all:all` the request resolves all the way to the
+/// transport match; the UI peer surfaces the not-implemented terminal, proving
+/// home-namespace authorization and peer-member resolution both succeeded.
+#[test]
+fn cross_bundle_raww_permitted_under_all_scope_resolves_peer() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_a = "raww_peer_a";
+    let bundle_b = "raww_peer_b";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_a);
+    write_ui_bundle(&configuration_root, bundle_b);
+    write_policies_with_raww(&configuration_root, "all:all");
+    let state_root = temporary.path().join("state");
+    let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
+    let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b).expect("bundle-b paths");
+    let catalog = multi_bundle_catalog(&[paths_a, paths_b]);
+
+    let response = cross_bundle_raww(
+        &configuration_root,
+        &state_root,
+        catalog,
+        bundle_a,
+        &format!("agent@{bundle_b}"),
+    );
+
+    assert_eq!(response["response"]["kind"], "error");
+    assert_eq!(
+        response["response"]["error"]["code"], "runtime_session_type_not_implemented",
+        "permitted cross-bundle raww authorizes in the home namespace and resolves the peer member"
+    );
+}
+
+/// `all:home` is sufficient for same-namespace raww but deliberately insufficient
+/// to cross the bundle boundary. The requester is authorized in its home
+/// namespace (where its `raww` control resolves) and denied — it is no longer
+/// dispatched through the target bundle, so the denial is a real
+/// `authorization_forbidden`, not an unknown-target artifact.
+#[test]
+fn cross_bundle_raww_denied_under_home_scope() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_a = "raww_home_a";
+    let bundle_b = "raww_home_b";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_a);
+    write_ui_bundle(&configuration_root, bundle_b);
+    write_policies_with_raww(&configuration_root, "all:home");
+    let state_root = temporary.path().join("state");
+    let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
+    let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b).expect("bundle-b paths");
+    let catalog = multi_bundle_catalog(&[paths_a, paths_b]);
+
+    let response = cross_bundle_raww(
+        &configuration_root,
+        &state_root,
+        catalog,
+        bundle_a,
+        &format!("agent@{bundle_b}"),
+    );
+
+    assert_eq!(response["response"]["kind"], "error");
+    assert_eq!(
+        response["response"]["error"]["code"],
+        "authorization_forbidden"
+    );
+    assert_eq!(
+        response["response"]["error"]["details"]["capability"],
+        "raww.write"
     );
 }
 

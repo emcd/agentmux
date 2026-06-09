@@ -42,6 +42,38 @@ impl SenderIdentity {
     }
 }
 
+/// Resolves a requester to a [`SenderIdentity`] in its home namespace.
+///
+/// A bundle-bound home resolves the sender from the bundle's members (falling
+/// back to a registered relay-wide UI session via [`resolve_sender_identity`]); a
+/// relay-wide home (`GLOBAL`, with no bundle) resolves it purely from the
+/// registered UI sessions in the operator authorization.
+pub(super) fn resolve_sender_in_namespace(
+    home_bundle: Option<&BundleConfiguration>,
+    authorization: &AuthorizationContext,
+    requester_session: &str,
+    detail_field: &str,
+) -> Result<SenderIdentity, RelayError> {
+    match home_bundle {
+        Some(home_bundle) => {
+            resolve_sender_identity(home_bundle, authorization, requester_session, detail_field)
+        }
+        None if has_ui_session(authorization, requester_session) => Ok(SenderIdentity {
+            session_id: requester_session.to_string(),
+            display_name: ui_session_display_name(authorization, requester_session)
+                .map(ToString::to_string),
+        }),
+        None => Err(relay_error(
+            "validation_unknown_sender",
+            "sender session is not configured",
+            Some(json!({
+                "field": detail_field,
+                "value": requester_session,
+            })),
+        )),
+    }
+}
+
 pub(super) fn resolve_sender_identity(
     bundle: &BundleConfiguration,
     authorization: &AuthorizationContext,

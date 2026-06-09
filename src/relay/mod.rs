@@ -67,20 +67,43 @@ fn handle_request_with_principal(
     principal: Option<RequestPrincipal>,
     bundle_catalog: &BundleCatalog,
 ) -> Result<RelayResponse, RelayError> {
-    // `Send` flows through the namespace-centric path, which loads the home
-    // bundle and its authorization from the namespace itself. The single-bundle
-    // entry point is always bundle-bound, so the home namespace is this bundle.
-    // (The connection layer reaches `dispatch_send` directly and never routes
-    // `Send` here.)
-    if matches!(request, RelayRequest::Send { .. }) {
-        return handlers::handle_send_routed(
-            bundle_name,
-            Some(runtime_directory),
-            request,
-            configuration_root,
-            bundle_catalog,
-            principal.as_ref(),
-        );
+    // The target operations (`Send`/`Look`/`Raww`) flow through the
+    // namespace-centric paths, which resolve the requester in its home namespace
+    // rather than a borrowed dispatch bundle. The single-bundle entry point is
+    // always bundle-bound, so the home namespace is this bundle. (The connection
+    // layer reaches these dispatchers directly and never routes the operations
+    // here.)
+    match request {
+        RelayRequest::Send { .. } => {
+            return handlers::handle_send_routed(
+                bundle_name,
+                Some(runtime_directory),
+                request,
+                configuration_root,
+                bundle_catalog,
+                principal.as_ref(),
+            );
+        }
+        RelayRequest::Look { .. } => {
+            return handlers::handle_look_routed(
+                bundle_name,
+                Some(runtime_directory),
+                request,
+                configuration_root,
+                bundle_catalog,
+                principal.as_ref(),
+            );
+        }
+        RelayRequest::Raww { .. } => {
+            return handlers::handle_raww_routed(
+                bundle_name,
+                Some(runtime_directory),
+                request,
+                configuration_root,
+                bundle_catalog,
+            );
+        }
+        _ => {}
     }
     let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
     let authorization = load_authorization_context(configuration_root, Some(&bundle))?;
@@ -90,8 +113,6 @@ fn handle_request_with_principal(
         &authorization,
         runtime_directory,
         principal,
-        configuration_root,
-        bundle_catalog,
     )
 }
 
@@ -272,6 +293,72 @@ pub(in crate::relay) fn dispatch_send(
         configuration_root,
         bundle_catalog,
         principal.as_ref(),
+    ) {
+        Ok(value) => value,
+        Err(error) => RelayResponse::Error { error },
+    }
+}
+
+/// Dispatches a `Look` through the namespace-centric path.
+///
+/// The requester is identified by its **home namespace**: its bound bundle for a
+/// session principal, or `GLOBAL` for a relay-wide principal. `bound_bundle` is
+/// `None` for relay-wide requesters. The look path resolves and authorizes the
+/// requester in its home namespace and loads the target's bundle separately for
+/// the snapshot — never a borrowed dispatch bundle.
+pub(in crate::relay) fn dispatch_look(
+    request: RelayRequest,
+    configuration_root: &Path,
+    bound_bundle: Option<&crate::runtime::paths::BundleRuntimePaths>,
+    principal: Option<RequestPrincipal>,
+    bundle_catalog: &BundleCatalog,
+) -> RelayResponse {
+    let (home_namespace, home_runtime) = match bound_bundle {
+        Some(paths) => (
+            paths.bundle_name.clone(),
+            Some(paths.runtime_directory.clone()),
+        ),
+        None => (GLOBAL_NAMESPACE.to_string(), None),
+    };
+    match handlers::handle_look_routed(
+        home_namespace.as_str(),
+        home_runtime.as_deref(),
+        request,
+        configuration_root,
+        bundle_catalog,
+        principal.as_ref(),
+    ) {
+        Ok(value) => value,
+        Err(error) => RelayResponse::Error { error },
+    }
+}
+
+/// Dispatches a `Raww` through the namespace-centric path.
+///
+/// Like `dispatch_look`, the requester is identified by its home namespace
+/// (bound bundle, or `GLOBAL` for a relay-wide principal) and authorized there;
+/// the target's bundle is loaded separately for delivery. This is what lets a
+/// cross-namespace raww authorize the sender in its home namespace rather than a
+/// borrowed target bundle.
+pub(in crate::relay) fn dispatch_raww(
+    request: RelayRequest,
+    configuration_root: &Path,
+    bound_bundle: Option<&crate::runtime::paths::BundleRuntimePaths>,
+    bundle_catalog: &BundleCatalog,
+) -> RelayResponse {
+    let (home_namespace, home_runtime) = match bound_bundle {
+        Some(paths) => (
+            paths.bundle_name.clone(),
+            Some(paths.runtime_directory.clone()),
+        ),
+        None => (GLOBAL_NAMESPACE.to_string(), None),
+    };
+    match handlers::handle_raww_routed(
+        home_namespace.as_str(),
+        home_runtime.as_deref(),
+        request,
+        configuration_root,
+        bundle_catalog,
     ) {
         Ok(value) => value,
         Err(error) => RelayResponse::Error { error },
