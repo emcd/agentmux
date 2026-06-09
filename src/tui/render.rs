@@ -9,6 +9,7 @@ use serde_json::Value;
 
 use crate::acp::AcpSnapshotEntry;
 
+use super::sender_bound_bundle;
 use super::state::{
     AppState, ChatHistoryDirection, FocusField, LookSnapshotFormat, Recipient, ScreenMode,
     StatusEntry,
@@ -53,27 +54,32 @@ pub(crate) fn render(frame: &mut Frame, state: &mut AppState) {
 }
 
 fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
-    let text = vec![Line::from(vec![
-        Span::styled(
-            "Agentmux",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("  Bundle: "),
-        Span::styled(
+    let mut spans = vec![Span::styled(
+        "Agentmux",
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )];
+    // A relay-wide (`@GLOBAL`) sender is bound to no bundle, so the `Bundle:`
+    // field is meaningless — the principal id already encodes the namespace. The
+    // browsing bundle survives only as the `List` enumeration target, not as a
+    // sender binding, so it is not surfaced in the header for these principals.
+    if sender_bound_bundle(&state.sender_session, &state.bundle_name).is_some() {
+        spans.push(Span::raw("  Bundle: "));
+        spans.push(Span::styled(
             state.bundle_name.clone(),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(
-            "  Sender: {}  Pending Deliveries: {}",
-            state.sender_session,
-            state.pending_deliveries_count()
-        )),
-    ])];
-    let paragraph = Paragraph::new(text).style(Style::default().bg(Color::DarkGray));
+        ));
+    }
+    spans.push(Span::raw(format!(
+        "  Sender: {}  Pending Deliveries: {}",
+        state.sender_session,
+        state.pending_deliveries_count()
+    )));
+    let paragraph =
+        Paragraph::new(vec![Line::from(spans)]).style(Style::default().bg(Color::DarkGray));
     frame.render_widget(paragraph, area);
 }
 

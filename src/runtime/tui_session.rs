@@ -59,8 +59,58 @@ pub fn resolve_tui_session_identity(
 ) -> Result<ResolvedTuiSession, RuntimeError> {
     let configuration = load_active_tui_configuration(configuration_root, workspace_root)?;
     let bundle_name = resolve_bundle_name(configuration.as_ref(), explicit_bundle)?;
-    let selector = resolve_session_selector(configuration.as_ref(), explicit_session)?;
-    let selected = resolve_selected_session(configuration.as_ref(), selector.as_str())?;
+    finish_tui_session(
+        configuration_root,
+        configuration.as_ref(),
+        bundle_name,
+        explicit_session,
+    )
+}
+
+/// Resolves the interactive TUI launch identity, treating the browsing bundle
+/// as optional.
+///
+/// The one-shot CLI commands operate on a concrete bundle and use
+/// [`resolve_tui_session_identity`], which requires one. The interactive TUI, by
+/// contrast, launches without requiring a configured `default-bundle`: the
+/// operator selects a bundle in the picker. The browsing bundle is taken from
+/// `explicit_bundle`, then the configured `default-bundle`, then
+/// `fallback_bundle` (e.g. the first available bundle), and is left empty when
+/// none resolve. The session/policy identity is still resolved strictly.
+///
+/// # Errors
+///
+/// Returns validation errors for missing/unknown sessions and unknown policy
+/// references — never for an absent bundle.
+pub fn resolve_tui_launch_identity(
+    configuration_root: &Path,
+    workspace_root: &Path,
+    explicit_bundle: Option<&str>,
+    explicit_session: Option<&str>,
+    fallback_bundle: Option<&str>,
+) -> Result<ResolvedTuiSession, RuntimeError> {
+    let configuration = load_active_tui_configuration(configuration_root, workspace_root)?;
+    let bundle_name =
+        resolve_browsing_bundle(configuration.as_ref(), explicit_bundle, fallback_bundle);
+    finish_tui_session(
+        configuration_root,
+        configuration.as_ref(),
+        bundle_name,
+        explicit_session,
+    )
+}
+
+/// Resolves the session selector, sender, and policy shared by both the strict
+/// and lenient bundle-resolution entry points, then assembles the result around
+/// an already-resolved `bundle_name`.
+fn finish_tui_session(
+    configuration_root: &Path,
+    configuration: Option<&TuiConfiguration>,
+    bundle_name: String,
+    explicit_session: Option<&str>,
+) -> Result<ResolvedTuiSession, RuntimeError> {
+    let selector = resolve_session_selector(configuration, explicit_session)?;
+    let selected = resolve_selected_session(configuration, selector.as_str())?;
     validate_sender_shape(selected.id.as_str())?;
     validate_selected_policy(configuration_root, selected.policy.as_str())?;
     Ok(ResolvedTuiSession {
@@ -89,6 +139,29 @@ fn resolve_bundle_name(
         "validation_unknown_bundle",
         "bundle is required via --bundle or users.toml default-bundle".to_string(),
     ))
+}
+
+/// Resolves the optional browsing bundle for an interactive TUI launch.
+///
+/// Unlike [`resolve_bundle_name`], an absent bundle is not an error: the TUI
+/// launches with an empty browsing context and the operator picks a bundle in
+/// the picker. Precedence is `explicit_bundle`, then the configured
+/// `default-bundle`, then `fallback_bundle`, then empty.
+fn resolve_browsing_bundle(
+    configuration: Option<&TuiConfiguration>,
+    explicit_bundle: Option<&str>,
+    fallback_bundle: Option<&str>,
+) -> String {
+    explicit_bundle
+        .and_then(normalize)
+        .or_else(|| {
+            configuration
+                .and_then(|configuration| configuration.default_bundle.as_deref())
+                .and_then(normalize)
+        })
+        .or_else(|| fallback_bundle.and_then(normalize))
+        .map(str::to_string)
+        .unwrap_or_default()
 }
 
 fn resolve_session_selector(

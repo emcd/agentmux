@@ -65,9 +65,11 @@ picker (`F5`) are overlays available in both modes.
   - `--as-session`
   - `default-session` from active `tui.toml` configuration
   - no association fallback,
-- bundle precedence:
+- bundle precedence (interactive launch does not require a bundle; a fresh
+  install ships none, and the operator picks one in the picker):
   - `--bundle`
-  - `default-bundle` from active `tui.toml` configuration,
+  - `default-bundle` from active `users.toml` configuration
+  - the first available bundle, else an empty browsing context,
 - delivery outcome vocabulary:
   - `accepted`, `success`, `timeout`, `failed`,
 - recipient completion via `@` token triggers plus explicit manual trigger,
@@ -93,9 +95,15 @@ picker (`F5`) are overlays available in both modes.
     the peer bundle by suffix and authorizes the requester's capability at the
     uniform cross-bundle `all:all` scope (the same threshold for `send` and
     `look`; unknown peers/targets surface as `validation_unknown_bundle` /
-    `validation_unknown_target`). `Raww` remains intra-bundle and the relay still
-    rejects cross-bundle attempts there with
-    `validation_cross_bundle_unsupported`,
+    `validation_unknown_target`). `Raww` routes the same way: the relay derives
+    the peer bundle from the look-target's `session@bundle` suffix and authorizes
+    `raww` at the same uniform `all:all` cross-bundle scope (issues/relay/24).
+    Because `Send` and `Raww` routing is suffix-based, the shared relay client
+    omits the wire-envelope `namespace` on those frames for every caller (TUI and
+    MCP alike); the browsing bundle survives only as the `List` / recipient-picker
+    enumeration context and the `Look` namespace selector, never as a sender
+    binding (so a relay-wide `@GLOBAL` sender shows no `Bundle:` field in the
+    header),
 - picker actions (mode-aware `Enter`, no separate `l` / `w` keys):
   - Communication mode: insert the selected recipient into `To`,
   - Interaction mode: open the Interaction screen for the selected identity,

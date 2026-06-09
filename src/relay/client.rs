@@ -93,9 +93,11 @@ impl RelayStreamSession {
 
     /// Sends one request over a persistent stream and returns response + events.
     ///
-    /// The wire envelope namespace is the session's bound bundle. Callers that
-    /// need to route a request elsewhere (notably `List` with the relay-wide
-    /// `GLOBAL` namespace) use `request_with_namespace_and_events`.
+    /// The wire-envelope namespace is resolved from the request type: omitted
+    /// for suffix-routed `Send`/`Raww`, otherwise the session's bound bundle.
+    /// Callers that need to route a namespace-selected request elsewhere (notably
+    /// `List` with the relay-wide `GLOBAL` namespace) use
+    /// `request_with_namespace_and_events`.
     ///
     /// # Errors
     ///
@@ -107,11 +109,16 @@ impl RelayStreamSession {
         self.request_with_namespace_and_events(request, None)
     }
 
-    /// Sends one request with an explicit wire-envelope namespace override.
+    /// Sends one request, resolving the wire-envelope namespace from the request
+    /// type and an optional override.
     ///
-    /// Passing `None` for `namespace` uses the session's bound bundle. The
-    /// override exists for routing exceptions such as `List` against the
-    /// relay-wide `GLOBAL` namespace.
+    /// Suffix-routed operations (`Send`, `Raww`) carry no wire namespace: the
+    /// relay derives their routing bundle from each target's `@<bundle>` suffix,
+    /// so a namespace is meaningless and is always omitted regardless of caller.
+    /// Every other (namespace-selected) operation uses `namespace` when provided,
+    /// else falls back to the connection's bound bundle. The override exists for
+    /// routing exceptions such as `List` against the relay-wide `GLOBAL`
+    /// namespace.
     ///
     /// # Errors
     ///
@@ -124,7 +131,10 @@ impl RelayStreamSession {
         self.ensure_connected()?;
         let request_id = uuid::Uuid::new_v4().to_string();
         let bound = self.bundle_name.clone();
-        let namespace = namespace.unwrap_or(bound.as_str());
+        let wire_namespace = match request {
+            RelayRequest::Send { .. } | RelayRequest::Raww { .. } => None,
+            _ => Some(namespace.unwrap_or(bound.as_str())),
+        };
         let result = {
             let connection = self
                 .connection
@@ -134,7 +144,7 @@ impl RelayStreamSession {
                 &mut connection.stream,
                 StreamClientFrame::Request {
                     request_id: request_id.as_str(),
-                    namespace: Some(namespace),
+                    namespace: wire_namespace,
                     request,
                 },
             )?;

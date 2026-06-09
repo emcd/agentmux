@@ -2,7 +2,9 @@ use std::fs;
 
 use agentmux::{
     configuration::TuiConfiguration,
-    runtime::tui_session::{load_active_tui_configuration, resolve_tui_session_identity},
+    runtime::tui_session::{
+        load_active_tui_configuration, resolve_tui_launch_identity, resolve_tui_session_identity,
+    },
 };
 use tempfile::TempDir;
 
@@ -99,6 +101,109 @@ policy = "default"
     let error = resolve_tui_session_identity(temporary.path(), temporary.path(), None, None)
         .expect_err("missing default bundle should fail");
     assert!(error.to_string().contains("validation_unknown_bundle"));
+}
+
+#[test]
+fn launch_without_default_bundle_seeds_from_fallback() {
+    let temporary = TempDir::new().expect("temporary");
+    write_policies(temporary.path(), &["default"]);
+    write_users(
+        temporary.path(),
+        r#"
+default-session = "user@GLOBAL"
+
+[[sessions]]
+id = "user@GLOBAL"
+policy = "default"
+
+[sessions.ui]
+"#,
+    );
+
+    let resolved = resolve_tui_launch_identity(
+        temporary.path(),
+        temporary.path(),
+        None,
+        None,
+        Some("first-available"),
+    )
+    .expect("launch without default bundle should succeed");
+    assert_eq!(resolved.bundle_name, "first-available");
+    assert_eq!(resolved.session_id, "user@GLOBAL");
+    assert_eq!(resolved.policy, "default");
+}
+
+#[test]
+fn launch_without_default_bundle_or_fallback_is_empty_not_error() {
+    let temporary = TempDir::new().expect("temporary");
+    write_policies(temporary.path(), &["default"]);
+    write_users(
+        temporary.path(),
+        r#"
+default-session = "user@GLOBAL"
+
+[[sessions]]
+id = "user@GLOBAL"
+policy = "default"
+
+[sessions.ui]
+"#,
+    );
+
+    let resolved =
+        resolve_tui_launch_identity(temporary.path(), temporary.path(), None, None, None)
+            .expect("launch with no bundle context should still succeed");
+    assert_eq!(resolved.bundle_name, "");
+    assert_eq!(resolved.session_id, "user@GLOBAL");
+}
+
+#[test]
+fn launch_prefers_configured_default_bundle_over_fallback() {
+    let temporary = TempDir::new().expect("temporary");
+    write_policies(temporary.path(), &["default"]);
+    write_users(
+        temporary.path(),
+        r#"
+default-bundle = "configured"
+default-session = "user@GLOBAL"
+
+[[sessions]]
+id = "user@GLOBAL"
+policy = "default"
+
+[sessions.ui]
+"#,
+    );
+
+    let resolved = resolve_tui_launch_identity(
+        temporary.path(),
+        temporary.path(),
+        None,
+        None,
+        Some("first-available"),
+    )
+    .expect("configured default bundle should win");
+    assert_eq!(resolved.bundle_name, "configured");
+}
+
+#[test]
+fn launch_still_requires_a_session() {
+    let temporary = TempDir::new().expect("temporary");
+    write_policies(temporary.path(), &["default"]);
+    write_users(
+        temporary.path(),
+        r#"
+[[sessions]]
+id = "user@GLOBAL"
+policy = "default"
+
+[sessions.ui]
+"#,
+    );
+
+    let error = resolve_tui_launch_identity(temporary.path(), temporary.path(), None, None, None)
+        .expect_err("missing default session should still fail");
+    assert!(error.to_string().contains("validation_unknown_session"));
 }
 
 #[test]

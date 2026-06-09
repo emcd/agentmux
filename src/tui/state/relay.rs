@@ -129,6 +129,9 @@ impl AppState {
         &mut self,
         request: &RelayRequest,
     ) -> Result<RelayResponse, RuntimeError> {
+        // The relay client resolves the wire namespace from the request type:
+        // suffix-routed Send/Raww carry none, namespace-selected ops fall back to
+        // the bound (browsing) bundle. Callers dispatch uniformly (issues/tui/11).
         match self.relay_stream.request_with_events(request) {
             Ok((response, events)) => {
                 self.record_stream_events(&events);
