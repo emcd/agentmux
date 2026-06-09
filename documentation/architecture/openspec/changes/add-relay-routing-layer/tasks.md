@@ -70,14 +70,14 @@
 
 ## 3. Step 2 — Migrate Look onto the layer (no behavior change)
 
-- [ ] 3.1 Implement `SingleTarget` config-free resolution stage for Look in
+- [x] 3.1 Implement `SingleTarget` config-free resolution stage for Look in
       `routing.rs`; supersedes `resolve_look_target_bundle`
-- [ ] 3.2 No profile change needed — Look already reaches `all:all` via the
+- [x] 3.2 No profile change needed — Look already reaches `all:all` via the
       policy schema allowed-scope set (`required_tier` is data-driven; no
       per-operation enum)
-- [ ] 3.3 Update `handle_look` to receive `ResolvedRoute`; remove
+- [x] 3.3 Update `handle_look` to receive `ResolvedRoute`; remove
       `resolve_look_target_bundle` and `authorize_look`
-- [ ] 3.4 Validate: `cargo test` passes; no behavior change
+- [x] 3.4 Validate: `cargo test` passes; no behavior change
 
 ## 4. Step 3 — Migrate List onto the layer (no behavior change)
 
