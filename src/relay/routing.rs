@@ -274,13 +274,20 @@ pub(super) fn resolve_send_route(
     })
 }
 
-/// Resolves a Look's fully-qualified target into a config-free [`ResolvedRoute`]
-/// (the `SingleTarget` resolution stage): one [`resolve_target`] call with
-/// relay-wide targets rejected, since a UI session has no pane to inspect.
+/// The shared `SingleTarget` resolution stage for the complementary read/write
+/// operations Look (inspect) and Raww (write): one [`resolve_target`] call with
+/// relay-wide (`@GLOBAL`) targets rejected, since a UI session has neither a pane
+/// to inspect nor an input channel to write.
+///
+/// Look and Raww resolve identically at this layer, so they share this body but
+/// keep distinct entry points ([`resolve_look_route`] / [`resolve_raww_route`]).
+/// The split documents intent and gives the two operations a seam to diverge once
+/// session-attribute routing lands (per-session `can_be_looked` / `can_be_written`),
+/// at which point the blanket relay-wide rejection becomes an attribute check.
 ///
 /// `dispatch_namespace` is the requester's home namespace (its bundle, or
 /// `GLOBAL`); see [`requester_home_namespace`].
-pub(super) fn resolve_look_route(
+fn resolve_single_target_route(
     dispatch_namespace: &str,
     requester_session: &str,
     target_session: &str,
@@ -295,6 +302,28 @@ pub(super) fn resolve_look_route(
         requester_session: requester_session.to_string(),
         targets: vec![target],
     })
+}
+
+/// Resolves a Look's fully-qualified target into a config-free [`ResolvedRoute`];
+/// see [`resolve_single_target_route`].
+pub(super) fn resolve_look_route(
+    dispatch_namespace: &str,
+    requester_session: &str,
+    target_session: &str,
+) -> Result<ResolvedRoute, RelayError> {
+    resolve_single_target_route(dispatch_namespace, requester_session, target_session)
+}
+
+/// Resolves a Raww's fully-qualified target into a config-free [`ResolvedRoute`];
+/// see [`resolve_single_target_route`]. A relay-wide (`@GLOBAL`) target is
+/// rejected with `validation_unsupported_namespace`, uniform with Look — a UI
+/// session does not accept raw input.
+pub(super) fn resolve_raww_route(
+    dispatch_namespace: &str,
+    requester_session: &str,
+    target_session: &str,
+) -> Result<ResolvedRoute, RelayError> {
+    resolve_single_target_route(dispatch_namespace, requester_session, target_session)
 }
 
 /// Builds the config-free [`ResolvedRoute`] for a List (the `BundleEnumerate`

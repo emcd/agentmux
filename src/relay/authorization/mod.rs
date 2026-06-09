@@ -1,0 +1,30 @@
+//! Authorization, split into behavioral seams over shared domain types.
+//!
+//! This module is an import-only hub. [`context`] holds the shared types
+//! ([`AuthorizationContext`] and the policy primitives), and the three seams act
+//! on them:
+//!
+//! - [`loading`]: parse `policies.toml` / `relay.toml` into validated presets and
+//!   build an [`AuthorizationContext`].
+//! - [`resolution`]: map a requester (a bundle-member session or a relay-wide
+//!   principal) to its resolved policy controls, plus the UI-session accessors.
+//! - [`checks`]: the uniform `authorize_*` decisions over a resolved route or a
+//!   relay-wide operator action.
+//!
+//! Nothing is defined here — the root only wires submodules and re-exports the
+//! relay-facing API.
+
+mod checks;
+mod context;
+mod loading;
+mod resolution;
+
+pub(in crate::relay) use checks::{
+    RelayActionFamily, authorize_grant, authorize_grant_for_list, authorize_relay_action,
+    authorize_route, authorize_updown,
+};
+pub(in crate::relay) use context::AuthorizationContext;
+pub(in crate::relay) use loading::load_authorization_context;
+pub(in crate::relay) use resolution::{
+    grant_authorized_ui_sessions, has_ui_session, permission_max_pending, ui_session_display_name,
+};

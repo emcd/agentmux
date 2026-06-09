@@ -100,7 +100,7 @@
 > (5.1) are deferred to the later, no-behavior-change migration slices — they are
 > not needed for the blocker.
 
-- [ ] 5.1 Migrate Raww onto the shared single-target resolution stage, unifying
+- [x] 5.1 Migrate Raww onto the shared single-target resolution stage, unifying
       it with Look — the complementary read/write single-target operations. Add a
       `resolve_raww_route` in `routing.rs` that delegates to the shared
       `resolve_target` with relay-wide targets rejected (the same path Look uses),
@@ -139,8 +139,16 @@
 
 ## 6. Step 5 — Decompose handlers.rs and authorization.rs (todos/relay/71)
 
-- [ ] 6.1 Split `handlers.rs` along thin operation bodies (routing/authz
-      boilerplate now absent; submodule seams are clean)
-- [ ] 6.2 Split `authorization.rs` along (policy loading | capability/profile
-      checks | session resolution) seams
-- [ ] 6.3 Validate: `cargo test` passes; no behavior change
+- [x] 6.1 Split `handlers.rs` along thin operation bodies (routing/authz
+      boilerplate now absent; submodule seams are clean). Extracted
+      `handlers/{send,look,raww}.rs`; the router, `normalize_request_identities`,
+      thin identity/permission delegators, and the shared `SenderIdentity` /
+      `resolve_sender_identity` / `authorize_bundle_principal` helpers stay in the
+      module root (handlers.rs: 1550 → 408 lines).
+- [x] 6.2 Split `authorization.rs` along (policy loading | capability/profile
+      checks | session resolution) seams. Created `authorization/{loading,checks,
+      resolution}.rs`; the root keeps the shared `AuthorizationContext` /
+      `PolicyControls` / `PolicyScope` / `UiSessionAuthorization` types and
+      re-exports the relay-facing API (authorization.rs: 1076 → 94 lines).
+- [x] 6.3 Validate: `cargo test` passes (254 unit + 216 integration); clippy and
+      `cargo fmt --check` clean; no behavior change
