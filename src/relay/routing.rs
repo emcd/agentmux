@@ -296,3 +296,32 @@ pub(super) fn resolve_look_route(
         targets: vec![target],
     })
 }
+
+/// Builds the config-free [`ResolvedRoute`] for a List (the `BundleEnumerate`
+/// resolution stage).
+///
+/// List names no session target — routing is purely which bundle to enumerate,
+/// already resolved by the connection layer's dispatch split — so the route
+/// carries a single bundle-level target (no session id, never relay-wide) and
+/// the stage cannot fail. The target's `bundle_name` is the enumerated bundle; a
+/// cross-namespace enumeration (a peer bundle) raises the required tier to
+/// `all:all`, while a same-namespace one stays at `all:home`.
+///
+/// `dispatch_namespace` is the requester's home namespace (see
+/// [`requester_home_namespace`]); `enumerate_bundle` is the bundle whose sessions
+/// are listed.
+pub(super) fn resolve_list_route(
+    dispatch_namespace: &str,
+    requester_session: &str,
+    enumerate_bundle: &str,
+) -> ResolvedRoute {
+    ResolvedRoute {
+        dispatch_namespace: dispatch_namespace.to_string(),
+        requester_session: requester_session.to_string(),
+        targets: vec![ResolvedTarget {
+            bundle_name: enumerate_bundle.to_string(),
+            session_id: None,
+            relay_wide: false,
+        }],
+    }
+}

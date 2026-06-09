@@ -81,12 +81,12 @@
 
 ## 4. Step 3 — Migrate List onto the layer (no behavior change)
 
-- [ ] 4.1 Implement `BundleEnumerate` resolution stage for List in `routing.rs`
-- [ ] 4.2 No profile change needed — List already reaches `all:all` via the
+- [x] 4.1 Implement `BundleEnumerate` resolution stage for List in `routing.rs`
+- [x] 4.2 No profile change needed — List already reaches `all:all` via the
       policy schema allowed-scope set; requester resolves in its home bundle
-- [ ] 4.3 Update `handle_list` to receive `ResolvedRoute`; remove inline
+- [x] 4.3 Update `handle_list` to receive `ResolvedRoute`; remove inline
       routing/authz
-- [ ] 4.4 Validate: `cargo test` passes; no behavior change
+- [x] 4.4 Validate: `cargo test` passes; no behavior change
 
 ## 5. Step 4 — Migrate Raww; enable cross-bundle under all:all (BREAKING)
 
@@ -100,8 +100,24 @@
 > (5.1) are deferred to the later, no-behavior-change migration slices — they are
 > not needed for the blocker.
 
-- [ ] 5.1 Implement `SingleTarget` resolution stage for Raww in `routing.rs`
-      (deferred — handle_raww still locates its own target this slice)
+- [ ] 5.1 Migrate Raww onto the shared single-target resolution stage, unifying
+      it with Look — the complementary read/write single-target operations. Add a
+      `resolve_raww_route` in `routing.rs` that delegates to the shared
+      `resolve_target` with relay-wide targets rejected (the same path Look uses),
+      and update `handle_raww` to consume the resulting `ResolvedRoute`, removing
+      its inline target classification and inline route construction. Standardize
+      the relay-wide/reserved target rejection on the generic
+      `validation_unsupported_namespace` (Look's behavior): retire Raww's bespoke
+      `validation_invalid_params` + `target_class: "ui"` /
+      `supported_target_classes` error and update the `raww_rejects_ui_target_class`
+      test to expect `validation_unsupported_namespace`. A richer transport-class
+      error is deferred to session-attribute-based routing (per-session
+      `can_be_written` / `can_be_looked` attributes; see the registry-unification
+      idea), which will let Look and Raww share one "target does not accept this
+      operation" rejection rather than two near-duplicate inline checks. Sequence
+      alongside Step 6 (handle_raww moves during the handlers.rs decomposition) or
+      as its own slice; not in the List step. Behavior change is limited to the
+      relay-wide raww-target error code.
 - [x] 5.2 Raww requires `all:all` for cross-namespace reach via
       `required_tier` (replaces the flat `authorize_raww` → `authorize_scope`
       path from issues/relay/24, now deleted). The `CrossBundlePolicy` enum form

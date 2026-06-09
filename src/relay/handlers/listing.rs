@@ -11,8 +11,7 @@ use super::super::authorization::{AuthorizationContext, authorize_route};
 use super::super::delivery::acp_session_ready_for_startup;
 use super::super::lifecycle::{reconcile_loaded_bundle, shutdown_bundle_runtime};
 use super::super::routing::{
-    Addressing, Capability, OperationProfile, ResolvedRoute, ResolvedTarget,
-    requester_home_namespace,
+    Addressing, Capability, OperationProfile, requester_home_namespace, resolve_list_route,
 };
 use super::super::tmux::resolve_active_pane_target;
 use super::super::{
@@ -122,6 +121,14 @@ pub(in crate::relay) fn handle_list_routed(
         requester_session.as_str(),
         "requester_session",
     )?;
+    let route = resolve_list_route(
+        requester_home_namespace(
+            sender.session_id.as_str(),
+            dispatch_bundle.bundle_name.as_str(),
+        ),
+        sender.session_id.as_str(),
+        enumerate_bundle.bundle_name.as_str(),
+    );
     authorize_route(
         dispatch_bundle.bundle_name.as_str(),
         dispatch_authorization,
@@ -129,19 +136,7 @@ pub(in crate::relay) fn handle_list_routed(
             capability: Capability::List,
             addressing: Addressing::BundleEnumerate,
         },
-        &ResolvedRoute {
-            dispatch_namespace: requester_home_namespace(
-                sender.session_id.as_str(),
-                dispatch_bundle.bundle_name.as_str(),
-            )
-            .to_string(),
-            requester_session: sender.session_id.clone(),
-            targets: vec![ResolvedTarget {
-                bundle_name: enumerate_bundle.bundle_name.clone(),
-                session_id: None,
-                relay_wide: false,
-            }],
-        },
+        &route,
     )?;
     let sessions = enumerate_bundle
         .members

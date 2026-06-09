@@ -89,7 +89,15 @@ match the model.
 ### Addressing modes
 
 - `SingleTarget` (Look, Raww): one resolved target; biggest win — enabling
-  cross-bundle becomes a profile flag.
+  cross-bundle becomes a profile flag. Look and Raww are complementary
+  (read/write) single-target operations and share one resolution stage
+  (`resolve_target`, with relay-wide targets rejected). The relay-wide/reserved
+  target rejection is standardized on `validation_unsupported_namespace` for
+  both; Raww's original bespoke `target_class: "ui"` error is retired here. A
+  richer "this target does not accept this operation" error returns once
+  session-attribute-based routing lands (per-session `can_be_looked` /
+  `can_be_written`), at which point the operation-named resolvers can collapse
+  into attribute checks.
 - `MultiTarget` fan-out (Send): N targets across N bundles; per-group
   permission deciders and transport/timeout cross-validation stay in body.
 - `BundleEnumerate` (List): no explicit target; routing = which bundle to

@@ -1312,13 +1312,6 @@ fn resolve_sender_identity(
     ))
 }
 
-/// Resolves a look target's hosting bundle and bundle-local session id from its
-/// fully-qualified principal-id form.
-///
-/// A target qualified with a bundle (`<session>@<bundle>`) routes to that bundle
-/// (a same-bundle look qualifies with its own bundle). A bare (unqualified)
-/// target is rejected with `validation_unqualified_target`; relay-wide namespaces
-/// (`@GLOBAL`/`@EXTERNAL`/`@RELAY`) name no inspectable session and are rejected.
 /// One namespace-scoped delivery group: a target bundle's configuration plus
 /// the runtime context and permission deciders used to dispatch its targets.
 struct DeliveryGroup {

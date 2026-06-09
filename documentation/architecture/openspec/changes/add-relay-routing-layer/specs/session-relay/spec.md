@@ -91,11 +91,19 @@ for raww targeting a different bundle.
 
 Validation behavior:
 - bare/unqualified target (no `@<namespace>` suffix) → `validation_unqualified_target`
+- relay-wide (`@GLOBAL`) or reserved (`@EXTERNAL`/`@RELAY`) target →
+  `validation_unsupported_namespace` (such a target names no session that accepts
+  raw input; uniform with the Look single-target stage)
 - unknown/non-canonical target → `validation_unknown_target`
 - cross-bundle raww with insufficient scope → `authorization_forbidden`
 
 Validation precedence SHALL evaluate target qualification (at the resolution
 stage), then target existence, then authorization policy checks.
+
+Raww and Look are complementary single-target operations and SHALL share one
+config-free resolution stage (`resolve_target`); their relay-wide/reserved
+target rejection is uniform. A richer, transport-class-specific rejection is
+intentionally deferred to session-attribute-based routing.
 
 #### Scenario: Reject unknown raww target
 
@@ -103,6 +111,12 @@ stage), then target existence, then authorization policy checks.
   configured session id
 - **THEN** relay returns `validation_unknown_target`
 - **AND** relay does not return `authorization_forbidden` for that request
+
+#### Scenario: Reject relay-wide raww target as unsupported namespace
+
+- **WHEN** caller invokes `raww` with an `@GLOBAL` (relay-wide) target
+- **THEN** relay returns `validation_unsupported_namespace`
+- **AND** the rejection is uniform with the Look stage for the same target
 
 #### Scenario: Cross-bundle raww denied by scope
 
