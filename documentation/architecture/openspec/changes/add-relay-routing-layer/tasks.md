@@ -172,16 +172,26 @@
 > authorized in a namespace that is not its home. This step makes every target
 > operation enter on the requester's home-namespace path, like `Send`.
 
-- [ ] 7.1 Route `Look` / `Raww` / `List` through the requester's home namespace
-      (its bound bundle, or `GLOBAL`), never a borrowed dispatch/target bundle;
-      subsume `resolve_effective_bundle`, `resolve_raww_routing_bundle`, and
-      `resolve_namespace_routing_bundle` into one home-namespace resolution in
-      `connection.rs`
-- [ ] 7.2 Collapse the five `connection.rs` dispatch branches toward one
-      namespace-centric entry; relay-wide and identity entry points stay explicit,
-      but no target operation borrows a peer/target bundle to be dispatched
-- [ ] 7.3 Validate: `cargo test` passes; cross-bundle `Look` / `Raww` / `List`
-      resolve the requester in its home namespace
+> **Combined with Step 7 in one commit** (Coordinator-approved): the namespace-
+> centric handler entries that Step 7 introduces are a prerequisite for routing
+> `Look`/`Raww` through the home namespace here — a `GLOBAL` requester has no home
+> bundle for the per-bundle dispatcher to load. Tasks 7.1–7.3 and 8.1/8.3 landed
+> together.
+
+- [x] 7.1 Route `Look` / `Raww` through the requester's home namespace (its bound
+      bundle, or `GLOBAL`) via `dispatch_look` / `dispatch_raww`, never a borrowed
+      dispatch/target bundle. Deleted `resolve_effective_bundle` and
+      `resolve_raww_routing_bundle`; `resolve_namespace_routing_bundle` is retained
+      (and re-documented) solely as the **bundle-subject** resolver for `Up`/`Down`
+      / permission ops and the `List` enumerate bundle — those address a bundle the
+      requester is a member of, which is not a borrow. (`List` was already
+      home/enumerate-split via `dispatch_list`.)
+- [x] 7.2 Collapsed the `connection.rs` dispatch branches: `Send` / `Look` / `Raww`
+      each have an explicit namespace-centric branch; the residual branch serves
+      only bundle-subject ops. No target operation borrows a peer/target bundle.
+- [x] 7.3 Validate: `cargo test` passes (256 unit + 216 integration); cross-bundle
+      `Look` / `Raww` / `List` resolve the requester in its home namespace
+      (`cross_bundle_look_*`, new `cross_bundle_raww_*`, `cross_bundle_list_*`).
 
 ## 8. Step 7 — Introduce the dispatch spine; lift resolution/authorization out of bodies
 
@@ -191,17 +201,23 @@
 > ordering (so `validation_unknown_target` precedes `authorization_forbidden`) is
 > upheld four times by convention. This step makes the spine a real pipeline.
 
-- [ ] 8.1 Generalize the namespace-centric entry (`handle_send_routed`) into a
-      uniform spine that, for any target operation, loads the requester's home
-      authorization context once, resolves the `ResolvedRoute`, runs the
-      operation's existence/delivery preparation, calls `authorize_route`, then
-      runs the operation body — in that fixed order
-- [ ] 8.2 Remove the `resolve_*_route` and `authorize_route` calls from
-      `handle_send` / `handle_look` / `handle_raww` / `handle_list_routed`; the
-      spine owns them, so the existence-before-authorization ordering is structural
-      rather than per-handler convention
-- [ ] 8.3 Validate: `cargo test` passes; error ordering preserved
-      (`validation_unknown_target` before `authorization_forbidden`)
+- [x] 8.1 Added the namespace-centric entries for the single-target ops —
+      `dispatch_look` / `handle_look_routed` and `dispatch_raww` /
+      `handle_raww_routed` — mirroring `dispatch_send` / `handle_send_routed`. Each
+      loads the requester's home authorization context once (`load_home_context`),
+      resolves the `ResolvedRoute`, loads the target's bundle separately
+      (`resolve_target_bundle`, the single-target analogue of
+      `assemble_delivery_groups`), validates existence, authorizes in the home
+      namespace, then runs the body — in that fixed order. Shared sender resolution
+      across the home (`resolve_sender_in_namespace`).
+- [ ] 8.2 Lift the `resolve_*_route` and `authorize_route` calls out of the
+      routed handler bodies into a single generic spine (the bodies still own them
+      today; this folds into the Step 8 prepare/execute reshape, 9.1).
+- [x] 8.3 Validate: `cargo test` passes; error ordering preserved
+      (`validation_unknown_target` before `authorization_forbidden`); the
+      bare relay-wide raww target now returns the precise
+      `validation_unqualified_target` rather than the retired
+      `validation_missing_routing_namespace` routing-bundle artifact.
 
 ## 9. Step 8 — Execution-only bodies; home-namespace authz for cross-bundle Look/Raww
 

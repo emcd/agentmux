@@ -26,8 +26,8 @@ use crate::{
 };
 
 use super::identity::{
-    IdentityIntrospectRights, PrincipalStore, PrincipalType, VerifiedIdentity,
-    classify_principal_id, split_principal_id, verify_hello_credential,
+    IdentityIntrospectRights, PrincipalStore, PrincipalType, VerifiedIdentity, split_principal_id,
+    verify_hello_credential,
 };
 use super::stream::{
     HelloFrame, IncomingFrame, OutgoingFrame, RegisterStreamOutcome, RegistryKey,
@@ -38,7 +38,8 @@ use super::stream::{
 use super::{
     RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
     canonical_session_id, dispatch_identity_admin, dispatch_identity_introspect, dispatch_list,
-    dispatch_request, dispatch_send, handlers, map_config, map_tui_config, relay_error,
+    dispatch_look, dispatch_raww, dispatch_request, dispatch_send, handlers, map_config,
+    map_tui_config, relay_error,
 };
 
 /// Shared, mutable map from configured bundle name to its resolved runtime
@@ -558,10 +559,11 @@ async fn serve_connection_frames(
                     )?;
                     continue;
                 }
-                // `Send` routes per-target by namespace and is authorized in the
-                // requester's home namespace (its bound bundle, or `GLOBAL`),
-                // never a borrowed peer bundle — so it bypasses the single-bundle
-                // `resolve_effective_bundle` path entirely.
+                // `Send`, `Look`, and `Raww` route per-target by namespace and are
+                // authorized in the requester's home namespace (its bound bundle,
+                // or `GLOBAL`), never a borrowed peer/target bundle — so they
+                // bypass the bundle-subject `resolve_namespace_routing_bundle`
+                // path below and load each target's bundle inside the handler.
                 if matches!(request, RelayRequest::Send { .. }) {
                     let session_id = active_registration.requester_session_id().to_string();
                     let response = dispatch_send(
@@ -584,9 +586,50 @@ async fn serve_connection_frames(
                     )?;
                     continue;
                 }
-                let bundle_paths = match resolve_effective_bundle(
+                if matches!(request, RelayRequest::Look { .. }) {
+                    let session_id = active_registration.requester_session_id().to_string();
+                    let response = dispatch_look(
+                        request,
+                        configuration_root,
+                        bound_bundle.as_ref(),
+                        Some(RequestPrincipal {
+                            session_id,
+                            authenticated_identity: authenticated_identity.clone(),
+                            introspect_rights: introspect_rights.clone(),
+                        }),
+                        bundle_catalog,
+                    );
+                    write_stream_frame_to_writer(
+                        writer,
+                        OutgoingFrame::Response {
+                            request_id: request_id.as_deref(),
+                            response: &response,
+                        },
+                    )?;
+                    continue;
+                }
+                if matches!(request, RelayRequest::Raww { .. }) {
+                    let response = dispatch_raww(
+                        request,
+                        configuration_root,
+                        bound_bundle.as_ref(),
+                        bundle_catalog,
+                    );
+                    write_stream_frame_to_writer(
+                        writer,
+                        OutgoingFrame::Response {
+                            request_id: request_id.as_deref(),
+                            response: &response,
+                        },
+                    )?;
+                    continue;
+                }
+                // Bundle-subject operations (`Up`/`Down`, permission decisions)
+                // address a bundle the requester is a member of, by the wire
+                // `namespace` selector or the bound bundle. This is not a borrow:
+                // the bundle is the operation's subject, not a stand-in home.
+                let bundle_paths = match resolve_namespace_routing_bundle(
                     bundle_catalog,
-                    &request,
                     target_namespace.as_deref(),
                     bound_bundle.as_ref(),
                 ) {
@@ -672,72 +715,19 @@ fn full_requester_principal_id(registration: &StreamRegistration) -> String {
     }
 }
 
-/// Resolves the bundle context to load for a stream request.
-///
-/// Routing differs by operation:
-///
-/// - `Send` infers its routing bundle from target principal-id suffixes, not the
-///   wire `namespace` field. A session sender always routes to its bound bundle
-///   (per-target classification and any cross-namespace conflict are handled
-///   downstream in `handle_send`). A relay-wide sender, which carries no bound
-///   bundle, routes to the bundle named by the first `@<bundle>` target suffix;
-///   a relay-wide sender whose targets are all bare (no suffix) has no routing
-///   context and is rejected with `validation_missing_routing_namespace`.
-/// - `Raww` mirrors `Send` for its single target: a session sender routes within
-///   its bound bundle, and a relay-wide sender derives the bundle from the
-///   target's `@<bundle>` suffix. A bare or relay-wide target names no bundle, so
-///   routing falls back to the wire `namespace` selector below.
-/// - All other operations use the wire `namespace` selector: a bundle name does
-///   a catalog lookup, `EXTERNAL`/`RELAY` are reserved for relay-internal
-///   routing and rejected with `validation_unsupported_namespace`, and an absent
-///   namespace falls back to the connection's bound bundle (a relay-wide
-///   connection with no namespace is rejected). `List` with the `GLOBAL`
-///   namespace is handled before this function and never reaches it.
-fn resolve_effective_bundle(
-    bundle_catalog: &BundleCatalog,
-    request: &RelayRequest,
-    namespace: Option<&str>,
-    bound_bundle: Option<&BundleRuntimePaths>,
-) -> Result<BundleRuntimePaths, RelayError> {
-    // `Send` is handled before this function via the namespace-centric send path
-    // and never reaches here.
-    if let RelayRequest::Raww { target_session, .. } = request {
-        return resolve_raww_routing_bundle(
-            bundle_catalog,
-            target_session,
-            namespace,
-            bound_bundle,
-        );
-    }
-    resolve_namespace_routing_bundle(bundle_catalog, namespace, bound_bundle)
-}
-
-/// Resolves the routing bundle for a `Raww` from its single target's bundle
-/// suffix (suffix-based routing), mirroring `Send`.
-fn resolve_raww_routing_bundle(
-    bundle_catalog: &BundleCatalog,
-    target_session: &str,
-    namespace: Option<&str>,
-    bound_bundle: Option<&BundleRuntimePaths>,
-) -> Result<BundleRuntimePaths, RelayError> {
-    if let Some(bound) = bound_bundle {
-        // A session sender routes within its bound bundle, exactly as `Send`
-        // does; the target's namespace is reconciled downstream.
-        return Ok(bound.clone());
-    }
-    // A relay-wide sender derives its routing bundle from the bundle-qualified
-    // target. A bare or relay-wide target names no bundle to route against, so
-    // fall back to the wire namespace selector (and its error path).
-    if let Some(bundle_name) = bundle_namespace_suffix(target_session) {
-        return bundle_catalog
-            .lookup(bundle_name)
-            .ok_or_else(|| unknown_bundle_error(bundle_name));
-    }
-    resolve_namespace_routing_bundle(bundle_catalog, namespace, bound_bundle)
-}
-
-/// Resolves the routing bundle for namespace-selected operations from the wire
+/// Resolves the subject bundle for a bundle-addressed operation (`Up`/`Down`,
+/// permission decisions, and the `List` enumerate bundle) from the wire
 /// `namespace` field and the connection's bound bundle.
+///
+/// This is the one remaining pre-handler bundle resolution. The target
+/// operations (`Send`/`Look`/`Raww`) no longer use it: they are dispatched
+/// through their namespace-centric paths, which resolve the requester in its home
+/// namespace and load each target's bundle inside the handler. A bundle name does
+/// a catalog lookup, `EXTERNAL`/`RELAY` are reserved for relay-internal routing
+/// and rejected with `validation_unsupported_namespace`, and an absent namespace
+/// falls back to the connection's bound bundle (a relay-wide connection with no
+/// namespace is rejected). `List` with the `GLOBAL` namespace is handled before
+/// this function and never reaches it.
 fn resolve_namespace_routing_bundle(
     bundle_catalog: &BundleCatalog,
     namespace: Option<&str>,
@@ -763,17 +753,6 @@ fn resolve_namespace_routing_bundle(
         "stream request from a relay-wide principal requires an explicit routing namespace",
         None,
     ))
-}
-
-/// Returns the bundle name from a target's `@<bundle>` suffix, or `None` for a
-/// bare target (no suffix) or a relay-wide target (`@GLOBAL`/`@EXTERNAL`/
-/// `@RELAY`), neither of which names a bundle.
-fn bundle_namespace_suffix(target: &str) -> Option<&str> {
-    let (_, namespace) = split_principal_id(target)?;
-    match classify_principal_id(target) {
-        Some(PrincipalType::Session) => Some(namespace),
-        _ => None,
-    }
 }
 
 fn unknown_bundle_error(bundle_name: &str) -> RelayError {

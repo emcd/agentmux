@@ -18,23 +18,6 @@ pub(super) struct SendRequestContext {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct LookRequestContext {
-    pub(super) requester_session: String,
-    pub(super) target_session: String,
-    pub(super) lines: Option<usize>,
-    pub(super) offset: Option<usize>,
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct RawwRequestContext {
-    pub(super) request_id: Option<String>,
-    pub(super) requester_session: String,
-    pub(super) target_session: String,
-    pub(super) text: String,
-    pub(super) no_enter: bool,
-}
-
-#[derive(Clone, Debug)]
 pub(super) struct PermissionDecisionRequestContext {
     pub(super) permission_request_id: String,
     pub(super) outcome: String,
