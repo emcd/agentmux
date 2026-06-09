@@ -188,17 +188,73 @@ pub(super) fn required_tier(route: &ResolvedRoute) -> ScopeTier {
         .unwrap_or(ScopeTier::Own)
 }
 
-/// Resolves a Send's fully-qualified targets into a config-free [`ResolvedRoute`]
-/// (the `MultiTarget` resolution stage).
+/// Whether an operation can route to a relay-wide (`@GLOBAL`) target.
 ///
-/// Classifies each target from its `@<namespace>` suffix alone — no bundle
-/// configuration or catalog access. An `@GLOBAL` target is relay-wide (delivered
-/// via the registry, keyed by its full principal id); an `@<bundle>` target is a
-/// session in that bundle; a reserved namespace (`@EXTERNAL`/`@RELAY`) is
-/// rejected with `validation_unsupported_namespace`; a bare (unqualified) target
-/// is rejected with `validation_unqualified_target`. Target *existence*
-/// (membership / registry presence) is not checked here — that is the handler
-/// body's delivery concern, validated after this stage.
+/// This is the only axis on which per-target resolution differs across
+/// operations: `Send` delivers to a relay-wide UI session via the registry,
+/// while `Look` cannot inspect one (a UI session has no pane) and so rejects it
+/// as an unsupported namespace.
+#[derive(Clone, Copy)]
+enum RelayWideTargets {
+    Allowed,
+    Rejected,
+}
+
+/// Classifies one fully-qualified target by its `@<namespace>` suffix alone — no
+/// bundle configuration or catalog access. An `@<bundle>` target is a session in
+/// that bundle; an `@GLOBAL` target is relay-wide when `relay_wide` is `Allowed`
+/// (keyed by its full principal id, riding `dispatch_namespace` for tier
+/// classification) and otherwise rejected; a reserved namespace
+/// (`@EXTERNAL`/`@RELAY`) is rejected with `validation_unsupported_namespace`; a
+/// bare (unqualified) target is rejected with `validation_unqualified_target`.
+/// Target *existence* is not checked here — that is the handler body's delivery
+/// concern, validated after this stage.
+fn resolve_target(
+    dispatch_namespace: &str,
+    target: &str,
+    relay_wide: RelayWideTargets,
+) -> Result<ResolvedTarget, RelayError> {
+    let requested = target.trim();
+    match classify_principal_id(requested) {
+        Some(PrincipalType::User) if matches!(relay_wide, RelayWideTargets::Allowed) => {
+            Ok(ResolvedTarget {
+                bundle_name: dispatch_namespace.to_string(),
+                session_id: Some(requested.to_string()),
+                relay_wide: true,
+            })
+        }
+        Some(PrincipalType::Session) => {
+            let (session_id, bundle_name) = split_principal_id(requested)
+                .expect("session classification implies a parseable suffix");
+            Ok(ResolvedTarget {
+                bundle_name: bundle_name.to_string(),
+                session_id: Some(session_id.to_string()),
+                relay_wide: false,
+            })
+        }
+        // A relay-wide `@GLOBAL` target falls here only when `relay_wide` is
+        // `Rejected`; reserved `@EXTERNAL`/`@RELAY` always do.
+        Some(PrincipalType::User | PrincipalType::Application | PrincipalType::Relay) => {
+            let namespace = split_principal_id(requested)
+                .map(|(_, namespace)| namespace)
+                .unwrap_or_default();
+            Err(relay_error(
+                "validation_unsupported_namespace",
+                "target namespace names no routable recipient for this operation",
+                Some(json!({ "target": requested, "namespace": namespace })),
+            ))
+        }
+        None => Err(relay_error(
+            "validation_unqualified_target",
+            "target must be a fully-qualified principal id (id@namespace)",
+            Some(json!({ "target": requested })),
+        )),
+    }
+}
+
+/// Resolves a Send's fully-qualified targets into a config-free [`ResolvedRoute`]
+/// (the `MultiTarget` resolution stage): a fan-out of [`resolve_target`] over
+/// every target, with relay-wide (`@GLOBAL`) delivery permitted.
 ///
 /// `dispatch_namespace` is the requester's home namespace (its bundle, or
 /// `GLOBAL`); see [`requester_home_namespace`].
@@ -207,51 +263,36 @@ pub(super) fn resolve_send_route(
     requester_session: &str,
     targets: &[String],
 ) -> Result<ResolvedRoute, RelayError> {
-    let mut resolved = Vec::with_capacity(targets.len());
-    for target in targets {
-        let requested = target.trim();
-        match classify_principal_id(requested) {
-            Some(PrincipalType::User) => {
-                // Relay-wide `@GLOBAL` target: delivered via the registry keyed by
-                // its full principal id. It rides the dispatch namespace for tier
-                // classification and never raises the bar to `all:all`.
-                resolved.push(ResolvedTarget {
-                    bundle_name: dispatch_namespace.to_string(),
-                    session_id: Some(requested.to_string()),
-                    relay_wide: true,
-                });
-            }
-            Some(PrincipalType::Session) => {
-                let (session_id, bundle_name) = split_principal_id(requested)
-                    .expect("session classification implies a parseable suffix");
-                resolved.push(ResolvedTarget {
-                    bundle_name: bundle_name.to_string(),
-                    session_id: Some(session_id.to_string()),
-                    relay_wide: false,
-                });
-            }
-            Some(PrincipalType::Application | PrincipalType::Relay) => {
-                let namespace = split_principal_id(requested)
-                    .map(|(_, namespace)| namespace)
-                    .unwrap_or_default();
-                return Err(relay_error(
-                    "validation_unsupported_namespace",
-                    "target namespace is reserved for relay-internal routing",
-                    Some(json!({ "target": requested, "namespace": namespace })),
-                ));
-            }
-            None => {
-                return Err(relay_error(
-                    "validation_unqualified_target",
-                    "target must be a fully-qualified principal id (id@namespace)",
-                    Some(json!({ "target": requested })),
-                ));
-            }
-        }
-    }
+    let resolved = targets
+        .iter()
+        .map(|target| resolve_target(dispatch_namespace, target, RelayWideTargets::Allowed))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(ResolvedRoute {
         dispatch_namespace: dispatch_namespace.to_string(),
         requester_session: requester_session.to_string(),
         targets: resolved,
+    })
+}
+
+/// Resolves a Look's fully-qualified target into a config-free [`ResolvedRoute`]
+/// (the `SingleTarget` resolution stage): one [`resolve_target`] call with
+/// relay-wide targets rejected, since a UI session has no pane to inspect.
+///
+/// `dispatch_namespace` is the requester's home namespace (its bundle, or
+/// `GLOBAL`); see [`requester_home_namespace`].
+pub(super) fn resolve_look_route(
+    dispatch_namespace: &str,
+    requester_session: &str,
+    target_session: &str,
+) -> Result<ResolvedRoute, RelayError> {
+    let target = resolve_target(
+        dispatch_namespace,
+        target_session,
+        RelayWideTargets::Rejected,
+    )?;
+    Ok(ResolvedRoute {
+        dispatch_namespace: dispatch_namespace.to_string(),
+        requester_session: requester_session.to_string(),
+        targets: vec![target],
     })
 }

@@ -29,7 +29,7 @@ use super::identity::{
 };
 use super::routing::{
     Addressing, Capability, OperationProfile, ResolvedRoute, ResolvedTarget as RouteTarget,
-    requester_home_namespace, resolve_send_route,
+    requester_home_namespace, resolve_look_route, resolve_send_route,
 };
 use super::stream::{RelayStreamEvent, list_registered_relay_wide_sessions};
 use super::tmux::{capture_pane_tail_lines, resolve_active_pane_target};
@@ -796,11 +796,21 @@ fn handle_look(
         "requester_session",
     )?;
 
-    // Resolve the target's hosting bundle from its `@<bundle>` suffix. A bare
-    // (unqualified) target is rejected; a same-bundle look is qualified with its
-    // own bundle name.
-    let (target_bundle_name, target_session_id) =
-        resolve_look_target_bundle(target_session.as_str())?;
+    // Resolve the target through the config-free single-target stage: a bare
+    // (unqualified) target is rejected, a reserved namespace names no pane, and
+    // an `@<bundle>` target is classified by suffix alone. The route doubles as
+    // the authorization input below.
+    let route = resolve_look_route(
+        requester_home_namespace(requester.session_id.as_str(), bundle.bundle_name.as_str()),
+        requester.session_id.as_str(),
+        target_session.as_str(),
+    )?;
+    let target_route = &route.targets[0];
+    let target_bundle_name = target_route.bundle_name.as_str();
+    let target_session_id = target_route
+        .session_id
+        .as_deref()
+        .expect("look target carries a session id");
     let cross_bundle = target_bundle_name != bundle.bundle_name;
 
     // For a peer-bundle target, load its configuration and runtime context from
@@ -839,19 +849,7 @@ fn handle_look(
     // `look` control is resolved in its dispatch bundle, and a peer-bundle target
     // raises the required tier to `all:all` while same-bundle inspection of
     // another session needs `all:home` (self-inspection needs only `self`).
-    let route = ResolvedRoute {
-        dispatch_namespace: requester_home_namespace(
-            requester.session_id.as_str(),
-            bundle.bundle_name.as_str(),
-        )
-        .to_string(),
-        requester_session: requester.session_id.clone(),
-        targets: vec![RouteTarget {
-            bundle_name: target_bundle_name.to_string(),
-            session_id: Some(target_session_id.to_string()),
-            relay_wide: false,
-        }],
-    };
+    // Existence is validated above, so a denial sorts after `validation_unknown_target`.
     authorize_route(
         bundle.bundle_name.as_str(),
         authorization,
@@ -1321,31 +1319,6 @@ fn resolve_sender_identity(
 /// (a same-bundle look qualifies with its own bundle). A bare (unqualified)
 /// target is rejected with `validation_unqualified_target`; relay-wide namespaces
 /// (`@GLOBAL`/`@EXTERNAL`/`@RELAY`) name no inspectable session and are rejected.
-fn resolve_look_target_bundle(target_session: &str) -> Result<(&str, &str), RelayError> {
-    match classify_principal_id(target_session) {
-        Some(PrincipalType::Session) => {
-            let (session_id, bundle_name) = split_principal_id(target_session)
-                .expect("session classification implies a parseable suffix");
-            Ok((bundle_name, session_id))
-        }
-        Some(PrincipalType::User | PrincipalType::Application | PrincipalType::Relay) => {
-            let namespace = split_principal_id(target_session)
-                .map(|(_, namespace)| namespace)
-                .unwrap_or_default();
-            Err(relay_error(
-                "validation_unsupported_namespace",
-                "look target namespace is reserved and names no inspectable session",
-                Some(json!({ "target_session": target_session, "namespace": namespace })),
-            ))
-        }
-        None => Err(relay_error(
-            "validation_unqualified_target",
-            "look target must be a fully-qualified principal id (id@namespace)",
-            Some(json!({ "target_session": target_session })),
-        )),
-    }
-}
-
 /// One namespace-scoped delivery group: a target bundle's configuration plus
 /// the runtime context and permission deciders used to dispatch its targets.
 struct DeliveryGroup {
