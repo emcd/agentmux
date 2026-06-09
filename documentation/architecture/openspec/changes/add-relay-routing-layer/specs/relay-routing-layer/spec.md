@@ -4,31 +4,47 @@
 
 The relay SHALL resolve all target-addressed operations (Send, Look, Raww,
 List) through a shared, operation-agnostic resolution stage before invoking any
-operation handler. The resolution stage SHALL:
+operation handler. The resolution stage SHALL operate **without consulting
+bundle configuration or the bundle catalog** — it classifies targets from their
+principal-ID suffixes alone — and SHALL:
 
-- Parse the `@<bundle>` suffix from each target principal ID and look up the
-  named bundle in the bundle catalog, producing a `ResolvedTarget` for each
-  target containing the bundle name, runtime directory, session ID, and
-  transport type.
+- Parse each target's `@<namespace>` suffix into a `ResolvedTarget { bundle_name,
+  session_id, relay_wide }`: an `@GLOBAL` suffix marks a relay-wide target; an
+  `@<bundle>` suffix names that bundle; the bundle-local session id is the
+  portion before the suffix.
+- Reject a target that carries no suffix with `validation_unqualified_target`.
+  The stage never resolves a bare id against bundle membership or the UI
+  registry.
 - Identify the requester's dispatch (home) bundle: the sender's bound bundle
-  for session principals, or the bundle inferred from the first bundle-qualified
+  for session principals, or the bundle named by the first bundle-qualified
   target for relay-wide principals.
-- Return a `ResolvedRoute { dispatch_bundle, targets: Vec<ResolvedTarget> }` to
-  the authorization stage.
+- Return a `ResolvedRoute { dispatch_bundle_name, requester_session, targets }`
+  to the authorization stage.
 
-#### Scenario: Single target resolved to its bundle
+Target existence (membership), transport type, and runtime directory are NOT
+resolved here; they are bundle-configuration concerns handled by the operation
+body after authorization (see Operation Body Contract).
 
-- **WHEN** the relay receives a Look or Raww request targeting
-  `agent@bundle-a`
-- **THEN** the resolution stage produces `ResolvedTarget { bundle: bundle-a,
-  session_id: agent, ... }`
-- **AND** `dispatch_bundle` is set to the requester's home bundle
+#### Scenario: Single target classified from its suffix
 
-#### Scenario: Multi-target Send resolved per target
+- **WHEN** the relay receives a Look or Raww request targeting `agent@bundle-a`
+- **THEN** the resolution stage produces `ResolvedTarget { bundle_name:
+  bundle-a, session_id: agent, relay_wide: false }` without loading bundle
+  configuration
+- **AND** `dispatch_bundle_name` is the requester's home bundle
+
+#### Scenario: Multi-target Send classified per target
 
 - **WHEN** the relay receives a Send request with targets in multiple bundles
 - **THEN** the resolution stage produces one `ResolvedTarget` per target, each
-  located in its own bundle
+  classified to its own bundle from its suffix
+
+#### Scenario: Unqualified target rejected at resolution
+
+- **WHEN** a target-addressed request carries a bare target (no `@<namespace>`
+  suffix)
+- **THEN** the resolution stage returns `validation_unqualified_target` without
+  loading any bundle configuration
 
 ### Requirement: Authorization Stage
 
@@ -36,27 +52,59 @@ The relay SHALL evaluate authorization for all target-addressed operations
 through a shared authorization stage that receives the `ResolvedRoute` from the
 resolution stage. The authorization stage SHALL:
 
-- Always resolve the requester's policy controls from the dispatch bundle (the
-  requester's home namespace), never from a peer bundle.
-- Classify the requester-to-target relationship and require the appropriate
-  scope tier: `self` for self-target, `all:home` for same-bundle, `all:all`
-  for cross-bundle.
-- Apply a per-operation `CrossBundlePolicy` that declares whether cross-bundle
-  reach is forbidden, requires `all:all`, or is permitted unconditionally:
-  - Send: `RequireScope(all:all)`
-  - Look: `RequireScope(all:all)`
-  - Raww: `RequireScope(all:all)`
-  - List: `RequireScope(all:all)`
+- Resolve the requester's policy controls from its **home namespace's** policy:
+  a bundle's session policy for a session principal, or the `GLOBAL` operator
+  policy for a relay-wide principal. The home namespace is derived from the
+  requester's own principal id, never from a target or a borrowed peer bundle. A
+  relay-wide (`GLOBAL`) sender is authorized from the operator policy and is
+  never assigned a bundle namespace.
+- Classify each target's relationship to the requester into a uniform scope tier
+  and require the maximum tier across the route: `self` for a self-target,
+  `all:home` for a same-bundle target, `all:all` for a target in a peer bundle.
+  A relay-wide (`@GLOBAL`) target is delivered through the session registry, not
+  by crossing into a peer bundle, so it classifies at the `all:home` tier rather
+  than raising the requirement to `all:all`.
+- Consider **every** target when computing the required tier; authorization is
+  the maximum across the whole route, never a single representative target.
+  Because the scope ladder is monotone, a requester whose configured scope
+  satisfies the maximum tier is thereby authorized for every target. The check
+  is **all-or-nothing**: if the requester's scope does not satisfy the maximum,
+  the entire operation is rejected with `authorization_forbidden` and no target
+  is delivered. (Per-target partial delivery is a deferred follow-up.)
+- Check the required tier against the requester's configured scope for the
+  operation's capability. Each operation contributes only an `OperationProfile`
+  (its capability and addressing mode); it carries no per-operation cross-bundle
+  policy.
 
-The relay SHALL NOT apply per-operation cross-bundle logic in routing code; the
-`CrossBundlePolicy` table SHALL be the single reviewable authority for
-cross-bundle reach.
+Whether a capability can ever be configured to reach the cross-bundle (`all:all`)
+tier is governed solely by the policy schema's per-capability allowed-scope set
+(`parse_policy_controls`): `send`, `look`, `raww`, and `list` may be configured
+to `all:all`; `grant` and `updown` are capped at `all:home` and can never satisfy
+the cross-bundle threshold without a schema change. The relay SHALL NOT apply
+per-operation cross-bundle logic in handler or routing code; this data-driven
+spine — uniform tier classification plus the schema allowed-scope set — SHALL be
+the single authority for cross-bundle reach.
 
-#### Scenario: Requester authorized in dispatch bundle for cross-bundle Raww
+#### Scenario: Requester authorized in home namespace for cross-bundle Raww
 
 - **WHEN** a session in bundle A issues a Raww request targeting bundle B
 - **THEN** relay evaluates the requester's `raww` policy control from bundle A
+  (its home namespace)
 - **AND** does not require the requester to be a member of bundle B
+
+#### Scenario: Relay-wide sender authorized from the operator policy
+
+- **WHEN** a relay-wide (`GLOBAL`) sender issues a target-addressed operation
+- **THEN** relay resolves the requester's controls from the `GLOBAL` operator
+  policy, not from any bundle
+- **AND** does not borrow a peer bundle's namespace for the sender
+
+#### Scenario: Relay-wide send to GLOBAL-only targets requires no bundle
+
+- **WHEN** a relay-wide (`GLOBAL`) sender issues a Send whose targets are all
+  `@GLOBAL`
+- **THEN** relay routes each target through the session registry
+- **AND** does not return `validation_missing_routing_namespace`
 
 #### Scenario: Cross-bundle Raww denied under all:home
 
@@ -85,21 +133,26 @@ cross-bundle raww from a relay-wide principal.
 
 ### Requirement: Operation Body Contract
 
-Operation handler bodies SHALL receive a `ResolvedRoute` containing targets
-already located and authorized. Handler bodies SHALL NOT:
+Operation handler bodies SHALL receive a `ResolvedRoute` whose targets are
+already classified (located to a bundle or the relay-wide registry) and
+authorized. Handler bodies SHALL NOT:
 
-- Parse `@<bundle>` suffixes from principal IDs.
-- Perform bundle catalog lookups.
-- Evaluate requester policy controls or scope tiers.
+- Parse `@<namespace>` suffixes from principal IDs.
+- Evaluate requester policy controls or classify target scope tiers.
 
-Handler bodies SHALL implement only operation-specific work: snapshot capture,
-delivery enqueueing, raw text injection, session enumeration, or lifecycle
-control.
+Handler bodies MAY load the target bundles' configuration to validate target
+existence and to assemble delivery (member transport, permission deciders,
+runtime directory) — this is delivery work, distinct from routing and
+authorization. They SHALL implement only operation-specific work: existence
+validation, snapshot capture, delivery enqueueing, raw text injection, session
+enumeration, or lifecycle control.
 
-#### Scenario: Handler body free of routing logic
+#### Scenario: Handler body free of routing and authorization logic
 
 - **WHEN** a developer reads any target-operation handler (`handle_send`,
   `handle_look`, `handle_raww`, `handle_list`)
-- **THEN** no bundle catalog lookups or principal-ID suffix parsing are present
-- **AND** routing and authorization are handled exclusively by the dispatch
-  layer
+- **THEN** no principal-ID suffix parsing and no requester-policy or scope-tier
+  evaluation are present
+- **AND** routing classification and authorization are handled exclusively by
+  the dispatch layer, with only existence validation and delivery assembly
+  remaining in the body
