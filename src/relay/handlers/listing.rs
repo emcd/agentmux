@@ -115,7 +115,7 @@ pub(in crate::relay) fn handle_list_routed(
             None,
         )
     })?;
-    let sender = super::resolve_sender_identity(
+    let sender = super::sender::resolve_sender_identity(
         dispatch_bundle,
         dispatch_authorization,
         requester_session.as_str(),

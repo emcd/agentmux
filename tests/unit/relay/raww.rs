@@ -24,9 +24,10 @@ fn raww_rejects_unknown_target() {
 }
 
 #[test]
-fn raww_rejects_ui_target_class() {
-    // Raww writes raw text to a tmux pane; a global UI session is rejected as
-    // an unsupported target class.
+fn raww_rejects_relay_wide_target_as_unsupported_namespace() {
+    // Raww writes raw text to a tmux pane; a relay-wide (`@GLOBAL`) UI session
+    // names no recipient that accepts raw input and is rejected with the generic
+    // unsupported-namespace error, uniform with the Look single-target stage.
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     write_tui_configuration_with_session_id(&config_root, "default", "ui@GLOBAL");
@@ -46,9 +47,7 @@ fn raww_rejects_ui_target_class() {
     )
     .expect_err("raww should fail");
 
-    assert_eq!(response.code, "validation_invalid_params");
-    let details = response.details.expect("details");
-    assert_eq!(details["target_class"], "ui");
+    assert_eq!(response.code, "validation_unsupported_namespace");
 }
 
 #[test]

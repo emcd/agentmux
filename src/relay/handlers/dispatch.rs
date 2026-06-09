@@ -1,0 +1,323 @@
+//! Request dispatch: the per-bundle [`handle_request`] router and the relay-wide
+//! entry points (`GLOBAL` list, identity admin/introspect, permission snapshot)
+//! that bypass the per-bundle path. Each arm delegates to a sibling operation
+//! submodule; this module owns only the routing and request normalization.
+
+use std::path::Path;
+
+use crate::configuration::BundleConfiguration;
+
+use super::super::authorization::{AuthorizationContext, authorize_updown};
+use super::super::connection::BundleCatalog;
+use super::super::identity::IdentityIntrospectRights;
+use super::super::stream::{RelayStreamEvent, list_registered_relay_wide_sessions};
+use super::super::{
+    ListedBundle, ListedBundleState, ListedSession, LookRequestContext,
+    PermissionDecisionRequestContext, RawwRequestContext, RelayError, RelayRequest, RelayResponse,
+    RequestPrincipal, SCHEMA_VERSION, bare_session_id, relay_error,
+};
+use super::{identity, listing, look, permissions, raww};
+
+pub(in crate::relay) fn handle_request(
+    request: RelayRequest,
+    bundle: &BundleConfiguration,
+    authorization: &AuthorizationContext,
+    runtime_directory: &Path,
+    principal: Option<RequestPrincipal>,
+    configuration_root: &Path,
+    bundle_catalog: &BundleCatalog,
+) -> Result<RelayResponse, RelayError> {
+    let request = normalize_request_identities(request, bundle.bundle_name.as_str());
+    match request {
+        RelayRequest::Up => {
+            authorize_bundle_principal(bundle, authorization, principal.as_ref())?;
+            listing::handle_bundle_up(bundle, runtime_directory)
+        }
+        RelayRequest::Down => {
+            authorize_bundle_principal(bundle, authorization, principal.as_ref())?;
+            listing::handle_bundle_down(bundle, runtime_directory)
+        }
+        RelayRequest::List { requester_session } => listing::handle_list_routed(
+            bundle,
+            authorization,
+            bundle,
+            runtime_directory,
+            requester_session,
+        ),
+        RelayRequest::Send { .. } => Err(relay_error(
+            "internal_unexpected_request",
+            "Send is dispatched through the namespace-centric send path, not the per-bundle dispatcher",
+            None,
+        )),
+        RelayRequest::Look {
+            requester_session,
+            target_session,
+            lines,
+            offset,
+        } => look::handle_look(
+            bundle,
+            authorization,
+            LookRequestContext {
+                requester_session,
+                target_session,
+                lines,
+                offset,
+            },
+            runtime_directory,
+            configuration_root,
+            bundle_catalog,
+            principal.as_ref(),
+        ),
+        RelayRequest::Raww {
+            request_id,
+            requester_session,
+            target_session,
+            text,
+            no_enter,
+        } => raww::handle_raww(
+            bundle,
+            authorization,
+            RawwRequestContext {
+                request_id,
+                requester_session,
+                target_session,
+                text,
+                no_enter,
+            },
+            runtime_directory,
+        ),
+        RelayRequest::PermissionResolve {
+            permission_request_id,
+            outcome,
+            option_id,
+            bundle_name: request_bundle_name,
+            ui_session_id,
+        } => permissions::handle_permission_decision(
+            bundle,
+            authorization,
+            PermissionDecisionRequestContext {
+                permission_request_id,
+                outcome,
+                option_id,
+                bundle_name: request_bundle_name,
+                ui_session_id,
+            },
+            runtime_directory,
+            principal,
+        ),
+        RelayRequest::PermissionList {
+            bundle_name: request_bundle_name,
+        } => permissions::handle_permission_list(
+            bundle,
+            authorization,
+            request_bundle_name,
+            runtime_directory,
+            principal,
+        ),
+        RelayRequest::NewPeer { .. }
+        | RelayRequest::ChangePsk { .. }
+        | RelayRequest::IdentityIntrospect { .. } => Err(relay_error(
+            "internal_unexpected_request",
+            "relay-wide identity request reached the per-bundle dispatcher",
+            None,
+        )),
+    }
+}
+
+/// Returns the set of currently registered relay-wide sessions for a `List`
+/// request issued with `namespace = "GLOBAL"`.
+///
+/// Relay-wide routing has no bundle context, so this bypasses the per-bundle
+/// `handle_request` path entirely: it reads the live stream registry and
+/// projects each `RegistryKey::RelayWide` entry into a `ListedSession`. The
+/// result is shaped as a `RelayResponse::List` over a synthetic `GLOBAL` bundle
+/// view so clients reuse the existing list payload. An empty registry yields an
+/// empty session set (a `down` bundle), not an error.
+pub(in crate::relay) fn handle_global_list() -> RelayResponse {
+    let mut sessions = list_registered_relay_wide_sessions()
+        .into_iter()
+        .map(|(principal_id, session_type)| ListedSession {
+            id: principal_id,
+            name: None,
+            transport: session_type.into(),
+            ready: true,
+        })
+        .collect::<Vec<_>>();
+    sessions.sort_by(|left, right| left.id.cmp(&right.id));
+    let hosted = !sessions.is_empty();
+    let state = if hosted {
+        ListedBundleState::Up
+    } else {
+        ListedBundleState::Down
+    };
+    RelayResponse::List {
+        schema_version: SCHEMA_VERSION.to_string(),
+        bundle: ListedBundle {
+            id: "GLOBAL".to_string(),
+            hosted,
+            state,
+            startup_health: None,
+            state_reason_code: None,
+            state_reason: None,
+            startup_failure_count: 0,
+            recent_startup_failures: Vec::new(),
+            principals: sessions,
+        },
+    }
+}
+
+/// Dispatches a relay-wide identity administration request (`new peer`,
+/// `change psk`). These bypass the per-bundle `handle_request` path: they
+/// operate on the relay-level principal store and authorize against the
+/// requester's policy preset relay-wide rather than within a bundle context.
+pub(in crate::relay) fn handle_identity_admin_request(
+    request: RelayRequest,
+    configuration_root: &Path,
+    state_root: &Path,
+    requester_principal_id: &str,
+) -> Result<RelayResponse, RelayError> {
+    match request {
+        RelayRequest::NewPeer {
+            principal_id,
+            scope,
+            output_path,
+        } => identity::handle_new_peer(
+            configuration_root,
+            state_root,
+            requester_principal_id,
+            identity::NewPeerRequestContext {
+                principal_id,
+                scope,
+                output_path,
+            },
+        ),
+        RelayRequest::ChangePsk { principal_id } => identity::handle_change_psk(
+            configuration_root,
+            state_root,
+            requester_principal_id,
+            principal_id,
+        ),
+        _ => Err(relay_error(
+            "internal_unexpected_request",
+            "non-admin request routed to identity admin dispatcher",
+            None,
+        )),
+    }
+}
+
+/// Dispatches a relay-wide `IdentityIntrospect` request. Like the identity admin
+/// handlers this bypasses the per-bundle `handle_request` path: introspection
+/// reads the relay-level principal store and its target may be a bundle-less
+/// principal. The connection gate (the recorded `introspect_rights` and their
+/// scope) is enforced inside the handler.
+pub(in crate::relay) fn handle_identity_introspect(
+    state_root: &Path,
+    principal: &RequestPrincipal,
+    target_session: &str,
+    bundle_name: Option<&str>,
+) -> Result<RelayResponse, RelayError> {
+    identity::handle_identity_introspect(state_root, principal, target_session, bundle_name)
+}
+
+/// Builds the `identity.snapshot` stream event for a trusted-host connection's
+/// registered scope (delivered once, right after Hello). See
+/// `identity::build_identity_snapshot_event`.
+pub(in crate::relay) fn build_identity_snapshot_event(
+    state_root: &Path,
+    host_principal_id: &str,
+    rights: &IdentityIntrospectRights,
+) -> Result<RelayStreamEvent, RelayError> {
+    identity::build_identity_snapshot_event(state_root, host_principal_id, rights)
+}
+
+pub(in crate::relay) fn emit_permission_snapshot_for_ui_registration(
+    configuration_root: &Path,
+    bundle_name: &str,
+    runtime_directory: &Path,
+    ui_session_id: &str,
+) -> Result<(), RelayError> {
+    permissions::emit_permission_snapshot_for_ui_registration(
+        configuration_root,
+        bundle_name,
+        runtime_directory,
+        ui_session_id,
+    )
+}
+
+/// Rewrites canonical `session@bundle` identities in an incoming request to
+/// their bundle-local form so internal lookups match configured member ids.
+fn normalize_request_identities(request: RelayRequest, bundle_name: &str) -> RelayRequest {
+    let bare = |id: String| bare_session_id(id.as_str(), bundle_name);
+    match request {
+        RelayRequest::List { requester_session } => RelayRequest::List {
+            requester_session: requester_session.map(bare),
+        },
+        RelayRequest::Send {
+            request_id,
+            requester_session,
+            message,
+            targets,
+            broadcast,
+            quiet_window_ms,
+            quiescence_timeout_ms,
+            acp_turn_timeout_ms,
+        } => RelayRequest::Send {
+            request_id,
+            requester_session: bare(requester_session),
+            message,
+            // Targets stay fully qualified; the relay no longer bares them. The
+            // send path classifies each target from its `@<namespace>` suffix.
+            targets,
+            broadcast,
+            quiet_window_ms,
+            quiescence_timeout_ms,
+            acp_turn_timeout_ms,
+        },
+        RelayRequest::Look {
+            requester_session,
+            target_session,
+            lines,
+            offset,
+        } => RelayRequest::Look {
+            requester_session: bare(requester_session),
+            target_session,
+            lines,
+            offset,
+        },
+        RelayRequest::Raww {
+            request_id,
+            requester_session,
+            target_session,
+            text,
+            no_enter,
+        } => RelayRequest::Raww {
+            request_id,
+            requester_session: bare(requester_session),
+            target_session,
+            text,
+            no_enter,
+        },
+        request @ (RelayRequest::Up
+        | RelayRequest::Down
+        | RelayRequest::PermissionResolve { .. }
+        | RelayRequest::PermissionList { .. }
+        | RelayRequest::NewPeer { .. }
+        | RelayRequest::ChangePsk { .. }
+        | RelayRequest::IdentityIntrospect { .. }) => request,
+    }
+}
+
+fn authorize_bundle_principal(
+    bundle: &BundleConfiguration,
+    authorization: &AuthorizationContext,
+    principal: Option<&RequestPrincipal>,
+) -> Result<(), RelayError> {
+    let principal = principal.ok_or_else(|| {
+        relay_error(
+            "validation_missing_hello",
+            "bundle up/down requests require stream-associated principal identity",
+            None,
+        )
+    })?;
+    authorize_updown(bundle, authorization, principal.session_id.as_str())
+}
