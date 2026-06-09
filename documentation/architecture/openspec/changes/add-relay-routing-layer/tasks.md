@@ -1,10 +1,18 @@
-## 1. Step 0 — Extend routing module with CrossBundlePolicy (no behavior change)
+## 1. Step 0 — Reconcile spec/design to the data-driven spine (no new enum)
 
-- [ ] 1.1 Extend `src/relay/routing.rs` (already has `OperationProfile`,
-      `ResolvedRoute`, `ResolvedTarget`, `authorize_route`); add
-      `CrossBundlePolicy { Forbidden, RequireScope(ScopeTier), PermitAll }`
-      and wire it into `authorize_route`
-- [ ] 1.2 Validate: `cargo check` passes; no behavior change
+> **Revised (Option B).** The `CrossBundlePolicy` enum is stale: the shipped
+> `src/relay/routing.rs` (`OperationProfile` + `required_tier` + the policy
+> schema's per-capability allowed-scope set) already is the single authority for
+> cross-bundle reach, with no per-operation hardcoded policy. The Raww slice
+> proved a new cross-bundle capability is a `Capability` variant plus a schema
+> allowed-scope widening, not a handler edit. Step 0 is doc/spec reconciliation
+> only.
+
+- [x] 1.1 Rewrite the `relay-routing-layer` spec Authorization Stage requirement
+      to describe the existing data-driven mechanism (drop the `CrossBundlePolicy`
+      table and the "single reviewable authority" enum language); fix the stale
+      `PermitAll` Non-Goal and §2 in `design.md`
+- [x] 1.2 Validate: `openspec validate add-relay-routing-layer --strict` passes
 
 ## 2. Step 1 — Migrate Send onto the layer (no behavior change)
 

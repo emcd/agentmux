@@ -9,10 +9,13 @@ layer) and unblocks `todos/relay/71` (decompose handlers/authorization).
 ## Goals / Non-Goals
 
 - Goals: one routing/authz spine for all target operations; cross-bundle reach
-  controlled by `CrossBundlePolicy` per operation; handlers implement op body
-  only; `todos/relay/76` (cross-bundle raww) resolved as a policy-schema change.
-- Non-Goals: async rewrite; changing Send's `PermitAll` cross-bundle policy;
-  ingress filter (`ideas/relay/2`, future seam).
+  governed by the data-driven tier classification plus the policy schema's
+  per-capability allowed-scope set (no per-operation hardcoded policy); handlers
+  implement op body only; `todos/relay/76` (cross-bundle raww) resolved as a
+  policy-schema change.
+- Non-Goals: async rewrite; changing Send's cross-bundle reach (already
+  `all:all` in effect via the schema allowed-scope set); ingress filter
+  (`ideas/relay/2`, future seam).
 
 ## Decisions
 
@@ -21,13 +24,17 @@ layer) and unblocks `todos/relay/71` (decompose handlers/authorization).
 1. **Resolution** (op-agnostic): parse `@bundle` suffix → catalog lookup →
    `ResolvedTarget { bundle, session_id, transport, runtime }`. Requester's
    dispatch (home) bundle resolved once.
-2. **Authorization**: requester controls always from dispatch bundle.
-   `CrossBundlePolicy` per operation:
-   - Send: `RequireScope(all:all)` (already enforced; migration only)
-   - Look: `RequireScope(all:all)` (already enforced; migration only)
-   - Raww: `RequireScope(all:all)` (was `Forbidden`; issues/relay/24 flat
-     `authorize_scope` path under-enforced at `all:home` — this raises it)
-   - List: `RequireScope(all:all)` (already enforced; migration only)
+2. **Authorization**: requester controls always from dispatch bundle. The
+   required scope tier is the maximum across the route's targets
+   (`required_tier`): a peer-bundle target classifies at `all:all`, a same-bundle
+   or relay-wide (`@GLOBAL`) target at `all:home`, a self-target at `self`.
+   Whether a capability may be configured that high is governed by the schema
+   allowed-scope set (`parse_policy_controls`), not a per-operation enum:
+   - Send: reaches `all:all` (already enforced; migration only)
+   - Look: reaches `all:all` (already enforced; migration only)
+   - Raww: reaches `all:all` (was capped; issues/relay/24 flat `authorize_scope`
+     path under-enforced at `all:home`, the Raww slice raised it via the schema)
+   - List: reaches `all:all` (already enforced; migration only)
 3. **Body**: handler receives `ResolvedRoute`; no routing or authz code.
 
 ### Addressing modes
@@ -50,6 +57,20 @@ layer) and unblocks `todos/relay/71` (decompose handlers/authorization).
 call `authorize_route`. Cross-bundle List requester-in-home is already resolved
 via the connection.rs `dispatch_list` split. These three steps are pure
 structural migrations onto the shared layer — no behavior change.
+
+### CrossBundlePolicy enum dropped (Option B)
+
+An earlier draft proposed a per-operation `CrossBundlePolicy { Forbidden,
+RequireScope(ScopeTier), PermitAll }` table as the cross-bundle authority. It is
+not adopted: the shipped spine already decides cross-bundle reach data-driven,
+and the four target ops would all be `RequireScope(all:all)`, exactly what
+`required_tier` already computes for a peer-bundle target. `required_tier`
+classifies the relationship and the policy schema's per-capability allowed-scope
+set (`parse_policy_controls`) governs configurability — `grant`/`updown` capped
+at `all:home`, `send`/`look`/`raww`/`list` permitted `all:all`. The Raww slice
+proved a new cross-bundle capability is a `Capability` variant plus a schema
+allowed-scope widening, not a handler edit. Step 0 is therefore spec/design
+reconciliation only, with no new enum.
 
 ### @GLOBAL → bundle raww requires all:all
 

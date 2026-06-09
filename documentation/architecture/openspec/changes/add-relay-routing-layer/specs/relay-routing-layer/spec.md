@@ -38,19 +38,25 @@ resolution stage. The authorization stage SHALL:
 
 - Always resolve the requester's policy controls from the dispatch bundle (the
   requester's home namespace), never from a peer bundle.
-- Classify the requester-to-target relationship and require the appropriate
-  scope tier: `self` for self-target, `all:home` for same-bundle, `all:all`
-  for cross-bundle.
-- Apply a per-operation `CrossBundlePolicy` that declares whether cross-bundle
-  reach is forbidden, requires `all:all`, or is permitted unconditionally:
-  - Send: `RequireScope(all:all)`
-  - Look: `RequireScope(all:all)`
-  - Raww: `RequireScope(all:all)`
-  - List: `RequireScope(all:all)`
+- Classify each target's relationship to the requester into a uniform scope tier
+  and require the maximum tier across the route: `self` for a self-target,
+  `all:home` for a same-bundle target, `all:all` for a target in a peer bundle.
+  A relay-wide (`@GLOBAL`) target is delivered through the session registry, not
+  by crossing into a peer bundle, so it classifies at the `all:home` tier rather
+  than raising the requirement to `all:all`.
+- Check the required tier against the requester's configured scope for the
+  operation's capability. Each operation contributes only an `OperationProfile`
+  (its capability and addressing mode); it carries no per-operation cross-bundle
+  policy.
 
-The relay SHALL NOT apply per-operation cross-bundle logic in routing code; the
-`CrossBundlePolicy` table SHALL be the single reviewable authority for
-cross-bundle reach.
+Whether a capability can ever be configured to reach the cross-bundle (`all:all`)
+tier is governed solely by the policy schema's per-capability allowed-scope set
+(`parse_policy_controls`): `send`, `look`, `raww`, and `list` may be configured
+to `all:all`; `grant` and `updown` are capped at `all:home` and can never satisfy
+the cross-bundle threshold without a schema change. The relay SHALL NOT apply
+per-operation cross-bundle logic in handler or routing code; this data-driven
+spine — uniform tier classification plus the schema allowed-scope set — SHALL be
+the single authority for cross-bundle reach.
 
 #### Scenario: Requester authorized in dispatch bundle for cross-bundle Raww
 
