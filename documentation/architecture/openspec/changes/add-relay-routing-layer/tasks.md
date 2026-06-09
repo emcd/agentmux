@@ -139,16 +139,94 @@
 
 ## 6. Step 5 — Decompose handlers.rs and authorization.rs (todos/relay/71)
 
-- [x] 6.1 Split `handlers.rs` along thin operation bodies (routing/authz
-      boilerplate now absent; submodule seams are clean). Extracted
-      `handlers/{send,look,raww}.rs`; the router, `normalize_request_identities`,
-      thin identity/permission delegators, and the shared `SenderIdentity` /
-      `resolve_sender_identity` / `authorize_bundle_principal` helpers stay in the
-      module root (handlers.rs: 1550 → 408 lines).
-- [x] 6.2 Split `authorization.rs` along (policy loading | capability/profile
-      checks | session resolution) seams. Created `authorization/{loading,checks,
-      resolution}.rs`; the root keeps the shared `AuthorizationContext` /
-      `PolicyControls` / `PolicyScope` / `UiSessionAuthorization` types and
-      re-exports the relay-facing API (authorization.rs: 1076 → 94 lines).
+- [x] 6.1 Dissolve `handlers.rs` into a directory module whose `mod.rs` is an
+      import-only hub. `handlers/dispatch.rs` holds the per-bundle router and the
+      relay-wide entry points; `handlers/sender.rs` holds the shared
+      `SenderIdentity` / `resolve_sender_identity`; each operation is its own file
+      (`send`, `look`, `raww`, `listing`, `identity`, `permissions`). No
+      definitions remain in `mod.rs` (handlers.rs: 1550 lines → a 23-line hub).
+- [x] 6.2 Dissolve `authorization.rs` into a directory module along the (policy
+      loading | capability/profile checks | session resolution) seams.
+      `authorization/context.rs` holds the shared `AuthorizationContext` /
+      `PolicyControls` / `PolicyScope` / `UiSessionAuthorization` (members
+      `pub(super)` for the sibling seams); `loading` / `resolution` / `checks` are
+      the seams; `mod.rs` is an import-only hub (authorization.rs: 1076 lines → a
+      30-line hub).
 - [x] 6.3 Validate: `cargo test` passes (254 unit + 216 integration); clippy and
       `cargo fmt --check` clean; no behavior change
+
+> **Decomposition vs separation.** Step 5 organized the code along the seams, but
+> it is file organization, not layer separation: the bodies still open-code
+> `resolve_* → existence → authorize → execute`, and only `Send` is
+> namespace-centric. Steps 6–8 make routing/dispatch and authorization genuinely
+> separate layers — the goal this proposal set out to deliver ("handlers
+> implement op body only"). Added in consultation with the human developer.
+
+## 7. Step 6 — Collapse pre-handler routing onto the home namespace
+
+> **The layer is realized only for `Send`.** `connection.rs` has five dispatch
+> branches; only `Send` (`dispatch_send`) is namespace-centric. `Look`/`Raww`
+> fall through `resolve_effective_bundle` → `dispatch_request` into a single
+> *borrowed* effective bundle — and for `Raww` that borrowed bundle is the
+> *target's* (`resolve_raww_routing_bundle`), so the requester is resolved and
+> authorized in a namespace that is not its home. This step makes every target
+> operation enter on the requester's home-namespace path, like `Send`.
+
+- [ ] 7.1 Route `Look` / `Raww` / `List` through the requester's home namespace
+      (its bound bundle, or `GLOBAL`), never a borrowed dispatch/target bundle;
+      subsume `resolve_effective_bundle`, `resolve_raww_routing_bundle`, and
+      `resolve_namespace_routing_bundle` into one home-namespace resolution in
+      `connection.rs`
+- [ ] 7.2 Collapse the five `connection.rs` dispatch branches toward one
+      namespace-centric entry; relay-wide and identity entry points stay explicit,
+      but no target operation borrows a peer/target bundle to be dispatched
+- [ ] 7.3 Validate: `cargo test` passes; cross-bundle `Look` / `Raww` / `List`
+      resolve the requester in its home namespace
+
+## 8. Step 7 — Introduce the dispatch spine; lift resolution/authorization out of bodies
+
+> The three-stage model (Resolution → Authorization → Body) is currently
+> open-coded inside each handler: every body calls `resolve_*_route`, validates
+> existence, calls `authorize_route`, then executes. The existence-before-authz
+> ordering (so `validation_unknown_target` precedes `authorization_forbidden`) is
+> upheld four times by convention. This step makes the spine a real pipeline.
+
+- [ ] 8.1 Generalize the namespace-centric entry (`handle_send_routed`) into a
+      uniform spine that, for any target operation, loads the requester's home
+      authorization context once, resolves the `ResolvedRoute`, runs the
+      operation's existence/delivery preparation, calls `authorize_route`, then
+      runs the operation body — in that fixed order
+- [ ] 8.2 Remove the `resolve_*_route` and `authorize_route` calls from
+      `handle_send` / `handle_look` / `handle_raww` / `handle_list_routed`; the
+      spine owns them, so the existence-before-authorization ordering is structural
+      rather than per-handler convention
+- [ ] 8.3 Validate: `cargo test` passes; error ordering preserved
+      (`validation_unknown_target` before `authorization_forbidden`)
+
+## 9. Step 8 — Execution-only bodies; home-namespace authz for cross-bundle Look/Raww
+
+> With the spine owning resolution and authorization, each operation contributes
+> only `prepare` (load per-target bundle configuration, validate existence → a
+> delivery plan; the one place configuration is touched) and `execute` (do the
+> work). Cross-bundle `Look` / `Raww` load peer configuration in `prepare` —
+> exactly as `assemble_delivery_groups` already does for `Send` — so the requester
+> is authorized in its **home** namespace, retiring the borrowed-bundle path and
+> the residual `home_bundle` (`todos/relay/78`).
+
+- [ ] 9.1 Reshape `handle_send` / `handle_look` / `handle_raww` /
+      `handle_list_routed` into `prepare` / `execute`; neither stage calls
+      `resolve_*` nor `authorize_route`
+- [ ] 9.2 Cross-bundle `Look` / `Raww` load peer-bundle configuration in `prepare`,
+      authorizing the requester in its home namespace; eliminate the residual
+      `home_bundle` from the delivery path (`todos/relay/78`)
+- [ ] 9.3 Add a `session-relay` spec scenario: a cross-namespace session→session
+      `Raww` / `Look` authorizes in the requester's home namespace and succeeds
+      under `all:all` (it no longer resolves the sender in the target's bundle)
+- [ ] 9.4 Validate: `cargo test` passes; routing/dispatch and authorization are
+      separately testable layers — an operation body cannot run without the spine
+      having authorized it
+
+> **Out of scope (separate arc).** Per-session routing attributes
+> (`can_be_looked` / `can_be_written`) that would let `routing.rs` shed its
+> operation-named resolvers depend on the registry-unification idea
+> (`ideas/relay/5`) and are not part of this change.
