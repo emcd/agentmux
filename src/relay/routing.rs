@@ -18,7 +18,10 @@
 //! cross-bundle (`all:all`) tier is governed entirely by the policy schema's
 //! per-capability allowed-scope set.
 
-use super::identity::split_principal_id;
+use serde_json::json;
+
+use super::identity::{PrincipalType, classify_principal_id, split_principal_id};
+use super::{RelayError, relay_error};
 
 /// Which `policies.toml` control an operation's authorization reads.
 #[derive(Clone, Copy, Debug)]
@@ -78,11 +81,11 @@ pub(super) struct ResolvedTarget {
 }
 
 /// The resolved, about-to-be-authorized shape of a request: the dispatch (home)
-/// bundle the requester is authorized in, the requester's bundle-local id, and
-/// the resolved targets.
+/// namespace the requester is authorized in (a bundle name, or `GLOBAL`), the
+/// requester's bundle-local id, and the resolved targets.
 #[derive(Clone, Debug)]
 pub(super) struct ResolvedRoute {
-    pub dispatch_bundle_name: String,
+    pub dispatch_namespace: String,
     pub requester_session: String,
     pub targets: Vec<ResolvedTarget>,
 }
@@ -130,14 +133,14 @@ impl ResolvedTarget {
     /// [`requester_home_namespace`]), so that direction does require `all:all`.
     /// The asymmetry is intentional — see `tests/integration` and `todos/relay/75`
     /// (the `home+` follow-up).
-    fn reachable_at_home_tier(&self, dispatch_bundle_name: &str) -> bool {
-        self.relay_wide || self.bundle_name == dispatch_bundle_name
+    fn reachable_at_home_tier(&self, dispatch_namespace: &str) -> bool {
+        self.relay_wide || self.bundle_name == dispatch_namespace
     }
 
     /// Classifies this target's relationship to the requester within the
-    /// dispatch bundle into a uniform scope tier.
-    fn tier(&self, dispatch_bundle_name: &str, requester_session: &str) -> ScopeTier {
-        if !self.reachable_at_home_tier(dispatch_bundle_name) {
+    /// dispatch namespace into a uniform scope tier.
+    fn tier(&self, dispatch_namespace: &str, requester_session: &str) -> ScopeTier {
+        if !self.reachable_at_home_tier(dispatch_namespace) {
             return ScopeTier::All;
         }
         // A relay-wide target is never `Own`: self-action via the relay-wide
@@ -163,11 +166,11 @@ impl ResolvedTarget {
 /// resolves to the supplied dispatch bundle.
 pub(super) fn requester_home_namespace<'a>(
     requester_session: &'a str,
-    dispatch_bundle_name: &'a str,
+    dispatch_namespace: &'a str,
 ) -> &'a str {
     match split_principal_id(requester_session) {
         Some((_, namespace)) => namespace,
-        None => dispatch_bundle_name,
+        None => dispatch_namespace,
     }
 }
 
@@ -180,7 +183,75 @@ pub(super) fn required_tier(route: &ResolvedRoute) -> ScopeTier {
     route
         .targets
         .iter()
-        .map(|target| target.tier(&route.dispatch_bundle_name, &route.requester_session))
+        .map(|target| target.tier(&route.dispatch_namespace, &route.requester_session))
         .max_by_key(|tier| tier.rank())
         .unwrap_or(ScopeTier::Own)
+}
+
+/// Resolves a Send's fully-qualified targets into a config-free [`ResolvedRoute`]
+/// (the `MultiTarget` resolution stage).
+///
+/// Classifies each target from its `@<namespace>` suffix alone — no bundle
+/// configuration or catalog access. An `@GLOBAL` target is relay-wide (delivered
+/// via the registry, keyed by its full principal id); an `@<bundle>` target is a
+/// session in that bundle; a reserved namespace (`@EXTERNAL`/`@RELAY`) is
+/// rejected with `validation_unsupported_namespace`; a bare (unqualified) target
+/// is rejected with `validation_unqualified_target`. Target *existence*
+/// (membership / registry presence) is not checked here — that is the handler
+/// body's delivery concern, validated after this stage.
+///
+/// `dispatch_namespace` is the requester's home namespace (its bundle, or
+/// `GLOBAL`); see [`requester_home_namespace`].
+pub(super) fn resolve_send_route(
+    dispatch_namespace: &str,
+    requester_session: &str,
+    targets: &[String],
+) -> Result<ResolvedRoute, RelayError> {
+    let mut resolved = Vec::with_capacity(targets.len());
+    for target in targets {
+        let requested = target.trim();
+        match classify_principal_id(requested) {
+            Some(PrincipalType::User) => {
+                // Relay-wide `@GLOBAL` target: delivered via the registry keyed by
+                // its full principal id. It rides the dispatch namespace for tier
+                // classification and never raises the bar to `all:all`.
+                resolved.push(ResolvedTarget {
+                    bundle_name: dispatch_namespace.to_string(),
+                    session_id: Some(requested.to_string()),
+                    relay_wide: true,
+                });
+            }
+            Some(PrincipalType::Session) => {
+                let (session_id, bundle_name) = split_principal_id(requested)
+                    .expect("session classification implies a parseable suffix");
+                resolved.push(ResolvedTarget {
+                    bundle_name: bundle_name.to_string(),
+                    session_id: Some(session_id.to_string()),
+                    relay_wide: false,
+                });
+            }
+            Some(PrincipalType::Application | PrincipalType::Relay) => {
+                let namespace = split_principal_id(requested)
+                    .map(|(_, namespace)| namespace)
+                    .unwrap_or_default();
+                return Err(relay_error(
+                    "validation_unsupported_namespace",
+                    "target namespace is reserved for relay-internal routing",
+                    Some(json!({ "target": requested, "namespace": namespace })),
+                ));
+            }
+            None => {
+                return Err(relay_error(
+                    "validation_unqualified_target",
+                    "target must be a fully-qualified principal id (id@namespace)",
+                    Some(json!({ "target": requested })),
+                ));
+            }
+        }
+    }
+    Ok(ResolvedRoute {
+        dispatch_namespace: dispatch_namespace.to_string(),
+        requester_session: requester_session.to_string(),
+        targets: resolved,
+    })
 }

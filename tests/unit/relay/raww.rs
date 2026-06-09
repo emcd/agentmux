@@ -10,7 +10,7 @@ fn raww_rejects_unknown_target() {
         RelayRequest::Raww {
             request_id: None,
             requester_session: "alpha".to_string(),
-            target_session: "missing".to_string(),
+            target_session: "missing@party".to_string(),
             text: "hello".to_string(),
             no_enter: false,
         },
@@ -62,7 +62,7 @@ fn raww_rejects_oversized_text() {
         RelayRequest::Raww {
             request_id: None,
             requester_session: "alpha".to_string(),
-            target_session: "bravo".to_string(),
+            target_session: "bravo@party".to_string(),
             text,
             no_enter: false,
         },
@@ -117,7 +117,7 @@ raww = "self"
         RelayRequest::Raww {
             request_id: None,
             requester_session: "alpha".to_string(),
-            target_session: "bravo".to_string(),
+            target_session: "bravo@party".to_string(),
             text: "hello".to_string(),
             no_enter: false,
         },

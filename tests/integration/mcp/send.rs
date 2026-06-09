@@ -483,6 +483,103 @@ async fn send_omits_sender_attribution_when_relay_omits_it() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn send_qualifies_bare_target_with_bound_bundle() {
+    let runtime = TestRuntime::create();
+    let relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("send") => json!({
+                    "kind": "send",
+                    "schema_version": "1",
+                    "bundle_name": BUNDLE_NAME,
+                    "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
+                    "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
+                    "results": [],
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let mut arguments = Map::new();
+    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments.insert(
+        "targets".to_string(),
+        Value::Array(vec![Value::String("bravo".to_string())]),
+    );
+    arguments.insert("broadcast".to_string(), Value::Bool(false));
+    let response = harness.call_tool(2, "send", arguments).await;
+    decode_tool_payload(&response);
+
+    // The relay rejects bare targets, so the bundle-bound MCP server fills in its
+    // bound bundle (`party`) before dispatch.
+    let relay_requests = relay.requests_for_operation("send");
+    assert_eq!(relay_requests.len(), 1);
+    assert_eq!(
+        relay_requests[0]["targets"],
+        json!([format!("bravo@{BUNDLE_NAME}")])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn send_preserves_already_qualified_target() {
+    let runtime = TestRuntime::create();
+    let relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("send") => json!({
+                    "kind": "send",
+                    "schema_version": "1",
+                    "bundle_name": BUNDLE_NAME,
+                    "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
+                    "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
+                    "results": [],
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let mut arguments = Map::new();
+    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments.insert(
+        "targets".to_string(),
+        Value::Array(vec![
+            Value::String("charlie@peer-bundle".to_string()),
+            Value::String("ops@GLOBAL".to_string()),
+        ]),
+    );
+    arguments.insert("broadcast".to_string(), Value::Bool(false));
+    let response = harness.call_tool(2, "send", arguments).await;
+    decode_tool_payload(&response);
+
+    // A target that already names its namespace is forwarded verbatim; the client
+    // never re-qualifies an explicit `@namespace`.
+    let relay_requests = relay.requests_for_operation("send");
+    assert_eq!(relay_requests.len(), 1);
+    assert_eq!(
+        relay_requests[0]["targets"],
+        json!(["charlie@peer-bundle", "ops@GLOBAL"])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn send_omits_wire_envelope_namespace_for_suffix_routing() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(

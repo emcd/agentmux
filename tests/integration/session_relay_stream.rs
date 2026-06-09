@@ -456,7 +456,7 @@ fn relay_async_send_emits_terminal_delivery_outcome_to_sender_ui_stream() {
             request_id: Some("req-async-sender".to_string()),
             requester_session: global_user_id(&bundle_name),
             message: "verify sender completion stream".to_string(),
-            targets: vec!["alpha".to_string()],
+            targets: vec![format!("alpha@{bundle_name}")],
             broadcast: false,
             quiet_window_ms: None,
             quiescence_timeout_ms: Some(500),

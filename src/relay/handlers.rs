@@ -29,13 +29,13 @@ use super::identity::{
 };
 use super::routing::{
     Addressing, Capability, OperationProfile, ResolvedRoute, ResolvedTarget as RouteTarget,
-    requester_home_namespace,
+    requester_home_namespace, resolve_send_route,
 };
 use super::stream::{RelayStreamEvent, list_registered_relay_wide_sessions};
 use super::tmux::{capture_pane_tail_lines, resolve_active_pane_target};
 use super::{
-    AsyncDeliveryTask, DeliveryPayloadMode, ListedBundle, ListedBundleState, ListedSession,
-    ListedSessionTransport, LookRequestContext, PermissionDecisionRequestContext,
+    AsyncDeliveryTask, DeliveryPayloadMode, GLOBAL_NAMESPACE, ListedBundle, ListedBundleState,
+    ListedSession, ListedSessionTransport, LookRequestContext, PermissionDecisionRequestContext,
     RawwRequestContext, RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
     SendOutcome, SendRequestContext, SendResult, bare_session_id, canonical_session_id, map_config,
     relay_error,
@@ -109,33 +109,11 @@ pub(super) fn handle_request(
             runtime_directory,
             requester_session,
         ),
-        RelayRequest::Send {
-            request_id,
-            requester_session,
-            message,
-            targets,
-            broadcast,
-            quiet_window_ms,
-            quiescence_timeout_ms,
-            acp_turn_timeout_ms,
-        } => handle_send(
-            bundle,
-            authorization,
-            SendRequestContext {
-                request_id,
-                requester_session,
-                message,
-                targets,
-                broadcast,
-                quiet_window_ms,
-                quiescence_timeout_ms,
-                acp_turn_timeout_ms,
-            },
-            runtime_directory,
-            configuration_root,
-            bundle_catalog,
-            principal.as_ref(),
-        ),
+        RelayRequest::Send { .. } => Err(relay_error(
+            "internal_unexpected_request",
+            "Send is dispatched through the namespace-centric send path, not the per-bundle dispatcher",
+            None,
+        )),
         RelayRequest::Look {
             requester_session,
             target_session,
@@ -338,7 +316,9 @@ fn normalize_request_identities(request: RelayRequest, bundle_name: &str) -> Rel
             request_id,
             requester_session: bare(requester_session),
             message,
-            targets: targets.into_iter().map(bare).collect(),
+            // Targets stay fully qualified; the relay no longer bares them. The
+            // send path classifies each target from its `@<namespace>` suffix.
+            targets,
             broadcast,
             quiet_window_ms,
             quiescence_timeout_ms,
@@ -351,7 +331,7 @@ fn normalize_request_identities(request: RelayRequest, bundle_name: &str) -> Rel
             offset,
         } => RelayRequest::Look {
             requester_session: bare(requester_session),
-            target_session: bare(target_session),
+            target_session,
             lines,
             offset,
         },
@@ -364,7 +344,7 @@ fn normalize_request_identities(request: RelayRequest, bundle_name: &str) -> Rel
         } => RelayRequest::Raww {
             request_id,
             requester_session: bare(requester_session),
-            target_session: bare(target_session),
+            target_session,
             text,
             no_enter,
         },
@@ -378,15 +358,75 @@ fn normalize_request_identities(request: RelayRequest, bundle_name: &str) -> Rel
     }
 }
 
-fn handle_send(
-    bundle: &BundleConfiguration,
-    authorization: &AuthorizationContext,
-    request: SendRequestContext,
-    runtime_directory: &Path,
+/// Entry point for the namespace-centric send path. Destructures a `Send`
+/// request and authorizes/delivers it in the requester's home namespace (its
+/// bundle, or `GLOBAL`), without borrowing a peer bundle. See `dispatch_send`.
+pub(in crate::relay) fn handle_send_routed(
+    home_namespace: &str,
+    home_runtime_directory: Option<&Path>,
+    request: RelayRequest,
     configuration_root: &Path,
     bundle_catalog: &BundleCatalog,
     principal: Option<&RequestPrincipal>,
 ) -> Result<RelayResponse, RelayError> {
+    let RelayRequest::Send {
+        request_id,
+        requester_session,
+        message,
+        targets,
+        broadcast,
+        quiet_window_ms,
+        quiescence_timeout_ms,
+        acp_turn_timeout_ms,
+    } = request
+    else {
+        return Err(relay_error(
+            "internal_unexpected_request",
+            "non-send request routed to the send dispatcher",
+            None,
+        ));
+    };
+    handle_send(
+        home_namespace,
+        home_runtime_directory,
+        SendRequestContext {
+            request_id,
+            requester_session,
+            message,
+            targets,
+            broadcast,
+            quiet_window_ms,
+            quiescence_timeout_ms,
+            acp_turn_timeout_ms,
+        },
+        configuration_root,
+        bundle_catalog,
+        principal,
+    )
+}
+
+fn handle_send(
+    home_namespace: &str,
+    home_runtime_directory: Option<&Path>,
+    request: SendRequestContext,
+    configuration_root: &Path,
+    bundle_catalog: &BundleCatalog,
+    principal: Option<&RequestPrincipal>,
+) -> Result<RelayResponse, RelayError> {
+    // The sender is identified by its home namespace alone. A `GLOBAL` sender is
+    // relay-wide and has no bundle; any other namespace names the bundle whose
+    // configuration backs sender resolution and home-group delivery. The home
+    // authorization context (operator policy for `GLOBAL`, or the bundle's
+    // policy) is derived from it, so neither the bundle nor its authorization is
+    // threaded in as a parameter.
+    let home_bundle = if home_namespace == GLOBAL_NAMESPACE {
+        None
+    } else {
+        Some(load_bundle_configuration(configuration_root, home_namespace).map_err(map_config)?)
+    };
+    let authorization = load_authorization_context(configuration_root, home_bundle.as_ref())?;
+    let authorization = &authorization;
+    let home_bundle = home_bundle.as_ref();
     let SendRequestContext {
         request_id,
         requester_session,
@@ -441,12 +481,41 @@ fn handle_send(
         ));
     }
 
-    let sender = resolve_sender_identity(
-        bundle,
-        authorization,
-        requester_session.as_str(),
-        "requester_session",
-    )?;
+    // The requester is authorized in its home namespace (its bundle, or
+    // `GLOBAL`); strip any `@<home>` qualifier so internal lookups match. A
+    // relay-wide (`@GLOBAL`) requester keeps its suffix.
+    let requester_session = bare_session_id(requester_session.as_str(), home_namespace);
+    let sender = match home_bundle {
+        Some(home_bundle) => resolve_sender_identity(
+            home_bundle,
+            authorization,
+            requester_session.as_str(),
+            "requester_session",
+        )?,
+        None => {
+            // Relay-wide sender: no home bundle; it must be a registered UI
+            // (`@GLOBAL`) session, resolved from the operator authorization.
+            if has_ui_session(authorization, requester_session.as_str()) {
+                SenderIdentity {
+                    session_id: requester_session.clone(),
+                    display_name: ui_session_display_name(
+                        authorization,
+                        requester_session.as_str(),
+                    )
+                    .map(ToString::to_string),
+                }
+            } else {
+                return Err(relay_error(
+                    "validation_unknown_sender",
+                    "sender session is not configured",
+                    Some(json!({
+                        "field": "requester_session",
+                        "value": requester_session,
+                    })),
+                ));
+            }
+        }
+    };
     let sender_member = sender.to_bundle_member();
     // Verified principal_id of the sender, carried both on the Send response
     // and into each recipient's delivered envelope; `None` for socket-trust.
@@ -456,7 +525,7 @@ fn handle_send(
     emit_inscription(
         "relay.send.request",
         &json!({
-            "bundle_name": bundle.bundle_name,
+            "bundle_name": home_namespace,
             "requester_session": sender.session_id,
             "broadcast": broadcast,
             "target_count": targets.len(),
@@ -465,34 +534,67 @@ fn handle_send(
         }),
     );
 
-    // Resolve every target into a per-namespace delivery group up front, so a
-    // single Send can fan out across the sender's bundle, peer bundles, and the
-    // relay-wide (`@GLOBAL`) registry. Broadcast stays bundle-scoped.
-    let groups = if broadcast {
-        vec![DeliveryGroup {
-            bundle: bundle.clone(),
-            runtime_directory: runtime_directory.to_path_buf(),
-            permission_decider_sessions: grant_authorized_ui_sessions(authorization, bundle),
-            permission_max_pending: permission_max_pending(authorization),
-            targets: bundle
-                .members
+    // Build the config-free route (suffix classification, for authorization) and
+    // the per-namespace delivery groups (catalog-loaded, for delivery). A single
+    // Send fans out across the sender's home bundle, peer bundles, and the
+    // relay-wide (`@GLOBAL`) registry. Broadcast stays home-bundle-scoped and
+    // requires a bundle-bound sender.
+    let (route, groups) = if broadcast {
+        let Some(home_bundle) = home_bundle else {
+            return Err(relay_error(
+                "validation_invalid_arguments",
+                "broadcast requires a bundle-bound sender",
+                None,
+            ));
+        };
+        let runtime_directory = home_runtime_directory.ok_or_else(|| {
+            relay_error(
+                "internal_unexpected_failure",
+                "bundle-bound sender is missing its runtime directory",
+                None,
+            )
+        })?;
+        let broadcast_targets: Vec<ResolvedTarget> = home_bundle
+            .members
+            .iter()
+            .filter(|member| member.id != sender.session_id)
+            .map(|member| ResolvedTarget {
+                session_id: member.id.clone(),
+                is_ui: false,
+            })
+            .collect();
+        let route = ResolvedRoute {
+            dispatch_namespace: home_namespace.to_string(),
+            requester_session: sender.session_id.clone(),
+            targets: broadcast_targets
                 .iter()
-                .filter(|member| member.id != sender.session_id)
-                .map(|member| ResolvedTarget {
-                    session_id: member.id.clone(),
-                    is_ui: false,
+                .map(|target| RouteTarget {
+                    bundle_name: home_namespace.to_string(),
+                    session_id: Some(target.session_id.clone()),
+                    relay_wide: false,
                 })
                 .collect(),
-        }]
+        };
+        let group = DeliveryGroup {
+            bundle: home_bundle.clone(),
+            runtime_directory: runtime_directory.to_path_buf(),
+            permission_decider_sessions: grant_authorized_ui_sessions(authorization, home_bundle),
+            permission_max_pending: permission_max_pending(authorization),
+            targets: broadcast_targets,
+        };
+        (route, vec![group])
     } else {
-        resolve_target_groups(
-            bundle,
+        let route = resolve_send_route(home_namespace, sender.session_id.as_str(), &targets)?;
+        let groups = assemble_delivery_groups(
+            home_namespace,
+            home_bundle,
+            home_runtime_directory,
             authorization,
-            runtime_directory,
             configuration_root,
             bundle_catalog,
-            &targets,
-        )?
+            &route.targets,
+        )?;
+        (route, groups)
     };
 
     // Timeout-vs-transport validation spans every resolved target, regardless of
@@ -548,30 +650,13 @@ fn handle_send(
         ));
     }
     // Send authorization runs through the uniform routing/authorization spine:
-    // the sender's `send` control is resolved in its dispatch bundle, and the
+    // the sender's `send` control is resolved in its home namespace, and the
     // required scope tier is the maximum across every resolved target. A
-    // cross-bundle (peer) target therefore demands `all:all`; relay-wide
-    // (`@GLOBAL`) and same-bundle targets stay at the `all:home` tier.
-    let route = ResolvedRoute {
-        dispatch_bundle_name: requester_home_namespace(
-            sender.session_id.as_str(),
-            bundle.bundle_name.as_str(),
-        )
-        .to_string(),
-        requester_session: sender.session_id.clone(),
-        targets: groups
-            .iter()
-            .flat_map(|group| {
-                group.targets.iter().map(|target| RouteTarget {
-                    bundle_name: group.bundle.bundle_name.clone(),
-                    session_id: Some(target.session_id.clone()),
-                    relay_wide: target.is_ui,
-                })
-            })
-            .collect(),
-    };
+    // cross-namespace (peer-bundle) target therefore demands `all:all`;
+    // relay-wide (`@GLOBAL`) and same-namespace targets stay at the `all:home`
+    // tier.
     authorize_route(
-        bundle,
+        home_namespace,
         authorization,
         OperationProfile {
             capability: Capability::Send,
@@ -594,7 +679,7 @@ fn handle_send(
             let message_id = Uuid::new_v4().to_string();
             let task = AsyncDeliveryTask {
                 bundle: group.bundle.clone(),
-                sender_bundle_name: bundle.bundle_name.clone(),
+                sender_bundle_name: home_namespace.to_string(),
                 sender: sender_member.clone(),
                 authenticated_identity: authenticated_identity.clone(),
                 all_target_sessions: group_target_sessions.clone(),
@@ -636,12 +721,9 @@ fn handle_send(
     }
     let response = RelayResponse::Send {
         schema_version: SCHEMA_VERSION.to_string(),
-        bundle_name: bundle.bundle_name.clone(),
+        bundle_name: home_namespace.to_string(),
         request_id,
-        requester_session: canonical_session_id(
-            sender.session_id.as_str(),
-            bundle.bundle_name.as_str(),
-        ),
+        requester_session: canonical_session_id(sender.session_id.as_str(), home_namespace),
         sender_display_name: sender.display_name.clone(),
         authenticated_identity: authenticated_identity.clone(),
         on_behalf_of: None,
@@ -714,11 +796,11 @@ fn handle_look(
         "requester_session",
     )?;
 
-    // Resolve the target's hosting bundle from any `@<bundle>` suffix. A bare
-    // target — or one qualified with the dispatch bundle, already stripped by
-    // identity normalization — stays in the dispatch bundle.
+    // Resolve the target's hosting bundle from its `@<bundle>` suffix. A bare
+    // (unqualified) target is rejected; a same-bundle look is qualified with its
+    // own bundle name.
     let (target_bundle_name, target_session_id) =
-        resolve_look_target_bundle(bundle.bundle_name.as_str(), target_session.as_str())?;
+        resolve_look_target_bundle(target_session.as_str())?;
     let cross_bundle = target_bundle_name != bundle.bundle_name;
 
     // For a peer-bundle target, load its configuration and runtime context from
@@ -758,7 +840,7 @@ fn handle_look(
     // raises the required tier to `all:all` while same-bundle inspection of
     // another session needs `all:home` (self-inspection needs only `self`).
     let route = ResolvedRoute {
-        dispatch_bundle_name: requester_home_namespace(
+        dispatch_namespace: requester_home_namespace(
             requester.session_id.as_str(),
             bundle.bundle_name.as_str(),
         )
@@ -771,7 +853,7 @@ fn handle_look(
         }],
     };
     authorize_route(
-        bundle,
+        bundle.bundle_name.as_str(),
         authorization,
         OperationProfile {
             capability: Capability::Look,
@@ -987,31 +1069,54 @@ fn handle_raww(
         requester_session.as_str(),
         "requester_session",
     )?;
-    let target_member = if let Some(member) = bundle
+    // The raww target must be a fully-qualified session principal. Relay-wide
+    // (`@GLOBAL`) targets are UI streams that cannot accept raw input; reserved
+    // namespaces and bare targets are rejected. The suffix names the target's
+    // bundle, which must be the resolved routing bundle.
+    let (target_session_id, target_bundle_name) =
+        match classify_principal_id(target_session.as_str()) {
+            Some(PrincipalType::Session) => split_principal_id(target_session.as_str())
+                .expect("session classification implies a parseable suffix"),
+            Some(PrincipalType::User) => {
+                return Err(relay_error(
+                    "validation_invalid_params",
+                    "raww target class is not supported",
+                    Some(json!({
+                        "target_session": target_session,
+                        "target_class": "ui",
+                        "supported_target_classes": ["tmux", "acp"],
+                    })),
+                ));
+            }
+            Some(PrincipalType::Application | PrincipalType::Relay) => {
+                let namespace = split_principal_id(target_session.as_str())
+                    .map(|(_, namespace)| namespace)
+                    .unwrap_or_default();
+                return Err(relay_error(
+                    "validation_unsupported_namespace",
+                    "raww target namespace is reserved for relay-internal routing",
+                    Some(json!({ "target_session": target_session, "namespace": namespace })),
+                ));
+            }
+            None => {
+                return Err(relay_error(
+                    "validation_unqualified_target",
+                    "raww target must be a fully-qualified principal id (id@namespace)",
+                    Some(json!({ "target_session": target_session })),
+                ));
+            }
+        };
+    let target_member = bundle
         .members
         .iter()
-        .find(|member| member.id == target_session)
-    {
-        member
-    } else if has_ui_session(authorization, target_session.as_str()) {
-        return Err(relay_error(
-            "validation_invalid_params",
-            "raww target class is not supported",
-            Some(json!({
-                "target_session": target_session,
-                "target_class": "ui",
-                "supported_target_classes": ["tmux", "acp"],
-            })),
-        ));
-    } else {
-        return Err(relay_error(
-            "validation_unknown_target",
-            "target_session is not a canonical configured target identifier",
-            Some(json!({
-                "target_session": target_session,
-            })),
-        ));
-    };
+        .find(|member| target_bundle_name == bundle.bundle_name && member.id == target_session_id)
+        .ok_or_else(|| {
+            relay_error(
+                "validation_unknown_target",
+                "target_session is not a canonical configured target identifier",
+                Some(json!({ "target_session": target_session })),
+            )
+        })?;
     // Raww authorizes through the uniform routing/authz spine like Send and Look:
     // the requester's `raww` control is resolved in its dispatch (home) bundle,
     // and the single target's relationship sets the required tier. A relay-wide
@@ -1019,7 +1124,7 @@ fn handle_raww(
     // requires `all:all`; a same-bundle target stays at `all:home`, and a
     // self-target floors at `self`.
     let route = ResolvedRoute {
-        dispatch_bundle_name: requester_home_namespace(
+        dispatch_namespace: requester_home_namespace(
             sender.session_id.as_str(),
             bundle.bundle_name.as_str(),
         )
@@ -1032,7 +1137,7 @@ fn handle_raww(
         }],
     };
     authorize_route(
-        bundle,
+        bundle.bundle_name.as_str(),
         authorization,
         OperationProfile {
             capability: Capability::Raww,
@@ -1210,17 +1315,13 @@ fn resolve_sender_identity(
 }
 
 /// Resolves a look target's hosting bundle and bundle-local session id from its
-/// principal-id form.
+/// fully-qualified principal-id form.
 ///
-/// Mirrors Send's suffix-based routing: a target qualified with a peer bundle
-/// (`<session>@<bundle>`) routes to that bundle, while a bare target — or one
-/// qualified with the dispatch bundle, already stripped during identity
-/// normalization — resolves within the dispatch bundle. Relay-wide namespaces
+/// A target qualified with a bundle (`<session>@<bundle>`) routes to that bundle
+/// (a same-bundle look qualifies with its own bundle). A bare (unqualified)
+/// target is rejected with `validation_unqualified_target`; relay-wide namespaces
 /// (`@GLOBAL`/`@EXTERNAL`/`@RELAY`) name no inspectable session and are rejected.
-fn resolve_look_target_bundle<'a>(
-    dispatch_bundle_name: &'a str,
-    target_session: &'a str,
-) -> Result<(&'a str, &'a str), RelayError> {
+fn resolve_look_target_bundle(target_session: &str) -> Result<(&str, &str), RelayError> {
     match classify_principal_id(target_session) {
         Some(PrincipalType::Session) => {
             let (session_id, bundle_name) = split_principal_id(target_session)
@@ -1237,7 +1338,11 @@ fn resolve_look_target_bundle<'a>(
                 Some(json!({ "target_session": target_session, "namespace": namespace })),
             ))
         }
-        None => Ok((dispatch_bundle_name, target_session)),
+        None => Err(relay_error(
+            "validation_unqualified_target",
+            "look target must be a fully-qualified principal id (id@namespace)",
+            Some(json!({ "target_session": target_session })),
+        )),
     }
 }
 
@@ -1268,142 +1373,108 @@ enum BundleGroupError {
     Relay(RelayError),
 }
 
-/// Resolves a Send's explicit targets into per-namespace delivery groups,
-/// validating every target before any delivery (design D2).
-///
-/// Each target's `@<namespace>` suffix selects its registry (design D1):
-/// `@GLOBAL` rides the dispatch-bundle group as a relay-wide UI target;
-/// `@EXTERNAL` / `@RELAY` are reserved and rejected; `@<bundle>` routes to that
-/// bundle's group (loaded from the catalog); a bare target resolves within the
-/// dispatch bundle. A relay-wide sender with no bundle-qualified target is
-/// rejected upstream (`resolve_send_routing_bundle`), so it never reaches here.
-/// Unknown targets across any namespace accumulate into a single
-/// `validation_unknown_target`.
-fn resolve_target_groups(
-    sender_bundle: &BundleConfiguration,
-    sender_authorization: &AuthorizationContext,
-    sender_runtime_directory: &Path,
+/// Assembles per-namespace delivery groups from an already-classified route (the
+/// config-free `MultiTarget` resolution stage in `routing.rs`). Validates target
+/// existence — bundle membership or a registered UI session — and folds unknown
+/// targets into a single `validation_unknown_target`. Each target bundle is
+/// loaded from the catalog; relay-wide (`@GLOBAL`) targets are delivered via the
+/// registry and ride the sender's home delivery context (or a synthetic `GLOBAL`
+/// context when the sender itself is relay-wide and has no home bundle).
+fn assemble_delivery_groups(
+    home_namespace: &str,
+    home_bundle: Option<&BundleConfiguration>,
+    home_runtime_directory: Option<&Path>,
+    home_authorization: &AuthorizationContext,
     configuration_root: &Path,
     bundle_catalog: &BundleCatalog,
-    targets: &[String],
+    route_targets: &[RouteTarget],
 ) -> Result<Vec<DeliveryGroup>, RelayError> {
-    // Seed the dispatch-bundle group: the session sender's bound bundle, or a
-    // relay-wide sender's routing bundle (its first `@<bundle>` target). It
-    // hosts bare targets and relay-wide `@GLOBAL` targets in addition to any
-    // targets qualified with its own bundle name. A relay-wide sender whose
-    // targets are all bare carries no routing bundle and is rejected earlier, at
-    // the connection layer (`resolve_send_routing_bundle`); any bare target that
-    // reaches here resolves within the dispatch bundle.
-    let mut group_order: Vec<String> = vec![sender_bundle.bundle_name.clone()];
+    let mut group_order: Vec<String> = Vec::new();
     let mut groups_by_bundle: HashMap<String, DeliveryGroup> = HashMap::new();
-    groups_by_bundle.insert(
-        sender_bundle.bundle_name.clone(),
-        DeliveryGroup {
-            bundle: sender_bundle.clone(),
-            runtime_directory: sender_runtime_directory.to_path_buf(),
-            permission_decider_sessions: grant_authorized_ui_sessions(
-                sender_authorization,
-                sender_bundle,
-            ),
-            permission_max_pending: permission_max_pending(sender_authorization),
-            targets: Vec::new(),
-        },
-    );
-
     let mut unknown_targets: Vec<String> = Vec::new();
 
-    for target in targets {
-        let requested = target.trim();
-        if requested.is_empty() {
-            unknown_targets.push(target.clone());
-            continue;
-        }
-        match classify_principal_id(requested) {
-            Some(PrincipalType::Application | PrincipalType::Relay) => {
-                let namespace = split_principal_id(requested)
-                    .map(|(_, namespace)| namespace)
-                    .unwrap_or_default();
-                return Err(relay_error(
-                    "validation_unsupported_namespace",
-                    "target namespace is reserved for relay-internal routing",
-                    Some(json!({ "target": requested, "namespace": namespace })),
-                ));
-            }
-            Some(PrincipalType::User) => {
-                // Relay-wide `@GLOBAL` target: delivered as a UI event keyed off
-                // the suffix, so it rides the dispatch-bundle group context.
-                if has_ui_session(sender_authorization, requested) {
-                    push_target(
-                        &mut groups_by_bundle,
-                        &sender_bundle.bundle_name,
-                        ResolvedTarget {
-                            session_id: requested.to_string(),
-                            is_ui: true,
-                        },
-                    );
-                } else {
-                    unknown_targets.push(target.clone());
-                }
-            }
-            Some(PrincipalType::Session) => {
-                let (session_id, bundle_name) = split_principal_id(requested)
-                    .expect("session classification implies a parseable suffix");
-                match ensure_bundle_group(
-                    bundle_name,
-                    sender_bundle,
-                    configuration_root,
-                    bundle_catalog,
+    // Seed the home group from the sender's home bundle when bundle-bound. It
+    // hosts same-namespace targets and relay-wide (`@GLOBAL`) targets, attributed
+    // to the sender's home namespace. A relay-wide sender has no home bundle; its
+    // `@GLOBAL` targets land in a synthetic `GLOBAL` group seeded on demand.
+    if let Some(home_bundle) = home_bundle {
+        group_order.push(home_namespace.to_string());
+        groups_by_bundle.insert(
+            home_namespace.to_string(),
+            DeliveryGroup {
+                bundle: home_bundle.clone(),
+                runtime_directory: home_runtime_directory
+                    .map(Path::to_path_buf)
+                    .unwrap_or_default(),
+                permission_decider_sessions: grant_authorized_ui_sessions(
+                    home_authorization,
+                    home_bundle,
+                ),
+                permission_max_pending: permission_max_pending(home_authorization),
+                targets: Vec::new(),
+            },
+        );
+    }
+
+    for target in route_targets {
+        let session_id = target.session_id.as_deref().unwrap_or_default();
+        if target.relay_wide {
+            // Relay-wide `@GLOBAL` target: existence is a registered UI session,
+            // resolved from the sender's (operator) authorization context.
+            if has_ui_session(home_authorization, session_id) {
+                let group_key = ensure_relay_wide_group(
+                    home_namespace,
+                    home_bundle.is_some(),
+                    home_authorization,
                     &mut group_order,
                     &mut groups_by_bundle,
-                ) {
-                    Ok(()) => {
-                        let is_member = groups_by_bundle.get(bundle_name).is_some_and(|group| {
-                            group
-                                .bundle
-                                .members
-                                .iter()
-                                .any(|member| member.id == session_id)
-                        });
-                        if is_member {
-                            push_target(
-                                &mut groups_by_bundle,
-                                bundle_name,
-                                ResolvedTarget {
-                                    session_id: session_id.to_string(),
-                                    is_ui: false,
-                                },
-                            );
-                        } else {
-                            unknown_targets.push(target.clone());
-                        }
-                    }
-                    Err(BundleGroupError::UnknownBundle) => unknown_targets.push(target.clone()),
-                    Err(BundleGroupError::Relay(error)) => return Err(error),
-                }
+                );
+                push_target(
+                    &mut groups_by_bundle,
+                    group_key.as_str(),
+                    ResolvedTarget {
+                        session_id: session_id.to_string(),
+                        is_ui: true,
+                    },
+                );
+            } else {
+                unknown_targets.push(session_id.to_string());
             }
-            None => {
-                // Bare target (no `@<namespace>` suffix) resolves within the
-                // dispatch bundle. Canonical `<id>@<dispatch-bundle>` targets are
-                // normalized to this bare form before dispatch, so this also
-                // covers a relay-wide sender's targets qualified with its routing
-                // bundle.
-                let is_member = sender_bundle
-                    .members
-                    .iter()
-                    .any(|member| member.id == requested);
-                if is_member || has_ui_session(sender_authorization, requested) {
+            continue;
+        }
+        let bundle_name = target.bundle_name.as_str();
+        match ensure_bundle_group(
+            bundle_name,
+            configuration_root,
+            bundle_catalog,
+            &mut group_order,
+            &mut groups_by_bundle,
+        ) {
+            Ok(()) => {
+                let is_member = groups_by_bundle.get(bundle_name).is_some_and(|group| {
+                    group
+                        .bundle
+                        .members
+                        .iter()
+                        .any(|member| member.id == session_id)
+                });
+                if is_member {
                     push_target(
                         &mut groups_by_bundle,
-                        &sender_bundle.bundle_name,
+                        bundle_name,
                         ResolvedTarget {
-                            session_id: requested.to_string(),
-                            is_ui: !is_member,
+                            session_id: session_id.to_string(),
+                            is_ui: false,
                         },
                     );
                 } else {
-                    unknown_targets.push(target.clone());
+                    unknown_targets.push(canonical_session_id(session_id, bundle_name));
                 }
             }
+            Err(BundleGroupError::UnknownBundle) => {
+                unknown_targets.push(canonical_session_id(session_id, bundle_name));
+            }
+            Err(BundleGroupError::Relay(error)) => return Err(error),
         }
     }
 
@@ -1415,13 +1486,51 @@ fn resolve_target_groups(
         ));
     }
 
-    // Preserve target-discovery order and drop the seeded dispatch group when no
-    // target landed in it (a relay-wide sender targeting only peer bundles).
+    // Preserve target-discovery order and drop any seeded group that received no
+    // target (e.g. the home group when every target was a peer or relay-wide).
     Ok(group_order
         .into_iter()
         .filter_map(|bundle_name| groups_by_bundle.remove(&bundle_name))
         .filter(|group| !group.targets.is_empty())
         .collect())
+}
+
+/// Returns the delivery-group key for a relay-wide (`@GLOBAL`) target, seeding
+/// the group when absent. A bundle-bound sender attributes `@GLOBAL` targets to
+/// its home group (already seeded). A relay-wide sender (no home bundle) gets a
+/// synthetic `GLOBAL` group whose bundle/runtime are inert — UI delivery routes
+/// by the target's principal id through the registry.
+fn ensure_relay_wide_group(
+    home_namespace: &str,
+    has_home_bundle: bool,
+    home_authorization: &AuthorizationContext,
+    group_order: &mut Vec<String>,
+    groups_by_bundle: &mut HashMap<String, DeliveryGroup>,
+) -> String {
+    if has_home_bundle {
+        return home_namespace.to_string();
+    }
+    let key = home_namespace.to_string();
+    if !groups_by_bundle.contains_key(key.as_str()) {
+        group_order.push(key.clone());
+        groups_by_bundle.insert(
+            key.clone(),
+            DeliveryGroup {
+                bundle: BundleConfiguration {
+                    schema_version: SCHEMA_VERSION.to_string(),
+                    bundle_name: home_namespace.to_string(),
+                    autostart: false,
+                    groups: Vec::new(),
+                    members: Vec::new(),
+                },
+                runtime_directory: PathBuf::new(),
+                permission_decider_sessions: Vec::new(),
+                permission_max_pending: permission_max_pending(home_authorization),
+                targets: Vec::new(),
+            },
+        );
+    }
+    key
 }
 
 /// Appends a resolved target to its bundle group. The group is guaranteed to
@@ -1437,18 +1546,18 @@ fn push_target(
 }
 
 /// Ensures a delivery group exists for `bundle_name`, loading the bundle's
-/// configuration and authorization from the catalog when first seen. The
-/// dispatch bundle is already seeded; an unconfigured bundle is reported so the
-/// caller can fold it into `validation_unknown_target`.
+/// configuration and authorization from the catalog when first seen. The home
+/// group (when the sender is bundle-bound) and already-seen peers are seeded, so
+/// they short-circuit; an unconfigured bundle is reported so the caller can fold
+/// it into `validation_unknown_target`.
 fn ensure_bundle_group(
     bundle_name: &str,
-    sender_bundle: &BundleConfiguration,
     configuration_root: &Path,
     bundle_catalog: &BundleCatalog,
     group_order: &mut Vec<String>,
     groups_by_bundle: &mut HashMap<String, DeliveryGroup>,
 ) -> Result<(), BundleGroupError> {
-    if bundle_name == sender_bundle.bundle_name || groups_by_bundle.contains_key(bundle_name) {
+    if groups_by_bundle.contains_key(bundle_name) {
         return Ok(());
     }
     let Some(paths) = bundle_catalog.lookup(bundle_name) else {
@@ -1456,8 +1565,8 @@ fn ensure_bundle_group(
     };
     let bundle = load_bundle_configuration(configuration_root, bundle_name)
         .map_err(|error| BundleGroupError::Relay(map_config(error)))?;
-    let authorization =
-        load_authorization_context(configuration_root, &bundle).map_err(BundleGroupError::Relay)?;
+    let authorization = load_authorization_context(configuration_root, Some(&bundle))
+        .map_err(BundleGroupError::Relay)?;
     let permission_decider_sessions = grant_authorized_ui_sessions(&authorization, &bundle);
     let permission_max_pending = permission_max_pending(&authorization);
     group_order.push(bundle_name.to_string());

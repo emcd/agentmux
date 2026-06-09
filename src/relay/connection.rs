@@ -38,7 +38,7 @@ use super::stream::{
 use super::{
     RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
     canonical_session_id, dispatch_identity_admin, dispatch_identity_introspect, dispatch_list,
-    dispatch_request, handlers, map_config, map_tui_config, relay_error,
+    dispatch_request, dispatch_send, handlers, map_config, map_tui_config, relay_error,
 };
 
 /// Shared, mutable map from configured bundle name to its resolved runtime
@@ -558,6 +558,32 @@ async fn serve_connection_frames(
                     )?;
                     continue;
                 }
+                // `Send` routes per-target by namespace and is authorized in the
+                // requester's home namespace (its bound bundle, or `GLOBAL`),
+                // never a borrowed peer bundle — so it bypasses the single-bundle
+                // `resolve_effective_bundle` path entirely.
+                if matches!(request, RelayRequest::Send { .. }) {
+                    let session_id = active_registration.requester_session_id().to_string();
+                    let response = dispatch_send(
+                        request,
+                        configuration_root,
+                        bound_bundle.as_ref(),
+                        Some(RequestPrincipal {
+                            session_id,
+                            authenticated_identity: authenticated_identity.clone(),
+                            introspect_rights: introspect_rights.clone(),
+                        }),
+                        bundle_catalog,
+                    );
+                    write_stream_frame_to_writer(
+                        writer,
+                        OutgoingFrame::Response {
+                            request_id: request_id.as_deref(),
+                            response: &response,
+                        },
+                    )?;
+                    continue;
+                }
                 let bundle_paths = match resolve_effective_bundle(
                     bundle_catalog,
                     &request,
@@ -673,52 +699,17 @@ fn resolve_effective_bundle(
     namespace: Option<&str>,
     bound_bundle: Option<&BundleRuntimePaths>,
 ) -> Result<BundleRuntimePaths, RelayError> {
-    match request {
-        RelayRequest::Send { targets, .. } => {
-            return resolve_send_routing_bundle(bundle_catalog, targets, bound_bundle);
-        }
-        RelayRequest::Raww { target_session, .. } => {
-            return resolve_raww_routing_bundle(
-                bundle_catalog,
-                target_session,
-                namespace,
-                bound_bundle,
-            );
-        }
-        _ => {}
+    // `Send` is handled before this function via the namespace-centric send path
+    // and never reaches here.
+    if let RelayRequest::Raww { target_session, .. } = request {
+        return resolve_raww_routing_bundle(
+            bundle_catalog,
+            target_session,
+            namespace,
+            bound_bundle,
+        );
     }
     resolve_namespace_routing_bundle(bundle_catalog, namespace, bound_bundle)
-}
-
-/// Resolves the routing bundle for a `Send` from its target principal-id
-/// suffixes (suffix-based routing).
-fn resolve_send_routing_bundle(
-    bundle_catalog: &BundleCatalog,
-    targets: &[String],
-    bound_bundle: Option<&BundleRuntimePaths>,
-) -> Result<BundleRuntimePaths, RelayError> {
-    if let Some(bound) = bound_bundle {
-        // A session sender routes within its bound bundle: relay-wide (`@GLOBAL`)
-        // targets are delivered via the registry from that context, and any
-        // relay-wide/session target mix is rejected in `handle_send`.
-        return Ok(bound.clone());
-    }
-    // A relay-wide sender derives its routing bundle from the first bundle-
-    // qualified target. Bare or relay-wide-only targets name no bundle to route
-    // against.
-    if let Some(bundle_name) = targets
-        .iter()
-        .find_map(|target| bundle_namespace_suffix(target.as_str()))
-    {
-        return bundle_catalog
-            .lookup(bundle_name)
-            .ok_or_else(|| unknown_bundle_error(bundle_name));
-    }
-    Err(relay_error(
-        "validation_missing_routing_namespace",
-        "send from a relay-wide principal requires at least one bundle-qualified target",
-        None,
-    ))
 }
 
 /// Resolves the routing bundle for a `Raww` from its single target's bundle

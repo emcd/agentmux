@@ -38,7 +38,7 @@ use super::params::{
     UpdownParams,
 };
 use super::validation::{
-    is_relay_unavailable_error, parse_meta_tool_args, validate_change_params,
+    is_relay_unavailable_error, parse_meta_tool_args, qualify_send_targets, validate_change_params,
     validate_change_psk_args, validate_grant_list_args, validate_grant_params,
     validate_grant_resolve_args, validate_help_request, validate_list_request,
     validate_look_request, validate_new_params, validate_new_peer_args, validate_raww_request,
@@ -219,12 +219,16 @@ impl McpServer {
                     None,
                 )
             })?;
+        // Fill in the namespace the relay now requires on every target. Done
+        // after sender resolution so an unidentified sender fails as
+        // `validation_unknown_sender` regardless of target shape.
+        let targets = qualify_send_targets(&params.targets, self.associated_bundle_name())?;
 
         let request = RelayRequest::Send {
             request_id: params.request_id.clone(),
             requester_session,
             message: params.message.clone(),
-            targets: params.targets.clone(),
+            targets,
             broadcast: params.broadcast,
             quiet_window_ms: None,
             quiescence_timeout_ms: params.quiescence_timeout_ms,

@@ -25,7 +25,7 @@ pub(super) fn emit_permission_snapshot_for_ui_registration(
     ui_session_id: &str,
 ) -> Result<(), RelayError> {
     let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
-    let authorization = load_authorization_context(configuration_root, &bundle)?;
+    let authorization = load_authorization_context(configuration_root, Some(&bundle))?;
     let authorized_sessions = grant_authorized_ui_sessions(&authorization, &bundle);
     if !authorized_sessions
         .iter()

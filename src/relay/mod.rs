@@ -67,8 +67,23 @@ fn handle_request_with_principal(
     principal: Option<RequestPrincipal>,
     bundle_catalog: &BundleCatalog,
 ) -> Result<RelayResponse, RelayError> {
+    // `Send` flows through the namespace-centric path, which loads the home
+    // bundle and its authorization from the namespace itself. The single-bundle
+    // entry point is always bundle-bound, so the home namespace is this bundle.
+    // (The connection layer reaches `dispatch_send` directly and never routes
+    // `Send` here.)
+    if matches!(request, RelayRequest::Send { .. }) {
+        return handlers::handle_send_routed(
+            bundle_name,
+            Some(runtime_directory),
+            request,
+            configuration_root,
+            bundle_catalog,
+            principal.as_ref(),
+        );
+    }
     let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
-    let authorization = load_authorization_context(configuration_root, &bundle)?;
+    let authorization = load_authorization_context(configuration_root, Some(&bundle))?;
     handlers::handle_request(
         request,
         &bundle,
@@ -210,7 +225,7 @@ pub(in crate::relay) fn dispatch_list(
             load_bundle_configuration(configuration_root, &dispatch_paths.bundle_name)
                 .map_err(map_config)?;
         let dispatch_authorization =
-            load_authorization_context(configuration_root, &dispatch_bundle)?;
+            load_authorization_context(configuration_root, Some(&dispatch_bundle))?;
         let enumerate_bundle =
             load_bundle_configuration(configuration_root, &enumerate_paths.bundle_name)
                 .map_err(map_config)?;
@@ -223,6 +238,41 @@ pub(in crate::relay) fn dispatch_list(
         )
     })();
     match result {
+        Ok(value) => value,
+        Err(error) => RelayResponse::Error { error },
+    }
+}
+
+/// Dispatches a `Send` through the namespace-centric send path.
+///
+/// The requester is identified by its **home namespace**: its bound bundle for a
+/// session principal, or `GLOBAL` for a relay-wide principal — whose controls
+/// come from the operator policy, not a borrowed peer bundle. `bound_bundle` is
+/// `None` for relay-wide senders. The send path loads the home bundle and its
+/// authorization context from the namespace; per-target delivery loads each
+/// target bundle from the catalog.
+pub(in crate::relay) fn dispatch_send(
+    request: RelayRequest,
+    configuration_root: &Path,
+    bound_bundle: Option<&crate::runtime::paths::BundleRuntimePaths>,
+    principal: Option<RequestPrincipal>,
+    bundle_catalog: &BundleCatalog,
+) -> RelayResponse {
+    let (home_namespace, home_runtime) = match bound_bundle {
+        Some(paths) => (
+            paths.bundle_name.clone(),
+            Some(paths.runtime_directory.clone()),
+        ),
+        None => (GLOBAL_NAMESPACE.to_string(), None),
+    };
+    match handlers::handle_send_routed(
+        home_namespace.as_str(),
+        home_runtime.as_deref(),
+        request,
+        configuration_root,
+        bundle_catalog,
+        principal.as_ref(),
+    ) {
         Ok(value) => value,
         Err(error) => RelayResponse::Error { error },
     }
