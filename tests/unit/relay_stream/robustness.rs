@@ -264,7 +264,7 @@ fn idle_ui_stream_write_timeout_tears_down_connection() {
                     "operation": "send",
                     "requester_session": "alpha",
                     "message": large_message,
-                    "targets": ["panel"],
+                    "targets": [format!("panel@{bundle_name}")],
                     "broadcast": false,
                 },
             }),

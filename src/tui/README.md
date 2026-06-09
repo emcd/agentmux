@@ -49,15 +49,18 @@ picker (`F5`) are overlays available in both modes.
 - recipient discovery from relay `list` responses,
 - two co-equal screen modes (Communication, Interaction) toggled with `F4`;
   per-mode cursor, draft, and scroll state preserved across switches,
-- explicit `To` recipient field with deterministic target parsing:
-  - bare `session` routes to the bound bundle,
-  - canonical `session@bundle` routes to the named bundle (peer bundle or the
-    relay-wide `@GLOBAL` user registry),
-  - the `@bundle` suffix is dropped only when it matches the sender's bound
-    bundle; a relay-wide sender (`@GLOBAL` principal, no bound bundle) preserves
-    every suffix verbatim, because the relay derives `Send` routing for a
-    relay-wide principal solely from target suffixes and rejects an unqualified
-    target with `validation_missing_routing_namespace`,
+- explicit `To` recipient field with deterministic target parsing. The relay
+  requires fully-qualified targets, so the client fills in the namespace before
+  dispatch and always emits `session@bundle`:
+  - bare `session` is qualified with the sender's bound bundle and emitted as
+    `session@bound-bundle`,
+  - canonical `session@bundle` is emitted verbatim, routing to the named bundle
+    (peer bundle or the relay-wide `@GLOBAL` user registry),
+  - a relay-wide sender (`@GLOBAL` principal, no bound bundle) has no bundle to
+    qualify a bare target with, so a bare target is rejected at compose time with
+    `validation_unqualified_target`; it must name each target's `@namespace`
+    explicitly, because the relay derives `Send` routing for a relay-wide
+    principal solely from target suffixes,
   - `parse_tui_target_identifier` rejects empty halves, `/`, and more than one
     `@` separator at compose time,
 - async send workflow with local pending tracking and terminal outcome updates,

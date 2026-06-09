@@ -334,7 +334,7 @@ fn acp_send_request(acp_turn_timeout_ms: Option<u64>) -> RelayRequest {
         request_id: Some("req-acp".to_string()),
         requester_session: "alpha".to_string(),
         message: "status?".to_string(),
-        targets: vec!["bravo".to_string()],
+        targets: vec!["bravo@party".to_string()],
         broadcast: false,
         quiet_window_ms: Some(50),
         quiescence_timeout_ms: None,
@@ -553,6 +553,17 @@ pub(super) fn assert_acp_delivery_unavailable(
     }
 }
 
+/// Qualifies a bare target id with the fixture bundle namespace, mirroring the
+/// client-side fill-in the relay now requires. Already-qualified ids pass
+/// through unchanged.
+fn qualify_party_target(target_session: &str) -> String {
+    if target_session.contains('@') {
+        target_session.to_string()
+    } else {
+        format!("{target_session}@party")
+    }
+}
+
 pub(super) fn dispatch_look(
     config_root: &Path,
     tmux_socket: &Path,
@@ -582,7 +593,7 @@ pub(super) fn dispatch_look_with_offset(
     dispatch_request(
         RelayRequest::Look {
             requester_session: requester_session.to_string(),
-            target_session: target_session.to_string(),
+            target_session: qualify_party_target(target_session),
             lines,
             offset,
         },
@@ -603,7 +614,7 @@ pub(super) fn dispatch_look_without_startup(
     dispatch_request(
         RelayRequest::Look {
             requester_session: requester_session.to_string(),
-            target_session: target_session.to_string(),
+            target_session: qualify_party_target(target_session),
             lines,
             offset: None,
         },
@@ -627,7 +638,7 @@ pub(super) fn dispatch_raww(
         RelayRequest::Raww {
             request_id: Some("req-acp-raww".to_string()),
             requester_session: requester_session.to_string(),
-            target_session: target_session.to_string(),
+            target_session: qualify_party_target(target_session),
             text: text.to_string(),
             no_enter,
         },

@@ -123,14 +123,14 @@ pub(in crate::relay) fn handle_list_routed(
         "requester_session",
     )?;
     authorize_route(
-        dispatch_bundle,
+        dispatch_bundle.bundle_name.as_str(),
         dispatch_authorization,
         OperationProfile {
             capability: Capability::List,
             addressing: Addressing::BundleEnumerate,
         },
         &ResolvedRoute {
-            dispatch_bundle_name: requester_home_namespace(
+            dispatch_namespace: requester_home_namespace(
                 sender.session_id.as_str(),
                 dispatch_bundle.bundle_name.as_str(),
             )

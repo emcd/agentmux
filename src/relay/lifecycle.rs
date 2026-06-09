@@ -35,7 +35,7 @@ pub(super) fn reconcile_bundle(
     tmux_socket: &Path,
 ) -> Result<ReconciliationReport, RelayError> {
     let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
-    let _authorization = load_authorization_context(configuration_root, &bundle)?;
+    let _authorization = load_authorization_context(configuration_root, Some(&bundle))?;
     reconcile_loaded_bundle(&bundle, tmux_socket)
 }
 
@@ -62,7 +62,7 @@ pub(super) fn startup_bundle(
     runtime_directory: &Path,
 ) -> Result<BundleStartupReport, RelayError> {
     let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
-    let _authorization = load_authorization_context(configuration_root, &bundle)?;
+    let _authorization = load_authorization_context(configuration_root, Some(&bundle))?;
     let tmux_socket = tmux_socket_path_for_runtime_directory(runtime_directory);
     startup_loaded_bundle(&bundle, runtime_directory, tmux_socket.as_path())
 }

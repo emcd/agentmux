@@ -182,7 +182,7 @@ fn relay_look_returns_oldest_to_newest_snapshot_lines() {
     let response = dispatch_request(
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
-            target_session: "bravo".to_string(),
+            target_session: "bravo@party".to_string(),
             lines: Some(3),
             offset: None,
         },
@@ -236,7 +236,7 @@ fn relay_look_allows_optional_or_matching_bundle_and_applies_default_lines() {
     let omitted_bundle = dispatch_request(
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
-            target_session: "bravo".to_string(),
+            target_session: "bravo@party".to_string(),
             lines: None,
             offset: None,
         },
@@ -258,7 +258,7 @@ fn relay_look_allows_optional_or_matching_bundle_and_applies_default_lines() {
     let matching_bundle = dispatch_request(
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
-            target_session: "bravo".to_string(),
+            target_session: "bravo@party".to_string(),
             lines: None,
             offset: None,
         },
@@ -280,7 +280,7 @@ fn relay_look_allows_optional_or_matching_bundle_and_applies_default_lines() {
     let explicit_default = dispatch_request(
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
-            target_session: "bravo".to_string(),
+            target_session: "bravo@party".to_string(),
             lines: Some(120),
             offset: None,
         },

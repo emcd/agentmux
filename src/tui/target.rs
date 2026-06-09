@@ -8,10 +8,12 @@ const GLOBAL_SESSION_SUFFIX: &str = "@GLOBAL";
 ///
 /// A sender whose session id carries the `@GLOBAL` suffix is a relay-wide
 /// principal with no bound bundle; otherwise the sender is bound to
-/// `active_bundle`. The result governs target suffix-stripping in
-/// [`merge_tui_targets`]: a relay-wide sender (`None`) preserves every `@bundle`
-/// suffix verbatim, since the relay derives `Send` routing for it solely from
-/// those suffixes.
+/// `active_bundle`. The result governs bare-target qualification in
+/// [`merge_tui_targets`]: a bundle-bound sender qualifies a bare target with its
+/// bound bundle, while a relay-wide sender (`None`) has no namespace to borrow
+/// and so rejects bare targets — it must name each target's `@namespace`
+/// explicitly, since the relay derives `Send` routing solely from those
+/// suffixes.
 pub fn sender_bound_bundle<'a>(sender_session: &str, active_bundle: &'a str) -> Option<&'a str> {
     if sender_session.ends_with(GLOBAL_SESSION_SUFFIX) {
         None
@@ -38,23 +40,24 @@ pub(super) struct RecipientTokenContext {
 
 /// Parses one recipient identifier for TUI target workflows.
 ///
+/// The emitted identifier is always fully qualified as `<session>@<bundle>`:
+/// the relay rejects bare targets, so the client fills in the namespace before
+/// dispatch.
+///
 /// Accepted forms:
-/// - bare: `<session-id>` — routed to the bound bundle.
-/// - canonical: `<session-id>@<bundle>` — routed to the named bundle. When the
-///   bundle qualifier matches the sender's bound bundle, the qualifier is
-///   dropped from the emitted identifier; otherwise the canonical form is
-///   preserved so the relay can route the target to its owning bundle (or to the
-///   relay-wide `@GLOBAL` registry for user sessions).
+/// - bare: `<session-id>` — qualified with the sender's bound bundle and emitted
+///   as `<session-id>@<bound-bundle>`. A bare target from a relay-wide sender is
+///   rejected, since there is no bound bundle to qualify it with.
+/// - canonical: `<session-id>@<bundle>` — emitted verbatim, routing the target to
+///   the named bundle (or to the relay-wide `@GLOBAL` registry for user
+///   sessions).
 /// - autocomplete-trigger prefix: a single leading `@` is permitted on either
 ///   form and stripped before parsing.
 ///
 /// `bound_bundle` is the bundle the sender is bound to, or `None` for a
-/// relay-wide (unbound) sender. The suffix-strip optimization fires only against
-/// the bound bundle: a relay-wide sender has no bound bundle, so every `@bundle`
-/// suffix is preserved verbatim. This matters because the relay derives `Send`
-/// routing for a relay-wide principal entirely from the target `@bundle`
-/// suffixes — stripping one would strand the target with no routing namespace
-/// and the relay rejects the send with `validation_missing_routing_namespace`.
+/// relay-wide (unbound) sender. A relay-wide sender must name each target's
+/// `@namespace` explicitly because the relay derives `Send` routing for it
+/// entirely from those suffixes.
 pub fn parse_tui_target_identifier(
     identifier: &str,
     bound_bundle: Option<&str>,
@@ -85,7 +88,16 @@ pub fn parse_tui_target_identifier(
         ));
     }
     match bundle {
-        None => Ok(session.to_string()),
+        None => match bound_bundle {
+            Some(bundle_name) => Ok(format!("{session}@{bundle_name}")),
+            None => Err(RuntimeError::validation(
+                "validation_unqualified_target",
+                format!(
+                    "target '{session}' must be fully-qualified as 'session@bundle'; \
+                     a relay-wide sender has no bound bundle to infer the namespace from"
+                ),
+            )),
+        },
         Some("") => Err(RuntimeError::validation(
             "validation_unknown_target",
             format!(
@@ -96,7 +108,6 @@ pub fn parse_tui_target_identifier(
             "validation_unknown_target",
             format!("target identifier '{after_prefix}' may contain at most one '@' separator"),
         )),
-        Some(bundle_name) if bound_bundle == Some(bundle_name) => Ok(session.to_string()),
         Some(bundle_name) => Ok(format!("{session}@{bundle_name}")),
     }
 }
@@ -104,8 +115,8 @@ pub fn parse_tui_target_identifier(
 /// Merges the To recipient field into a deterministic target set.
 ///
 /// `bound_bundle` is the sender's bound bundle, or `None` for a relay-wide
-/// sender; it is forwarded to [`parse_tui_target_identifier`] to govern the
-/// suffix-strip behavior.
+/// sender; it is forwarded to [`parse_tui_target_identifier`] to govern bare-
+/// target qualification.
 pub fn merge_tui_targets(
     to_field: &str,
     bound_bundle: Option<&str>,

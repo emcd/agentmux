@@ -257,24 +257,30 @@ fn load_policy_presets(
 
 pub(super) fn load_authorization_context(
     configuration_root: &Path,
-    bundle: &BundleConfiguration,
+    bundle: Option<&BundleConfiguration>,
 ) -> Result<AuthorizationContext, RelayError> {
     let policies_path = configuration_root.join(POLICIES_FILE);
     let (presets, default_policy_id) = load_policy_presets(configuration_root)?;
 
     let permission_max_pending = load_permission_max_pending(configuration_root)?;
 
+    // A relay-wide (`GLOBAL`) home namespace has no bundle members; its
+    // requester controls come entirely from the operator policy loaded below
+    // (the TUI session presets), independent of any bundle.
     let conservative_default = PolicyControls::conservative_default();
-    let mut controls_by_session = HashMap::with_capacity(bundle.members.len());
-    for member in &bundle.members {
-        let controls = resolve_session_policy_controls(
-            member,
-            &presets,
-            default_policy_id.as_deref(),
-            &conservative_default,
-            policies_path.as_path(),
-        )?;
-        controls_by_session.insert(member.id.clone(), controls.clone());
+    let mut controls_by_session =
+        HashMap::with_capacity(bundle.map_or(0, |bundle| bundle.members.len()));
+    if let Some(bundle) = bundle {
+        for member in &bundle.members {
+            let controls = resolve_session_policy_controls(
+                member,
+                &presets,
+                default_policy_id.as_deref(),
+                &conservative_default,
+                policies_path.as_path(),
+            )?;
+            controls_by_session.insert(member.id.clone(), controls.clone());
+        }
     }
     let mut ui_sessions = HashMap::<String, UiSessionAuthorization>::new();
     if let Some(tui_configuration) =
@@ -770,14 +776,14 @@ pub(super) fn authorize_relay_action(
 /// can never satisfy the cross-bundle threshold without a schema change, no code
 /// override needed.
 pub(super) fn authorize_route(
-    dispatch_bundle: &BundleConfiguration,
+    dispatch_namespace: &str,
     authorization: &AuthorizationContext,
     profile: OperationProfile,
     route: &ResolvedRoute,
 ) -> Result<(), RelayError> {
     let controls = controls_for_requester(
         authorization,
-        dispatch_bundle,
+        dispatch_namespace,
         route.requester_session.as_str(),
     )?;
     let scope = scope_for_capability(controls, profile.capability);
@@ -794,7 +800,7 @@ pub(super) fn authorize_route(
         AuthorizationDecisionContext {
             capability: profile.capability.label(),
             requester_session: route.requester_session.as_str(),
-            bundle_name: dispatch_bundle.bundle_name.as_str(),
+            bundle_name: dispatch_namespace,
             reason: tier_denial_reason(minimum),
             target_session,
             targets,
@@ -849,7 +855,11 @@ pub(super) fn authorize_grant(
     requester_session: &str,
     permission_request_id: &str,
 ) -> Result<(), RelayError> {
-    let controls = controls_for_requester(authorization, bundle, requester_session)?;
+    let controls = controls_for_requester(
+        authorization,
+        bundle.bundle_name.as_str(),
+        requester_session,
+    )?;
     authorize_scope(
         controls.grant,
         PolicyScope::AllHome,
@@ -878,7 +888,11 @@ pub(super) fn authorize_updown(
     authorization: &AuthorizationContext,
     requester_session: &str,
 ) -> Result<(), RelayError> {
-    let controls = controls_for_requester(authorization, bundle, requester_session)?;
+    let controls = controls_for_requester(
+        authorization,
+        bundle.bundle_name.as_str(),
+        requester_session,
+    )?;
     authorize_scope(
         controls.updown,
         PolicyScope::AllHome,
@@ -898,7 +912,11 @@ pub(super) fn authorize_grant_for_list(
     authorization: &AuthorizationContext,
     requester_session: &str,
 ) -> Result<(), RelayError> {
-    let controls = controls_for_requester(authorization, bundle, requester_session)?;
+    let controls = controls_for_requester(
+        authorization,
+        bundle.bundle_name.as_str(),
+        requester_session,
+    )?;
     authorize_scope(
         controls.grant,
         PolicyScope::AllHome,
@@ -951,7 +969,7 @@ fn authorize_scope(
 
 fn controls_for_requester<'a>(
     authorization: &'a AuthorizationContext,
-    bundle: &BundleConfiguration,
+    dispatch_namespace: &str,
     requester_session: &str,
 ) -> Result<&'a PolicyControls, RelayError> {
     let controls = authorization
@@ -963,7 +981,7 @@ fn controls_for_requester<'a>(
                 "requester_session has no resolved policy controls",
                 Some(json!({
                     "requester_session": requester_session,
-                    "bundle_name": bundle.bundle_name,
+                    "bundle_name": dispatch_namespace,
                 })),
             )
         })?;

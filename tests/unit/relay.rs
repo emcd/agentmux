@@ -406,7 +406,7 @@ fn send_rejects_unknown_target() {
             request_id: None,
             requester_session: "alpha".to_string(),
             message: "hello".to_string(),
-            targets: vec!["missing".to_string()],
+            targets: vec!["missing@party".to_string()],
             broadcast: false,
             quiet_window_ms: None,
             quiescence_timeout_ms: None,
@@ -430,7 +430,7 @@ fn send_rejects_target_by_configured_session_name_alias() {
             request_id: None,
             requester_session: "alpha".to_string(),
             message: "hello".to_string(),
-            targets: vec!["Bravo".to_string()],
+            targets: vec!["Bravo@party".to_string()],
             broadcast: false,
             quiet_window_ms: Some(1),
             quiescence_timeout_ms: Some(1),
@@ -486,7 +486,7 @@ fn send_prefers_bundle_member_when_target_id_overlaps_with_ui_session_id() {
             request_id: None,
             requester_session: "bravo".to_string(),
             message: "hello".to_string(),
-            targets: vec!["alpha".to_string()],
+            targets: vec!["alpha@party".to_string()],
             broadcast: false,
             quiet_window_ms: Some(1),
             quiescence_timeout_ms: Some(1),
@@ -548,7 +548,7 @@ fn send_async_returns_accepted_and_queued_outcome() {
             request_id: None,
             requester_session: "alpha".to_string(),
             message: "hello".to_string(),
-            targets: vec!["bravo".to_string()],
+            targets: vec!["bravo@party".to_string()],
             broadcast: false,
             quiet_window_ms: Some(1),
             quiescence_timeout_ms: Some(1),
@@ -578,7 +578,7 @@ fn send_rejects_zero_timeout_override() {
             request_id: None,
             requester_session: "alpha".to_string(),
             message: "hello".to_string(),
-            targets: vec!["bravo".to_string()],
+            targets: vec!["bravo@party".to_string()],
             broadcast: false,
             quiet_window_ms: Some(1),
             quiescence_timeout_ms: Some(0),
@@ -631,7 +631,7 @@ fn send_rejects_quiescence_timeout_for_acp_target() {
             request_id: None,
             requester_session: "alpha".to_string(),
             message: "hello".to_string(),
-            targets: vec!["bravo".to_string()],
+            targets: vec!["bravo@party".to_string()],
             broadcast: false,
             quiet_window_ms: Some(1),
             quiescence_timeout_ms: Some(100),
@@ -658,7 +658,7 @@ fn send_rejects_acp_turn_timeout_for_tmux_target() {
             request_id: None,
             requester_session: "alpha".to_string(),
             message: "hello".to_string(),
-            targets: vec!["bravo".to_string()],
+            targets: vec!["bravo@party".to_string()],
             broadcast: false,
             quiet_window_ms: Some(1),
             quiescence_timeout_ms: None,
@@ -685,7 +685,7 @@ fn send_rejects_conflicting_timeout_fields() {
             request_id: None,
             requester_session: "alpha".to_string(),
             message: "hello".to_string(),
-            targets: vec!["bravo".to_string()],
+            targets: vec!["bravo@party".to_string()],
             broadcast: false,
             quiet_window_ms: Some(1),
             quiescence_timeout_ms: Some(100),
@@ -732,7 +732,7 @@ fn look_rejects_out_of_range_lines() {
     let response = dispatch_request(
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
-            target_session: "bravo".to_string(),
+            target_session: "bravo@party".to_string(),
             lines: Some(1001),
             offset: None,
         },
@@ -753,7 +753,7 @@ fn look_rejects_offset_for_tmux_target() {
     let response = dispatch_request(
         RelayRequest::Look {
             requester_session: "bravo".to_string(),
-            target_session: "bravo".to_string(),
+            target_session: "bravo@party".to_string(),
             lines: None,
             offset: Some(2),
         },
@@ -778,7 +778,7 @@ fn look_allows_zero_offset_for_tmux_target() {
     let response = dispatch_request(
         RelayRequest::Look {
             requester_session: "bravo".to_string(),
-            target_session: "bravo".to_string(),
+            target_session: "bravo@party".to_string(),
             lines: None,
             offset: Some(0),
         },
@@ -799,7 +799,7 @@ fn look_rejects_unknown_target() {
     let response = dispatch_request(
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
-            target_session: "missing".to_string(),
+            target_session: "missing@party".to_string(),
             lines: Some(5),
             offset: None,
         },
@@ -820,7 +820,7 @@ fn look_returns_empty_snapshot_for_acp_target_without_recorded_updates() {
     let response = dispatch_request(
         RelayRequest::Look {
             requester_session: "bravo".to_string(),
-            target_session: "bravo".to_string(),
+            target_session: "bravo@party".to_string(),
             lines: Some(5),
             offset: None,
         },
@@ -849,7 +849,7 @@ fn look_denies_same_bundle_non_self_target_under_default_self_scope() {
     let response = dispatch_request(
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
-            target_session: "bravo".to_string(),
+            target_session: "bravo@party".to_string(),
             lines: Some(3),
             offset: None,
         },

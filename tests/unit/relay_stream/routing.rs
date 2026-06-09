@@ -270,7 +270,12 @@ fn same_bundle_raww_permitted_under_home_scope() {
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
 
-    let response = bundle_session_raww(&configuration_root, &bundle_paths, bundle_name, "bravo");
+    let response = bundle_session_raww(
+        &configuration_root,
+        &bundle_paths,
+        bundle_name,
+        &format!("bravo@{bundle_name}"),
+    );
 
     assert_eq!(response["response"]["kind"], "error");
     assert_eq!(
@@ -539,8 +544,9 @@ fn relay_wide_send_into_bundle_denied_under_home_scope() {
     );
 }
 
-/// Task 3.3: a relay-wide principal whose targets are all bare (no suffix) has
-/// no routing context and is rejected.
+/// Task 3.3: a relay-wide principal whose targets are all bare (no `@<namespace>`
+/// suffix) is rejected — the relay requires fully-qualified targets and the
+/// client never filled them in.
 #[test]
 fn relay_wide_send_with_bare_target_is_rejected() {
     let temporary = TempDir::new().expect("temporary directory");
@@ -560,7 +566,7 @@ fn relay_wide_send_with_bare_target_is_rejected() {
     assert_eq!(response["response"]["kind"], "error");
     assert_eq!(
         response["response"]["error"]["code"],
-        "validation_missing_routing_namespace"
+        "validation_unqualified_target"
     );
 }
 
@@ -599,7 +605,7 @@ fn send_mixing_relay_wide_and_session_targets_fans_out() {
                 "operation": "send",
                 "requester_session": "alpha",
                 "message": "mixed targets",
-                "targets": [operator_id, "bravo"],
+                "targets": [operator_id, format!("bravo@{bundle_name}")],
                 "broadcast": false,
                 "quiescence_timeout_ms": 200,
             },

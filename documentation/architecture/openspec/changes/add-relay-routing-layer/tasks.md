@@ -25,11 +25,11 @@
 
 ### 2A. Relay: require fully-qualified targets
 
-- [ ] 2.1 Reject bare (unqualified) targets on Send/Look/Raww with
+- [x] 2.1 Reject bare (unqualified) targets on Send/Look/Raww with
       `validation_unqualified_target`; remove bare→bound-bundle and bare→UI
       resolution from `resolve_target_groups` and the target half of
       `normalize_request_identities`
-- [ ] 2.2 Implement the config-free `MultiTarget` resolution stage in
+- [x] 2.2 Implement the config-free `MultiTarget` resolution stage in
       `routing.rs`: classify each target from its suffix alone into
       `ResolvedTarget { bundle_name, session_id, relay_wide }`; supersedes
       `resolve_send_routing_bundle` and the classification half of
@@ -37,10 +37,10 @@
 
 ### 2B. Clients: fill in the namespace (cross-lane — MCP / TUI lanes)
 
-- [ ] 2.3 MCP server fills the caller's bound bundle into a target left
+- [x] 2.3 MCP server fills the caller's bound bundle into a target left
       unqualified before sending (`mcp-tool-surface`); MCP lane
-- [ ] 2.4 TUI (global user) always qualifies targets (`tui-surface`); TUI lane
-- [ ] 2.5 Coordinator sequences rollout: client fill-in lands with or before the
+- [x] 2.4 TUI (global user) always qualifies targets (`tui-surface`); TUI lane
+- [x] 2.5 Coordinator sequences rollout: client fill-in lands with or before the
       relay's bare-target rejection
 
 ### 2C. Namespace-centric dispatch (no borrowed bundle)
@@ -49,23 +49,23 @@
 > come from that namespace's policy. Stop borrowing a peer bundle for a `GLOBAL`
 > sender.
 
-- [ ] 2.6 Build a `GLOBAL`/operator authorization context (operator policy +
+- [x] 2.6 Build a `GLOBAL`/operator authorization context (operator policy +
       relay-wide permission config, no bundle members) so a relay-wide sender is
       authorized without loading a borrowed bundle; decouple
       `load_authorization_context` / `dispatch_request` from a single
       `BundleConfiguration` for relay-wide senders
-- [ ] 2.7 Drop `resolve_send_routing_bundle`; route Send per-target by namespace;
+- [x] 2.7 Drop `resolve_send_routing_bundle`; route Send per-target by namespace;
       a relay-wide `Send` to `@GLOBAL`-only targets succeeds (no
       `validation_missing_routing_namespace`)
-- [ ] 2.8 Rename `ResolvedRoute.dispatch_bundle_name` → `dispatch_namespace` (and
+- [x] 2.8 Rename `ResolvedRoute.dispatch_bundle_name` → `dispatch_namespace` (and
       `requester_home_namespace` call sites) to match the namespace model
 
 ### 2D. Migrate Send onto the config-free layer
 
-- [ ] 2.9 Update `handle_send` to obtain its `ResolvedRoute` from the resolution
+- [x] 2.9 Update `handle_send` to obtain its `ResolvedRoute` from the resolution
       stage; keep existence validation (before authz) and delivery assembly
       (after authz) in the body; remove inline suffix parsing / route-building
-- [ ] 2.10 Validate: `cargo test` passes; no behavior change beyond bare-target
+- [x] 2.10 Validate: `cargo test` passes; no behavior change beyond bare-target
       rejection and the relay-wide `GLOBAL`-only send now succeeding
 
 ## 3. Step 2 — Migrate Look onto the layer (no behavior change)

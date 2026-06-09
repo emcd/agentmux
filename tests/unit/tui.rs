@@ -11,7 +11,7 @@ use agentmux::tui::{
 #[test]
 fn parses_local_target_identifier() {
     let resolved = parse_tui_target_identifier("relay", Some("agentmux")).expect("target");
-    assert_eq!(resolved, "relay");
+    assert_eq!(resolved, "relay@agentmux");
 }
 
 #[test]
@@ -24,13 +24,15 @@ fn rejects_slash_qualified_target_identifier() {
 #[test]
 fn parses_at_prefixed_target_identifier() {
     let resolved = parse_tui_target_identifier("@relay", Some("agentmux")).expect("target");
-    assert_eq!(resolved, "relay");
+    assert_eq!(resolved, "relay@agentmux");
 }
 
 #[test]
-fn parses_session_at_active_bundle_to_bare_session() {
+fn parses_session_at_active_bundle_preserves_canonical_form() {
+    // The relay requires fully-qualified targets, so a canonical id matching the
+    // bound bundle is emitted verbatim rather than stripped to a bare session.
     let resolved = parse_tui_target_identifier("relay@agentmux", Some("agentmux")).expect("target");
-    assert_eq!(resolved, "relay");
+    assert_eq!(resolved, "relay@agentmux");
 }
 
 #[test]
@@ -64,9 +66,12 @@ fn relay_wide_sender_preserves_all_bundle_suffixes() {
 }
 
 #[test]
-fn relay_wide_sender_leaves_bare_target_unqualified() {
-    let resolved = parse_tui_target_identifier("relay", None).expect("target");
-    assert_eq!(resolved, "relay");
+fn relay_wide_sender_rejects_bare_target() {
+    // A relay-wide sender has no bound bundle to qualify a bare target with, and
+    // the relay rejects unqualified targets, so the client fails fast instead of
+    // sending one the relay would reject.
+    let error = parse_tui_target_identifier("relay", None).expect_err("must reject");
+    assert!(error.to_string().contains("validation_unqualified_target"));
 }
 
 #[test]
@@ -104,20 +109,22 @@ fn rejects_slash_in_bundle_qualifier() {
 
 #[test]
 fn merge_dedupes_canonical_and_bare_intra_bundle_targets() {
+    // The bare `relay` qualifies to `relay@agentmux`, matching the canonical form,
+    // so the two collapse to a single fully-qualified target.
     let targets = merge_tui_targets("relay, relay@agentmux", Some("agentmux")).expect("targets");
-    assert_eq!(targets, vec!["relay"]);
+    assert_eq!(targets, vec!["relay@agentmux"]);
 }
 
 #[test]
 fn merge_preserves_peer_bundle_target_alongside_local() {
     let targets = merge_tui_targets("relay, mcp@other-bundle", Some("agentmux")).expect("targets");
-    assert_eq!(targets, vec!["relay", "mcp@other-bundle"]);
+    assert_eq!(targets, vec!["relay@agentmux", "mcp@other-bundle"]);
 }
 
 #[test]
 fn sender_bound_bundle_exposes_active_bundle_for_session_principal() {
     // A bundle-bound session sender (bare id, no `@GLOBAL`) is bound to the
-    // active bundle, so intra-bundle suffixes are stripped on send.
+    // active bundle, so bare targets are qualified with it on send.
     assert_eq!(sender_bound_bundle("tui", "agentmux"), Some("agentmux"));
 }
 
@@ -140,7 +147,10 @@ fn merge_relay_wide_sender_preserves_cross_bundle_target() {
 #[test]
 fn merges_to_field_into_deterministic_targets() {
     let targets = merge_tui_targets("relay, mcp, tui", Some("agentmux")).expect("targets");
-    assert_eq!(targets, vec!["relay", "mcp", "tui"]);
+    assert_eq!(
+        targets,
+        vec!["relay@agentmux", "mcp@agentmux", "tui@agentmux"]
+    );
 }
 
 #[test]
