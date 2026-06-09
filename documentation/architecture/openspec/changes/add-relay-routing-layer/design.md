@@ -13,8 +13,10 @@ layer) and unblocks `todos/relay/71` (decompose handlers/authorization).
   classification)** — the bare-id convenience moves client-side; cross-bundle
   reach governed by the data-driven tier classification plus the policy schema's
   per-capability allowed-scope set (no per-operation hardcoded policy); handlers
-  implement op body only; `todos/relay/76` (cross-bundle raww) resolved as a
-  policy-schema change.
+  implement op body only — a single namespace-centric **dispatch spine** runs
+  resolution and authorization as stages for *every* target operation (not `Send`
+  alone), and operation bodies reduce to `prepare`/`execute`; `todos/relay/76`
+  (cross-bundle raww) resolved as a policy-schema change.
 - Non-Goals: async rewrite; changing Send's cross-bundle reach (already
   `all:all` in effect via the schema allowed-scope set); per-target partial
   delivery (all-or-nothing is retained; deferred to `todos/relay/77`);
@@ -140,6 +142,51 @@ these are structural migrations onto the shared layer — no behavior change
 beyond the (separately gated) bare-target rejection. The handler keeps existence
 validation and delivery assembly (which load configuration); the layer keeps
 suffix classification and authorization.
+
+As first delivered these migrations left each body *orchestrating* the stages —
+it calls `resolve_*_route` and `authorize_route` itself — and only `Send`
+namespace-centric. The dispatch-spine step below completes the separation by
+lifting those calls into the dispatcher and routing every operation through the
+home namespace.
+
+### Dispatch spine: stages the dispatcher runs, not calls the handler makes
+
+The three-stage model above is the *contract*; the **spine** is the single
+dispatcher that runs it. As first delivered, the stages are open-coded inside
+each handler — every body calls `resolve_*_route`, validates target existence,
+calls `authorize_route`, then executes — and only `Send` is namespace-centric.
+`Look`/`Raww`/`List` still enter through `connection.rs`'s
+`resolve_effective_bundle` and authorize in a *borrowed* dispatch bundle; for
+`Raww` that borrowed bundle is the *target's* (`resolve_raww_routing_bundle`), so
+a cross-namespace session→session `Raww` would resolve the sender in the wrong
+namespace. That is the borrowed-bundle anti-pattern this design rejects (see
+"Namespaces, not bundles"), left live for the non-`Send` operations because only
+`Send` was moved onto the namespace-centric path.
+
+The spine closes this. One namespace-centric entry (generalizing
+`handle_send_routed`) serves every target operation: it loads the requester's
+**home** authorization context once, resolves the `ResolvedRoute`, runs the
+operation's existence/delivery **preparation**, calls `authorize_route`, then
+runs the operation **body** — in that fixed order. The ordering invariant
+(`validation_unknown_target` before `authorization_forbidden`) becomes
+structural rather than per-handler convention. Each operation then contributes
+only two pieces: `prepare` (load per-target bundle configuration, validate
+existence → a delivery plan; the one place configuration is touched) and
+`execute` (do the work). Cross-bundle `Look`/`Raww` load peer configuration in
+`prepare`, exactly as `assemble_delivery_groups` already does for `Send`, so the
+requester is authorized in its home namespace and the residual `home_bundle`
+(`todos/relay/78`) is retired. `connection.rs`'s five dispatch branches collapse
+toward this single entry; the relay-wide and identity entry points stay explicit.
+
+This is what makes routing/dispatch and authorization genuinely **separate
+layers**: routing produces a route from the home namespace, the spine authorizes
+it through the data-driven authorization layer, and a body cannot run without
+having been authorized. The module decomposition (`todos/relay/71`) organized the
+code along these seams; the spine is what turns them into layers rather than
+co-located helpers. Per-session routing attributes (`can_be_looked` /
+`can_be_written`) that would further let `routing.rs` shed its operation-named
+resolvers depend on the registry-unification idea (`ideas/relay/5`) and are a
+separate arc.
 
 ### Authorization granularity: all-or-nothing (per-target deferred)
 
