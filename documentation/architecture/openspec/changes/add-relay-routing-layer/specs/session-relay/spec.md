@@ -2,22 +2,31 @@
 
 ### Requirement: Suffix-Based Target Routing
 
-The relay SHALL infer the routing bundle for all target-addressed operations
-(Send, Look, Raww) from the `@<namespace>` suffix of the target's principal ID:
+The relay SHALL require every target on a target-addressed operation (Send, Look,
+Raww) to be a **fully-qualified** principal ID carrying an `@<namespace>` suffix,
+and SHALL derive the routing registry from that suffix alone:
 
 - Target with `@GLOBAL` suffix → relay-wide registry (`RegistryKey::RelayWide`)
 - Target with `@<bundle>` suffix → bundle registry for `<bundle>`
-- Bare target (no suffix) with bundle-bound sender → sender's bound bundle
-- Bare target (no suffix) with relay-wide sender → error if no namespace
-  supplied
+- Target with no suffix (bare) → rejected with `validation_unqualified_target`
 
-The relay SHALL NOT require an explicit `namespace` field from the client to
-route to relay-wide (`@GLOBAL`) targets or to bundle-qualified targets. Clients
-specify targets as fully-qualified principal IDs; the relay derives the routing
-registry from the suffix.
+The relay SHALL NOT resolve a bare target against the sender's bound bundle or
+the UI registry, regardless of sender type. The bare-id convenience is a
+client-side concern: a client (or its MCP server) fills in the namespace before
+sending, so the relay always receives fully-qualified targets and classifies
+them from the suffix without consulting bundle configuration. The relay SHALL
+NOT require a separate `namespace` field to route to qualified targets; the
+suffix is authoritative.
 
-A single `Send` request MAY mix relay-wide (`@GLOBAL`) and bundle-session
-targets; the relay SHALL fan out delivery to each target in its own namespace.
+Routing is **per-target by namespace**: each target is delivered in the
+namespace its suffix names — a bundle via the catalog, `GLOBAL` via the session
+registry. The relay SHALL NOT assign a sender a single "routing bundle" derived
+from its targets. In particular a relay-wide (`GLOBAL`) sender SHALL NOT be
+required to supply a bundle-qualified target: a `Send` from a relay-wide sender
+to `@GLOBAL`-only targets routes through the registry and SHALL NOT return
+`validation_missing_routing_namespace`. A single `Send` request MAY mix
+relay-wide (`@GLOBAL`) and bundle-session targets; the relay SHALL fan out
+delivery to each target in its own namespace.
 
 Any authenticated session (bundle-bound or relay-wide) MAY send to `@GLOBAL`
 targets. This is a routing invariant, not a relaxation of the scope ladder: a
@@ -50,17 +59,13 @@ therefore does require `all:all`.
 - **AND** the requester's configured `raww` scope is `all:all`
 - **THEN** relay routes to bundle `bundle-a` and delivers to `agent`
 
-#### Scenario: Bare target defaults to sender's bound bundle
+#### Scenario: Bare target rejected as unqualified
 
-- **WHEN** a bundle-bound session sends a target-addressed request with a bare
-  target (no `@<namespace>` suffix)
-- **THEN** relay resolves the target within the sender's bound bundle
-
-#### Scenario: Relay-wide sender with bare target returns error
-
-- **WHEN** a relay-wide principal issues a target-addressed request with a bare
-  target (no suffix)
-- **THEN** relay returns `validation_missing_routing_namespace`
+- **WHEN** any sender (bundle-bound or relay-wide) issues a target-addressed
+  request with a bare target (no `@<namespace>` suffix)
+- **THEN** relay returns `validation_unqualified_target`
+- **AND** relay does not resolve the target against the sender's bound bundle or
+  the UI registry
 
 #### Scenario: Mixed relay-wide and bundle targets fan out
 
@@ -68,6 +73,14 @@ therefore does require `all:all`.
   in the same `Send` request
 - **THEN** relay delivers to `@GLOBAL` via the relay-wide registry and to the
   `@<bundle>` target via the bundle catalog
+
+#### Scenario: Relay-wide sender to GLOBAL-only targets needs no bundle
+
+- **WHEN** a relay-wide (`GLOBAL`) sender issues a `Send` whose targets are all
+  `@GLOBAL`
+- **THEN** relay routes each target through the relay-wide registry
+- **AND** relay does not require a bundle-qualified target and does not return
+  `validation_missing_routing_namespace`
 
 ### Requirement: Relay raww target resolution and bundle boundary
 
@@ -77,11 +90,12 @@ the Uniform Cross-Bundle Authorization Model; there is no hard routing rejection
 for raww targeting a different bundle.
 
 Validation behavior:
+- bare/unqualified target (no `@<namespace>` suffix) → `validation_unqualified_target`
 - unknown/non-canonical target → `validation_unknown_target`
 - cross-bundle raww with insufficient scope → `authorization_forbidden`
 
-Validation precedence SHALL evaluate target existence before authorization
-policy checks.
+Validation precedence SHALL evaluate target qualification (at the resolution
+stage), then target existence, then authorization policy checks.
 
 #### Scenario: Reject unknown raww target
 

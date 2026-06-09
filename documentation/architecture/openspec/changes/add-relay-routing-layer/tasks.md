@@ -14,23 +14,67 @@
       `PermitAll` Non-Goal and §2 in `design.md`
 - [x] 1.2 Validate: `openspec validate add-relay-routing-layer --strict` passes
 
-## 2. Step 1 — Migrate Send onto the layer (no behavior change)
+## 2. Step 1 — Require qualified targets, then migrate Send (BREAKING)
 
-- [ ] 2.1 Implement `MultiTarget` resolution stage for Send in `routing.rs`;
-      supersedes per-handler `resolve_send_routing_bundle` /
+> **Root cause first.** The relay accepted bare targets and resolved them against
+> bundle members + the UI registry, coupling routing to configuration and letting
+> a bare id silently resolve to a `@GLOBAL` operator. We require fully-qualified
+> targets at the relay and move the bare-id convenience client-side, which makes
+> the resolution stage config-free. Only then does the Send migration land on a
+> genuinely thin layer.
+
+### 2A. Relay: require fully-qualified targets
+
+- [ ] 2.1 Reject bare (unqualified) targets on Send/Look/Raww with
+      `validation_unqualified_target`; remove bare→bound-bundle and bare→UI
+      resolution from `resolve_target_groups` and the target half of
+      `normalize_request_identities`
+- [ ] 2.2 Implement the config-free `MultiTarget` resolution stage in
+      `routing.rs`: classify each target from its suffix alone into
+      `ResolvedTarget { bundle_name, session_id, relay_wide }`; supersedes
+      `resolve_send_routing_bundle` and the classification half of
       `resolve_target_groups`
-- [ ] 2.2 Set Send `CrossBundlePolicy = RequireScope(all:all)` (already
-      enforced; migrate existing behavior onto the shared table, no change)
-- [ ] 2.3 Update `handle_send` to receive `ResolvedRoute`; remove inline
-      routing/authz boilerplate
-- [ ] 2.4 Validate: `cargo test` passes; no behavior change
+
+### 2B. Clients: fill in the namespace (cross-lane — MCP / TUI lanes)
+
+- [ ] 2.3 MCP server fills the caller's bound bundle into a target left
+      unqualified before sending (`mcp-tool-surface`); MCP lane
+- [ ] 2.4 TUI (global user) always qualifies targets (`tui-surface`); TUI lane
+- [ ] 2.5 Coordinator sequences rollout: client fill-in lands with or before the
+      relay's bare-target rejection
+
+### 2C. Namespace-centric dispatch (no borrowed bundle)
+
+> A sender has exactly one home namespace (its bundle, or `GLOBAL`); its controls
+> come from that namespace's policy. Stop borrowing a peer bundle for a `GLOBAL`
+> sender.
+
+- [ ] 2.6 Build a `GLOBAL`/operator authorization context (operator policy +
+      relay-wide permission config, no bundle members) so a relay-wide sender is
+      authorized without loading a borrowed bundle; decouple
+      `load_authorization_context` / `dispatch_request` from a single
+      `BundleConfiguration` for relay-wide senders
+- [ ] 2.7 Drop `resolve_send_routing_bundle`; route Send per-target by namespace;
+      a relay-wide `Send` to `@GLOBAL`-only targets succeeds (no
+      `validation_missing_routing_namespace`)
+- [ ] 2.8 Rename `ResolvedRoute.dispatch_bundle_name` → `dispatch_namespace` (and
+      `requester_home_namespace` call sites) to match the namespace model
+
+### 2D. Migrate Send onto the config-free layer
+
+- [ ] 2.9 Update `handle_send` to obtain its `ResolvedRoute` from the resolution
+      stage; keep existence validation (before authz) and delivery assembly
+      (after authz) in the body; remove inline suffix parsing / route-building
+- [ ] 2.10 Validate: `cargo test` passes; no behavior change beyond bare-target
+      rejection and the relay-wide `GLOBAL`-only send now succeeding
 
 ## 3. Step 2 — Migrate Look onto the layer (no behavior change)
 
-- [ ] 3.1 Implement `SingleTarget` resolution stage for Look in `routing.rs`;
-      supersedes `resolve_look_target_bundle`
-- [ ] 3.2 Set Look `CrossBundlePolicy = RequireScope(all:all)` (already
-      enforced; migrate existing behavior, no change)
+- [ ] 3.1 Implement `SingleTarget` config-free resolution stage for Look in
+      `routing.rs`; supersedes `resolve_look_target_bundle`
+- [ ] 3.2 No profile change needed — Look already reaches `all:all` via the
+      policy schema allowed-scope set (`required_tier` is data-driven; no
+      per-operation enum)
 - [ ] 3.3 Update `handle_look` to receive `ResolvedRoute`; remove
       `resolve_look_target_bundle` and `authorize_look`
 - [ ] 3.4 Validate: `cargo test` passes; no behavior change
@@ -38,8 +82,8 @@
 ## 4. Step 3 — Migrate List onto the layer (no behavior change)
 
 - [ ] 4.1 Implement `BundleEnumerate` resolution stage for List in `routing.rs`
-- [ ] 4.2 Set List `CrossBundlePolicy = RequireScope(all:all)` (requester
-      already resolves in home bundle; preserve existing behavior)
+- [ ] 4.2 No profile change needed — List already reaches `all:all` via the
+      policy schema allowed-scope set; requester resolves in its home bundle
 - [ ] 4.3 Update `handle_list` to receive `ResolvedRoute`; remove inline
       routing/authz
 - [ ] 4.4 Validate: `cargo test` passes; no behavior change
