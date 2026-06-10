@@ -5,6 +5,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
+    thread,
     time::Duration,
 };
 
@@ -98,6 +99,10 @@ impl RelayConnectionMetrics {
 const RELAY_MAX_CONNECTIONS: usize = 512;
 const RELAY_PRE_HELLO_IDLE_TIMEOUT_MS: u64 = 2_000;
 const RELAY_SHUTDOWN_POLL_INTERVAL_MS: u64 = 100;
+// Grace period between observing a termination signal and forcing process
+// exit. Caps all post-signal work (drain, cleanup, runtime teardown); graceful
+// shutdown normally completes well under 2 seconds.
+const RELAY_SHUTDOWN_WATCHDOG_GRACE_MS: u64 = 5_000;
 
 pub(super) async fn run_relay_host(arguments: RelayHostArguments) -> Result<(), RuntimeError> {
     // Install SIGINT/SIGTERM handlers before any startup work. The handlers do
@@ -110,6 +115,7 @@ pub(super) async fn run_relay_host(arguments: RelayHostArguments) -> Result<(), 
     // socket existence, which on macOS could become true before the handlers
     // were installed.
     let _signal_handlers = install_shutdown_signal_handlers()?;
+    spawn_shutdown_watchdog()?;
 
     // Captured before `arguments` is moved into the blocking startup closure;
     // enforcement and watching apply in the async serve phase, not during startup.
@@ -150,6 +156,51 @@ pub(super) async fn run_relay_host(arguments: RelayHostArguments) -> Result<(), 
             .await
         }
     }
+}
+
+/// Spawns the runtime-independent shutdown watchdog: a plain OS thread that
+/// polls the shutdown flag and forces process exit a bounded grace period
+/// after a termination signal is observed.
+///
+/// This is the hard backstop for issues/relay/26: request dispatch runs
+/// blocking work inline on tokio worker threads, so once every worker parks,
+/// the timer-driven shutdown polls in `supervise_accept_loop` and the accept
+/// loop can never observe SIGTERM and the process hangs until SIGKILL. The
+/// watchdog shares nothing with the runtime (OS thread, `thread::sleep`,
+/// `process::exit`), so it wins whenever graceful shutdown stalls.
+///
+/// If the relay wedges again with this backstop deployed, capture thread state
+/// before the grace period expires (or before resorting to SIGKILL):
+/// `eu-stack -p <relay pid>` or
+/// `gdb -p <relay pid> -ex "thread apply all bt" -ex quit`.
+fn spawn_shutdown_watchdog() -> Result<(), RuntimeError> {
+    thread::Builder::new()
+        .name("shutdown-watchdog".to_string())
+        .spawn(|| {
+            while !shutdown_requested() {
+                thread::sleep(Duration::from_millis(RELAY_SHUTDOWN_POLL_INTERVAL_MS));
+            }
+            emit_inscription(
+                "relay.shutdown.watchdog.armed",
+                &json!({ "grace_ms": RELAY_SHUTDOWN_WATCHDOG_GRACE_MS }),
+            );
+            eprintln!(
+                "relay shutdown watchdog armed: forcing exit in \
+                 {RELAY_SHUTDOWN_WATCHDOG_GRACE_MS} ms unless graceful shutdown completes"
+            );
+            thread::sleep(Duration::from_millis(RELAY_SHUTDOWN_WATCHDOG_GRACE_MS));
+            emit_inscription(
+                "relay.shutdown.watchdog.forced_exit",
+                &json!({ "grace_ms": RELAY_SHUTDOWN_WATCHDOG_GRACE_MS }),
+            );
+            eprintln!(
+                "relay shutdown watchdog: graceful shutdown did not complete within \
+                 {RELAY_SHUTDOWN_WATCHDOG_GRACE_MS} ms; forcing exit"
+            );
+            std::process::exit(0);
+        })
+        .map_err(|source| RuntimeError::io("spawn relay shutdown watchdog thread", source))?;
+    Ok(())
 }
 
 fn resolve_runtime_roots(runtime: RuntimeArguments) -> Result<RuntimeRoots, RuntimeError> {
