@@ -17,7 +17,9 @@ use super::super::tmux::{
 };
 
 const QUIET_WINDOW_MS_DEFAULT: u64 = 750;
-const QUIESCENCE_TIMEOUT_MS_DEFAULT: u64 = 30_000;
+// Also caps the UI-reconnect delivery wait when the caller set no explicit
+// quiescence timeout (see `deliver_one_target_ui`).
+pub(super) const QUIESCENCE_TIMEOUT_MS_DEFAULT: u64 = 30_000;
 // TODO(refactor-acp-background-reader follow-up): drop this constant and the
 // `acp_turn_timeout_ms` param plumbing entirely. The relay no longer
 // enforces a turn timeout for ACP prompts (fire-and-forget; agent death

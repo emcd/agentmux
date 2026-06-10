@@ -20,6 +20,14 @@ use crate::runtime::inscriptions::emit_inscription;
 const ACP_CLIENT_NAME: &str = "agentmux-relay";
 const ACP_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+// Bound on each bootstrap request (initialize, session/new, session/load): an
+// agent child that never replies must not pin the requesting blocking thread
+// forever (issues/relay/26 defense-in-depth; startup's outer readiness poll
+// gives up at 10s, but the inner request thread previously stayed stuck).
+// Generous relative to observed bootstrap times; session/load streams its full
+// replay before responding, so it shares the same wide bound.
+const ACP_OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub const REPLAY_BUFFER_MAX_ENTRIES: usize = 1000;
 
 pub(in crate::acp) fn append_replay_entries(
@@ -231,7 +239,7 @@ impl AcpStdioClient {
                     "version": ACP_CLIENT_VERSION,
                 },
             }),
-            None,
+            ACP_OPERATION_TIMEOUT,
         )
         .map_err(|error| match error {
             AcpRequestError::Failed(reason) => reason,
@@ -251,7 +259,7 @@ impl AcpStdioClient {
                     "cwd": working_directory.display().to_string(),
                     "mcpServers": [],
                 }),
-                None,
+                ACP_OPERATION_TIMEOUT,
             )
             .map_err(|error| match error {
                 AcpRequestError::Failed(reason) => reason,
@@ -273,15 +281,6 @@ impl AcpStdioClient {
         session_id: &str,
         working_directory: &Path,
     ) -> Result<Vec<ReplayEntry>, String> {
-        self.load_session_with_timeout(session_id, working_directory, None)
-    }
-
-    pub fn load_session_with_timeout(
-        &mut self,
-        session_id: &str,
-        working_directory: &Path,
-        timeout: Option<Duration>,
-    ) -> Result<Vec<ReplayEntry>, String> {
         let entries_before_load = self
             .replay_buffer
             .lock()
@@ -294,7 +293,7 @@ impl AcpStdioClient {
                 "cwd": working_directory.display().to_string(),
                 "mcpServers": [],
             }),
-            timeout,
+            ACP_OPERATION_TIMEOUT,
         )
         .map_err(|error| match error {
             AcpRequestError::Failed(reason) => reason,
@@ -459,7 +458,7 @@ impl AcpStdioClient {
         &mut self,
         method: &str,
         params: Value,
-        timeout: Option<Duration>,
+        timeout: Duration,
     ) -> Result<Value, AcpRequestError> {
         let request_id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
@@ -490,30 +489,20 @@ impl AcpStdioClient {
                 reason: format!("write ACP request failed: {source}"),
             });
         }
-        let envelope = match timeout {
-            Some(deadline) => match rx.recv_timeout(deadline) {
-                Ok(envelope) => envelope,
-                Err(RecvTimeoutError::Timeout) => {
-                    self.pending_responses
-                        .lock()
-                        .expect("pending mutex")
-                        .remove(&request_id);
-                    return Err(AcpRequestError::Timeout(deadline));
-                }
-                Err(RecvTimeoutError::Disconnected) => {
-                    return Err(AcpRequestError::ConnectionClosed {
-                        reason: "ACP transport closed before response".to_string(),
-                    });
-                }
-            },
-            None => match rx.recv() {
-                Ok(envelope) => envelope,
-                Err(_) => {
-                    return Err(AcpRequestError::ConnectionClosed {
-                        reason: "ACP transport closed before response".to_string(),
-                    });
-                }
-            },
+        let envelope = match rx.recv_timeout(timeout) {
+            Ok(envelope) => envelope,
+            Err(RecvTimeoutError::Timeout) => {
+                self.pending_responses
+                    .lock()
+                    .expect("pending mutex")
+                    .remove(&request_id);
+                return Err(AcpRequestError::Timeout(timeout));
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(AcpRequestError::ConnectionClosed {
+                    reason: "ACP transport closed before response".to_string(),
+                });
+            }
         };
         match envelope {
             ResponseEnvelope::Result(value) => Ok(value),
