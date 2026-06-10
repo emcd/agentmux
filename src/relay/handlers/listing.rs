@@ -7,7 +7,7 @@ use crate::{
     runtime::{inscriptions::emit_inscription, paths::tmux_socket_path_for_runtime_directory},
 };
 
-use super::super::authorization::{AuthorizationContext, authorize_route};
+use super::super::authorization::AuthorizationContext;
 use super::super::delivery::acp_session_ready_for_startup;
 use super::super::lifecycle::{reconcile_loaded_bundle, shutdown_bundle_runtime};
 use super::super::routing::{
@@ -19,6 +19,7 @@ use super::super::{
     ListedSession, RelayError, RelayResponse, SCHEMA_VERSION, canonical_session_id,
     load_startup_failures, relay_error,
 };
+use super::routed::run_target_operation;
 
 pub(super) fn handle_bundle_up(
     bundle: &BundleConfiguration,
@@ -121,23 +122,47 @@ pub(in crate::relay) fn handle_list_routed(
         requester_session.as_str(),
         "requester_session",
     )?;
-    let route = resolve_list_route(
-        requester_home_namespace(
-            sender.session_id.as_str(),
-            dispatch_bundle.bundle_name.as_str(),
-        ),
-        sender.session_id.as_str(),
-        enumerate_bundle.bundle_name.as_str(),
-    );
-    authorize_route(
+    // List names no per-session target, so the spine's `prepare` stage is empty;
+    // existence of the enumerate bundle is guaranteed by the connection layer. The
+    // requester's `list` control is resolved in the dispatch bundle while the
+    // route's home namespace drives the cross-namespace tier.
+    run_target_operation(
         dispatch_bundle.bundle_name.as_str(),
         dispatch_authorization,
         OperationProfile {
             capability: Capability::List,
             addressing: Addressing::BundleEnumerate,
         },
-        &route,
-    )?;
+        || {
+            Ok(resolve_list_route(
+                requester_home_namespace(
+                    sender.session_id.as_str(),
+                    dispatch_bundle.bundle_name.as_str(),
+                ),
+                sender.session_id.as_str(),
+                enumerate_bundle.bundle_name.as_str(),
+            ))
+        },
+        |_route| Ok(()),
+        |_route, ()| {
+            execute_list(
+                enumerate_bundle,
+                enumerate_runtime_directory,
+                tmux_socket.as_path(),
+                sender.session_id.as_str(),
+            )
+        },
+    )
+}
+
+/// Enumerates a bundle's sessions and builds the list response. Runs as the
+/// spine's `execute` stage, after authorization.
+fn execute_list(
+    enumerate_bundle: &BundleConfiguration,
+    enumerate_runtime_directory: &Path,
+    tmux_socket: &Path,
+    requester_session_id: &str,
+) -> Result<RelayResponse, RelayError> {
     let sessions = enumerate_bundle
         .members
         .iter()
@@ -148,7 +173,7 @@ pub(in crate::relay) fn handle_list_routed(
             ready: session_ready_for_list(
                 enumerate_bundle,
                 enumerate_runtime_directory,
-                tmux_socket.as_path(),
+                tmux_socket,
                 member,
             ),
         })
@@ -191,7 +216,7 @@ pub(in crate::relay) fn handle_list_routed(
             "relay.list.response",
             &json!({
                 "bundle_name": bundle.id,
-                "requester_session": sender.session_id,
+                "requester_session": requester_session_id,
                 "hosted": bundle.hosted,
                 "state": bundle.state,
                 "startup_health": bundle.startup_health,

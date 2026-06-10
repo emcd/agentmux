@@ -281,17 +281,15 @@ fn relay_send_routes_to_connected_ui_stream_with_event_frames() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].outcome, SendOutcome::Queued);
 
-    let events = collect_bundle_events(
-        &ui_client,
-        &mut reader,
-        bundle_name.as_str(),
-        Duration::from_secs(3),
-    );
+    // Events to a relay-wide (`@GLOBAL`) UI session are attributed to the
+    // uniform `GLOBAL` delivery group regardless of the sender's home bundle;
+    // sender attribution rides in the payload's `sender_session`.
+    let events = collect_bundle_events(&ui_client, &mut reader, "GLOBAL", Duration::from_secs(3));
     let incoming_event = events
         .iter()
         .find(|value| value["event"]["event_type"] == "incoming_message")
         .expect("incoming event");
-    assert_eq!(incoming_event["event"]["bundle_name"], bundle_name);
+    assert_eq!(incoming_event["event"]["bundle_name"], "GLOBAL");
     assert_eq!(
         incoming_event["event"]["target_session"],
         global_user_id(&bundle_name)
@@ -375,7 +373,7 @@ fn relay_send_waits_for_ui_reconnect_before_delivery() {
         let events = collect_bundle_events(
             &reconnect_client,
             &mut reconnect_reader,
-            reconnect_bundle.as_str(),
+            "GLOBAL",
             Duration::from_secs(3),
         );
         reconnect_client

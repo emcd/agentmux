@@ -210,9 +210,10 @@
       `assemble_delivery_groups`), validates existence, authorizes in the home
       namespace, then runs the body — in that fixed order. Shared sender resolution
       across the home (`resolve_sender_in_namespace`).
-- [ ] 8.2 Lift the `resolve_*_route` and `authorize_route` calls out of the
-      routed handler bodies into a single generic spine (the bodies still own them
-      today; this folds into the Step 8 prepare/execute reshape, 9.1).
+- [x] 8.2 Lift the `resolve_*_route` and `authorize_route` calls out of the
+      routed handler bodies into a single generic spine
+      (`run_target_operation` in `handlers/routed.rs`; folded into the Step 8
+      prepare/execute reshape, 9.1).
 - [x] 8.3 Validate: `cargo test` passes; error ordering preserved
       (`validation_unknown_target` before `authorization_forbidden`); the
       bare relay-wide raww target now returns the precise
@@ -229,18 +230,35 @@
 > is authorized in its **home** namespace, retiring the borrowed-bundle path and
 > the residual `home_bundle` (`todos/relay/78`).
 
-- [ ] 9.1 Reshape `handle_send` / `handle_look` / `handle_raww` /
-      `handle_list_routed` into `prepare` / `execute`; neither stage calls
-      `resolve_*` nor `authorize_route`
-- [ ] 9.2 Cross-bundle `Look` / `Raww` load peer-bundle configuration in `prepare`,
-      authorizing the requester in its home namespace; eliminate the residual
-      `home_bundle` from the delivery path (`todos/relay/78`)
-- [ ] 9.3 Add a `session-relay` spec scenario: a cross-namespace session→session
+- [x] 9.1 Reshape `handle_send` / `handle_look` / `handle_raww` /
+      `handle_list_routed` into `prepare` / `execute` closures run by the
+      `run_target_operation` spine; neither stage calls `resolve_*` nor
+      `authorize_route`, and the resolve → prepare → authorize → execute order
+      (existence before authorization) is structural rather than per-handler
+      convention
+- [x] 9.2 Cross-bundle `Look` / `Raww` load peer-bundle configuration in `prepare`
+      (`resolve_target_bundle`), authorizing the requester in its home namespace.
+      Eliminated the residual `home_bundle` from the Send delivery path
+      (`todos/relay/78`): the non-stream `handle_request` seeds its
+      `BundleCatalog` with the home bundle, so `assemble_delivery_groups` resolves
+      every bundle-bound target — broadcast and same-namespace included — through
+      `ensure_bundle_group` like any peer, and relay-wide (`@GLOBAL`) targets land
+      in one uniformly-keyed synthetic `GLOBAL` group regardless of sender.
+      Behavior change: stream events delivered to relay-wide UI sessions are now
+      attributed to `bundle_name = "GLOBAL"` for bundle-bound senders too
+      (previously the sender's home bundle; sender attribution rides in the
+      payload's `sender_session`), making them uniform with relay-wide senders —
+      two `session_relay_stream` tests updated accordingly.
+- [x] 9.3 Added the `session-relay` spec scenario (under the Uniform Cross-Bundle
+      Authorization Model requirement): a cross-namespace session→session
       `Raww` / `Look` authorizes in the requester's home namespace and succeeds
-      under `all:all` (it no longer resolves the sender in the target's bundle)
-- [ ] 9.4 Validate: `cargo test` passes; routing/dispatch and authorization are
-      separately testable layers — an operation body cannot run without the spine
-      having authorized it
+      under `all:all`, never resolving the sender in the target's bundle. Also
+      retired the requirement's stale "`raww` capped at `all:home`" example,
+      which 5.3 obsoleted.
+- [x] 9.4 Validate: `cargo test` passes (256 unit + 216 integration); clippy and
+      `cargo fmt --check` clean; `openspec validate --strict` passes.
+      Routing/dispatch and authorization are separately testable layers — an
+      operation body cannot run without the spine having authorized it
 
 > **Out of scope (separate arc).** Per-session routing attributes
 > (`can_be_looked` / `can_be_written`) that would let `routing.rs` shed its
