@@ -184,7 +184,7 @@ fn validate_permission_decision_request(
     {
         return Err(relay_error(
             "validation_cross_bundle_unsupported",
-            "permission decisions are limited to the associated bundle in MVP",
+            "permission decisions are limited to the associated bundle",
             Some(json!({
                 "associated_bundle_name": bundle.bundle_name,
                 "requested_bundle_name": request_bundle_name,
