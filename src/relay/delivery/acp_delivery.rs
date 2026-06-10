@@ -456,7 +456,7 @@ pub(super) fn deliver_one_target_acp(
     // failure (Unavailable state). Without this, a dispatch would proceed
     // to write to a dead pipe and bubble up as `acp_child_unavailable`,
     // muddling the "worker is broken" signal. TODO(acp): consider
-    // graceful auto-respawn here; see todos/acp/auto_respawn_after_transport_failure.
+    // graceful auto-respawn here.
     if matches!(
         get_acp_worker_state(
             task.bundle.bundle_name.as_str(),
