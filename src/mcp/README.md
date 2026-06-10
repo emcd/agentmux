@@ -134,8 +134,24 @@ This module implements the MCP stdio server for `agentmux`.
 
 - `mod.rs`
   - Module declarations and public re-exports.
-- `server.rs`
-  - MCP server state, tool handlers, and relay/list plumbing.
+- `server/`
+  - Pure directory module holding the MCP server surface.
+- `server/mod.rs`
+  - Operator-hub: only `mod` declarations and re-exports. Re-exports
+    `McpConfiguration` and `run` from `core`.
+- `server/core.rs`
+  - `McpConfiguration`, `McpState`, `McpServer`, the shared relay helpers
+    (`request_relay`, `request_relay_with_namespace`, `map_relay_stream_failure`),
+    the `#[tool_handler] impl rmcp::ServerHandler for McpServer`, and
+    `pub async fn run`. `McpServer::new()` composes the per-tool routers
+    via the `Add` impl on `ToolRouter`.
+- `server/handlers/`
+  - One file per MCP tool: `list.rs`, `help.rs`, `send.rs`, `look.rs`,
+    `raww.rs`, `grant.rs`, `updown.rs`, `new.rs`, `change.rs`. Each file
+    holds an `impl McpServer` block with a named `#[tool_router(router = tool_router_X, vis = "pub(crate)")]`
+    attribute, the `#[tool]` method, and the tool's helper methods. The
+    `pub(super)` `state` field on `McpServer` (defined in `core.rs`) is
+    visible from these sibling impl blocks.
 - `params.rs`
   - MCP tool parameter and meta-tool argument schemas plus shared command
     constants.
