@@ -68,7 +68,7 @@ This module implements the MCP stdio server for `agentmux`.
      (`RelayRequest::ChangePsk`)
    - `raww` -> `RelayStreamSession` (`RelayRequest::Raww`)
    - `send` -> `RelayStreamSession` (`RelayRequest::Send`)
-5. For `all=true`, MCP performs adapter fanout across bundle relays in
+5. For `namespace="*"`, MCP performs adapter fanout across bundle relays in
    deterministic lexicographic order.
 6. Relay response is mapped back to MCP JSON payload.
 

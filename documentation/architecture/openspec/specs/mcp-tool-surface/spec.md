@@ -311,7 +311,6 @@ The system SHALL expose a read-only MCP inspection tool named `look`.
 - `target_session` (required session identifier; MAY be a peer-qualified
   `<session>@<bundle>` id to inspect a session in a peer bundle)
 - `lines` (optional positive integer)
-- `bundle_name` (optional, redundant; does not select or reject a peer bundle)
 
 The tool forwards `target_session` to the relay verbatim; cross-bundle
 resolution and authorization are performed by the relay and surfaced unchanged.
@@ -598,7 +597,7 @@ and SHALL NOT be caller-overridable.
 MCP raww SHALL preserve canonical relay codes and payload semantics for
 validation and authorization failures, including:
 - `validation_unknown_target`
-- `validation_cross_bundle_unsupported`
+- `validation_unsupported_namespace`
 - `validation_invalid_params`
 - `authorization_forbidden`
 
