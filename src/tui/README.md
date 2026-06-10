@@ -29,16 +29,53 @@ picker (`F5`) are overlays available in both modes.
 - `state/history.rs`
   - chat history/event tracking, pending-delivery accounting, stream-event
     dedupe, and paging/snap behavior.
-- `state/compose.rs`
+- `state/compose/`
   - compose/raww draft editing, mode-switch transitions, picker retargeting,
-    and dispatch helpers.
+    and dispatch helpers. Split by concern:
+    - `mod.rs` — pure hub: submodule decls and re-exports of `AppState` and
+      sibling-state items
+    - `pickers.rs` — recipient/bundle picker open/close/move, picker
+      selection insert, overlay toggles (`toggle_events_overlay`,
+      `toggle_help_overlay`)
+    - `editing.rs` — focus cycling, mode toggle, text/character editing,
+      message cursor, `To` completion, `clear_compose_fields`
+    - `interaction.rs` — interaction-mode entry, target set, raww draft
+      editing + cursor, snapshot scrolling, interaction-region visibility,
+      `overlay_snapshot_from_payload`, `render_transport_label`
+    - `permissions.rs` — look-permission selection/resolve,
+      `ensure_pending_permission_selection`, `selected_look_permission*`,
+      `look_pending_permissions`, `submit_permission_decision`
+    - `text_util.rs` — private `&str` cursor/line utilities shared across
+      the compose submodules
 - `state/relay.rs`
   - relay request/response plumbing, recipient refresh, and stream polling
     lifecycle.
 - `input.rs`
   - mode-aware key handling and command intent updates.
-- `render.rs`
-  - per-mode pane rendering, overlays, and key help text.
+- `render/`
+  - per-mode pane rendering, overlays, and key help text. Split by area:
+    - `mod.rs` — pure hub: submodule decls and `pub(crate) use frame::render`
+    - `frame.rs` — top-level `render` entry, `render_header`/`render_main`/
+      `render_footer`, frame-level layout constants
+    - `communication.rs` — `render_communication_mode`, compose + chat
+      history panes, peer resolution
+    - `interaction.rs` — `render_interaction_mode`, target header, raww
+      pane, look snapshot, ACP entries, look permission lines
+    - `overlays/`
+      - `mod.rs` — pure hub: submodule decls
+      - `recipient_picker.rs` — recipient picker overlay, hint strip,
+        per-row readiness styling
+      - `bundle_picker.rs` — bundle picker overlay, status header line,
+        severity styling
+      - `events.rs` — events overlay (pending permissions + delivery
+        events)
+      - `help.rs` — help overlay (two-column keybinding reference)
+    - `cursor.rs` — active cursor, compose/raww cursor placement, position
+      + column helpers, raww pane area
+    - `geometry.rs` — shared measure/layout helpers (`centered_rect`,
+      `split_workbench_rows`, `compute_compose_height`, titled blocks,
+      `MessageLayout`, `compose_message_layout`,
+      `compose_message_visible_start`, `wrap_text`, `raww_titled_block`)
 - `target.rs`
   - recipient parsing/autocomplete and look-target resolution helpers.
 - `workbench.rs`
