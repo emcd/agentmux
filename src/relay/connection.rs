@@ -254,6 +254,11 @@ async fn serve_connection_frames(
     pre_hello_idle_timeout: Duration,
     revoke: StreamRevokeSignal,
 ) -> Result<(), io::Error> {
+    // Shared-ownership copies of the root paths so each request dispatch can be
+    // moved onto the blocking pool (`'static + Send`) without re-copying the
+    // path data per request.
+    let configuration_root: Arc<Path> = Arc::from(configuration_root);
+    let state_root: Arc<Path> = Arc::from(state_root);
     let mut bound_bundle: Option<BundleRuntimePaths> = None;
     // Verified principal_id of the connection, set on a store-backed Hello and
     // attached to each dispatched request for sender attribution; stays `None`
@@ -308,8 +313,8 @@ async fn serve_connection_frames(
         match frame {
             IncomingFrame::Hello(hello) => {
                 let binding = match resolve_hello_binding(
-                    configuration_root,
-                    state_root,
+                    &configuration_root,
+                    &state_root,
                     bundle_catalog,
                     require_session_credentials,
                     &hello,
@@ -371,7 +376,7 @@ async fn serve_connection_frames(
                 )?;
                 if binding.session_type == SessionType::Ui
                     && let Err(error) = emit_registration_permission_snapshots(
-                        configuration_root,
+                        &configuration_root,
                         bundle_catalog,
                         &binding,
                     )
@@ -395,7 +400,7 @@ async fn serve_connection_frames(
                 // introspect rights and get no snapshot.
                 if let Some(rights) = introspect_rights.as_ref() {
                     match handlers::build_identity_snapshot_event(
-                        state_root,
+                        &state_root,
                         hello.principal_id.as_str(),
                         rights,
                     ) {
@@ -462,12 +467,19 @@ async fn serve_connection_frames(
                     RelayRequest::NewPeer { .. } | RelayRequest::ChangePsk { .. }
                 ) {
                     let requester_principal_id = full_requester_principal_id(active_registration);
-                    let response = dispatch_identity_admin(
-                        request,
-                        configuration_root,
-                        state_root,
-                        requester_principal_id.as_str(),
-                    );
+                    let response = {
+                        let configuration_root = Arc::clone(&configuration_root);
+                        let state_root = Arc::clone(&state_root);
+                        dispatch_on_blocking_pool(move || {
+                            dispatch_identity_admin(
+                                request,
+                                &configuration_root,
+                                &state_root,
+                                requester_principal_id.as_str(),
+                            )
+                        })
+                        .await
+                    };
                     write_stream_frame_to_writer(
                         writer,
                         OutgoingFrame::Response {
@@ -487,7 +499,13 @@ async fn serve_connection_frames(
                         authenticated_identity: authenticated_identity.clone(),
                         introspect_rights: introspect_rights.clone(),
                     };
-                    let response = dispatch_identity_introspect(request, state_root, &principal);
+                    let response = {
+                        let state_root = Arc::clone(&state_root);
+                        dispatch_on_blocking_pool(move || {
+                            dispatch_identity_introspect(request, &state_root, &principal)
+                        })
+                        .await
+                    };
                     write_stream_frame_to_writer(
                         writer,
                         OutgoingFrame::Response {
@@ -544,12 +562,18 @@ async fn serve_connection_frames(
                     let dispatch_paths = bound_bundle
                         .clone()
                         .unwrap_or_else(|| enumerate_paths.clone());
-                    let response = dispatch_list(
-                        request,
-                        configuration_root,
-                        &dispatch_paths,
-                        &enumerate_paths,
-                    );
+                    let response = {
+                        let configuration_root = Arc::clone(&configuration_root);
+                        dispatch_on_blocking_pool(move || {
+                            dispatch_list(
+                                request,
+                                &configuration_root,
+                                &dispatch_paths,
+                                &enumerate_paths,
+                            )
+                        })
+                        .await
+                    };
                     write_stream_frame_to_writer(
                         writer,
                         OutgoingFrame::Response {
@@ -565,18 +589,26 @@ async fn serve_connection_frames(
                 // bypass the bundle-subject `resolve_namespace_routing_bundle`
                 // path below and load each target's bundle inside the handler.
                 if matches!(request, RelayRequest::Send { .. }) {
-                    let session_id = active_registration.requester_session_id().to_string();
-                    let response = dispatch_send(
-                        request,
-                        configuration_root,
-                        bound_bundle.as_ref(),
-                        Some(RequestPrincipal {
-                            session_id,
-                            authenticated_identity: authenticated_identity.clone(),
-                            introspect_rights: introspect_rights.clone(),
-                        }),
-                        bundle_catalog,
-                    );
+                    let principal = RequestPrincipal {
+                        session_id: active_registration.requester_session_id().to_string(),
+                        authenticated_identity: authenticated_identity.clone(),
+                        introspect_rights: introspect_rights.clone(),
+                    };
+                    let response = {
+                        let configuration_root = Arc::clone(&configuration_root);
+                        let bound_bundle = bound_bundle.clone();
+                        let bundle_catalog = bundle_catalog.clone();
+                        dispatch_on_blocking_pool(move || {
+                            dispatch_send(
+                                request,
+                                &configuration_root,
+                                bound_bundle.as_ref(),
+                                Some(principal),
+                                &bundle_catalog,
+                            )
+                        })
+                        .await
+                    };
                     write_stream_frame_to_writer(
                         writer,
                         OutgoingFrame::Response {
@@ -587,18 +619,26 @@ async fn serve_connection_frames(
                     continue;
                 }
                 if matches!(request, RelayRequest::Look { .. }) {
-                    let session_id = active_registration.requester_session_id().to_string();
-                    let response = dispatch_look(
-                        request,
-                        configuration_root,
-                        bound_bundle.as_ref(),
-                        Some(RequestPrincipal {
-                            session_id,
-                            authenticated_identity: authenticated_identity.clone(),
-                            introspect_rights: introspect_rights.clone(),
-                        }),
-                        bundle_catalog,
-                    );
+                    let principal = RequestPrincipal {
+                        session_id: active_registration.requester_session_id().to_string(),
+                        authenticated_identity: authenticated_identity.clone(),
+                        introspect_rights: introspect_rights.clone(),
+                    };
+                    let response = {
+                        let configuration_root = Arc::clone(&configuration_root);
+                        let bound_bundle = bound_bundle.clone();
+                        let bundle_catalog = bundle_catalog.clone();
+                        dispatch_on_blocking_pool(move || {
+                            dispatch_look(
+                                request,
+                                &configuration_root,
+                                bound_bundle.as_ref(),
+                                Some(principal),
+                                &bundle_catalog,
+                            )
+                        })
+                        .await
+                    };
                     write_stream_frame_to_writer(
                         writer,
                         OutgoingFrame::Response {
@@ -609,12 +649,20 @@ async fn serve_connection_frames(
                     continue;
                 }
                 if matches!(request, RelayRequest::Raww { .. }) {
-                    let response = dispatch_raww(
-                        request,
-                        configuration_root,
-                        bound_bundle.as_ref(),
-                        bundle_catalog,
-                    );
+                    let response = {
+                        let configuration_root = Arc::clone(&configuration_root);
+                        let bound_bundle = bound_bundle.clone();
+                        let bundle_catalog = bundle_catalog.clone();
+                        dispatch_on_blocking_pool(move || {
+                            dispatch_raww(
+                                request,
+                                &configuration_root,
+                                bound_bundle.as_ref(),
+                                &bundle_catalog,
+                            )
+                        })
+                        .await
+                    };
                     write_stream_frame_to_writer(
                         writer,
                         OutgoingFrame::Response {
@@ -645,19 +693,26 @@ async fn serve_connection_frames(
                         continue;
                     }
                 };
-                let session_id = active_registration.requester_session_id().to_string();
-                let response = dispatch_request(
-                    request,
-                    configuration_root,
-                    &bundle_paths.bundle_name,
-                    &bundle_paths.runtime_directory,
-                    Some(RequestPrincipal {
-                        session_id,
-                        authenticated_identity: authenticated_identity.clone(),
-                        introspect_rights: introspect_rights.clone(),
-                    }),
-                    bundle_catalog,
-                );
+                let principal = RequestPrincipal {
+                    session_id: active_registration.requester_session_id().to_string(),
+                    authenticated_identity: authenticated_identity.clone(),
+                    introspect_rights: introspect_rights.clone(),
+                };
+                let response = {
+                    let configuration_root = Arc::clone(&configuration_root);
+                    let bundle_catalog = bundle_catalog.clone();
+                    dispatch_on_blocking_pool(move || {
+                        dispatch_request(
+                            request,
+                            &configuration_root,
+                            &bundle_paths.bundle_name,
+                            &bundle_paths.runtime_directory,
+                            Some(principal),
+                            &bundle_catalog,
+                        )
+                    })
+                    .await
+                };
                 write_stream_frame_to_writer(
                     writer,
                     OutgoingFrame::Response {
@@ -670,6 +725,31 @@ async fn serve_connection_frames(
     }
 
     Ok(())
+}
+
+/// Runs one synchronous request dispatcher on tokio's blocking thread pool.
+///
+/// Request handlers do blocking work inline (config file loads, tmux
+/// subprocesses, ACP mutex and replay waits); running them directly on runtime
+/// worker threads can park every worker and starve timers, accepts, and the
+/// poll-based shutdown path (issues/relay/26). Dispatching through
+/// `spawn_blocking` keeps the worker threads free to drive I/O regardless of
+/// how long a handler blocks. A join failure (handler panic or runtime
+/// shutdown) is mapped to an error response rather than tearing down the
+/// connection.
+async fn dispatch_on_blocking_pool(
+    dispatch: impl FnOnce() -> RelayResponse + Send + 'static,
+) -> RelayResponse {
+    match tokio::task::spawn_blocking(dispatch).await {
+        Ok(response) => response,
+        Err(join_error) => RelayResponse::Error {
+            error: relay_error(
+                "internal_unexpected_failure",
+                "relay request dispatch task failed to join",
+                Some(json!({"cause": join_error.to_string()})),
+            ),
+        },
+    }
 }
 
 enum ReadLineOutcome {

@@ -178,17 +178,23 @@ fn stalled_client_write_timeout_releases_connection_worker() {
         client_stream
     });
 
+    // Request dispatch runs on the blocking pool, so when the writer dies the
+    // read loop may be parked awaiting a dispatched response. Teardown then
+    // races the writer-exit arm (clean exit) against the next failed response
+    // write (io error); both are valid. What must hold either way: the worker
+    // is released promptly rather than pinned on the stalled write.
     let outcome = join_within(join_handle, Duration::from_secs(5));
-    let error = outcome.expect_err("stalled-client write should fail");
-    assert!(
-        matches!(
-            error.kind(),
-            std::io::ErrorKind::WouldBlock
-                | std::io::ErrorKind::TimedOut
-                | std::io::ErrorKind::BrokenPipe
-        ),
-        "unexpected error kind: {error:?}"
-    );
+    if let Err(error) = outcome {
+        assert!(
+            matches!(
+                error.kind(),
+                std::io::ErrorKind::WouldBlock
+                    | std::io::ErrorKind::TimedOut
+                    | std::io::ErrorKind::BrokenPipe
+            ),
+            "unexpected error kind: {error:?}"
+        );
+    }
     drop(flood.join().expect("join client flood"));
 
     // The connection must have been released from the registry: a fresh hello
