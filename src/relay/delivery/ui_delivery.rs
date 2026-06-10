@@ -11,6 +11,7 @@ use crate::runtime::signals::shutdown_requested;
 use super::super::canonical_session_id;
 use super::super::stream::{RelayStreamEvent, StreamEventSendOutcome, send_event_to_registered_ui};
 use super::super::{AsyncDeliveryTask, SendOutcome, SendResult};
+use super::quiescence::QUIESCENCE_TIMEOUT_MS_DEFAULT;
 
 const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delivery";
 const DROPPED_ON_SHUTDOWN_REASON_CODE: &str = "dropped_on_shutdown";
@@ -25,7 +26,14 @@ pub(super) fn deliver_one_target_ui(
     message: &str,
 ) -> SendResult {
     let bundle_name = task.bundle.bundle_name.as_str();
-    let timeout = task.quiescence.quiescence_timeout;
+    // The async send path leaves `quiescence_timeout` unset by default; cap the
+    // reconnect wait with the sync-path default so a permanently absent UI
+    // cannot pin this delivery worker's blocking thread forever
+    // (issues/relay/26 defense-in-depth).
+    let timeout = task
+        .quiescence
+        .quiescence_timeout
+        .unwrap_or(Duration::from_millis(QUIESCENCE_TIMEOUT_MS_DEFAULT));
     let start = Instant::now();
     loop {
         if shutdown_requested() {
@@ -93,7 +101,7 @@ pub(super) fn deliver_one_target_ui(
         match routed_outcome {
             Ok(StreamEventSendOutcome::Delivered) => {}
             Ok(StreamEventSendOutcome::NoUiEndpoint) | Ok(StreamEventSendOutcome::Disconnected) => {
-                if timeout.is_some_and(|value| start.elapsed() >= value) {
+                if start.elapsed() >= timeout {
                     return SendResult {
                         target_session,
                         message_id,
@@ -153,7 +161,7 @@ pub(super) fn deliver_one_target_ui(
                 };
             }
         }
-        if timeout.is_some_and(|value| start.elapsed() >= value) {
+        if start.elapsed() >= timeout {
             return SendResult {
                 target_session,
                 message_id,
