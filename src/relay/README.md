@@ -216,7 +216,7 @@ exported from `src/relay/mod.rs`.
   that direction does require `all:all` (a `@GLOBAL` operator listing or
   messaging a bundle is the privileged-operator-preset case above). The
   asymmetry — and a possible future `home+` scope that would fold the `GLOBAL`
-  namespace into a principal's home tier — is tracked in `todos/relay/75`.
+  namespace into a principal's home tier — is documented in this section.
 - `Send` cross-bundle delivery requires `all:all`. Earlier slices left it
   effectively permit-all (the old `authorize_send` used a `self` floor that any
   configured `send` scope cleared); the spine corrects this to match the
