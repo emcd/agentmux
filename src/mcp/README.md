@@ -40,8 +40,8 @@ This module implements the MCP stdio server for `agentmux`.
       of the caller, present only for store-backed credential connections and
       omitted for socket-trust sessions.
     - `on_behalf_of` (optional): the delegated principal the caller is acting
-      for. Reserved — always omitted for now; surfaced in the schema so callers
-      can consume it without a breaking change once delegation activates.
+      for. Reserved for a future delegated-identity delta; surfaced in the
+      schema so callers can consume it without a breaking change.
     Both follow the relay's `skip_serializing_if` semantics: omitted entirely
     (not `null`) when absent.
 - Validate MCP request payloads.
