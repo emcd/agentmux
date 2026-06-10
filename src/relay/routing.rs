@@ -131,8 +131,8 @@ impl ResolvedTarget {
     /// It is asymmetric with a relay-wide *requester* reaching *into* a bundle:
     /// there the bundle is not the requester's home namespace (see
     /// [`requester_home_namespace`]), so that direction does require `all:all`.
-    /// The asymmetry is intentional — see `tests/integration` and `todos/relay/75`
-    /// (the `home+` follow-up).
+    /// The asymmetry is intentional; the integration tests exercise both
+    /// directions.
     fn reachable_at_home_tier(&self, dispatch_namespace: &str) -> bool {
         self.relay_wide || self.bundle_name == dispatch_namespace
     }

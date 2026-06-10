@@ -246,10 +246,10 @@ pub(super) fn deliver_batch_target_acp(
         move |permission_request: crate::acp::PermissionRequest,
               mut responder: crate::acp::PermissionResponder| {
             // Resolver runs on a dedicated short-lived thread so the ACP
-            // reader thread can return to its `read_line` loop immediately
-            // (see todos/acp/16). The captured context/writer/responder
-            // outlive the reader's dispatch frame; the thread name aids
-            // debugging when many resolvers fire under federation load.
+            // reader thread can return to its `read_line` loop immediately.
+            // The captured context/writer/responder outlive the reader's
+            // dispatch frame; the thread name aids debugging when many
+            // resolvers fire under federation load.
             let context = permission_context_for_handler.clone();
             let message_id = permission_message_id_for_handler.clone();
             let target = permission_target_member_id.clone();

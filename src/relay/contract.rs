@@ -326,10 +326,9 @@ pub enum RelayResponse {
         /// for socket-trust sessions.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         authenticated_identity: Option<String>,
-        /// Delegated principal the requester is acting on behalf of. Reserved:
-        /// the setting mechanism lands in a later delta, so this is always absent
-        /// for now. Defined here so consumers can handle it without a breaking
-        /// change when it is activated.
+        /// Delegated principal the requester is acting on behalf of. Reserved
+        /// for a future delegated-identity delta. Defined here so consumers can
+        /// handle it without a breaking change when it is activated.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         on_behalf_of: Option<String>,
         #[serde(flatten)]
