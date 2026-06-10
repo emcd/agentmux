@@ -13,9 +13,37 @@ use serde_json::json;
 
 use crate::configuration::{BundleConfiguration, load_bundle_configuration};
 
-use super::super::authorization::{AuthorizationContext, load_authorization_context};
+use super::super::authorization::{
+    AuthorizationContext, authorize_route, load_authorization_context,
+};
 use super::super::connection::BundleCatalog;
-use super::super::{GLOBAL_NAMESPACE, RelayError, map_config, relay_error};
+use super::super::routing::{OperationProfile, ResolvedRoute};
+use super::super::{GLOBAL_NAMESPACE, RelayError, RelayResponse, map_config, relay_error};
+
+/// The dispatch spine for target operations.
+///
+/// It owns route resolution and authorization and fixes their order relative to
+/// the operation's own work: `resolve` builds the [`ResolvedRoute`], `prepare`
+/// validates target existence and loads delivery context, `authorize_route` runs
+/// **between** them, and `execute` (the operation body) runs **only after**
+/// authorization succeeds. The `prepare` and `execute` closures never call
+/// `resolve_*` or `authorize_route` themselves — so the
+/// existence-before-authorization ordering (`validation_unknown_target` before
+/// `authorization_forbidden`) is structural, not a per-handler convention, and a
+/// body cannot run on a route the spine has not authorized.
+pub(super) fn run_target_operation<Prepared>(
+    home_namespace: &str,
+    authorization: &AuthorizationContext,
+    profile: OperationProfile,
+    resolve: impl FnOnce() -> Result<ResolvedRoute, RelayError>,
+    prepare: impl FnOnce(&ResolvedRoute) -> Result<Prepared, RelayError>,
+    execute: impl FnOnce(&ResolvedRoute, Prepared) -> Result<RelayResponse, RelayError>,
+) -> Result<RelayResponse, RelayError> {
+    let route = resolve()?;
+    let prepared = prepare(&route)?;
+    authorize_route(home_namespace, authorization, profile, &route)?;
+    execute(&route, prepared)
+}
 
 /// Loads the requester's home authorization context. A bundle namespace loads the
 /// bundle and its policy; the relay-wide `GLOBAL` namespace has no bundle and

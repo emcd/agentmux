@@ -1,12 +1,12 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::configuration::TargetConfiguration;
+use crate::configuration::{BundleConfiguration, TargetConfiguration};
 
 use super::super::authorization::{
-    authorize_route, grant_authorized_ui_sessions, load_authorization_context,
+    AuthorizationContext, grant_authorized_ui_sessions, load_authorization_context,
     permission_max_pending,
 };
 use super::super::connection::BundleCatalog;
@@ -14,15 +14,25 @@ use super::super::delivery::{
     QuiescenceOptions, deliver_one_target, enqueue_sync_delivery, prompt_batch_settings,
 };
 use super::super::routing::{
-    Addressing, Capability, OperationProfile, requester_home_namespace, resolve_raww_route,
+    Addressing, Capability, OperationProfile, ResolvedRoute, requester_home_namespace,
+    resolve_raww_route,
 };
 use super::super::{
     AsyncDeliveryTask, DeliveryPayloadMode, ListedSessionTransport, RelayError, RelayRequest,
     RelayResponse, SCHEMA_VERSION, SendOutcome, bare_session_id, canonical_session_id, relay_error,
     session_type_not_implemented,
 };
-use super::routed::{load_home_context, resolve_target_bundle};
-use super::sender::resolve_sender_in_namespace;
+use super::routed::{load_home_context, resolve_target_bundle, run_target_operation};
+use super::sender::{SenderIdentity, resolve_sender_in_namespace};
+
+/// The raww target's bundle, runtime, and the target bundle's authorization
+/// (which gates delivery), resolved and existence-validated by `prepare_raww`
+/// before authorization.
+struct RawwPrepared {
+    bundle: BundleConfiguration,
+    runtime_directory: PathBuf,
+    target_authorization: AuthorizationContext,
+}
 
 /// Entry point for the namespace-centric raww path. The requester is resolved and
 /// authorized in its **home** namespace (`home_namespace`: its bound bundle, or
@@ -83,64 +93,120 @@ pub(in crate::relay) fn handle_raww_routed(
         "requester_session",
     )?;
 
-    // Resolve the target through the shared single-target stage Raww and Look
-    // share: a bare (unqualified) target is rejected, and a relay-wide
-    // (`@GLOBAL`) or reserved namespace names no session that accepts raw input
-    // (`validation_unsupported_namespace`, uniform with Look). The route doubles
-    // as the authorization input below.
-    let route = resolve_raww_route(
-        requester_home_namespace(sender.session_id.as_str(), home_namespace),
-        sender.session_id.as_str(),
-        target_session.as_str(),
-    )?;
-    let target_route = &route.targets[0];
-    let target_bundle_name = target_route.bundle_name.as_str();
-    let target_session_id = target_route
-        .session_id
-        .as_deref()
-        .expect("raww target carries a session id");
-
-    // Load the target's bundle and runtime context separately: a same-namespace
-    // target reuses the home bundle, a peer (or any target of a relay-wide
-    // requester) is loaded from the catalog. Permission deciders come from the
-    // target bundle, where delivery happens.
-    let (raww_bundle, raww_runtime_directory) = resolve_target_bundle(
-        home_namespace,
-        home_bundle.as_ref(),
-        home_runtime_directory,
-        target_bundle_name,
-        configuration_root,
-        bundle_catalog,
-    )?;
-    let target_member = raww_bundle
-        .members
-        .iter()
-        .find(|member| member.id == target_session_id)
-        .ok_or_else(|| {
-            relay_error(
-                "validation_unknown_target",
-                "target_session is not a canonical configured target identifier",
-                Some(json!({
-                    "target_session": canonical_session_id(target_session_id, target_bundle_name),
-                })),
-            )
-        })?;
-
-    // Raww authorizes through the uniform routing/authz spine like Send and Look:
-    // the requester's `raww` control is resolved in its home namespace, and the
-    // single target's relationship sets the required tier. A cross-namespace
-    // requester reaching into a bundle requires `all:all`; a same-namespace target
-    // stays at `all:home`, and a self-target floors at `self`. Existence is
-    // validated above, so a denial sorts after `validation_unknown_target`.
-    authorize_route(
+    // The spine owns resolution and authorization; `prepare_raww` validates
+    // existence and loads the target bundle, `execute_raww` delivers the input.
+    run_target_operation(
         home_namespace,
         &authorization,
         OperationProfile {
             capability: Capability::Raww,
             addressing: Addressing::SingleTarget,
         },
-        &route,
+        || {
+            resolve_raww_route(
+                requester_home_namespace(sender.session_id.as_str(), home_namespace),
+                sender.session_id.as_str(),
+                target_session.as_str(),
+            )
+        },
+        |route| {
+            prepare_raww(
+                route,
+                home_namespace,
+                home_bundle.as_ref(),
+                home_runtime_directory,
+                configuration_root,
+                bundle_catalog,
+            )
+        },
+        |route, prepared| {
+            execute_raww(
+                route,
+                prepared,
+                &sender,
+                home_namespace,
+                text,
+                no_enter,
+                request_id,
+            )
+        },
+    )
+}
+
+/// Resolves the raww target's bundle, validates that the target is a configured
+/// member, and loads the target bundle's authorization (which gates delivery).
+/// Runs before authorization, so an unknown target sorts before
+/// `authorization_forbidden`.
+fn prepare_raww(
+    route: &ResolvedRoute,
+    home_namespace: &str,
+    home_bundle: Option<&BundleConfiguration>,
+    home_runtime_directory: Option<&Path>,
+    configuration_root: &Path,
+    bundle_catalog: &BundleCatalog,
+) -> Result<RawwPrepared, RelayError> {
+    let target_route = &route.targets[0];
+    let target_bundle_name = target_route.bundle_name.as_str();
+    let target_session_id = target_route
+        .session_id
+        .as_deref()
+        .expect("raww target carries a session id");
+    let (bundle, runtime_directory) = resolve_target_bundle(
+        home_namespace,
+        home_bundle,
+        home_runtime_directory,
+        target_bundle_name,
+        configuration_root,
+        bundle_catalog,
     )?;
+    if !bundle
+        .members
+        .iter()
+        .any(|member| member.id == target_session_id)
+    {
+        return Err(relay_error(
+            "validation_unknown_target",
+            "target_session is not a canonical configured target identifier",
+            Some(json!({
+                "target_session": canonical_session_id(target_session_id, target_bundle_name),
+            })),
+        ));
+    }
+    let target_authorization = load_authorization_context(configuration_root, Some(&bundle))?;
+    Ok(RawwPrepared {
+        bundle,
+        runtime_directory,
+        target_authorization,
+    })
+}
+
+/// Delivers the raw input to the authorized target and builds the response. The
+/// target is guaranteed present by `prepare_raww`. Permission deciders and the
+/// queue bound come from the target bundle's authorization, where delivery is
+/// gated.
+fn execute_raww(
+    route: &ResolvedRoute,
+    prepared: RawwPrepared,
+    sender: &SenderIdentity,
+    home_namespace: &str,
+    text: String,
+    no_enter: bool,
+    request_id: Option<String>,
+) -> Result<RelayResponse, RelayError> {
+    let RawwPrepared {
+        bundle: raww_bundle,
+        runtime_directory: raww_runtime_directory,
+        target_authorization,
+    } = prepared;
+    let target_session_id = route.targets[0]
+        .session_id
+        .as_deref()
+        .expect("raww target carries a session id");
+    let target_member = raww_bundle
+        .members
+        .iter()
+        .find(|member| member.id == target_session_id)
+        .expect("raww target existence validated in prepare_raww");
 
     let transport = match &target_member.target {
         TargetConfiguration::Tmux(_) => ListedSessionTransport::Tmux,
@@ -154,9 +220,6 @@ pub(in crate::relay) fn handle_raww_routed(
     };
     let message_id = Uuid::new_v4().to_string();
     let sender_member = sender.to_bundle_member();
-    // Permission deciders and the queue bound come from the target bundle's
-    // authorization, where delivery is gated.
-    let target_authorization = load_authorization_context(configuration_root, Some(&raww_bundle))?;
     let permission_decider_sessions =
         grant_authorized_ui_sessions(&target_authorization, &raww_bundle);
     let queue_max_pending = permission_max_pending(&target_authorization);

@@ -1,8 +1,12 @@
 //! Relay IPC contract and message-routing implementation.
 
-use std::{path::Path, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use crate::configuration::load_bundle_configuration;
+use crate::runtime::paths::{BundleRuntimePaths, tmux_socket_path_for_runtime_directory};
 
 mod authorization;
 mod client;
@@ -46,9 +50,16 @@ pub fn handle_request(
 ) -> Result<RelayResponse, RelayError> {
     // The non-stream entry point routes within a single bundle; cross-bundle
     // fan-out is reachable only over the stream path, which threads the live
-    // catalog through `dispatch_request`. An empty catalog confines this path
-    // to same-bundle and relay-wide (`@GLOBAL`) targets.
-    let bundle_catalog = BundleCatalog::default();
+    // catalog through `dispatch_request`. The catalog carries only the home
+    // bundle — delivery resolves it like any other catalog entry, and targets
+    // beyond it are confined to relay-wide (`@GLOBAL`) sessions. `state_root`
+    // is a placeholder: delivery consumes only `runtime_directory`.
+    let bundle_catalog = BundleCatalog::from_paths([BundleRuntimePaths {
+        state_root: PathBuf::new(),
+        bundle_name: bundle_name.to_string(),
+        runtime_directory: runtime_directory.to_path_buf(),
+        tmux_socket: tmux_socket_path_for_runtime_directory(runtime_directory),
+    }]);
     handle_request_with_principal(
         request,
         configuration_root,
@@ -77,7 +88,6 @@ fn handle_request_with_principal(
         RelayRequest::Send { .. } => {
             return handlers::handle_send_routed(
                 bundle_name,
-                Some(runtime_directory),
                 request,
                 configuration_root,
                 bundle_catalog,
@@ -270,8 +280,8 @@ pub(in crate::relay) fn dispatch_list(
 /// session principal, or `GLOBAL` for a relay-wide principal — whose controls
 /// come from the operator policy, not a borrowed peer bundle. `bound_bundle` is
 /// `None` for relay-wide senders. The send path loads the home bundle and its
-/// authorization context from the namespace; per-target delivery loads each
-/// target bundle from the catalog.
+/// authorization context from the namespace; per-target delivery loads every
+/// target bundle — the home bundle included — from the catalog.
 pub(in crate::relay) fn dispatch_send(
     request: RelayRequest,
     configuration_root: &Path,
@@ -279,16 +289,12 @@ pub(in crate::relay) fn dispatch_send(
     principal: Option<RequestPrincipal>,
     bundle_catalog: &BundleCatalog,
 ) -> RelayResponse {
-    let (home_namespace, home_runtime) = match bound_bundle {
-        Some(paths) => (
-            paths.bundle_name.clone(),
-            Some(paths.runtime_directory.clone()),
-        ),
-        None => (GLOBAL_NAMESPACE.to_string(), None),
+    let home_namespace = match bound_bundle {
+        Some(paths) => paths.bundle_name.clone(),
+        None => GLOBAL_NAMESPACE.to_string(),
     };
     match handlers::handle_send_routed(
         home_namespace.as_str(),
-        home_runtime.as_deref(),
         request,
         configuration_root,
         bundle_catalog,

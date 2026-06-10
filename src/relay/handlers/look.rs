@@ -1,28 +1,29 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::json;
 use time::format_description::well_known::Rfc3339;
 
 use crate::{
+    configuration::BundleConfiguration,
     relay::{AcpLookFreshness, AcpLookSnapshotSource, LookSnapshotPayload},
     runtime::{inscriptions::emit_inscription, paths::tmux_socket_path_for_runtime_directory},
 };
 
-use super::super::authorization::authorize_route;
 use super::super::connection::BundleCatalog;
 use super::super::delivery::{
     await_acp_worker_prime_for_look, derive_acp_look_snapshot, get_acp_worker_snapshot,
     get_acp_worker_state,
 };
 use super::super::routing::{
-    Addressing, Capability, OperationProfile, requester_home_namespace, resolve_look_route,
+    Addressing, Capability, OperationProfile, ResolvedRoute, requester_home_namespace,
+    resolve_look_route,
 };
 use super::super::tmux::{capture_pane_tail_lines, resolve_active_pane_target};
 use super::super::{
     RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION, bare_session_id,
     canonical_session_id, relay_error, session_type_not_implemented,
 };
-use super::routed::{load_home_context, resolve_target_bundle};
+use super::routed::{load_home_context, resolve_target_bundle, run_target_operation};
 use super::sender::resolve_sender_in_namespace;
 
 const LOOK_LINES_DEFAULT: usize = 120;
@@ -31,6 +32,13 @@ const LOOK_LINES_MAX: usize = 1000;
 /// (each can be a full message or tool invocation), so a small default keeps
 /// the response under the MCP payload limit while still showing recent context.
 const ACP_LOOK_ENTRIES_DEFAULT: usize = 50;
+
+/// The look target's bundle and runtime, resolved and existence-validated by
+/// `prepare_look` before authorization.
+struct LookPrepared {
+    bundle: BundleConfiguration,
+    runtime_directory: PathBuf,
+}
 
 /// Entry point for the namespace-centric look path. The requester is resolved and
 /// authorized in its **home** namespace (`home_namespace`: its bound bundle, or
@@ -87,61 +95,115 @@ pub(in crate::relay) fn handle_look_routed(
         "requester_session",
     )?;
 
-    // Resolve the target through the config-free single-target stage: a bare
-    // (unqualified) target is rejected, a reserved namespace names no pane, and
-    // an `@<bundle>` target is classified by suffix alone. The route doubles as
-    // the authorization input below.
-    let route = resolve_look_route(
-        requester_home_namespace(requester.session_id.as_str(), home_namespace),
-        requester.session_id.as_str(),
-        target_session.as_str(),
-    )?;
-    let target_route = &route.targets[0];
-    let target_bundle_name = target_route.bundle_name.as_str();
-    let target_session_id = target_route
-        .session_id
-        .as_deref()
-        .expect("look target carries a session id");
-
-    // Load the target's bundle and runtime context separately: a same-namespace
-    // target reuses the home bundle, a peer is loaded from the catalog.
-    let (look_bundle, look_runtime_directory) = resolve_target_bundle(
-        home_namespace,
-        home_bundle.as_ref(),
-        home_runtime_directory,
-        target_bundle_name,
-        configuration_root,
-        bundle_catalog,
-    )?;
-
-    let target = look_bundle
-        .members
-        .iter()
-        .find(|member| member.id == target_session_id)
-        .ok_or_else(|| {
-            relay_error(
-                "validation_unknown_target",
-                "target_session is not in bundle configuration",
-                Some(json!({
-                    "target_session": canonical_session_id(target_session_id, target_bundle_name),
-                })),
-            )
-        })?;
-
-    // Authorize through the uniform routing/authorization spine: the requester's
-    // `look` control is resolved in its home namespace, and a peer-bundle target
-    // raises the required tier to `all:all` while same-namespace inspection of
-    // another session needs `all:home` (self-inspection needs only `self`).
-    // Existence is validated above, so a denial sorts after `validation_unknown_target`.
-    authorize_route(
+    // The spine owns resolution and authorization; `prepare_look` validates
+    // existence and loads the target bundle, `execute_look` captures the snapshot.
+    run_target_operation(
         home_namespace,
         &authorization,
         OperationProfile {
             capability: Capability::Look,
             addressing: Addressing::SingleTarget,
         },
-        &route,
+        || {
+            resolve_look_route(
+                requester_home_namespace(requester.session_id.as_str(), home_namespace),
+                requester.session_id.as_str(),
+                target_session.as_str(),
+            )
+        },
+        |route| {
+            prepare_look(
+                route,
+                home_namespace,
+                home_bundle.as_ref(),
+                home_runtime_directory,
+                configuration_root,
+                bundle_catalog,
+            )
+        },
+        |route, prepared| {
+            execute_look(
+                route,
+                prepared,
+                requester.session_id.as_str(),
+                home_namespace,
+                lines,
+                offset,
+                principal,
+            )
+        },
+    )
+}
+
+/// Resolves the look target's bundle and validates that the target session is a
+/// configured member. Loads peer configuration for a cross-namespace target;
+/// reuses the home bundle for a same-namespace one. Runs before authorization, so
+/// an unknown target sorts before `authorization_forbidden`.
+fn prepare_look(
+    route: &ResolvedRoute,
+    home_namespace: &str,
+    home_bundle: Option<&BundleConfiguration>,
+    home_runtime_directory: Option<&Path>,
+    configuration_root: &Path,
+    bundle_catalog: &BundleCatalog,
+) -> Result<LookPrepared, RelayError> {
+    let target_route = &route.targets[0];
+    let target_bundle_name = target_route.bundle_name.as_str();
+    let target_session_id = target_route
+        .session_id
+        .as_deref()
+        .expect("look target carries a session id");
+    let (bundle, runtime_directory) = resolve_target_bundle(
+        home_namespace,
+        home_bundle,
+        home_runtime_directory,
+        target_bundle_name,
+        configuration_root,
+        bundle_catalog,
     )?;
+    if !bundle
+        .members
+        .iter()
+        .any(|member| member.id == target_session_id)
+    {
+        return Err(relay_error(
+            "validation_unknown_target",
+            "target_session is not in bundle configuration",
+            Some(json!({
+                "target_session": canonical_session_id(target_session_id, target_bundle_name),
+            })),
+        ));
+    }
+    Ok(LookPrepared {
+        bundle,
+        runtime_directory,
+    })
+}
+
+/// Captures the look snapshot for the authorized target and builds the response.
+/// The target is guaranteed present by `prepare_look`.
+fn execute_look(
+    route: &ResolvedRoute,
+    prepared: LookPrepared,
+    requester_session_id: &str,
+    home_namespace: &str,
+    lines: Option<usize>,
+    offset: usize,
+    principal: Option<&RequestPrincipal>,
+) -> Result<RelayResponse, RelayError> {
+    let LookPrepared {
+        bundle: look_bundle,
+        runtime_directory: look_runtime_directory,
+    } = prepared;
+    let target_session_id = route.targets[0]
+        .session_id
+        .as_deref()
+        .expect("look target carries a session id");
+    let target = look_bundle
+        .members
+        .iter()
+        .find(|member| member.id == target_session_id)
+        .expect("look target existence validated in prepare_look");
 
     let snapshot = match &target.target {
         crate::configuration::TargetConfiguration::Tmux(_) => {
@@ -232,7 +294,7 @@ pub(in crate::relay) fn handle_look_routed(
     let response = RelayResponse::Look {
         schema_version: SCHEMA_VERSION.to_string(),
         bundle_name: look_bundle.bundle_name.clone(),
-        requester_session: canonical_session_id(requester.session_id.as_str(), home_namespace),
+        requester_session: canonical_session_id(requester_session_id, home_namespace),
         target_session: canonical_session_id(target.id.as_str(), look_bundle.bundle_name.as_str()),
         captured_at: time::OffsetDateTime::now_utc()
             .format(&Rfc3339)
