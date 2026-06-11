@@ -93,7 +93,6 @@ pub enum LookSnapshotPayload {
 /// One persisted startup-failure record surfaced in list-sessions payloads.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct StartupFailureRecord {
-    pub bundle_name: String,
     pub session_id: String,
     pub transport: ListedSessionTransport,
     pub code: String,
