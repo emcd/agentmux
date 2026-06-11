@@ -37,7 +37,6 @@ async fn tool_catalog_contains_list_sessions_send_look_and_raww() {
                 Some("send") => json!({
                     "kind": "send",
                     "schema_version": "1",
-                    "bundle_name": BUNDLE_NAME,
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
                     "requester_session": SENDER_SESSION,
                     "status": "success",
@@ -46,7 +45,6 @@ async fn tool_catalog_contains_list_sessions_send_look_and_raww() {
                 Some("look") => json!({
                     "kind": "look",
                     "schema_version": "1",
-                    "bundle_name": BUNDLE_NAME,
                     "requester_session": SENDER_SESSION,
                     "target_session": "bravo",
                     "captured_at": "2026-03-10T00:00:00Z",

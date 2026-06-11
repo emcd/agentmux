@@ -12,7 +12,6 @@ async fn look_returns_snapshot_payload_and_forwards_request_shape() {
                 Some("look") => json!({
                     "kind": "look",
                     "schema_version": "1",
-                    "bundle_name": BUNDLE_NAME,
                     "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
                     "target_session": request.get("target_session").cloned().unwrap_or(Value::Null),
                     "captured_at": "2026-03-10T00:00:00Z",
@@ -77,7 +76,6 @@ async fn look_forwards_offset_to_relay_request() {
                 Some("look") => json!({
                     "kind": "look",
                     "schema_version": "1",
-                    "bundle_name": BUNDLE_NAME,
                     "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
                     "target_session": request.get("target_session").cloned().unwrap_or(Value::Null),
                     "captured_at": "2026-03-10T00:00:00Z",
@@ -129,7 +127,6 @@ async fn look_preserves_additive_acp_freshness_fields() {
                 Some("look") => json!({
                     "kind": "look",
                     "schema_version": "1",
-                    "bundle_name": BUNDLE_NAME,
                     "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
                     "target_session": request.get("target_session").cloned().unwrap_or(Value::Null),
                     "captured_at": "2026-03-10T00:00:00Z",
@@ -179,7 +176,6 @@ async fn look_preserves_structured_acp_entries_passthrough() {
                 Some("look") => json!({
                     "kind": "look",
                     "schema_version": "1",
-                    "bundle_name": BUNDLE_NAME,
                     "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
                     "target_session": request.get("target_session").cloned().unwrap_or(Value::Null),
                     "captured_at": "2026-03-10T00:00:00Z",
@@ -492,7 +488,6 @@ async fn look_forwards_bound_bundle_on_wire_envelope() {
                 Some("look") => json!({
                     "kind": "look",
                     "schema_version": "1",
-                    "bundle_name": BUNDLE_NAME,
                     "requester_session": SENDER_SESSION,
                     "target_session": "bravo",
                     "captured_at": "2026-03-10T00:00:00Z",
@@ -534,7 +529,6 @@ async fn look_surfaces_authenticated_identity_from_relay() {
                 Some("look") => json!({
                     "kind": "look",
                     "schema_version": "1",
-                    "bundle_name": BUNDLE_NAME,
                     "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
                     "target_session": request.get("target_session").cloned().unwrap_or(Value::Null),
                     "captured_at": "2026-03-10T00:00:00Z",

@@ -105,7 +105,6 @@ impl McpServer {
                 emit_inscription(
                     "mcp.tool.grant.list.success",
                     &json!({
-                        "bundle_name": response["bundle_name"],
                         "pending_count": pending_count,
                     }),
                 );
