@@ -37,7 +37,7 @@ repos:
     - id: cargo-fmt
       name: 'Check Style (Rust)'
       language: system
-      entry: 'bash -c "mkdir -p target && flock -w 300 target/.cargo-lock cargo fmt --all -- --check"'
+      entry: 'cargo fmt --all -- --check'
       pass_filenames: false
       require_serial: true
       stages: [ 'pre-commit' ]
@@ -46,7 +46,7 @@ repos:
     - id: cargo-clippy
       name: 'Lint (Rust: Clippy)'
       language: system
-      entry: 'bash -c "mkdir -p target && flock -w 300 target/.cargo-lock cargo clippy --all-targets --all-features -- -D warnings"'
+      entry: 'cargo clippy --all-targets --all-features -- -D warnings'
       pass_filenames: false
       require_serial: true
       stages: [ 'pre-commit' ]
@@ -55,7 +55,7 @@ repos:
     - id: cargo-test
       name: 'Test (Rust)'
       language: system
-      entry: 'bash -c "mkdir -p target && flock -w 300 target/.cargo-lock cargo test --locked"'
+      entry: 'cargo test --locked'
       pass_filenames: false
       require_serial: true
       stages: [ 'pre-commit' ]
@@ -64,7 +64,7 @@ repos:
     - id: cargo-build
       name: 'Compile (Rust: Release)'
       language: system
-      entry: 'bash -c "mkdir -p target && flock -w 300 target/.cargo-lock cargo build --release --locked"'
+      entry: 'cargo build --release --locked'
       pass_filenames: false
       require_serial: true
       stages: [ 'pre-push' ]
@@ -74,7 +74,7 @@ repos:
     - id: cargo-test-release
       name: 'Test (Rust: Release)'
       language: system
-      entry: 'bash -c "mkdir -p target && flock -w 300 target/.cargo-lock cargo test --release --locked"'
+      entry: 'cargo test --release --locked'
       pass_filenames: false
       require_serial: true
       stages: [ 'pre-push' ]

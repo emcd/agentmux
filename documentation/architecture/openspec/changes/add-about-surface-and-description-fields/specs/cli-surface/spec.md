@@ -20,10 +20,10 @@ The CLI SHALL expose read-only runtime introspection commands:
 - **WHEN** operator runs `agentmux about --session relay`
 - **THEN** CLI requests bundle about payload filtered to `session_id=relay`
 
-#### Scenario: Reject cross-bundle selector in MVP
+#### Scenario: Show bundle about via explicit bundle selector
 
-- **WHEN** operator provides `--bundle` different from associated bundle context
-- **THEN** CLI returns `validation_cross_bundle_unsupported`
+- **WHEN** operator provides `--bundle` matching the associated bundle context
+- **THEN** CLI returns about payload for that bundle
 
 ### Requirement: About Command Response Schema
 
@@ -62,7 +62,6 @@ Validation SHALL run before authorization for `about` requests.
 
 - `validation_unknown_bundle`
 - `validation_unknown_session`
-- `validation_cross_bundle_unsupported`
 
 Unknown session selectors SHALL return validation errors and SHALL NOT return
 successful empty `sessions[]` payloads.

@@ -7,7 +7,9 @@ The system SHALL expose a read-only MCP tool named `about`.
 `about` request parameters SHALL be:
 
 - `session_id` (optional)
-- `bundle_name` (optional; redundant under associated bundle context)
+
+Bundle scope is derived from the associated connection context; no
+`bundle_name` selector is accepted.
 
 `about` authorization SHALL map to capability `list.read`.
 
@@ -20,11 +22,6 @@ The system SHALL expose a read-only MCP tool named `about`.
 
 - **WHEN** caller invokes `about` without selectors
 - **THEN** MCP resolves associated bundle context and returns about payload
-
-#### Scenario: Reject cross-bundle about selector in MVP
-
-- **WHEN** caller provides `bundle_name` different from associated bundle
-- **THEN** MCP returns `validation_cross_bundle_unsupported`
 
 ### Requirement: MCP About Response Contract
 
@@ -63,7 +60,6 @@ Validation SHALL run before authorization for `about` requests.
 
 - `validation_unknown_bundle`
 - `validation_unknown_session`
-- `validation_cross_bundle_unsupported`
 
 Unknown session selectors SHALL return validation errors and SHALL NOT return
 successful empty `sessions[]` payloads.

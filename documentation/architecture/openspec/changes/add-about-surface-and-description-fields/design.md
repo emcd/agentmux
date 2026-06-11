@@ -30,8 +30,9 @@ relying on external docs that may drift from active runtime config.
     - session `description` <= 512 UTF-8 characters.
 - Decision: about auth reuses `list.read`; deny path remains
   `authorization_forbidden` with canonical details schema.
-- Decision: about remains same-bundle only in MVP. Non-home bundle selectors
-  return `validation_cross_bundle_unsupported`.
+- Decision: about remains same-bundle only in MVP. Bundle scope is derived
+  structurally from the request's routing namespace; no in-payload bundle
+  selector is accepted in the relay or MCP request.
 - Decision: response shape is exact and stable across CLI machine output and MCP
   payload:
   - top-level: `schema_version`, `bundle_name`, `bundle_description`,

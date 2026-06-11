@@ -46,22 +46,15 @@ Relay SHALL provide a read-only operation named `about`.
 
 - `requester_session` (required)
 - `session_id` (optional)
-- `bundle_name` (optional; redundant under associated bundle context)
 
-MVP `about` scope SHALL remain same-bundle only.
+MVP `about` scope SHALL remain same-bundle only. Bundle scope is derived
+from the request's routing namespace (frame-level namespace, defaulting to
+the connection's bound bundle); no in-payload bundle selector is accepted.
 
-If `bundle_name` is supplied and differs from associated bundle context,
-relay SHALL reject request with `validation_cross_bundle_unsupported`.
+#### Scenario: Resolve associated bundle from routing context
 
-#### Scenario: Resolve associated bundle when bundle_name is omitted
-
-- **WHEN** request omits `bundle_name`
-- **THEN** relay resolves bundle from associated runtime context
-
-#### Scenario: Reject cross-bundle about request in MVP
-
-- **WHEN** request `bundle_name` differs from associated bundle
-- **THEN** relay returns `validation_cross_bundle_unsupported`
+- **WHEN** request is received on a bundle-bound stream
+- **THEN** relay resolves bundle from the routing namespace of that stream
 
 ### Requirement: Relay About Response Contract
 

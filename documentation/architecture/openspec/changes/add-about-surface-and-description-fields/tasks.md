@@ -2,7 +2,7 @@
 
 - [ ] 1.1 Add relay `about` operation contract with same-bundle selector semantics.
 - [ ] 1.2 Lock canonical response schema for `about` and CLI/MCP parity.
-- [ ] 1.3 Lock validation/error semantics (`validation_unknown_bundle`, `validation_unknown_session`, `validation_cross_bundle_unsupported`).
+- [ ] 1.3 Lock validation/error semantics (`validation_unknown_bundle`, `validation_unknown_session`). Note: `validation_cross_bundle_unsupported` is not emitted by `about`; same-bundle scope is enforced structurally.
 - [ ] 1.4 Lock authorization mapping for `about` to `list.read` and denial passthrough requirements.
 
 ## 2. Configuration Model Contract
