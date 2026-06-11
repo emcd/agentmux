@@ -50,6 +50,33 @@ pub(super) fn relay_error(code: &str, message: &str, details: Option<Value>) -> 
     }
 }
 
+/// Rejection code for a resolved target whose transport type does not support
+/// the requested operation (Transport Capability Contract). Distinct from
+/// `validation_unsupported_namespace` (reserved namespace names no session at
+/// all) and `validation_unknown_target` (target not configured): the target
+/// exists and is routable, but its transport cannot perform this operation.
+pub(super) const VALIDATION_UNSUPPORTED_OPERATION: &str = "validation_unsupported_operation";
+
+/// Builds the capability-gate rejection for a look/raww target whose transport
+/// lacks the operation's capability. `capability_flag` names the failed flag
+/// (`can_be_looked` / `can_be_written`) and is reported as a `false`-valued
+/// detail key so the diagnostic is actionable.
+pub(super) fn unsupported_operation(
+    target_session: &str,
+    session_type: SessionType,
+    capability_flag: &str,
+) -> RelayError {
+    let mut details = serde_json::Map::new();
+    details.insert("target_session".to_string(), json!(target_session));
+    details.insert("session_type".to_string(), json!(session_type));
+    details.insert(capability_flag.to_string(), json!(false));
+    relay_error(
+        VALIDATION_UNSUPPORTED_OPERATION,
+        "target transport does not support this operation",
+        Some(Value::Object(details)),
+    )
+}
+
 /// Builds the structured error for a session whose declared session type does
 /// not yet have an implemented delivery path (`ui`, `pubsub`).
 pub(super) fn session_type_not_implemented(

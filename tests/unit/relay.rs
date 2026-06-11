@@ -791,6 +791,85 @@ fn look_allows_zero_offset_for_tmux_target() {
 }
 
 #[test]
+fn look_rejects_relay_wide_target_as_unsupported_operation() {
+    // A relay-wide (`@GLOBAL`) target resolves through routing; the rejection
+    // is the capability gate on its configured session type (`ui` carries
+    // `can_be_looked = false`), reported with the target id and the failed
+    // capability flag so the diagnostic is actionable.
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    write_tui_configuration(&config_root, "default");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    let response = dispatch_request(
+        RelayRequest::Look {
+            requester_session: "alpha".to_string(),
+            target_session: "user@GLOBAL".to_string(),
+            lines: Some(3),
+            offset: None,
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect_err("look should fail");
+
+    assert_eq!(response.code, "validation_unsupported_operation");
+    let details = response.details.expect("capability details");
+    assert_eq!(details["target_session"], "user@GLOBAL");
+    assert_eq!(details["can_be_looked"], false);
+}
+
+#[test]
+fn look_rejects_unconfigured_relay_wide_target_as_unknown() {
+    // A `@GLOBAL` target absent from the global users configuration has no
+    // session type to derive a capability from and sorts as unknown.
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    write_tui_configuration(&config_root, "default");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    let response = dispatch_request(
+        RelayRequest::Look {
+            requester_session: "alpha".to_string(),
+            target_session: "stranger@GLOBAL".to_string(),
+            lines: Some(3),
+            offset: None,
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect_err("look should fail");
+
+    assert_eq!(response.code, "validation_unknown_target");
+}
+
+#[test]
+fn look_rejects_reserved_namespace_target_as_unsupported_namespace() {
+    // Reserved namespaces (`@EXTERNAL`/`@RELAY`) name no routable session at
+    // all; their routing-stage rejection is unchanged by the capability gate.
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    let response = dispatch_request(
+        RelayRequest::Look {
+            requester_session: "alpha".to_string(),
+            target_session: "service@EXTERNAL".to_string(),
+            lines: Some(3),
+            offset: None,
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect_err("look should fail");
+
+    assert_eq!(response.code, "validation_unsupported_namespace");
+}
+
+#[test]
 fn look_rejects_unknown_target() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");

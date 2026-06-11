@@ -18,6 +18,57 @@ pub enum SessionType {
     Pubsub,
 }
 
+/// Transport capability derivation (Transport Capability Contract).
+///
+/// Capabilities are pure functions of the transport type — never stored bool
+/// fields — derived at check time from the configuration enum discriminant:
+///
+/// | Transport | `can_be_looked` | `can_be_written` | `can_stream_output` |
+/// |-----------|-----------------|------------------|---------------------|
+/// | `Tmux`    | true            | true             | false               |
+/// | `Acp`     | true            | true             | true                |
+/// | `Pty`     | true            | true             | true                |
+/// | `Ui`      | false           | false            | false               |
+/// | `Pubsub`  | false           | false            | false               |
+///
+/// The `Pty` row is normative and forward-looking: no `Pty` variant exists
+/// yet. It is the long-term replacement for `Tmux` with identical
+/// `can_be_looked`/`can_be_written` capabilities and `can_stream_output =
+/// true` (PTY natively streams output byte-by-byte; tmux requires periodic
+/// snapshot polling). The row activates when the `Pty` transport lands
+/// (expected in `decouple-transport-layer`).
+impl SessionType {
+    /// The session can be targeted by `look`: its transport supports snapshot
+    /// capture.
+    #[must_use]
+    pub fn can_be_looked(self) -> bool {
+        match self {
+            Self::Tmux | Self::Acp => true,
+            Self::Ui | Self::Pubsub => false,
+        }
+    }
+
+    /// The session can be targeted by `raww`: its transport supports raw input
+    /// injection.
+    #[must_use]
+    pub fn can_be_written(self) -> bool {
+        match self {
+            Self::Tmux | Self::Acp => true,
+            Self::Ui | Self::Pubsub => false,
+        }
+    }
+
+    /// The session's transport natively produces live output chunks. Advertised
+    /// ahead of any consumer; streaming look semantics are a follow-on proposal.
+    #[must_use]
+    pub fn can_stream_output(self) -> bool {
+        match self {
+            Self::Acp => true,
+            Self::Tmux | Self::Ui | Self::Pubsub => false,
+        }
+    }
+}
+
 /// One configured bundle member.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct BundleMember {

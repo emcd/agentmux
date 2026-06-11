@@ -271,8 +271,8 @@ pub(super) fn coalesce_batch(
     carry: &mut VecDeque<AsyncDeliveryTask>,
     receiver: &mut UnboundedReceiver<AsyncDeliveryTask>,
 ) -> Vec<AsyncDeliveryTask> {
-    let coalescable =
-        matches!(head.payload_mode, DeliveryPayloadMode::EnvelopeMessage) && !head.target_is_ui;
+    let coalescable = matches!(head.payload_mode, DeliveryPayloadMode::EnvelopeMessage)
+        && !head.relay_wide_target;
     let mut batch = vec![head];
     if !coalescable {
         return batch;
@@ -320,7 +320,7 @@ fn can_coalesce_with_head(head: &AsyncDeliveryTask, candidate: &AsyncDeliveryTas
     debug_assert_eq!(head.bundle.bundle_name, candidate.bundle.bundle_name);
     matches!(head.payload_mode, DeliveryPayloadMode::EnvelopeMessage)
         && matches!(candidate.payload_mode, DeliveryPayloadMode::EnvelopeMessage)
-        && head.target_is_ui == candidate.target_is_ui
+        && head.relay_wide_target == candidate.relay_wide_target
 }
 
 /// Identifies a head task that needs the worker-loop tmux quiescence hoist.
@@ -328,7 +328,8 @@ fn can_coalesce_with_head(head: &AsyncDeliveryTask, candidate: &AsyncDeliveryTas
 /// run without re-borrowing into the worker's bundle state. ACP/UI targets
 /// and RawInput heads return `None` — they keep their original transport flow.
 fn classify_tmux_quiescence_hoist(task: &AsyncDeliveryTask) -> Option<TmuxTargetConfiguration> {
-    if !matches!(task.payload_mode, DeliveryPayloadMode::EnvelopeMessage) || task.target_is_ui {
+    if !matches!(task.payload_mode, DeliveryPayloadMode::EnvelopeMessage) || task.relay_wide_target
+    {
         return None;
     }
     let target_member = task
@@ -808,7 +809,7 @@ mod coalesce_batch_tests {
             authenticated_identity: None,
             all_target_sessions: vec!["bravo".to_string()],
             target_session: "bravo".to_string(),
-            target_is_ui: false,
+            relay_wide_target: false,
             message: String::new(),
             message_id: message_id.to_string(),
             quiescence: QuiescenceOptions {

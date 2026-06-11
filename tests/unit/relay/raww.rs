@@ -24,10 +24,11 @@ fn raww_rejects_unknown_target() {
 }
 
 #[test]
-fn raww_rejects_relay_wide_target_as_unsupported_namespace() {
-    // Raww writes raw text to a tmux pane; a relay-wide (`@GLOBAL`) UI session
-    // names no recipient that accepts raw input and is rejected with the generic
-    // unsupported-namespace error, uniform with the Look single-target stage.
+fn raww_rejects_relay_wide_target_as_unsupported_operation() {
+    // A relay-wide (`@GLOBAL`) target resolves through routing; the rejection
+    // is the capability gate on its configured session type (`ui` carries
+    // `can_be_written = false`), reported with the target id and the failed
+    // capability flag so the diagnostic is actionable.
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     write_tui_configuration_with_session_id(&config_root, "default", "ui@GLOBAL");
@@ -38,6 +39,34 @@ fn raww_rejects_relay_wide_target_as_unsupported_namespace() {
             request_id: None,
             requester_session: "alpha".to_string(),
             target_session: "ui@GLOBAL".to_string(),
+            text: "hello".to_string(),
+            no_enter: false,
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect_err("raww should fail");
+
+    assert_eq!(response.code, "validation_unsupported_operation");
+    let details = response.details.expect("capability details");
+    assert_eq!(details["target_session"], "ui@GLOBAL");
+    assert_eq!(details["can_be_written"], false);
+}
+
+#[test]
+fn raww_rejects_reserved_namespace_target_as_unsupported_namespace() {
+    // Reserved namespaces (`@EXTERNAL`/`@RELAY`) name no routable session at
+    // all; their routing-stage rejection is unchanged by the capability gate.
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    let response = dispatch_request(
+        RelayRequest::Raww {
+            request_id: None,
+            requester_session: "alpha".to_string(),
+            target_session: "service@RELAY".to_string(),
             text: "hello".to_string(),
             no_enter: false,
         },

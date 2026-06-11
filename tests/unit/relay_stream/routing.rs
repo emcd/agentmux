@@ -359,9 +359,10 @@ fn cross_bundle_raww(
 /// session reaching a session in a peer bundle is authorized in its **home**
 /// namespace and resolves the peer member — rather than failing because the relay
 /// dispatched the raww through a borrowed (target) bundle, where the home session
-/// is unknown. Under `raww = all:all` the request resolves all the way to the
-/// transport match; the UI peer surfaces the not-implemented terminal, proving
-/// home-namespace authorization and peer-member resolution both succeeded.
+/// is unknown. The request resolves through routing and the peer-bundle member
+/// lookup; the UI peer then fails the `can_be_written` capability gate. The
+/// capability-specific code (not unknown-bundle/unknown-target) proves
+/// peer-bundle and member resolution both succeeded.
 #[test]
 fn cross_bundle_raww_permitted_under_all_scope_resolves_peer() {
     let temporary = TempDir::new().expect("temporary directory");
@@ -385,8 +386,12 @@ fn cross_bundle_raww_permitted_under_all_scope_resolves_peer() {
 
     assert_eq!(response["response"]["kind"], "error");
     assert_eq!(
-        response["response"]["error"]["code"], "runtime_session_type_not_implemented",
-        "permitted cross-bundle raww authorizes in the home namespace and resolves the peer member"
+        response["response"]["error"]["code"], "validation_unsupported_operation",
+        "cross-bundle raww resolves the peer member and reaches the capability gate"
+    );
+    assert_eq!(
+        response["response"]["error"]["details"]["can_be_written"],
+        false
     );
 }
 
@@ -394,14 +399,16 @@ fn cross_bundle_raww_permitted_under_all_scope_resolves_peer() {
 /// to cross the bundle boundary. The requester is authorized in its home
 /// namespace (where its `raww` control resolves) and denied — it is no longer
 /// dispatched through the target bundle, so the denial is a real
-/// `authorization_forbidden`, not an unknown-target artifact.
+/// `authorization_forbidden`, not an unknown-target artifact. The peer is a tmux
+/// member so the pre-authorization capability gate passes and the denial
+/// surfaces.
 #[test]
 fn cross_bundle_raww_denied_under_home_scope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_a = "raww_home_a";
     let bundle_b = "raww_home_b";
     let configuration_root = write_bundle_configuration(&temporary, bundle_a);
-    write_ui_bundle(&configuration_root, bundle_b);
+    write_tmux_bundle(&configuration_root, bundle_b);
     write_policies_with_raww(&configuration_root, "all:home");
     let state_root = temporary.path().join("state");
     let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");

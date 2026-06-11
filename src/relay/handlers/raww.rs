@@ -20,9 +20,12 @@ use super::super::routing::{
 use super::super::{
     AsyncDeliveryTask, DeliveryPayloadMode, ListedSessionTransport, RelayError, RelayRequest,
     RelayResponse, SCHEMA_VERSION, SendOutcome, bare_session_id, canonical_session_id, relay_error,
-    session_type_not_implemented,
+    unsupported_operation,
 };
-use super::routed::{load_home_context, resolve_target_bundle, run_target_operation};
+use super::routed::{
+    load_home_context, relay_wide_operation_unimplemented, resolve_relay_wide_target_session_type,
+    resolve_target_bundle, run_target_operation,
+};
 use super::sender::{SenderIdentity, resolve_sender_in_namespace};
 
 /// The raww target's bundle, runtime, and the target bundle's authorization
@@ -134,8 +137,9 @@ pub(in crate::relay) fn handle_raww_routed(
 }
 
 /// Resolves the raww target's bundle, validates that the target is a configured
-/// member, and loads the target bundle's authorization (which gates delivery).
-/// Runs before authorization, so an unknown target sorts before
+/// member, applies the `can_be_written` capability gate, and loads the target
+/// bundle's authorization (which gates delivery). Runs before authorization, so
+/// an unknown or transport-incapable target sorts before
 /// `authorization_forbidden`.
 fn prepare_raww(
     route: &ResolvedRoute,
@@ -151,6 +155,24 @@ fn prepare_raww(
         .session_id
         .as_deref()
         .expect("raww target carries a session id");
+    if target_route.relay_wide {
+        // A relay-wide target has no bundle membership; its capability derives
+        // from the declared session type in the global users configuration.
+        let session_type =
+            resolve_relay_wide_target_session_type(configuration_root, target_session_id)?;
+        if !session_type.can_be_written() {
+            return Err(unsupported_operation(
+                target_session_id,
+                session_type,
+                "can_be_written",
+            ));
+        }
+        return Err(relay_wide_operation_unimplemented(
+            "raww",
+            target_session_id,
+            session_type,
+        ));
+    }
     let (bundle, runtime_directory) = resolve_target_bundle(
         home_namespace,
         home_bundle,
@@ -159,17 +181,25 @@ fn prepare_raww(
         configuration_root,
         bundle_catalog,
     )?;
-    if !bundle
+    let Some(member) = bundle
         .members
         .iter()
-        .any(|member| member.id == target_session_id)
-    {
+        .find(|member| member.id == target_session_id)
+    else {
         return Err(relay_error(
             "validation_unknown_target",
             "target_session is not a canonical configured target identifier",
             Some(json!({
                 "target_session": canonical_session_id(target_session_id, target_bundle_name),
             })),
+        ));
+    };
+    let session_type = member.target.session_type();
+    if !session_type.can_be_written() {
+        return Err(unsupported_operation(
+            canonical_session_id(target_session_id, target_bundle_name).as_str(),
+            session_type,
+            "can_be_written",
         ));
     }
     let target_authorization = load_authorization_context(configuration_root, Some(&bundle))?;
@@ -212,10 +242,7 @@ fn execute_raww(
         TargetConfiguration::Tmux(_) => ListedSessionTransport::Tmux,
         TargetConfiguration::Acp(_) => ListedSessionTransport::Acp,
         TargetConfiguration::Ui | TargetConfiguration::Pubsub => {
-            return Err(session_type_not_implemented(
-                target_member.id.as_str(),
-                target_member.target.session_type(),
-            ));
+            unreachable!("capability gate in prepare_raww rejects can_be_written = false targets")
         }
     };
     let message_id = Uuid::new_v4().to_string();
@@ -232,7 +259,7 @@ fn execute_raww(
         authenticated_identity: None,
         all_target_sessions: vec![target_member.id.clone()],
         target_session: target_member.id.clone(),
-        target_is_ui: false,
+        relay_wide_target: false,
         message: text,
         message_id: message_id.clone(),
         quiescence: QuiescenceOptions::for_sync(None, None, None),
@@ -249,10 +276,7 @@ fn execute_raww(
         TargetConfiguration::Acp(_) => enqueue_sync_delivery(task)?,
         TargetConfiguration::Tmux(_) => deliver_one_target(&task)?,
         TargetConfiguration::Ui | TargetConfiguration::Pubsub => {
-            return Err(session_type_not_implemented(
-                target_member.id.as_str(),
-                target_member.target.session_type(),
-            ));
+            unreachable!("capability gate in prepare_raww rejects can_be_written = false targets")
         }
     };
     if result.outcome != SendOutcome::Delivered {

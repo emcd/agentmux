@@ -48,7 +48,7 @@ pub(super) fn resolve_target_member(
         .members
         .iter()
         .find(|member| member.id == task.target_session);
-    if target_member.is_none() && !task.target_is_ui {
+    if target_member.is_none() && !task.relay_wide_target {
         return Err(super::super::super::relay_error(
             "internal_unexpected_failure",
             "resolved target member is missing from bundle configuration",
@@ -62,7 +62,7 @@ pub(super) fn resolve_target_member(
 ///
 /// All tasks in `batch` share `(runtime_directory, bundle_name, target_session)`
 /// (guaranteed by the per-target worker key) and identical `payload_mode` and
-/// `target_is_ui` (guaranteed by the worker coalesce predicate). Each task's
+/// `relay_wide_target` (guaranteed by the worker coalesce predicate). Each task's
 /// envelope is rendered with its own sender/cc/message_id, then packed via
 /// `batch_envelopes` against the head task's `batch_settings`.
 ///
@@ -88,7 +88,7 @@ pub(super) fn prepare_batch_delivery_payload(
     );
 
     if should_route_to_ui(head)? {
-        // UI heads are non-coalescable (the worker enforces target_is_ui ==
+        // UI heads are non-coalescable (the worker enforces relay_wide_target ==
         // false to coalesce), so this path always has batch.len() == 1.
         debug_assert_eq!(batch.len(), 1, "UI-routed envelope tasks must not coalesce",);
         let cc_sessions = head
@@ -300,7 +300,7 @@ pub(super) fn prepare_delivery_payload(
             })
         }
         DeliveryPayloadMode::RawInput => {
-            if task.target_is_ui {
+            if task.relay_wide_target {
                 return Err(super::super::super::relay_error(
                     "internal_unexpected_failure",
                     "raw delivery tasks do not support ui targets",
@@ -317,7 +317,7 @@ pub(super) fn prepare_delivery_payload(
 }
 
 fn should_route_to_ui(task: &AsyncDeliveryTask) -> Result<bool, RelayError> {
-    if task.target_is_ui {
+    if task.relay_wide_target {
         return Ok(true);
     }
     let resolved_session_type = resolve_registered_session_type(

@@ -1,6 +1,6 @@
 ## 1. Add capability derivation for SessionType (BE)
 
-- [ ] 1.1 Implement capability derivation as methods on `SessionType` — e.g.
+- [x] 1.1 Implement capability derivation as methods on `SessionType` — e.g.
       `fn can_be_looked(self) -> bool`, `fn can_be_written(self) -> bool`,
       `fn can_stream_output(self) -> bool` — or as a
       `TransportCapabilities::of(SessionType)` helper struct. Do NOT add bool
@@ -12,7 +12,7 @@
       `RegistryEntry.session_type`. Note: `StreamRegistration`
       (`connection.rs` / `stream.rs`) is a thin unregistration handle, not the
       right home for this derivation.
-- [ ] 1.2 Implement the derivation table:
+- [x] 1.2 Implement the derivation table:
 
       | Transport | can_be_looked | can_be_written | can_stream_output |
       |-----------|---------------|----------------|-------------------|
@@ -32,12 +32,12 @@
 
 ## 2. Add validation_unsupported_operation error code (BE)
 
-- [ ] 2.1 Add `validation_unsupported_operation` as a named error code
+- [x] 2.1 Add `validation_unsupported_operation` as a named error code
       constant in `src/relay/` (alongside existing validation error constants).
 
 ## 3. Update look handler (BE)
 
-- [ ] 3.1 In `src/relay/handlers/look.rs`, add a pre-authorization capability
+- [x] 3.1 In `src/relay/handlers/look.rs`, add a pre-authorization capability
       check. Derive `can_be_looked` from the target's `SessionType` and return
       `validation_unsupported_operation` with informative details if false.
 
@@ -52,16 +52,16 @@
         before the bundle-member lookup; for relay-wide targets, derive
         `SessionType` from `users.toml` (analogous to send's `has_ui_session`,
         send.rs:482) and apply the capability check.
-- [ ] 3.2 In `execute_look` (look.rs:247), remove the
+- [x] 3.2 In `execute_look` (look.rs:247), remove the
       `runtime_session_type_not_implemented` rejection for `Ui`/`Pubsub` bundle
       members. The capability gate in 3.1 now fires pre-authorization for these
       targets, making the execute-time check unreachable.
-- [ ] 3.3 Remove any remaining implicit `@GLOBAL`-specific rejection path in
+- [x] 3.3 Remove any remaining implicit `@GLOBAL`-specific rejection path in
       look routing that overlaps with the new capability check.
 
 ## 4. Update raww handler and routing (BE)
 
-- [ ] 4.1 In `src/relay/handlers/raww.rs`, add a pre-authorization capability
+- [x] 4.1 In `src/relay/handlers/raww.rs`, add a pre-authorization capability
       check. Derive `can_be_written` from the target's `SessionType` and return
       `validation_unsupported_operation` with informative details if false.
 
@@ -79,11 +79,11 @@
       injection. The `no_enter` parameter is tmux-specific; the existing dispatch
       path in `deliver_one_target_acp` (acp_delivery.rs:437) already handles this
       correctly. No behavioral change needed beyond the capability gate.
-- [ ] 4.2 In `execute_raww` (raww.rs:215/252), remove the
+- [x] 4.2 In `execute_raww` (raww.rs:215/252), remove the
       `runtime_session_type_not_implemented` rejection for `Ui`/`Pubsub` bundle
       members. The capability gate in 4.1 fires pre-authorization for these
       targets, making the execute-time check unreachable.
-- [ ] 4.3 In `src/relay/routing.rs`, change the `RelayWideTargets::Rejected`
+- [x] 4.3 In `src/relay/routing.rs`, change the `RelayWideTargets::Rejected`
       call to `RelayWideTargets::Allowed` for the look/raww single-target path,
       removing the `@GLOBAL` routing-stage rejection. `@EXTERNAL`/`@RELAY`
       rejections remain unchanged. Then remove the `RelayWideTargets` enum and
@@ -94,7 +94,7 @@
 
 ## 5. Rename is_ui in delivery path (BE)
 
-- [ ] 5.1 Rename `is_ui`/`target_is_ui` to `relay_wide` (or
+- [x] 5.1 Rename `is_ui`/`target_is_ui` to `relay_wide` (or
       `relay_wide_target`) in `src/relay/context.rs` and all delivery path
       callers: `handlers/send.rs`, `handlers/raww.rs:236`,
       `delivery/dispatch/payload.rs`, `delivery/dispatch/worker.rs`. No
@@ -105,11 +105,11 @@
 
 ## 6. Tests (BE)
 
-- [ ] 6.1 Add unit/integration tests confirming `validation_unsupported_operation`
+- [x] 6.1 Add unit/integration tests confirming `validation_unsupported_operation`
       is returned for look and raww against a registered relay-wide session.
-- [ ] 6.2 Add tests confirming `@EXTERNAL`/`@RELAY` targets still return
+- [x] 6.2 Add tests confirming `@EXTERNAL`/`@RELAY` targets still return
       `validation_unsupported_namespace`.
-- [ ] 6.3 Update existing tests whose expected error codes change with this proposal:
+- [x] 6.3 Update existing tests whose expected error codes change with this proposal:
       - Tests asserting `validation_unsupported_namespace` for `@GLOBAL` look/raww
         targets → change to `validation_unsupported_operation`
         (`tests/unit/relay_stream/routing.rs:388`).
@@ -124,8 +124,8 @@
 
 ## 7. Coordination (BE / Coordinator)
 
-- [ ] 7.1 After landing, amend `decouple-transport-layer/tasks.md` to note
+- [x] 7.1 After landing, amend `decouple-transport-layer/tasks.md` to note
       that `can_be_looked`/`can_be_written` capability flags already exist on
       registered sessions and should be incorporated as first-class fields on
       each `TransportImpl` variant rather than re-derived.
-- [ ] 7.2 Delete `ideas/relay/6` notebook note (superseded by this proposal).
+- [x] 7.2 Delete `ideas/relay/6` notebook note (superseded by this proposal).

@@ -336,6 +336,28 @@ directory = "/tmp"
     .expect("write ui bundle configuration");
 }
 
+// Writes an additional bundle whose sole session `agent` is a tmux member.
+// Unlike `write_ui_bundle`, the member passes the look/raww capability gate
+// (`can_be_looked`/`can_be_written` = true), so a cross-bundle request reaches
+// the authorization stage — the gate fires pre-authorization and would
+// otherwise short-circuit a UI peer before the policy outcome is observable.
+fn write_tmux_bundle(configuration_root: &Path, bundle_name: &str) {
+    let bundles_directory = configuration_root.join("bundles");
+    std::fs::write(
+        bundles_directory.join(format!("{bundle_name}.toml")),
+        r#"
+format-version = 1
+
+[[sessions]]
+id = "agent"
+name = "Agent"
+directory = "/tmp"
+coder = "shell"
+"#,
+    )
+    .expect("write tmux bundle configuration");
+}
+
 // Spawns a connection served against an explicit (typically multi-bundle)
 // catalog, so a Send can fan out to peer bundles the connection is not bound to.
 fn spawn_relay_connection_with_catalog(
