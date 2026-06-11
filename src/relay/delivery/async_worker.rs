@@ -17,7 +17,7 @@ use crate::configuration::TargetConfiguration;
 use crate::runtime::{inscriptions::emit_inscription, signals::shutdown_requested};
 
 use super::super::stream::{RelayStreamEvent, send_event_to_registered_ui};
-use super::super::{AsyncDeliveryTask, RelayError, SendOutcome, SendResult};
+use super::super::{AsyncDeliveryTask, RelayError, SendOutcome, SendResult, canonical_session_id};
 
 use std::path::{Path, PathBuf};
 
@@ -449,8 +449,10 @@ fn emit_sender_delivery_outcome_event(
 
     let event = RelayStreamEvent {
         event_type: "delivery_outcome".to_string(),
-        bundle_name: task.bundle.bundle_name.clone(),
-        target_session: target_session.to_string(),
+        // Describes the target in the TARGET's bundle even though the event
+        // routes to the sender's bundle; cross-bundle sends would otherwise
+        // misattribute the target to the sender's namespace.
+        target_session: canonical_session_id(target_session, task.bundle.bundle_name.as_str()),
         created_at: time::OffsetDateTime::now_utc()
             .format(&Rfc3339)
             .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string()),

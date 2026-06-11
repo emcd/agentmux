@@ -52,7 +52,6 @@ pub(super) fn run_agentmux_look(arguments: &[String]) -> Result<(), RuntimeError
     let payload = match response {
         RelayResponse::Look {
             schema_version,
-            bundle_name,
             requester_session,
             target_session,
             captured_at,
@@ -61,7 +60,6 @@ pub(super) fn run_agentmux_look(arguments: &[String]) -> Result<(), RuntimeError
         } => {
             let mut payload = Map::new();
             payload.insert("schema_version".to_string(), Value::String(schema_version));
-            payload.insert("bundle_name".to_string(), Value::String(bundle_name));
             payload.insert(
                 "requester_session".to_string(),
                 Value::String(requester_session),

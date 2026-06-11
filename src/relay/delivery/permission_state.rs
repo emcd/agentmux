@@ -277,8 +277,7 @@ pub(in crate::relay) fn emit_permission_snapshot_then_replay(
     let pending = list_pending_permission_requests(context.runtime_directory.as_path())?;
     let snapshot_event = RelayStreamEvent {
         event_type: "permission.snapshot".to_string(),
-        bundle_name: context.bundle_name.clone(),
-        target_session: ui_session_id.to_string(),
+        target_session: canonical_session_id(ui_session_id, context.bundle_name.as_str()),
         created_at: timestamp_rfc3339(),
         payload: json!({
             "pending_count": pending.len(),
@@ -490,8 +489,7 @@ fn emit_permission_resolved_event(
     for ui_session_id in &context.authorized_ui_sessions {
         let event = RelayStreamEvent {
             event_type: "permission.resolved".to_string(),
-            bundle_name: context.bundle_name.clone(),
-            target_session: ui_session_id.clone(),
+            target_session: canonical_session_id(ui_session_id, context.bundle_name.as_str()),
             created_at: timestamp_rfc3339(),
             payload: json!({
                 "message_id": request.message_id,
@@ -523,8 +521,7 @@ fn permission_requested_event(
 ) -> RelayStreamEvent {
     RelayStreamEvent {
         event_type: "permission.requested".to_string(),
-        bundle_name: bundle_name.to_string(),
-        target_session: ui_session_id.to_string(),
+        target_session: canonical_session_id(ui_session_id, bundle_name),
         created_at: timestamp_rfc3339(),
         payload: json!({
             "message_id": request.message_id,

@@ -151,9 +151,8 @@ pub(in crate::relay) fn handle_change_psk(
         .unwrap_or_default();
     let revoked_event = RelayStreamEvent {
         event_type: "identity.revoked".to_string(),
-        // `bundle_name`/`target_session` are rewritten per recipient host by the
-        // fan-out; the revoked principal is carried in the payload.
-        bundle_name: String::new(),
+        // `target_session` is rewritten per recipient host by the fan-out; the
+        // revoked principal is carried in the payload.
         target_session: String::new(),
         created_at: revoked_at.clone(),
         payload: serde_json::json!({
@@ -255,14 +254,10 @@ pub(in crate::relay) fn build_identity_snapshot_event(
         .filter(|record| scope_permits(rights.scope.as_deref(), record.principal_id.as_str()))
         .map(snapshot_principal_entry)
         .collect();
-    // The host is a relay-wide principal with no bundle; label the event with
-    // its namespace (e.g. `EXTERNAL`) rather than a bundle name.
-    let namespace = split_principal_id(host_principal_id)
-        .map(|(_, namespace)| namespace.to_string())
-        .unwrap_or_default();
     Ok(RelayStreamEvent {
         event_type: "identity.snapshot".to_string(),
-        bundle_name: namespace,
+        // The host is a relay-wide principal; its full principal id already
+        // carries the namespace suffix (e.g. `@EXTERNAL`).
         target_session: host_principal_id.to_string(),
         created_at: now.format(&Rfc3339).unwrap_or_default(),
         payload: serde_json::json!({ "principals": principals }),

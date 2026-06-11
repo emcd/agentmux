@@ -854,7 +854,10 @@ fn send_fans_out_across_bundle_and_global_namespaces() {
 
     // Both recipients observe the delivered message on their own streams.
     let agent_event = read_until_event_type(&mut agent_reader, "incoming_message");
-    assert_eq!(agent_event["event"]["target_session"], "agent");
+    assert_eq!(
+        agent_event["event"]["target_session"],
+        format!("agent@{bundle_b}")
+    );
     assert_eq!(
         agent_event["event"]["payload"]["sender_session"],
         format!("alpha@{bundle_a}")

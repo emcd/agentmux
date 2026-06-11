@@ -84,8 +84,7 @@ pub(super) fn deliver_one_target_ui(
         }
         let incoming_event = RelayStreamEvent {
             event_type: "incoming_message".to_string(),
-            bundle_name: bundle_name.to_string(),
-            target_session: target_session.clone(),
+            target_session: canonical_session_id(target_session.as_str(), bundle_name),
             created_at: timestamp_rfc3339(),
             payload,
         };
@@ -207,8 +206,7 @@ fn emit_delivery_outcome_event(
     }
     let event = RelayStreamEvent {
         event_type: "delivery_outcome".to_string(),
-        bundle_name: bundle_name.to_string(),
-        target_session: target_session.to_string(),
+        target_session: canonical_session_id(target_session, bundle_name),
         created_at: timestamp_rfc3339(),
         payload: Value::Object(payload),
     };

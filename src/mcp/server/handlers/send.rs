@@ -70,7 +70,6 @@ impl McpServer {
         match self.request_relay(&request) {
             Ok(RelayResponse::Send {
                 schema_version,
-                bundle_name,
                 request_id,
                 requester_session,
                 sender_display_name,
@@ -80,7 +79,6 @@ impl McpServer {
             }) => {
                 let mut response = json!({
                     "schema_version": schema_version,
-                    "bundle_name": bundle_name,
                     "request_id": request_id,
                     "requester_session": requester_session,
                     "sender_display_name": sender_display_name,

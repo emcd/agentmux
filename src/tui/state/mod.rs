@@ -348,8 +348,7 @@ mod tests {
         let mut state = make_state();
         let duplicated = RelayStreamEvent {
             event_type: "incoming_message".to_string(),
-            bundle_name: "agentmux".to_string(),
-            target_session: "tui".to_string(),
+            target_session: "tui@agentmux".to_string(),
             created_at: "2026-03-19T00:00:00Z".to_string(),
             payload: json!({
                 "message_id": "msg-1",
@@ -413,8 +412,7 @@ mod tests {
 
         state.record_stream_events(&[RelayStreamEvent {
             event_type: "delivery_outcome".to_string(),
-            bundle_name: "agentmux".to_string(),
-            target_session: "user".to_string(),
+            target_session: "user@agentmux".to_string(),
             created_at: "2026-03-29T00:00:00Z".to_string(),
             payload: json!({
                 "message_id": "msg-1",
@@ -430,8 +428,7 @@ mod tests {
         let mut state = make_state();
         state.record_stream_events(&[RelayStreamEvent {
             event_type: "delivery_outcome".to_string(),
-            bundle_name: "agentmux".to_string(),
-            target_session: "user".to_string(),
+            target_session: "user@agentmux".to_string(),
             created_at: "2026-03-29T00:00:00Z".to_string(),
             payload: json!({
                 "message_id": "msg-1",
@@ -457,8 +454,7 @@ mod tests {
         let mut state = make_state();
         state.record_stream_events(&[RelayStreamEvent {
             event_type: "permission.snapshot".to_string(),
-            bundle_name: "agentmux".to_string(),
-            target_session: "tui".to_string(),
+            target_session: "tui@agentmux".to_string(),
             created_at: "2026-04-29T00:00:00Z".to_string(),
             payload: json!({
                 "pending_count": 1,
@@ -470,8 +466,7 @@ mod tests {
 
         let requested = RelayStreamEvent {
             event_type: "permission.requested".to_string(),
-            bundle_name: "agentmux".to_string(),
-            target_session: "tui".to_string(),
+            target_session: "tui@agentmux".to_string(),
             created_at: "2026-04-29T00:00:01Z".to_string(),
             payload: json!({
                 "message_id": "msg-1",
@@ -505,8 +500,7 @@ mod tests {
         let mut state = make_state();
         state.record_stream_events(&[RelayStreamEvent {
             event_type: "permission.requested".to_string(),
-            bundle_name: "agentmux".to_string(),
-            target_session: "tui".to_string(),
+            target_session: "tui@agentmux".to_string(),
             created_at: "2026-04-29T00:00:01Z".to_string(),
             payload: json!({
                 "message_id": "msg-1",
@@ -524,8 +518,7 @@ mod tests {
 
         state.record_stream_events(&[RelayStreamEvent {
             event_type: "permission.resolved".to_string(),
-            bundle_name: "agentmux".to_string(),
-            target_session: "tui".to_string(),
+            target_session: "tui@agentmux".to_string(),
             created_at: "2026-04-29T00:00:02Z".to_string(),
             payload: json!({
                 "message_id": "msg-1",

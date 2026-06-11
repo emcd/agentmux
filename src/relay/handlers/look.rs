@@ -293,7 +293,6 @@ fn execute_look(
     };
     let response = RelayResponse::Look {
         schema_version: SCHEMA_VERSION.to_string(),
-        bundle_name: look_bundle.bundle_name.clone(),
         requester_session: canonical_session_id(requester_session_id, home_namespace),
         target_session: canonical_session_id(target.id.as_str(), look_bundle.bundle_name.as_str()),
         captured_at: time::OffsetDateTime::now_utc()
@@ -305,7 +304,6 @@ fn execute_look(
         snapshot,
     };
     if let RelayResponse::Look {
-        bundle_name,
         requester_session,
         target_session,
         snapshot,
@@ -351,7 +349,7 @@ fn execute_look(
         emit_inscription(
             "relay.look.response",
             &json!({
-                "bundle_name": bundle_name,
+                "bundle_name": look_bundle.bundle_name,
                 "requester_session": requester_session,
                 "target_session": target_session,
                 "snapshot_format": snapshot_format,

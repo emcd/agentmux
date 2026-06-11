@@ -398,7 +398,6 @@ fn execute_send(
     }
     let response = RelayResponse::Send {
         schema_version: SCHEMA_VERSION.to_string(),
-        bundle_name: home_namespace.to_string(),
         request_id,
         requester_session: canonical_session_id(sender.session_id.as_str(), home_namespace),
         sender_display_name: sender.display_name.clone(),
@@ -407,7 +406,6 @@ fn execute_send(
         results,
     };
     if let RelayResponse::Send {
-        bundle_name,
         requester_session,
         results,
         ..
@@ -420,7 +418,7 @@ fn execute_send(
         emit_inscription(
             "relay.send.response",
             &json!({
-            "bundle_name": bundle_name,
+            "bundle_name": home_namespace,
             "requester_session": requester_session,
             "result_count": results.len(),
             "delivered_count": delivered_count,

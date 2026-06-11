@@ -167,7 +167,6 @@ pub(super) fn handle_permission_list(
         .collect();
     Ok(RelayResponse::PermissionList {
         schema_version: SCHEMA_VERSION.to_string(),
-        bundle_name: bundle.bundle_name.clone(),
         pending_requests,
     })
 }
