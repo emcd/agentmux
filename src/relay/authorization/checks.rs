@@ -48,7 +48,7 @@ impl RelayActionFamily {
 ///
 /// These operations mutate the relay-wide principal store and therefore require
 /// a relay-wide grant: the requester's policy must grant the control at
-/// `all:all`. A bundle/namespace-relative `all:home` grant is insufficient
+/// `all`. A bundle/namespace-relative `home` grant is insufficient
 /// because it confers no authority beyond the requester's own namespace.
 pub(in crate::relay) fn authorize_relay_action(
     configuration_root: &Path,
@@ -63,7 +63,7 @@ pub(in crate::relay) fn authorize_relay_action(
     };
     let granted = scope_map
         .get(action)
-        .is_some_and(|scope| scope.allows(PolicyScope::AllAll));
+        .is_some_and(|scope| scope.allows(PolicyScope::All));
     if granted {
         return Ok(());
     }
@@ -71,7 +71,7 @@ pub(in crate::relay) fn authorize_relay_action(
         format!("{}.{action}", family.namespace()).as_str(),
         requester_principal_id,
         "",
-        "relay-wide operator action requires an all:all grant for this control",
+        "relay-wide operator action requires the all scope for this control",
         None,
         None,
         None,
@@ -84,15 +84,15 @@ pub(in crate::relay) fn authorize_relay_action(
 /// The requester's controls are always resolved in the dispatch (home) bundle —
 /// a session is a member only of its home bundle, and a peer bundle never
 /// supplies the requester's policy. Each resolved target's relationship to the
-/// requester is mapped to a uniform scope tier (self / all:home / all:all), and
+/// requester is mapped to a uniform scope tier (self / home / all), and
 /// the maximum required tier across the route is checked against the requester's
 /// *configured* scope for the operation's capability.
 ///
 /// No operation supplies a cross-bundle policy: the relay never decides per
 /// operation whether crossing is allowed. Whether a capability can ever be
-/// configured to the cross-bundle (`all:all`) tier is governed solely by the
+/// configured to the cross-bundle (`all`) tier is governed solely by the
 /// policy schema's per-capability allowed-scope set (`parse_policy_controls`) —
-/// `grant` and `updown`, for instance, are capped at `all:home` there, so they
+/// `grant` and `updown`, for instance, are capped at `home` there, so they
 /// can never satisfy the cross-bundle threshold without a schema change, no code
 /// override needed.
 pub(in crate::relay) fn authorize_route(
@@ -140,8 +140,8 @@ fn scope_for_capability(controls: &PolicyControls, capability: Capability) -> Po
 fn minimum_scope_for_tier(tier: ScopeTier) -> PolicyScope {
     match tier {
         ScopeTier::Own => PolicyScope::SelfOnly,
-        ScopeTier::Home => PolicyScope::AllHome,
-        ScopeTier::All => PolicyScope::AllAll,
+        ScopeTier::Home => PolicyScope::Home,
+        ScopeTier::All => PolicyScope::All,
     }
 }
 
@@ -162,9 +162,7 @@ fn route_target_identifiers(route: &ResolvedRoute) -> Vec<String> {
 
 fn tier_denial_reason(minimum: PolicyScope) -> &'static str {
     match minimum {
-        PolicyScope::AllAll => {
-            "policy scope does not permit cross-bundle access (requires all:all)"
-        }
+        PolicyScope::All => "policy scope does not permit cross-bundle access (requires all)",
         _ => "policy scope does not permit this access",
     }
 }
@@ -182,7 +180,7 @@ pub(in crate::relay) fn authorize_grant(
     )?;
     authorize_scope(
         controls.grant,
-        PolicyScope::AllHome,
+        PolicyScope::Home,
         AuthorizationDecisionContext {
             capability: "grant",
             requester_session,
@@ -215,7 +213,7 @@ pub(in crate::relay) fn authorize_updown(
     )?;
     authorize_scope(
         controls.updown,
-        PolicyScope::AllHome,
+        PolicyScope::Home,
         AuthorizationDecisionContext {
             capability: "updown",
             requester_session,
@@ -239,7 +237,7 @@ pub(in crate::relay) fn authorize_grant_for_list(
     )?;
     authorize_scope(
         controls.grant,
-        PolicyScope::AllHome,
+        PolicyScope::Home,
         AuthorizationDecisionContext {
             capability: "grant",
             requester_session,

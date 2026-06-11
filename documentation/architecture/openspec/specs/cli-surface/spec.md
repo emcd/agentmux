@@ -90,8 +90,8 @@ explicit send targets.
 
 Send authorization SHALL follow requester policy control scope:
 
-- `all:home`
-- `all:all`
+- `home`
+- `all`
 
 #### Scenario: Send to explicit targets
 
@@ -117,7 +117,7 @@ Send authorization SHALL follow requester policy control scope:
 #### Scenario: Deny cross-bundle send under home-only scope
 
 - **WHEN** caller requests cross-bundle send
-- **AND** requester policy `send` scope is `all:home`
+- **AND** requester policy `send` scope is `home`
 - **THEN** CLI surfaces `authorization_forbidden`
 
 ### Requirement: Send Message Input Resolution
@@ -252,9 +252,9 @@ session in a peer bundle.
 
 `agentmux look` SHALL return canonical structured JSON output in MVP.
 `agentmux look` authorization SHALL use capability label `look.inspect`.
-Policy control `look` determines allowed scope (`self`, `all:home`, `all:all`).
+Policy control `look` determines allowed scope (`self`, `home`, `all`).
 Cross-bundle look (a `<session>@<bundle>` target naming a peer bundle) requires
-`all:all` scope; same-bundle non-self look requires `all:home`. The CLI is a
+`all` scope; same-bundle non-self look requires `home`. The CLI is a
 thin adapter and propagates relay authorization and resolution outcomes
 unchanged.
 
@@ -278,7 +278,7 @@ unchanged.
 
 - **WHEN** an operator runs `agentmux look <session>@<peer-bundle>` naming a
   bundle other than the requester's dispatch bundle
-- **AND** the requester is authorized at `look = all:all`
+- **AND** the requester is authorized at `look = all`
 - **THEN** the system returns the peer bundle's snapshot from the relay response
 
 #### Scenario: Surface peer resolution errors from relay

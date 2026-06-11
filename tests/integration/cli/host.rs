@@ -74,10 +74,10 @@ id = "default"
 find = "self"
 # The CLI lists this bundle as the relay-wide `user@GLOBAL` operator, whose home
 # namespace is GLOBAL; reaching into a bundle is cross-namespace and requires
-# all:all.
-list = "all:all"
+# all.
+list = "all"
 look = "self"
-send = "all:home"
+send = "home"
 "#,
     )
     .expect("write policies config");

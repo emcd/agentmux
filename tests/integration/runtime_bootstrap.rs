@@ -338,9 +338,9 @@ id = "default"
 
 [policies.controls]
 find = "self"
-list = "all:home"
+list = "home"
 look = "self"
-send = "all:home"
+send = "home"
 "#,
     )
     .expect("write policies config");
@@ -392,9 +392,9 @@ id = "default"
 
 [policies.controls]
 find = "self"
-list = "all:home"
+list = "home"
 look = "self"
-send = "all:home"
+send = "home"
 "#,
     )
     .expect("write policies config");

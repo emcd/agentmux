@@ -7,7 +7,7 @@
 use super::*;
 
 /// Writes a configuration whose operator preset grants `new.peer`/`change.psk`
-/// at `all:all`, with a `@GLOBAL` operator declared in the TUI configuration so
+/// at `all`, with a `@GLOBAL` operator declared in the TUI configuration so
 /// relay-wide credential administration authorizes.
 fn write_identity_configuration(temporary: &TempDir, bundle_name: &str) -> PathBuf {
     let configuration_root = write_bundle_configuration(temporary, bundle_name);
@@ -22,24 +22,24 @@ id = "default"
 
 [policies.controls]
 find = "self"
-list = "all:home"
+list = "home"
 look = "self"
-send = "all:home"
+send = "home"
 
 [[policies]]
 id = "operator"
 
 [policies.controls]
 find = "self"
-list = "all:home"
-look = "all:home"
-send = "all:home"
+list = "home"
+look = "home"
+send = "home"
 
 [policies.controls.new]
-peer = "all:all"
+peer = "all"
 
 [policies.controls.change]
-psk = "all:all"
+psk = "all"
 "#,
     )
     .expect("write operator policies configuration");

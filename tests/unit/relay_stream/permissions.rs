@@ -343,7 +343,7 @@ fn permission_snapshot_then_replay_carries_option_metadata() {
     let bundle_name = "party_permission_snapshot_options";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_root, "default", bundle_name);
-    write_policies_with_grant(&configuration_root, "all:home");
+    write_policies_with_grant(&configuration_root, "home");
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     seed_permission_queue_with_options(
@@ -409,7 +409,7 @@ fn permission_request_persists_across_authorized_ui_reconnect() {
     let bundle_name = "party_permission_persists";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_root, "default", bundle_name);
-    write_policies_with_grant(&configuration_root, "all:home");
+    write_policies_with_grant(&configuration_root, "home");
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     seed_permission_queue(
@@ -469,7 +469,7 @@ fn permission_resolve_selected_emits_resolved_event_with_option_id() {
     let bundle_name = "party_permission_selected_emit";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_root, "default", bundle_name);
-    write_policies_with_grant(&configuration_root, "all:home");
+    write_policies_with_grant(&configuration_root, "home");
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     seed_permission_queue(
@@ -539,7 +539,7 @@ fn permission_resolve_cancelled_emits_resolved_event_with_reason_code() {
     let bundle_name = "party_permission_cancelled_emit";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_root, "default", bundle_name);
-    write_policies_with_grant(&configuration_root, "all:home");
+    write_policies_with_grant(&configuration_root, "home");
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     seed_permission_queue(
@@ -610,7 +610,7 @@ fn permission_max_pending_out_of_range_is_rejected() {
     let bundle_name = "party_permission_max_pending_invalid";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_root, "default", bundle_name);
-    write_policies_with_grant(&configuration_root, "all:home");
+    write_policies_with_grant(&configuration_root, "home");
     std::fs::write(
         configuration_root.join("relay.toml"),
         r#"
@@ -662,7 +662,7 @@ fn permission_resolve_selected_rejects_unknown_option_id() {
     let bundle_name = "party_permission_unknown_option";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_root, "default", bundle_name);
-    write_policies_with_grant(&configuration_root, "all:home");
+    write_policies_with_grant(&configuration_root, "home");
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     seed_permission_queue(

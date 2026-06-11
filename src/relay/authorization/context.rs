@@ -17,8 +17,8 @@ pub(in crate::relay) struct AuthorizationContext {
 pub(super) enum PolicyScope {
     None,
     SelfOnly,
-    AllHome,
-    AllAll,
+    Home,
+    All,
 }
 
 impl PolicyScope {
@@ -26,8 +26,8 @@ impl PolicyScope {
         match self {
             Self::None => 0,
             Self::SelfOnly => 1,
-            Self::AllHome => 2,
-            Self::AllAll => 3,
+            Self::Home => 2,
+            Self::All => 3,
         }
     }
 
@@ -59,10 +59,10 @@ impl PolicyControls {
     pub(super) fn conservative_default() -> Self {
         Self {
             find: PolicyScope::SelfOnly,
-            list: PolicyScope::AllHome,
-            look: PolicyScope::AllHome,
-            send: PolicyScope::AllHome,
-            raww: PolicyScope::AllHome,
+            list: PolicyScope::Home,
+            look: PolicyScope::Home,
+            send: PolicyScope::Home,
+            raww: PolicyScope::Home,
             grant: PolicyScope::None,
             updown: PolicyScope::None,
             do_controls: HashMap::new(),

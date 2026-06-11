@@ -66,9 +66,9 @@ id = "default"
 
 [policies.controls]
 find = "self"
-list = "all:home"
+list = "home"
 look = "self"
-send = "all:home"
+send = "home"
 "#,
     )
     .expect("write policies configuration");
@@ -142,9 +142,9 @@ id = "default"
 [policies.controls]
 find = "self"
 grant = "{grant}"
-list = "all:home"
+list = "home"
 look = "self"
-send = "all:home"
+send = "home"
 "#
         ),
     )
@@ -153,7 +153,7 @@ send = "all:home"
 
 // Overwrites the policy artifact so the `default` preset's `send` control uses
 // the given scope, leaving the other controls at workable defaults. Cross-bundle
-// send requires `all:all`; `all:home` permits only same-bundle delivery.
+// send requires `all`; `home` permits only same-bundle delivery.
 fn write_policies_with_send(configuration_root: &Path, send: &str) {
     std::fs::write(
         configuration_root.join("policies.toml"),
@@ -167,7 +167,7 @@ id = "default"
 
 [policies.controls]
 find = "self"
-list = "all:home"
+list = "home"
 look = "self"
 send = "{send}"
 "#
@@ -178,7 +178,7 @@ send = "{send}"
 
 // Overwrites the policy artifact so the `default` preset's `raww` control uses
 // the given scope. A relay-wide (`@GLOBAL`) principal reaching a bundle is
-// cross-namespace, so `all:all` is required there; `all:home` permits only
+// cross-namespace, so `all` is required there; `home` permits only
 // same-bundle raww.
 fn write_policies_with_raww(configuration_root: &Path, raww: &str) {
     std::fs::write(
@@ -193,10 +193,10 @@ id = "default"
 
 [policies.controls]
 find = "self"
-list = "all:home"
+list = "home"
 look = "self"
 raww = "{raww}"
-send = "all:home"
+send = "home"
 "#
         ),
     )
@@ -204,7 +204,7 @@ send = "all:home"
 }
 
 // Overwrites the policy artifact so the `default` preset's `list` control uses
-// the given scope. Cross-bundle list requires `all:all`; `all:home` permits only
+// the given scope. Cross-bundle list requires `all`; `home` permits only
 // same-bundle enumeration.
 fn write_policies_with_list(configuration_root: &Path, list: &str) {
     std::fs::write(
@@ -221,7 +221,7 @@ id = "default"
 find = "self"
 list = "{list}"
 look = "self"
-send = "all:home"
+send = "home"
 "#
         ),
     )

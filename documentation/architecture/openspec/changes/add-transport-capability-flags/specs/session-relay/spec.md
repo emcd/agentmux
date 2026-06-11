@@ -116,7 +116,7 @@ single `Rejected` call site is gone.
 #### Scenario: Cross-bundle raww denied by scope
 
 - **WHEN** caller invokes `raww` with a target in a different bundle
-- **AND** requester's `raww` scope is `all:home` or narrower
+- **AND** requester's `raww` scope is `home` or narrower
 - **THEN** relay returns `authorization_forbidden`
 
 ## REMOVED Requirements

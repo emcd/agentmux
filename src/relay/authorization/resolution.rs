@@ -153,7 +153,7 @@ pub(in crate::relay) fn grant_authorized_ui_sessions(
             authorization
                 .controls_by_session
                 .get(session_id.as_str())
-                .is_some_and(|controls| controls.grant.allows(PolicyScope::AllHome))
+                .is_some_and(|controls| controls.grant.allows(PolicyScope::Home))
         })
         .cloned()
         .collect()

@@ -107,9 +107,9 @@ id = "default"
 
 [policies.controls]
 find = "self"
-list = "all:home"
-look = "all:home"
-send = "all:home"
+list = "home"
+look = "home"
+send = "home"
 "#,
     )
     .expect("write policies file");

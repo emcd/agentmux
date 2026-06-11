@@ -6,7 +6,7 @@
 //! dispatch layer this failed with `validation_unknown_sender`, because the
 //! requester was looked up in the enumerated bundle's members rather than its own
 //! home bundle. They assert the uniform cross-bundle threshold (cross-bundle list
-//! requires `all:all`, same-bundle list needs only `all:home`) and that the
+//! requires `all`, same-bundle list needs only `home`) and that the
 //! enumerated bundle's sessions are returned.
 
 use super::*;
@@ -51,7 +51,7 @@ fn cross_bundle_list(
     response
 }
 
-/// A session permitted cross-bundle (`list = all:all`) enumerates a peer bundle's
+/// A session permitted cross-bundle (`list = all`) enumerates a peer bundle's
 /// sessions rather than being rejected as an unknown sender.
 #[test]
 fn cross_bundle_list_permitted_under_all_scope_enumerates_peer() {
@@ -60,7 +60,7 @@ fn cross_bundle_list_permitted_under_all_scope_enumerates_peer() {
     let bundle_b = "list_peer_b";
     let configuration_root = write_bundle_configuration(&temporary, bundle_a);
     write_ui_bundle(&configuration_root, bundle_b);
-    write_policies_with_list(&configuration_root, "all:all");
+    write_policies_with_list(&configuration_root, "all");
     let state_root = temporary.path().join("state");
     let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
     let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b).expect("bundle-b paths");
@@ -87,7 +87,7 @@ fn cross_bundle_list_permitted_under_all_scope_enumerates_peer() {
     );
 }
 
-/// `all:home` is sufficient for same-bundle listing but deliberately insufficient
+/// `home` is sufficient for same-bundle listing but deliberately insufficient
 /// to enumerate a peer bundle.
 #[test]
 fn cross_bundle_list_denied_under_home_scope() {
@@ -96,7 +96,7 @@ fn cross_bundle_list_denied_under_home_scope() {
     let bundle_b = "list_home_b";
     let configuration_root = write_bundle_configuration(&temporary, bundle_a);
     write_ui_bundle(&configuration_root, bundle_b);
-    write_policies_with_list(&configuration_root, "all:home");
+    write_policies_with_list(&configuration_root, "home");
     let state_root = temporary.path().join("state");
     let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
     let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b).expect("bundle-b paths");
@@ -122,13 +122,13 @@ fn cross_bundle_list_denied_under_home_scope() {
 }
 
 /// Same-bundle listing is unaffected by the cross-bundle threshold: a session
-/// lists its own bundle by name under `all:home`.
+/// lists its own bundle by name under `home`.
 #[test]
 fn same_bundle_list_permitted_under_home_scope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "list_same_home";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_policies_with_list(&configuration_root, "all:home");
+    write_policies_with_list(&configuration_root, "home");
     let state_root = temporary.path().join("state");
     let paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let catalog = multi_bundle_catalog(&[paths]);
@@ -185,14 +185,14 @@ fn relay_wide_list(
 }
 
 /// A relay-wide operator's home namespace is `GLOBAL`. Listing a bundle is
-/// therefore cross-namespace and permitted only under `all:all`.
+/// therefore cross-namespace and permitted only under `all`.
 #[test]
 fn relay_wide_list_of_bundle_permitted_under_all_scope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "list_relay_wide_all";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_root, "default", bundle_name);
-    write_policies_with_list(&configuration_root, "all:all");
+    write_policies_with_list(&configuration_root, "all");
     let state_root = temporary.path().join("state");
     let paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let catalog = multi_bundle_catalog(&[paths]);
@@ -210,15 +210,15 @@ fn relay_wide_list_of_bundle_permitted_under_all_scope() {
     assert_eq!(response["response"]["bundle"]["id"], bundle_name);
 }
 
-/// The same relay-wide operator under only `all:home` is denied a bundle list:
-/// `all:home` confers authority only within its own (`GLOBAL`) namespace.
+/// The same relay-wide operator under only `home` is denied a bundle list:
+/// `home` confers authority only within its own (`GLOBAL`) namespace.
 #[test]
 fn relay_wide_list_of_bundle_denied_under_home_scope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "list_relay_wide_home";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_root, "default", bundle_name);
-    write_policies_with_list(&configuration_root, "all:home");
+    write_policies_with_list(&configuration_root, "home");
     let state_root = temporary.path().join("state");
     let paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let catalog = multi_bundle_catalog(&[paths]);
@@ -249,7 +249,7 @@ fn cross_bundle_list_rejects_unknown_namespace() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_a = "list_nobundle_a";
     let configuration_root = write_bundle_configuration(&temporary, bundle_a);
-    write_policies_with_list(&configuration_root, "all:all");
+    write_policies_with_list(&configuration_root, "all");
     let state_root = temporary.path().join("state");
     let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
     let catalog = multi_bundle_catalog(&[paths_a]);

@@ -90,20 +90,20 @@ id = "default"
 
 [policies.controls]
 find = "self"
-list = "all:home"
+list = "home"
 look = "self"
-send = "all:home"
+send = "home"
 
 # A privileged cross-namespace operator: a relay-wide principal's home is the
-# GLOBAL namespace, so reaching into a bundle requires all:all.
+# GLOBAL namespace, so reaching into a bundle requires all.
 [[policies]]
 id = "operator"
 
 [policies.controls]
 find = "self"
-list = "all:all"
-look = "all:all"
-send = "all:all"
+list = "all"
+look = "all"
+send = "all"
 "#,
     )
     .expect("write policies file");
@@ -155,9 +155,9 @@ id = "default"
 
 [policies.controls]
 find = "self"
-list = "all:home"
+list = "home"
 look = "self"
-send = "all:home"
+send = "home"
 "#,
     )
     .expect("write policies file");
@@ -203,9 +203,9 @@ id = "default"
 
 [policies.controls]
 find = "self"
-list = "all:home"
+list = "home"
 look = "self"
-send = "all:home"
+send = "home"
 
 # Privileged cross-namespace operator (see write_bundle).
 [[policies]]
@@ -213,9 +213,9 @@ id = "operator"
 
 [policies.controls]
 find = "self"
-list = "all:all"
-look = "all:all"
-send = "all:all"
+list = "all"
+look = "all"
+send = "all"
 "#,
     )
     .expect("write policies file");
@@ -316,7 +316,7 @@ fn list_allows_ui_sender_from_global_tui_sessions() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     // A relay-wide operator's home is GLOBAL, so listing a bundle is
-    // cross-namespace and requires all:all (the privileged operator preset).
+    // cross-namespace and requires all (the privileged operator preset).
     write_tui_configuration(&config_root, "operator");
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_request(
@@ -366,7 +366,7 @@ fn list_rejects_ui_sender_with_unknown_policy_reference() {
 fn list_reports_down_when_no_acp_worker_registered() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_acp_bundle(&temporary, "party");
-    // Cross-namespace list from a GLOBAL operator requires all:all.
+    // Cross-namespace list from a GLOBAL operator requires all.
     write_tui_configuration(&config_root, "operator");
     let tmux_socket = temporary.path().join("tmux.sock");
 

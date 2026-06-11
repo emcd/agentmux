@@ -99,8 +99,8 @@ pub(super) fn handle_bundle_down(
 /// `GLOBAL`, not whichever bundle it is listing. `enumerate_bundle` is the bundle
 /// whose sessions are listed: the same bundle for a same-namespace list, or a
 /// peer bundle for a cross-namespace list. A cross-namespace enumeration requires
-/// the requester's `list` scope to reach the `all:all` tier; a same-namespace
-/// enumeration needs only `all:home`.
+/// the requester's `list` scope to reach the `all` tier; a same-namespace
+/// enumeration needs only `home`.
 pub(in crate::relay) fn handle_list_routed(
     dispatch_bundle: &BundleConfiguration,
     dispatch_authorization: &AuthorizationContext,

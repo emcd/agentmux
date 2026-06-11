@@ -115,8 +115,8 @@ This module implements the MCP stdio server for `agentmux`.
   returns the new value; Slice 1 is a store update only (no revocation dispatch).
 - Both are relay-wide operations: they ride the MCP server's relay stream, and
   the relay authorizes the connection's principal against its policy preset
-  relay-wide, requiring an `all:all` `new.peer` / `change.psk` grant. A
-  bundle-relative `all:home` grant is insufficient. The MCP server's own
+  relay-wide, requiring an `all` `new.peer` / `change.psk` grant. A
+  bundle-relative `home` grant is insufficient. The MCP server's own
   identity must therefore carry an operator policy for these tools to succeed.
 
 ## Key Types

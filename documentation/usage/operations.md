@@ -71,13 +71,13 @@ systemctl --user restart agentmux-relay.service
 
 Authorization for relay operations (`list`, `look`, `send`, `raww`, `grant`,
 `updown`) is configured in `<config-root>/policies.toml`. Each policy preset
-sets a scope (`none`, `self`, `all:home`, `all:all`) per control; the
+sets a scope (`none`, `self`, `home`, `all`) per control; the
 configured scope must meet the operation's minimum.
 
 The `updown` control gates the `agentmux up` and `agentmux down` commands
 (and the corresponding `RelayRequest::Up` and `RelayRequest::Down` requests
 to the relay). It is **deny by default** — a session whose policy does not
-grant `updown = "all:home"` cannot bring bundles up or down. Configured
+grant `updown = "home"` cannot bring bundles up or down. Configured
 operators (the starter `operator` policy in the scaffolded
 `policies.toml`) carry this grant; the conservative `default` policy does
 not.
@@ -86,7 +86,7 @@ A bundle lifecycle request without an authorized principal receives a
 typed `authorization_forbidden` error from the relay; the CLI surfaces it
 as a `relay returned error: authorization_forbidden` message. Operators who
 hit this should verify that `users.toml` maps their `session@GLOBAL`
-identity to a policy with `updown = "all:home"`.
+identity to a policy with `updown = "home"`.
 
 ## Runtime Artifacts
 
