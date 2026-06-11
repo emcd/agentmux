@@ -21,9 +21,12 @@ use super::super::routing::{
 use super::super::tmux::{capture_pane_tail_lines, resolve_active_pane_target};
 use super::super::{
     RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION, bare_session_id,
-    canonical_session_id, relay_error, session_type_not_implemented,
+    canonical_session_id, relay_error, unsupported_operation,
 };
-use super::routed::{load_home_context, resolve_target_bundle, run_target_operation};
+use super::routed::{
+    load_home_context, relay_wide_operation_unimplemented, resolve_relay_wide_target_session_type,
+    resolve_target_bundle, run_target_operation,
+};
 use super::sender::resolve_sender_in_namespace;
 
 const LOOK_LINES_DEFAULT: usize = 120;
@@ -135,10 +138,11 @@ pub(in crate::relay) fn handle_look_routed(
     )
 }
 
-/// Resolves the look target's bundle and validates that the target session is a
-/// configured member. Loads peer configuration for a cross-namespace target;
-/// reuses the home bundle for a same-namespace one. Runs before authorization, so
-/// an unknown target sorts before `authorization_forbidden`.
+/// Resolves the look target's bundle, validates that the target session is a
+/// configured member, and applies the `can_be_looked` capability gate. Loads
+/// peer configuration for a cross-namespace target; reuses the home bundle for
+/// a same-namespace one. Runs before authorization, so an unknown or
+/// transport-incapable target sorts before `authorization_forbidden`.
 fn prepare_look(
     route: &ResolvedRoute,
     home_namespace: &str,
@@ -153,6 +157,24 @@ fn prepare_look(
         .session_id
         .as_deref()
         .expect("look target carries a session id");
+    if target_route.relay_wide {
+        // A relay-wide target has no bundle membership; its capability derives
+        // from the declared session type in the global users configuration.
+        let session_type =
+            resolve_relay_wide_target_session_type(configuration_root, target_session_id)?;
+        if !session_type.can_be_looked() {
+            return Err(unsupported_operation(
+                target_session_id,
+                session_type,
+                "can_be_looked",
+            ));
+        }
+        return Err(relay_wide_operation_unimplemented(
+            "look",
+            target_session_id,
+            session_type,
+        ));
+    }
     let (bundle, runtime_directory) = resolve_target_bundle(
         home_namespace,
         home_bundle,
@@ -161,17 +183,25 @@ fn prepare_look(
         configuration_root,
         bundle_catalog,
     )?;
-    if !bundle
+    let Some(member) = bundle
         .members
         .iter()
-        .any(|member| member.id == target_session_id)
-    {
+        .find(|member| member.id == target_session_id)
+    else {
         return Err(relay_error(
             "validation_unknown_target",
             "target_session is not in bundle configuration",
             Some(json!({
                 "target_session": canonical_session_id(target_session_id, target_bundle_name),
             })),
+        ));
+    };
+    let session_type = member.target.session_type();
+    if !session_type.can_be_looked() {
+        return Err(unsupported_operation(
+            canonical_session_id(target_session_id, target_bundle_name).as_str(),
+            session_type,
+            "can_be_looked",
         ));
     }
     Ok(LookPrepared {
@@ -244,10 +274,7 @@ fn execute_look(
         }
         crate::configuration::TargetConfiguration::Ui
         | crate::configuration::TargetConfiguration::Pubsub => {
-            return Err(session_type_not_implemented(
-                target.id.as_str(),
-                target.target.session_type(),
-            ));
+            unreachable!("capability gate in prepare_look rejects can_be_looked = false targets")
         }
         crate::configuration::TargetConfiguration::Acp(_) => {
             let prime_timed_out = await_acp_worker_prime_for_look(

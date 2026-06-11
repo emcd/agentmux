@@ -188,41 +188,22 @@ pub(super) fn required_tier(route: &ResolvedRoute) -> ScopeTier {
         .unwrap_or(ScopeTier::Own)
 }
 
-/// Whether an operation can route to a relay-wide (`@GLOBAL`) target.
-///
-/// This is the only axis on which per-target resolution differs across
-/// operations: `Send` delivers to a relay-wide UI session via the registry,
-/// while `Look` cannot inspect one (a UI session has no pane) and so rejects it
-/// as an unsupported namespace.
-#[derive(Clone, Copy)]
-enum RelayWideTargets {
-    Allowed,
-    Rejected,
-}
-
 /// Classifies one fully-qualified target by its `@<namespace>` suffix alone — no
 /// bundle configuration or catalog access. An `@<bundle>` target is a session in
-/// that bundle; an `@GLOBAL` target is relay-wide when `relay_wide` is `Allowed`
-/// (keyed by its full principal id, riding `dispatch_namespace` for tier
-/// classification) and otherwise rejected; a reserved namespace
-/// (`@EXTERNAL`/`@RELAY`) is rejected with `validation_unsupported_namespace`; a
-/// bare (unqualified) target is rejected with `validation_unqualified_target`.
-/// Target *existence* is not checked here — that is the handler body's delivery
-/// concern, validated after this stage.
-fn resolve_target(
-    dispatch_namespace: &str,
-    target: &str,
-    relay_wide: RelayWideTargets,
-) -> Result<ResolvedTarget, RelayError> {
+/// that bundle; an `@GLOBAL` target is relay-wide (keyed by its full principal
+/// id, riding `dispatch_namespace` for tier classification); a reserved
+/// namespace (`@EXTERNAL`/`@RELAY`) is rejected with
+/// `validation_unsupported_namespace`; a bare (unqualified) target is rejected
+/// with `validation_unqualified_target`. Target *existence* is not checked here
+/// — that is the handler body's delivery concern, validated after this stage.
+fn resolve_target(dispatch_namespace: &str, target: &str) -> Result<ResolvedTarget, RelayError> {
     let requested = target.trim();
     match classify_principal_id(requested) {
-        Some(PrincipalType::User) if matches!(relay_wide, RelayWideTargets::Allowed) => {
-            Ok(ResolvedTarget {
-                bundle_name: dispatch_namespace.to_string(),
-                session_id: Some(requested.to_string()),
-                relay_wide: true,
-            })
-        }
+        Some(PrincipalType::User) => Ok(ResolvedTarget {
+            bundle_name: dispatch_namespace.to_string(),
+            session_id: Some(requested.to_string()),
+            relay_wide: true,
+        }),
         Some(PrincipalType::Session) => {
             let (session_id, bundle_name) = split_principal_id(requested)
                 .expect("session classification implies a parseable suffix");
@@ -232,9 +213,7 @@ fn resolve_target(
                 relay_wide: false,
             })
         }
-        // A relay-wide `@GLOBAL` target falls here only when `relay_wide` is
-        // `Rejected`; reserved `@EXTERNAL`/`@RELAY` always do.
-        Some(PrincipalType::User | PrincipalType::Application | PrincipalType::Relay) => {
+        Some(PrincipalType::Application | PrincipalType::Relay) => {
             let namespace = split_principal_id(requested)
                 .map(|(_, namespace)| namespace)
                 .unwrap_or_default();
@@ -254,7 +233,7 @@ fn resolve_target(
 
 /// Resolves a Send's fully-qualified targets into a config-free [`ResolvedRoute`]
 /// (the `MultiTarget` resolution stage): a fan-out of [`resolve_target`] over
-/// every target, with relay-wide (`@GLOBAL`) delivery permitted.
+/// every target.
 ///
 /// `dispatch_namespace` is the requester's home namespace (its bundle, or
 /// `GLOBAL`); see [`requester_home_namespace`].
@@ -265,7 +244,7 @@ pub(super) fn resolve_send_route(
 ) -> Result<ResolvedRoute, RelayError> {
     let resolved = targets
         .iter()
-        .map(|target| resolve_target(dispatch_namespace, target, RelayWideTargets::Allowed))
+        .map(|target| resolve_target(dispatch_namespace, target))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(ResolvedRoute {
         dispatch_namespace: dispatch_namespace.to_string(),
@@ -275,15 +254,15 @@ pub(super) fn resolve_send_route(
 }
 
 /// The shared `SingleTarget` resolution stage for the complementary read/write
-/// operations Look (inspect) and Raww (write): one [`resolve_target`] call with
-/// relay-wide (`@GLOBAL`) targets rejected, since a UI session has neither a pane
-/// to inspect nor an input channel to write.
+/// operations Look (inspect) and Raww (write): one [`resolve_target`] call.
 ///
-/// Look and Raww resolve identically at this layer, so they share this body but
-/// keep distinct entry points ([`resolve_look_route`] / [`resolve_raww_route`]).
-/// The split documents intent and gives the two operations a seam to diverge once
-/// session-attribute routing lands (per-session `can_be_looked` / `can_be_written`),
-/// at which point the blanket relay-wide rejection becomes an attribute check.
+/// Relay-wide (`@GLOBAL`) targets resolve like any other; whether the resolved
+/// target's transport supports the operation is the handlers' capability check
+/// (`can_be_looked` / `can_be_written`, derived from the target's
+/// `SessionType`), which replaced the blanket relay-wide rejection this stage
+/// used to apply. Look and Raww resolve identically at this layer, so they
+/// share this body but keep distinct entry points ([`resolve_look_route`] /
+/// [`resolve_raww_route`]) documenting intent.
 ///
 /// `dispatch_namespace` is the requester's home namespace (its bundle, or
 /// `GLOBAL`); see [`requester_home_namespace`].
@@ -292,11 +271,7 @@ fn resolve_single_target_route(
     requester_session: &str,
     target_session: &str,
 ) -> Result<ResolvedRoute, RelayError> {
-    let target = resolve_target(
-        dispatch_namespace,
-        target_session,
-        RelayWideTargets::Rejected,
-    )?;
+    let target = resolve_target(dispatch_namespace, target_session)?;
     Ok(ResolvedRoute {
         dispatch_namespace: dispatch_namespace.to_string(),
         requester_session: requester_session.to_string(),
@@ -315,9 +290,7 @@ pub(super) fn resolve_look_route(
 }
 
 /// Resolves a Raww's fully-qualified target into a config-free [`ResolvedRoute`];
-/// see [`resolve_single_target_route`]. A relay-wide (`@GLOBAL`) target is
-/// rejected with `validation_unsupported_namespace`, uniform with Look — a UI
-/// session does not accept raw input.
+/// see [`resolve_single_target_route`].
 pub(super) fn resolve_raww_route(
     dispatch_namespace: &str,
     requester_session: &str,

@@ -8,11 +8,11 @@
 //! (`validation_unknown_bundle` / `validation_unknown_target`) that replaced the
 //! retired `validation_cross_bundle_unsupported` stub.
 //!
-//! Peer targets are coder-less UI sessions: like the cross-bundle `Send`
-//! fan-out tests, this keeps the peer bundle observable without a live tmux
-//! pane. A permitted cross-bundle look therefore resolves all the way to the
-//! transport match and surfaces `runtime_session_type_not_implemented`, which
-//! proves authorization and peer-bundle/member resolution succeeded.
+//! Peer choice tracks the pre-authorization capability gate: a coder-less UI
+//! peer fails `can_be_looked` in the prepare stage, so it surfaces
+//! `validation_unsupported_operation` — proving peer-bundle/member resolution
+//! succeeded without a live tmux pane — while a tmux peer passes the gate and
+//! keeps the authorization outcome observable for the denial test.
 
 use super::*;
 
@@ -84,9 +84,10 @@ fn cross_bundle_look(
     response
 }
 
-/// A peer-bundle target that the requester is permitted to inspect (`all:all`)
-/// resolves through to the transport match; the UI peer surfaces the
-/// not-implemented terminal rather than any authorization/validation error.
+/// A cross-bundle target resolves through routing and the peer-bundle member
+/// lookup; the UI peer then fails the `can_be_looked` capability gate. The
+/// capability-specific code (not unknown-bundle/unknown-target) proves
+/// peer-bundle and member resolution both succeeded.
 #[test]
 fn cross_bundle_look_permitted_under_all_scope_resolves_peer() {
     let temporary = TempDir::new().expect("temporary directory");
@@ -110,20 +111,25 @@ fn cross_bundle_look_permitted_under_all_scope_resolves_peer() {
 
     assert_eq!(response["response"]["kind"], "error");
     assert_eq!(
-        response["response"]["error"]["code"], "runtime_session_type_not_implemented",
-        "permitted cross-bundle look resolves the peer member and reaches transport dispatch"
+        response["response"]["error"]["code"], "validation_unsupported_operation",
+        "cross-bundle look resolves the peer member and reaches the capability gate"
+    );
+    assert_eq!(
+        response["response"]["error"]["details"]["can_be_looked"],
+        false
     );
 }
 
 /// `all:home` is sufficient for same-bundle inspection but deliberately
-/// insufficient to cross the bundle boundary.
+/// insufficient to cross the bundle boundary. The peer is a tmux member so the
+/// pre-authorization capability gate passes and the policy denial surfaces.
 #[test]
 fn cross_bundle_look_denied_under_home_scope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_a = "look_home_a";
     let bundle_b = "look_home_b";
     let configuration_root = write_bundle_configuration(&temporary, bundle_a);
-    write_ui_bundle(&configuration_root, bundle_b);
+    write_tmux_bundle(&configuration_root, bundle_b);
     write_policies_with_look(&configuration_root, "all:home");
     let state_root = temporary.path().join("state");
     let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");

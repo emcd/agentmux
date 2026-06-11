@@ -11,14 +11,18 @@ use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
-use crate::configuration::{BundleConfiguration, load_bundle_configuration};
+use crate::configuration::{
+    BundleConfiguration, SessionType, load_bundle_configuration, load_tui_configuration,
+};
 
 use super::super::authorization::{
     AuthorizationContext, authorize_route, load_authorization_context,
 };
 use super::super::connection::BundleCatalog;
 use super::super::routing::{OperationProfile, ResolvedRoute};
-use super::super::{GLOBAL_NAMESPACE, RelayError, RelayResponse, map_config, relay_error};
+use super::super::{
+    GLOBAL_NAMESPACE, RelayError, RelayResponse, map_config, map_tui_config, relay_error,
+};
 
 /// The dispatch spine for target operations.
 ///
@@ -59,6 +63,55 @@ pub(super) fn load_home_context(
     };
     let authorization = load_authorization_context(configuration_root, home_bundle.as_ref())?;
     Ok((home_bundle, authorization))
+}
+
+/// Resolves the declared session type of a relay-wide (`@GLOBAL`) target from
+/// the global users configuration, for the look/raww capability check.
+///
+/// The capability source is configuration, not the live registry: a configured
+/// target is checkable whether or not the session is connected. An
+/// unconfigured principal is rejected with `validation_unknown_target`,
+/// uniform with how a bundle target missing from bundle membership sorts
+/// before authorization.
+pub(super) fn resolve_relay_wide_target_session_type(
+    configuration_root: &Path,
+    target_principal_id: &str,
+) -> Result<SessionType, RelayError> {
+    let users_configuration = load_tui_configuration(configuration_root).map_err(map_tui_config)?;
+    let Some(user_session) = users_configuration
+        .as_ref()
+        .and_then(|configuration| configuration.session_by_id(target_principal_id))
+    else {
+        return Err(relay_error(
+            "validation_unknown_target",
+            "target_session is not a configured relay-wide principal",
+            Some(json!({ "target_session": target_principal_id })),
+        ));
+    };
+    Ok(user_session.session_type)
+}
+
+/// Builds the error for a relay-wide target that passed the capability gate
+/// but has no relay-wide operation path in the handler body.
+///
+/// Forward note from `add-transport-capability-flags`: unreachable via current
+/// configuration (every `users.toml` session type is `Ui`, which fails the
+/// gate first), but a capable relay-wide transport appearing there must fail
+/// structurally rather than panic.
+pub(super) fn relay_wide_operation_unimplemented(
+    operation: &str,
+    target_principal_id: &str,
+    session_type: SessionType,
+) -> RelayError {
+    relay_error(
+        "runtime_relay_wide_operation_not_implemented",
+        "operation is not implemented for relay-wide targets",
+        Some(json!({
+            "operation": operation,
+            "target_session": target_principal_id,
+            "session_type": session_type,
+        })),
+    )
 }
 
 /// Loads the bundle hosting a single resolved target, with its runtime directory.

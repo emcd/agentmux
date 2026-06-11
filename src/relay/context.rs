@@ -53,7 +53,12 @@ pub(super) struct AsyncDeliveryTask {
     pub(super) authenticated_identity: Option<String>,
     pub(super) all_target_sessions: Vec<String>,
     pub(super) target_session: String,
-    pub(super) target_is_ui: bool,
+    /// The target is a relay-wide (`@GLOBAL`) principal with no bundle-member
+    /// transport configuration; delivery resolves it via the stream registry.
+    /// Mirrors `RouteTarget.relay_wide` in `routing.rs`, which feeds it. Not a
+    /// delivery-mechanism flag: stream-event delivery is decided by
+    /// `should_route_to_ui`, a strict superset of this.
+    pub(super) relay_wide_target: bool,
     pub(super) message: String,
     pub(super) message_id: String,
     pub(super) quiescence: QuiescenceOptions,

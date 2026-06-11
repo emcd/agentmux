@@ -273,13 +273,13 @@ fn prepare_send(
     )?;
 
     // Timeout-vs-transport validation spans every resolved target, regardless of
-    // which bundle hosts it. Relay-wide (`is_ui`) targets carry no tmux/ACP
+    // which bundle hosts it. Relay-wide targets carry no tmux/ACP
     // transport and are skipped.
     let mut has_tmux_target = false;
     let mut has_acp_target = false;
     for group in &groups {
         for target in &group.targets {
-            if target.is_ui {
+            if target.relay_wide {
                 continue;
             }
             match group
@@ -361,7 +361,7 @@ fn execute_send(
                 authenticated_identity: authenticated_identity.clone(),
                 all_target_sessions: group_target_sessions.clone(),
                 target_session: target.session_id.clone(),
-                target_is_ui: target.is_ui,
+                relay_wide_target: target.relay_wide,
                 message: message.to_string(),
                 message_id: message_id.clone(),
                 quiescence,
@@ -438,12 +438,12 @@ struct DeliveryGroup {
     targets: Vec<ResolvedTarget>,
 }
 
-/// One validated target within a delivery group. `is_ui` marks relay-wide
+/// One validated target within a delivery group. `relay_wide` marks relay-wide
 /// (`@GLOBAL`) targets, whose registry key is re-derived from the suffix rather
 /// than from the group's bundle members.
 struct ResolvedTarget {
     session_id: String,
-    is_ui: bool,
+    relay_wide: bool,
 }
 
 /// Reason a `@<bundle>` target could not be resolved to a delivery group.
@@ -488,7 +488,7 @@ fn assemble_delivery_groups(
                     group_key.as_str(),
                     ResolvedTarget {
                         session_id: session_id.to_string(),
-                        is_ui: true,
+                        relay_wide: true,
                     },
                 );
             } else {
@@ -518,7 +518,7 @@ fn assemble_delivery_groups(
                         bundle_name,
                         ResolvedTarget {
                             session_id: session_id.to_string(),
-                            is_ui: false,
+                            relay_wide: false,
                         },
                     );
                 } else {

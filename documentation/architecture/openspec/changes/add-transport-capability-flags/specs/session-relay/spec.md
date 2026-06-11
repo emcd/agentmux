@@ -90,12 +90,11 @@ config-free resolution stage; their reserved namespace target rejection is
 uniform.
 
 After this change, the routing stage for look and raww SHALL resolve `@GLOBAL`
-targets as relay-wide rather than rejecting them at the routing stage.
-Concretely, `resolve_single_target_route` SHALL be invoked with
-`RelayWideTargets::Allowed` for look and raww paths; the handler then fetches
-the resolved relay-wide session entry and applies the capability check. The
-`RelayWideTargets::Rejected` variant has no remaining active callers after this
-change; its removal is deferred to `decouple-transport-layer`.
+targets as relay-wide rather than rejecting them at the routing stage; the
+handler then derives the resolved target's session type and applies the
+capability check. The `RelayWideTargets` enum and `resolve_target`'s
+relay-wide-targets parameter are removed in this change — dead code once the
+single `Rejected` call site is gone.
 
 #### Scenario: Reject unqualified raww target
 
@@ -129,5 +128,6 @@ single-target rejection at the routing stage — the `RelayWideTargets::Rejected
 short-circuit that currently emits `validation_unsupported_namespace` in
 `routing.rs` — is retired; `validation_unsupported_operation` from the capability
 check in the handler body is the canonical rejection for transport-unsupported
-targets. The `RelayWideTargets::Rejected` variant has no remaining active callers
-after this change; its removal is deferred to `decouple-transport-layer`.
+targets. The `RelayWideTargets` enum and `resolve_target`'s relay-wide-targets
+parameter are removed in this change — dead code once the single `Rejected`
+call site is gone.

@@ -6,6 +6,15 @@
       `accept_capacity`, `inbound`
 - [ ] 1.3 Define `TransportImpl { Acp(AcpTransport), Tmux(TmuxTransport) }`
       enum with match delegation for each method
+
+      Note (from `add-transport-capability-flags`, landed): transport
+      capability flags (`can_be_looked`, `can_be_written`,
+      `can_stream_output`) already exist as pure derivation methods on
+      `SessionType` (`src/configuration/types.rs`), consumed by the look/raww
+      capability gates. Incorporate them as first-class methods on each
+      `TransportImpl` variant rather than re-deriving from `SessionType`; the
+      `Pty` variant activates the forward-declared Pty capability row
+      (true/true/true).
 - [ ] 1.4 Define supporting types: `StartupContext`, `DeliveryEnvelope`,
       `DeliveryContext`, `DeliveryResult`, `SingleDeliveryOutcome`,
       `TransportEvent`, `TransportStatus`, `TransportReadiness`,
