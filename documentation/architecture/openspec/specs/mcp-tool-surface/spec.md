@@ -119,7 +119,6 @@ Each `principals[]` entry SHALL include:
 
 Each `recent_startup_failures[]` entry SHALL include:
 
-- `bundle_name`
 - `session_id`
 - `transport` (`tmux`|`acp`)
 - `code`

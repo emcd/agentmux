@@ -818,7 +818,7 @@ fn host_selected_bundle(
             emit_inscription(
                 "relay.session_start_failed",
                 &json!({
-                    "bundle_name": persisted.bundle_name,
+                    "bundle_name": bundle_name,
                     "session_id": persisted.session_id,
                     "transport": persisted.transport,
                     "code": persisted.code,

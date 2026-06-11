@@ -173,7 +173,6 @@ fn startup_loaded_bundle(
                     ready_session_count += 1;
                 }
                 Err((code, reason, details)) => failed_startups.push(StartupFailureRecord {
-                    bundle_name: bundle.bundle_name.clone(),
                     session_id: member.id.clone(),
                     transport: ListedSessionTransport::Tmux,
                     code,
@@ -194,7 +193,6 @@ fn startup_loaded_bundle(
                         ready_session_count += 1;
                     }
                     Err((code, reason, details)) => failed_startups.push(StartupFailureRecord {
-                        bundle_name: bundle.bundle_name.clone(),
                         session_id: member.id.clone(),
                         transport: ListedSessionTransport::Acp,
                         code,
@@ -209,7 +207,6 @@ fn startup_loaded_bundle(
             // structured startup failure and exclude them from active routing.
             TargetConfiguration::Ui | TargetConfiguration::Pubsub => {
                 failed_startups.push(StartupFailureRecord {
-                    bundle_name: bundle.bundle_name.clone(),
                     session_id: member.id.clone(),
                     transport: member.target.session_type().into(),
                     code: "runtime_session_type_not_implemented".to_string(),
