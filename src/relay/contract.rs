@@ -252,14 +252,9 @@ pub enum RelayRequest {
         #[serde(default)]
         option_id: Option<String>,
         #[serde(default)]
-        bundle_name: Option<String>,
-        #[serde(default)]
         ui_session_id: Option<String>,
     },
-    PermissionList {
-        #[serde(default)]
-        bundle_name: Option<String>,
-    },
+    PermissionList,
     NewPeer {
         principal_id: String,
         #[serde(default)]
@@ -272,8 +267,6 @@ pub enum RelayRequest {
     },
     IdentityIntrospect {
         target_session: String,
-        #[serde(default)]
-        bundle_name: Option<String>,
     },
 }
 

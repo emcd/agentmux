@@ -132,9 +132,9 @@ closes the picker as a no-op. Selecting a different bundle:
   unhosted/unreachable, the refresh fails fast and surfaces a relay error in
   the status pane (the bundle context stays switched).
 
-Cross-bundle targeting (mixing sessions from different bundles in one `To`
-field) is not supported; the relay rejects cross-bundle requests with
-`validation_cross_bundle_unsupported`.
+Cross-bundle targeting is governed by policy scope: reaching sessions in
+another bundle requires the `all` scope for the operation, and the relay
+denies insufficient scope with `authorization_forbidden`.
 
 ## Status and Outcome Vocabulary
 
