@@ -650,8 +650,8 @@ requests for the associated bundle.
 
 Request argument schema:
 
-- `bundle_name` (optional; when present MUST equal the associated bundle, else
-  reject with `validation_cross_bundle_unsupported`)
+- No `bundle_name` field is accepted. Bundle scope is derived from the
+  associated connection context.
 
 No additional positional arguments are accepted; unknown fields SHALL be
 rejected with `validation_invalid_params`.
@@ -660,9 +660,6 @@ Successful response SHALL include:
 
 - `schema_version`
 - `pending_requests[]` ordered by enqueue `sequence` ascending
-
-`bundle_name` is retired from grant list responses; bundle context is implicit
-from the associated bundle connection.
 
 Each entry in `pending_requests[]` SHALL include:
 
@@ -694,8 +691,9 @@ Request argument schema:
 - `outcome` (required, value `selected` or `cancelled`)
 - `option_id` (required when `outcome="selected"`, forbidden when
   `outcome="cancelled"`)
-- `bundle_name` (optional; when present MUST equal the associated bundle, else
-  reject with `validation_cross_bundle_unsupported`)
+
+No `bundle_name` field is accepted. Bundle scope is derived from the
+associated connection context.
 
 The following MCP `grant resolve` payload fields SHALL be rejected with
 `validation_invalid_params`:
@@ -772,7 +770,6 @@ MCP `grant` SHALL preserve canonical relay codes and payload semantics
 for validation, authorization, and runtime failures, including:
 
 - `validation_invalid_params`
-- `validation_cross_bundle_unsupported`
 - `authorization_forbidden`
 - `runtime_permission_request_already_resolved`
 - `runtime_permission_queue_full`

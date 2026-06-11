@@ -151,11 +151,17 @@ SHALL be enforced at load time, not at connection time.
 
 ### Requirement: Identity Introspection Surface
 
-The relay SHALL expose `RelayRequest::IdentityIntrospect` as a new request
+The relay SHALL expose `RelayRequest::IdentityIntrospect` as a request
 variant. Only connections that have been granted trusted-host privilege
 (see: Trusted Host Configuration) SHALL be permitted to issue this request.
 A non-trusted connection that issues `IdentityIntrospect` SHALL receive a
 typed authorization denial.
+
+`target_session` SHALL be supplied as a qualified principal id
+(`<id>@<namespace>`). A bare (unqualified) `target_session` — one without a
+`@<namespace>` suffix — SHALL be rejected with `validation_invalid_params`
+citing `field: "target_session"`. No `bundle_name` qualifier field is
+accepted; callers MUST supply a qualified id before issuing the request.
 
 An introspection result SHALL include:
 - `principal_id`: the stable identity assigned at credential verification.
@@ -176,7 +182,7 @@ introspection violates this requirement.
 #### Scenario: Trusted host introspects active session
 
 - **WHEN** a trusted-host connection issues `IdentityIntrospect` for an
-  active session within its scope
+  active session within its scope using a qualified principal id
 - **THEN** the relay returns `principal_id`, `expires_at`, and `verified: true`
 
 #### Scenario: Non-trusted connection rejected
@@ -196,7 +202,12 @@ introspection violates this requirement.
 - **WHEN** a trusted-host introspects a session_id with no registered principal
 - **THEN** the relay returns a typed not-found error
 
----
+#### Scenario: Reject bare target_session in IdentityIntrospect
+
+- **WHEN** a trusted-host connection issues `IdentityIntrospect` with a
+  `target_session` that has no `@<namespace>` suffix
+- **THEN** relay rejects with `validation_invalid_params`
+- **AND** rejection details include `field: "target_session"`
 
 ### Requirement: Revocation and Expiry Enforcement
 

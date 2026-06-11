@@ -285,13 +285,11 @@ NOT require replay after reconnect.
 TUI SHALL surface transport/connectivity failures explicitly and SHALL NOT
 silently degrade into synthetic success states.
 
-Same-bundle MVP lock SHALL remain enforced for transport and history updates.
-
 When startup transport is unavailable, TUI SHALL attempt runtime relay
 auto-start before rendering an unavailable state.
 
-Auto-started relay lifecycle remains external in MVP; TUI exit SHALL NOT
-auto-stop relay.
+Auto-started relay lifecycle remains external; TUI exit SHALL NOT auto-stop
+relay.
 
 #### Scenario: Surface relay connectivity failure explicitly
 
@@ -310,11 +308,6 @@ auto-stop relay.
 - **WHEN** relay was auto-started during TUI startup
 - **AND** TUI process exits
 - **THEN** TUI does not issue relay shutdown solely due to TUI exit
-
-#### Scenario: Reject cross-bundle transport scope in MVP
-
-- **WHEN** TUI transport scope attempts bundle outside associated context
-- **THEN** request is rejected with `validation_cross_bundle_unsupported`
 
 ### Requirement: TUI raww dispatch contract
 
@@ -336,16 +329,17 @@ TUI raww requests SHALL include:
 
 TUI raww failure handling SHALL treat canonical relay codes as terminal,
 including:
+
 - `validation_unknown_target`
-- `validation_cross_bundle_unsupported`
+- `validation_unsupported_operation`
 - `validation_invalid_params`
 - `authorization_forbidden`
 
 #### Scenario: Show deterministic validation error for unsupported target class
 
-- **WHEN** relay returns `validation_invalid_params` for unsupported raww target
-  class
-- **THEN** TUI shows deterministic raww failure state and does not retry
+- **WHEN** relay returns `validation_unsupported_operation` for an unsupported
+  raww target class
+- **THEN** TUI surfaces the error as terminal without retry
 
 ### Requirement: TUI raww accepted response handling
 

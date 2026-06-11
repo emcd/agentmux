@@ -389,9 +389,13 @@ Only add complexity with:
 - Multiple proven use cases requiring abstraction
 
 ### Clear References
-- Use `file.ts:42` format for code locations
 - Reference specs as `specs/auth/spec.md`
 - Link related changes and PRs
+- In proposals and tasks, identify code locations by symbol name, struct name,
+  or module path rather than line numbers — line numbers drift as code evolves
+  and become misleading quickly. Reserve `file.rs:42` style references for
+  issue reports, test failure context, and stack traces where precision at a
+  point in time is the goal.
 
 ### Capability Naming
 - Use verb-noun: `user-auth`, `payment-capture`

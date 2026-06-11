@@ -809,18 +809,6 @@ current owner is live, relay SHALL reject the second claim with
 - **THEN** relay rejects with `validation_unknown_bundle`
 - **AND** closes the connection without registering a stream
 
-### Requirement: Same-Bundle Stream Scope Enforcement
-
-Once a stream is bound to a bundle via `hello`, the relay SHALL reject any
-request frame on that stream whose target falls outside the bound bundle with
-`validation_cross_bundle_unsupported`.
-
-#### Scenario: Reject cross-bundle request frame
-
-- **WHEN** a registered stream submits request frame scoped to a bundle that
-  does not match the bundle bound by the stream's `hello`
-- **THEN** relay rejects with `validation_cross_bundle_unsupported`
-
 ### Requirement: Static Recipient Routability
 
 Static configured recipients from bundle session definitions SHALL remain
@@ -2117,13 +2105,18 @@ action payload.
 ### Requirement: Same-Bundle Permission Decision Scope
 
 Permission request routing and decisioning SHALL be same-bundle only in alpha.
-Cross-bundle routing/decision attempts SHALL be rejected with
-`validation_cross_bundle_unsupported`.
+The bundle scope SHALL be derived from the request's routing namespace
+(frame-level namespace, defaulting to the connection's bound bundle); no
+caller-supplied in-payload bundle selector is accepted in `PermissionResolve`.
+A caller reaches a bundle's permission queue only by routing to that bundle,
+subject to its policy controls.
 
-#### Scenario: Reject cross-bundle permission decision attempt
+#### Scenario: Permission decision scoped to session's associated bundle
 
-- **WHEN** a decision action targets a permission request owned by another bundle
-- **THEN** relay rejects with `validation_cross_bundle_unsupported`
+- **WHEN** a grant-authorized principal issues `PermissionResolve`
+- **THEN** relay resolves the permission request within the principal's
+  associated bundle
+- **AND** no `bundle_name` field is accepted in the request payload
 
 ### Requirement: Bounded Permission Queue and Replay
 
@@ -2383,10 +2376,8 @@ Relay SHALL accept `RelayRequest::PermissionList` from associated principals
 with `client_class ∈ {ui, operator}` and `grant` capability satisfying policy.
 
 `PermissionList` returns the current set of pending permission requests for
-the requester's bundle.
-
-Same-bundle scope: cross-bundle `PermissionList` attempts SHALL be rejected
-with `validation_cross_bundle_unsupported`.
+the requester's bundle. The bundle scope is derived from the request's routing namespace; no
+caller-supplied bundle selector is accepted.
 
 Response payload SHALL include for each pending request the same field set
 emitted by `permission.requested` events:
@@ -2410,7 +2401,7 @@ poll-only via `PermissionList`.
 #### Scenario: Operator client lists pending requests
 
 - **WHEN** an operator-class principal with `grant` capability submits
-  `PermissionList` scoped to its associated bundle
+  `PermissionList`
 - **THEN** relay returns pending records in FIFO `sequence` order
 - **AND** each record contains the `permission.requested` field set
 
@@ -2425,12 +2416,6 @@ poll-only via `PermissionList`.
   `PermissionList`
 - **THEN** relay rejects with `authorization_forbidden`
 - **AND** denial details include `capability="grant"`
-
-#### Scenario: Reject cross-bundle permission list attempt
-
-- **WHEN** a permission list request targets a bundle other than the
-  associated bundle
-- **THEN** relay rejects with `validation_cross_bundle_unsupported`
 
 ### Requirement: Session Type Taxonomy
 
