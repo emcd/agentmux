@@ -306,6 +306,95 @@ fn idle_ui_stream_write_timeout_tears_down_connection() {
         .expect("join reconnect relay thread");
 }
 
+// Drives a bounded drain wait on a private current-thread runtime so the
+// synchronous test can assert on the report.
+fn block_on_drain(
+    coordinator: &ConnectionDrainCoordinator,
+    timeout: Duration,
+) -> ConnectionDrainReport {
+    TokioRuntimeBuilder::new_current_thread()
+        .enable_time()
+        .build()
+        .expect("build current-thread runtime")
+        .block_on(coordinator.wait_for_drain(timeout))
+}
+
+#[test]
+fn shutdown_signal_drains_parked_connection_worker() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "party_drain_parked";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+
+    // The slot is registered with a coordinator the test keeps, so the test
+    // plays the relay host's shutdown role against a real connection worker.
+    let coordinator = ConnectionDrainCoordinator::new();
+    let worker_slot = coordinator.register_worker();
+    let (server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
+    let root = configuration_root.clone();
+    let state = bundle_paths.state_root.clone();
+    let catalog = super::single_bundle_catalog(&bundle_paths);
+    let join_handle = thread::spawn(move || {
+        run_serve_connection_with_slot(server_stream, root, state, catalog, false, worker_slot)
+    });
+
+    let mut client_stream = client_stream;
+    let read_stream = client_stream.try_clone().expect("clone stream");
+    let mut reader = BufReader::new(read_stream);
+    send_json(&mut client_stream, agent_hello_frame(bundle_name));
+    assert_eq!(read_json(&mut reader)["frame"], "hello_ack");
+
+    // The worker is now parked on its long-lived post-hello stream read with
+    // no incoming frame and no EOF; only the cooperative signal can release it.
+    coordinator.signal_shutdown();
+    let outcome = join_within(join_handle, Duration::from_secs(5));
+    assert!(outcome.is_ok(), "drain exit should be clean: {outcome:?}");
+
+    let report = block_on_drain(&coordinator, Duration::from_millis(500));
+    assert!(
+        !report.timed_out,
+        "drained worker must not report a timeout"
+    );
+    assert_eq!(report.drained_worker_count, 1);
+    assert_eq!(report.remaining_worker_count, 0);
+
+    // The drained worker closed the connection: the client sees EOF.
+    let mut line = String::new();
+    let read = reader.read_line(&mut line).expect("read after drain");
+    assert_eq!(read, 0, "client should observe EOF after worker drains");
+}
+
+#[test]
+fn drain_wait_reports_timeout_for_undrained_workers() {
+    let coordinator = ConnectionDrainCoordinator::new();
+    let parked_slot = coordinator.register_worker();
+    let serving_slot = coordinator.register_worker();
+    let serving_guard = serving_slot.begin_serving();
+
+    // Neither worker exits, so the bounded wait must end at its timeout with
+    // a deterministic report distinguishing the serving worker from the
+    // parked one.
+    coordinator.signal_shutdown();
+    let started = Instant::now();
+    let report = block_on_drain(&coordinator, Duration::from_millis(100));
+    assert!(started.elapsed() >= Duration::from_millis(100));
+    assert!(report.timed_out, "undrained workers must report a timeout");
+    assert_eq!(report.drained_worker_count, 0);
+    assert_eq!(report.remaining_worker_count, 2);
+    assert_eq!(report.remaining_serving_count, 1);
+
+    // Both workers exit after the signal: a follow-up wait reports full drain.
+    drop(serving_guard);
+    drop(serving_slot);
+    drop(parked_slot);
+    let report = block_on_drain(&coordinator, Duration::from_millis(100));
+    assert!(!report.timed_out);
+    assert_eq!(report.drained_worker_count, 2);
+    assert_eq!(report.remaining_worker_count, 0);
+    assert_eq!(report.remaining_serving_count, 0);
+}
+
 #[test]
 fn connection_loop_error_releases_hello_claim() {
     let temporary = TempDir::new().expect("temporary directory");

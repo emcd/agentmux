@@ -25,6 +25,7 @@ use crate::{
     },
 };
 
+use super::drain::ConnectionWorkerSlot;
 use super::identity::{
     IdentityIntrospectRights, PrincipalStore, PrincipalType, VerifiedIdentity, split_principal_id,
     verify_hello_credential,
@@ -130,6 +131,11 @@ impl BundleCatalog {
 /// `state_root` locates the relay-level principal store consulted at Hello time
 /// for credential verification; `require_session_credentials` enables relay-wide
 /// enforcement (rejecting `"socket-trust"` and unrecognized tokens).
+///
+/// `worker_slot` is this connection's registration with the host's drain
+/// coordinator: the frame loop observes its shutdown signal cooperatively — an
+/// idle read exits immediately, an in-flight request finishes and flushes its
+/// response first — and dropping it on exit reports the worker as drained.
 pub async fn serve_connection(
     stream: UnixStream,
     configuration_root: &Path,
@@ -137,6 +143,7 @@ pub async fn serve_connection(
     bundle_catalog: &BundleCatalog,
     require_session_credentials: bool,
     pre_hello_idle_timeout: Duration,
+    mut worker_slot: ConnectionWorkerSlot,
 ) -> Result<(), io::Error> {
     let (read_half, write_half) = stream.into_split();
     let (writer, mut writer_handle) = spawn_stream_writer(write_half);
@@ -168,6 +175,7 @@ pub async fn serve_connection(
             require_session_credentials,
             pre_hello_idle_timeout,
             revoke.clone(),
+            &mut worker_slot,
         );
         tokio::pin!(frames);
         tokio::select! {
@@ -253,6 +261,7 @@ async fn serve_connection_frames(
     require_session_credentials: bool,
     pre_hello_idle_timeout: Duration,
     revoke: StreamRevokeSignal,
+    worker_slot: &mut ConnectionWorkerSlot,
 ) -> Result<(), io::Error> {
     // Shared-ownership copies of the root paths so each request dispatch can be
     // moved onto the blocking pool (`'static + Send`) without re-copying the
@@ -271,17 +280,27 @@ async fn serve_connection_frames(
     let mut line = String::new();
     loop {
         line.clear();
+        // Cooperative drain: between frames, a signaled worker exits before
+        // reading further. An in-flight frame is never abandoned — the signal
+        // is observed only here and inside the parked read below, so the
+        // response for the previous frame has already been handed to the
+        // writer task (and flushes during teardown).
+        if worker_slot.shutdown_signaled() {
+            break;
+        }
         let read = match read_next_line(
             &mut reader,
             &mut line,
             guard.current().is_some(),
             pre_hello_idle_timeout,
+            worker_slot,
         )
         .await
         {
             ReadLineOutcome::Read(read) => read,
             ReadLineOutcome::Eof => break,
             ReadLineOutcome::PreHelloIdleTimeout => break,
+            ReadLineOutcome::ShutdownRequested => break,
             ReadLineOutcome::Error(source) => return Err(source),
         };
         if read == 0 {
@@ -310,6 +329,10 @@ async fn serve_connection_frames(
             }
         };
 
+        // Marks this worker as mid-request until the frame's processing (and
+        // response write handoff) completes, so a drain-timeout report can
+        // distinguish serving workers from parked ones.
+        let _serving = worker_slot.begin_serving();
         match frame {
             IncomingFrame::Hello(hello) => {
                 let binding = match resolve_hello_binding(
@@ -756,25 +779,39 @@ enum ReadLineOutcome {
     Read(usize),
     Eof,
     PreHelloIdleTimeout,
+    ShutdownRequested,
     Error(io::Error),
 }
 
-/// Reads the next framed line. Pre-hello reads are bounded by
+/// Reads the next framed line, racing the cooperative shutdown signal so a
+/// worker parked on a long-lived stream read exits promptly when the host
+/// begins draining. Pre-hello reads are additionally bounded by
 /// `pre_hello_idle_timeout` so an unresponsive client cannot consume a
-/// connection slot indefinitely; post-hello reads block until a frame or EOF
-/// arrives.
+/// connection slot indefinitely; post-hello reads block until a frame, EOF, or
+/// the shutdown signal arrives.
 async fn read_next_line(
     reader: &mut BufReader<OwnedReadHalf>,
     line: &mut String,
     after_hello: bool,
     pre_hello_idle_timeout: Duration,
+    worker_slot: &mut ConnectionWorkerSlot,
 ) -> ReadLineOutcome {
     let read_result = if after_hello {
-        reader.read_line(line).await
+        tokio::select! {
+            biased;
+            () = worker_slot.shutdown_signal() => return ReadLineOutcome::ShutdownRequested,
+            result = reader.read_line(line) => result,
+        }
     } else {
-        match tokio::time::timeout(pre_hello_idle_timeout, reader.read_line(line)).await {
-            Ok(result) => result,
-            Err(Elapsed { .. }) => return ReadLineOutcome::PreHelloIdleTimeout,
+        tokio::select! {
+            biased;
+            () = worker_slot.shutdown_signal() => return ReadLineOutcome::ShutdownRequested,
+            result = tokio::time::timeout(pre_hello_idle_timeout, reader.read_line(line)) => {
+                match result {
+                    Ok(result) => result,
+                    Err(Elapsed { .. }) => return ReadLineOutcome::PreHelloIdleTimeout,
+                }
+            }
         }
     };
     match read_result {

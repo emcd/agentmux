@@ -19,8 +19,9 @@ use tokio::{
 use crate::{
     configuration::load_bundle_group_memberships,
     relay::{
-        BundleCatalog, append_startup_failure, serve_connection, shutdown_bundle_runtime,
-        spawn_bundle_watcher, startup_bundle, wait_for_async_delivery_shutdown,
+        BundleCatalog, ConnectionDrainCoordinator, append_startup_failure, serve_connection,
+        shutdown_bundle_runtime, spawn_bundle_watcher, startup_bundle,
+        wait_for_async_delivery_shutdown,
     },
     runtime::{
         bootstrap::{
@@ -103,6 +104,11 @@ const RELAY_SHUTDOWN_POLL_INTERVAL_MS: u64 = 100;
 // exit. Caps all post-signal work (drain, cleanup, runtime teardown); graceful
 // shutdown normally completes well under 2 seconds.
 const RELAY_SHUTDOWN_WATCHDOG_GRACE_MS: u64 = 5_000;
+// Bounded wait for connection workers to drain after the cooperative shutdown
+// signal fires. Must leave headroom inside the watchdog grace for the rest of
+// cleanup (async-delivery drain, tmux teardown); workers that miss the window
+// are abandoned to runtime teardown and reported as timed out.
+const RELAY_SHUTDOWN_WORKER_DRAIN_TIMEOUT_MS: u64 = 1_500;
 
 pub(super) async fn run_relay_host(arguments: RelayHostArguments) -> Result<(), RuntimeError> {
     // Install SIGINT/SIGTERM handlers before any startup work. The handlers do
@@ -352,6 +358,7 @@ async fn serve_relay_host(
     let stop_requested = Arc::new(AtomicBool::new(false));
     let max_connections = relay_max_connections();
     let connection_permits = Arc::new(Semaphore::new(max_connections));
+    let drain_coordinator = ConnectionDrainCoordinator::new();
 
     // Build the bundle catalog: map from bundle_name to per-bundle paths.
     // Connection workers consult this on Hello to route to the correct bundle.
@@ -372,6 +379,7 @@ async fn serve_relay_host(
         let stop_requested = Arc::clone(&stop_requested);
         let connection_permits = Arc::clone(&connection_permits);
         let catalog = catalog.clone();
+        let drain_coordinator = Arc::clone(&drain_coordinator);
         // `require_session_credentials` is the relay-wide enforcement flag set by
         // the `--require-credentials` CLI flag (default: disabled).
         tokio::spawn(run_relay_accept_loop(
@@ -383,6 +391,7 @@ async fn serve_relay_host(
             stop_requested,
             connection_permits,
             max_connections,
+            drain_coordinator,
         ))
     };
 
@@ -423,6 +432,28 @@ async fn serve_relay_host(
         emit_inscription("relay.shutdown.signal", &json!({"signal": "termination"}));
     }
     stop_requested.store(true, Ordering::SeqCst);
+
+    // Cooperative connection-worker drain: signal every worker to wrap up, then
+    // wait a bounded window for them to exit. A worker parked on a stream read
+    // exits immediately; one mid-request finishes its in-flight dispatch first.
+    // Workers that miss the window are abandoned to runtime teardown (and the
+    // shutdown watchdog), so this wait can never stall shutdown indefinitely.
+    drain_coordinator.signal_shutdown();
+    let drain_report = drain_coordinator
+        .wait_for_drain(Duration::from_millis(
+            RELAY_SHUTDOWN_WORKER_DRAIN_TIMEOUT_MS,
+        ))
+        .await;
+    emit_inscription(
+        "relay.shutdown.worker_drain",
+        &json!({
+            "drained_worker_count": drain_report.drained_worker_count,
+            "remaining_worker_count": drain_report.remaining_worker_count,
+            "remaining_serving_count": drain_report.remaining_serving_count,
+            "timed_out": drain_report.timed_out,
+            "drain_timeout_ms": RELAY_SHUTDOWN_WORKER_DRAIN_TIMEOUT_MS,
+        }),
+    );
 
     // Stop watching before cleanup unloads the bundles, so a reconcile cannot
     // race the teardown. Dropping the watcher joins its reconcile thread, so any
@@ -564,6 +595,7 @@ async fn run_relay_accept_loop(
     stop_requested: Arc<AtomicBool>,
     connection_permits: Arc<Semaphore>,
     max_connections: usize,
+    drain_coordinator: Arc<ConnectionDrainCoordinator>,
 ) -> Result<(), RuntimeError> {
     listener
         .set_nonblocking(true)
@@ -576,7 +608,7 @@ async fn run_relay_accept_loop(
     })?;
     let metrics = Arc::new(RelayConnectionMetrics::new());
 
-    let accept_outcome = loop {
+    loop {
         if shutdown_requested() || stop_requested.load(Ordering::SeqCst) {
             break Ok(());
         }
@@ -598,6 +630,7 @@ async fn run_relay_accept_loop(
                                     bundle_catalog.clone(),
                                     require_session_credentials,
                                     Arc::clone(&metrics),
+                                    &drain_coordinator,
                                 );
                             }
                             Err(TryAcquireError::NoPermits) => {
@@ -617,26 +650,17 @@ async fn run_relay_accept_loop(
             }
             () = tokio::time::sleep(Duration::from_millis(RELAY_SHUTDOWN_POLL_INTERVAL_MS)) => {}
         }
-    };
-
-    if accept_outcome.is_ok() && (shutdown_requested() || stop_requested.load(Ordering::SeqCst)) {
-        emit_inscription(
-            "relay.shutdown.connection_workers_detached",
-            &json!({
-                "max_connections": max_connections,
-                "active_connections": metrics.active_connections.load(Ordering::SeqCst),
-                "rejected_connections": metrics.rejected_connections.load(Ordering::SeqCst),
-            }),
-        );
     }
-    accept_outcome
 }
 
 /// Spawns a tokio task to serve one accepted connection asynchronously. The
-/// task is detached: in-flight tasks are cancelled when the runtime is dropped
-/// (process shutdown), which triggers the connection's drop-guard unregister
-/// path. Per-connection writes run on a separate writer task spawned inside
-/// `serve_connection`, so no blocking call ever ties up a runtime worker.
+/// task is not joined: shutdown signals it cooperatively through its drain
+/// coordinator slot (registered before the spawn, so a racing shutdown signal
+/// still counts the worker), and any worker that misses the bounded drain
+/// window is cancelled when the runtime is dropped, which triggers the
+/// connection's drop-guard unregister path. Per-connection writes run on a
+/// separate writer task spawned inside `serve_connection`, so no blocking call
+/// ever ties up a runtime worker.
 #[allow(clippy::too_many_arguments)]
 fn spawn_connection_worker(
     permit: OwnedSemaphorePermit,
@@ -646,9 +670,11 @@ fn spawn_connection_worker(
     bundle_catalog: BundleCatalog,
     require_session_credentials: bool,
     metrics: Arc<RelayConnectionMetrics>,
+    drain_coordinator: &Arc<ConnectionDrainCoordinator>,
 ) {
     metrics.active_connections.fetch_add(1, Ordering::SeqCst);
     let pre_hello_idle_timeout = relay_pre_hello_idle_timeout();
+    let worker_slot = drain_coordinator.register_worker();
     tokio::spawn(async move {
         let result = serve_connection(
             stream,
@@ -657,6 +683,7 @@ fn spawn_connection_worker(
             &bundle_catalog,
             require_session_credentials,
             pre_hello_idle_timeout,
+            worker_slot,
         )
         .await;
         metrics.active_connections.fetch_sub(1, Ordering::SeqCst);

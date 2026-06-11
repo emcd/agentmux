@@ -43,6 +43,14 @@ exported from `src/relay/mod.rs`.
     `bundle_name` selects the routing bundle (overriding any binding); absent
     that, the bound bundle is used, and a relay-wide principal with neither is
     rejected.
+- `drain.rs`
+  - cooperative connection-worker shutdown. `ConnectionDrainCoordinator` is
+    shared between the relay host and its connection workers: the host fires
+    the shutdown signal and waits a bounded window for workers to drain, with
+    per-worker state (parked vs mid-request) tracked through
+    `ConnectionWorkerSlot` registrations so the drain report distinguishes
+    drained, parked, and still-serving workers. Workers that miss the window
+    are abandoned to runtime teardown and the shutdown watchdog.
 - `routing.rs`
   - operation-agnostic routing/authorization spine. Defines the `OperationProfile`
     (which capability/control an operation reads) and the resolved-route types
