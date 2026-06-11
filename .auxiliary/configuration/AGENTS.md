@@ -119,12 +119,10 @@ Use consistent tags for discoverability:
 - When in doubt about whether work needs an OpenSpec proposal or only `nb` execution tracking, prefer OpenSpec first for design clarity.
 - For each active OpenSpec proposal, keep **exactly one** linked `nb` todo as the tracking anchor (with proposal reference), rather than duplicating full task trees in both systems.
 
-### OpenSpec Draft and Handoff Hygiene
-- Draft OpenSpec proposal text in a dedicated `nb` note first so collaborators can review without local file access barriers; share the note id when requesting feedback.
-- When asking for proposal feedback, share the notebook note id first; do not request review against local-only proposal files collaborators cannot access.
-- Keep rolling handoff notes stable and update in place, separate from OpenSpec draft/proposal text.
+### OpenSpec Proposal Workflow
+- Treat OpenSpec proposals like code: commit proposal files to master, share the commit hash with reviewers (`git show <hash>`), amend as needed, merge when settled. No notebook draft step.
+- Keep rolling handoff notes stable and update in place, separate from OpenSpec proposal content.
 - Do not repurpose or overwrite rolling handoff notes with proposal content.
-- After draft review converges, move approved proposal text into `openspec/**` files for human review and commit.
 
 ## Agentmux Coordination
 

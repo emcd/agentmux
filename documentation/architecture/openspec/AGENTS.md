@@ -10,6 +10,7 @@ Instructions for AI coding assistants using OpenSpec for spec-driven development
 - Scaffold: `proposal.md`, `tasks.md`, `design.md` (only if needed), and delta specs per affected capability
 - Write deltas: use `## ADDED|MODIFIED|REMOVED|RENAMED Requirements`; include at least one `#### Scenario:` per requirement
 - Validate: `openspec validate [change-id] --strict` and fix issues
+- Commit and share: commit proposal files, share the commit hash for review; amend for feedback (no nb draft step)
 - Request approval: Do not start implementation until proposal is approved
 
 ## Three-Stage Workflow
@@ -44,7 +45,8 @@ Skip proposal for:
 1. Review top-level `AGENTS.md` and `openspec list`, `openspec list --specs` to understand current context.
 2. Choose a unique verb-led `change-id` and scaffold `proposal.md`, `tasks.md`, optional `design.md`, and spec deltas under `openspec/changes/<id>/`.
 3. Draft spec deltas using `## ADDED|MODIFIED|REMOVED Requirements` with at least one `#### Scenario:` per requirement.
-4. Run `openspec validate <id> --strict` and resolve any issues before sharing the proposal.
+4. Run `openspec validate <id> --strict` and resolve any issues.
+5. Commit the proposal files. Share the commit hash for review; reviewers use `git show <hash>` to inspect. Amend the commit to incorporate feedback while it is unmerged. No notebook draft step.
 
 ### Stage 2: Implementing Changes
 Track these steps as TODOs and complete them one by one.
