@@ -39,9 +39,9 @@
 - [ ] 1.8 Integrate authorization-policy controls for `do` modes:
       - enforce capability mapping for `do.list`, `do.show`, `do.run`
       - evaluate requester policy using shared scope semantics
-        (`none` | `self` | `all:home` | `all:all`)
+        (`none` | `self` | `home` | `all`)
       - keep alpha scope self-target-only behavior for `do run`
-      - treat `all:home` / `all:all` as reserved non-operative for current
+      - treat `home` / `all` as reserved non-operative for current
         alpha scope run targeting contract
 - [ ] 1.9 Enforce missing `do` action control entry as `none` at runtime:
       - if action id has no explicit `do` scope entry, deny `do run`
@@ -72,7 +72,7 @@
       - deny when `do.<action>` is missing (implicit `none`)
       - deny when `do.<action> = none`
       - allow when `do.<action> = self` for self-run mode
-      - reserved/non-operative handling for `all:home` / `all:all`
+      - reserved/non-operative handling for `home` / `all`
       - canonical `authorization_forbidden` detail fields
 
 ## 3. Validation

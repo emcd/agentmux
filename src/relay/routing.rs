@@ -12,10 +12,10 @@
 //! Authorization is fully data-driven. An operation contributes only an
 //! [`OperationProfile`] naming which policy control it reads; the layer maps the
 //! requester-to-target relationship to a uniform scope tier
-//! (self / all:home / all:all) and checks it against the requester's *configured*
+//! (self / home / all) and checks it against the requester's *configured*
 //! scope (the authorization stage in `authorization.rs`). No operation carries a
 //! hardcoded cross-bundle policy: whether a capability can ever reach the
-//! cross-bundle (`all:all`) tier is governed entirely by the policy schema's
+//! cross-bundle (`all`) tier is governed entirely by the policy schema's
 //! per-capability allowed-scope set.
 
 use serde_json::json;
@@ -95,7 +95,7 @@ pub(super) struct ResolvedRoute {
 /// authorization stage.
 ///
 /// The variants mirror the scope ladder the authorization stage maps them onto:
-/// `Own` → `self`, `Home` → `all:home`, `All` → `all:all`.
+/// `Own` → `self`, `Home` → `home`, `All` → `all`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ScopeTier {
     /// The requester acting on itself.
@@ -124,13 +124,13 @@ impl ResolvedTarget {
     /// control)**, for any relay-wide (`@GLOBAL`) target. Relay-wide targets are
     /// delivered through the session *registry* keyed by `principal_id`, not by
     /// crossing into a peer bundle, so reaching one is not a cross-namespace act
-    /// and never raises the bar to `all:all`. This is what lets a bundle-bound
+    /// and never raises the bar to `all`. This is what lets a bundle-bound
     /// agent message an `@GLOBAL` operator (and one relay-wide principal message
-    /// another) under `all:home`.
+    /// another) under `home`.
     ///
     /// It is asymmetric with a relay-wide *requester* reaching *into* a bundle:
     /// there the bundle is not the requester's home namespace (see
-    /// [`requester_home_namespace`]), so that direction does require `all:all`.
+    /// [`requester_home_namespace`]), so that direction does require `all`.
     /// The asymmetry is intentional; the integration tests exercise both
     /// directions.
     fn reachable_at_home_tier(&self, dispatch_namespace: &str) -> bool {
@@ -161,7 +161,7 @@ impl ResolvedTarget {
 /// happens to route through: a session's home is its bundle, while a relay-wide
 /// principal's home is its reserved namespace (`GLOBAL` / `EXTERNAL` / `RELAY`).
 /// So a relay-wide operator reaching into a bundle is cross-namespace (it needs
-/// `all:all`), and `all:home` confers authority only within its own namespace.
+/// `all`), and `home` confers authority only within its own namespace.
 /// A bare (already dispatch-normalized) session id carries no suffix and
 /// resolves to the supplied dispatch bundle.
 pub(super) fn requester_home_namespace<'a>(
@@ -307,7 +307,7 @@ pub(super) fn resolve_raww_route(
 /// carries a single bundle-level target (no session id, never relay-wide) and
 /// the stage cannot fail. The target's `bundle_name` is the enumerated bundle; a
 /// cross-namespace enumeration (a peer bundle) raises the required tier to
-/// `all:all`, while a same-namespace one stays at `all:home`.
+/// `all`, while a same-namespace one stays at `home`.
 ///
 /// `dispatch_namespace` is the requester's home namespace (see
 /// [`requester_home_namespace`]); `enumerate_bundle` is the bundle whose sessions

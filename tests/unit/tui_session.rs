@@ -13,7 +13,7 @@ fn write_policies(configuration_root: &std::path::Path, policy_ids: &[&str]) {
     for policy_id in policy_ids {
         body.push_str(
             format!(
-                "\n[[policies]]\nid = \"{}\"\n\n[policies.controls]\nfind = \"self\"\nlist = \"all:home\"\nlook = \"all:home\"\nsend = \"all:home\"\n",
+                "\n[[policies]]\nid = \"{}\"\n\n[policies.controls]\nfind = \"self\"\nlist = \"home\"\nlook = \"home\"\nsend = \"home\"\n",
                 policy_id
             )
             .as_str(),

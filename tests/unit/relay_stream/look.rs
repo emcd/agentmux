@@ -3,8 +3,8 @@
 //! These exercise the peer-bundle resolution path through `serve_connection`:
 //! a bundle-bound session inspects a session in a peer bundle named by the
 //! target's `@<bundle>` suffix. They assert the deliberately tightened
-//! authorization (cross-bundle inspection requires `all:all`, not the
-//! same-bundle `all:home`) and the resolution error codes
+//! authorization (cross-bundle inspection requires `all`, not the
+//! same-bundle `home`) and the resolution error codes
 //! (`validation_unknown_bundle` / `validation_unknown_target`) that replaced the
 //! retired `validation_cross_bundle_unsupported` stub.
 //!
@@ -31,9 +31,9 @@ id = "default"
 
 [policies.controls]
 find = "self"
-list = "all:home"
+list = "home"
 look = "{look}"
-send = "all:home"
+send = "home"
 "#
         ),
     )
@@ -95,7 +95,7 @@ fn cross_bundle_look_permitted_under_all_scope_resolves_peer() {
     let bundle_b = "look_peer_b";
     let configuration_root = write_bundle_configuration(&temporary, bundle_a);
     write_ui_bundle(&configuration_root, bundle_b);
-    write_policies_with_look(&configuration_root, "all:all");
+    write_policies_with_look(&configuration_root, "all");
     let state_root = temporary.path().join("state");
     let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
     let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b).expect("bundle-b paths");
@@ -120,7 +120,7 @@ fn cross_bundle_look_permitted_under_all_scope_resolves_peer() {
     );
 }
 
-/// `all:home` is sufficient for same-bundle inspection but deliberately
+/// `home` is sufficient for same-bundle inspection but deliberately
 /// insufficient to cross the bundle boundary. The peer is a tmux member so the
 /// pre-authorization capability gate passes and the policy denial surfaces.
 #[test]
@@ -130,7 +130,7 @@ fn cross_bundle_look_denied_under_home_scope() {
     let bundle_b = "look_home_b";
     let configuration_root = write_bundle_configuration(&temporary, bundle_a);
     write_tmux_bundle(&configuration_root, bundle_b);
-    write_policies_with_look(&configuration_root, "all:home");
+    write_policies_with_look(&configuration_root, "home");
     let state_root = temporary.path().join("state");
     let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
     let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b).expect("bundle-b paths");
@@ -161,7 +161,7 @@ fn cross_bundle_look_rejects_unknown_peer_bundle() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_a = "look_nobundle_a";
     let configuration_root = write_bundle_configuration(&temporary, bundle_a);
-    write_policies_with_look(&configuration_root, "all:all");
+    write_policies_with_look(&configuration_root, "all");
     let state_root = temporary.path().join("state");
     let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
     let catalog = multi_bundle_catalog(&[paths_a]);
@@ -190,7 +190,7 @@ fn cross_bundle_look_rejects_unknown_target_in_peer_bundle() {
     let bundle_b = "look_notarget_b";
     let configuration_root = write_bundle_configuration(&temporary, bundle_a);
     write_ui_bundle(&configuration_root, bundle_b);
-    write_policies_with_look(&configuration_root, "all:all");
+    write_policies_with_look(&configuration_root, "all");
     let state_root = temporary.path().join("state");
     let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
     let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b).expect("bundle-b paths");

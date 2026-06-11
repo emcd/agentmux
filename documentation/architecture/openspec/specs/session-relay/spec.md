@@ -561,9 +561,9 @@ Authorization posture for `look` SHALL be:
 - default scope `self`
 - self-inspection (requester equals target) is always permitted; this shortcut
   applies to same-bundle look only
-- same-bundle inspection of a different session requires `all:home`
-- cross-bundle inspection of a peer bundle's session requires `all:all`,
-  evaluated against the requester's own (dispatch) bundle policy; `all:home`
+- same-bundle inspection of a different session requires `home`
+- cross-bundle inspection of a peer bundle's session requires `all`,
+  evaluated against the requester's own (dispatch) bundle policy; `home`
   confers no authority beyond the requester's own bundle
 
 #### Scenario: Resolve bundle from associated runtime context
@@ -582,7 +582,7 @@ Authorization posture for `look` SHALL be:
 - **WHEN** look request target is `<session>@<peer-bundle>` where
   `<peer-bundle>` differs from the requester's dispatch bundle
 - **AND** `<peer-bundle>` is configured on the relay and `<session>` is a member
-- **AND** requester policy has `look = "all:all"`
+- **AND** requester policy has `look = "all"`
 - **THEN** relay captures the snapshot from `<peer-bundle>`'s runtime and
   returns `bundle_name = <peer-bundle>` with the requester echoed in its own
   dispatch bundle
@@ -602,7 +602,7 @@ Authorization posture for `look` SHALL be:
 #### Scenario: Deny cross-bundle look under home scope
 
 - **WHEN** requester targets a session in a peer bundle
-- **AND** requester policy has `look = "all:home"` or narrower
+- **AND** requester policy has `look = "home"` or narrower
 - **THEN** relay returns `authorization_forbidden`
 
 #### Scenario: Deny same-bundle non-self look under self scope
@@ -958,9 +958,9 @@ Relay SHALL fail fast when this artifact is missing or invalid.
 - **THEN** relay applies built-in conservative default policy
 - **AND** built-in controls are:
   - `find = self`
-  - `list = all:home`
+  - `list = home`
   - `look = self`
-  - `send = all:home`
+  - `send = home`
   - `do` defaults to `none` for unspecified actions
 
 ### Requirement: Session Policy Binding
@@ -993,16 +993,16 @@ policy id.
 
 Relay SHALL evaluate authorization using canonical controls and scope values:
 
-- `find`: `self` | `all:home` | `all:all`
-- `list`: `all:home` | `all:all`
-- `look`: `self` | `all:home` | `all:all`
-- `send`: `all:home` | `all:all`
-- `do`: map `action_id -> (none | self | all:home | all:all)`
+- `find`: `self` | `home` | `all`
+- `list`: `home` | `all`
+- `look`: `self` | `home` | `all`
+- `send`: `home` | `all`
+- `do`: map `action_id -> (none | self | home | all)`
 
 For current self-target-only `do` MVP behavior:
 
 - `none` and `self` are operative
-- `all:home` and `all:all` are reserved/non-operative until non-self `do`
+- `home` and `all` are reserved/non-operative until non-self `do`
   targeting is introduced
 
 #### Scenario: Evaluate look request using configured look scope
@@ -1020,7 +1020,7 @@ For current self-target-only `do` MVP behavior:
 #### Scenario: Treat do all-home/all-all scopes as reserved in current MVP
 
 - **WHEN** relay evaluates `do` authorization
-- **AND** action scope is `all:home` or `all:all`
+- **AND** action scope is `home` or `all`
 - **THEN** relay treats scope as reserved/non-operative for current MVP
 - **AND** non-self `do` execution remains unsupported by runtime contract
 
@@ -1105,22 +1105,22 @@ canonical `ListedBundle` payload (renamed from `sessions[]`); the per-entry
 Relay send authorization SHALL be driven by `send` control scope, evaluated
 against the requester's dispatch (home) bundle policy:
 
-- `all:home` allows only same-bundle targets
-- `all:all` allows cross-bundle targets
+- `home` allows only same-bundle targets
+- `all` allows cross-bundle targets
 
-Cross-bundle send SHALL require `all:all`; a cross-bundle send issued under
-`all:home` SHALL be rejected with `authorization_forbidden`.
+Cross-bundle send SHALL require `all`; a cross-bundle send issued under
+`home` SHALL be rejected with `authorization_forbidden`.
 
 #### Scenario: Reject cross-bundle send under home-only scope
 
 - **WHEN** requester issues cross-bundle send
-- **AND** requester policy has `send = "all:home"`
+- **AND** requester policy has `send = "home"`
 - **THEN** relay returns `authorization_forbidden`
 
 #### Scenario: Permit cross-bundle send under all-all scope
 
 - **WHEN** requester issues cross-bundle send
-- **AND** requester policy has `send = "all:all"`
+- **AND** requester policy has `send = "all"`
 - **THEN** relay routes and delivers to the cross-bundle target(s)
 
 ### Requirement: Authorization Hooks for Do and Find
@@ -1931,7 +1931,7 @@ intentionally deferred to session-attribute-based routing.
 #### Scenario: Cross-bundle raww denied by scope
 
 - **WHEN** caller invokes `raww` with a target in a different bundle
-- **AND** requester's `raww` scope is `all:home` or narrower
+- **AND** requester's `raww` scope is `home` or narrower
 - **THEN** relay returns `authorization_forbidden`
 
 ### Requirement: Relay raww target class gate
@@ -1954,7 +1954,7 @@ indicating unsupported target class.
 Relay SHALL evaluate raww authorization using policy control `raww`.
 
 Policy scope contract:
-- allowed values: `none`, `self`, `all:home`, `all:all`
+- allowed values: `none`, `self`, `home`, `all`
 - invalid values (unknown values) SHALL fail configuration validation with
   `validation_invalid_policy_scope`
 
@@ -1972,9 +1972,9 @@ with canonical minimum details:
 - **THEN** relay returns `authorization_forbidden`
 - **AND** denial details include `capability = "raww.write"`
 
-#### Scenario: Cross-bundle raww permitted under all:all
+#### Scenario: Cross-bundle raww permitted under all
 
-- **WHEN** requester policy sets `raww = "all:all"`
+- **WHEN** requester policy sets `raww = "all"`
 - **AND** requester invokes raww to a session in a different bundle
 - **THEN** relay routes to the target and delivers
 
@@ -2077,9 +2077,9 @@ capability `grant`.
 
 For alpha scope:
 
-- allowed values: `none`, `all:home`
+- allowed values: `none`, `home`
 - default when omitted: `none`
-- invalid values (`self`, `all:all`, unknown values) SHALL fail validation with
+- invalid values (`self`, `all`, unknown values) SHALL fail validation with
   `validation_invalid_policy_scope`
 
 #### Scenario: Reject invalid grant scope self
@@ -2651,12 +2651,12 @@ Any authenticated session (bundle-bound or relay-wide) MAY send to `@GLOBAL`
 targets. This is a routing invariant, not a relaxation of the scope ladder: a
 relay-wide (`@GLOBAL`) target is delivered through the session registry (keyed
 by `principal_id`) rather than by crossing into a peer bundle, so it classifies
-at the `all:home` tier under the Uniform Cross-Bundle Authorization Model and
-never demands `all:all`. This holds whether the sender is bundle-bound (an
+at the `home` tier under the Uniform Cross-Bundle Authorization Model and
+never demands `all`. This holds whether the sender is bundle-bound (an
 agent replying to the operator) or itself relay-wide (one relay-wide principal
 messaging another). It is asymmetric with a relay-wide *requester* reaching
 *into* a bundle, which the uniform model classifies as cross-namespace and which
-therefore does require `all:all`.
+therefore does require `all`.
 
 #### Scenario: Bundle-bound agent sends to @GLOBAL operator
 
@@ -2671,11 +2671,11 @@ therefore does require `all:all`.
   `targets = ["agent@bundle-a"]`
 - **THEN** relay routes to bundle `bundle-a` and delivers to `agent`
 
-#### Scenario: @GLOBAL principal rawws to bundle session under all:all
+#### Scenario: @GLOBAL principal rawws to bundle session under all
 
 - **WHEN** a relay-wide principal issues a Raww request with
   `target_session = "agent@bundle-a"`
-- **AND** the requester's configured `raww` scope is `all:all`
+- **AND** the requester's configured `raww` scope is `all`
 - **THEN** relay routes to bundle `bundle-a` and delivers to `agent`
 
 #### Scenario: Bare target rejected as unqualified
@@ -2841,24 +2841,24 @@ requester-to-target relationship relative to that home namespace, and require a
 scope tier on the policy scope ladder:
 
 - self target → `self`
-- same-namespace non-self target → `all:home`
-- other-namespace target → `all:all`
+- same-namespace non-self target → `home`
+- other-namespace target → `all`
 
 A principal's home namespace SHALL be its native namespace: a session's home is
 its bundle, and a relay-wide principal's home is its reserved namespace
-(`GLOBAL` / `EXTERNAL` / `RELAY`). `all:home` SHALL therefore confer authority
+(`GLOBAL` / `EXTERNAL` / `RELAY`). `home` SHALL therefore confer authority
 only within the principal's own namespace; a relay-wide principal (for example a
-`@GLOBAL` operator) SHALL require `all:all` to reach into any bundle, since a
+`@GLOBAL` operator) SHALL require `all` to reach into any bundle, since a
 bundle is not its home namespace. There SHALL be no global/relay-principal
 exemption from this threshold.
 
 This requester-axis rule has a target-axis counterpart: a relay-wide
-(`@GLOBAL`) *target* SHALL classify at the `all:home` tier rather than `all:all`,
+(`@GLOBAL`) *target* SHALL classify at the `home` tier rather than `all`,
 because relay-wide principals are delivered through the session registry rather
 than by crossing into a peer bundle (see Suffix-Based Target Routing). Reaching a
 relay-wide target — an agent messaging the operator, or one relay-wide principal
 messaging another — is therefore not a cross-namespace act and SHALL NOT demand
-`all:all`. This is a routing invariant, not a per-operation policy exemption.
+`all`. This is a routing invariant, not a per-operation policy exemption.
 
 The relay SHALL then check whether the requester's configured scope for the
 operation's capability meets that tier. The relay SHALL NOT apply any
@@ -2869,9 +2869,9 @@ requester's membership in the peer namespace SHALL NOT be required, and the
 relay SHALL NOT resolve or authorize the requester in a target's (or any other
 borrowed) bundle in place of its home namespace, on any target operation.
 
-Whether a capability can be configured to a cross-bundle (`all:all`) scope SHALL
+Whether a capability can be configured to a cross-bundle (`all`) scope SHALL
 be governed by the policy schema's per-capability allowed-scope set, not by
-relay routing code. A capability whose schema cap is below `all:all` SHALL
+relay routing code. A capability whose schema cap is below `all` SHALL
 therefore be unreachable cross-bundle until the policy schema is widened, with
 no code override involved.
 
@@ -2887,7 +2887,7 @@ no code override involved.
 - **WHEN** a session in bundle A issues a `raww` or `look` targeting a session
   in bundle B
 - **AND** the requester's configured scope for that capability in bundle A's
-  policy is `all:all`
+  policy is `all`
 - **THEN** relay resolves and authorizes the requester in bundle A (its home
   namespace) and the operation succeeds against the bundle B target
 - **AND** relay does not resolve the requester in bundle B and does not return
@@ -2896,13 +2896,13 @@ no code override involved.
 #### Scenario: Cross-bundle operation denied under home scope
 
 - **WHEN** a requester issues a cross-bundle `look`, `send`, or `list`
-- **AND** the requester's configured scope for that capability is `all:home` or
+- **AND** the requester's configured scope for that capability is `home` or
   narrower
 - **THEN** relay returns `authorization_forbidden`
 
 #### Scenario: Cross-bundle list enumerates peer bundle under all-all scope
 
-- **WHEN** a requester with `list = all:all` lists a configured peer bundle's
+- **WHEN** a requester with `list = all` lists a configured peer bundle's
   sessions
 - **THEN** relay returns the peer bundle's session listing rather than rejecting
   the requester as unknown
@@ -2911,16 +2911,16 @@ no code override involved.
 
 - **WHEN** a relay-wide principal (for example a `@GLOBAL` operator) issues a
   `list` or `send` targeting a bundle namespace
-- **AND** its configured scope for that capability is `all:home`
+- **AND** its configured scope for that capability is `home`
 - **THEN** relay returns `authorization_forbidden`, because the bundle is not the
   principal's home (`GLOBAL`) namespace
-- **AND** the same principal under `all:all` is permitted
+- **AND** the same principal under `all` is permitted
 
 #### Scenario: Capability not configurable to cross-bundle scope fails uniformly
 
 - **WHEN** a requester issues a cross-bundle request for a capability whose
-  policy-schema cap is below `all:all`
-- **THEN** the request fails the uniform `all:all` threshold with
+  policy-schema cap is below `all`
+- **THEN** the request fails the uniform `all` threshold with
   `authorization_forbidden`
 - **AND** no operation-specific code override is involved
 

@@ -193,9 +193,9 @@ fn bundle_session_raww(
 
 /// A relay-wide (`@GLOBAL`) principal rawws to a bundle target named by its
 /// `@<bundle>` suffix. The relay infers the routing bundle from the single
-/// target's suffix (mirroring `Send`) and, under `raww = all:all`, authorizes the
+/// target's suffix (mirroring `Send`) and, under `raww = all`, authorizes the
 /// cross-namespace reach: a `@GLOBAL` operator's home is `GLOBAL`, so reaching
-/// into a bundle is cross-namespace and requires `all:all`. Routing and
+/// into a bundle is cross-namespace and requires `all`. Routing and
 /// authorization succeed, so the request reaches dispatch (and fails there only
 /// because the target has no live pane in this harness).
 #[test]
@@ -204,7 +204,7 @@ fn relay_wide_raww_routes_to_bundle_target_by_suffix() {
     let bundle_name = "party_relay_wide_raww_to_bundle";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_root, "default", bundle_name);
-    write_policies_with_raww(&configuration_root, "all:all");
+    write_policies_with_raww(&configuration_root, "all");
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
 
@@ -216,7 +216,7 @@ fn relay_wide_raww_routes_to_bundle_target_by_suffix() {
     );
 
     assert_eq!(response["response"]["kind"], "error");
-    // Routing resolved the bundle and authorization passed at `all:all`; the only
+    // Routing resolved the bundle and authorization passed at `all`; the only
     // remaining failure is the absent tmux pane in this harness. Neither the
     // routing rejection (`validation_missing_routing_namespace`) nor an authz
     // denial (`authorization_forbidden`) must appear.
@@ -226,9 +226,9 @@ fn relay_wide_raww_routes_to_bundle_target_by_suffix() {
     );
 }
 
-/// A relay-wide (`@GLOBAL`) principal rawwing into a bundle under only `all:home`
+/// A relay-wide (`@GLOBAL`) principal rawwing into a bundle under only `home`
 /// raww scope is denied: reaching a bundle is cross-namespace for a `@GLOBAL`
-/// principal (its home is `GLOBAL`), so it requires `all:all`. Mirrors
+/// principal (its home is `GLOBAL`), so it requires `all`. Mirrors
 /// `relay_wide_send_into_bundle_denied_under_home_scope`.
 #[test]
 fn relay_wide_raww_into_bundle_denied_under_home_scope() {
@@ -236,7 +236,7 @@ fn relay_wide_raww_into_bundle_denied_under_home_scope() {
     let bundle_name = "party_relay_wide_raww_home_denied";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_root, "default", bundle_name);
-    write_policies_with_raww(&configuration_root, "all:home");
+    write_policies_with_raww(&configuration_root, "home");
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
 
@@ -260,13 +260,13 @@ fn relay_wide_raww_into_bundle_denied_under_home_scope() {
 
 /// A bundle-bound session rawwing a same-bundle peer is unaffected by the
 /// cross-namespace threshold: it is a home-tier act and succeeds under
-/// `all:home`, reaching dispatch (and failing only on the absent harness pane).
+/// `home`, reaching dispatch (and failing only on the absent harness pane).
 #[test]
 fn same_bundle_raww_permitted_under_home_scope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_same_bundle_raww_home";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_policies_with_raww(&configuration_root, "all:home");
+    write_policies_with_raww(&configuration_root, "home");
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
 
@@ -370,7 +370,7 @@ fn cross_bundle_raww_permitted_under_all_scope_resolves_peer() {
     let bundle_b = "raww_peer_b";
     let configuration_root = write_bundle_configuration(&temporary, bundle_a);
     write_ui_bundle(&configuration_root, bundle_b);
-    write_policies_with_raww(&configuration_root, "all:all");
+    write_policies_with_raww(&configuration_root, "all");
     let state_root = temporary.path().join("state");
     let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
     let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b).expect("bundle-b paths");
@@ -395,7 +395,7 @@ fn cross_bundle_raww_permitted_under_all_scope_resolves_peer() {
     );
 }
 
-/// `all:home` is sufficient for same-namespace raww but deliberately insufficient
+/// `home` is sufficient for same-namespace raww but deliberately insufficient
 /// to cross the bundle boundary. The requester is authorized in its home
 /// namespace (where its `raww` control resolves) and denied — it is no longer
 /// dispatched through the target bundle, so the denial is a real
@@ -409,7 +409,7 @@ fn cross_bundle_raww_denied_under_home_scope() {
     let bundle_b = "raww_home_b";
     let configuration_root = write_bundle_configuration(&temporary, bundle_a);
     write_tmux_bundle(&configuration_root, bundle_b);
-    write_policies_with_raww(&configuration_root, "all:home");
+    write_policies_with_raww(&configuration_root, "home");
     let state_root = temporary.path().join("state");
     let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
     let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b).expect("bundle-b paths");
@@ -614,14 +614,14 @@ fn send_to_global_target_is_delivered_to_registered_operator() {
 /// `@<bundle>` suffix; the relay infers the bundle and resolves the target.
 ///
 /// A relay-wide operator's home namespace is `GLOBAL`, so reaching into a bundle
-/// is cross-namespace and requires `all:all` send scope.
+/// is cross-namespace and requires `all` send scope.
 #[test]
 fn relay_wide_send_routes_to_bundle_target_by_suffix() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_relay_wide_to_bundle";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_root, "default", bundle_name);
-    write_policies_with_send(&configuration_root, "all:all");
+    write_policies_with_send(&configuration_root, "all");
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
 
@@ -641,8 +641,8 @@ fn relay_wide_send_routes_to_bundle_target_by_suffix() {
     assert_eq!(results[0]["outcome"], "queued");
 }
 
-/// A relay-wide operator reaching into a bundle under only `all:home` send scope
-/// is denied: `all:home` confers authority only within the operator's own
+/// A relay-wide operator reaching into a bundle under only `home` send scope
+/// is denied: `home` confers authority only within the operator's own
 /// (`GLOBAL`) namespace, not into bundle namespaces.
 #[test]
 fn relay_wide_send_into_bundle_denied_under_home_scope() {
@@ -650,7 +650,7 @@ fn relay_wide_send_into_bundle_denied_under_home_scope() {
     let bundle_name = "party_relay_wide_home_denied";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_root, "default", bundle_name);
-    write_policies_with_send(&configuration_root, "all:home");
+    write_policies_with_send(&configuration_root, "home");
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
 
@@ -768,9 +768,9 @@ fn send_fans_out_across_bundle_and_global_namespaces() {
     let configuration_root = write_bundle_configuration(&temporary, bundle_a);
     write_tui_configuration(&configuration_root, "default", bundle_a);
     write_ui_bundle(&configuration_root, bundle_b);
-    // The fan-out crosses into peer bundle-b, which now requires `all:all` send
+    // The fan-out crosses into peer bundle-b, which now requires `all` send
     // scope (the uniform cross-bundle threshold).
-    write_policies_with_send(&configuration_root, "all:all");
+    write_policies_with_send(&configuration_root, "all");
     let state_root = temporary.path().join("state");
     let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
     let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b).expect("bundle-b paths");
@@ -881,8 +881,8 @@ fn send_fans_out_across_bundle_and_global_namespaces() {
 }
 
 /// A cross-bundle `Send` is denied when the sender's `send` scope is only
-/// `all:home`. This is the uniform cross-bundle threshold (`all:all`) correcting
-/// the prior permit-all stance; same-bundle delivery under `all:home` is
+/// `home`. This is the uniform cross-bundle threshold (`all`) correcting
+/// the prior permit-all stance; same-bundle delivery under `home` is
 /// unaffected. **BREAKING** for callers that relied on permit-all cross-bundle
 /// send.
 #[test]
@@ -892,7 +892,7 @@ fn cross_bundle_send_denied_under_home_scope() {
     let bundle_b = "party_send_home_b";
     let configuration_root = write_bundle_configuration(&temporary, bundle_a);
     write_ui_bundle(&configuration_root, bundle_b);
-    write_policies_with_send(&configuration_root, "all:home");
+    write_policies_with_send(&configuration_root, "home");
     let state_root = temporary.path().join("state");
     let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
     let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b).expect("bundle-b paths");
@@ -945,13 +945,13 @@ fn cross_bundle_send_denied_under_home_scope() {
 }
 
 /// Same-bundle delivery is unaffected by the cross-bundle threshold: a session
-/// sends to a peer in its own bundle under `all:home` and the message is queued.
+/// sends to a peer in its own bundle under `home` and the message is queued.
 #[test]
 fn same_bundle_send_permitted_under_home_scope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_send_same_home";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_policies_with_send(&configuration_root, "all:home");
+    write_policies_with_send(&configuration_root, "home");
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
 

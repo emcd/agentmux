@@ -83,9 +83,9 @@ id = "default"
 
 [policies.controls]
 find = "self"
-list = "all:home"
+list = "home"
 look = "self"
-send = "all:home"
+send = "home"
 "#,
         ),
     );
@@ -126,9 +126,9 @@ id = "default"
 
 [policies.controls]
 find = "self"
-list = "all:home"
+list = "home"
 look = "self"
-send = "all:home"
+send = "home"
 raww = "all:everything"
 "#,
         ),
@@ -172,9 +172,9 @@ id = "default"
 
 [policies.controls]
 find = "self"
-list = "all:home"
+list = "home"
 look = "self"
-send = "all:home"
+send = "home"
 grant = "self"
 "#,
         ),

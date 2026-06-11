@@ -63,10 +63,10 @@ resolution stage. The authorization stage SHALL:
   never assigned a bundle namespace.
 - Classify each target's relationship to the requester into a uniform scope tier
   and require the maximum tier across the route: `self` for a self-target,
-  `all:home` for a same-bundle target, `all:all` for a target in a peer bundle.
+  `home` for a same-bundle target, `all` for a target in a peer bundle.
   A relay-wide (`@GLOBAL`) target is delivered through the session registry, not
-  by crossing into a peer bundle, so it classifies at the `all:home` tier rather
-  than raising the requirement to `all:all`.
+  by crossing into a peer bundle, so it classifies at the `home` tier rather
+  than raising the requirement to `all`.
 - Consider **every** target when computing the required tier; authorization is
   the maximum across the whole route, never a single representative target.
   Because the scope ladder is monotone, a requester whose configured scope
@@ -79,10 +79,10 @@ resolution stage. The authorization stage SHALL:
   (its capability and addressing mode); it carries no per-operation cross-bundle
   policy.
 
-Whether a capability can ever be configured to reach the cross-bundle (`all:all`)
+Whether a capability can ever be configured to reach the cross-bundle (`all`)
 tier is governed solely by the policy schema's per-capability allowed-scope set
 (`parse_policy_controls`): `send`, `look`, `raww`, and `list` may be configured
-to `all:all`; `grant` and `updown` are capped at `all:home` and can never satisfy
+to `all`; `grant` and `updown` are capped at `home` and can never satisfy
 the cross-bundle threshold without a schema change. The relay SHALL NOT apply
 per-operation cross-bundle logic in handler or routing code; this data-driven
 spine — uniform tier classification plus the schema allowed-scope set — SHALL be
@@ -109,22 +109,22 @@ the single authority for cross-bundle reach.
 - **THEN** relay routes each target through the session registry
 - **AND** does not return `validation_missing_routing_namespace`
 
-#### Scenario: Cross-bundle Raww denied under all:home
+#### Scenario: Cross-bundle Raww denied under home
 
 - **WHEN** a requester issues a Raww request to a target in a different bundle
-- **AND** the requester's configured `raww` scope is `all:home` or narrower
+- **AND** the requester's configured `raww` scope is `home` or narrower
 - **THEN** relay returns `authorization_forbidden`
 
-Note: for a relay-wide (`@GLOBAL`) principal, `all:home` covers only the
+Note: for a relay-wide (`@GLOBAL`) principal, `home` covers only the
 `GLOBAL` namespace, which is populated exclusively by UI sessions. UI sessions
-are rejected by `handle_raww` as an unsupported target class, so `all:home`
-confers zero effective raww reach. `all:all` is the only meaningful tier for
+are rejected by `handle_raww` as an unsupported target class, so `home`
+confers zero effective raww reach. `all` is the only meaningful tier for
 cross-bundle raww from a relay-wide principal.
 
-#### Scenario: Cross-bundle Raww permitted under all:all
+#### Scenario: Cross-bundle Raww permitted under all
 
 - **WHEN** a requester issues a Raww request to a target in a different bundle
-- **AND** the requester's configured `raww` scope is `all:all`
+- **AND** the requester's configured `raww` scope is `all`
 - **THEN** relay routes to the target's bundle and delivers
 
 #### Scenario: Cross-bundle List resolves requester in home bundle

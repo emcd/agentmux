@@ -58,22 +58,22 @@ id = "default"
 find = "self"
 # The CLI operates this bundle as the relay-wide `user@GLOBAL` operator, whose
 # home namespace is GLOBAL; cross-namespace list/send into a bundle requires
-# all:all.
-list = "all:all"
+# all.
+list = "all"
 look = "self"
-send = "all:home"
+send = "home"
 
 [[policies]]
 id = "operator"
 
 [policies.controls]
 find = "self"
-grant = "all:home"
-list = "all:all"
-look = "all:all"
-raww = "all:home"
-send = "all:all"
-updown = "all:home"
+grant = "home"
+list = "all"
+look = "all"
+raww = "home"
+send = "all"
+updown = "home"
 "#,
     )
     .expect("write policies config");
@@ -155,22 +155,22 @@ id = "default"
 find = "self"
 # The CLI operates this bundle as the relay-wide `user@GLOBAL` operator, whose
 # home namespace is GLOBAL; cross-namespace list/send into a bundle requires
-# all:all.
-list = "all:all"
+# all.
+list = "all"
 look = "self"
-send = "all:home"
+send = "home"
 
 [[policies]]
 id = "operator"
 
 [policies.controls]
 find = "self"
-grant = "all:home"
-list = "all:all"
-look = "all:all"
-raww = "all:home"
-send = "all:all"
-updown = "all:home"
+grant = "home"
+list = "all"
+look = "all"
+raww = "home"
+send = "all"
+updown = "home"
 "#,
     )
     .expect("write policies config");

@@ -55,20 +55,20 @@ id = "default"
 
 [policies.controls]
 find = "self"
-list = "all:home"
+list = "home"
 look = "self"
-send = "all:home"
+send = "home"
 
 # A relay-wide operator's home namespace is GLOBAL, so reaching into a bundle is
-# cross-namespace and requires all:all.
+# cross-namespace and requires all.
 [[policies]]
 id = "operator"
 
 [policies.controls]
 find = "self"
-list = "all:all"
-look = "all:all"
-send = "all:all"
+list = "all"
+look = "all"
+send = "all"
 "#,
     )
     .expect("write policies configuration");
@@ -544,9 +544,9 @@ id = "default"
 
 [policies.controls]
 find = "self"
-list = "all:home"
+list = "home"
 look = "self"
-send = "all:home"
+send = "home"
 grant = "none"
 
 [[policies]]
@@ -554,10 +554,10 @@ id = "operator"
 
 [policies.controls]
 find = "self"
-list = "all:home"
-look = "all:home"
-send = "all:home"
-grant = "all:home"
+list = "home"
+look = "home"
+send = "home"
+grant = "home"
 "#,
     )
     .expect("write policies configuration");

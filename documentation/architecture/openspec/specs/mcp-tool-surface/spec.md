@@ -177,8 +177,8 @@ Transport-incompatible timeout overrides SHALL fail fast with
 
 `send` authorization scope SHALL follow requester policy control:
 
-- `all:home`
-- `all:all`
+- `home`
+- `all`
 
 #### Scenario: Reject non-canonical configured-name token for explicit send target
 
@@ -330,7 +330,7 @@ resolution and authorization are performed by the relay and surfaced unchanged.
 - **WHEN** a caller provides `target_session = "<session>@<peer-bundle>"`
   naming a bundle other than the associated bundle
 - **THEN** the tool forwards the target and returns the relay's peer-bundle
-  snapshot when the requester is authorized at `look = all:all`
+  snapshot when the requester is authorized at `look = all`
 
 #### Scenario: Reject unknown bundle
 

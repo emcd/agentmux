@@ -81,7 +81,7 @@ struct RawPolicyControls {
 }
 
 fn default_raww_policy_scope() -> String {
-    "all:home".to_string()
+    "home".to_string()
 }
 
 fn default_grant_policy_scope() -> String {
@@ -322,8 +322,8 @@ fn parse_policy_controls(
         &[
             PolicyScope::None,
             PolicyScope::SelfOnly,
-            PolicyScope::AllHome,
-            PolicyScope::AllAll,
+            PolicyScope::Home,
+            PolicyScope::All,
         ],
         "validation_invalid_arguments",
         "authorization policy control uses unsupported scope value",
@@ -333,7 +333,7 @@ fn parse_policy_controls(
         policies_path,
         policy_id,
         "list",
-        &[PolicyScope::AllHome, PolicyScope::AllAll],
+        &[PolicyScope::Home, PolicyScope::All],
         "validation_invalid_arguments",
         "authorization policy list control uses unsupported scope value",
     )?;
@@ -345,8 +345,8 @@ fn parse_policy_controls(
         &[
             PolicyScope::None,
             PolicyScope::SelfOnly,
-            PolicyScope::AllHome,
-            PolicyScope::AllAll,
+            PolicyScope::Home,
+            PolicyScope::All,
         ],
         "validation_invalid_arguments",
         "authorization policy control uses unsupported scope value",
@@ -356,7 +356,7 @@ fn parse_policy_controls(
         policies_path,
         policy_id,
         "send",
-        &[PolicyScope::AllHome, PolicyScope::AllAll],
+        &[PolicyScope::Home, PolicyScope::All],
         "validation_invalid_arguments",
         "authorization policy send control uses unsupported scope value",
     )?;
@@ -368,8 +368,8 @@ fn parse_policy_controls(
         &[
             PolicyScope::None,
             PolicyScope::SelfOnly,
-            PolicyScope::AllHome,
-            PolicyScope::AllAll,
+            PolicyScope::Home,
+            PolicyScope::All,
         ],
         "validation_invalid_policy_scope",
         "authorization policy raww control uses unsupported scope value",
@@ -379,7 +379,7 @@ fn parse_policy_controls(
         policies_path,
         policy_id,
         "grant",
-        &[PolicyScope::None, PolicyScope::AllHome],
+        &[PolicyScope::None, PolicyScope::Home],
         "validation_invalid_policy_scope",
         "authorization policy grant control uses unsupported scope value",
     )?;
@@ -388,7 +388,7 @@ fn parse_policy_controls(
         policies_path,
         policy_id,
         "updown",
-        &[PolicyScope::None, PolicyScope::AllHome],
+        &[PolicyScope::None, PolicyScope::Home],
         "validation_invalid_policy_scope",
         "authorization policy updown control uses unsupported scope value",
     )?;
@@ -400,8 +400,8 @@ fn parse_policy_controls(
         &[
             PolicyScope::None,
             PolicyScope::SelfOnly,
-            PolicyScope::AllHome,
-            PolicyScope::AllAll,
+            PolicyScope::Home,
+            PolicyScope::All,
         ],
     )?;
     let new_controls = parse_action_scope_map(
@@ -409,14 +409,14 @@ fn parse_policy_controls(
         "new",
         policies_path,
         policy_id,
-        &[PolicyScope::None, PolicyScope::AllHome, PolicyScope::AllAll],
+        &[PolicyScope::None, PolicyScope::Home, PolicyScope::All],
     )?;
     let change_controls = parse_action_scope_map(
         controls.change_controls,
         "change",
         policies_path,
         policy_id,
-        &[PolicyScope::None, PolicyScope::AllHome, PolicyScope::AllAll],
+        &[PolicyScope::None, PolicyScope::Home, PolicyScope::All],
     )?;
     Ok(PolicyControls {
         find,
@@ -480,8 +480,8 @@ fn parse_scope_for_control(
     let parsed = match value {
         "none" => PolicyScope::None,
         "self" => PolicyScope::SelfOnly,
-        "all:home" => PolicyScope::AllHome,
-        "all:all" => PolicyScope::AllAll,
+        "home" => PolicyScope::Home,
+        "all" => PolicyScope::All,
         _ => {
             return Err(relay_error(
                 error_code,

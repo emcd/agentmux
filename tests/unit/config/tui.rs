@@ -142,16 +142,16 @@ id = "default"
 
 [policies.controls]
 find = "self"
-list = "all:home"
-look = "all:home"
-send = "all:home"
+list = "home"
+look = "home"
+send = "home"
 
 [[policies]]
 id = "restricted"
 
 [policies.controls]
 find = "self"
-list = "all:home"
+list = "home"
 look = "self"
 send = "none"
 "#,
