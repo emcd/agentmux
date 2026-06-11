@@ -755,7 +755,6 @@ fn acp_respawn_stream_event(
 ) -> RelayStreamEvent {
     RelayStreamEvent {
         event_type: event_type.to_string(),
-        bundle_name: bundle_name.to_string(),
         target_session: canonical_session_id(target_session, bundle_name),
         created_at: time::OffsetDateTime::now_utc()
             .format(&Rfc3339)

@@ -41,7 +41,6 @@ async fn look_returns_snapshot_payload_and_forwards_request_shape() {
     let payload = decode_tool_payload(&response);
 
     assert_eq!(payload["schema_version"], "1");
-    assert_eq!(payload["bundle_name"], BUNDLE_NAME);
     assert_eq!(payload["requester_session"], SENDER_SESSION);
     assert_eq!(payload["target_session"], "bravo");
     assert_eq!(payload["snapshot_format"], "lines");

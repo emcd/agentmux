@@ -185,11 +185,11 @@ pub struct RelayError {
     pub details: Option<Value>,
 }
 
-/// Relay-pushed stream event payload.
+/// Relay-pushed stream event payload. The addressee's bundle is carried in the
+/// canonical `target_session` suffix (`session@bundle`).
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct RelayStreamEvent {
     pub event_type: String,
-    pub bundle_name: String,
     pub target_session: String,
     pub created_at: String,
     pub payload: Value,
@@ -297,7 +297,6 @@ pub enum RelayResponse {
     },
     Send {
         schema_version: String,
-        bundle_name: String,
         request_id: Option<String>,
         requester_session: String,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -317,7 +316,6 @@ pub enum RelayResponse {
     },
     Look {
         schema_version: String,
-        bundle_name: String,
         requester_session: String,
         target_session: String,
         captured_at: String,
@@ -358,7 +356,6 @@ pub enum RelayResponse {
     },
     PermissionList {
         schema_version: String,
-        bundle_name: String,
         pending_requests: Vec<PendingPermissionEntry>,
     },
     NewPeer {

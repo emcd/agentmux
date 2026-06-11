@@ -60,7 +60,6 @@ impl McpServer {
         match self.request_relay(&request) {
             Ok(RelayResponse::Look {
                 schema_version,
-                bundle_name,
                 requester_session,
                 target_session,
                 captured_at,
@@ -70,7 +69,6 @@ impl McpServer {
             }) => {
                 let mut response_map = serde_json::Map::new();
                 response_map.insert("schema_version".to_string(), Value::String(schema_version));
-                response_map.insert("bundle_name".to_string(), Value::String(bundle_name));
                 response_map.insert(
                     "requester_session".to_string(),
                     Value::String(requester_session),

@@ -22,7 +22,7 @@ use uuid::Uuid;
 use crate::configuration::SessionType;
 use crate::runtime::inscriptions::emit_inscription;
 
-use super::identity::{PrincipalType, classify_principal_id, scope_permits, split_principal_id};
+use super::identity::{PrincipalType, canonical_session_id, classify_principal_id, scope_permits};
 use super::{RelayRequest, RelayResponse};
 
 // Bounded write timeout for relay-to-client writes. A stalled client whose
@@ -150,7 +150,6 @@ pub(super) enum OutgoingFrame<'a> {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub(super) struct RelayStreamEvent {
     pub(super) event_type: String,
-    pub(super) bundle_name: String,
     pub(super) target_session: String,
     pub(super) created_at: String,
     pub(super) payload: Value,
@@ -458,7 +457,7 @@ pub(super) fn evict_streams_for_bundle(bundle_name: &str, response: &RelayRespon
 /// carrying a scope are considered, and `scope` is set only for application
 /// principals, so non-host connections are skipped (a `None` scope is
 /// fail-closed in [`scope_permits`]). The per-recipient event is cloned with
-/// `target_session`/`bundle_name` rewritten to the recipient host, matching the
+/// `target_session` rewritten to the recipient host's principal id, matching the
 /// relay-wide event convention used by the snapshot. Writers are collected under
 /// the registry lock and written after it is released. Returns the number of
 /// hosts notified.
@@ -489,10 +488,7 @@ pub(super) fn notify_trusted_hosts_of_revocation(
     let count = targets.len();
     for (writer, host_principal_id) in targets {
         let mut event = template.clone();
-        event.target_session = host_principal_id.clone();
-        if let Some((_, namespace)) = split_principal_id(host_principal_id.as_str()) {
-            event.bundle_name = namespace.to_string();
-        }
+        event.target_session = host_principal_id;
         let _ = write_stream_frame_to_writer(&writer, OutgoingFrame::Event { event: &event });
     }
     count
@@ -574,8 +570,9 @@ pub(super) fn list_registered_relay_wide_sessions() -> Vec<(String, SessionType)
 
 // Fans an event out to every UI-class subscriber relevant to the bundle
 // (bundle-local sessions and relay-wide principals). The per-recipient event is
-// cloned with `target_session` rewritten to the recipient id so existing
-// per-session filtering still works.
+// cloned with `target_session` rewritten to the recipient's canonical id so
+// existing per-session filtering still works; bundle-local recipient ids are
+// bare and must be qualified, relay-wide principal ids pass through unchanged.
 pub(super) fn broadcast_event_to_bundle_ui(
     bundle_name: &str,
     template: &RelayStreamEvent,
@@ -584,7 +581,7 @@ pub(super) fn broadcast_event_to_bundle_ui(
     let mut delivered = Vec::new();
     for ui_session_id in ui_session_ids {
         let mut event = template.clone();
-        event.target_session = ui_session_id.clone();
+        event.target_session = canonical_session_id(ui_session_id.as_str(), bundle_name);
         if matches!(
             send_event_to_registered_ui(bundle_name, ui_session_id.as_str(), &event),
             Ok(StreamEventSendOutcome::Delivered)

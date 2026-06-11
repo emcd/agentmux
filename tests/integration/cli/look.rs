@@ -40,7 +40,6 @@ fn look_returns_canonical_json_payload() {
         &RelayRuntimePaths::resolve(&state_root).relay_socket,
         RelayResponse::Look {
             schema_version: "1".to_string(),
-            bundle_name: "agentmux".to_string(),
             requester_session: "user".to_string(),
             target_session: "bravo".to_string(),
             captured_at: "2026-03-08T00:00:00Z".to_string(),
@@ -72,7 +71,6 @@ fn look_returns_canonical_json_payload() {
     assert!(output.status.success(), "command should succeed");
     let payload: Value = serde_json::from_slice(&output.stdout).expect("decode look json payload");
     assert_eq!(payload["schema_version"], "1");
-    assert_eq!(payload["bundle_name"], "agentmux");
     assert_eq!(payload["requester_session"], "user");
     assert_eq!(payload["target_session"], "bravo");
     assert_eq!(payload["captured_at"], "2026-03-08T00:00:00Z");
@@ -118,7 +116,6 @@ fn look_preserves_additive_acp_freshness_fields_in_machine_output() {
         &RelayRuntimePaths::resolve(&state_root).relay_socket,
         RelayResponse::Look {
             schema_version: "1".to_string(),
-            bundle_name: "agentmux".to_string(),
             requester_session: "user".to_string(),
             target_session: "bravo".to_string(),
             captured_at: "2026-03-08T00:00:00Z".to_string(),
@@ -210,7 +207,6 @@ fn look_preserves_structured_acp_entries_in_machine_output() {
         &RelayRuntimePaths::resolve(&state_root).relay_socket,
         RelayResponse::Look {
             schema_version: "1".to_string(),
-            bundle_name: "agentmux".to_string(),
             requester_session: "user".to_string(),
             target_session: "bravo".to_string(),
             captured_at: "2026-03-08T00:00:00Z".to_string(),

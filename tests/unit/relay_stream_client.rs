@@ -103,8 +103,7 @@ fn stream_client_poll_events_returns_pending_event_frames() {
             "frame": "event",
             "event": {
                 "event_type": "incoming_message",
-                "bundle_name": "party",
-                "target_session": "alpha",
+                "target_session": "alpha@party",
                 "created_at": "2026-03-18T00:00:00Z",
                 "payload": {
                     "message_id": "msg-1",
@@ -139,8 +138,7 @@ fn stream_client_poll_events_returns_pending_event_frames() {
 
     assert_eq!(received.len(), 1);
     assert_eq!(received[0].event_type, "incoming_message");
-    assert_eq!(received[0].bundle_name, "party");
-    assert_eq!(received[0].target_session, "alpha");
+    assert_eq!(received[0].target_session, "alpha@party");
     assert_eq!(received[0].payload["sender_session"], "master");
     server.join().expect("join server thread");
 }

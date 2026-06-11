@@ -95,13 +95,11 @@ impl McpServer {
         match self.request_relay(&request) {
             Ok(RelayResponse::PermissionList {
                 schema_version,
-                bundle_name,
                 pending_requests,
             }) => {
                 let pending_count = pending_requests.len();
                 let response = json!({
                     "schema_version": schema_version,
-                    "bundle_name": bundle_name,
                     "pending_requests": pending_requests,
                 });
                 emit_inscription(

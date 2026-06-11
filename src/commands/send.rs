@@ -60,7 +60,6 @@ pub(super) fn run_agentmux_send(arguments: &[String]) -> Result<(), RuntimeError
     let payload = match response {
         RelayResponse::Send {
             schema_version,
-            bundle_name,
             request_id,
             requester_session,
             sender_display_name,
@@ -68,7 +67,6 @@ pub(super) fn run_agentmux_send(arguments: &[String]) -> Result<(), RuntimeError
             ..
         } => json!({
             "schema_version": schema_version,
-            "bundle_name": bundle_name,
             "request_id": request_id,
             "requester_session": requester_session,
             "sender_display_name": sender_display_name,
@@ -89,20 +87,14 @@ pub(super) fn run_agentmux_send(arguments: &[String]) -> Result<(), RuntimeError
                 RuntimeError::io("encode send response json", std::io::Error::other(source))
             })?
         );
-    } else {
-        println!(
-            "bundle={}",
-            payload["bundle_name"].as_str().unwrap_or_default(),
-        );
-        if let Some(results) = payload["results"].as_array() {
-            for result in results {
-                let target = result["target_session"].as_str().unwrap_or_default();
-                let outcome = result["outcome"].as_str().unwrap_or_default();
-                if let Some(reason) = result["reason"].as_str() {
-                    println!("{target}\t{outcome}\t{reason}");
-                } else {
-                    println!("{target}\t{outcome}");
-                }
+    } else if let Some(results) = payload["results"].as_array() {
+        for result in results {
+            let target = result["target_session"].as_str().unwrap_or_default();
+            let outcome = result["outcome"].as_str().unwrap_or_default();
+            if let Some(reason) = result["reason"].as_str() {
+                println!("{target}\t{outcome}\t{reason}");
+            } else {
+                println!("{target}\t{outcome}");
             }
         }
     }

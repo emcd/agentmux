@@ -83,7 +83,6 @@ fn send_accepts_message_flag_when_piped_stdin_is_empty() {
         &RelayRuntimePaths::resolve(&state_root).relay_socket,
         RelayResponse::Send {
             schema_version: "1".to_string(),
-            bundle_name: "agentmux".to_string(),
             request_id: None,
             requester_session: "user".to_string(),
             sender_display_name: Some("Operator".to_string()),
@@ -215,7 +214,6 @@ fn send_preserves_valid_explicit_session_in_relay_request() {
         &RelayRuntimePaths::resolve(&state_root).relay_socket,
         RelayResponse::Send {
             schema_version: "1".to_string(),
-            bundle_name: "agentmux".to_string(),
             request_id: None,
             requester_session: "user".to_string(),
             sender_display_name: Some("Alpha".to_string()),
@@ -390,7 +388,6 @@ fn send_uses_tui_defaults_for_bundle_and_session() {
         &RelayRuntimePaths::resolve(&state_root).relay_socket,
         RelayResponse::Send {
             schema_version: "1".to_string(),
-            bundle_name: "agentmux".to_string(),
             request_id: None,
             requester_session: "user".to_string(),
             sender_display_name: Some("Operator".to_string()),

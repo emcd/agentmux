@@ -194,15 +194,16 @@ fn global_user_id(bundle_name: &str) -> String {
     format!("g{:016x}@GLOBAL", hasher.finish())
 }
 
-// Collects stream events for `bundle_name` until the terminal `delivered`
-// outcome is seen or the deadline elapses. Relay-wide (`@GLOBAL`) UI connections
-// receive events from every bundle on the relay, and the stream registry is
-// process-wide, so a test targeting one bundle must filter foreign events out by
-// `bundle_name` rather than reading a fixed event count.
-fn collect_bundle_events(
+// Collects stream events addressed to `target_session` until the terminal
+// `delivered` outcome is seen or the deadline elapses. Relay-wide (`@GLOBAL`)
+// UI connections receive events from every bundle on the relay, and the stream
+// registry is process-wide, so a test must filter foreign events out by the
+// recipient id in the canonical `target_session` (unique per test) rather than
+// reading a fixed event count.
+fn collect_events_for_target(
     stream: &UnixStream,
     reader: &mut BufReader<UnixStream>,
-    bundle_name: &str,
+    target_session: &str,
     deadline: Duration,
 ) -> Vec<Value> {
     stream
@@ -214,7 +215,7 @@ fn collect_bundle_events(
         let Some(value) = read_json_with_timeout(reader) else {
             continue;
         };
-        if value["frame"] != "event" || value["event"]["bundle_name"] != bundle_name {
+        if value["frame"] != "event" || value["event"]["target_session"] != target_session {
             continue;
         }
         let terminal = value["event"]["event_type"] == "delivery_outcome"
@@ -283,15 +284,18 @@ fn relay_send_routes_to_connected_ui_stream_with_event_frames() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].outcome, SendOutcome::Queued);
 
-    // Events to a relay-wide (`@GLOBAL`) UI session are attributed to the
-    // uniform `GLOBAL` delivery group regardless of the sender's home bundle;
-    // sender attribution rides in the payload's `sender_session`.
-    let events = collect_bundle_events(&ui_client, &mut reader, "GLOBAL", Duration::from_secs(3));
+    // Events to a relay-wide (`@GLOBAL`) UI session are addressed to its full
+    // principal id; sender attribution rides in the payload's `sender_session`.
+    let events = collect_events_for_target(
+        &ui_client,
+        &mut reader,
+        &global_user_id(&bundle_name),
+        Duration::from_secs(3),
+    );
     let incoming_event = events
         .iter()
         .find(|value| value["event"]["event_type"] == "incoming_message")
         .expect("incoming event");
-    assert_eq!(incoming_event["event"]["bundle_name"], "GLOBAL");
     assert_eq!(
         incoming_event["event"]["target_session"],
         global_user_id(&bundle_name)
@@ -372,10 +376,10 @@ fn relay_send_waits_for_ui_reconnect_before_delivery() {
             ),
         );
         let ack = read_json(&mut reconnect_reader);
-        let events = collect_bundle_events(
+        let events = collect_events_for_target(
             &reconnect_client,
             &mut reconnect_reader,
-            "GLOBAL",
+            &global_user_id(&reconnect_bundle),
             Duration::from_secs(3),
         );
         reconnect_client
@@ -634,7 +638,6 @@ fn relay_permission_list_succeeds_for_grant_authorized_principal() {
     assert_eq!(response["frame"], "response");
     assert_eq!(response["request_id"], request_id);
     assert_eq!(response["response"]["kind"], "permission_list");
-    assert_eq!(response["response"]["bundle_name"], bundle_name);
     let entries = response["response"]["pending_requests"]
         .as_array()
         .expect("pending_requests array");

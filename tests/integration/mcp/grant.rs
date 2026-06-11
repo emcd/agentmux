@@ -59,7 +59,6 @@ async fn grant_list_returns_pending_requests_from_relay() {
     let payload = decode_tool_payload(&response);
 
     assert_eq!(payload["schema_version"], "1");
-    assert_eq!(payload["bundle_name"], BUNDLE_NAME);
     let entries = payload["pending_requests"]
         .as_array()
         .expect("pending_requests array");
