@@ -125,7 +125,6 @@ impl McpServer {
                 emit_inscription(
                     "mcp.tool.look.success",
                     &json!({
-                        "bundle_name": response["bundle_name"],
                         "requester_session": response["requester_session"],
                         "target_session": response["target_session"],
                         "snapshot_format": response["snapshot_format"],

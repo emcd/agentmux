@@ -12,7 +12,6 @@ async fn grant_list_returns_pending_requests_from_relay() {
                 Some("permission_list") => json!({
                     "kind": "permission_list",
                     "schema_version": "1",
-                    "bundle_name": BUNDLE_NAME,
                     "pending_requests": [
                         {
                             "message_id": "msg-1",

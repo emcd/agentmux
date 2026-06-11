@@ -185,7 +185,6 @@ async fn send_forwards_quiescence_timeout_override() {
                 Some("send") => json!({
                     "kind": "send",
                     "schema_version": "1",
-                    "bundle_name": BUNDLE_NAME,
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
                     "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
                     "results": [],
@@ -231,7 +230,6 @@ async fn send_forwards_acp_turn_timeout_override() {
                 Some("send") => json!({
                     "kind": "send",
                     "schema_version": "1",
-                    "bundle_name": BUNDLE_NAME,
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
                     "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
                     "results": [],
@@ -407,7 +405,6 @@ async fn send_surfaces_authenticated_identity_from_relay() {
                 Some("send") => json!({
                     "kind": "send",
                     "schema_version": "1",
-                    "bundle_name": BUNDLE_NAME,
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
                     "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
                     "authenticated_identity": "alpha@agentmux",
@@ -451,7 +448,6 @@ async fn send_omits_sender_attribution_when_relay_omits_it() {
                 Some("send") => json!({
                     "kind": "send",
                     "schema_version": "1",
-                    "bundle_name": BUNDLE_NAME,
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
                     "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
                     "results": [],
@@ -492,7 +488,6 @@ async fn send_qualifies_bare_target_with_bound_bundle() {
                 Some("send") => json!({
                     "kind": "send",
                     "schema_version": "1",
-                    "bundle_name": BUNDLE_NAME,
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
                     "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
                     "results": [],
@@ -539,7 +534,6 @@ async fn send_preserves_already_qualified_target() {
                 Some("send") => json!({
                     "kind": "send",
                     "schema_version": "1",
-                    "bundle_name": BUNDLE_NAME,
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
                     "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
                     "results": [],
@@ -589,7 +583,6 @@ async fn send_omits_wire_envelope_namespace_for_suffix_routing() {
                 Some("send") => json!({
                     "kind": "send",
                     "schema_version": "1",
-                    "bundle_name": BUNDLE_NAME,
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
                     "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
                     "results": [],

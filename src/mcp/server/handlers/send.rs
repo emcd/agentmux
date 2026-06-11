@@ -93,7 +93,6 @@ impl McpServer {
                 emit_inscription(
                     "mcp.tool.send.success",
                     &json!({
-                        "bundle_name": response["bundle_name"],
                         "result_count": response["results"].as_array().map_or(0, |value| value.len()),
                     }),
                 );
