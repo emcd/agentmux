@@ -1,10 +1,83 @@
 use agentmux::runtime::paths::{
     BundleRuntimePaths, RelayRuntimePaths, RuntimeRootOverrides, RuntimeRoots,
-    debug_repository_configuration_root, debug_repository_inscriptions_root,
-    debug_repository_state_root, ensure_bundle_runtime_directory,
-    tmux_socket_path_for_runtime_directory,
+    agentmux_source_checkout_root, debug_repository_configuration_root,
+    debug_repository_inscriptions_root, debug_repository_state_root,
+    ensure_bundle_runtime_directory, tmux_socket_path_for_runtime_directory,
 };
 use tempfile::TempDir;
+
+/// Writes a minimal candidate checkout: optional `.git` entry (directory or
+/// marker file, mirroring a primary clone vs a linked worktree) and optional
+/// `Cargo.toml` with the given package name.
+fn write_checkout_candidate(
+    temporary: &TempDir,
+    git_entry: Option<GitEntry>,
+    package_name: Option<&str>,
+) -> std::path::PathBuf {
+    let root = temporary.path().join("candidate");
+    std::fs::create_dir_all(&root).expect("create candidate root");
+    match git_entry {
+        Some(GitEntry::Directory) => {
+            std::fs::create_dir(root.join(".git")).expect("create .git directory");
+        }
+        Some(GitEntry::WorktreeFile) => {
+            std::fs::write(root.join(".git"), "gitdir: /elsewhere/.git/worktrees/wt\n")
+                .expect("write .git worktree file");
+        }
+        None => {}
+    }
+    if let Some(name) = package_name {
+        std::fs::write(
+            root.join("Cargo.toml"),
+            format!("[package]\nname = \"{name}\"\nversion = \"0.0.0\"\n"),
+        )
+        .expect("write Cargo.toml");
+    }
+    root
+}
+
+enum GitEntry {
+    Directory,
+    WorktreeFile,
+}
+
+// Debug builds (which tests are) take the dev-mode branch, so the probe's
+// positive and negative signals are observable directly.
+#[test]
+fn source_checkout_probe_accepts_agentmux_clone() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let root = write_checkout_candidate(&temporary, Some(GitEntry::Directory), Some("agentmux"));
+    assert_eq!(agentmux_source_checkout_root(&root), Some(root.clone()));
+}
+
+#[test]
+fn source_checkout_probe_accepts_linked_worktree() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let root = write_checkout_candidate(&temporary, Some(GitEntry::WorktreeFile), Some("agentmux"));
+    assert_eq!(agentmux_source_checkout_root(&root), Some(root.clone()));
+}
+
+#[test]
+fn source_checkout_probe_rejects_foreign_git_clone() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let root =
+        write_checkout_candidate(&temporary, Some(GitEntry::Directory), Some("otherproject"));
+    assert_eq!(agentmux_source_checkout_root(&root), None);
+}
+
+#[test]
+fn source_checkout_probe_rejects_git_clone_without_manifest() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let root = write_checkout_candidate(&temporary, Some(GitEntry::Directory), None);
+    assert_eq!(agentmux_source_checkout_root(&root), None);
+}
+
+#[test]
+fn source_checkout_probe_rejects_source_export_without_git() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let root = write_checkout_candidate(&temporary, None, Some("agentmux"));
+    assert_eq!(agentmux_source_checkout_root(&root), None);
+}
 
 #[test]
 fn resolves_debug_repository_state_root() {

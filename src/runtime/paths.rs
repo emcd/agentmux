@@ -7,6 +7,7 @@ use std::{
 };
 
 use super::error::RuntimeError;
+use super::inscriptions::emit_inscription;
 
 const APPLICATION_DIRECTORY: &str = "agentmux";
 const CONFIGURATION_DIRECTORY_DEFAULT: &str = ".config";
@@ -142,6 +143,61 @@ pub fn debug_repository_inscriptions_root(repository_root: &Path) -> PathBuf {
     repository_root
         .join(".auxiliary/inscriptions")
         .join(APPLICATION_DIRECTORY)
+}
+
+/// Probes `candidate` for an Agentmux source checkout — the positive signal
+/// required before a debug build adopts repository-local (dev-mode) runtime
+/// roots from its working directory.
+///
+/// A checkout must satisfy both conditions: `.git` exists (a directory for a
+/// primary clone, a file for a linked worktree), and the root `Cargo.toml`
+/// declares `name = "agentmux"`. Either alone is insufficient: an installed
+/// binary launched inside an unrelated Git clone must resolve production
+/// paths, and a source export without Git history is not a development
+/// workspace. When `.git` is present but the manifest marker is absent, a
+/// warning is emitted (stderr + inscription) so operators can see why the
+/// production paths were selected.
+///
+/// Always `None` in release builds, where dev-mode roots are unreachable and
+/// the filesystem probe would be wasted work.
+#[must_use]
+pub fn agentmux_source_checkout_root(candidate: &Path) -> Option<PathBuf> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    if !candidate.join(".git").exists() {
+        return None;
+    }
+    if !cargo_manifest_declares_agentmux(candidate) {
+        emit_inscription(
+            "runtime.dev_mode.foreign_repository",
+            &serde_json::json!({ "candidate": candidate }),
+        );
+        eprintln!(
+            "debug build launched inside a Git clone that is not an Agentmux source \
+             checkout ({}); using production runtime paths",
+            candidate.display()
+        );
+        return None;
+    }
+    Some(candidate.to_path_buf())
+}
+
+/// Reports whether the `Cargo.toml` at `root` declares `name = "agentmux"`
+/// in its `[package]` table. Unreadable or unparseable manifests are not
+/// checkouts.
+fn cargo_manifest_declares_agentmux(root: &Path) -> bool {
+    let Ok(raw) = fs::read_to_string(root.join("Cargo.toml")) else {
+        return false;
+    };
+    let Ok(manifest) = raw.parse::<toml::Value>() else {
+        return false;
+    };
+    manifest
+        .get("package")
+        .and_then(|package| package.get("name"))
+        .and_then(toml::Value::as_str)
+        == Some(APPLICATION_DIRECTORY)
 }
 
 /// Resolves the tmux socket path for one bundle runtime directory.

@@ -32,7 +32,8 @@ use crate::{
         inscriptions::{configure_process_inscriptions, emit_inscription, relay_inscriptions_path},
         paths::{
             BundleRuntimePaths, RelayRuntimePaths, RuntimeRootOverrides, RuntimeRoots,
-            ensure_bundle_runtime_directory, ensure_relay_runtime_directory,
+            agentmux_source_checkout_root, ensure_bundle_runtime_directory,
+            ensure_relay_runtime_directory,
         },
         signals::{install_shutdown_signal_handlers, shutdown_requested},
         starter::ensure_starter_configuration_layout,
@@ -212,11 +213,17 @@ fn spawn_shutdown_watchdog() -> Result<(), RuntimeError> {
 fn resolve_runtime_roots(runtime: RuntimeArguments) -> Result<RuntimeRoots, RuntimeError> {
     let current_directory = env::current_dir()
         .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
+    // The working directory feeds dev-mode (repository-local) path resolution
+    // only when it is positively identified as an Agentmux source checkout; an
+    // explicit --repository-root override is operator intent and goes through
+    // unprobed.
     let overrides = RuntimeRootOverrides {
         configuration_root: runtime.configuration_root,
         state_root: runtime.state_root,
         inscriptions_root: runtime.inscriptions_root,
-        repository_root: runtime.repository_root.or(Some(current_directory)),
+        repository_root: runtime
+            .repository_root
+            .or_else(|| agentmux_source_checkout_root(&current_directory)),
     };
     let roots = RuntimeRoots::resolve(&overrides)?;
     ensure_starter_configuration_layout(&roots.configuration_root)?;
