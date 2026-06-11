@@ -8,7 +8,8 @@ use std::{
 
 use agentmux::{
     relay::{
-        BundleCatalog, RelayRequest, RelayResponse, SendOutcome, handle_request, serve_connection,
+        BundleCatalog, ConnectionDrainCoordinator, RelayRequest, RelayResponse, SendOutcome,
+        handle_request, serve_connection,
     },
     runtime::paths::BundleRuntimePaths,
 };
@@ -148,6 +149,7 @@ fn run_serve_connection(
             &bundle_catalog,
             false,
             Duration::from_secs(2),
+            ConnectionDrainCoordinator::new().register_worker(),
         )
         .await
     })

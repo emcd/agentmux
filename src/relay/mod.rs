@@ -15,6 +15,7 @@ mod constants;
 mod context;
 mod contract;
 mod delivery;
+mod drain;
 mod errors;
 mod handlers;
 mod identity;
@@ -37,6 +38,7 @@ pub use self::delivery::install_pending_permission_request_for_testing;
 pub use self::delivery::observability::{
     PermissionQueueEvent, subscribe_acp_worker_state, subscribe_permission_queue_events,
 };
+pub use self::drain::{ConnectionDrainCoordinator, ConnectionDrainReport, ConnectionWorkerSlot};
 use self::errors::*;
 use self::identity::*;
 pub use self::watcher::{BundleWatcher, spawn_bundle_watcher};

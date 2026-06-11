@@ -8,7 +8,10 @@ use std::{
 };
 
 use agentmux::{
-    relay::{BundleCatalog, serve_connection},
+    relay::{
+        BundleCatalog, ConnectionDrainCoordinator, ConnectionDrainReport, ConnectionWorkerSlot,
+        serve_connection,
+    },
     runtime::paths::BundleRuntimePaths,
 };
 use serde_json::{Value, json};
@@ -377,6 +380,27 @@ fn run_serve_connection_with_enforcement(
     bundle_catalog: BundleCatalog,
     require_session_credentials: bool,
 ) -> Result<(), std::io::Error> {
+    run_serve_connection_with_slot(
+        server_stream,
+        configuration_root,
+        state_root,
+        bundle_catalog,
+        require_session_credentials,
+        ConnectionDrainCoordinator::new().register_worker(),
+    )
+}
+
+// Variant for shutdown-drain tests: the caller keeps the coordinator that
+// issued `worker_slot`, so it can fire the shutdown signal and assert on the
+// drain report from outside the connection thread.
+fn run_serve_connection_with_slot(
+    server_stream: UnixStream,
+    configuration_root: PathBuf,
+    state_root: PathBuf,
+    bundle_catalog: BundleCatalog,
+    require_session_credentials: bool,
+    worker_slot: ConnectionWorkerSlot,
+) -> Result<(), std::io::Error> {
     server_stream.set_nonblocking(true)?;
     let runtime = TokioRuntimeBuilder::new_multi_thread()
         .worker_threads(2)
@@ -392,6 +416,7 @@ fn run_serve_connection_with_enforcement(
             &bundle_catalog,
             require_session_credentials,
             TEST_PRE_HELLO_IDLE_TIMEOUT,
+            worker_slot,
         )
         .await
     })
