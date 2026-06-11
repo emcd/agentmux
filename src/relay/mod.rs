@@ -403,11 +403,7 @@ pub(in crate::relay) fn dispatch_identity_introspect(
     state_root: &Path,
     principal: &RequestPrincipal,
 ) -> RelayResponse {
-    let RelayRequest::IdentityIntrospect {
-        target_session,
-        bundle_name,
-    } = request
-    else {
+    let RelayRequest::IdentityIntrospect { target_session } = request else {
         return RelayResponse::Error {
             error: relay_error(
                 "internal_unexpected_request",
@@ -416,12 +412,7 @@ pub(in crate::relay) fn dispatch_identity_introspect(
             ),
         };
     };
-    match handlers::handle_identity_introspect(
-        state_root,
-        principal,
-        target_session.as_str(),
-        bundle_name.as_deref(),
-    ) {
+    match handlers::handle_identity_introspect(state_root, principal, target_session.as_str()) {
         Ok(value) => value,
         Err(error) => RelayResponse::Error { error },
     }

@@ -15,7 +15,7 @@ use time::format_description::well_known::Rfc3339;
 use crate::relay::authorization::{RelayActionFamily, authorize_relay_action};
 use crate::relay::context::RequestPrincipal;
 use crate::relay::identity::{
-    IdentityIntrospectRights, PrincipalRecord, PrincipalStore, PrincipalType, canonical_session_id,
+    IdentityIntrospectRights, PrincipalRecord, PrincipalStore, PrincipalType,
     classify_principal_id, generate_psk, hash_token_sha256, scope_permits, split_principal_id,
     write_psk_output_file,
 };
@@ -180,33 +180,40 @@ pub(in crate::relay) fn handle_change_psk(
 /// Resolves an `IdentityIntrospect` request against the relay-wide principal
 /// store, gated on the connection's recorded introspection rights.
 ///
-/// Only an application principal carries `introspect_rights` (recorded at
-/// Hello), and only targets within its registered scope may be introspected; a
-/// connection without rights, or a target outside scope, receives an
-/// authorization denial. The store is read without pruning so an expired
-/// principal still surfaces (with `verified: false`) rather than vanishing.
+/// `target_session` must be a qualified principal id (`<id>@<namespace>`);
+/// bare ids are rejected with `validation_invalid_params` before any
+/// authorization check. Only an application principal carries
+/// `introspect_rights` (recorded at Hello), and only targets within its
+/// registered scope may be introspected; a connection without rights, or a
+/// target outside scope, receives an authorization denial. The store is read
+/// without pruning so an expired principal still surfaces (with
+/// `verified: false`) rather than vanishing.
 pub(in crate::relay) fn handle_identity_introspect(
     state_root: &Path,
     principal: &RequestPrincipal,
     target_session: &str,
-    bundle_name: Option<&str>,
 ) -> Result<RelayResponse, RelayError> {
-    let target_principal_id = match bundle_name {
-        Some(bundle) => canonical_session_id(target_session, bundle),
-        None => target_session.to_string(),
-    };
+    // Format validation precedes the authorization gate: a malformed target is
+    // a field error regardless of the connection's introspection rights.
+    if split_principal_id(target_session).is_none() {
+        return Err(relay_error(
+            "validation_invalid_params",
+            "target_session must be a qualified principal id (<id>@<namespace>)",
+            Some(serde_json::json!({ "field": "target_session" })),
+        ));
+    }
     let Some(rights) = principal.introspect_rights.as_ref() else {
-        return Err(introspect_denied(target_principal_id.as_str()));
+        return Err(introspect_denied(target_session));
     };
-    if !scope_permits(rights.scope.as_deref(), target_principal_id.as_str()) {
-        return Err(introspect_denied(target_principal_id.as_str()));
+    if !scope_permits(rights.scope.as_deref(), target_session) {
+        return Err(introspect_denied(target_session));
     }
     let store = PrincipalStore::load(principal_store_path(state_root))?;
-    let Some(record) = store.find_by_principal_id(target_principal_id.as_str()) else {
+    let Some(record) = store.find_by_principal_id(target_session) else {
         return Err(relay_error(
             "validation_unknown_principal",
             "no registered principal matches the introspection target",
-            Some(serde_json::json!({ "principal_id": target_principal_id })),
+            Some(serde_json::json!({ "principal_id": target_session })),
         ));
     };
     let verified = !record.is_expired(OffsetDateTime::now_utc());

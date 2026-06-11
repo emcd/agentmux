@@ -62,12 +62,9 @@ pub(super) fn handle_permission_decision(
         permission_request_id,
         outcome,
         option_id,
-        bundle_name: request_bundle_name,
         ui_session_id,
     } = request;
     validate_permission_decision_request(
-        bundle,
-        request_bundle_name.as_deref(),
         ui_session_id.as_ref(),
         permission_request_id.as_str(),
         option_id.as_deref(),
@@ -125,22 +122,9 @@ pub(super) fn handle_permission_decision(
 pub(super) fn handle_permission_list(
     bundle: &BundleConfiguration,
     authorization: &AuthorizationContext,
-    request_bundle_name: Option<String>,
     runtime_directory: &Path,
     principal: Option<RequestPrincipal>,
 ) -> Result<RelayResponse, RelayError> {
-    if let Some(request_bundle_name) = request_bundle_name.as_deref()
-        && request_bundle_name != bundle.bundle_name
-    {
-        return Err(relay_error(
-            "validation_cross_bundle_unsupported",
-            "permission list is limited to the associated bundle",
-            Some(json!({
-                "associated_bundle_name": bundle.bundle_name,
-                "requested_bundle_name": request_bundle_name,
-            })),
-        ));
-    }
     let principal = principal.ok_or_else(|| {
         relay_error(
             "validation_missing_hello",
@@ -172,24 +156,10 @@ pub(super) fn handle_permission_list(
 }
 
 fn validate_permission_decision_request(
-    bundle: &BundleConfiguration,
-    request_bundle_name: Option<&str>,
     ui_session_id: Option<&String>,
     permission_request_id: &str,
     option_id: Option<&str>,
 ) -> Result<(), RelayError> {
-    if let Some(request_bundle_name) = request_bundle_name
-        && request_bundle_name != bundle.bundle_name
-    {
-        return Err(relay_error(
-            "validation_cross_bundle_unsupported",
-            "permission decisions are limited to the associated bundle",
-            Some(json!({
-                "associated_bundle_name": bundle.bundle_name,
-                "requested_bundle_name": request_bundle_name,
-            })),
-        ));
-    }
     if ui_session_id.is_some() {
         return Err(relay_error(
             "validation_invalid_params",

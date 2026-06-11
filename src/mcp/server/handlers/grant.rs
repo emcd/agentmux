@@ -91,7 +91,7 @@ impl McpServer {
                 "bundle_name": self.associated_bundle_name(),
             }),
         );
-        let request = RelayRequest::PermissionList { bundle_name: None };
+        let request = RelayRequest::PermissionList;
         match self.request_relay(&request) {
             Ok(RelayResponse::PermissionList {
                 schema_version,
@@ -167,7 +167,6 @@ impl McpServer {
             permission_request_id: permission_request_id.clone(),
             outcome: outcome.clone(),
             option_id: option_id.clone(),
-            bundle_name: None,
             ui_session_id: None,
         };
         match self.request_relay(&request) {

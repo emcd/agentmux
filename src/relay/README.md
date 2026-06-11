@@ -40,7 +40,7 @@ exported from `src/relay/mod.rs`.
     (`<session>@<bundle>`) look up their bundle in the `BundleCatalog` and bind
     the connection to it; non-session principals (`@GLOBAL`/`@EXTERNAL`/`@RELAY`)
     skip the catalog and are not bundle-bound. A request frame's optional
-    `bundle_name` selects the routing bundle (overriding any binding); absent
+    `namespace` selects the routing bundle (overriding any binding); absent
     that, the bound bundle is used, and a relay-wide principal with neither is
     rejected.
 - `drain.rs`

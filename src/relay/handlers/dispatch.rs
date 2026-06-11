@@ -59,7 +59,6 @@ pub(in crate::relay) fn handle_request(
             permission_request_id,
             outcome,
             option_id,
-            bundle_name: request_bundle_name,
             ui_session_id,
         } => permissions::handle_permission_decision(
             bundle,
@@ -68,21 +67,14 @@ pub(in crate::relay) fn handle_request(
                 permission_request_id,
                 outcome,
                 option_id,
-                bundle_name: request_bundle_name,
                 ui_session_id,
             },
             runtime_directory,
             principal,
         ),
-        RelayRequest::PermissionList {
-            bundle_name: request_bundle_name,
-        } => permissions::handle_permission_list(
-            bundle,
-            authorization,
-            request_bundle_name,
-            runtime_directory,
-            principal,
-        ),
+        RelayRequest::PermissionList => {
+            permissions::handle_permission_list(bundle, authorization, runtime_directory, principal)
+        }
         RelayRequest::NewPeer { .. }
         | RelayRequest::ChangePsk { .. }
         | RelayRequest::IdentityIntrospect { .. } => Err(relay_error(
@@ -183,9 +175,8 @@ pub(in crate::relay) fn handle_identity_introspect(
     state_root: &Path,
     principal: &RequestPrincipal,
     target_session: &str,
-    bundle_name: Option<&str>,
 ) -> Result<RelayResponse, RelayError> {
-    identity::handle_identity_introspect(state_root, principal, target_session, bundle_name)
+    identity::handle_identity_introspect(state_root, principal, target_session)
 }
 
 /// Builds the `identity.snapshot` stream event for a trusted-host connection's
@@ -269,7 +260,7 @@ fn normalize_request_identities(request: RelayRequest, bundle_name: &str) -> Rel
         request @ (RelayRequest::Up
         | RelayRequest::Down
         | RelayRequest::PermissionResolve { .. }
-        | RelayRequest::PermissionList { .. }
+        | RelayRequest::PermissionList
         | RelayRequest::NewPeer { .. }
         | RelayRequest::ChangePsk { .. }
         | RelayRequest::IdentityIntrospect { .. }) => request,

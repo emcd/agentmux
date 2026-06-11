@@ -22,7 +22,6 @@ pub(super) struct PermissionDecisionRequestContext {
     pub(super) permission_request_id: String,
     pub(super) outcome: String,
     pub(super) option_id: Option<String>,
-    pub(super) bundle_name: Option<String>,
     pub(super) ui_session_id: Option<String>,
 }
 

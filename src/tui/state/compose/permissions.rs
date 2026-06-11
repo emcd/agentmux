@@ -140,7 +140,6 @@ impl AppState {
             permission_request_id: permission_request_id.clone(),
             outcome: outcome.to_string(),
             option_id,
-            bundle_name: None,
             ui_session_id: None,
         };
         match self.request_relay(&request)? {

@@ -756,16 +756,14 @@ fn typed_identity_error_codes_are_distinct_from_relay_unavailable() {
 // --- Identity introspection: IdentityIntrospect dispatch gate (Slice 2, tasks 2.9/2.10) ---
 
 /// Connects with `principal_id` + `identity_token`, issues one
-/// `IdentityIntrospect` for `target_session` (optionally qualified by
-/// `bundle_name`), and returns the response frame. The connection is closed
-/// before returning.
+/// `IdentityIntrospect` for `target_session` (a qualified principal id), and
+/// returns the response frame. The connection is closed before returning.
 fn introspect_request(
     configuration_root: &Path,
     bundle_paths: &BundleRuntimePaths,
     principal_id: &str,
     identity_token: &str,
     target_session: &str,
-    bundle_name: Option<&str>,
 ) -> Value {
     let (mut client, join) = spawn_relay_connection(configuration_root, bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone introspect stream"));
@@ -783,19 +781,15 @@ fn introspect_request(
         "hello_ack",
         "introspect client hello not acked"
     );
-    let mut request = json!({
-        "operation": "identity_introspect",
-        "target_session": target_session,
-    });
-    if let Some(bundle_name) = bundle_name {
-        request["bundle_name"] = Value::String(bundle_name.to_string());
-    }
     send_json(
         &mut client,
         json!({
             "frame": "request",
             "request_id": "introspect-1",
-            "request": request,
+            "request": {
+                "operation": "identity_introspect",
+                "target_session": target_session,
+            },
         }),
     );
     let mut response = read_json(&mut reader);
@@ -844,8 +838,7 @@ fn application_principal_introspects_active_session() {
         &bundle_paths,
         &app_principal_id,
         &app_psk,
-        "alpha",
-        Some(bundle_name),
+        target_principal_id.as_str(),
     );
 
     assert_eq!(
@@ -890,8 +883,7 @@ fn session_principal_introspect_is_denied() {
         &bundle_paths,
         &format!("alpha@{bundle_name}"),
         "socket-trust",
-        "alpha",
-        Some(bundle_name),
+        &format!("alpha@{bundle_name}"),
     );
 
     assert_eq!(
@@ -905,6 +897,39 @@ fn session_principal_introspect_is_denied() {
     assert!(
         response["response"]["principal_id"].is_null(),
         "a denied introspection must not leak identity data"
+    );
+}
+
+// A bare (unqualified) target_session is a field-format error, rejected before
+// the introspect_rights gate: even a connection with no rights sees
+// validation_invalid_params rather than an authorization denial.
+#[test]
+fn introspect_rejects_bare_target_session_before_authorization() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "ident_introspect_bare";
+    let configuration_root = write_identity_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+
+    let response = introspect_request(
+        &configuration_root,
+        &bundle_paths,
+        &format!("alpha@{bundle_name}"),
+        "socket-trust",
+        "alpha",
+    );
+
+    assert_eq!(
+        response["response"]["kind"], "error",
+        "bare introspect target must be rejected: {response:?}"
+    );
+    assert_eq!(
+        response["response"]["error"]["code"], "validation_invalid_params",
+        "bare target is a field-format error, not an authorization denial: {response:?}"
+    );
+    assert_eq!(
+        response["response"]["error"]["details"]["field"], "target_session",
+        "rejection details must cite the offending field: {response:?}"
     );
 }
 
