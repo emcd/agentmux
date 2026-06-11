@@ -36,5 +36,6 @@ No compatibility window; alpha software.
 - Affected code: `src/relay/contract.rs`, `src/relay/delivery/`,
   `src/relay/handlers/`, `src/relay/stream.rs`, `src/tui/state/` (test
   fixtures only), `src/mcp/server/handlers/{send,look,grant}.rs`,
-  `tests/integration/mcp/{send,look,grant}.rs`
+  `src/commands/send.rs`, `src/commands/look.rs` (CLI JSON output and send's
+  `bundle=` text line removed), `tests/integration/mcp/{send,look,grant}.rs`
 - Cross-lane: relay (BE), TUI (FE), MCP (AE)
