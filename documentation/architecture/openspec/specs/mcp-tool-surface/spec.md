@@ -216,11 +216,13 @@ Caller-supplied sender-like payload fields SHALL NOT override that principal.
 `send` SHALL return a response containing:
 
 - `schema_version`
-- `bundle_name`
 - `request_id` (when provided by caller)
 - `requester_session`
 - `sender_display_name` (optional)
 - `results` (per-target entries)
+
+`bundle_name` is retired from send responses; bundle context is recoverable
+from the `requester_session` suffix.
 
 Each per-target result SHALL include:
 
@@ -348,11 +350,13 @@ resolution and authorization are performed by the relay and surfaced unchanged.
 Successful `look` responses SHALL include:
 
 - `schema_version`
-- `bundle_name`
 - `requester_session`
 - `target_session`
 - `captured_at`
 - `snapshot_format` (`lines` | `acp_entries_v1`)
+
+`bundle_name` is retired from look responses; bundle context is recoverable
+from the `target_session` suffix.
 
 When `snapshot_format = "lines"`, MCP responses SHALL include:
 - `snapshot_lines` (`string[]`)
@@ -377,19 +381,6 @@ from transport heuristics.
 - **THEN** MCP returns `snapshot_format="lines"`
 - **AND** includes canonical `snapshot_lines` payload
 - **AND** ACP additive freshness fields are omitted
-
-#### Scenario: Preserve ACP structured payload unchanged
-
-- **WHEN** relay returns successful ACP look payload with
-  `snapshot_format="acp_entries_v1"`
-- **THEN** MCP returns the same `snapshot_format` and `snapshot_entries`
-  unchanged
-
-#### Scenario: Preserve required ACP freshness fields for empty snapshot entries
-
-- **WHEN** relay returns ACP look payload with `snapshot_entries=[]`
-- **THEN** MCP response still includes required `freshness` and
-  `snapshot_source`
 
 ### Requirement: MCP Authorization Adapter Boundary
 
@@ -669,8 +660,10 @@ rejected with `validation_invalid_params`.
 Successful response SHALL include:
 
 - `schema_version`
-- `bundle_name`
 - `pending_requests[]` ordered by enqueue `sequence` ascending
+
+`bundle_name` is retired from grant list responses; bundle context is implicit
+from the associated bundle connection.
 
 Each entry in `pending_requests[]` SHALL include:
 
@@ -690,12 +683,6 @@ These fields mirror the `permission.requested` relay event payload.
   `grant` capability
 - **THEN** MCP returns `pending_requests[]` ordered by `sequence`
 - **AND** each entry contains the required field set
-
-#### Scenario: Reject grant list with mismatched bundle_name
-
-- **WHEN** caller invokes `grant list` with `bundle_name` other than the
-  associated bundle
-- **THEN** MCP rejects with `validation_cross_bundle_unsupported`
 
 ### Requirement: MCP grant resolve request contract
 

@@ -676,11 +676,13 @@ the available buffer using `offset`:
 Successful relay look responses SHALL include:
 
 - `schema_version`
-- `bundle_name`
 - `requester_session`
 - `target_session`
 - `captured_at`
 - `snapshot_format` (`lines` | `acp_entries_v1`)
+
+`bundle_name` is retired from look responses; bundle context is recoverable
+from the `target_session` suffix.
 
 When `snapshot_format = "lines"`, responses SHALL include:
 - `snapshot_lines` (`string[]`)
@@ -701,7 +703,7 @@ For ACP targets, successful relay look responses SHALL additionally include:
 - `stale_reason_code` (required when `freshness=stale`; absent otherwise)
 - `snapshot_age_ms` (optional; omitted when unavailable)
 
-ACP stale reason vocabulary SHALL be fixed in MVP:
+ACP stale reason vocabulary:
 
 - `acp_worker_initializing`
 - `acp_worker_unavailable`
@@ -837,11 +839,14 @@ recipients.
 Relay pushed event frames SHALL include:
 
 - `event_type`
-- `bundle_name`
 - `target_session`
 - `created_at`
 
-MVP event types SHALL include:
+`target_session` SHALL carry the canonical `session@bundle` form per the
+Canonical Session Identity requirement. `bundle_name` is retired; bundle
+context is recoverable from the `target_session` suffix.
+
+Event types SHALL include:
 
 - `incoming_message`
 - `delivery_outcome`
@@ -901,6 +906,11 @@ Relay terminal state `dropped_on_shutdown` SHALL map to:
 - **THEN** `delivery_outcome` includes `phase=failed`
 - **AND** includes `outcome=failed`
 - **AND** includes `reason_code=dropped_on_shutdown`
+
+#### Scenario: Emit canonical target identity in delivery event
+
+- **WHEN** relay delivers a message to session `"relay"` in bundle `"agentmux"`
+- **THEN** delivery event includes `target_session = "relay@agentmux"`
 
 ### Requirement: Stream Failure Semantics
 
@@ -1894,60 +1904,60 @@ Request contract (MVP):
 
 ### Requirement: Relay raww target resolution and bundle boundary
 
-Relay raww target resolution SHALL use canonical session id identifiers only.
-Cross-bundle reach is governed by the requester's configured `raww` scope and
-the Uniform Cross-Bundle Authorization Model; there is no hard routing rejection
-for raww targeting a different bundle.
+Raww targets SHALL be resolved using the shared single-target routing stage.
 
 Validation behavior:
-- bare/unqualified target (no `@<namespace>` suffix) → `validation_unqualified_target`
-- relay-wide (`@GLOBAL`) or reserved (`@EXTERNAL`/`@RELAY`) target →
-  `validation_unsupported_namespace` (such a target names no session that accepts
-  raw input; uniform with the Look single-target stage)
+
+- bare/unqualified target (no `@<namespace>` suffix) →
+  `validation_unqualified_target`
+- reserved namespace (`@EXTERNAL`/`@RELAY`) target →
+  `validation_unsupported_namespace`
 - unknown/non-canonical target → `validation_unknown_target`
+- resolved target with `can_be_written = false` →
+  `validation_unsupported_operation` (see Transport Capability Contract)
 - cross-bundle raww with insufficient scope → `authorization_forbidden`
 
+Relay-wide (`@GLOBAL`) targets are no longer rejected at the routing stage;
+rejection occurs at the capability check using `validation_unsupported_operation`
+when the resolved session carries `can_be_written = false`. This separates namespace
+routing from operation-capability concerns.
+
 Validation precedence SHALL evaluate target qualification (at the resolution
-stage), then target existence, then authorization policy checks.
+stage), then target existence, then capability, then authorization policy checks.
 
 Raww and Look are complementary single-target operations and SHALL share one
-config-free resolution stage (`resolve_target`); their relay-wide/reserved
-target rejection is uniform. A richer, transport-class-specific rejection is
-intentionally deferred to session-attribute-based routing.
+config-free resolution stage; their reserved namespace target rejection is
+uniform.
 
-#### Scenario: Reject unknown raww target
+After this change, the routing stage for look and raww SHALL resolve `@GLOBAL`
+targets as relay-wide rather than rejecting them at the routing stage; the
+handler then derives the resolved target's session type and applies the
+capability check. The `RelayWideTargets` enum and `resolve_target`'s
+relay-wide-targets parameter are removed in this change — dead code once the
+single `Rejected` call site is gone.
 
-- **WHEN** caller invokes `raww` with a target token that is not a canonical
-  configured session id
-- **THEN** relay returns `validation_unknown_target`
-- **AND** relay does not return `authorization_forbidden` for that request
+#### Scenario: Reject unqualified raww target
 
-#### Scenario: Reject relay-wide raww target as unsupported namespace
+- **WHEN** caller invokes `raww` with a target without `@<namespace>` suffix
+- **THEN** relay returns `validation_unqualified_target`
+
+#### Scenario: Reject reserved namespace raww target
+
+- **WHEN** caller invokes `raww` with an `@EXTERNAL` or `@RELAY` target
+- **THEN** relay returns `validation_unsupported_namespace`
+
+#### Scenario: Reject relay-wide raww target via capability check
 
 - **WHEN** caller invokes `raww` with an `@GLOBAL` (relay-wide) target
-- **THEN** relay returns `validation_unsupported_namespace`
-- **AND** the rejection is uniform with the Look stage for the same target
+- **THEN** relay returns `validation_unsupported_operation`
+- **AND** the rejection is uniform with the look capability check for the
+  same target
 
 #### Scenario: Cross-bundle raww denied by scope
 
 - **WHEN** caller invokes `raww` with a target in a different bundle
 - **AND** requester's `raww` scope is `home` or narrower
 - **THEN** relay returns `authorization_forbidden`
-
-### Requirement: Relay raww target class gate
-
-Relay raww recipients in MVP SHALL be configured coder transport sessions only
-(`tmux` or `acp`).
-
-Targets resolved to unsupported classes (including UI stream endpoints) SHALL
-be rejected with `validation_invalid_params` and deterministic details
-indicating unsupported target class.
-
-#### Scenario: Reject ui target class for raww
-
-- **WHEN** resolved raww target is a UI target class
-- **THEN** relay returns `validation_invalid_params`
-- **AND** error details indicate unsupported target class for raww
 
 ### Requirement: Relay raww authorization mapping
 
@@ -2923,4 +2933,64 @@ no code override involved.
 - **THEN** the request fails the uniform `all` threshold with
   `authorization_forbidden`
 - **AND** no operation-specific code override is involved
+
+### Requirement: Transport Capability Contract
+
+Every target reachable via look or raww SHALL have transport capabilities
+derivable from its `SessionType` at check time:
+
+- `can_be_looked: bool` — the session can be targeted by `look` (its transport
+  supports snapshot capture)
+- `can_be_written: bool` — the session can be targeted by `raww` (its transport
+  supports raw input injection)
+- `can_stream_output: bool` — the session's transport natively produces live
+  output chunks (ACP and PTY stream output natively; Tmux requires periodic
+  polling)
+
+Capabilities SHALL be derived from the target's `SessionType` (from
+`BundleMember` configuration for bundle targets, or from `TuiSession::session_type`
+in `users.toml` for relay-wide targets):
+
+| Transport | `can_be_looked` | `can_be_written` | `can_stream_output` |
+|-----------|----------------|----------------|-------------------|
+| `Tmux` | true | true | false |
+| `Acp` | true | true | true |
+| `Pty` | true | true | true |
+| `Ui` | false | false | false |
+| `Pubsub` | false | false | false |
+
+`can_stream_output` is advertised on registration; streaming look semantics
+that consume it are deferred to a follow-on proposal.
+
+When a look or raww operation resolves a target whose transport type has the
+relevant capability false, relay SHALL return `validation_unsupported_operation`.
+This check precedes authorization policy checks and applies to both bundle
+targets (checked from `BundleMember` configuration) and relay-wide targets
+(checked from `users.toml` session type).
+
+#### Scenario: Reject look against session with can_be_looked false
+
+- **WHEN** a `look` request resolves to a target whose transport type carries
+  `can_be_looked = false`
+- **THEN** relay returns `validation_unsupported_operation`
+- **AND** relay does not evaluate authorization policy for that request
+
+#### Scenario: Reject raww against session with can_be_written false
+
+- **WHEN** a `raww` request resolves to a target whose transport type carries
+  `can_be_written = false`
+- **THEN** relay returns `validation_unsupported_operation`
+- **AND** relay does not evaluate authorization policy for that request
+
+#### Scenario: Permit look against session with can_be_looked true
+
+- **WHEN** a `look` request resolves to a target whose transport type carries
+  `can_be_looked = true`
+- **THEN** relay proceeds to authorization policy evaluation
+
+#### Scenario: Permit raww against session with can_be_written true
+
+- **WHEN** a `raww` request resolves to a target whose transport type carries
+  `can_be_written = true`
+- **THEN** relay proceeds to authorization policy evaluation
 

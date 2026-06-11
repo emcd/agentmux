@@ -62,7 +62,7 @@ targets (checked from `BundleMember` configuration) and relay-wide targets
 
 ## MODIFIED Requirements
 
-### Requirement: Relay Raww Target Routing
+### Requirement: Relay raww target resolution and bundle boundary
 
 Raww targets SHALL be resolved using the shared single-target routing stage.
 
