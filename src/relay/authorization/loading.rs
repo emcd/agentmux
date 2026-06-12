@@ -319,12 +319,6 @@ fn parse_policy_controls(
         policies_path,
         policy_id,
         "find",
-        &[
-            PolicyScope::None,
-            PolicyScope::SelfOnly,
-            PolicyScope::Home,
-            PolicyScope::All,
-        ],
         "validation_invalid_arguments",
         "authorization policy control uses unsupported scope value",
     )?;
@@ -333,7 +327,6 @@ fn parse_policy_controls(
         policies_path,
         policy_id,
         "list",
-        &[PolicyScope::Home, PolicyScope::All],
         "validation_invalid_arguments",
         "authorization policy list control uses unsupported scope value",
     )?;
@@ -342,12 +335,6 @@ fn parse_policy_controls(
         policies_path,
         policy_id,
         "look",
-        &[
-            PolicyScope::None,
-            PolicyScope::SelfOnly,
-            PolicyScope::Home,
-            PolicyScope::All,
-        ],
         "validation_invalid_arguments",
         "authorization policy control uses unsupported scope value",
     )?;
@@ -356,7 +343,6 @@ fn parse_policy_controls(
         policies_path,
         policy_id,
         "send",
-        &[PolicyScope::Home, PolicyScope::All],
         "validation_invalid_arguments",
         "authorization policy send control uses unsupported scope value",
     )?;
@@ -365,12 +351,6 @@ fn parse_policy_controls(
         policies_path,
         policy_id,
         "raww",
-        &[
-            PolicyScope::None,
-            PolicyScope::SelfOnly,
-            PolicyScope::Home,
-            PolicyScope::All,
-        ],
         "validation_invalid_policy_scope",
         "authorization policy raww control uses unsupported scope value",
     )?;
@@ -379,7 +359,6 @@ fn parse_policy_controls(
         policies_path,
         policy_id,
         "grant",
-        &[PolicyScope::None, PolicyScope::Home],
         "validation_invalid_policy_scope",
         "authorization policy grant control uses unsupported scope value",
     )?;
@@ -388,36 +367,14 @@ fn parse_policy_controls(
         policies_path,
         policy_id,
         "updown",
-        &[PolicyScope::None, PolicyScope::Home],
         "validation_invalid_policy_scope",
         "authorization policy updown control uses unsupported scope value",
     )?;
-    let do_controls = parse_action_scope_map(
-        controls.do_controls,
-        "do",
-        policies_path,
-        policy_id,
-        &[
-            PolicyScope::None,
-            PolicyScope::SelfOnly,
-            PolicyScope::Home,
-            PolicyScope::All,
-        ],
-    )?;
-    let new_controls = parse_action_scope_map(
-        controls.new_controls,
-        "new",
-        policies_path,
-        policy_id,
-        &[PolicyScope::None, PolicyScope::Home, PolicyScope::All],
-    )?;
-    let change_controls = parse_action_scope_map(
-        controls.change_controls,
-        "change",
-        policies_path,
-        policy_id,
-        &[PolicyScope::None, PolicyScope::Home, PolicyScope::All],
-    )?;
+    let do_controls = parse_action_scope_map(controls.do_controls, "do", policies_path, policy_id)?;
+    let new_controls =
+        parse_action_scope_map(controls.new_controls, "new", policies_path, policy_id)?;
+    let change_controls =
+        parse_action_scope_map(controls.change_controls, "change", policies_path, policy_id)?;
     Ok(PolicyControls {
         find,
         list,
@@ -437,7 +394,6 @@ fn parse_action_scope_map(
     namespace: &str,
     policies_path: &Path,
     policy_id: &str,
-    allowed_scopes: &[PolicyScope],
 ) -> Result<HashMap<String, PolicyScope>, RelayError> {
     let mut result = HashMap::with_capacity(raw_map.len());
     for (action_id, scope_value) in raw_map {
@@ -458,7 +414,6 @@ fn parse_action_scope_map(
             policies_path,
             policy_id,
             format!("{namespace}.{action_id}").as_str(),
-            allowed_scopes,
             "validation_invalid_arguments",
             "authorization policy control uses unsupported scope value",
         )?;
@@ -467,47 +422,35 @@ fn parse_action_scope_map(
     Ok(result)
 }
 
+// The policies file is authoritative: every control accepts the full
+// none/self/home/all ladder, and consuming authorization checks give each
+// value its effect via rank order. Do not reintroduce per-control
+// allowed-scope caps here.
 fn parse_scope_for_control(
     raw: &str,
     policies_path: &Path,
     policy_id: &str,
     control: &str,
-    allowed: &[PolicyScope],
     error_code: &str,
     unsupported_message: &str,
 ) -> Result<PolicyScope, RelayError> {
     let value = raw.trim();
-    let parsed = match value {
-        "none" => PolicyScope::None,
-        "self" => PolicyScope::SelfOnly,
-        "home" => PolicyScope::Home,
-        "all" => PolicyScope::All,
-        _ => {
-            return Err(relay_error(
-                error_code,
-                unsupported_message,
-                Some(json!({
-                    "path": policies_path.display().to_string(),
-                    "policy_id": policy_id,
-                    "control": control,
-                    "value": value,
-                })),
-            ));
-        }
-    };
-    if allowed.contains(&parsed) {
-        return Ok(parsed);
+    match value {
+        "none" => Ok(PolicyScope::None),
+        "self" => Ok(PolicyScope::SelfOnly),
+        "home" => Ok(PolicyScope::Home),
+        "all" => Ok(PolicyScope::All),
+        _ => Err(relay_error(
+            error_code,
+            unsupported_message,
+            Some(json!({
+                "path": policies_path.display().to_string(),
+                "policy_id": policy_id,
+                "control": control,
+                "value": value,
+            })),
+        )),
     }
-    Err(relay_error(
-        error_code,
-        unsupported_message,
-        Some(json!({
-            "path": policies_path.display().to_string(),
-            "policy_id": policy_id,
-            "control": control,
-            "value": value,
-        })),
-    ))
 }
 
 pub(super) fn map_tui_configuration_error(

@@ -1,7 +1,8 @@
 //! Capability/profile checks: the uniform `authorize_*` decisions over a
 //! resolved route or a relay-wide operator action. All scope comparisons funnel
 //! through [`authorize_scope`]; cross-bundle reach is decided data-driven by the
-//! policy schema's per-capability allowed-scope set, never per operation here.
+//! scope the policies file configures for the capability, never per operation
+//! here.
 
 use std::path::Path;
 
@@ -89,12 +90,10 @@ pub(in crate::relay) fn authorize_relay_action(
 /// *configured* scope for the operation's capability.
 ///
 /// No operation supplies a cross-bundle policy: the relay never decides per
-/// operation whether crossing is allowed. Whether a capability can ever be
-/// configured to the cross-bundle (`all`) tier is governed solely by the
-/// policy schema's per-capability allowed-scope set (`parse_policy_controls`) —
-/// `grant` and `updown`, for instance, are capped at `home` there, so they
-/// can never satisfy the cross-bundle threshold without a schema change, no code
-/// override needed.
+/// operation whether crossing is allowed. Whether a capability reaches the
+/// cross-bundle (`all`) tier is governed solely by the scope the policies file
+/// configures for it — every control accepts the full `none`/`self`/`home`/
+/// `all` ladder at parse time, and rank order gives each value its effect.
 pub(in crate::relay) fn authorize_route(
     dispatch_namespace: &str,
     authorization: &AuthorizationContext,
