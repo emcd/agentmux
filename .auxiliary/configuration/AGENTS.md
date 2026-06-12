@@ -198,6 +198,10 @@ Use `openspec/AGENTS.md` to learn:
 
 Team roster, lane ownership, merge policy, coordinator and specialist responsibilities, and OpenSpec multi-agent workflow live in `coordination/general/14`.
 
+## Procedures
+
+- [Cleanup and removal protocol](agentmux:procedures/2) — inventory-first, spec-coupled deltas, proof-of-absence gate for all removal/cleanup directives.
+
 ## Alpha Defaults
 
 - This project is **alpha software with live releases**. Do **not** preserve

@@ -991,11 +991,15 @@ policy id.
 
 Relay SHALL evaluate authorization using canonical controls and scope values:
 
-- `find`: `self` | `home` | `all`
-- `list`: `home` | `all`
-- `look`: `self` | `home` | `all`
-- `send`: `home` | `all`
+- `find`: `none` | `self` | `home` | `all`
+- `list`: `none` | `self` | `home` | `all`
+- `look`: `none` | `self` | `home` | `all`
+- `send`: `none` | `self` | `home` | `all`
 - `do`: map `action_id -> (none | self | home | all)`
+
+The policies file is authoritative: every control accepts the full scope
+ladder at parse time, and the consuming authorization checks give each value
+its effect via scope rank order.
 
 For current self-target-only `do` MVP behavior:
 
@@ -2073,16 +2077,14 @@ Error code taxonomy addendum:
 Relay SHALL evaluate ACP permission-request decision authority using policy
 capability `grant`.
 
-For alpha scope:
-
-- allowed values: `none`, `home`
+- allowed values: `none`, `self`, `home`, `all`
 - default when omitted: `none`
-- invalid values (`self`, `all`, unknown values) SHALL fail validation with
-  `validation_invalid_policy_scope`
+- unknown values SHALL fail validation with `validation_invalid_policy_scope`
 
-#### Scenario: Reject invalid grant scope self
+#### Scenario: Reject unknown grant scope value
 
-- **WHEN** policy configuration sets `grant = "self"`
+- **WHEN** policy configuration sets `grant` to a value outside the canonical
+  scope ladder
 - **THEN** relay rejects configuration with `validation_invalid_policy_scope`
 
 #### Scenario: Default omitted grant to none
