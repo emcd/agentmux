@@ -45,8 +45,8 @@ use crate::commands::{
 };
 
 use super::summary::{
-    build_startup_summary, failed_startup_bundle, hosted_startup_bundle, render_startup_summary,
-    skipped_startup_bundle, startup_summary_payload,
+    build_startup_summary, failed_startup_bundle, failed_startup_bundle_from_relay_error,
+    hosted_startup_bundle, render_startup_summary, skipped_startup_bundle, startup_summary_payload,
 };
 
 #[derive(Clone, Debug)]
@@ -309,6 +309,36 @@ fn prepare_relay_host(
         }
     }
 
+    // A restart-first operator diagnoses from the journal and inscriptions, so
+    // every failed bundle must leave a per-bundle reason on both before any
+    // aggregate error can exit the process.
+    for outcome in &outcomes {
+        if outcome.outcome != "failed" {
+            continue;
+        }
+        let reason_code = outcome.reason_code.as_deref().unwrap_or("unknown");
+        let reason = outcome.reason.as_deref().unwrap_or("unknown");
+        match &outcome.details {
+            Some(details) => eprintln!(
+                "bundle '{}' failed to start ({reason_code}): {reason}; details: {details}",
+                outcome.bundle_name
+            ),
+            None => eprintln!(
+                "bundle '{}' failed to start ({reason_code}): {reason}",
+                outcome.bundle_name
+            ),
+        }
+        emit_inscription(
+            "relay.bundle.startup_failed",
+            &json!({
+                "bundle_name": outcome.bundle_name,
+                "reason_code": outcome.reason_code,
+                "reason": outcome.reason,
+                "details": outcome.details,
+            }),
+        );
+    }
+
     let summary = build_startup_summary(
         if no_autostart {
             "process_only"
@@ -324,6 +354,7 @@ fn prepare_relay_host(
             return Ok(RelayHostPreparation::NoHostedBundles);
         }
         if summary.failed_bundle_count > 0 {
+            emit_inscription("relay.startup.summary", &startup_summary_payload(&summary));
             return Err(RuntimeError::validation(
                 "runtime_startup_failed",
                 format!(
@@ -798,11 +829,14 @@ fn host_selected_bundle(
             &roots.configuration_root,
             &paths.bundle_name,
             &paths.runtime_directory,
-        )
-        .map_err(shared::map_reconcile_error)
-        {
+        ) {
             Ok(report) => report,
-            Err(source) => return (failed_startup_bundle(bundle_name, source), None),
+            Err(source) => {
+                return (
+                    failed_startup_bundle_from_relay_error(bundle_name, source),
+                    None,
+                );
+            }
         };
         for failure in &report.failed_startups {
             let persisted = match append_startup_failure(&paths.runtime_directory, failure.clone())
@@ -817,6 +851,7 @@ fn host_selected_bundle(
                             reason: Some(format!(
                                 "failed to persist startup failure history: {cause}"
                             )),
+                            details: None,
                         },
                         None,
                     );
@@ -849,6 +884,7 @@ fn host_selected_bundle(
                     outcome: "failed".to_string(),
                     reason_code: Some("runtime_startup_failed".to_string()),
                     reason: Some("zero configured sessions reached ready state".to_string()),
+                    details: None,
                 }
             }
         }

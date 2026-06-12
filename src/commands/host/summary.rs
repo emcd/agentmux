@@ -49,6 +49,7 @@ pub(super) fn startup_summary_payload(summary: &RelayHostStartupSummary) -> Valu
                         "outcome": bundle.outcome,
                         "reason_code": bundle.reason_code,
                         "reason": bundle.reason,
+                        "details": bundle.details,
                     })
                 })
                 .collect::<Vec<_>>(),
@@ -90,6 +91,7 @@ pub(super) fn hosted_startup_bundle(bundle_name: &str) -> RelayHostStartupBundle
         outcome: "hosted".to_string(),
         reason_code: None,
         reason: None,
+        details: None,
     }
 }
 
@@ -103,6 +105,7 @@ pub(super) fn skipped_startup_bundle(
         outcome: "skipped".to_string(),
         reason_code: Some(reason_code.to_string()),
         reason: Some(reason),
+        details: None,
     }
 }
 
@@ -116,5 +119,22 @@ pub(super) fn failed_startup_bundle(
         outcome: "failed".to_string(),
         reason_code: Some(reason_code),
         reason: Some(reason),
+        details: None,
+    }
+}
+
+/// Preserves the structured details a relay-layer startup failure carries
+/// (for example the offending policy control and value), which the
+/// `RuntimeError` mapping would otherwise flatten to a message string.
+pub(super) fn failed_startup_bundle_from_relay_error(
+    bundle_name: &str,
+    source: crate::relay::RelayError,
+) -> RelayHostStartupBundle {
+    RelayHostStartupBundle {
+        bundle_name: bundle_name.to_string(),
+        outcome: "failed".to_string(),
+        reason_code: Some(source.code),
+        reason: Some(source.message),
+        details: source.details,
     }
 }
