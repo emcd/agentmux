@@ -834,3 +834,149 @@ fn read_paste_buffer_content(log_file: &Path, paste_line: &str) -> String {
     fs::read_to_string(&buffer_path)
         .unwrap_or_else(|error| panic!("read paste buffer file {}: {error}", buffer_path.display()))
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn relay_async_delivery_envelope_addresses_carry_canonical_ids_across_bundles() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle_configuration(temporary.path(), "party", &["alpha", "bravo"]);
+    // A second namespace plus a send scope that reaches it: the fixture's
+    // policies file caps send at home.
+    fs::write(
+        config_root.join("bundles").join("qa.toml"),
+        r#"format-version = 1
+autostart = true
+
+[[sessions]]
+id = "zulu"
+name = "zulu"
+directory = "/tmp"
+coder = "default"
+"#,
+    )
+    .expect("write qa bundle config");
+    fs::write(
+        config_root.join("policies.toml"),
+        r#"
+format-version = 1
+default = "default"
+
+[[policies]]
+id = "default"
+
+[policies.controls]
+find = "self"
+list = "home"
+look = "self"
+send = "all"
+"#,
+    )
+    .expect("widen send scope for cross-bundle delivery");
+
+    let state_root = temporary.path().join("state");
+    let fake_tmux_script = temporary.path().join("fake-tmux.sh");
+    let attempts_file = temporary.path().join("attempts.txt");
+    let log_file = temporary.path().join("fake-tmux.log");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
+
+    let relay_socket = state_root.join("relay.sock");
+    let mut child = spawn_relay_with_fake_tmux_and_env(
+        "party",
+        &config_root,
+        &state_root,
+        &inscriptions_root,
+        &fake_tmux_script,
+        &[("FAKE_TMUX_CAPTURE_MODE", "stable")],
+    );
+    wait_for_relay_ready(&relay_socket).await;
+
+    let response = request_relay(
+        &relay_socket,
+        "party",
+        "alpha",
+        &RelayRequest::Send {
+            request_id: Some("req-canonical-addresses".to_string()),
+            requester_session: "alpha".to_string(),
+            message: "cross-bundle co-recipient visibility".to_string(),
+            targets: vec!["bravo@party".to_string(), "zulu@qa".to_string()],
+            broadcast: false,
+            quiet_window_ms: Some(50),
+            quiescence_timeout_ms: Some(2_000),
+            acp_turn_timeout_ms: None,
+        },
+    )
+    .expect("cross-bundle send request should succeed");
+    let RelayResponse::Send { results, .. } = response else {
+        panic!("expected send response");
+    };
+    assert_eq!(results.len(), 2);
+    assert!(
+        results
+            .iter()
+            .all(|result| result.outcome == SendOutcome::Queued),
+        "expected both targets queued, results={results:?}"
+    );
+
+    // Async delivery pastes one buffer per target; wait until both envelopes
+    // land, then identify each by its To header.
+    let delivery_deadline = Instant::now() + Duration::from_secs(5);
+    let (bravo_envelope, zulu_envelope) = loop {
+        let envelopes = read_all_paste_buffers(temporary.path());
+        let bravo = envelopes
+            .iter()
+            .find(|content| content.contains("To: bravo <session:bravo@party>"))
+            .cloned();
+        let zulu = envelopes
+            .iter()
+            .find(|content| content.contains("To: zulu <session:zulu@qa>"))
+            .cloned();
+        if let (Some(bravo), Some(zulu)) = (bravo, zulu) {
+            break (bravo, zulu);
+        }
+        assert!(
+            Instant::now() < delivery_deadline,
+            "async deliveries did not complete, envelopes={envelopes:?}"
+        );
+        sleep(Duration::from_millis(20)).await;
+    };
+
+    child.start_kill().expect("kill relay");
+    let _ = child.wait().await;
+
+    assert!(
+        bravo_envelope.contains("From: alpha <session:alpha@party>"),
+        "expected canonical sender address, envelope={bravo_envelope:?}"
+    );
+    // The cross-bundle co-recipient is absent from the delivery bundle's
+    // configuration, so its Cc entry carries the canonical id alone.
+    assert!(
+        bravo_envelope.contains("Cc: zulu@qa <session:zulu@qa>"),
+        "expected cross-bundle co-recipient in Cc, envelope={bravo_envelope:?}"
+    );
+    assert!(
+        zulu_envelope.contains("From: alpha <session:alpha@party>"),
+        "expected canonical sender address, envelope={zulu_envelope:?}"
+    );
+    assert!(
+        zulu_envelope.contains("Cc: bravo@party <session:bravo@party>"),
+        "expected cross-bundle co-recipient in Cc, envelope={zulu_envelope:?}"
+    );
+}
+
+fn read_all_paste_buffers(directory: &Path) -> Vec<String> {
+    let mut contents = Vec::new();
+    let Ok(entries) = fs::read_dir(directory) else {
+        return contents;
+    };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        if file_name
+            .to_string_lossy()
+            .starts_with("fake-tmux.log.buffer.")
+            && let Ok(content) = fs::read_to_string(entry.path())
+        {
+            contents.push(content);
+        }
+    }
+    contents
+}

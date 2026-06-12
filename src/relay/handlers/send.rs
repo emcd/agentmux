@@ -346,12 +346,22 @@ fn execute_send(
     let quiescence =
         QuiescenceOptions::for_async(quiet_window_ms, quiescence_timeout_ms, acp_turn_timeout_ms);
     let mut results = Vec::with_capacity(route.targets.len());
+    // Every task carries the full recipient list across all delivery groups so
+    // delivered envelopes can show co-recipients in other namespaces. Entries
+    // are canonical `session@namespace` ids: bare ids are ambiguous outside
+    // their own group.
+    let all_recipient_sessions = groups
+        .iter()
+        .flat_map(|group| {
+            group.targets.iter().map(|target| {
+                canonical_session_id(
+                    target.session_id.as_str(),
+                    group.bundle.bundle_name.as_str(),
+                )
+            })
+        })
+        .collect::<Vec<_>>();
     for group in &groups {
-        let group_target_sessions = group
-            .targets
-            .iter()
-            .map(|target| target.session_id.clone())
-            .collect::<Vec<_>>();
         for target in &group.targets {
             let message_id = Uuid::new_v4().to_string();
             let task = AsyncDeliveryTask {
@@ -359,7 +369,7 @@ fn execute_send(
                 sender_bundle_name: home_namespace.to_string(),
                 sender: sender_member.clone(),
                 authenticated_identity: authenticated_identity.clone(),
-                all_target_sessions: group_target_sessions.clone(),
+                all_target_sessions: all_recipient_sessions.clone(),
                 target_session: target.session_id.clone(),
                 relay_wide_target: target.relay_wide,
                 message: message.to_string(),

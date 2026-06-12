@@ -35,6 +35,10 @@ pub struct ManifestPreamble {
 }
 
 /// Human-visible identity token for RFC 822-style headers.
+///
+/// `session_name` carries the canonical `session@namespace` principal id so a
+/// recipient in any namespace can derive a reply address from the envelope
+/// alone.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AddressIdentity {
     pub session_name: String,

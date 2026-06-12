@@ -807,7 +807,7 @@ mod coalesce_batch_tests {
             sender_bundle_name: "party".to_string(),
             sender: member.clone(),
             authenticated_identity: None,
-            all_target_sessions: vec!["bravo".to_string()],
+            all_target_sessions: vec!["bravo@party".to_string()],
             target_session: "bravo".to_string(),
             relay_wide_target: false,
             message: String::new(),
