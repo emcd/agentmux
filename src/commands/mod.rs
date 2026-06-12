@@ -137,6 +137,7 @@ pub(super) struct RelayHostStartupBundle {
     pub(super) outcome: String,
     pub(super) reason_code: Option<String>,
     pub(super) reason: Option<String>,
+    pub(super) details: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug)]

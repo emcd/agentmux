@@ -320,7 +320,7 @@ fn parse_policy_controls(
         policy_id,
         "find",
         "validation_invalid_arguments",
-        "authorization policy control uses unsupported scope value",
+        "authorization policy control uses unknown scope value",
     )?;
     let list = parse_scope_for_control(
         controls.list.as_str(),
@@ -328,7 +328,7 @@ fn parse_policy_controls(
         policy_id,
         "list",
         "validation_invalid_arguments",
-        "authorization policy list control uses unsupported scope value",
+        "authorization policy list control uses unknown scope value",
     )?;
     let look = parse_scope_for_control(
         controls.look.as_str(),
@@ -336,7 +336,7 @@ fn parse_policy_controls(
         policy_id,
         "look",
         "validation_invalid_arguments",
-        "authorization policy control uses unsupported scope value",
+        "authorization policy control uses unknown scope value",
     )?;
     let send = parse_scope_for_control(
         controls.send.as_str(),
@@ -344,7 +344,7 @@ fn parse_policy_controls(
         policy_id,
         "send",
         "validation_invalid_arguments",
-        "authorization policy send control uses unsupported scope value",
+        "authorization policy send control uses unknown scope value",
     )?;
     let raww = parse_scope_for_control(
         controls.raww.as_str(),
@@ -352,7 +352,7 @@ fn parse_policy_controls(
         policy_id,
         "raww",
         "validation_invalid_policy_scope",
-        "authorization policy raww control uses unsupported scope value",
+        "authorization policy raww control uses unknown scope value",
     )?;
     let grant = parse_scope_for_control(
         controls.grant.as_str(),
@@ -360,7 +360,7 @@ fn parse_policy_controls(
         policy_id,
         "grant",
         "validation_invalid_policy_scope",
-        "authorization policy grant control uses unsupported scope value",
+        "authorization policy grant control uses unknown scope value",
     )?;
     let updown = parse_scope_for_control(
         controls.updown.as_str(),
@@ -368,7 +368,7 @@ fn parse_policy_controls(
         policy_id,
         "updown",
         "validation_invalid_policy_scope",
-        "authorization policy updown control uses unsupported scope value",
+        "authorization policy updown control uses unknown scope value",
     )?;
     let do_controls = parse_action_scope_map(controls.do_controls, "do", policies_path, policy_id)?;
     let new_controls =
@@ -415,7 +415,7 @@ fn parse_action_scope_map(
             policy_id,
             format!("{namespace}.{action_id}").as_str(),
             "validation_invalid_arguments",
-            "authorization policy control uses unsupported scope value",
+            "authorization policy control uses unknown scope value",
         )?;
         result.insert(action_id.to_string(), scope);
     }
@@ -432,7 +432,7 @@ fn parse_scope_for_control(
     policy_id: &str,
     control: &str,
     error_code: &str,
-    unsupported_message: &str,
+    unknown_value_message: &str,
 ) -> Result<PolicyScope, RelayError> {
     let value = raw.trim();
     match value {
@@ -442,12 +442,13 @@ fn parse_scope_for_control(
         "all" => Ok(PolicyScope::All),
         _ => Err(relay_error(
             error_code,
-            unsupported_message,
+            unknown_value_message,
             Some(json!({
                 "path": policies_path.display().to_string(),
                 "policy_id": policy_id,
                 "control": control,
                 "value": value,
+                "expected": ["none", "self", "home", "all"],
             })),
         )),
     }

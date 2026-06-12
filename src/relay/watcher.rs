@@ -231,12 +231,26 @@ fn load_new_bundle(
     let paths = match BundleRuntimePaths::resolve(state_root, bundle_name) {
         Ok(paths) => paths,
         Err(source) => {
-            record_load_failure(bundle_name, &source.to_string(), state, fingerprint);
+            record_load_failure(
+                bundle_name,
+                &source.to_string(),
+                None,
+                None,
+                state,
+                fingerprint,
+            );
             return;
         }
     };
     if let Err(source) = ensure_bundle_runtime_directory(&paths) {
-        record_load_failure(bundle_name, &source.to_string(), state, fingerprint);
+        record_load_failure(
+            bundle_name,
+            &source.to_string(),
+            None,
+            None,
+            state,
+            fingerprint,
+        );
         return;
     }
     match startup_bundle(configuration_root, bundle_name, &paths.runtime_directory) {
@@ -258,12 +272,21 @@ fn load_new_bundle(
             record_load_failure(
                 bundle_name,
                 "zero configured sessions reached ready state",
+                None,
+                None,
                 state,
                 fingerprint,
             );
         }
         Err(error) => {
-            record_load_failure(bundle_name, &error.message, state, fingerprint);
+            record_load_failure(
+                bundle_name,
+                &error.message,
+                Some(&error.code),
+                error.details.as_ref(),
+                state,
+                fingerprint,
+            );
         }
     }
 }
@@ -286,7 +309,14 @@ fn reload_bundle(
         Err(source) => {
             catalog.remove(bundle_name);
             state.fingerprints.remove(bundle_name);
-            record_load_failure(bundle_name, &source.to_string(), state, fingerprint);
+            record_load_failure(
+                bundle_name,
+                &source.to_string(),
+                None,
+                None,
+                state,
+                fingerprint,
+            );
             return;
         }
     };
@@ -315,11 +345,24 @@ fn reload_bundle(
             // unloaded so new connections fail fast with validation_unknown_bundle.
             catalog.remove(bundle_name);
             state.fingerprints.remove(bundle_name);
-            let reason = match outcome {
-                Err(error) => error.message,
-                _ => "zero configured sessions reached ready state".to_string(),
-            };
-            record_load_failure(bundle_name, &reason, state, fingerprint);
+            match outcome {
+                Err(error) => record_load_failure(
+                    bundle_name,
+                    &error.message,
+                    Some(&error.code),
+                    error.details.as_ref(),
+                    state,
+                    fingerprint,
+                ),
+                _ => record_load_failure(
+                    bundle_name,
+                    "zero configured sessions reached ready state",
+                    None,
+                    None,
+                    state,
+                    fingerprint,
+                ),
+            }
         }
     }
 }
@@ -347,6 +390,8 @@ fn unload_bundle(catalog: &BundleCatalog, bundle_name: &str, state: &mut Reconci
 fn record_load_failure(
     bundle_name: &str,
     reason: &str,
+    code: Option<&str>,
+    details: Option<&serde_json::Value>,
     state: &mut ReconcileState,
     fingerprint: [u8; 32],
 ) {
@@ -356,6 +401,8 @@ fn record_load_failure(
         &json!({
             "bundle_name": bundle_name,
             "reason": reason,
+            "code": code,
+            "details": details,
         }),
     );
 }

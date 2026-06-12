@@ -413,6 +413,122 @@ fn host_relay_clears_startup_failures_for_sessions_that_start_successfully() {
     assert!(output.status.success(), "command should succeed");
 }
 
+fn write_bundle_configuration_with_invalid_policy_scope(config_root: &Path, bundle_name: &str) {
+    fs::create_dir_all(config_root.join("bundles")).expect("create bundles directory");
+    fs::write(
+        config_root.join("coders.toml"),
+        r#"
+format-version = 1
+
+[[coders]]
+id = "tmux-default"
+
+[coders.tmux]
+initial-command = "sh -lc 'exec sleep 45'"
+resume-command = "sh -lc 'exec sleep 45'"
+"#,
+    )
+    .expect("write coders config");
+    fs::write(
+        config_root.join("policies.toml"),
+        r#"
+format-version = 1
+default = "default"
+
+[[policies]]
+id = "default"
+
+[policies.controls]
+find = "self"
+list = "home"
+look = "self"
+send = "home"
+grant = "everywhere"
+"#,
+    )
+    .expect("write policies config");
+    fs::write(
+        config_root
+            .join("bundles")
+            .join(format!("{bundle_name}.toml")),
+        r#"
+format-version = 1
+autostart = true
+groups = ["dev"]
+
+[[sessions]]
+id = "alpha"
+name = "alpha"
+directory = "/tmp"
+coder = "tmux-default"
+"#,
+    )
+    .expect("write bundle config");
+}
+
+// Replays the 2026-06-11 outage shape: every autostart bundle fails (here from
+// a policy validation rejection) and the host exits. The journal (stderr) and
+// the inscription log must each carry a per-bundle reason with the structured
+// error details, not just the aggregate bundle count.
+#[test]
+fn host_relay_startup_failure_emits_per_bundle_reason_with_details() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_invalid_policy_scope(&config_root, "alpha");
+
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .output()
+        .expect("run agentmux host relay");
+    assert!(
+        !output.status.success(),
+        "host relay should exit nonzero when every bundle fails to start"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("bundle 'alpha' failed to start (validation_invalid_policy_scope)"),
+        "expected per-bundle failure reason on stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("\"control\":\"grant\"") && stderr.contains("\"value\":\"everywhere\""),
+        "expected structured details on stderr: {stderr}"
+    );
+
+    let inscriptions = fs::read_to_string(inscriptions_root.join("relay.log"))
+        .expect("read relay inscriptions log");
+    let startup_failed = inscriptions
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("decode inscription line"))
+        .find(|entry| entry["event"] == "relay.bundle.startup_failed")
+        .expect("relay.bundle.startup_failed inscription should be emitted");
+    assert_eq!(startup_failed["details"]["bundle_name"], "alpha");
+    assert_eq!(
+        startup_failed["details"]["reason_code"],
+        "validation_invalid_policy_scope"
+    );
+    assert_eq!(startup_failed["details"]["details"]["control"], "grant");
+    assert_eq!(startup_failed["details"]["details"]["value"], "everywhere");
+}
+
 #[test]
 fn host_relay_no_autostart_mode_reports_process_only_summary() {
     let temporary = TempDir::new().expect("temporary");
