@@ -65,15 +65,12 @@ pub(super) fn deliver_one_target_ui(
                 task.sender_bundle_name.as_str(),
             ),
             "body": message,
+            // Co-recipient entries already arrive as canonical
+            // `session@namespace` ids spanning every delivery group.
             "cc_sessions": if cc_sessions.is_empty() {
                 Value::Null
             } else {
-                json!(
-                    cc_sessions
-                        .iter()
-                        .map(|cc| canonical_session_id(cc, bundle_name))
-                        .collect::<Vec<_>>()
-                )
+                json!(cc_sessions)
             },
         });
         // Carry the sender's verified principal_id to the recipient so it can

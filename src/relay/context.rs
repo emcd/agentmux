@@ -50,6 +50,9 @@ pub(super) struct AsyncDeliveryTask {
     /// and for delivery paths that do not attribute a verified identity (e.g.
     /// raw input).
     pub(super) authenticated_identity: Option<String>,
+    /// Canonical `session@namespace` ids of every recipient of this message
+    /// across all delivery groups, the task's own target included. Envelope
+    /// rendering derives co-recipient (Cc) identities from this list.
     pub(super) all_target_sessions: Vec<String>,
     pub(super) target_session: String,
     /// The target is a relay-wide (`@GLOBAL`) principal with no bundle-member

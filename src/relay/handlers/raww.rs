@@ -257,7 +257,10 @@ fn execute_raww(
         // Raw input does not carry verified sender attribution, and its targets
         // are never UI streams.
         authenticated_identity: None,
-        all_target_sessions: vec![target_member.id.clone()],
+        all_target_sessions: vec![canonical_session_id(
+            target_member.id.as_str(),
+            raww_bundle.bundle_name.as_str(),
+        )],
         target_session: target_member.id.clone(),
         relay_wide_target: false,
         message: text,
