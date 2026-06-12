@@ -81,9 +81,7 @@ resolution stage. The authorization stage SHALL:
 
 Whether a capability can ever be configured to reach the cross-bundle (`all`)
 tier is governed solely by the policy schema's per-capability allowed-scope set
-(`parse_policy_controls`): `send`, `look`, `raww`, and `list` may be configured
-to `all`; `grant` and `updown` are capped at `home` and can never satisfy
-the cross-bundle threshold without a schema change. The relay SHALL NOT apply
+(`parse_policy_controls`). The relay SHALL NOT apply
 per-operation cross-bundle logic in handler or routing code; this data-driven
 spine — uniform tier classification plus the schema allowed-scope set — SHALL be
 the single authority for cross-bundle reach.
