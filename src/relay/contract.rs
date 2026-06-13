@@ -339,6 +339,10 @@ pub enum RelayResponse {
         status: String,
         choice_request_id: String,
         outcome: String,
+        /// Relay-derived, association-bound actor that resolved the choice.
+        /// Mirrors the `decided_by` field on the `choices.resolved` event.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        decided_by: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         reason_code: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]

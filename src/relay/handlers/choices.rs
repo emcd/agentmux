@@ -96,19 +96,27 @@ pub(super) fn handle_choices_pick(
         },
     )
     .map_err(|cause| map_choice_resolution_error(cause, &choice_request_id, option_id))?;
-    let (outcome_label, reason_code, reason_message) = match outcome {
-        ChoiceResolutionOutcome::Selected { .. } => ("selected".to_string(), None, None),
+    let (outcome_label, reason_code, reason_message, decided_by) = match outcome {
+        ChoiceResolutionOutcome::Selected { decided_by, .. } => {
+            ("selected".to_string(), None, None, decided_by)
+        }
         ChoiceResolutionOutcome::Cancelled {
+            decided_by,
             reason_code,
             reason,
-            ..
-        } => ("cancelled".to_string(), Some(reason_code), reason),
+        } => (
+            "cancelled".to_string(),
+            Some(reason_code),
+            reason,
+            decided_by,
+        ),
     };
     Ok(RelayResponse::ChoicesPick {
         schema_version: SCHEMA_VERSION.to_string(),
         status: "resolved".to_string(),
         choice_request_id,
         outcome: outcome_label,
+        decided_by: Some(decided_by),
         reason_code,
         reason: reason_message,
     })

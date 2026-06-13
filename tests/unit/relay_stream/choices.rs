@@ -467,6 +467,10 @@ fn choices_pick_selected_emits_resolved_event_with_option_id() {
     assert_eq!(response["response"]["outcome"], "selected");
     assert_eq!(response["response"]["status"], "resolved");
     assert_eq!(response["response"]["choice_request_id"], "perm-selected");
+    assert_eq!(
+        response["response"]["decided_by"],
+        global_user_id(bundle_name)
+    );
 
     shutdown_stream(&client_stream, "shutdown client stream");
     join_handle.join().expect("join relay thread");

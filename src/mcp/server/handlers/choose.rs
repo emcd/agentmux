@@ -64,6 +64,7 @@ impl McpServer {
                 status,
                 choice_request_id,
                 outcome,
+                decided_by,
                 reason_code,
                 reason,
             }) => {
@@ -72,6 +73,7 @@ impl McpServer {
                     "status": status,
                     "choice_request_id": choice_request_id,
                     "outcome": outcome,
+                    "decided_by": decided_by,
                     "reason_code": reason_code,
                     "reason": reason,
                 });

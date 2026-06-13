@@ -99,6 +99,7 @@ async fn choose_forwards_decision_and_returns_relay_response() {
                         .cloned()
                         .unwrap_or(Value::Null),
                     "outcome": request.get("outcome").cloned().unwrap_or(Value::Null),
+                    "decided_by": "operator@agentmux",
                 }),
                 _ => json!({
                     "kind": "error",
@@ -130,6 +131,7 @@ async fn choose_forwards_decision_and_returns_relay_response() {
     assert_eq!(payload["status"], "resolved");
     assert_eq!(payload["choice_request_id"], "choice-1");
     assert_eq!(payload["outcome"], "selected");
+    assert_eq!(payload["decided_by"], "operator@agentmux");
 
     let relay_requests = relay.requests_for_operation("choices_pick");
     assert_eq!(relay_requests.len(), 1);
