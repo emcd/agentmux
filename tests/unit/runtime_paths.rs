@@ -41,9 +41,12 @@ enum GitEntry {
     WorktreeFile,
 }
 
-// Debug builds (which tests are) take the dev-mode branch, so the probe's
-// positive and negative signals are observable directly.
+// Debug builds take the dev-mode branch, so the probe's positive and negative
+// signals are observable directly. The positive-path tests are ignored in
+// release mode because the probe unconditionally returns None without
+// debug_assertions.
 #[test]
+#[cfg_attr(not(debug_assertions), ignore = "probe returns None in release builds")]
 fn source_checkout_probe_accepts_agentmux_clone() {
     let temporary = TempDir::new().expect("temporary directory");
     let root = write_checkout_candidate(&temporary, Some(GitEntry::Directory), Some("agentmux"));
@@ -51,6 +54,7 @@ fn source_checkout_probe_accepts_agentmux_clone() {
 }
 
 #[test]
+#[cfg_attr(not(debug_assertions), ignore = "probe returns None in release builds")]
 fn source_checkout_probe_accepts_linked_worktree() {
     let temporary = TempDir::new().expect("temporary directory");
     let root = write_checkout_candidate(&temporary, Some(GitEntry::WorktreeFile), Some("agentmux"));
