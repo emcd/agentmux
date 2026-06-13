@@ -357,7 +357,7 @@ indicator in status presentation where shown.
 - **THEN** TUI marks request accepted at dispatch boundary
 - **AND** does not mark terminal completion from that response alone
 
-### Requirement: TUI Pending Permission Visibility
+### Requirement: TUI Pending Choice Visibility
 
 TUI SHALL expose pending ACP choice requests received from canonical relay
 lifecycle events.
@@ -389,7 +389,7 @@ at-least-once replay does not create duplicate pending rows.
 - **AND** relay replays matching `choices.requested` events
 - **THEN** TUI keeps one pending row per `choice_request_id`
 
-### Requirement: TUI Permission Decision Actions
+### Requirement: TUI Choice Decision Actions
 
 TUI SHALL expose deterministic decision actions keyed by `choice_request_id`.
 
@@ -414,7 +414,7 @@ TUI SHALL NOT send caller-supplied actor identity fields in action payload.
 - **THEN** TUI submits `choices.pick` with
   `choice_request_id` and `outcome=cancelled`
 
-### Requirement: Session-Scoped Permission Workflow
+### Requirement: Session-Scoped Choice Workflow
 
 TUI SHALL provide a session-scoped choice workflow in `Interaction` mode
 for the active interaction target session.
@@ -433,7 +433,7 @@ Workflow contract:
 - **THEN** Interaction-mode choice actions render only pending requests
   for `acp`
 
-### Requirement: Permission Terminal State Updates
+### Requirement: Choice Terminal State Updates
 
 TUI SHALL apply terminal updates from `choices.resolved` and remove pending
 entries deterministically by `choice_request_id`.
@@ -600,7 +600,7 @@ directly from the picker.
 - **AND** raww dispatch requires explicit operator submission from the raww
   input pane in `Interaction` mode
 
-### Requirement: Interaction Mode Permission/Raww Pane Replacement
+### Requirement: Interaction Mode Choice/Raww Pane Replacement
 
 The raww input pane and the choice decisioning pane SHALL share the same
 screen region in `Interaction` mode.

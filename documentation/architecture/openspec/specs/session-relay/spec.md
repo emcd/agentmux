@@ -2072,7 +2072,7 @@ Error code taxonomy addendum:
 - **THEN** consumer can infer the ACP process is gone and may retry/reattach
 - **AND** can distinguish this from a non-retryable relay-internal failure
 
-### Requirement: Permission Decision Capability Contract
+### Requirement: Choice Decision Capability Contract
 
 Relay SHALL evaluate ACP choice-request decision authority using policy
 capability `choose`.
@@ -2104,7 +2104,7 @@ action payload.
 - **THEN** relay derives `decided_by` from the authenticated stream context
 - **AND** does not consult any caller-supplied identity field in the payload
 
-### Requirement: Same-Bundle Permission Decision Scope
+### Requirement: Same-Bundle Choice Decision Scope
 
 Choice request routing and decisioning SHALL be same-bundle only in alpha.
 The bundle scope SHALL be derived from the request's routing namespace
@@ -2120,7 +2120,7 @@ subject to its policy controls.
   associated bundle
 - **AND** no `bundle_name` field is accepted in the request payload
 
-### Requirement: Bounded Permission Queue and Replay
+### Requirement: Bounded Choice Queue and Replay
 
 Relay SHALL queue ACP choice requests when no choose-authorized UI is
 connected.
@@ -2162,7 +2162,7 @@ drop pending items.
 - **WHEN** relay startup cannot restore pending choice queue state
 - **THEN** relay fails with `runtime_choices_queue_unavailable`
 
-### Requirement: Non-Expiring Permission Pending Lifecycle
+### Requirement: Non-Expiring Choice Pending Lifecycle
 
 Alpha choice requests SHALL be non-expiring while relay and worker state
 remain healthy.
@@ -2184,7 +2184,7 @@ remain independent from choice decision lifecycle.
 - **AND** relay/worker remain healthy
 - **THEN** request remains pending and is not auto-expired by timer
 
-### Requirement: Permission Lifecycle Event Carrier
+### Requirement: Choice Lifecycle Event Carrier
 
 Relay stream events SHALL be canonical machine carrier for choice lifecycle.
 
@@ -2216,7 +2216,7 @@ Inscriptions MAY be emitted but SHALL be additive only.
 - **THEN** relay emits `choices.resolved`
 - **AND** event includes `message_id` and `choice_request_id`
 
-### Requirement: Permission Resolution and Enforcement Mapping
+### Requirement: Choice Resolution and Enforcement Mapping
 
 Relay SHALL enforce choice terminal outcomes with deterministic mapping to
 ACP action and sender-visible terminal outcome/reason_code.
@@ -2246,7 +2246,7 @@ response immutable.
 - **AND** choice later resolves to cancelled
 - **THEN** relay does not mutate the earlier phase-1 response
 
-### Requirement: ACP Permission Option Fidelity
+### Requirement: ACP Choice Option Fidelity
 
 Relay SHALL preserve ACP permission-option fidelity for operator decisioning.
 
@@ -2286,7 +2286,7 @@ Lifecycle payload contract:
   `option_id`
 - **THEN** relay rejects with `validation_invalid_params`
 
-### Requirement: Permission Decision Arbitration
+### Requirement: Choice Decision Arbitration
 
 First authorized decision SHALL win across both `ui` and `operator`
 submitters. Subsequent decisions on resolved requests SHALL be rejected with
@@ -2298,7 +2298,7 @@ submitters. Subsequent decisions on resolved requests SHALL be rejected with
   resolved request
 - **THEN** relay rejects with `runtime_choices_request_already_resolved`
 
-### Requirement: Permission Decision Denial Schema
+### Requirement: Choice Decision Denial Schema
 
 When relay denies choice decisioning by policy, relay SHALL return
 `authorization_forbidden` with canonical minimum details:
@@ -2373,7 +2373,7 @@ gates; both must be satisfied for a session to resolve choice requests.
 - **AND** subsequent `choices.pick` from that stream is rejected with
   `authorization_forbidden`
 
-### Requirement: Permission List Polling Request
+### Requirement: Choice List Polling Request
 
 Relay SHALL accept `RelayRequest::ChoicesList` from associated principals
 with `client_class ∈ {ui, operator}` and `choose` capability satisfying policy.

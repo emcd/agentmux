@@ -4,8 +4,11 @@
 The system SHALL expose the following MCP tools for the relay alpha scope:
 
 - `list`
+- `help`
 - `look`
 - `send`
+- `raww`
+- `choose`
 - `do`
 
 The system SHALL NOT expose a temporary `chat` compatibility alias by default.
@@ -13,7 +16,10 @@ The system SHALL NOT expose a temporary `chat` compatibility alias by default.
 #### Scenario: Advertise full tool set including do
 
 - **WHEN** an MCP client enumerates available tools
-- **THEN** the system includes `do` in addition to existing tools
+- **THEN** the system includes `list`, `help`, `look`, `send`, `raww`,
+  `choose`, and `do`
+- **AND** does not include `grant`
+- **AND** does not include `chat`
 
 ## ADDED Requirements
 ### Requirement: MCP Do Tool Modes
