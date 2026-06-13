@@ -59,3 +59,22 @@ fn preserves_existing_configuration_files() {
     let bundle_text = fs::read_to_string(example_bundle).expect("read example bundle");
     assert_eq!(bundle_text, "format-version = 1\n# custom bundle\n");
 }
+
+#[test]
+fn skips_example_seed_when_bundles_directory_already_has_toml() {
+    let temporary = TempDir::new().expect("temporary");
+    let configuration_root = temporary.path().join("config");
+    fs::create_dir_all(configuration_root.join("bundles")).expect("create bundle dir");
+    let operator_bundle = configuration_root.join("bundles/production.toml");
+    fs::write(&operator_bundle, "format-version = 1\n# operator bundle\n").expect("write bundle");
+
+    ensure_starter_configuration_layout(&configuration_root).expect("starter layout");
+
+    let example_bundle = configuration_root.join("bundles/example.toml");
+    assert!(
+        !example_bundle.exists(),
+        "expected example.toml to stay unseeded when a real bundle is present"
+    );
+    let operator_text = fs::read_to_string(&operator_bundle).expect("read operator bundle");
+    assert_eq!(operator_text, "format-version = 1\n# operator bundle\n");
+}
