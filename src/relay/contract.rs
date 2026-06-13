@@ -246,15 +246,13 @@ pub enum RelayRequest {
         #[serde(default)]
         no_enter: bool,
     },
-    PermissionResolve {
-        permission_request_id: String,
+    ChoicesPick {
+        choice_request_id: String,
         outcome: String,
         #[serde(default)]
         option_id: Option<String>,
-        #[serde(default)]
-        ui_session_id: Option<String>,
     },
-    PermissionList,
+    ChoicesList,
     NewPeer {
         principal_id: String,
         #[serde(default)]
@@ -336,19 +334,19 @@ pub enum RelayResponse {
         #[serde(skip_serializing_if = "Option::is_none")]
         details: Option<Value>,
     },
-    PermissionDecision {
+    ChoicesPick {
         schema_version: String,
         status: String,
-        permission_request_id: String,
+        choice_request_id: String,
         outcome: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         reason_code: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
-    PermissionList {
+    ChoicesList {
         schema_version: String,
-        pending_requests: Vec<PendingPermissionEntry>,
+        pending_requests: Vec<PendingChoiceEntry>,
     },
     NewPeer {
         schema_version: String,
@@ -391,13 +389,13 @@ pub enum RelayResponse {
     },
 }
 
-/// One pending permission request entry returned by `RelayResponse::PermissionList`.
+/// One pending choice request entry returned by `RelayResponse::ChoicesList`.
 ///
-/// Field set mirrors the `permission.requested` stream event payload.
+/// Field set mirrors the `choices.requested` stream event payload.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-pub struct PendingPermissionEntry {
+pub struct PendingChoiceEntry {
     pub message_id: String,
-    pub permission_request_id: String,
+    pub choice_request_id: String,
     pub target_session: String,
     pub requested_kind: String,
     pub requested_details: Value,

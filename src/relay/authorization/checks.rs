@@ -48,8 +48,8 @@ impl RelayActionFamily {
 /// Authorizes a relay-level operator action (`new.peer`, `change.psk`).
 ///
 /// These operations mutate the relay-wide principal store and therefore require
-/// a relay-wide grant: the requester's policy must grant the control at
-/// `all`. A bundle/namespace-relative `home` grant is insufficient
+/// relay-wide reach: the requester's policy must hold the control at
+/// `all`. A bundle/namespace-relative `home` scope is insufficient
 /// because it confers no authority beyond the requester's own namespace.
 pub(in crate::relay) fn authorize_relay_action(
     configuration_root: &Path,
@@ -166,11 +166,11 @@ fn tier_denial_reason(minimum: PolicyScope) -> &'static str {
     }
 }
 
-pub(in crate::relay) fn authorize_grant(
+pub(in crate::relay) fn authorize_choose(
     bundle: &BundleConfiguration,
     authorization: &AuthorizationContext,
     requester_session: &str,
-    permission_request_id: &str,
+    choice_request_id: &str,
 ) -> Result<(), RelayError> {
     let controls = controls_for_requester(
         authorization,
@@ -178,13 +178,13 @@ pub(in crate::relay) fn authorize_grant(
         requester_session,
     )?;
     authorize_scope(
-        controls.grant,
+        controls.choose,
         PolicyScope::Home,
         AuthorizationDecisionContext {
-            capability: "grant",
+            capability: "choose",
             requester_session,
             bundle_name: bundle.bundle_name.as_str(),
-            reason: "grant policy scope does not allow permission decisions",
+            reason: "choose policy scope does not allow choice decisions",
             target_session: None,
             targets: None,
         },
@@ -192,8 +192,8 @@ pub(in crate::relay) fn authorize_grant(
     .map_err(|mut error| {
         if let Some(object) = error.details.as_mut().and_then(Value::as_object_mut) {
             object.insert(
-                "permission_request_id".to_string(),
-                Value::String(permission_request_id.to_string()),
+                "choice_request_id".to_string(),
+                Value::String(choice_request_id.to_string()),
             );
         }
         error
@@ -224,7 +224,7 @@ pub(in crate::relay) fn authorize_updown(
     )
 }
 
-pub(in crate::relay) fn authorize_grant_for_list(
+pub(in crate::relay) fn authorize_choose_for_list(
     bundle: &BundleConfiguration,
     authorization: &AuthorizationContext,
     requester_session: &str,
@@ -235,13 +235,13 @@ pub(in crate::relay) fn authorize_grant_for_list(
         requester_session,
     )?;
     authorize_scope(
-        controls.grant,
+        controls.choose,
         PolicyScope::Home,
         AuthorizationDecisionContext {
-            capability: "grant",
+            capability: "choose",
             requester_session,
             bundle_name: bundle.bundle_name.as_str(),
-            reason: "grant policy scope does not allow permission list",
+            reason: "choose policy scope does not allow choices list",
             target_session: None,
             targets: None,
         },

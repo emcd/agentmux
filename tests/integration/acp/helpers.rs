@@ -7,10 +7,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(super) use agentmux::relay::{AcpWorkerReadinessState, PermissionQueueEvent};
+pub(super) use agentmux::relay::{AcpWorkerReadinessState, ChoicesQueueEvent};
 use agentmux::relay::{
     RelayRequest, RelayResponse, handle_request, subscribe_acp_worker_state,
-    subscribe_permission_queue_events,
+    subscribe_choices_queue_events,
 };
 use serde_json::Value;
 use tokio::sync::{broadcast, watch};
@@ -143,9 +143,9 @@ while IFS= read -r line; do
         prompt_session_id="$new_session_id"
       fi
       if [ "$request_permission_on_prompt" = "1" ]; then
-        permission_request_id=$((id + 1000000))
+        choice_request_id=$((id + 1000000))
         printf '{"jsonrpc":"2.0","id":%s,"method":"session/request_permission","params":{"sessionId":"%s","kind":"exec","description":"need permission","options":[{"optionId":"allow","name":"Allow","kind":"allow"}]}}\n' \
-          "$permission_request_id" "$prompt_session_id"
+          "$choice_request_id" "$prompt_session_id"
       fi
       emit_updates() {
         count=1
@@ -453,8 +453,8 @@ pub(super) fn subscribe_bravo_worker_state(
 /// the broadcast::Receiver only observes events that arrive after subscribe.
 pub(super) fn subscribe_bravo_permission_queue(
     root: &Path,
-) -> broadcast::Receiver<PermissionQueueEvent> {
-    subscribe_permission_queue_events(root)
+) -> broadcast::Receiver<ChoicesQueueEvent> {
+    subscribe_choices_queue_events(root)
 }
 
 /// Polls a watch::Receiver for the ACP worker's readiness state until it
@@ -493,12 +493,12 @@ pub(super) fn await_acp_worker_any_state(
 /// the predicate. Drops non-matching events; treats `Lagged` as a continue
 /// (tests should subscribe before the action so lag is not expected).
 pub(super) fn await_permission_event<F>(
-    receiver: &mut broadcast::Receiver<PermissionQueueEvent>,
+    receiver: &mut broadcast::Receiver<ChoicesQueueEvent>,
     mut matcher: F,
     timeout: Duration,
 ) -> bool
 where
-    F: FnMut(&PermissionQueueEvent) -> bool,
+    F: FnMut(&ChoicesQueueEvent) -> bool,
 {
     let deadline = Instant::now() + timeout;
     loop {

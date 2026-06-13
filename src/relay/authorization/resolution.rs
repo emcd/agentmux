@@ -1,6 +1,6 @@
 //! Session resolution: map a requester (a bundle-member session or a relay-wide
 //! principal) to its resolved [`PolicyControls`], plus the UI-session accessors
-//! and the permission queue bound.
+//! and the choices queue bound.
 
 use std::{collections::HashMap, path::Path};
 
@@ -35,8 +35,8 @@ pub(in crate::relay) fn ui_session_display_name<'a>(
         .and_then(|session| session.display_name.as_deref())
 }
 
-pub(in crate::relay) fn permission_max_pending(authorization: &AuthorizationContext) -> usize {
-    authorization.permission_max_pending
+pub(in crate::relay) fn choices_max_pending(authorization: &AuthorizationContext) -> usize {
+    authorization.choices_max_pending
 }
 
 pub(super) fn resolve_session_policy_controls<'a>(
@@ -142,7 +142,7 @@ pub(super) fn resolve_relay_principal_controls(
     }
 }
 
-pub(in crate::relay) fn grant_authorized_ui_sessions(
+pub(in crate::relay) fn choose_authorized_ui_sessions(
     authorization: &AuthorizationContext,
     _bundle: &BundleConfiguration,
 ) -> Vec<String> {
@@ -153,7 +153,7 @@ pub(in crate::relay) fn grant_authorized_ui_sessions(
             authorization
                 .controls_by_session
                 .get(session_id.as_str())
-                .is_some_and(|controls| controls.grant.allows(PolicyScope::Home))
+                .is_some_and(|controls| controls.choose.allows(PolicyScope::Home))
         })
         .cloned()
         .collect()

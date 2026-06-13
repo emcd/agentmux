@@ -37,7 +37,7 @@ impl AppState {
     pub fn resolve_selected_look_permission_selected(&mut self) -> Result<(), RuntimeError> {
         let Some(entry) = self.selected_look_permission() else {
             return Err(RuntimeError::validation(
-                "validation_unknown_permission_request",
+                "validation_unknown_choice_request",
                 "selected outcome requires a pending permission request for the current look target",
             ));
         };
@@ -60,7 +60,7 @@ impl AppState {
             .map(|entry| entry.permission_request_id.clone())
             .ok_or_else(|| {
                 RuntimeError::validation(
-                    "validation_unknown_permission_request",
+                    "validation_unknown_choice_request",
                     "cancelled outcome requires a pending permission request for the current look target",
                 )
             })?;
@@ -136,16 +136,15 @@ impl AppState {
                 "cancelled outcome must omit option_id",
             ));
         }
-        let request = RelayRequest::PermissionResolve {
-            permission_request_id: permission_request_id.clone(),
+        let request = RelayRequest::ChoicesPick {
+            choice_request_id: permission_request_id.clone(),
             outcome: outcome.to_string(),
             option_id,
-            ui_session_id: None,
         };
         match self.request_relay(&request)? {
-            RelayResponse::PermissionDecision {
+            RelayResponse::ChoicesPick {
                 status,
-                permission_request_id,
+                choice_request_id: permission_request_id,
                 outcome,
                 reason_code,
                 reason,

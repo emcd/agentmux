@@ -16,28 +16,27 @@ use super::super::{
     stream::{RelayStreamEvent, send_event_to_registered_ui},
 };
 
-const PERMISSION_CANCELLED_CODE: &str = "runtime_permission_request_cancelled";
-const PERMISSION_INVALIDATED_BY_RESPAWN_CODE: &str =
-    "runtime_permission_request_invalidated_by_respawn";
-const PERMISSION_ALREADY_RESOLVED_CODE: &str = "runtime_permission_request_already_resolved";
-const PERMISSION_QUEUE_FULL_CODE: &str = "runtime_permission_queue_full";
-const PERMISSION_WAIT_POLL_MS: u64 = 100;
+const CHOICE_CANCELLED_CODE: &str = "runtime_choices_request_cancelled";
+const CHOICE_INVALIDATED_BY_RESPAWN_CODE: &str = "runtime_choices_request_invalidated_by_respawn";
+const CHOICE_ALREADY_RESOLVED_CODE: &str = "runtime_choices_request_already_resolved";
+const CHOICES_QUEUE_FULL_CODE: &str = "runtime_choices_queue_full";
+const CHOICE_WAIT_POLL_MS: u64 = 100;
 
-type SharedWaiterState = Arc<(Mutex<Option<PermissionResolutionOutcome>>, Condvar)>;
+type SharedWaiterState = Arc<(Mutex<Option<ChoiceResolutionOutcome>>, Condvar)>;
 
 // The queue is process-local in-memory state keyed by runtime_directory. The
-// ACP server is authoritative for whether a permission request is still
+// ACP server is authoritative for whether a choice request is still
 // outstanding: a stale on-disk queue from a previous relay run could replay
 // records the ACP side has long forgotten, so persistence was removed (relay/43).
 #[derive(Clone, Debug, Default)]
-struct PermissionQueueState {
+struct ChoicesQueueState {
     next_sequence: u64,
-    pending: Vec<PendingPermissionRequest>,
+    pending: Vec<PendingChoiceRequest>,
 }
 
 #[derive(Clone, Debug)]
-pub(in crate::relay) struct PendingPermissionRequest {
-    pub(in crate::relay) permission_request_id: String,
+pub(in crate::relay) struct PendingChoiceRequest {
+    pub(in crate::relay) choice_request_id: String,
     pub(in crate::relay) message_id: String,
     pub(in crate::relay) target_session: String,
     pub(in crate::relay) requested_kind: String,
@@ -47,7 +46,7 @@ pub(in crate::relay) struct PendingPermissionRequest {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(in crate::relay) enum PermissionResolutionOutcome {
+pub(in crate::relay) enum ChoiceResolutionOutcome {
     Selected {
         option_id: String,
         decided_by: String,
@@ -60,40 +59,40 @@ pub(in crate::relay) enum PermissionResolutionOutcome {
 }
 
 #[derive(Clone, Debug)]
-pub(in crate::relay) struct PermissionEnqueueResult {
-    pub(in crate::relay) permission_request_id: String,
+pub(in crate::relay) struct ChoiceEnqueueResult {
+    pub(in crate::relay) choice_request_id: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::relay) enum PermissionDecisionKind {
+pub(in crate::relay) enum ChoiceDecisionKind {
     Selected,
     Cancelled,
 }
 
 #[derive(Clone, Debug)]
-pub(in crate::relay) struct PermissionDecisionRequest {
-    pub(in crate::relay) permission_request_id: String,
+pub(in crate::relay) struct ChoiceDecisionRequest {
+    pub(in crate::relay) choice_request_id: String,
     pub(in crate::relay) option_id: Option<String>,
-    pub(in crate::relay) decision: PermissionDecisionKind,
+    pub(in crate::relay) decision: ChoiceDecisionKind,
     pub(in crate::relay) decided_by: String,
 }
 
 #[derive(Clone, Debug)]
-pub(in crate::relay) struct PermissionEventContext {
+pub(in crate::relay) struct ChoiceEventContext {
     pub(in crate::relay) runtime_directory: PathBuf,
     pub(in crate::relay) bundle_name: String,
     pub(in crate::relay) authorized_ui_sessions: Vec<String>,
 }
 
-static PERMISSION_QUEUES: OnceLock<Mutex<HashMap<PathBuf, PermissionQueueState>>> = OnceLock::new();
-static PERMISSION_WAITERS: OnceLock<Mutex<HashMap<String, SharedWaiterState>>> = OnceLock::new();
+static CHOICES_QUEUES: OnceLock<Mutex<HashMap<PathBuf, ChoicesQueueState>>> = OnceLock::new();
+static CHOICE_WAITERS: OnceLock<Mutex<HashMap<String, SharedWaiterState>>> = OnceLock::new();
 
-fn permission_queues() -> &'static Mutex<HashMap<PathBuf, PermissionQueueState>> {
-    PERMISSION_QUEUES.get_or_init(|| Mutex::new(HashMap::new()))
+fn choices_queues() -> &'static Mutex<HashMap<PathBuf, ChoicesQueueState>> {
+    CHOICES_QUEUES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn permission_waiters() -> &'static Mutex<HashMap<String, SharedWaiterState>> {
-    PERMISSION_WAITERS.get_or_init(|| Mutex::new(HashMap::new()))
+fn choice_waiters() -> &'static Mutex<HashMap<String, SharedWaiterState>> {
+    CHOICE_WAITERS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 // Holds the global queues lock for the duration of `mutate`, so callers can
@@ -101,29 +100,29 @@ fn permission_waiters() -> &'static Mutex<HashMap<String, SharedWaiterState>> {
 // prior file lock + load + store sequence.
 fn with_queue_state<R>(
     runtime_directory: &Path,
-    mutate: impl FnOnce(&mut PermissionQueueState) -> R,
+    mutate: impl FnOnce(&mut ChoicesQueueState) -> R,
 ) -> Result<R, String> {
-    let mut queues = permission_queues()
+    let mut queues = choices_queues()
         .lock()
-        .map_err(|_| "failed to lock permission queue state".to_string())?;
+        .map_err(|_| "failed to lock choices queue state".to_string())?;
     let state = queues
         .entry(runtime_directory.to_path_buf())
-        .or_insert_with(|| PermissionQueueState {
+        .or_insert_with(|| ChoicesQueueState {
             next_sequence: 1,
             pending: Vec::new(),
         });
     Ok(mutate(state))
 }
 
-fn sort_pending_by_sequence(pending: &mut [PendingPermissionRequest]) {
+fn sort_pending_by_sequence(pending: &mut [PendingChoiceRequest]) {
     pending.sort_by(|left, right| {
         left.sequence
             .cmp(&right.sequence)
-            .then(left.permission_request_id.cmp(&right.permission_request_id))
+            .then(left.choice_request_id.cmp(&right.choice_request_id))
     });
 }
 
-fn pending_permission_option_ids(record: &PendingPermissionRequest) -> Vec<String> {
+fn pending_choice_option_ids(record: &PendingChoiceRequest) -> Vec<String> {
     record
         .requested_details
         .get("options")
@@ -142,17 +141,17 @@ fn pending_permission_option_ids(record: &PendingPermissionRequest) -> Vec<Strin
         .unwrap_or_default()
 }
 
-pub(in crate::relay) fn enqueue_permission_request(
-    context: &PermissionEventContext,
+pub(in crate::relay) fn enqueue_choice_request(
+    context: &ChoiceEventContext,
     message_id: &str,
     target_session: &str,
     requested_kind: &str,
     requested_details: Value,
     max_pending: usize,
-) -> Result<PermissionEnqueueResult, String> {
-    let permission_request_id = Uuid::new_v4().to_string();
-    let record = PendingPermissionRequest {
-        permission_request_id: permission_request_id.clone(),
+) -> Result<ChoiceEnqueueResult, String> {
+    let choice_request_id = Uuid::new_v4().to_string();
+    let record = PendingChoiceRequest {
+        choice_request_id: choice_request_id.clone(),
         message_id: message_id.to_string(),
         target_session: target_session.to_string(),
         requested_kind: requested_kind.to_string(),
@@ -162,7 +161,7 @@ pub(in crate::relay) fn enqueue_permission_request(
     };
     let stored = with_queue_state(context.runtime_directory.as_path(), |state| {
         if state.pending.len() >= max_pending {
-            return Err(PERMISSION_QUEUE_FULL_CODE.to_string());
+            return Err(CHOICES_QUEUE_FULL_CODE.to_string());
         }
         let mut record = record;
         record.sequence = state.next_sequence;
@@ -171,142 +170,140 @@ pub(in crate::relay) fn enqueue_permission_request(
         sort_pending_by_sequence(state.pending.as_mut_slice());
         Ok(record)
     })??;
-    register_waiter(stored.permission_request_id.as_str())?;
-    emit_permission_requested_event(context, &stored);
-    super::observability::publish_permission_queue_event(
+    register_waiter(stored.choice_request_id.as_str())?;
+    emit_choices_requested_event(context, &stored);
+    super::observability::publish_choices_queue_event(
         context.runtime_directory.as_path(),
-        super::observability::PermissionQueueEvent::Enqueued {
-            permission_request_id: stored.permission_request_id.clone(),
+        super::observability::ChoicesQueueEvent::Enqueued {
+            choice_request_id: stored.choice_request_id.clone(),
             message_id: stored.message_id.clone(),
             target_session: stored.target_session.clone(),
         },
     );
-    Ok(PermissionEnqueueResult {
-        permission_request_id,
-    })
+    Ok(ChoiceEnqueueResult { choice_request_id })
 }
 
-pub(in crate::relay) fn resolve_permission_request(
-    context: &PermissionEventContext,
-    decision: PermissionDecisionRequest,
-) -> Result<PermissionResolutionOutcome, String> {
+pub(in crate::relay) fn resolve_choice_request(
+    context: &ChoiceEventContext,
+    decision: ChoiceDecisionRequest,
+) -> Result<ChoiceResolutionOutcome, String> {
     let record = with_queue_state(context.runtime_directory.as_path(), |state| {
         state
             .pending
             .iter()
-            .position(|record| record.permission_request_id == decision.permission_request_id)
+            .position(|record| record.choice_request_id == decision.choice_request_id)
             .map(|index| state.pending.remove(index))
     })?
-    .ok_or_else(|| PERMISSION_ALREADY_RESOLVED_CODE.to_string())?;
+    .ok_or_else(|| CHOICE_ALREADY_RESOLVED_CODE.to_string())?;
 
     let outcome = match decision.decision {
-        PermissionDecisionKind::Selected => {
+        ChoiceDecisionKind::Selected => {
             let option_id = decision.option_id.ok_or_else(|| {
                 "validation_invalid_params: selected outcome requires explicit option_id"
                     .to_string()
             })?;
-            let allowed_option_ids = pending_permission_option_ids(&record);
+            let allowed_option_ids = pending_choice_option_ids(&record);
             if !allowed_option_ids
                 .iter()
                 .any(|candidate| candidate == &option_id)
             {
                 return Err(format!(
-                    "validation_invalid_params: selected option_id '{}' is not present in pending permission options",
+                    "validation_invalid_params: selected option_id '{}' is not present in pending choice options",
                     option_id
                 ));
             }
-            PermissionResolutionOutcome::Selected {
+            ChoiceResolutionOutcome::Selected {
                 option_id,
                 decided_by: decision.decided_by.clone(),
             }
         }
-        PermissionDecisionKind::Cancelled => PermissionResolutionOutcome::Cancelled {
+        ChoiceDecisionKind::Cancelled => ChoiceResolutionOutcome::Cancelled {
             decided_by: decision.decided_by.clone(),
-            reason_code: PERMISSION_CANCELLED_CODE.to_string(),
-            reason: Some("permission request was cancelled by UI decision".to_string()),
+            reason_code: CHOICE_CANCELLED_CODE.to_string(),
+            reason: Some("choice request was cancelled by UI decision".to_string()),
         },
     };
 
-    if let Some(waiter) = take_waiter(decision.permission_request_id.as_str())? {
+    if let Some(waiter) = take_waiter(decision.choice_request_id.as_str())? {
         let (lock, condvar) = &*waiter;
         if let Ok(mut value) = lock.lock() {
             *value = Some(outcome.clone());
             condvar.notify_all();
         }
     }
-    emit_permission_resolved_event(context, &record, &outcome);
-    super::observability::publish_permission_queue_event(
+    emit_choices_resolved_event(context, &record, &outcome);
+    super::observability::publish_choices_queue_event(
         context.runtime_directory.as_path(),
-        super::observability::PermissionQueueEvent::Resolved {
-            permission_request_id: record.permission_request_id.clone(),
+        super::observability::ChoicesQueueEvent::Resolved {
+            choice_request_id: record.choice_request_id.clone(),
             target_session: record.target_session.clone(),
         },
     );
     Ok(outcome)
 }
 
-pub(in crate::relay) fn wait_for_permission_resolution(
-    context: &PermissionEventContext,
-    permission_request_id: &str,
-) -> Result<PermissionResolutionOutcome, String> {
-    let waiter = get_waiter(permission_request_id)?
-        .ok_or_else(|| PERMISSION_ALREADY_RESOLVED_CODE.to_string())?;
+pub(in crate::relay) fn wait_for_choice_resolution(
+    context: &ChoiceEventContext,
+    choice_request_id: &str,
+) -> Result<ChoiceResolutionOutcome, String> {
+    let waiter =
+        get_waiter(choice_request_id)?.ok_or_else(|| CHOICE_ALREADY_RESOLVED_CODE.to_string())?;
     let (lock, condvar) = &*waiter;
     let mut guard = lock
         .lock()
-        .map_err(|_| "failed to lock permission waiter".to_string())?;
+        .map_err(|_| "failed to lock choice waiter".to_string())?;
     loop {
         if let Some(outcome) = guard.clone() {
             return Ok(outcome);
         }
         let wait = condvar
-            .wait_timeout(guard, Duration::from_millis(PERMISSION_WAIT_POLL_MS))
-            .map_err(|_| "failed to wait for permission decision".to_string())?;
+            .wait_timeout(guard, Duration::from_millis(CHOICE_WAIT_POLL_MS))
+            .map_err(|_| "failed to wait for choice decision".to_string())?;
         guard = wait.0;
         if shutdown_requested() {
             drop(guard);
-            return cancel_permission_request_on_shutdown(context, permission_request_id);
+            return cancel_choice_request_on_shutdown(context, choice_request_id);
         }
     }
 }
 
-pub(in crate::relay) fn emit_permission_snapshot_then_replay(
-    context: &PermissionEventContext,
+pub(in crate::relay) fn emit_choices_snapshot_then_replay(
+    context: &ChoiceEventContext,
     ui_session_id: &str,
 ) -> Result<(), String> {
-    let pending = list_pending_permission_requests(context.runtime_directory.as_path())?;
+    let pending = list_pending_choice_requests(context.runtime_directory.as_path())?;
     let snapshot_event = RelayStreamEvent {
-        event_type: "permission.snapshot".to_string(),
+        event_type: "choices.snapshot".to_string(),
         target_session: canonical_session_id(ui_session_id, context.bundle_name.as_str()),
         created_at: timestamp_rfc3339(),
         payload: json!({
             "pending_count": pending.len(),
-            "permission_request_ids": pending
+            "choice_request_ids": pending
                 .iter()
-                .map(|value| value.permission_request_id.clone())
+                .map(|value| value.choice_request_id.clone())
                 .collect::<Vec<_>>(),
         }),
     };
     let _ =
         send_event_to_registered_ui(context.bundle_name.as_str(), ui_session_id, &snapshot_event);
     for request in pending {
-        let event = permission_requested_event(ui_session_id, &context.bundle_name, &request);
+        let event = choices_requested_event(ui_session_id, &context.bundle_name, &request);
         let _ = send_event_to_registered_ui(context.bundle_name.as_str(), ui_session_id, &event);
     }
     Ok(())
 }
 
-// Cancels every pending permission request tied to `target_session` with the
-// `runtime_permission_request_invalidated_by_respawn` reason code. Used when
+// Cancels every pending choice request tied to `target_session` with the
+// `runtime_choices_request_invalidated_by_respawn` reason code. Used when
 // the ACP worker for that session is being respawned; the dying ACP child can
 // no longer accept the operator decision, so the request must be cleared
 // before the new child runs `session/load`. Returns the number of records
 // invalidated.
 pub(in crate::relay) fn invalidate_pending_for_respawn(
-    context: &PermissionEventContext,
+    context: &ChoiceEventContext,
     target_session: &str,
 ) -> Result<usize, String> {
-    let invalidated_records: Vec<PendingPermissionRequest> =
+    let invalidated_records: Vec<PendingChoiceRequest> =
         with_queue_state(context.runtime_directory.as_path(), |state| {
             let mut removed = Vec::new();
             state.pending.retain(|record| {
@@ -324,14 +321,12 @@ pub(in crate::relay) fn invalidate_pending_for_respawn(
     }
 
     for record in &invalidated_records {
-        let outcome = PermissionResolutionOutcome::Cancelled {
+        let outcome = ChoiceResolutionOutcome::Cancelled {
             decided_by: "relay".to_string(),
-            reason_code: PERMISSION_INVALIDATED_BY_RESPAWN_CODE.to_string(),
-            reason: Some(
-                "ACP worker respawn invalidated the pending permission request".to_string(),
-            ),
+            reason_code: CHOICE_INVALIDATED_BY_RESPAWN_CODE.to_string(),
+            reason: Some("ACP worker respawn invalidated the pending choice request".to_string()),
         };
-        let had_pending_waiter = match take_waiter(record.permission_request_id.as_str())? {
+        let had_pending_waiter = match take_waiter(record.choice_request_id.as_str())? {
             Some(waiter) => {
                 let (lock, condvar) = &*waiter;
                 if let Ok(mut value) = lock.lock() {
@@ -342,42 +337,42 @@ pub(in crate::relay) fn invalidate_pending_for_respawn(
             }
             None => false,
         };
-        emit_permission_resolved_event(context, record, &outcome);
+        emit_choices_resolved_event(context, record, &outcome);
         emit_inscription(
-            "relay.acp.respawn.permission_invalidated",
+            "relay.acp.respawn.choice_invalidated",
             &json!({
                 "bundle_name": context.bundle_name,
-                "permission_request_id": record.permission_request_id,
+                "choice_request_id": record.choice_request_id,
                 "message_id": record.message_id,
                 "target_session": record.target_session,
                 "had_pending_waiter": had_pending_waiter,
             }),
         );
-        super::observability::publish_permission_queue_event(
+        super::observability::publish_choices_queue_event(
             context.runtime_directory.as_path(),
-            super::observability::PermissionQueueEvent::Invalidated {
-                permission_request_id: record.permission_request_id.clone(),
+            super::observability::ChoicesQueueEvent::Invalidated {
+                choice_request_id: record.choice_request_id.clone(),
                 target_session: record.target_session.clone(),
-                reason_code: PERMISSION_INVALIDATED_BY_RESPAWN_CODE.to_string(),
+                reason_code: CHOICE_INVALIDATED_BY_RESPAWN_CODE.to_string(),
             },
         );
     }
     Ok(invalidated_records.len())
 }
 
-pub(in crate::relay) fn list_pending_permission_requests(
+pub(in crate::relay) fn list_pending_choice_requests(
     runtime_directory: &Path,
-) -> Result<Vec<PendingPermissionRequest>, String> {
+) -> Result<Vec<PendingChoiceRequest>, String> {
     with_queue_state(runtime_directory, |state| state.pending.clone())
 }
 
-// Pre-seeds the in-memory permission queue for a runtime directory. Exposed
+// Pre-seeds the in-memory choices queue for a runtime directory. Exposed
 // for integration tests that need to assert on UI snapshot/replay behavior
-// for deterministically named permission requests; production code paths use
-// `enqueue_permission_request` instead.
-pub fn install_pending_permission_request_for_testing(
+// for deterministically named choice requests; production code paths use
+// `enqueue_choice_request` instead.
+pub fn install_pending_choice_request_for_testing(
     runtime_directory: &Path,
-    permission_request_id: &str,
+    choice_request_id: &str,
     message_id: &str,
     target_session: &str,
     requested_kind: &str,
@@ -386,8 +381,8 @@ pub fn install_pending_permission_request_for_testing(
     with_queue_state(runtime_directory, |state| {
         let sequence = state.next_sequence;
         state.next_sequence = state.next_sequence.saturating_add(1);
-        state.pending.push(PendingPermissionRequest {
-            permission_request_id: permission_request_id.to_string(),
+        state.pending.push(PendingChoiceRequest {
+            choice_request_id: choice_request_id.to_string(),
             message_id: message_id.to_string(),
             target_session: target_session.to_string(),
             requested_kind: requested_kind.to_string(),
@@ -399,62 +394,58 @@ pub fn install_pending_permission_request_for_testing(
     })
 }
 
-fn cancel_permission_request_on_shutdown(
-    context: &PermissionEventContext,
-    permission_request_id: &str,
-) -> Result<PermissionResolutionOutcome, String> {
+fn cancel_choice_request_on_shutdown(
+    context: &ChoiceEventContext,
+    choice_request_id: &str,
+) -> Result<ChoiceResolutionOutcome, String> {
     let record = with_queue_state(context.runtime_directory.as_path(), |state| {
         state
             .pending
             .iter()
-            .position(|record| record.permission_request_id == permission_request_id)
+            .position(|record| record.choice_request_id == choice_request_id)
             .map(|index| state.pending.remove(index))
     })?;
     let Some(record) = record else {
-        return Ok(PermissionResolutionOutcome::Cancelled {
+        return Ok(ChoiceResolutionOutcome::Cancelled {
             decided_by: "relay".to_string(),
-            reason_code: PERMISSION_ALREADY_RESOLVED_CODE.to_string(),
-            reason: Some("permission request was already resolved".to_string()),
+            reason_code: CHOICE_ALREADY_RESOLVED_CODE.to_string(),
+            reason: Some("choice request was already resolved".to_string()),
         });
     };
-    let outcome = PermissionResolutionOutcome::Cancelled {
+    let outcome = ChoiceResolutionOutcome::Cancelled {
         decided_by: "relay".to_string(),
-        reason_code: PERMISSION_CANCELLED_CODE.to_string(),
-        reason: Some("relay shutdown cancelled pending permission request".to_string()),
+        reason_code: CHOICE_CANCELLED_CODE.to_string(),
+        reason: Some("relay shutdown cancelled pending choice request".to_string()),
     };
-    if let Some(waiter) = take_waiter(permission_request_id)? {
+    if let Some(waiter) = take_waiter(choice_request_id)? {
         let (lock, condvar) = &*waiter;
         if let Ok(mut value) = lock.lock() {
             *value = Some(outcome.clone());
             condvar.notify_all();
         }
     }
-    emit_permission_resolved_event(context, &record, &outcome);
-    super::observability::publish_permission_queue_event(
+    emit_choices_resolved_event(context, &record, &outcome);
+    super::observability::publish_choices_queue_event(
         context.runtime_directory.as_path(),
-        super::observability::PermissionQueueEvent::Invalidated {
-            permission_request_id: record.permission_request_id.clone(),
+        super::observability::ChoicesQueueEvent::Invalidated {
+            choice_request_id: record.choice_request_id.clone(),
             target_session: record.target_session.clone(),
-            reason_code: PERMISSION_CANCELLED_CODE.to_string(),
+            reason_code: CHOICE_CANCELLED_CODE.to_string(),
         },
     );
     Ok(outcome)
 }
 
-fn emit_permission_requested_event(
-    context: &PermissionEventContext,
-    request: &PendingPermissionRequest,
-) {
+fn emit_choices_requested_event(context: &ChoiceEventContext, request: &PendingChoiceRequest) {
     for ui_session_id in &context.authorized_ui_sessions {
-        let event =
-            permission_requested_event(ui_session_id.as_str(), &context.bundle_name, request);
+        let event = choices_requested_event(ui_session_id.as_str(), &context.bundle_name, request);
         let _ = send_event_to_registered_ui(context.bundle_name.as_str(), ui_session_id, &event);
     }
     emit_inscription(
-        "relay.permission.requested",
+        "relay.choices.requested",
         &json!({
             "bundle_name": context.bundle_name,
-            "permission_request_id": request.permission_request_id,
+            "choice_request_id": request.choice_request_id,
             "message_id": request.message_id,
             "target_session": request.target_session,
             "requested_kind": request.requested_kind,
@@ -463,19 +454,19 @@ fn emit_permission_requested_event(
     );
 }
 
-fn emit_permission_resolved_event(
-    context: &PermissionEventContext,
-    request: &PendingPermissionRequest,
-    outcome: &PermissionResolutionOutcome,
+fn emit_choices_resolved_event(
+    context: &ChoiceEventContext,
+    request: &PendingChoiceRequest,
+    outcome: &ChoiceResolutionOutcome,
 ) {
     let (outcome_label, reason_code, decided_by, reason) = match outcome {
-        PermissionResolutionOutcome::Selected { decided_by, .. } => (
+        ChoiceResolutionOutcome::Selected { decided_by, .. } => (
             "selected",
             Value::Null,
             Value::String(decided_by.clone()),
             Value::Null,
         ),
-        PermissionResolutionOutcome::Cancelled {
+        ChoiceResolutionOutcome::Cancelled {
             decided_by,
             reason_code,
             reason,
@@ -488,12 +479,12 @@ fn emit_permission_resolved_event(
     };
     for ui_session_id in &context.authorized_ui_sessions {
         let event = RelayStreamEvent {
-            event_type: "permission.resolved".to_string(),
+            event_type: "choices.resolved".to_string(),
             target_session: canonical_session_id(ui_session_id, context.bundle_name.as_str()),
             created_at: timestamp_rfc3339(),
             payload: json!({
                 "message_id": request.message_id,
-                "permission_request_id": request.permission_request_id,
+                "choice_request_id": request.choice_request_id,
                 "outcome": outcome_label,
                 "reason_code": reason_code,
                 "decided_by": decided_by,
@@ -504,28 +495,28 @@ fn emit_permission_resolved_event(
         let _ = send_event_to_registered_ui(context.bundle_name.as_str(), ui_session_id, &event);
     }
     emit_inscription(
-        "relay.permission.resolved",
+        "relay.choices.resolved",
         &json!({
             "bundle_name": context.bundle_name,
-            "permission_request_id": request.permission_request_id,
+            "choice_request_id": request.choice_request_id,
             "message_id": request.message_id,
             "outcome": outcome_label,
         }),
     );
 }
 
-fn permission_requested_event(
+fn choices_requested_event(
     ui_session_id: &str,
     bundle_name: &str,
-    request: &PendingPermissionRequest,
+    request: &PendingChoiceRequest,
 ) -> RelayStreamEvent {
     RelayStreamEvent {
-        event_type: "permission.requested".to_string(),
+        event_type: "choices.requested".to_string(),
         target_session: canonical_session_id(ui_session_id, bundle_name),
         created_at: timestamp_rfc3339(),
         payload: json!({
             "message_id": request.message_id,
-            "permission_request_id": request.permission_request_id,
+            "choice_request_id": request.choice_request_id,
             "target_session": canonical_session_id(request.target_session.as_str(), bundle_name),
             "requested_kind": request.requested_kind,
             "requested_details": request.requested_details,
@@ -534,29 +525,29 @@ fn permission_requested_event(
     }
 }
 
-fn register_waiter(permission_request_id: &str) -> Result<(), String> {
-    let mut waiters = permission_waiters()
+fn register_waiter(choice_request_id: &str) -> Result<(), String> {
+    let mut waiters = choice_waiters()
         .lock()
-        .map_err(|_| "failed to lock permission waiters".to_string())?;
+        .map_err(|_| "failed to lock choice waiters".to_string())?;
     waiters.insert(
-        permission_request_id.to_string(),
+        choice_request_id.to_string(),
         Arc::new((Mutex::new(None), Condvar::new())),
     );
     Ok(())
 }
 
-fn get_waiter(permission_request_id: &str) -> Result<Option<SharedWaiterState>, String> {
-    let waiters = permission_waiters()
+fn get_waiter(choice_request_id: &str) -> Result<Option<SharedWaiterState>, String> {
+    let waiters = choice_waiters()
         .lock()
-        .map_err(|_| "failed to lock permission waiters".to_string())?;
-    Ok(waiters.get(permission_request_id).cloned())
+        .map_err(|_| "failed to lock choice waiters".to_string())?;
+    Ok(waiters.get(choice_request_id).cloned())
 }
 
-fn take_waiter(permission_request_id: &str) -> Result<Option<SharedWaiterState>, String> {
-    let mut waiters = permission_waiters()
+fn take_waiter(choice_request_id: &str) -> Result<Option<SharedWaiterState>, String> {
+    let mut waiters = choice_waiters()
         .lock()
-        .map_err(|_| "failed to lock permission waiters".to_string())?;
-    Ok(waiters.remove(permission_request_id))
+        .map_err(|_| "failed to lock choice waiters".to_string())?;
+    Ok(waiters.remove(choice_request_id))
 }
 
 fn timestamp_rfc3339() -> String {

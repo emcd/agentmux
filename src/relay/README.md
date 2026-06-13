@@ -73,8 +73,8 @@ exported from `src/relay/mod.rs`.
     separates the requester's home (dispatch) bundle — where its `list` control
     resolves — from the enumerated bundle, so a session may list a peer bundle
     under `all` without being looked up in the wrong bundle's members.
-- `handlers/permissions.rs`
-  - permission snapshot, list, and decision request handlers.
+- `handlers/choices.rs`
+  - choices snapshot, list, and pick request handlers.
 - `handlers/identity.rs`
   - relay-wide identity administration: `new peer` credential registration and
     `change psk` rotation. Operates on the relay-level principal store with no
@@ -114,7 +114,7 @@ exported from `src/relay/mod.rs`.
     rendered multi-batch result in a single dispatch.
   - `dispatch/transport.rs`: ACP/tmux transport-specific dispatch, including
     the batch variants that share one quiescence wait (tmux) or one
-    permission decision window (ACP) across the coalesced tasks.
+    choice decision window (ACP) across the coalesced tasks.
   - `dispatch/worker.rs`: per-target tokio worker task; ACP bootstrap,
     respawn, and the blocking delivery body are run on the blocking pool
     via `spawn_blocking`. Holds a carry buffer that re-queues tasks the
@@ -184,7 +184,7 @@ exported from `src/relay/mod.rs`.
   principal's hash in place. Both authorize the requester relay-wide: the
   caller's policy preset (resolved from a session member's `policy_id` or a
   `@GLOBAL` operator's TUI-config policy) must grant `new.peer` / `change.psk`
-  at the `all` tier — a bundle-relative `home` grant is insufficient,
+  at the `all` tier — bundle-relative `home` scope is insufficient,
   and application/relay principals are denied fail-closed.
 
 ### Cross-bundle routing and the uniform authorization model
@@ -354,7 +354,7 @@ exported from `src/relay/mod.rs`.
   flight prompt-completion wait runs *between* worker iterations, so the
   next iteration's blocking `recv` plus initial coalesce drain already
   absorb anything that queued during the previous turn. ACP-coalesced
-  tasks share one `session/prompt` dispatch and one permission-decision
+  tasks share one `session/prompt` dispatch and one choice-decision
   window; ACP cannot accept multi-batch payloads, so when the packer
   produces more than one prompt batch the tail tasks are peeled back to
   the carry buffer to preserve the single-batch invariant. A mid-batch

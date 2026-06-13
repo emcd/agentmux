@@ -982,7 +982,7 @@ fn application_principal_receives_identity_snapshot_on_connect() {
         "app hello not acked"
     );
 
-    // The snapshot is the very next frame after the ack (no permission snapshot
+    // The snapshot is the very next frame after the ack (no choices snapshot
     // is emitted for a non-UI application principal).
     let frame = read_json(&mut reader);
     shutdown_stream(&client, "shutdown app stream");

@@ -149,7 +149,7 @@ raww = "all:everything"
 }
 
 #[test]
-fn grant_policy_rejects_unknown_scope_value() {
+fn choose_policy_rejects_unknown_scope_value() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle_with_policy(
         &temporary,
@@ -175,7 +175,7 @@ find = "self"
 list = "home"
 look = "self"
 send = "home"
-grant = "everywhere"
+choose = "everywhere"
 "#,
         ),
     );
@@ -196,7 +196,7 @@ grant = "everywhere"
 
 // The policies file is authoritative: every control accepts the full
 // none/self/home/all ladder. The fixture pins each control to a value the
-// retired per-control caps used to reject (grant/updown at all, send at
+// retired per-control caps used to reject (choose/updown at all, send at
 // self, new/change at self), so a parse-time rejection would resurface here.
 #[test]
 fn policy_controls_accept_full_scope_ladder() {
@@ -226,7 +226,7 @@ list = "all"
 look = "none"
 send = "self"
 raww = "none"
-grant = "all"
+choose = "all"
 updown = "all"
 
 [policies.controls.new]

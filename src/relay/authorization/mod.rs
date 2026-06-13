@@ -20,11 +20,11 @@ mod loading;
 mod resolution;
 
 pub(in crate::relay) use checks::{
-    RelayActionFamily, authorize_grant, authorize_grant_for_list, authorize_relay_action,
+    RelayActionFamily, authorize_choose, authorize_choose_for_list, authorize_relay_action,
     authorize_route, authorize_updown,
 };
 pub(in crate::relay) use context::AuthorizationContext;
 pub(in crate::relay) use loading::load_authorization_context;
 pub(in crate::relay) use resolution::{
-    grant_authorized_ui_sessions, has_ui_session, permission_max_pending, ui_session_display_name,
+    choices_max_pending, choose_authorized_ui_sessions, has_ui_session, ui_session_display_name,
 };

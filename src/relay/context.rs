@@ -18,11 +18,10 @@ pub(super) struct SendRequestContext {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct PermissionDecisionRequestContext {
-    pub(super) permission_request_id: String,
+pub(super) struct ChoiceDecisionRequestContext {
+    pub(super) choice_request_id: String,
     pub(super) outcome: String,
     pub(super) option_id: Option<String>,
-    pub(super) ui_session_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -69,6 +68,6 @@ pub(super) struct AsyncDeliveryTask {
     pub(super) completion_sender: Option<mpsc::Sender<Result<SendResult, RelayError>>>,
     pub(super) payload_mode: DeliveryPayloadMode,
     pub(super) append_enter: bool,
-    pub(super) permission_decider_sessions: Vec<String>,
-    pub(super) permission_max_pending: usize,
+    pub(super) choice_decider_sessions: Vec<String>,
+    pub(super) choices_max_pending: usize,
 }

@@ -157,3 +157,33 @@ coder = "shell"
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn session_type_capability_table_is_derived_from_transport() {
+    use agentmux::configuration::SessionType;
+
+    // Transport Capability Contract: (can_be_looked, can_be_written,
+    // can_stream_output, gives_choices) per transport. `gives_choices`
+    // describes choice production only; resolution authority is governed by
+    // the `choose` policy capability.
+    let table = [
+        (SessionType::Tmux, (true, true, false, false)),
+        (SessionType::Acp, (true, true, true, true)),
+        (SessionType::Ui, (false, false, false, false)),
+        (SessionType::Pubsub, (false, false, false, false)),
+    ];
+    for (session_type, (looked, written, streams, gives_choices)) in table {
+        assert_eq!(session_type.can_be_looked(), looked, "{session_type:?}");
+        assert_eq!(session_type.can_be_written(), written, "{session_type:?}");
+        assert_eq!(
+            session_type.can_stream_output(),
+            streams,
+            "{session_type:?}"
+        );
+        assert_eq!(
+            session_type.can_give_choices(),
+            gives_choices,
+            "{session_type:?}"
+        );
+    }
+}

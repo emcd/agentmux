@@ -1,5 +1,5 @@
 //! Request dispatch: the per-bundle [`handle_request`] router and the relay-wide
-//! entry points (`GLOBAL` list, identity admin/introspect, permission snapshot)
+//! entry points (`GLOBAL` list, identity admin/introspect, choices snapshot)
 //! that bypass the per-bundle path. Each arm delegates to a sibling operation
 //! submodule; this module owns only the routing and request normalization.
 
@@ -11,13 +11,13 @@ use super::super::authorization::{AuthorizationContext, authorize_updown};
 use super::super::identity::IdentityIntrospectRights;
 use super::super::stream::{RelayStreamEvent, list_registered_relay_wide_sessions};
 use super::super::{
-    ListedBundle, ListedBundleState, ListedSession, PermissionDecisionRequestContext, RelayError,
+    ChoiceDecisionRequestContext, ListedBundle, ListedBundleState, ListedSession, RelayError,
     RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION, bare_session_id, relay_error,
 };
-use super::{identity, listing, permissions};
+use super::{choices, identity, listing};
 
 /// Per-bundle dispatcher for the operations whose subject is a bundle the
-/// requester is a member of (`Up`/`Down`, `List`, permission decisions). The
+/// requester is a member of (`Up`/`Down`, `List`, choice decisions). The
 /// target operations (`Send`/`Look`/`Raww`) are dispatched through their
 /// namespace-centric paths and never reach here.
 pub(in crate::relay) fn handle_request(
@@ -55,25 +55,23 @@ pub(in crate::relay) fn handle_request(
                 None,
             ))
         }
-        RelayRequest::PermissionResolve {
-            permission_request_id,
+        RelayRequest::ChoicesPick {
+            choice_request_id,
             outcome,
             option_id,
-            ui_session_id,
-        } => permissions::handle_permission_decision(
+        } => choices::handle_choices_pick(
             bundle,
             authorization,
-            PermissionDecisionRequestContext {
-                permission_request_id,
+            ChoiceDecisionRequestContext {
+                choice_request_id,
                 outcome,
                 option_id,
-                ui_session_id,
             },
             runtime_directory,
             principal,
         ),
-        RelayRequest::PermissionList => {
-            permissions::handle_permission_list(bundle, authorization, runtime_directory, principal)
+        RelayRequest::ChoicesList => {
+            choices::handle_choices_list(bundle, authorization, runtime_directory, principal)
         }
         RelayRequest::NewPeer { .. }
         | RelayRequest::ChangePsk { .. }
@@ -190,13 +188,13 @@ pub(in crate::relay) fn build_identity_snapshot_event(
     identity::build_identity_snapshot_event(state_root, host_principal_id, rights)
 }
 
-pub(in crate::relay) fn emit_permission_snapshot_for_ui_registration(
+pub(in crate::relay) fn emit_choices_snapshot_for_ui_registration(
     configuration_root: &Path,
     bundle_name: &str,
     runtime_directory: &Path,
     ui_session_id: &str,
 ) -> Result<(), RelayError> {
-    permissions::emit_permission_snapshot_for_ui_registration(
+    choices::emit_choices_snapshot_for_ui_registration(
         configuration_root,
         bundle_name,
         runtime_directory,
@@ -259,8 +257,8 @@ fn normalize_request_identities(request: RelayRequest, bundle_name: &str) -> Rel
         },
         request @ (RelayRequest::Up
         | RelayRequest::Down
-        | RelayRequest::PermissionResolve { .. }
-        | RelayRequest::PermissionList
+        | RelayRequest::ChoicesPick { .. }
+        | RelayRequest::ChoicesList
         | RelayRequest::NewPeer { .. }
         | RelayRequest::ChangePsk { .. }
         | RelayRequest::IdentityIntrospect { .. }) => request,

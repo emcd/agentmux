@@ -540,7 +540,7 @@ mod tests {
         let selected = state.resolve_selected_look_permission_selected();
         match selected {
             Err(RuntimeError::Validation { code, .. }) => {
-                assert_eq!(code, "validation_unknown_permission_request");
+                assert_eq!(code, "validation_unknown_choice_request");
             }
             other => panic!("unexpected result: {other:?}"),
         }
@@ -548,7 +548,7 @@ mod tests {
         let cancelled = state.resolve_selected_look_permission_cancelled();
         match cancelled {
             Err(RuntimeError::Validation { code, .. }) => {
-                assert_eq!(code, "validation_unknown_permission_request");
+                assert_eq!(code, "validation_unknown_choice_request");
             }
             other => panic!("unexpected result: {other:?}"),
         }

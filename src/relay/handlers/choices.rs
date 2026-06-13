@@ -5,20 +5,20 @@ use serde_json::json;
 use crate::configuration::{BundleConfiguration, load_bundle_configuration};
 
 use super::super::authorization::{
-    AuthorizationContext, authorize_grant, authorize_grant_for_list, grant_authorized_ui_sessions,
-    load_authorization_context,
+    AuthorizationContext, authorize_choose, authorize_choose_for_list,
+    choose_authorized_ui_sessions, load_authorization_context,
 };
 use super::super::delivery::{
-    PendingPermissionRequest, PermissionDecisionKind, PermissionDecisionRequest,
-    PermissionEventContext, PermissionResolutionOutcome, emit_permission_snapshot_then_replay,
-    list_pending_permission_requests, resolve_permission_request,
+    ChoiceDecisionKind, ChoiceDecisionRequest, ChoiceEventContext, ChoiceResolutionOutcome,
+    PendingChoiceRequest, emit_choices_snapshot_then_replay, list_pending_choice_requests,
+    resolve_choice_request,
 };
 use super::super::{
-    PendingPermissionEntry, PermissionDecisionRequestContext, RelayError, RelayResponse,
-    RequestPrincipal, SCHEMA_VERSION, canonical_session_id, map_config, relay_error,
+    ChoiceDecisionRequestContext, PendingChoiceEntry, RelayError, RelayResponse, RequestPrincipal,
+    SCHEMA_VERSION, canonical_session_id, map_config, relay_error,
 };
 
-pub(super) fn emit_permission_snapshot_for_ui_registration(
+pub(super) fn emit_choices_snapshot_for_ui_registration(
     configuration_root: &Path,
     bundle_name: &str,
     runtime_directory: &Path,
@@ -26,22 +26,22 @@ pub(super) fn emit_permission_snapshot_for_ui_registration(
 ) -> Result<(), RelayError> {
     let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
     let authorization = load_authorization_context(configuration_root, Some(&bundle))?;
-    let authorized_sessions = grant_authorized_ui_sessions(&authorization, &bundle);
+    let authorized_sessions = choose_authorized_ui_sessions(&authorization, &bundle);
     if !authorized_sessions
         .iter()
         .any(|value| value == ui_session_id)
     {
         return Ok(());
     }
-    let context = PermissionEventContext {
+    let context = ChoiceEventContext {
         runtime_directory: runtime_directory.to_path_buf(),
         bundle_name: bundle.bundle_name.clone(),
         authorized_ui_sessions: authorized_sessions,
     };
-    emit_permission_snapshot_then_replay(&context, ui_session_id).map_err(|cause| {
+    emit_choices_snapshot_then_replay(&context, ui_session_id).map_err(|cause| {
         relay_error(
             "internal_unexpected_failure",
-            "failed to replay permission snapshot for ui session",
+            "failed to replay choices snapshot for ui session",
             Some(json!({
                 "bundle_name": bundle.bundle_name,
                 "session_id": ui_session_id,
@@ -51,47 +51,42 @@ pub(super) fn emit_permission_snapshot_for_ui_registration(
     })
 }
 
-pub(super) fn handle_permission_decision(
+pub(super) fn handle_choices_pick(
     bundle: &BundleConfiguration,
     authorization: &AuthorizationContext,
-    request: PermissionDecisionRequestContext,
+    request: ChoiceDecisionRequestContext,
     runtime_directory: &Path,
     principal: Option<RequestPrincipal>,
 ) -> Result<RelayResponse, RelayError> {
-    let PermissionDecisionRequestContext {
-        permission_request_id,
+    let ChoiceDecisionRequestContext {
+        choice_request_id,
         outcome,
         option_id,
-        ui_session_id,
     } = request;
-    validate_permission_decision_request(
-        ui_session_id.as_ref(),
-        permission_request_id.as_str(),
-        option_id.as_deref(),
-    )?;
-    let decision = permission_decision_kind(outcome.as_str(), option_id.as_ref())?;
+    validate_choice_decision_request(choice_request_id.as_str(), option_id.as_deref())?;
+    let decision = choice_decision_kind(outcome.as_str(), option_id.as_ref())?;
     let principal = principal.ok_or_else(|| {
         relay_error(
             "validation_missing_hello",
-            "permission decisions require stream-associated principal identity",
+            "choice decisions require stream-associated principal identity",
             None,
         )
     })?;
-    authorize_grant(
+    authorize_choose(
         bundle,
         authorization,
         principal.session_id.as_str(),
-        permission_request_id.as_str(),
+        choice_request_id.as_str(),
     )?;
-    let context = PermissionEventContext {
+    let context = ChoiceEventContext {
         runtime_directory: runtime_directory.to_path_buf(),
         bundle_name: bundle.bundle_name.clone(),
-        authorized_ui_sessions: grant_authorized_ui_sessions(authorization, bundle),
+        authorized_ui_sessions: choose_authorized_ui_sessions(authorization, bundle),
     };
-    let outcome = resolve_permission_request(
+    let outcome = resolve_choice_request(
         &context,
-        PermissionDecisionRequest {
-            permission_request_id: permission_request_id.clone(),
+        ChoiceDecisionRequest {
+            choice_request_id: choice_request_id.clone(),
             option_id: option_id.clone(),
             decision,
             decided_by: canonical_session_id(
@@ -100,26 +95,26 @@ pub(super) fn handle_permission_decision(
             ),
         },
     )
-    .map_err(|cause| map_permission_resolution_error(cause, &permission_request_id, option_id))?;
+    .map_err(|cause| map_choice_resolution_error(cause, &choice_request_id, option_id))?;
     let (outcome_label, reason_code, reason_message) = match outcome {
-        PermissionResolutionOutcome::Selected { .. } => ("selected".to_string(), None, None),
-        PermissionResolutionOutcome::Cancelled {
+        ChoiceResolutionOutcome::Selected { .. } => ("selected".to_string(), None, None),
+        ChoiceResolutionOutcome::Cancelled {
             reason_code,
             reason,
             ..
         } => ("cancelled".to_string(), Some(reason_code), reason),
     };
-    Ok(RelayResponse::PermissionDecision {
+    Ok(RelayResponse::ChoicesPick {
         schema_version: SCHEMA_VERSION.to_string(),
         status: "resolved".to_string(),
-        permission_request_id,
+        choice_request_id,
         outcome: outcome_label,
         reason_code,
         reason: reason_message,
     })
 }
 
-pub(super) fn handle_permission_list(
+pub(super) fn handle_choices_list(
     bundle: &BundleConfiguration,
     authorization: &AuthorizationContext,
     runtime_directory: &Path,
@@ -128,50 +123,42 @@ pub(super) fn handle_permission_list(
     let principal = principal.ok_or_else(|| {
         relay_error(
             "validation_missing_hello",
-            "permission list requires stream-associated principal identity",
+            "choices list requires stream-associated principal identity",
             None,
         )
     })?;
-    authorize_grant_for_list(bundle, authorization, principal.session_id.as_str())?;
-    let pending = list_pending_permission_requests(runtime_directory).map_err(|cause| {
+    authorize_choose_for_list(bundle, authorization, principal.session_id.as_str())?;
+    let pending = list_pending_choice_requests(runtime_directory).map_err(|cause| {
         relay_error(
             "internal_unexpected_failure",
-            "failed to list pending permission requests",
+            "failed to list pending choice requests",
             Some(json!({ "cause": cause })),
         )
     })?;
     let pending_requests = pending
         .into_iter()
         .map(|record| {
-            let mut entry = pending_permission_entry_from_record(record);
+            let mut entry = pending_choice_entry_from_record(record);
             entry.target_session =
                 canonical_session_id(entry.target_session.as_str(), bundle.bundle_name.as_str());
             entry
         })
         .collect();
-    Ok(RelayResponse::PermissionList {
+    Ok(RelayResponse::ChoicesList {
         schema_version: SCHEMA_VERSION.to_string(),
         pending_requests,
     })
 }
 
-fn validate_permission_decision_request(
-    ui_session_id: Option<&String>,
-    permission_request_id: &str,
+fn validate_choice_decision_request(
+    choice_request_id: &str,
     option_id: Option<&str>,
 ) -> Result<(), RelayError> {
-    if ui_session_id.is_some() {
+    if choice_request_id.trim().is_empty() {
         return Err(relay_error(
             "validation_invalid_params",
-            "caller-supplied ui_session_id is not allowed",
-            Some(json!({"field": "ui_session_id"})),
-        ));
-    }
-    if permission_request_id.trim().is_empty() {
-        return Err(relay_error(
-            "validation_invalid_params",
-            "permission_request_id must be non-empty",
-            Some(json!({"field": "permission_request_id"})),
+            "choice_request_id must be non-empty",
+            Some(json!({"field": "choice_request_id"})),
         ));
     }
     if let Some(option_id) = option_id
@@ -186,10 +173,10 @@ fn validate_permission_decision_request(
     Ok(())
 }
 
-fn permission_decision_kind(
+fn choice_decision_kind(
     outcome: &str,
     option_id: Option<&String>,
-) -> Result<PermissionDecisionKind, RelayError> {
+) -> Result<ChoiceDecisionKind, RelayError> {
     match outcome {
         "selected" => {
             if option_id.is_none() {
@@ -199,7 +186,7 @@ fn permission_decision_kind(
                     Some(json!({"field": "option_id", "outcome": "selected"})),
                 ));
             }
-            Ok(PermissionDecisionKind::Selected)
+            Ok(ChoiceDecisionKind::Selected)
         }
         "cancelled" => {
             if option_id.is_some() {
@@ -209,32 +196,32 @@ fn permission_decision_kind(
                     Some(json!({"field": "option_id", "outcome": "cancelled"})),
                 ));
             }
-            Ok(PermissionDecisionKind::Cancelled)
+            Ok(ChoiceDecisionKind::Cancelled)
         }
         _ => Err(relay_error(
             "validation_invalid_params",
-            "permission decision outcome must be selected or cancelled",
+            "choice decision outcome must be selected or cancelled",
             Some(json!({"field": "outcome", "value": outcome})),
         )),
     }
 }
 
-fn map_permission_resolution_error(
+fn map_choice_resolution_error(
     cause: String,
-    permission_request_id: &str,
+    choice_request_id: &str,
     option_id: Option<String>,
 ) -> RelayError {
-    if cause == "runtime_permission_request_already_resolved" {
+    if cause == "runtime_choices_request_already_resolved" {
         relay_error(
-            "runtime_permission_request_already_resolved",
-            "permission request is already resolved",
-            Some(json!({"permission_request_id": permission_request_id})),
+            "runtime_choices_request_already_resolved",
+            "choice request is already resolved",
+            Some(json!({"choice_request_id": choice_request_id})),
         )
     } else if cause.starts_with("validation_invalid_params:") {
         let validation_message = cause
             .split_once(':')
             .map(|(_, message)| message.trim().to_string())
-            .unwrap_or_else(|| "invalid permission decision parameters".to_string());
+            .unwrap_or_else(|| "invalid choice decision parameters".to_string());
         relay_error(
             "validation_invalid_params",
             validation_message.as_str(),
@@ -243,30 +230,28 @@ fn map_permission_resolution_error(
     } else {
         relay_error(
             "internal_unexpected_failure",
-            "failed to resolve permission request",
+            "failed to resolve choice request",
             Some(json!({
-                "permission_request_id": permission_request_id,
+                "choice_request_id": choice_request_id,
                 "cause": cause,
             })),
         )
     }
 }
 
-fn pending_permission_entry_from_record(
-    record: PendingPermissionRequest,
-) -> PendingPermissionEntry {
-    let PendingPermissionRequest {
+fn pending_choice_entry_from_record(record: PendingChoiceRequest) -> PendingChoiceEntry {
+    let PendingChoiceRequest {
         message_id,
-        permission_request_id,
+        choice_request_id,
         target_session,
         requested_kind,
         requested_details,
         enqueued_at,
         ..
     } = record;
-    PendingPermissionEntry {
+    PendingChoiceEntry {
         message_id,
-        permission_request_id,
+        choice_request_id,
         target_session,
         requested_kind,
         requested_details,
