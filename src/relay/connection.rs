@@ -398,7 +398,7 @@ async fn serve_connection_frames(
                     },
                 )?;
                 if binding.session_type == SessionType::Ui
-                    && let Err(error) = emit_registration_permission_snapshots(
+                    && let Err(error) = emit_registration_choices_snapshots(
                         &configuration_root,
                         bundle_catalog,
                         &binding,
@@ -695,7 +695,7 @@ async fn serve_connection_frames(
                     )?;
                     continue;
                 }
-                // Bundle-subject operations (`Up`/`Down`, permission decisions)
+                // Bundle-subject operations (`Up`/`Down`, choice decisions)
                 // address a bundle the requester is a member of, by the wire
                 // `namespace` selector or the bound bundle. This is not a borrow:
                 // the bundle is the operation's subject, not a stand-in home.
@@ -833,7 +833,7 @@ fn full_requester_principal_id(registration: &StreamRegistration) -> String {
 }
 
 /// Resolves the subject bundle for a bundle-addressed operation (`Up`/`Down`,
-/// permission decisions, and the `List` enumerate bundle) from the wire
+/// choice decisions, and the `List` enumerate bundle) from the wire
 /// `namespace` field and the connection's bound bundle.
 ///
 /// This is the one remaining pre-handler bundle resolution. The target
@@ -903,13 +903,13 @@ fn identity_claim_conflict_error(
     )
 }
 
-/// Emits permission snapshots to a freshly registered UI connection.
+/// Emits choices snapshots to a freshly registered UI connection.
 ///
 /// Session UI connections receive the snapshot for their bound bundle.
 /// Relay-wide UI principals are not bundle-bound, so they replay every
 /// configured bundle's snapshot — a global operator sees pending requests
 /// across the whole relay on (re)connect.
-fn emit_registration_permission_snapshots(
+fn emit_registration_choices_snapshots(
     configuration_root: &Path,
     bundle_catalog: &BundleCatalog,
     binding: &HelloBinding,
@@ -920,7 +920,7 @@ fn emit_registration_permission_snapshots(
             bundle_name,
         } => {
             if let Some(bundle_paths) = binding.bound_bundle.as_ref() {
-                handlers::emit_permission_snapshot_for_ui_registration(
+                handlers::emit_choices_snapshot_for_ui_registration(
                     configuration_root,
                     bundle_name,
                     &bundle_paths.runtime_directory,
@@ -930,7 +930,7 @@ fn emit_registration_permission_snapshots(
         }
         RegistryKey::RelayWide { principal_id } => {
             for bundle_paths in bundle_catalog.snapshot() {
-                handlers::emit_permission_snapshot_for_ui_registration(
+                handlers::emit_choices_snapshot_for_ui_registration(
                     configuration_root,
                     &bundle_paths.bundle_name,
                     &bundle_paths.runtime_directory,

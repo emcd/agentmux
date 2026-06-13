@@ -1,6 +1,6 @@
 ## 1. Relay core (contract + handler)
 
-- [ ] 1.1 Rename request and response variants in `src/relay/contract.rs`:
+- [x] 1.1 Rename request and response variants in `src/relay/contract.rs`:
       - `RelayRequest::PermissionList` → `ChoicesList`
       - `RelayRequest::PermissionResolve` → `ChoicesPick`
       - `RelayResponse::PermissionList` → `ChoicesList`
@@ -13,7 +13,7 @@
       (`ui_session_id.is_some()` guard). The `ui_session_id: None` literals in
       `grant.rs:170` and `src/tui/state/compose/permissions.rs:143` are handled
       by tasks 3.1 and 5.1 respectively.
-- [ ] 1.2 Rename relay wire events in emission sites:
+- [x] 1.2 Rename relay wire events in emission sites:
       - `permission.requested` → `choices.requested`
       - `permission.resolved` → `choices.resolved`
       - `permission.snapshot` → `choices.snapshot`
@@ -26,7 +26,7 @@
       - `relay.permission.resolved` → `relay.choices.resolved`
       - `relay.acp.respawn.permission_invalidated` →
         `relay.acp.respawn.choice_invalidated`
-- [ ] 1.3 Rename error codes — update all match arms and string literals:
+- [x] 1.3 Rename error codes — update all match arms and string literals:
       - `runtime_permission_request_already_resolved` →
         `runtime_choices_request_already_resolved`
       - `runtime_permission_queue_*` → `runtime_choices_queue_*`
@@ -36,18 +36,18 @@
         `runtime_choices_request_invalidated_by_respawn`
       - `validation_unknown_permission_request` →
         `validation_unknown_choice_request` (check both relay and TUI sides)
-- [ ] 1.4 Rename `grant` capability references in
+- [x] 1.4 Rename `grant` capability references in
       `src/relay/authorization/` (loading, checks, policy structs) to `choose`.
       Rename the `grant` field in policy TOML structs and default values.
       Rename `grant_authorized_ui_sessions` in
       `src/relay/authorization/resolution.rs` to `choose_authorized_ui_sessions`.
-- [ ] 1.5 Rename internal relay types and helpers: every `Permission*` /
+- [x] 1.5 Rename internal relay types and helpers: every `Permission*` /
       `permission_*` symbol under `src/relay/` renames to the `Choice*` /
       `choice_*` / `choices_*` equivalent. `src/acp/` retains the `Permission`
       vocabulary at the ACP protocol boundary and is not renamed.
       Run `rg "\bPermission\b|\bpermission_\b|\bpermission\b" src/relay/
       --type rust` to enumerate remaining hits after initial pass.
-- [ ] 1.6 Rename TOML config section `[relay.permission]` →  `[relay.choices]`
+- [x] 1.6 Rename TOML config section `[relay.permission]` →  `[relay.choices]`
       (field `max-pending` is unchanged). Update loading code
       (`src/relay/authorization/loading.rs`, `RawRelayPermissionSection` :57 →
       `RawRelayChoicesSection`; `load_permission_max_pending` :266 →
@@ -55,12 +55,12 @@
 
 ## 2. Transport capability flag
 
-- [ ] 2.1 Add `can_give_choices() -> bool` as a derived method on `SessionType`
+- [x] 2.1 Add `can_give_choices() -> bool` as a derived method on `SessionType`
       in `src/configuration/types.rs`, alongside `can_be_looked`, `can_be_written`,
       `can_stream_output`. `SessionType` has four variants; match all four
       explicitly (no catch-all). Returns `true` only for `Acp`; `Tmux`, `Ui`,
       and `Pubsub` return `false`.
-- [ ] 2.2 `can_give_choices()` has no enforcement site in the
+- [x] 2.2 `can_give_choices()` has no enforcement site in the
       `choices.list` / `choices.pick` request paths — those address the choice
       record queue, not the producing session's transport. The method exists to
       anchor the capability table in the session-relay spec and to support the

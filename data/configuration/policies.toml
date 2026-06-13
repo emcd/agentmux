@@ -14,7 +14,7 @@ send = 'home'
 
 [[policies]]
 id = 'operator'
-description = 'Operator policy with cross-namespace inspection/messaging and permission-grant and lifecycle capability.'
+description = 'Operator policy with cross-namespace inspection/messaging and choice-decision and lifecycle capability.'
 
 # An operator is a relay-wide (@GLOBAL) principal whose home namespace is GLOBAL.
 # list/look/send/raww are therefore set to all so the operator can inspect,
@@ -22,10 +22,10 @@ description = 'Operator policy with cross-namespace inspection/messaging and per
 # home would confine it to GLOBAL). raww in particular needs all because
 # the operator's home (GLOBAL) holds only relay-wide UI sessions, which reject
 # raww as an unsupported target class — so every usable raww target is
-# cross-namespace. grant/updown are bundle-level capabilities capped at home.
+# cross-namespace.
 [policies.controls]
+choose = 'home'
 find = 'self'
-grant = 'home'
 list = 'all'
 look = 'all'
 raww = 'all'
@@ -34,7 +34,7 @@ updown = 'home'
 
 # Relay-wide credential administration requires the all tier: these
 # operations mutate the relay-level principal store, so a namespace-relative
-# home grant is insufficient.
+# home scope is insufficient.
 [policies.controls.new]
 peer = 'all'
 

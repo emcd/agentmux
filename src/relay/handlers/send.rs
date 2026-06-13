@@ -10,8 +10,8 @@ use crate::{
 };
 
 use super::super::authorization::{
-    AuthorizationContext, grant_authorized_ui_sessions, has_ui_session, load_authorization_context,
-    permission_max_pending,
+    AuthorizationContext, choices_max_pending, choose_authorized_ui_sessions, has_ui_session,
+    load_authorization_context,
 };
 use super::super::connection::BundleCatalog;
 use super::super::delivery::{QuiescenceOptions, enqueue_async_delivery, prompt_batch_settings};
@@ -380,8 +380,8 @@ fn execute_send(
                 completion_sender: None,
                 payload_mode: DeliveryPayloadMode::EnvelopeMessage,
                 append_enter: true,
-                permission_decider_sessions: group.permission_decider_sessions.clone(),
-                permission_max_pending: group.permission_max_pending,
+                choice_decider_sessions: group.choice_decider_sessions.clone(),
+                choices_max_pending: group.choices_max_pending,
             };
             enqueue_async_delivery(task)?;
             emit_inscription(
@@ -439,12 +439,12 @@ fn execute_send(
 }
 
 /// One namespace-scoped delivery group: a target bundle's configuration plus
-/// the runtime context and permission deciders used to dispatch its targets.
+/// the runtime context and choice deciders used to dispatch its targets.
 struct DeliveryGroup {
     bundle: BundleConfiguration,
     runtime_directory: PathBuf,
-    permission_decider_sessions: Vec<String>,
-    permission_max_pending: usize,
+    choice_decider_sessions: Vec<String>,
+    choices_max_pending: usize,
     targets: Vec<ResolvedTarget>,
 }
 
@@ -583,8 +583,8 @@ fn ensure_relay_wide_group(
                     members: Vec::new(),
                 },
                 runtime_directory: PathBuf::new(),
-                permission_decider_sessions: Vec::new(),
-                permission_max_pending: permission_max_pending(home_authorization),
+                choice_decider_sessions: Vec::new(),
+                choices_max_pending: choices_max_pending(home_authorization),
                 targets: Vec::new(),
             },
         );
@@ -626,16 +626,16 @@ fn ensure_bundle_group(
         .map_err(|error| BundleGroupError::Relay(map_config(error)))?;
     let authorization = load_authorization_context(configuration_root, Some(&bundle))
         .map_err(BundleGroupError::Relay)?;
-    let permission_decider_sessions = grant_authorized_ui_sessions(&authorization, &bundle);
-    let permission_max_pending = permission_max_pending(&authorization);
+    let choice_decider_sessions = choose_authorized_ui_sessions(&authorization, &bundle);
+    let choices_max_pending = choices_max_pending(&authorization);
     group_order.push(bundle_name.to_string());
     groups_by_bundle.insert(
         bundle_name.to_string(),
         DeliveryGroup {
             bundle,
             runtime_directory: paths.runtime_directory.clone(),
-            permission_decider_sessions,
-            permission_max_pending,
+            choice_decider_sessions,
+            choices_max_pending,
             targets: Vec::new(),
         },
     );

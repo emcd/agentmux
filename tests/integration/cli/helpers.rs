@@ -68,7 +68,7 @@ id = "operator"
 
 [policies.controls]
 find = "self"
-grant = "home"
+choose = "home"
 list = "all"
 look = "all"
 raww = "home"
@@ -165,7 +165,7 @@ id = "operator"
 
 [policies.controls]
 find = "self"
-grant = "home"
+choose = "home"
 list = "all"
 look = "all"
 raww = "home"

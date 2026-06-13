@@ -14,8 +14,7 @@ use super::results::{
     delivered_in_progress_result, delivered_result, failed_result, failed_result_with_code,
 };
 use super::{
-    PermissionEventContext, PermissionResolutionOutcome, enqueue_permission_request,
-    wait_for_permission_resolution,
+    ChoiceEventContext, ChoiceResolutionOutcome, enqueue_choice_request, wait_for_choice_resolution,
 };
 
 use super::super::startup_state::note_session_served_successfully;
@@ -144,7 +143,7 @@ pub(super) fn respawn_acp_worker_runtime(
 /// Mirrors `deliver_one_target_acp` but folds N tasks into the prompt's
 /// completion path: the on_completion callback fans the single transport
 /// outcome out to every task's `completion_sender` using each task's own
-/// `target_session` and `message_id`. The shared permission decision window
+/// `target_session` and `message_id`. The shared choice decision window
 /// (one tool-call surface per coalesced prompt) is correlated to the head
 /// task's `message_id`; that is the operator-facing message under which the
 /// decision is recorded.
@@ -204,17 +203,17 @@ pub(super) fn deliver_batch_target_acp(
         return replicate_failed_result(batch, "ACP delivery received no prompt batch".to_string());
     };
 
-    let permission_context = PermissionEventContext {
+    let choice_context = ChoiceEventContext {
         runtime_directory: head.runtime_directory.clone(),
         bundle_name: head.bundle.bundle_name.clone(),
-        // The head's decider list governs the permission decision for the
+        // The head's decider list governs the choice decision for the
         // coalesced prompt. All tasks share the same target session, so the
-        // permission_decider_sessions field will typically match across tasks;
+        // choice_decider_sessions field will typically match across tasks;
         // diverging values would indicate a configuration race we do not
         // attempt to reconcile here.
-        authorized_ui_sessions: head.permission_decider_sessions.clone(),
+        authorized_ui_sessions: head.choice_decider_sessions.clone(),
     };
-    let pending_permission_outcome_shared: Arc<Mutex<Option<PermissionResolutionOutcome>>> =
+    let pending_choice_outcome_shared: Arc<Mutex<Option<ChoiceResolutionOutcome>>> =
         Arc::new(Mutex::new(None));
 
     let bundle_name = head.bundle.bundle_name.clone();
@@ -234,14 +233,14 @@ pub(super) fn deliver_batch_target_acp(
         );
     });
 
-    let permission_context_for_handler = permission_context.clone();
-    // Permission requests inside one ACP prompt correlate to the head
+    let choice_context_for_handler = choice_context.clone();
+    // ACP permission requests inside one prompt correlate to the head
     // message_id; downstream UIs can resolve the batch via inscriptions if
     // they need to enumerate the coalesced message ids.
-    let permission_message_id_for_handler = head_message_id.clone();
-    let permission_target_member_id = target_member_id.clone();
-    let permission_max_pending = head.permission_max_pending;
-    let pending_permission_outcome_writer = Arc::clone(&pending_permission_outcome_shared);
+    let choice_message_id_for_handler = head_message_id.clone();
+    let choice_target_member_id = target_member_id.clone();
+    let choices_max_pending = head.choices_max_pending;
+    let pending_choice_outcome_writer = Arc::clone(&pending_choice_outcome_shared);
     let on_permission_request: crate::acp::PermissionHandler = Box::new(
         move |permission_request: crate::acp::PermissionRequest,
               mut responder: crate::acp::PermissionResponder| {
@@ -250,29 +249,29 @@ pub(super) fn deliver_batch_target_acp(
             // The captured context/writer/responder outlive the reader's
             // dispatch frame; the thread name aids debugging when many
             // resolvers fire under federation load.
-            let context = permission_context_for_handler.clone();
-            let message_id = permission_message_id_for_handler.clone();
-            let target = permission_target_member_id.clone();
-            let writer = Arc::clone(&pending_permission_outcome_writer);
+            let context = choice_context_for_handler.clone();
+            let message_id = choice_message_id_for_handler.clone();
+            let target = choice_target_member_id.clone();
+            let writer = Arc::clone(&pending_choice_outcome_writer);
             std::thread::Builder::new()
                 .name("acp-permission-resolver".to_string())
                 .spawn(move || {
-                    let (response_option_id, outcome) = resolve_acp_permission_request(
+                    let (response_option_id, outcome) = resolve_acp_choice_request(
                         &context,
                         message_id.as_str(),
                         target.as_str(),
                         &permission_request,
-                        permission_max_pending,
+                        choices_max_pending,
                     );
                     // Ordering invariant: populate
-                    // pending_permission_outcome BEFORE writing the
+                    // pending_choice_outcome BEFORE writing the
                     // JSON-RPC response. on_completion reads the shared
                     // slot when building the final SendResult; the agent
                     // cannot send its prompt-response until it sees the
                     // permission response, so once the responder writes,
                     // a fast agent reply could race on_completion ahead
                     // of the outcome record otherwise.
-                    *writer.lock().expect("pending_permission_outcome mutex") = Some(outcome);
+                    *writer.lock().expect("pending_choice_outcome mutex") = Some(outcome);
                     responder.respond(response_option_id);
                 })
                 .expect("spawn ACP permission resolver thread");
@@ -294,14 +293,14 @@ pub(super) fn deliver_batch_target_acp(
     let completion_bundle_name = bundle_name.clone();
     let completion_runtime_directory = runtime_directory_owned.clone();
     let completion_target_member_id = target_member_id.clone();
-    let pending_permission_outcome_reader = Arc::clone(&pending_permission_outcome_shared);
+    let pending_choice_outcome_reader = Arc::clone(&pending_choice_outcome_shared);
     let on_completion: crate::acp::PromptCompletionHandler = Box::new(move |completion| {
-        let pending_permission_outcome = pending_permission_outcome_reader
+        let pending_choice_outcome = pending_choice_outcome_reader
             .lock()
-            .expect("pending_permission_outcome mutex")
+            .expect("pending_choice_outcome mutex")
             .clone();
         // build_acp_completion_result is deterministic over (completion,
-        // pending_permission_outcome); the final state and the non-correlation
+        // pending_choice_outcome); the final state and the non-correlation
         // fields of the result are identical across tasks. Compute the
         // template once (consuming `completion`, which is not Clone), then
         // replicate per task by overwriting target_session and message_id.
@@ -310,7 +309,7 @@ pub(super) fn deliver_batch_target_acp(
             .expect("batch ACP completion requires at least one correlation");
         let (final_state, template_result) = build_acp_completion_result(
             completion,
-            pending_permission_outcome,
+            pending_choice_outcome,
             template_correlation.target_session.clone(),
             template_correlation.message_id.clone(),
             completion_target_member_id.as_str(),
@@ -500,12 +499,12 @@ pub(super) fn deliver_one_target_acp(
         );
     };
 
-    let permission_context = PermissionEventContext {
+    let choice_context = ChoiceEventContext {
         runtime_directory: task.runtime_directory.clone(),
         bundle_name: task.bundle.bundle_name.clone(),
-        authorized_ui_sessions: task.permission_decider_sessions.clone(),
+        authorized_ui_sessions: task.choice_decider_sessions.clone(),
     };
-    let pending_permission_outcome_shared: Arc<Mutex<Option<PermissionResolutionOutcome>>> =
+    let pending_choice_outcome_shared: Arc<Mutex<Option<ChoiceResolutionOutcome>>> =
         Arc::new(Mutex::new(None));
 
     let bundle_name = task.bundle.bundle_name.clone();
@@ -525,11 +524,11 @@ pub(super) fn deliver_one_target_acp(
         );
     });
 
-    let permission_context_for_handler = permission_context.clone();
+    let choice_context_for_handler = choice_context.clone();
     let message_id_for_handler = message_id.clone();
-    let permission_target_member_id = target_member_id.clone();
-    let permission_max_pending = task.permission_max_pending;
-    let pending_permission_outcome_writer = Arc::clone(&pending_permission_outcome_shared);
+    let choice_target_member_id = target_member_id.clone();
+    let choices_max_pending = task.choices_max_pending;
+    let pending_choice_outcome_writer = Arc::clone(&pending_choice_outcome_shared);
     let on_permission_request: crate::acp::PermissionHandler = Box::new(
         move |permission_request: crate::acp::PermissionRequest,
               mut responder: crate::acp::PermissionResponder| {
@@ -537,21 +536,21 @@ pub(super) fn deliver_one_target_acp(
             // resolver runs on a short-lived thread so the ACP reader is
             // never parked, and the ordering invariant (outcome before
             // response) is the same.
-            let context = permission_context_for_handler.clone();
+            let context = choice_context_for_handler.clone();
             let message_id = message_id_for_handler.clone();
-            let target = permission_target_member_id.clone();
-            let writer = Arc::clone(&pending_permission_outcome_writer);
+            let target = choice_target_member_id.clone();
+            let writer = Arc::clone(&pending_choice_outcome_writer);
             std::thread::Builder::new()
                 .name("acp-permission-resolver".to_string())
                 .spawn(move || {
-                    let (response_option_id, outcome) = resolve_acp_permission_request(
+                    let (response_option_id, outcome) = resolve_acp_choice_request(
                         &context,
                         message_id.as_str(),
                         target.as_str(),
                         &permission_request,
-                        permission_max_pending,
+                        choices_max_pending,
                     );
-                    *writer.lock().expect("pending_permission_outcome mutex") = Some(outcome);
+                    *writer.lock().expect("pending_choice_outcome mutex") = Some(outcome);
                     responder.respond(response_option_id);
                 })
                 .expect("spawn ACP permission resolver thread");
@@ -564,15 +563,15 @@ pub(super) fn deliver_one_target_acp(
     let completion_target_session = target_session.clone();
     let completion_message_id = message_id.clone();
     let completion_sender = task.completion_sender.clone();
-    let pending_permission_outcome_reader = Arc::clone(&pending_permission_outcome_shared);
+    let pending_choice_outcome_reader = Arc::clone(&pending_choice_outcome_shared);
     let on_completion: crate::acp::PromptCompletionHandler = Box::new(move |completion| {
-        let pending_permission_outcome = pending_permission_outcome_reader
+        let pending_choice_outcome = pending_choice_outcome_reader
             .lock()
-            .expect("pending_permission_outcome mutex")
+            .expect("pending_choice_outcome mutex")
             .clone();
         let (final_state, final_result) = build_acp_completion_result(
             completion,
-            pending_permission_outcome,
+            pending_choice_outcome,
             completion_target_session.clone(),
             completion_message_id.clone(),
             completion_target_member_id.as_str(),
@@ -647,16 +646,16 @@ pub(super) fn deliver_one_target_acp(
 
 fn build_acp_completion_result(
     completion: PromptCompletion,
-    pending_permission_outcome: Option<PermissionResolutionOutcome>,
+    pending_choice_outcome: Option<ChoiceResolutionOutcome>,
     target_session: String,
     message_id: String,
     target_member_id: &str,
 ) -> (AcpWorkerReadinessState, SendResult) {
-    if let Some(PermissionResolutionOutcome::Cancelled {
+    if let Some(ChoiceResolutionOutcome::Cancelled {
         reason_code,
         reason,
         ..
-    }) = pending_permission_outcome
+    }) = pending_choice_outcome
     {
         return (
             AcpWorkerReadinessState::Available,
@@ -664,7 +663,7 @@ fn build_acp_completion_result(
                 target_session,
                 message_id,
                 reason_code.as_str(),
-                reason.unwrap_or_else(|| "ACP permission request was cancelled".to_string()),
+                reason.unwrap_or_else(|| "choice request was cancelled".to_string()),
                 Some(json!({
                     "target_session": target_member_id,
                 })),
@@ -726,67 +725,66 @@ fn build_acp_completion_result(
     }
 }
 
-fn resolve_acp_permission_request(
-    permission_context: &PermissionEventContext,
+fn resolve_acp_choice_request(
+    choice_context: &ChoiceEventContext,
     message_id: &str,
     target_session: &str,
     permission_request: &crate::acp::PermissionRequest,
-    permission_max_pending: usize,
-) -> (Option<String>, PermissionResolutionOutcome) {
+    choices_max_pending: usize,
+) -> (Option<String>, ChoiceResolutionOutcome) {
     let requested_details = json!({
         "tool_call_title": permission_request.tool_call_title.clone(),
         "options": permission_request.options.clone(),
         "acp_request_id": permission_request.request_id,
         "raw": permission_request.requested_details.clone(),
     });
-    let enqueue = enqueue_permission_request(
-        permission_context,
+    let enqueue = enqueue_choice_request(
+        choice_context,
         message_id,
         target_session,
         permission_request.requested_kind.as_str(),
         requested_details,
-        permission_max_pending,
+        choices_max_pending,
     );
     let enqueued = match enqueue {
         Ok(value) => value,
-        Err(code) if code == "runtime_permission_queue_full" => {
+        Err(code) if code == "runtime_choices_queue_full" => {
             return (
                 None,
-                PermissionResolutionOutcome::Cancelled {
+                ChoiceResolutionOutcome::Cancelled {
                     decided_by: "relay".to_string(),
-                    reason_code: "runtime_permission_queue_full".to_string(),
-                    reason: Some("permission queue is full".to_string()),
+                    reason_code: "runtime_choices_queue_full".to_string(),
+                    reason: Some("choices queue is full".to_string()),
                 },
             );
         }
         Err(_) => {
             return (
                 None,
-                PermissionResolutionOutcome::Cancelled {
+                ChoiceResolutionOutcome::Cancelled {
                     decided_by: "relay".to_string(),
-                    reason_code: "runtime_permission_queue_unavailable".to_string(),
-                    reason: Some("failed to enqueue permission request".to_string()),
+                    reason_code: "runtime_choices_queue_unavailable".to_string(),
+                    reason: Some("failed to enqueue choice request".to_string()),
                 },
             );
         }
     };
 
-    let outcome =
-        wait_for_permission_resolution(permission_context, enqueued.permission_request_id.as_str());
+    let outcome = wait_for_choice_resolution(choice_context, enqueued.choice_request_id.as_str());
     let Ok(outcome) = outcome else {
         return (
             None,
-            PermissionResolutionOutcome::Cancelled {
+            ChoiceResolutionOutcome::Cancelled {
                 decided_by: "relay".to_string(),
-                reason_code: "runtime_permission_request_cancelled".to_string(),
-                reason: Some("failed while waiting for permission decision".to_string()),
+                reason_code: "runtime_choices_request_cancelled".to_string(),
+                reason: Some("failed while waiting for choice decision".to_string()),
             },
         );
     };
 
     let response_option_id = match &outcome {
-        PermissionResolutionOutcome::Selected { option_id, .. } => Some(option_id.clone()),
-        PermissionResolutionOutcome::Cancelled { .. } => None,
+        ChoiceResolutionOutcome::Selected { option_id, .. } => Some(option_id.clone()),
+        ChoiceResolutionOutcome::Cancelled { .. } => None,
     };
     (response_option_id, outcome)
 }

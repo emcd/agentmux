@@ -134,7 +134,7 @@ fn acp_respawn_recovers_when_agent_exits_during_pending_permission() {
     assert_eq!(first_result.outcome, SendOutcome::Queued);
 
     // Permission record must be enqueued. Only the resolver thread (the
-    // todos/acp/16 code path) calls enqueue_permission_request. If the
+    // todos/acp/16 code path) calls enqueue_choice_request. If the
     // Enqueued event never arrives, the reader either parked in the handler
     // (regression to the pre-fix deadlock) or failed to spawn the resolver.
     assert!(
@@ -142,7 +142,7 @@ fn acp_respawn_recovers_when_agent_exits_during_pending_permission() {
             &mut queue_receiver,
             |event| matches!(
                 event,
-                PermissionQueueEvent::Enqueued { target_session, .. }
+                ChoicesQueueEvent::Enqueued { target_session, .. }
                     if target_session == "bravo"
             ),
             Duration::from_secs(5),
@@ -159,9 +159,9 @@ fn acp_respawn_recovers_when_agent_exits_during_pending_permission() {
             &mut queue_receiver,
             |event| matches!(
                 event,
-                PermissionQueueEvent::Invalidated { target_session, reason_code, .. }
+                ChoicesQueueEvent::Invalidated { target_session, reason_code, .. }
                     if target_session == "bravo"
-                        && reason_code == "runtime_permission_request_invalidated_by_respawn"
+                        && reason_code == "runtime_choices_request_invalidated_by_respawn"
             ),
             Duration::from_secs(5),
         ),

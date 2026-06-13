@@ -91,9 +91,9 @@ impl McpServer {
                 "bundle_name": self.associated_bundle_name(),
             }),
         );
-        let request = RelayRequest::PermissionList;
+        let request = RelayRequest::ChoicesList;
         match self.request_relay(&request) {
-            Ok(RelayResponse::PermissionList {
+            Ok(RelayResponse::ChoicesList {
                 schema_version,
                 pending_requests,
             }) => {
@@ -163,17 +163,16 @@ impl McpServer {
                 "has_option_id": option_id.is_some(),
             }),
         );
-        let request = RelayRequest::PermissionResolve {
-            permission_request_id: permission_request_id.clone(),
+        let request = RelayRequest::ChoicesPick {
+            choice_request_id: permission_request_id.clone(),
             outcome: outcome.clone(),
             option_id: option_id.clone(),
-            ui_session_id: None,
         };
         match self.request_relay(&request) {
-            Ok(RelayResponse::PermissionDecision {
+            Ok(RelayResponse::ChoicesPick {
                 schema_version,
                 status,
-                permission_request_id,
+                choice_request_id: permission_request_id,
                 outcome,
                 reason_code,
                 reason,

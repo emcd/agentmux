@@ -10,7 +10,7 @@ use std::collections::HashMap;
 pub(in crate::relay) struct AuthorizationContext {
     pub(super) controls_by_session: HashMap<String, PolicyControls>,
     pub(super) ui_sessions: HashMap<String, UiSessionAuthorization>,
-    pub(super) permission_max_pending: usize,
+    pub(super) choices_max_pending: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,7 +43,7 @@ pub(super) struct PolicyControls {
     pub(super) look: PolicyScope,
     pub(super) send: PolicyScope,
     pub(super) raww: PolicyScope,
-    pub(super) grant: PolicyScope,
+    pub(super) choose: PolicyScope,
     pub(super) updown: PolicyScope,
     pub(super) do_controls: HashMap<String, PolicyScope>,
     pub(super) new_controls: HashMap<String, PolicyScope>,
@@ -63,7 +63,7 @@ impl PolicyControls {
             look: PolicyScope::Home,
             send: PolicyScope::Home,
             raww: PolicyScope::Home,
-            grant: PolicyScope::None,
+            choose: PolicyScope::None,
             updown: PolicyScope::None,
             do_controls: HashMap::new(),
             new_controls: HashMap::new(),

@@ -27,7 +27,7 @@ use super::super::async_worker::{
     AcpWorkerReadinessState, AsyncWorkerKey, get_acp_worker_state,
     install_acp_worker_replay_buffer, set_acp_worker_state,
 };
-use super::super::permission_state::{PermissionEventContext, invalidate_pending_for_respawn};
+use super::super::choice_state::{ChoiceEventContext, invalidate_pending_for_respawn};
 
 const RESPAWN_BACKOFF_MAX_MS_ENVVAR: &str = "AGENTMUX_RELAY_ACP_RESPAWN_BACKOFF_MAX_MS";
 const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;
@@ -617,7 +617,7 @@ async fn drive_acp_worker_respawn(
             return;
         }
 
-        let permission_context = PermissionEventContext {
+        let choice_context = ChoiceEventContext {
             runtime_directory: ctx.runtime_directory.clone(),
             bundle_name: key.bundle_name.clone(),
             authorized_ui_sessions: list_registered_ui_sessions_for_bundle(
@@ -625,10 +625,10 @@ async fn drive_acp_worker_respawn(
             ),
         };
         if let Err(reason) =
-            invalidate_pending_for_respawn(&permission_context, ctx.target_member.id.as_str())
+            invalidate_pending_for_respawn(&choice_context, ctx.target_member.id.as_str())
         {
             emit_inscription(
-                "relay.acp.respawn.permission_invalidate_failed",
+                "relay.acp.respawn.choice_invalidate_failed",
                 &json!({
                     "bundle_name": key.bundle_name,
                     "target_session": ctx.target_member.id,
@@ -822,8 +822,8 @@ mod coalesce_batch_tests {
             completion_sender: None,
             payload_mode,
             append_enter: true,
-            permission_decider_sessions: Vec::new(),
-            permission_max_pending: 0,
+            choice_decider_sessions: Vec::new(),
+            choices_max_pending: 0,
         }
     }
 

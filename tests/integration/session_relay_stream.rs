@@ -512,7 +512,7 @@ fn relay_async_send_emits_terminal_delivery_outcome_to_sender_ui_stream() {
 }
 
 // ---------------------------------------------------------------------------
-// Grant-authorized permission list and submitter gating
+// Choose-authorized choices list and submitter gating
 // ---------------------------------------------------------------------------
 
 fn write_operator_bundle_configuration(temporary: &TempDir, bundle_name: &str) -> PathBuf {
@@ -547,7 +547,7 @@ find = "self"
 list = "home"
 look = "self"
 send = "home"
-grant = "none"
+choose = "none"
 
 [[policies]]
 id = "operator"
@@ -557,7 +557,7 @@ find = "self"
 list = "home"
 look = "home"
 send = "home"
-grant = "home"
+choose = "home"
 "#,
     )
     .expect("write policies configuration");
@@ -608,7 +608,7 @@ fn relay_accepts_hello_for_configured_bundle_member() {
 }
 
 #[test]
-fn relay_permission_list_succeeds_for_grant_authorized_principal() {
+fn relay_choices_list_succeeds_for_grant_authorized_principal() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_root = write_operator_bundle_configuration(&temporary, &bundle_name);
@@ -631,13 +631,13 @@ fn relay_permission_list_succeeds_for_grant_authorized_principal() {
         json!({
             "frame": "request",
             "request_id": request_id,
-            "request": {"operation": "permission_list"},
+            "request": {"operation": "choices_list"},
         }),
     );
     let response = read_json(&mut reader);
     assert_eq!(response["frame"], "response");
     assert_eq!(response["request_id"], request_id);
-    assert_eq!(response["response"]["kind"], "permission_list");
+    assert_eq!(response["response"]["kind"], "choices_list");
     let entries = response["response"]["pending_requests"]
         .as_array()
         .expect("pending_requests array");
@@ -650,7 +650,7 @@ fn relay_permission_list_succeeds_for_grant_authorized_principal() {
 }
 
 #[test]
-fn relay_permission_resolve_rejects_submitter_without_grant() {
+fn relay_choices_pick_rejects_submitter_without_grant() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_root = write_bundle_configuration(&temporary, &bundle_name);
@@ -672,8 +672,8 @@ fn relay_permission_resolve_rejects_submitter_without_grant() {
             "frame": "request",
             "request_id": request_id,
             "request": {
-                "operation": "permission_resolve",
-                "permission_request_id": "perm-1",
+                "operation": "choices_pick",
+                "choice_request_id": "perm-1",
                 "outcome": "cancelled",
             },
         }),

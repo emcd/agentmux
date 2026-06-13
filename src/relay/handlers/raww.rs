@@ -6,8 +6,8 @@ use uuid::Uuid;
 use crate::configuration::{BundleConfiguration, TargetConfiguration};
 
 use super::super::authorization::{
-    AuthorizationContext, grant_authorized_ui_sessions, load_authorization_context,
-    permission_max_pending,
+    AuthorizationContext, choices_max_pending, choose_authorized_ui_sessions,
+    load_authorization_context,
 };
 use super::super::connection::BundleCatalog;
 use super::super::delivery::{
@@ -211,7 +211,7 @@ fn prepare_raww(
 }
 
 /// Delivers the raw input to the authorized target and builds the response. The
-/// target is guaranteed present by `prepare_raww`. Permission deciders and the
+/// target is guaranteed present by `prepare_raww`. Choice deciders and the
 /// queue bound come from the target bundle's authorization, where delivery is
 /// gated.
 fn execute_raww(
@@ -247,9 +247,9 @@ fn execute_raww(
     };
     let message_id = Uuid::new_v4().to_string();
     let sender_member = sender.to_bundle_member();
-    let permission_decider_sessions =
-        grant_authorized_ui_sessions(&target_authorization, &raww_bundle);
-    let queue_max_pending = permission_max_pending(&target_authorization);
+    let choice_decider_sessions =
+        choose_authorized_ui_sessions(&target_authorization, &raww_bundle);
+    let queue_max_pending = choices_max_pending(&target_authorization);
     let task = AsyncDeliveryTask {
         bundle: raww_bundle.clone(),
         sender_bundle_name: home_namespace.to_string(),
@@ -271,8 +271,8 @@ fn execute_raww(
         completion_sender: None,
         payload_mode: DeliveryPayloadMode::RawInput,
         append_enter: !no_enter,
-        permission_decider_sessions,
-        permission_max_pending: queue_max_pending,
+        choice_decider_sessions,
+        choices_max_pending: queue_max_pending,
     };
 
     let result = match &target_member.target {

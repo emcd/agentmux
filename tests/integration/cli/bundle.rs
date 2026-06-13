@@ -259,7 +259,7 @@ fn up_rejects_caller_whose_policy_lacks_updown() {
 }
 
 #[test]
-fn up_succeeds_for_operator_policy_with_updown_grant() {
+fn up_succeeds_for_operator_policy_with_updown_capability() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = temporary.path().join("config");
     let state_root = temporary.path().join("state");

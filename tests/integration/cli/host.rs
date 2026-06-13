@@ -443,7 +443,7 @@ find = "self"
 list = "home"
 look = "self"
 send = "home"
-grant = "everywhere"
+choose = "everywhere"
 "#,
     )
     .expect("write policies config");
@@ -509,7 +509,7 @@ fn host_relay_startup_failure_emits_per_bundle_reason_with_details() {
         "expected per-bundle failure reason on stderr: {stderr}"
     );
     assert!(
-        stderr.contains("\"control\":\"grant\"") && stderr.contains("\"value\":\"everywhere\""),
+        stderr.contains("\"control\":\"choose\"") && stderr.contains("\"value\":\"everywhere\""),
         "expected structured details on stderr: {stderr}"
     );
 
@@ -525,7 +525,7 @@ fn host_relay_startup_failure_emits_per_bundle_reason_with_details() {
         startup_failed["details"]["reason_code"],
         "validation_invalid_policy_scope"
     );
-    assert_eq!(startup_failed["details"]["details"]["control"], "grant");
+    assert_eq!(startup_failed["details"]["details"]["control"], "choose");
     assert_eq!(startup_failed["details"]["details"]["value"], "everywhere");
 }
 

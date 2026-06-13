@@ -24,14 +24,14 @@ use tokio::runtime::Builder as TokioRuntimeBuilder;
 // the OS stream.
 const TEST_PRE_HELLO_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 
+#[path = "relay_stream/choices.rs"]
+mod choices;
 #[path = "relay_stream/identity.rs"]
 mod identity;
 #[path = "relay_stream/list.rs"]
 mod list;
 #[path = "relay_stream/look.rs"]
 mod look;
-#[path = "relay_stream/permissions.rs"]
-mod permissions;
 #[path = "relay_stream/robustness.rs"]
 mod robustness;
 #[path = "relay_stream/routing.rs"]
@@ -128,7 +128,7 @@ policy = "{policy}"
     .expect("write users configuration");
 }
 
-fn write_policies_with_grant(configuration_root: &Path, grant: &str) {
+fn write_policies_with_choose(configuration_root: &Path, choose: &str) {
     std::fs::write(
         configuration_root.join("policies.toml"),
         format!(
@@ -141,7 +141,7 @@ id = "default"
 
 [policies.controls]
 find = "self"
-grant = "{grant}"
+choose = "{choose}"
 list = "home"
 look = "self"
 send = "home"
@@ -228,13 +228,13 @@ send = "home"
     .expect("write policies configuration");
 }
 
-fn seed_permission_queue(runtime_directory: &Path, permission_request_id: &str, option_id: &str) {
-    seed_permission_queue_with_options(runtime_directory, &[(permission_request_id, option_id)]);
+fn seed_choices_queue(runtime_directory: &Path, choice_request_id: &str, option_id: &str) {
+    seed_choices_queue_with_options(runtime_directory, &[(choice_request_id, option_id)]);
 }
 
-fn seed_permission_queue_with_options(runtime_directory: &Path, entries: &[(&str, &str)]) {
+fn seed_choices_queue_with_options(runtime_directory: &Path, entries: &[(&str, &str)]) {
     std::fs::create_dir_all(runtime_directory).expect("create runtime directory");
-    for (index, (permission_request_id, option_id)) in entries.iter().enumerate() {
+    for (index, (choice_request_id, option_id)) in entries.iter().enumerate() {
         let sequence = (index as u64) + 1;
         let requested_details = json!({
             "tool_call_title": format!("Run command {sequence}"),
@@ -253,15 +253,15 @@ fn seed_permission_queue_with_options(runtime_directory: &Path, entries: &[(&str
             "acp_request_id": 100 + sequence,
             "raw": {"sessionId": "alpha"},
         });
-        agentmux::relay::install_pending_permission_request_for_testing(
+        agentmux::relay::install_pending_choice_request_for_testing(
             runtime_directory,
-            permission_request_id,
+            choice_request_id,
             format!("msg-{sequence}").as_str(),
             "alpha",
             "execute",
             requested_details,
         )
-        .expect("install pending permission request for testing");
+        .expect("install pending choice request for testing");
     }
 }
 

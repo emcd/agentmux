@@ -34,9 +34,9 @@ use self::constants::*;
 use self::context::*;
 pub use self::contract::*;
 pub use self::delivery::AcpWorkerReadinessState;
-pub use self::delivery::install_pending_permission_request_for_testing;
+pub use self::delivery::install_pending_choice_request_for_testing;
 pub use self::delivery::observability::{
-    PermissionQueueEvent, subscribe_acp_worker_state, subscribe_permission_queue_events,
+    ChoicesQueueEvent, subscribe_acp_worker_state, subscribe_choices_queue_events,
 };
 pub use self::drain::{ConnectionDrainCoordinator, ConnectionDrainReport, ConnectionWorkerSlot};
 use self::errors::*;

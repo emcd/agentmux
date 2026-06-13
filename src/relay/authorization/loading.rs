@@ -15,9 +15,9 @@ use super::context::{AuthorizationContext, PolicyControls, PolicyScope, UiSessio
 use super::resolution::{normalize_policy_id, resolve_session_policy_controls};
 
 const RELAY_FILE: &str = "relay.toml";
-const DEFAULT_PERMISSION_MAX_PENDING: usize = 256;
-const MIN_PERMISSION_MAX_PENDING: usize = 1;
-const MAX_PERMISSION_MAX_PENDING: usize = 4096;
+const DEFAULT_CHOICES_MAX_PENDING: usize = 256;
+const MIN_CHOICES_MAX_PENDING: usize = 1;
+const MAX_CHOICES_MAX_PENDING: usize = 4096;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -49,12 +49,12 @@ struct RawRelayFile {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 struct RawRelaySection {
     #[serde(default)]
-    permission: Option<RawRelayPermissionSection>,
+    choices: Option<RawRelayChoicesSection>,
 }
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
-struct RawRelayPermissionSection {
+struct RawRelayChoicesSection {
     #[serde(default)]
     max_pending: Option<usize>,
 }
@@ -68,8 +68,8 @@ struct RawPolicyControls {
     send: String,
     #[serde(default = "default_raww_policy_scope")]
     raww: String,
-    #[serde(default = "default_grant_policy_scope")]
-    grant: String,
+    #[serde(default = "default_choose_policy_scope")]
+    choose: String,
     #[serde(default = "default_updown_policy_scope")]
     updown: String,
     #[serde(default, rename = "do")]
@@ -84,7 +84,7 @@ fn default_raww_policy_scope() -> String {
     "home".to_string()
 }
 
-fn default_grant_policy_scope() -> String {
+fn default_choose_policy_scope() -> String {
     "none".to_string()
 }
 
@@ -185,7 +185,7 @@ pub(in crate::relay) fn load_authorization_context(
     let policies_path = configuration_root.join(POLICIES_FILE);
     let (presets, default_policy_id) = load_policy_presets(configuration_root)?;
 
-    let permission_max_pending = load_permission_max_pending(configuration_root)?;
+    let choices_max_pending = load_choices_max_pending(configuration_root)?;
 
     // A relay-wide (`GLOBAL`) home namespace has no bundle members; its
     // requester controls come entirely from the operator policy loaded below
@@ -259,14 +259,14 @@ pub(in crate::relay) fn load_authorization_context(
     Ok(AuthorizationContext {
         controls_by_session,
         ui_sessions,
-        permission_max_pending,
+        choices_max_pending,
     })
 }
 
-fn load_permission_max_pending(configuration_root: &Path) -> Result<usize, RelayError> {
+fn load_choices_max_pending(configuration_root: &Path) -> Result<usize, RelayError> {
     let path = configuration_root.join(RELAY_FILE);
     if !path.exists() {
-        return Ok(DEFAULT_PERMISSION_MAX_PENDING);
+        return Ok(DEFAULT_CHOICES_MAX_PENDING);
     }
     let raw = fs::read_to_string(&path).map_err(|source| {
         relay_error(
@@ -290,21 +290,21 @@ fn load_permission_max_pending(configuration_root: &Path) -> Result<usize, Relay
     })?;
     let configured = parsed
         .relay
-        .and_then(|relay| relay.permission)
-        .and_then(|permission| permission.max_pending)
-        .unwrap_or(DEFAULT_PERMISSION_MAX_PENDING);
-    if (MIN_PERMISSION_MAX_PENDING..=MAX_PERMISSION_MAX_PENDING).contains(&configured) {
+        .and_then(|relay| relay.choices)
+        .and_then(|choices| choices.max_pending)
+        .unwrap_or(DEFAULT_CHOICES_MAX_PENDING);
+    if (MIN_CHOICES_MAX_PENDING..=MAX_CHOICES_MAX_PENDING).contains(&configured) {
         return Ok(configured);
     }
     Err(relay_error(
         "validation_invalid_arguments",
-        "relay permission max-pending is out of supported range",
+        "relay choices max-pending is out of supported range",
         Some(json!({
             "path": path.display().to_string(),
-            "field": "relay.permission.max-pending",
+            "field": "relay.choices.max-pending",
             "value": configured,
-            "minimum": MIN_PERMISSION_MAX_PENDING,
-            "maximum": MAX_PERMISSION_MAX_PENDING,
+            "minimum": MIN_CHOICES_MAX_PENDING,
+            "maximum": MAX_CHOICES_MAX_PENDING,
         })),
     ))
 }
@@ -354,13 +354,13 @@ fn parse_policy_controls(
         "validation_invalid_policy_scope",
         "authorization policy raww control uses unknown scope value",
     )?;
-    let grant = parse_scope_for_control(
-        controls.grant.as_str(),
+    let choose = parse_scope_for_control(
+        controls.choose.as_str(),
         policies_path,
         policy_id,
-        "grant",
+        "choose",
         "validation_invalid_policy_scope",
-        "authorization policy grant control uses unknown scope value",
+        "authorization policy choose control uses unknown scope value",
     )?;
     let updown = parse_scope_for_control(
         controls.updown.as_str(),
@@ -381,7 +381,7 @@ fn parse_policy_controls(
         look,
         send,
         raww,
-        grant,
+        choose,
         updown,
         do_controls,
         new_controls,

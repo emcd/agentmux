@@ -23,13 +23,13 @@ pub enum SessionType {
 /// Capabilities are pure functions of the transport type — never stored bool
 /// fields — derived at check time from the configuration enum discriminant:
 ///
-/// | Transport | `can_be_looked` | `can_be_written` | `can_stream_output` |
-/// |-----------|-----------------|------------------|---------------------|
-/// | `Tmux`    | true            | true             | false               |
-/// | `Acp`     | true            | true             | true                |
-/// | `Pty`     | true            | true             | true                |
-/// | `Ui`      | false           | false            | false               |
-/// | `Pubsub`  | false           | false            | false               |
+/// | Transport | `can_be_looked` | `can_be_written` | `can_stream_output` | `gives_choices` |
+/// |-----------|-----------------|------------------|---------------------|-----------------|
+/// | `Tmux`    | true            | true             | false               | false           |
+/// | `Acp`     | true            | true             | true                | true            |
+/// | `Pty`     | true            | true             | true                | false           |
+/// | `Ui`      | false           | false            | false               | false           |
+/// | `Pubsub`  | false           | false            | false               | false           |
 ///
 /// The `Pty` row is normative and forward-looking: no `Pty` variant exists
 /// yet. It is the long-term replacement for `Tmux` with identical
@@ -62,6 +62,18 @@ impl SessionType {
     /// ahead of any consumer; streaming look semantics are a follow-on proposal.
     #[must_use]
     pub fn can_stream_output(self) -> bool {
+        match self {
+            Self::Acp => true,
+            Self::Tmux | Self::Ui | Self::Pubsub => false,
+        }
+    }
+
+    /// The session's transport can surface choice requests (ACP-style option
+    /// arrays for operator/UI resolution). Describes choice production, not
+    /// resolution authority: the `choices.list`/`choices.pick` paths address
+    /// the choice record queue, so no request handler gates on this method.
+    #[must_use]
+    pub fn can_give_choices(self) -> bool {
         match self {
             Self::Acp => true,
             Self::Tmux | Self::Ui | Self::Pubsub => false,
