@@ -17,11 +17,11 @@ pub(in crate::tui::render) fn render_events_overlay(frame: &mut Frame, state: &m
         .constraints([Constraint::Length(8), Constraint::Min(6)])
         .split(popup);
 
-    let pending_items = if state.pending_permissions.is_empty() {
-        vec![ListItem::new("(no pending permission requests)")]
+    let pending_items = if state.pending_choices.is_empty() {
+        vec![ListItem::new("(no pending choice requests)")]
     } else {
         state
-            .pending_permissions
+            .pending_choices
             .iter()
             .map(|entry| {
                 let target = entry.target_session.as_deref().unwrap_or("-");
@@ -29,7 +29,7 @@ pub(in crate::tui::render) fn render_events_overlay(frame: &mut Frame, state: &m
                 let enqueued_at = entry.enqueued_at.as_deref().unwrap_or("-");
                 ListItem::new(format!(
                     "{} target={} kind={} enqueued={}",
-                    entry.permission_request_id, target, kind, enqueued_at
+                    entry.choice_request_id, target, kind, enqueued_at
                 ))
             })
             .collect::<Vec<_>>()
@@ -38,14 +38,10 @@ pub(in crate::tui::render) fn render_events_overlay(frame: &mut Frame, state: &m
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Pending Permissions"),
+                .title("Pending Choices"),
         )
         .highlight_style(Style::default().bg(Color::Blue).fg(Color::White));
-    frame.render_stateful_widget(
-        pending_list,
-        sections[0],
-        &mut state.pending_permissions_state,
-    );
+    frame.render_stateful_widget(pending_list, sections[0], &mut state.pending_choices_state);
 
     let lines = if state.event_history.is_empty() {
         vec![Line::from("(no delivery events captured yet)")]

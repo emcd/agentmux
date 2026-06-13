@@ -84,18 +84,18 @@ pub(crate) struct Recipient {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PendingPermissionEntry {
-    pub permission_request_id: String,
+pub(crate) struct PendingChoiceEntry {
+    pub choice_request_id: String,
     pub message_id: Option<String>,
     pub target_session: Option<String>,
     pub requested_kind: Option<String>,
     pub requested_details: Option<serde_json::Value>,
     pub enqueued_at: Option<String>,
-    pub options: Vec<PendingPermissionOption>,
+    pub options: Vec<PendingChoiceOption>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PendingPermissionOption {
+pub(crate) struct PendingChoiceOption {
     pub option_id: String,
     pub name: Option<String>,
     pub kind: Option<String>,
@@ -133,12 +133,12 @@ pub(crate) struct AppState {
     pub look_snapshot_lines: Vec<String>,
     pub look_snapshot_entries: Vec<AcpSnapshotEntry>,
     pub look_overlay_scroll: usize,
-    pub(crate) look_permission_request_index: usize,
-    pub(crate) look_permission_option_index: usize,
+    pub(crate) look_choice_request_index: usize,
+    pub(crate) look_choice_option_index: usize,
     pub status_history: VecDeque<StatusEntry>,
     pub event_history: VecDeque<String>,
-    pub pending_permissions: Vec<PendingPermissionEntry>,
-    pub pending_permissions_state: ListState,
+    pub pending_choices: Vec<PendingChoiceEntry>,
+    pub pending_choices_state: ListState,
     pub chat_history: VecDeque<ChatHistoryEntry>,
     chat_history_scroll: usize,
     chat_history_viewport_height: usize,
@@ -200,15 +200,15 @@ impl AppState {
             look_snapshot_lines: Vec::new(),
             look_snapshot_entries: Vec::new(),
             look_overlay_scroll: 0,
-            look_permission_request_index: 0,
-            look_permission_option_index: 0,
+            look_choice_request_index: 0,
+            look_choice_option_index: 0,
             status_history: VecDeque::from([StatusEntry {
                 code: None,
                 message: "Ready. Press F1 for help.".to_string(),
             }]),
             event_history: VecDeque::new(),
-            pending_permissions: Vec::new(),
-            pending_permissions_state: ListState::default(),
+            pending_choices: Vec::new(),
+            pending_choices_state: ListState::default(),
             chat_history: VecDeque::new(),
             chat_history_scroll: 0,
             chat_history_viewport_height: 10,
@@ -312,7 +312,7 @@ mod tests {
         runtime::error::RuntimeError,
     };
 
-    use super::{AppState, PendingPermissionEntry, TuiLaunchOptions};
+    use super::{AppState, PendingChoiceEntry, TuiLaunchOptions};
 
     fn make_state() -> AppState {
         AppState::new(TuiLaunchOptions {
@@ -450,27 +450,27 @@ mod tests {
     }
 
     #[test]
-    fn permission_snapshot_and_replay_keep_single_pending_row_per_id() {
+    fn choice_snapshot_and_replay_keep_single_pending_row_per_id() {
         let mut state = make_state();
         state.record_stream_events(&[RelayStreamEvent {
-            event_type: "permission.snapshot".to_string(),
+            event_type: "choices.snapshot".to_string(),
             target_session: "tui@agentmux".to_string(),
             created_at: "2026-04-29T00:00:00Z".to_string(),
             payload: json!({
                 "pending_count": 1,
-                "permission_request_ids": ["perm-1"],
+                "choice_request_ids": ["perm-1"],
             }),
         }]);
-        assert_eq!(state.pending_permissions.len(), 1);
-        assert_eq!(state.pending_permissions[0].permission_request_id, "perm-1");
+        assert_eq!(state.pending_choices.len(), 1);
+        assert_eq!(state.pending_choices[0].choice_request_id, "perm-1");
 
         let requested = RelayStreamEvent {
-            event_type: "permission.requested".to_string(),
+            event_type: "choices.requested".to_string(),
             target_session: "tui@agentmux".to_string(),
             created_at: "2026-04-29T00:00:01Z".to_string(),
             payload: json!({
                 "message_id": "msg-1",
-                "permission_request_id": "perm-1",
+                "choice_request_id": "perm-1",
                 "target_session": "acp",
                 "requested_kind": "approval",
                 "requested_details": {
@@ -484,9 +484,9 @@ mod tests {
             }),
         };
         state.record_stream_events(&[requested.clone(), requested]);
-        assert_eq!(state.pending_permissions.len(), 1);
-        let entry = &state.pending_permissions[0];
-        assert_eq!(entry.permission_request_id, "perm-1");
+        assert_eq!(state.pending_choices.len(), 1);
+        let entry = &state.pending_choices[0];
+        assert_eq!(entry.choice_request_id, "perm-1");
         assert_eq!(entry.message_id.as_deref(), Some("msg-1"));
         assert_eq!(entry.target_session.as_deref(), Some("acp"));
         assert_eq!(entry.requested_kind.as_deref(), Some("approval"));
@@ -496,15 +496,15 @@ mod tests {
     }
 
     #[test]
-    fn permission_resolved_removes_pending_request() {
+    fn choice_resolved_removes_pending_request() {
         let mut state = make_state();
         state.record_stream_events(&[RelayStreamEvent {
-            event_type: "permission.requested".to_string(),
+            event_type: "choices.requested".to_string(),
             target_session: "tui@agentmux".to_string(),
             created_at: "2026-04-29T00:00:01Z".to_string(),
             payload: json!({
                 "message_id": "msg-1",
-                "permission_request_id": "perm-1",
+                "choice_request_id": "perm-1",
                 "target_session": "acp",
                 "requested_kind": "approval",
                 "requested_details": {
@@ -514,15 +514,15 @@ mod tests {
                 "enqueued_at": "2026-04-29T00:00:01Z",
             }),
         }]);
-        assert_eq!(state.pending_permissions.len(), 1);
+        assert_eq!(state.pending_choices.len(), 1);
 
         state.record_stream_events(&[RelayStreamEvent {
-            event_type: "permission.resolved".to_string(),
+            event_type: "choices.resolved".to_string(),
             target_session: "tui@agentmux".to_string(),
             created_at: "2026-04-29T00:00:02Z".to_string(),
             payload: json!({
                 "message_id": "msg-1",
-                "permission_request_id": "perm-1",
+                "choice_request_id": "perm-1",
                 "outcome": "selected",
                 "reason_code": null,
                 "decided_by": "user",
@@ -530,14 +530,14 @@ mod tests {
                 "resolved_at": "2026-04-29T00:00:02Z",
             }),
         }]);
-        assert!(state.pending_permissions.is_empty());
+        assert!(state.pending_choices.is_empty());
     }
 
     #[test]
-    fn look_permission_resolve_without_pending_request_is_validation_error() {
+    fn look_choice_resolve_without_pending_request_is_validation_error() {
         let mut state = make_state();
         state.look_target = Some("acp".to_string());
-        let selected = state.resolve_selected_look_permission_selected();
+        let selected = state.resolve_selected_look_choice_selected();
         match selected {
             Err(RuntimeError::Validation { code, .. }) => {
                 assert_eq!(code, "validation_unknown_choice_request");
@@ -545,7 +545,7 @@ mod tests {
             other => panic!("unexpected result: {other:?}"),
         }
 
-        let cancelled = state.resolve_selected_look_permission_cancelled();
+        let cancelled = state.resolve_selected_look_choice_cancelled();
         match cancelled {
             Err(RuntimeError::Validation { code, .. }) => {
                 assert_eq!(code, "validation_unknown_choice_request");
@@ -555,11 +555,11 @@ mod tests {
     }
 
     #[test]
-    fn look_pending_permissions_filter_by_active_target_session() {
+    fn look_pending_choices_filter_by_active_target_session() {
         let mut state = make_state();
-        state.pending_permissions = vec![
-            PendingPermissionEntry {
-                permission_request_id: "perm-1".to_string(),
+        state.pending_choices = vec![
+            PendingChoiceEntry {
+                choice_request_id: "perm-1".to_string(),
                 message_id: Some("msg-1".to_string()),
                 target_session: Some("acp".to_string()),
                 requested_kind: Some("approval".to_string()),
@@ -567,8 +567,8 @@ mod tests {
                 options: vec![],
                 enqueued_at: Some("2026-04-29T00:00:01Z".to_string()),
             },
-            PendingPermissionEntry {
-                permission_request_id: "perm-2".to_string(),
+            PendingChoiceEntry {
+                choice_request_id: "perm-2".to_string(),
                 message_id: Some("msg-2".to_string()),
                 target_session: Some("relay".to_string()),
                 requested_kind: Some("approval".to_string()),
@@ -578,8 +578,8 @@ mod tests {
             },
         ];
         state.look_target = Some("acp".to_string());
-        let filtered = state.look_pending_permissions();
+        let filtered = state.look_pending_choices();
         assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].permission_request_id, "perm-1");
+        assert_eq!(filtered[0].choice_request_id, "perm-1");
     }
 }

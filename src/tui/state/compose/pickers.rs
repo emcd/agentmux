@@ -65,7 +65,7 @@ impl AppState {
             self.picker_open = false;
             self.bundle_picker_open = false;
             self.help_overlay_open = false;
-            self.ensure_pending_permission_selection();
+            self.ensure_pending_choice_selection();
         }
     }
 

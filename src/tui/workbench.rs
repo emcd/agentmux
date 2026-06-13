@@ -7,7 +7,7 @@ use crate::runtime::error::RuntimeError;
 use super::{
     input,
     state::{
-        AppState, ChatHistoryDirection, ChatHistoryEntry, FocusField, PendingPermissionEntry,
+        AppState, ChatHistoryDirection, ChatHistoryEntry, FocusField, PendingChoiceEntry,
         Recipient, ScreenMode, TuiLaunchOptions,
     },
 };
@@ -172,9 +172,9 @@ impl Workbench {
             .collect()
     }
 
-    pub fn inject_pending_permission(&mut self, target: &str) {
-        self.state.pending_permissions.push(PendingPermissionEntry {
-            permission_request_id: format!("perm-{target}"),
+    pub fn inject_pending_choice(&mut self, target: &str) {
+        self.state.pending_choices.push(PendingChoiceEntry {
+            choice_request_id: format!("perm-{target}"),
             message_id: None,
             target_session: Some(target.to_string()),
             requested_kind: Some("approval".to_string()),

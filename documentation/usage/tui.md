@@ -31,7 +31,7 @@ draft, and scroll state is preserved across switches.
 - **Communication** (default) — chat history and compose (`To` + `Message`)
   for send/receive workflows.
 - **Interaction** — an interaction-target header, the look snapshot, a Write
-  input, and permission decisioning for operator-driven session inspection.
+  input, and choice decisioning for operator-driven session inspection.
 
 When Interaction mode has no target, the header shows a placeholder hint:
 open the picker (`F2`) and press `Enter` to choose a session.
@@ -66,15 +66,15 @@ open the picker (`F2`) and press `Enter` to choose a session.
 ### Interaction mode
 
 - `PgUp` / `PgDn`: scroll look snapshot
-- Write input (active when write has text, or no pending permission requests):
+- Write input (active when write has text, or no pending choice requests):
   - `Left` / `Right` / `Up` / `Down` / `Home` / `End`: move write cursor
   - `Enter`: dispatch write to the active interaction target via relay `raww`
   - `Ctrl+J`: insert newline in write input
   - `Backspace`: delete the character before the write cursor
-- Permission decisioning (active when write input is empty and the target has
+- Choice decisioning (active when write input is empty and the target has
   pending requests):
-  - `Left` / `Right`: previous/next pending permission request for the target
-  - `Up` / `Down`: previous/next ACP permission option
+  - `Left` / `Right`: previous/next pending choice request for the target
+  - `Up` / `Down`: previous/next ACP choice option
   - `Enter`: resolve selected request with selected option
     (`outcome=selected`)
   - `c`: resolve selected request as cancelled (`outcome=cancelled`)
@@ -126,7 +126,7 @@ closes the picker as a no-op. Selecting a different bundle:
   new bundle),
 - rebuilds the relay stream session with the new bundle,
 - clears bundle-scoped state (recipients, last-selected recipient, bundle
-  status, look snapshot, pending permissions, chat history, delivery state,
+  status, look snapshot, pending choices, chat history, delivery state,
   write draft),
 - triggers a recipient refresh against the new bundle; if the new bundle is
   unhosted/unreachable, the refresh fails fast and surfaces a relay error in
@@ -163,10 +163,10 @@ Delivery outcomes:
   surfaces acceptance-phase metadata when provided.
 - Terminal outcomes are sourced from relay completion updates keyed by
   `message_id`.
-- Permission requests are rendered from relay `permission.snapshot`,
-  `permission.requested`, and `permission.resolved` events.
-- Replay is at-least-once; the TUI deduplicates pending permission rows by
-  `permission_request_id`.
-- Permission decisions are ACP-native and explicit: selected option ids are
-  forwarded verbatim via `permission.resolve`; cancelled decisions omit
+- Choice requests are rendered from relay `choices.snapshot`,
+  `choices.requested`, and `choices.resolved` events.
+- Replay is at-least-once; the TUI deduplicates pending choice rows by
+  `choice_request_id`.
+- Choice decisions are ACP-native and explicit: selected option ids are
+  forwarded verbatim via `choices.pick`; cancelled decisions omit
   `option_id`.

@@ -382,7 +382,7 @@ fn picker_retires_legacy_l_and_w_keys() {
 }
 
 #[test]
-fn interaction_region_swaps_between_raww_and_permission_pane() {
+fn interaction_region_swaps_between_raww_and_choice_pane() {
     let mut state = make_state();
     state.set_recipients(&["master"]);
     state.set_interaction_target("master");
@@ -395,10 +395,10 @@ fn interaction_region_swaps_between_raww_and_permission_pane() {
         "raww region shows when no pending requests exist"
     );
 
-    state.inject_pending_permission("master");
+    state.inject_pending_choice("master");
     assert!(
         !state.interaction_shows_raww(),
-        "permission pane replaces raww region when raww empty and pending exists"
+        "choice pane replaces raww region when raww empty and pending exists"
     );
 
     state
@@ -423,7 +423,7 @@ fn ctrl_c_quits_even_when_picker_overlay_is_open() {
 }
 
 #[test]
-fn events_overlay_permission_action_keys_are_ignored() {
+fn events_overlay_choice_action_keys_are_ignored() {
     let mut state = make_state();
     state
         .dispatch_event(key_event(KeyCode::F(3), KeyModifiers::NONE))

@@ -148,8 +148,8 @@ impl AppState {
         self.look_target = Some(target);
         if target_changed {
             self.look_overlay_scroll = 0;
-            self.look_permission_request_index = 0;
-            self.look_permission_option_index = 0;
+            self.look_choice_request_index = 0;
+            self.look_choice_option_index = 0;
         }
     }
 
@@ -263,7 +263,7 @@ impl AppState {
     }
 
     pub(crate) fn interaction_raww_region_visible(&self) -> bool {
-        !self.raww_draft.is_empty() || self.look_pending_permissions().is_empty()
+        !self.raww_draft.is_empty() || self.look_pending_choices().is_empty()
     }
 }
 

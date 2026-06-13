@@ -167,22 +167,22 @@ fn handle_interaction_mode_key(state: &mut AppState, key: KeyEvent) -> Result<()
         KeyCode::PageUp => state.scroll_interaction_snapshot_page_up(),
         KeyCode::PageDown => state.scroll_interaction_snapshot_page_down(),
         KeyCode::Left => {
-            if interaction_permission_active(state) {
-                state.move_look_permission_request_selection(-1);
+            if interaction_choice_active(state) {
+                state.move_look_choice_request_selection(-1);
             } else {
                 state.move_raww_cursor_left();
             }
         }
         KeyCode::Right => {
-            if interaction_permission_active(state) {
-                state.move_look_permission_request_selection(1);
+            if interaction_choice_active(state) {
+                state.move_look_choice_request_selection(1);
             } else {
                 state.move_raww_cursor_right();
             }
         }
         KeyCode::Up => {
-            if interaction_permission_active(state) {
-                state.move_look_permission_option_selection(-1);
+            if interaction_choice_active(state) {
+                state.move_look_choice_option_selection(-1);
             } else if !state.raww_draft.is_empty() {
                 state.move_raww_cursor_up();
             } else {
@@ -190,33 +190,33 @@ fn handle_interaction_mode_key(state: &mut AppState, key: KeyEvent) -> Result<()
             }
         }
         KeyCode::Down => {
-            if interaction_permission_active(state) {
-                state.move_look_permission_option_selection(1);
+            if interaction_choice_active(state) {
+                state.move_look_choice_option_selection(1);
             } else if !state.raww_draft.is_empty() {
                 state.move_raww_cursor_down();
             } else {
                 state.scroll_interaction_snapshot_down();
             }
         }
-        KeyCode::Home if !interaction_permission_active(state) => {
+        KeyCode::Home if !interaction_choice_active(state) => {
             state.move_raww_cursor_home();
         }
-        KeyCode::End if !interaction_permission_active(state) => {
+        KeyCode::End if !interaction_choice_active(state) => {
             state.move_raww_cursor_end();
         }
         KeyCode::Enter => {
-            if interaction_permission_active(state) {
-                return state.resolve_selected_look_permission_selected();
+            if interaction_choice_active(state) {
+                return state.resolve_selected_look_choice_selected();
             }
             return state.dispatch_raww_from_interaction();
         }
         KeyCode::Backspace => state.backspace_raww(),
         KeyCode::Char(character)
-            if interaction_permission_active(state)
+            if interaction_choice_active(state)
                 && (character == 'c' || character == 'C')
                 && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
         {
-            return state.resolve_selected_look_permission_cancelled();
+            return state.resolve_selected_look_choice_cancelled();
         }
         KeyCode::Char(character)
             if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
@@ -229,8 +229,8 @@ fn handle_interaction_mode_key(state: &mut AppState, key: KeyEvent) -> Result<()
     Ok(())
 }
 
-fn interaction_permission_active(state: &AppState) -> bool {
-    state.raww_draft.is_empty() && !state.look_pending_permissions().is_empty()
+fn interaction_choice_active(state: &AppState) -> bool {
+    state.raww_draft.is_empty() && !state.look_pending_choices().is_empty()
 }
 
 fn insert_text_for_active_mode(state: &mut AppState, text: &str) {
