@@ -44,11 +44,48 @@ pub fn ensure_starter_configuration_layout(configuration_root: &Path) -> Result<
     ensure_template_file(&configuration_root.join(CODERS_FILE), CODERS_TEMPLATE)?;
     ensure_template_file(&configuration_root.join(POLICIES_FILE), POLICIES_TEMPLATE)?;
     ensure_template_file(&configuration_root.join(USERS_FILE), USERS_TEMPLATE)?;
-    ensure_template_file(
-        &bundles_directory.join(EXAMPLE_BUNDLE_FILE),
-        BUNDLE_TEMPLATE,
-    )?;
+    if !bundles_directory_has_toml(&bundles_directory)? {
+        ensure_template_file(
+            &bundles_directory.join(EXAMPLE_BUNDLE_FILE),
+            BUNDLE_TEMPLATE,
+        )?;
+    }
     Ok(())
+}
+
+/// Reports whether the bundles directory already holds operator bundle config.
+///
+/// The example bundle is a first-run sample, not durable config: it seeds only
+/// when the operator has supplied no bundles of their own. Any `.toml` file in
+/// the directory — including a renamed or hand-authored bundle — counts as real
+/// configuration and suppresses the seed, so deleting `example.toml` after
+/// setup does not re-seed it on the next start.
+fn bundles_directory_has_toml(bundles_directory: &Path) -> Result<bool, RuntimeError> {
+    let entries = fs::read_dir(bundles_directory).map_err(|source| {
+        RuntimeError::io(
+            format!("read bundles directory {}", bundles_directory.display()),
+            source,
+        )
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|source| {
+            RuntimeError::io(
+                format!(
+                    "read bundles directory entry under {}",
+                    bundles_directory.display()
+                ),
+                source,
+            )
+        })?;
+        if entry
+            .path()
+            .extension()
+            .is_some_and(|extension| extension == "toml")
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn ensure_directory(path: &Path) -> Result<(), RuntimeError> {
