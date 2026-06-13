@@ -16,8 +16,8 @@ use super::super::acp_delivery::PersistentAcpWorkerRuntime;
 use super::super::acp_state::{ACP_LOOK_PRIME_TIMEOUT_MS, ACP_STARTUP_PRIME_TIMEOUT_MS};
 use super::super::async_worker::{AcpWorkerReadinessState, get_acp_worker_state};
 use super::payload::{
-    PreparedBatchPayload, PreparedDeliveryPayload, prepare_batch_delivery_payload,
-    prepare_delivery_payload, resolve_target_member,
+    PreparedBatchPayload, prepare_batch_delivery_payload, prepare_delivery_payload,
+    resolve_target_member,
 };
 use super::transport::{deliver_non_ui_target, deliver_non_ui_target_batch};
 use super::worker::{AcpWorkerBootstrap, spawn_async_delivery_worker};
@@ -272,16 +272,8 @@ pub(in crate::relay) fn deliver_one_target_with_worker_state(
     task: &AsyncDeliveryTask,
     acp_runtime: &mut Option<PersistentAcpWorkerRuntime>,
 ) -> Result<SendResult, RelayError> {
-    let created_at = time::OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
     let target_member = resolve_target_member(task)?;
-    let prepared_payload = prepare_delivery_payload(task, target_member, created_at.as_str())?;
-    let prompt_batches = match prepared_payload {
-        PreparedDeliveryPayload::Immediate(result) => return Ok(result),
-        PreparedDeliveryPayload::Batched { prompt_batches } => prompt_batches,
-    };
-
+    let prompt_batches = prepare_delivery_payload(task)?;
     let non_ui_target_member = target_member.expect("non-UI target_member must exist");
     deliver_non_ui_target(task, non_ui_target_member, prompt_batches, acp_runtime)
 }

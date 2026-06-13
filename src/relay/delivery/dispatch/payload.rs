@@ -19,11 +19,6 @@ use super::super::ui_delivery::deliver_one_target_ui;
 const PROMPT_TOKENS_MAX_ENVVAR: &str = "AGENTMUX_MAX_PROMPT_TOKENS";
 const TOKENIZER_PROFILE_ENVVAR: &str = "AGENTMUX_TOKENIZER_PROFILE";
 
-pub(super) enum PreparedDeliveryPayload {
-    Immediate(SendResult),
-    Batched { prompt_batches: Vec<String> },
-}
-
 /// Outcome of preparing a coalesced delivery batch.
 ///
 /// `Immediate` short-circuits when the head task routes to UI; batch length
@@ -232,45 +227,27 @@ fn co_recipient_addresses(task: &AsyncDeliveryTask) -> Vec<AddressIdentity> {
         .collect()
 }
 
+/// Prepares the prompt batches for a single raw-input delivery task.
+///
+/// Only `RawInput` tasks reach this path: `deliver_one_target` (tmux raww),
+/// `enqueue_sync_delivery` (ACP raww), and the batch worker's RawInput-head
+/// delegation all carry raw input. Envelope-mode tasks are produced solely by
+/// `send.rs` and route through the async batch path
+/// (`prepare_batch_delivery_payload`), never here, so this function renders no
+/// envelope and carries no UI short-circuit.
 pub(super) fn prepare_delivery_payload(
     task: &AsyncDeliveryTask,
-    target_member: Option<&BundleMember>,
-    created_at: &str,
-) -> Result<PreparedDeliveryPayload, RelayError> {
-    match task.payload_mode {
-        DeliveryPayloadMode::EnvelopeMessage => {
-            if should_route_to_ui(task)? {
-                let cc_sessions = co_recipient_sessions(task);
-                return Ok(PreparedDeliveryPayload::Immediate(deliver_one_target_ui(
-                    task,
-                    task.sender.id.as_str(),
-                    cc_sessions.as_slice(),
-                    task.target_session.clone(),
-                    task.message_id.clone(),
-                    task.message.as_str(),
-                )));
-            }
-
-            let envelope = render_task_envelope(task, target_member, created_at);
-            Ok(PreparedDeliveryPayload::Batched {
-                prompt_batches: batch_envelopes(&[envelope], task.batch_settings),
-            })
-        }
-        DeliveryPayloadMode::RawInput => {
-            if task.relay_wide_target {
-                return Err(super::super::super::relay_error(
-                    "internal_unexpected_failure",
-                    "raw delivery tasks do not support ui targets",
-                    Some(json!({
-                        "target_session": task.target_session,
-                    })),
-                ));
-            }
-            Ok(PreparedDeliveryPayload::Batched {
-                prompt_batches: vec![task.message.clone()],
-            })
-        }
+) -> Result<Vec<String>, RelayError> {
+    if task.relay_wide_target {
+        return Err(super::super::super::relay_error(
+            "internal_unexpected_failure",
+            "raw delivery tasks do not support ui targets",
+            Some(json!({
+                "target_session": task.target_session,
+            })),
+        ));
     }
+    Ok(vec![task.message.clone()])
 }
 
 fn should_route_to_ui(task: &AsyncDeliveryTask) -> Result<bool, RelayError> {
