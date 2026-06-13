@@ -5,11 +5,13 @@ This module implements the MCP stdio server for `agentmux`.
 ## Responsibilities
 
 - Advertise and handle MCP tools:
-  - `list` (requires `command="principals"`; `args.namespace` selects the
-    scope: omitted/home bundle, a bundle name, `GLOBAL`, or `*` for fan-out)
+  - `list` (requires `command="principals"` or `command="decisions"`; for
+    `principals`, `args.namespace` selects the scope: omitted/home bundle, a
+    bundle name, `GLOBAL`, or `*` for fan-out; `decisions` lists the bundle's
+    pending ACP choice queue)
   - `help`
   - `look`
-  - `grant` (requires `command="list"` or `command="resolve"`)
+  - `choose` (submit an ACP-native choice decision)
   - `updown` (requires `command="up"` or `command="down"`)
   - `new` (requires `command="peer"`)
   - `change` (requires `command="psk"`)
@@ -51,16 +53,15 @@ This module implements the MCP stdio server for `agentmux`.
 
 ## Data Flow
 
-1. MCP client calls `list`, `look`, `grant`, `updown`, `raww`, or `send`.
+1. MCP client calls `list`, `look`, `choose`, `updown`, `raww`, or `send`.
 2. MCP client can call `help` to discover tool/command schemas.
 3. `src/mcp/mod.rs` validates parameter shape and transport-compatible options.
 4. Request is forwarded as relay contract:
    - `list` (`command="principals"`) -> `RelayStreamSession` (`RelayRequest::List`)
    - `look` -> `RelayStreamSession` (`RelayRequest::Look`)
-   - `grant` (`command="list"`) -> `RelayStreamSession`
-     (`RelayRequest::PermissionList`)
-   - `grant` (`command="resolve"`) -> `RelayStreamSession`
-     (`RelayRequest::PermissionResolve`)
+   - `list` (`command="decisions"`) -> `RelayStreamSession`
+     (`RelayRequest::ChoicesList`)
+   - `choose` -> `RelayStreamSession` (`RelayRequest::ChoicesPick`)
    - `updown` (`command="up"`) -> `RelayStreamSession` (`RelayRequest::Up`)
    - `updown` (`command="down"`) -> `RelayStreamSession` (`RelayRequest::Down`)
    - `new` (`command="peer"`) -> `RelayStreamSession` (`RelayRequest::NewPeer`)
@@ -89,20 +90,22 @@ This module implements the MCP stdio server for `agentmux`.
 - Relay `authorization_forbidden` (capability `updown`) surfaces as a typed
   MCP tool error with the relay error code and details preserved.
 
-## Permission Granting
+## Choice Decisions
 
-- The `grant` tool exposes the relay ACP permission queue:
-  - `command="list"` polls the bundle-scoped pending-request set; the response
-    payload mirrors the `permission.requested` event fields exactly.
-  - `command="resolve"` submits a decision (`outcome="selected"` requires
-    `option_id`; `outcome="cancelled"` rejects `option_id`).
-- MCP rejects decider-identity fields (`decided_by`, `ui_session_id`,
-  `operator_session_id`) before relay submission; the deciding identity is
-  association-derived and relay-stamped.
-- Both subcommands are gated solely on the sender session's `grant` policy
-  capability. The MCP server forwards the decision over its relay stream, and
-  the relay authorizes it against the bundle policy preset. Sessions whose
-  policy does not enable `grant` receive the relay submitter-gate rejection.
+- The relay ACP choice queue is split across two tools:
+  - `list` with `command="decisions"` polls the bundle-scoped pending-request
+    set; the response payload mirrors the `choices.requested` event fields
+    exactly.
+  - `choose` submits a decision (`outcome="selected"` requires `option_id`;
+    `outcome="cancelled"` rejects `option_id`).
+- `choose` rejects caller-supplied sender-identity fields (`decided_by`,
+  `ui_session_id`, `operator_session_id`) before relay submission; the deciding
+  identity is association-derived and relay-stamped.
+- Both surfaces are gated solely on the sender session's `choose` policy
+  capability (the transport's `gives_choices` flag is not required). The MCP
+  server forwards the request over its relay stream, and the relay authorizes
+  it against the bundle policy preset. Sessions whose policy does not enable
+  `choose` receive the relay submitter-gate rejection.
 
 ## Credential Administration
 
@@ -147,7 +150,7 @@ This module implements the MCP stdio server for `agentmux`.
     via the `Add` impl on `ToolRouter`.
 - `server/handlers/`
   - One file per MCP tool: `list.rs`, `help.rs`, `send.rs`, `look.rs`,
-    `raww.rs`, `grant.rs`, `updown.rs`, `new.rs`, `change.rs`. Each file
+    `raww.rs`, `choose.rs`, `updown.rs`, `new.rs`, `change.rs`. Each file
     holds an `impl McpServer` block with a named `#[tool_router(router = tool_router_X, vis = "pub(crate)")]`
     attribute, the `#[tool]` method, and the tool's helper methods. The
     `pub(super)` `state` field on `McpServer` (defined in `core.rs`) is

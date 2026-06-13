@@ -4,11 +4,11 @@ use serde_json::json;
 
 use super::errors::validation_tool_error;
 use super::params::{
-    CHANGE_COMMAND_PSK, ChangePskArgs, GRANT_COMMAND_LIST, GRANT_COMMAND_RESOLVE,
-    GRANT_OUTCOME_SELECTED, GrantListArgs, GrantResolveArgs, HelpParams, LIST_COMMAND_PRINCIPALS,
-    ListArgs, LookParams, NAMESPACE_AGENTMUX, NEW_COMMAND_PEER, NewPeerArgs, RawwParams,
-    SendParams, TOOL_CHANGE, TOOL_GRANT, TOOL_HELP, TOOL_LIST, TOOL_LOOK, TOOL_NEW, TOOL_RAWW,
-    TOOL_SEND, TOOL_UPDOWN, UPDOWN_COMMAND_DOWN, UPDOWN_COMMAND_UP, UpdownArgs,
+    CHANGE_COMMAND_PSK, CHOOSE_OUTCOME_SELECTED, ChangePskArgs, ChooseParams, HelpParams,
+    LIST_COMMAND_DECISIONS, LIST_COMMAND_PRINCIPALS, ListArgs, ListDecisionsArgs, LookParams,
+    NAMESPACE_AGENTMUX, NEW_COMMAND_PEER, NewPeerArgs, RawwParams, SendParams, TOOL_CHANGE,
+    TOOL_CHOOSE, TOOL_HELP, TOOL_LIST, TOOL_LOOK, TOOL_NEW, TOOL_RAWW, TOOL_SEND, TOOL_UPDOWN,
+    UPDOWN_COMMAND_DOWN, UPDOWN_COMMAND_UP, UpdownArgs,
 };
 
 pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpError> {
@@ -17,16 +17,16 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
         "" | NAMESPACE_AGENTMUX => Ok(json!({
             "namespace": NAMESPACE_AGENTMUX,
             "shape_hints": [
-                "Call help with query='list', 'grant', 'updown', 'new', or 'change' for meta-tool command lists.",
-                "Call help with query='list.principals', 'grant.list', 'grant.resolve', 'updown.up', 'updown.down', 'new.peer', or 'change.psk' for command args schemas.",
-                "Call help with query='send', 'look', or 'raww' for exact tool args schemas."
+                "Call help with query='list', 'updown', 'new', or 'change' for meta-tool command lists.",
+                "Call help with query='list.principals', 'list.decisions', 'updown.up', 'updown.down', 'new.peer', or 'change.psk' for command args schemas.",
+                "Call help with query='send', 'look', 'raww', or 'choose' for exact tool args schemas."
             ],
             "tools": [
                 {"tool": TOOL_LIST, "kind": "meta_tool", "description": "List principals for one namespace or fan out across namespaces."},
                 {"tool": TOOL_SEND, "kind": "tool", "description": "Submit a message to explicit targets or broadcast."},
                 {"tool": TOOL_LOOK, "kind": "tool", "description": "Inspect a target session pane snapshot for this bundle."},
                 {"tool": TOOL_RAWW, "kind": "tool", "description": "Write raw text directly to one target session."},
-                {"tool": TOOL_GRANT, "kind": "meta_tool", "description": "Inspect or resolve pending ACP permission requests."},
+                {"tool": TOOL_CHOOSE, "kind": "tool", "description": "Submit an ACP-native decision on a pending choice request."},
                 {"tool": TOOL_UPDOWN, "kind": "meta_tool", "description": "Administer bundle runtime updown (up/down)."},
                 {"tool": TOOL_NEW, "kind": "meta_tool", "description": "Register a principal credential and mint its PSK."},
                 {"tool": TOOL_CHANGE, "kind": "meta_tool", "description": "Rotate the PSK for an existing principal."},
@@ -45,6 +45,10 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
                 {
                     "command": "list.principals",
                     "description": "List principals for one namespace or fan out across namespaces."
+                },
+                {
+                    "command": "list.decisions",
+                    "description": "List pending ACP choice requests for the associated bundle."
                 }
             ],
             "invoke": {
@@ -63,6 +67,18 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
                 "tool": TOOL_LIST,
                 "params": {
                     "command": LIST_COMMAND_PRINCIPALS,
+                    "args": {}
+                }
+            }),
+        )),
+        "list.decisions" => Ok(command_help(
+            "list.decisions",
+            "List pending ACP choice requests for the associated bundle.",
+            json_schema_for::<ListDecisionsArgs>(),
+            json!({
+                "tool": TOOL_LIST,
+                "params": {
+                    "command": LIST_COMMAND_DECISIONS,
                     "args": {}
                 }
             }),
@@ -103,53 +119,16 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
                 "params": {}
             }),
         )),
-        TOOL_GRANT => Ok(json!({
-            "tool": TOOL_GRANT,
-            "kind": "meta_tool",
-            "description": "Inspect or resolve pending ACP permission requests.",
-            "commands": [
-                {
-                    "command": "grant.list",
-                    "description": "List pending ACP permission requests for the associated bundle."
-                },
-                {
-                    "command": "grant.resolve",
-                    "description": "Submit an ACP-native decision on a pending permission request."
-                }
-            ],
-            "invoke": {
-                "tool": TOOL_GRANT,
-                "params": {
-                    "command": GRANT_COMMAND_LIST,
-                    "args": {}
-                }
-            }
-        })),
-        "grant.list" => Ok(command_help(
-            "grant.list",
-            "List pending ACP permission requests for the associated bundle.",
-            json_schema_for::<GrantListArgs>(),
+        TOOL_CHOOSE => Ok(command_help(
+            TOOL_CHOOSE,
+            "Submit an ACP-native decision on a pending choice request.",
+            json_schema_for::<ChooseParams>(),
             json!({
-                "tool": TOOL_GRANT,
+                "tool": TOOL_CHOOSE,
                 "params": {
-                    "command": GRANT_COMMAND_LIST,
-                    "args": {}
-                }
-            }),
-        )),
-        "grant.resolve" => Ok(command_help(
-            "grant.resolve",
-            "Submit an ACP-native decision on a pending permission request.",
-            json_schema_for::<GrantResolveArgs>(),
-            json!({
-                "tool": TOOL_GRANT,
-                "params": {
-                    "command": GRANT_COMMAND_RESOLVE,
-                    "args": {
-                        "permission_request_id": "<uuid>",
-                        "outcome": GRANT_OUTCOME_SELECTED,
-                        "option_id": "<option-id>"
-                    }
+                    "choice_request_id": "<uuid>",
+                    "outcome": CHOOSE_OUTCOME_SELECTED,
+                    "option_id": "<option-id>"
                 }
             }),
         )),
@@ -261,7 +240,7 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
         )),
         _ => Err(validation_tool_error(
             "validation_invalid_params",
-            "unknown help query; try empty query, 'agentmux', 'list', 'list.principals', 'send', 'look', 'raww', 'grant', 'grant.list', 'grant.resolve', 'updown', 'updown.up', 'updown.down', 'new', 'new.peer', 'change', or 'change.psk'",
+            "unknown help query; try empty query, 'agentmux', 'list', 'list.principals', 'list.decisions', 'send', 'look', 'raww', 'choose', 'updown', 'updown.up', 'updown.down', 'new', 'new.peer', 'change', or 'change.psk'",
             Some(json!({"query": query})),
         )),
     }

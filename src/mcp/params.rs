@@ -8,16 +8,15 @@ pub(super) const LOOK_LINES_MIN: u64 = 1;
 pub(super) const LOOK_LINES_MAX: u64 = 1000;
 pub(super) const LIST_SESSIONS_SCHEMA_VERSION: &str = "1";
 pub(super) const LIST_COMMAND_PRINCIPALS: &str = "principals";
+pub(super) const LIST_COMMAND_DECISIONS: &str = "decisions";
 pub(super) const TOOL_HELP: &str = "help";
 pub(super) const TOOL_LIST: &str = "list";
 pub(super) const TOOL_LOOK: &str = "look";
 pub(super) const TOOL_RAWW: &str = "raww";
 pub(super) const TOOL_SEND: &str = "send";
-pub(super) const TOOL_GRANT: &str = "grant";
-pub(super) const GRANT_COMMAND_LIST: &str = "list";
-pub(super) const GRANT_COMMAND_RESOLVE: &str = "resolve";
-pub(super) const GRANT_OUTCOME_SELECTED: &str = "selected";
-pub(super) const GRANT_OUTCOME_CANCELLED: &str = "cancelled";
+pub(super) const TOOL_CHOOSE: &str = "choose";
+pub(super) const CHOOSE_OUTCOME_SELECTED: &str = "selected";
+pub(super) const CHOOSE_OUTCOME_CANCELLED: &str = "cancelled";
 pub(super) const TOOL_UPDOWN: &str = "updown";
 pub(super) const UPDOWN_COMMAND_UP: &str = "up";
 pub(super) const UPDOWN_COMMAND_DOWN: &str = "down";
@@ -30,7 +29,7 @@ pub(super) const NAMESPACE_AGENTMUX: &str = "agentmux";
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub(super) struct ListParams {
-    /// List command selector. Requires command="principals".
+    /// List command selector. Allowed values: `principals`, `decisions`.
     #[serde(default)]
     pub(super) command: Option<String>,
     /// Command-scoped arguments.
@@ -116,14 +115,7 @@ pub(super) struct LookParams {
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
-pub(super) struct GrantParams {
-    /// Grant subcommand selector. Required; allowed values: `list`, `resolve`.
-    #[serde(default)]
-    pub(super) command: Option<String>,
-    /// Command-scoped arguments.
-    #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
-    #[serde(default)]
-    pub(super) args: Value,
+pub(super) struct ListDecisionsArgs {
     /// Unknown fields captured for explicit validation.
     #[serde(flatten, default)]
     #[schemars(skip)]
@@ -132,26 +124,20 @@ pub(super) struct GrantParams {
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
-pub(super) struct GrantListArgs {
-    /// Unknown fields captured for explicit validation.
-    #[serde(flatten, default)]
-    #[schemars(skip)]
-    pub(super) extra_fields: BTreeMap<String, Value>,
-}
-
-#[derive(Debug, Default, Deserialize, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub(super) struct GrantResolveArgs {
-    /// Required permission request identifier returned by `grant list`.
+pub(super) struct ChooseParams {
+    /// Required choice request identifier returned by `list` command="decisions".
     #[serde(default)]
-    pub(super) permission_request_id: Option<String>,
+    pub(super) choice_request_id: Option<String>,
     /// Required decision outcome (`selected` or `cancelled`).
     #[serde(default)]
     pub(super) outcome: Option<String>,
     /// Required option_id when outcome is `selected`; forbidden when `cancelled`.
     #[serde(default)]
     pub(super) option_id: Option<String>,
-    /// Unknown fields captured for explicit validation.
+    /// Unknown fields captured for explicit validation. Caller-supplied
+    /// sender-like identity fields (`decided_by`, `ui_session_id`,
+    /// `operator_session_id`) land here and are rejected; the decision actor is
+    /// association-derived by the relay.
     #[serde(flatten, default)]
     #[schemars(skip)]
     pub(super) extra_fields: BTreeMap<String, Value>,
