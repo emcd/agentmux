@@ -19,11 +19,13 @@ use crate::mcp::errors::{
     map_runtime_error, validation_tool_error,
 };
 use crate::mcp::params::{
-    LIST_COMMAND_PRINCIPALS, LIST_SESSIONS_SCHEMA_VERSION, ListArgs, ListParams,
+    LIST_COMMAND_DECISIONS, LIST_COMMAND_PRINCIPALS, LIST_SESSIONS_SCHEMA_VERSION, ListArgs,
+    ListDecisionsArgs, ListParams,
 };
 use crate::mcp::server::McpServer;
 use crate::mcp::validation::{
-    is_relay_unavailable_error, parse_meta_tool_args, validate_list_request,
+    is_relay_unavailable_error, parse_meta_tool_args, validate_list_decisions_args,
+    validate_list_params, validate_list_principals_args,
 };
 use crate::relay::{
     ListedBundle, ListedBundleState, ListedSession, RelayRequest, RelayResponse,
@@ -42,6 +44,31 @@ impl McpServer {
         &self,
         Parameters(params): Parameters<ListParams>,
     ) -> Result<CallToolResult, McpError> {
+        validate_list_params(&params)?;
+        let command = params
+            .command
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                validation_tool_error(
+                    "validation_invalid_params",
+                    "command is required; allowed values are \"principals\" or \"decisions\"",
+                    None,
+                )
+            })?;
+        match command {
+            LIST_COMMAND_PRINCIPALS => self.list_principals(&params),
+            LIST_COMMAND_DECISIONS => self.list_decisions(&params),
+            other => Err(validation_tool_error(
+                "validation_invalid_params",
+                "command must be \"principals\" or \"decisions\"",
+                Some(json!({"command": other})),
+            )),
+        }
+    }
+
+    fn list_principals(&self, params: &ListParams) -> Result<CallToolResult, McpError> {
         let parsed_args = parse_meta_tool_args::<ListArgs>(params.args.clone()).map_err(|reason| {
             validation_tool_error(
                 "validation_invalid_params",
@@ -52,7 +79,7 @@ impl McpServer {
                 })),
             )
         })?;
-        validate_list_request(&params, &parsed_args)?;
+        validate_list_principals_args(&parsed_args)?;
         let requester_session = self
             .state
             .configuration
@@ -115,6 +142,72 @@ impl McpServer {
             }),
         );
         Ok(CallToolResult::success(vec![Content::json(response)?]))
+    }
+
+    fn list_decisions(&self, params: &ListParams) -> Result<CallToolResult, McpError> {
+        let args =
+            parse_meta_tool_args::<ListDecisionsArgs>(params.args.clone()).map_err(|reason| {
+                validation_tool_error(
+                    "validation_invalid_params",
+                    "invalid args for list decisions command",
+                    Some(json!({
+                        "reason": reason,
+                        "hint": "pass args as a JSON object; use help query 'list.decisions' for exact schema",
+                    })),
+                )
+            })?;
+        validate_list_decisions_args(&args)?;
+        emit_inscription(
+            "mcp.tool.list.decisions.request",
+            &json!({
+                "bundle_name": self.associated_bundle_name(),
+            }),
+        );
+        let request = RelayRequest::ChoicesList;
+        match self.request_relay(&request) {
+            Ok(RelayResponse::ChoicesList {
+                schema_version,
+                pending_requests,
+            }) => {
+                let pending_count = pending_requests.len();
+                let response = json!({
+                    "schema_version": schema_version,
+                    "pending_requests": pending_requests,
+                });
+                emit_inscription(
+                    "mcp.tool.list.decisions.success",
+                    &json!({
+                        "pending_count": pending_count,
+                    }),
+                );
+                Ok(CallToolResult::success(vec![Content::json(response)?]))
+            }
+            Ok(RelayResponse::Error { error }) => {
+                emit_inscription(
+                    "mcp.tool.list.decisions.relay_error",
+                    &json!({
+                        "code": error.code.clone(),
+                        "message": error.message.clone(),
+                        "details": error.details.clone(),
+                    }),
+                );
+                Err(map_relay_error(error))
+            }
+            Ok(other) => {
+                emit_inscription(
+                    "mcp.tool.list.decisions.unexpected_response",
+                    &json!({"response": other}),
+                );
+                Err(internal_tool_error(
+                    "internal_unexpected_failure",
+                    "relay returned unexpected response variant",
+                    Some(json!({"response": other})),
+                ))
+            }
+            Err(source) => {
+                Err(self.map_relay_stream_failure("mcp.tool.list.decisions.io_error", source))
+            }
+        }
     }
 
     fn list_sessions_single_bundle(

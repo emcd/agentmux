@@ -36,7 +36,45 @@ async fn help_list_query_returns_meta_tool_command_catalog() {
     assert_eq!(payload["tool"], "list");
     assert_eq!(payload["kind"], "meta_tool");
     assert_eq!(payload["commands"][0]["command"], "list.principals");
+    let commands = payload["commands"].as_array().expect("commands array");
+    assert!(
+        commands
+            .iter()
+            .any(|entry| entry["command"] == "list.decisions"),
+        "list catalog includes list.decisions: {commands:?}"
+    );
     assert_eq!(payload["invoke"]["tool"], "list");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn help_list_decisions_query_returns_args_schema() {
+    let runtime = TestRuntime::create();
+    let mut harness = McpHarness::spawn(&runtime).await;
+    let response = harness
+        .call_tool(2, "help", help_call(Some("list.decisions")))
+        .await;
+    let payload = decode_tool_payload(&response);
+
+    assert_eq!(payload["command"], "list.decisions");
+    assert!(payload["args_schema"].is_object());
+    assert_eq!(payload["invoke"]["tool"], "list");
+    assert_eq!(payload["invoke"]["params"]["command"], "decisions");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn help_choose_query_returns_args_schema() {
+    let runtime = TestRuntime::create();
+    let mut harness = McpHarness::spawn(&runtime).await;
+    let response = harness
+        .call_tool(2, "help", help_call(Some("choose")))
+        .await;
+    let payload = decode_tool_payload(&response);
+
+    assert_eq!(payload["command"], "choose");
+    assert!(payload["args_schema"]["properties"]["choice_request_id"].is_object());
+    assert!(payload["args_schema"]["properties"]["outcome"].is_object());
+    assert!(payload["args_schema"]["properties"]["option_id"].is_object());
+    assert_eq!(payload["invoke"]["tool"], "choose");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

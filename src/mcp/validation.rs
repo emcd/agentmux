@@ -5,10 +5,9 @@ use serde_json::json;
 
 use super::errors::validation_tool_error;
 use super::params::{
-    ChangeParams, ChangePskArgs, GRANT_OUTCOME_CANCELLED, GRANT_OUTCOME_SELECTED, GrantListArgs,
-    GrantParams, GrantResolveArgs, HelpParams, LIST_COMMAND_PRINCIPALS, LOOK_LINES_MAX,
-    LOOK_LINES_MIN, ListArgs, ListParams, LookParams, NewParams, NewPeerArgs, RawwParams,
-    SendParams, UpdownArgs, UpdownParams,
+    CHOOSE_OUTCOME_CANCELLED, CHOOSE_OUTCOME_SELECTED, ChangeParams, ChangePskArgs, ChooseParams,
+    HelpParams, LOOK_LINES_MAX, LOOK_LINES_MIN, ListArgs, ListDecisionsArgs, ListParams,
+    LookParams, NewParams, NewPeerArgs, RawwParams, SendParams, UpdownArgs, UpdownParams,
 };
 
 pub(super) fn validate_list_params(params: &ListParams) -> Result<(), McpError> {
@@ -17,10 +16,6 @@ pub(super) fn validate_list_params(params: &ListParams) -> Result<(), McpError> 
 
 pub(super) fn validate_help_request(params: &HelpParams) -> Result<(), McpError> {
     validate_unknown_fields("help request", None, &params.extra_fields)
-}
-
-pub(super) fn validate_grant_params(params: &GrantParams) -> Result<(), McpError> {
-    validate_unknown_fields("grant request", None, &params.extra_fields)
 }
 
 pub(super) fn validate_updown_params(params: &UpdownParams) -> Result<(), McpError> {
@@ -48,28 +43,8 @@ pub(super) fn validate_change_psk_args(args: &ChangePskArgs) -> Result<(), McpEr
     validate_unknown_fields("change psk command", Some("args"), &args.extra_fields)
 }
 
-pub(super) fn validate_list_request(params: &ListParams, args: &ListArgs) -> Result<(), McpError> {
-    validate_list_params(params)?;
-    validate_unknown_fields("list sessions command", Some("args"), &args.extra_fields)?;
-    let command = params
-        .command
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            validation_tool_error(
-                "validation_invalid_params",
-                "command is required and must equal \"principals\"",
-                None,
-            )
-        })?;
-    if command != LIST_COMMAND_PRINCIPALS {
-        return Err(validation_tool_error(
-            "validation_invalid_params",
-            "command is required and must equal \"principals\"",
-            Some(json!({"command": command})),
-        ));
-    }
+pub(super) fn validate_list_principals_args(args: &ListArgs) -> Result<(), McpError> {
+    validate_unknown_fields("list principals command", Some("args"), &args.extra_fields)?;
     if let Some(namespace) = args
         .namespace
         .as_deref()
@@ -84,6 +59,10 @@ pub(super) fn validate_list_request(params: &ListParams, args: &ListArgs) -> Res
         ));
     }
     Ok(())
+}
+
+pub(super) fn validate_list_decisions_args(args: &ListDecisionsArgs) -> Result<(), McpError> {
+    validate_unknown_fields("list decisions command", Some("args"), &args.extra_fields)
 }
 
 pub(super) fn parse_meta_tool_args<T: serde::de::DeserializeOwned + Default>(
@@ -236,27 +215,22 @@ pub(super) fn validate_raww_request(params: &RawwParams) -> Result<(), McpError>
     Ok(())
 }
 
-pub(super) fn validate_grant_list_args(args: &GrantListArgs) -> Result<(), McpError> {
-    validate_unknown_fields("grant list command", Some("args"), &args.extra_fields)?;
-    Ok(())
-}
-
-pub(super) fn validate_grant_resolve_args(args: &GrantResolveArgs) -> Result<(), McpError> {
-    validate_unknown_fields("grant resolve command", Some("args"), &args.extra_fields)?;
-    let permission_request_id = args
-        .permission_request_id
+pub(super) fn validate_choose_request(params: &ChooseParams) -> Result<(), McpError> {
+    validate_unknown_fields("choose request", None, &params.extra_fields)?;
+    let choice_request_id = params
+        .choice_request_id
         .as_ref()
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
             validation_tool_error(
                 "validation_invalid_params",
-                "permission_request_id must be a non-empty string",
-                Some(json!({"field": "permission_request_id"})),
+                "choice_request_id must be a non-empty string",
+                Some(json!({"field": "choice_request_id"})),
             )
         })?;
-    let _ = permission_request_id;
-    let outcome = args
+    let _ = choice_request_id;
+    let outcome = params
         .outcome
         .as_ref()
         .map(|value| value.trim())
@@ -269,8 +243,8 @@ pub(super) fn validate_grant_resolve_args(args: &GrantResolveArgs) -> Result<(),
             )
         })?;
     match outcome {
-        GRANT_OUTCOME_SELECTED => {
-            let option_id = args
+        CHOOSE_OUTCOME_SELECTED => {
+            let option_id = params
                 .option_id
                 .as_ref()
                 .map(|value| value.trim())
@@ -281,19 +255,19 @@ pub(super) fn validate_grant_resolve_args(args: &GrantResolveArgs) -> Result<(),
                     "selected outcome requires explicit non-empty option_id",
                     Some(json!({
                         "field": "option_id",
-                        "outcome": GRANT_OUTCOME_SELECTED,
+                        "outcome": CHOOSE_OUTCOME_SELECTED,
                     })),
                 ));
             }
         }
-        GRANT_OUTCOME_CANCELLED => {
-            if args.option_id.is_some() {
+        CHOOSE_OUTCOME_CANCELLED => {
+            if params.option_id.is_some() {
                 return Err(validation_tool_error(
                     "validation_invalid_params",
                     "cancelled outcome must omit option_id",
                     Some(json!({
                         "field": "option_id",
-                        "outcome": GRANT_OUTCOME_CANCELLED,
+                        "outcome": CHOOSE_OUTCOME_CANCELLED,
                     })),
                 ));
             }

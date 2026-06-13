@@ -2,8 +2,15 @@ use super::helpers::*;
 use serde_json::{Map, Value, json};
 use std::sync::Arc;
 
+fn decisions_list_call() -> Map<String, Value> {
+    Map::from_iter([(
+        "command".to_string(),
+        Value::String("decisions".to_string()),
+    )])
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn grant_list_returns_pending_requests_from_relay() {
+async fn list_decisions_returns_pending_requests_from_relay() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -15,7 +22,7 @@ async fn grant_list_returns_pending_requests_from_relay() {
                     "pending_requests": [
                         {
                             "message_id": "msg-1",
-                            "choice_request_id": "perm-1",
+                            "choice_request_id": "choice-1",
                             "target_session": "bravo",
                             "requested_kind": "execute",
                             "requested_details": {
@@ -28,7 +35,7 @@ async fn grant_list_returns_pending_requests_from_relay() {
                         },
                         {
                             "message_id": "msg-2",
-                            "choice_request_id": "perm-2",
+                            "choice_request_id": "choice-2",
                             "target_session": "charlie",
                             "requested_kind": "read",
                             "requested_details": {
@@ -52,9 +59,7 @@ async fn grant_list_returns_pending_requests_from_relay() {
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
-    let mut arguments = Map::new();
-    arguments.insert("command".to_string(), Value::String("list".to_string()));
-    let response = harness.call_tool(2, "grant", arguments).await;
+    let response = harness.call_tool(2, "list", decisions_list_call()).await;
     let payload = decode_tool_payload(&response);
 
     assert_eq!(payload["schema_version"], "1");
@@ -62,7 +67,7 @@ async fn grant_list_returns_pending_requests_from_relay() {
         .as_array()
         .expect("pending_requests array");
     assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0]["choice_request_id"], "perm-1");
+    assert_eq!(entries[0]["choice_request_id"], "choice-1");
     assert_eq!(entries[0]["target_session"], "bravo");
     assert_eq!(entries[0]["requested_kind"], "execute");
     assert_eq!(
@@ -72,14 +77,14 @@ async fn grant_list_returns_pending_requests_from_relay() {
             .len(),
         2
     );
-    assert_eq!(entries[1]["choice_request_id"], "perm-2");
+    assert_eq!(entries[1]["choice_request_id"], "choice-2");
 
     let relay_requests = relay.requests_for_operation("choices_list");
     assert_eq!(relay_requests.len(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn grant_resolve_forwards_decision_and_returns_relay_response() {
+async fn choose_forwards_decision_and_returns_relay_response() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -107,27 +112,28 @@ async fn grant_resolve_forwards_decision_and_returns_relay_response() {
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
-    let mut arguments = Map::new();
-    arguments.insert("command".to_string(), Value::String("resolve".to_string()));
-    arguments.insert(
-        "args".to_string(),
-        json!({
-            "permission_request_id": "perm-1",
-            "outcome": "selected",
-            "option_id": "allow_once",
-        }),
-    );
-    let response = harness.call_tool(2, "grant", arguments).await;
+    let arguments = Map::from_iter([
+        (
+            "choice_request_id".to_string(),
+            Value::String("choice-1".to_string()),
+        ),
+        ("outcome".to_string(), Value::String("selected".to_string())),
+        (
+            "option_id".to_string(),
+            Value::String("allow_once".to_string()),
+        ),
+    ]);
+    let response = harness.call_tool(2, "choose", arguments).await;
     let payload = decode_tool_payload(&response);
 
     assert_eq!(payload["schema_version"], "1");
     assert_eq!(payload["status"], "resolved");
-    assert_eq!(payload["permission_request_id"], "perm-1");
+    assert_eq!(payload["choice_request_id"], "choice-1");
     assert_eq!(payload["outcome"], "selected");
 
     let relay_requests = relay.requests_for_operation("choices_pick");
     assert_eq!(relay_requests.len(), 1);
-    assert_eq!(relay_requests[0]["choice_request_id"], "perm-1");
+    assert_eq!(relay_requests[0]["choice_request_id"], "choice-1");
     assert_eq!(relay_requests[0]["outcome"], "selected");
     assert_eq!(relay_requests[0]["option_id"], "allow_once");
     assert!(
@@ -137,7 +143,7 @@ async fn grant_resolve_forwards_decision_and_returns_relay_response() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn grant_resolve_supports_cancelled_outcome_without_option_id() {
+async fn choose_supports_cancelled_outcome_without_option_id() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -153,7 +159,7 @@ async fn grant_resolve_supports_cancelled_outcome_without_option_id() {
                         .unwrap_or(Value::Null),
                     "outcome": "cancelled",
                     "reason_code": "runtime_choices_request_cancelled",
-                    "reason": "permission request was cancelled by UI decision",
+                    "reason": "choice request was cancelled by UI decision",
                 }),
                 _ => json!({
                     "kind": "error",
@@ -167,16 +173,17 @@ async fn grant_resolve_supports_cancelled_outcome_without_option_id() {
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
-    let mut arguments = Map::new();
-    arguments.insert("command".to_string(), Value::String("resolve".to_string()));
-    arguments.insert(
-        "args".to_string(),
-        json!({
-            "permission_request_id": "perm-2",
-            "outcome": "cancelled",
-        }),
-    );
-    let response = harness.call_tool(2, "grant", arguments).await;
+    let arguments = Map::from_iter([
+        (
+            "choice_request_id".to_string(),
+            Value::String("choice-2".to_string()),
+        ),
+        (
+            "outcome".to_string(),
+            Value::String("cancelled".to_string()),
+        ),
+    ]);
+    let response = harness.call_tool(2, "choose", arguments).await;
     let payload = decode_tool_payload(&response);
 
     assert_eq!(payload["outcome"], "cancelled");
@@ -193,7 +200,7 @@ async fn grant_resolve_supports_cancelled_outcome_without_option_id() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn grant_resolve_rejects_decider_identity_fields_before_relay_request() {
+async fn choose_rejects_decider_identity_fields_before_relay_request() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -201,24 +208,25 @@ async fn grant_resolve_rejects_decider_identity_fields_before_relay_request() {
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
-    let mut arguments = Map::new();
-    arguments.insert("command".to_string(), Value::String("resolve".to_string()));
-    arguments.insert(
-        "args".to_string(),
-        json!({
-            "permission_request_id": "perm-1",
-            "outcome": "cancelled",
-            "decided_by": "spoof",
-        }),
-    );
-    let response = harness.call_tool(2, "grant", arguments).await;
+    let arguments = Map::from_iter([
+        (
+            "choice_request_id".to_string(),
+            Value::String("choice-1".to_string()),
+        ),
+        (
+            "outcome".to_string(),
+            Value::String("cancelled".to_string()),
+        ),
+        ("decided_by".to_string(), Value::String("spoof".to_string())),
+    ]);
+    let response = harness.call_tool(2, "choose", arguments).await;
 
-    assert_unknown_field_error(&response, &["args.decided_by"]);
+    assert_unknown_field_error(&response, &["decided_by"]);
     assert!(relay.requests_for_operation("choices_pick").is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn grant_rejects_unknown_top_level_fields() {
+async fn choose_rejects_unknown_fields() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -226,18 +234,25 @@ async fn grant_rejects_unknown_top_level_fields() {
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
-    let mut arguments = Map::new();
-    arguments.insert("command".to_string(), Value::String("list".to_string()));
-    arguments.insert("stowaway".to_string(), Value::String("value".to_string()));
-    let response = harness.call_tool(2, "grant", arguments).await;
+    let arguments = Map::from_iter([
+        (
+            "choice_request_id".to_string(),
+            Value::String("choice-1".to_string()),
+        ),
+        (
+            "outcome".to_string(),
+            Value::String("cancelled".to_string()),
+        ),
+        ("stowaway".to_string(), Value::String("value".to_string())),
+    ]);
+    let response = harness.call_tool(2, "choose", arguments).await;
 
     assert_unknown_field_error(&response, &["stowaway"]);
-    assert!(relay.requests_for_operation("choices_list").is_empty());
     assert!(relay.requests_for_operation("choices_pick").is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn grant_resolve_rejects_selected_without_option_id() {
+async fn choose_rejects_selected_without_option_id() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -245,23 +260,21 @@ async fn grant_resolve_rejects_selected_without_option_id() {
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
-    let mut arguments = Map::new();
-    arguments.insert("command".to_string(), Value::String("resolve".to_string()));
-    arguments.insert(
-        "args".to_string(),
-        json!({
-            "permission_request_id": "perm-1",
-            "outcome": "selected",
-        }),
-    );
-    let response = harness.call_tool(2, "grant", arguments).await;
+    let arguments = Map::from_iter([
+        (
+            "choice_request_id".to_string(),
+            Value::String("choice-1".to_string()),
+        ),
+        ("outcome".to_string(), Value::String("selected".to_string())),
+    ]);
+    let response = harness.call_tool(2, "choose", arguments).await;
 
     assert_eq!(error_code(&response), Some("validation_invalid_params"));
     assert!(relay.requests_for_operation("choices_pick").is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn grant_resolve_rejects_cancelled_with_option_id() {
+async fn choose_rejects_cancelled_with_option_id() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -269,24 +282,28 @@ async fn grant_resolve_rejects_cancelled_with_option_id() {
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
-    let mut arguments = Map::new();
-    arguments.insert("command".to_string(), Value::String("resolve".to_string()));
-    arguments.insert(
-        "args".to_string(),
-        json!({
-            "permission_request_id": "perm-1",
-            "outcome": "cancelled",
-            "option_id": "allow_once",
-        }),
-    );
-    let response = harness.call_tool(2, "grant", arguments).await;
+    let arguments = Map::from_iter([
+        (
+            "choice_request_id".to_string(),
+            Value::String("choice-1".to_string()),
+        ),
+        (
+            "outcome".to_string(),
+            Value::String("cancelled".to_string()),
+        ),
+        (
+            "option_id".to_string(),
+            Value::String("allow_once".to_string()),
+        ),
+    ]);
+    let response = harness.call_tool(2, "choose", arguments).await;
 
     assert_eq!(error_code(&response), Some("validation_invalid_params"));
     assert!(relay.requests_for_operation("choices_pick").is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn grant_rejects_unknown_command_selector() {
+async fn list_rejects_unknown_command_selector() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -294,9 +311,8 @@ async fn grant_rejects_unknown_command_selector() {
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
-    let mut arguments = Map::new();
-    arguments.insert("command".to_string(), Value::String("garbage".to_string()));
-    let response = harness.call_tool(2, "grant", arguments).await;
+    let arguments = Map::from_iter([("command".to_string(), Value::String("garbage".to_string()))]);
+    let response = harness.call_tool(2, "list", arguments).await;
 
     assert_eq!(error_code(&response), Some("validation_invalid_params"));
     assert!(relay.requests_for_operation("choices_list").is_empty());
@@ -304,30 +320,34 @@ async fn grant_rejects_unknown_command_selector() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn grant_list_rejects_unknown_arg_fields() {
+async fn list_decisions_rejects_unknown_arg_fields() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay should not receive permission_list for invalid args")),
+        Arc::new(|_| panic!("relay should not receive choices_list for invalid args")),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
-    let mut arguments = Map::new();
-    arguments.insert("command".to_string(), Value::String("list".to_string()));
-    arguments.insert(
-        "args".to_string(),
-        json!({
-            "stowaway_field": "value",
-        }),
-    );
-    let response = harness.call_tool(2, "grant", arguments).await;
+    let arguments = Map::from_iter([
+        (
+            "command".to_string(),
+            Value::String("decisions".to_string()),
+        ),
+        (
+            "args".to_string(),
+            json!({
+                "stowaway_field": "value",
+            }),
+        ),
+    ]);
+    let response = harness.call_tool(2, "list", arguments).await;
 
     assert_unknown_field_error(&response, &["args.stowaway_field"]);
     assert!(relay.requests_for_operation("choices_list").is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn grant_resolve_preserves_already_resolved_code_from_relay() {
+async fn choose_preserves_already_resolved_code_from_relay() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -339,7 +359,7 @@ async fn grant_resolve_preserves_already_resolved_code_from_relay() {
                         "code": "runtime_choices_request_already_resolved",
                         "message": "choice request is already resolved",
                         "details": {
-                            "choice_request_id": "perm-1",
+                            "choice_request_id": "choice-1",
                         },
                     },
                 }),
@@ -355,16 +375,17 @@ async fn grant_resolve_preserves_already_resolved_code_from_relay() {
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
-    let mut arguments = Map::new();
-    arguments.insert("command".to_string(), Value::String("resolve".to_string()));
-    arguments.insert(
-        "args".to_string(),
-        json!({
-            "permission_request_id": "perm-1",
-            "outcome": "cancelled",
-        }),
-    );
-    let response = harness.call_tool(2, "grant", arguments).await;
+    let arguments = Map::from_iter([
+        (
+            "choice_request_id".to_string(),
+            Value::String("choice-1".to_string()),
+        ),
+        (
+            "outcome".to_string(),
+            Value::String("cancelled".to_string()),
+        ),
+    ]);
+    let response = harness.call_tool(2, "choose", arguments).await;
 
     assert_eq!(
         error_code(&response),
@@ -373,7 +394,7 @@ async fn grant_resolve_preserves_already_resolved_code_from_relay() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn grant_resolve_preserves_authorization_forbidden_grant_capability() {
+async fn choose_preserves_authorization_forbidden_choose_capability() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -385,10 +406,10 @@ async fn grant_resolve_preserves_authorization_forbidden_grant_capability() {
                         "code": "authorization_forbidden",
                         "message": "request denied by authorization policy",
                         "details": {
-                            "capability": "grant",
+                            "capability": "choose",
                             "requester_session": SENDER_SESSION,
                             "bundle_name": BUNDLE_NAME,
-                            "reason": "grant policy scope does not allow permission decisions",
+                            "reason": "choose policy scope does not allow choice decisions",
                         },
                     },
                 }),
@@ -404,23 +425,24 @@ async fn grant_resolve_preserves_authorization_forbidden_grant_capability() {
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
-    let mut arguments = Map::new();
-    arguments.insert("command".to_string(), Value::String("resolve".to_string()));
-    arguments.insert(
-        "args".to_string(),
-        json!({
-            "permission_request_id": "perm-1",
-            "outcome": "cancelled",
-        }),
-    );
-    let response = harness.call_tool(2, "grant", arguments).await;
+    let arguments = Map::from_iter([
+        (
+            "choice_request_id".to_string(),
+            Value::String("choice-1".to_string()),
+        ),
+        (
+            "outcome".to_string(),
+            Value::String("cancelled".to_string()),
+        ),
+    ]);
+    let response = harness.call_tool(2, "choose", arguments).await;
 
     assert_eq!(error_code(&response), Some("authorization_forbidden"));
-    assert_eq!(response["error"]["data"]["details"]["capability"], "grant");
+    assert_eq!(response["error"]["data"]["details"]["capability"], "choose");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn grant_advertised_in_tool_inventory() {
+async fn choose_advertised_in_tool_inventory() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -441,5 +463,9 @@ async fn grant_advertised_in_tool_inventory() {
         .iter()
         .filter_map(|tool| tool.get("name").and_then(Value::as_str))
         .collect();
-    assert!(names.contains(&"grant"), "grant tool advertised: {names:?}");
+    assert!(
+        names.contains(&"choose"),
+        "choose tool advertised: {names:?}"
+    );
+    assert!(!names.contains(&"grant"), "grant tool retired: {names:?}");
 }

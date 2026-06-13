@@ -63,7 +63,7 @@ impl McpServer {
             + Self::tool_router_send()
             + Self::tool_router_look()
             + Self::tool_router_raww()
-            + Self::tool_router_grant()
+            + Self::tool_router_choose()
             + Self::tool_router_updown()
             + Self::tool_router_new()
             + Self::tool_router_change();
