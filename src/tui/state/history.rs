@@ -4,9 +4,8 @@ use crate::relay::{RelayRequest, RelayResponse, RelayStreamEvent, SendOutcome, S
 use crate::runtime::error::RuntimeError;
 
 use super::{
-    AppState, ChatHistoryDirection, ChatHistoryEntry, PendingPermissionEntry,
-    PendingPermissionOption, SEEN_STREAM_IDS_MAXIMUM, map_relay_error, merge_tui_targets,
-    sender_bound_bundle,
+    AppState, ChatHistoryDirection, ChatHistoryEntry, PendingChoiceEntry, PendingChoiceOption,
+    SEEN_STREAM_IDS_MAXIMUM, map_relay_error, merge_tui_targets, sender_bound_bundle,
 };
 
 impl AppState {
@@ -318,10 +317,10 @@ impl AppState {
                         self.pending_deliveries_count()
                     ));
                 }
-                "permission.snapshot" => {
+                "choices.snapshot" => {
                     let pending_ids = event
                         .payload
-                        .get("permission_request_ids")
+                        .get("choice_request_ids")
                         .and_then(serde_json::Value::as_array)
                         .map(|values| {
                             values
@@ -331,27 +330,27 @@ impl AppState {
                                 .collect::<Vec<_>>()
                         })
                         .unwrap_or_default();
-                    self.apply_permission_snapshot(pending_ids);
+                    self.apply_choices_snapshot(pending_ids);
                     self.push_event(format!(
-                        "permission snapshot pending_count={}",
-                        self.pending_permissions.len()
+                        "choice snapshot pending_count={}",
+                        self.pending_choices.len()
                     ));
                 }
-                "permission.requested" => {
-                    let Some(permission_request_id) = event
+                "choices.requested" => {
+                    let Some(choice_request_id) = event
                         .payload
-                        .get("permission_request_id")
+                        .get("choice_request_id")
                         .and_then(serde_json::Value::as_str)
                         .map(ToString::to_string)
                     else {
                         self.push_event(
-                            "permission requested event missing permission_request_id".to_string(),
+                            "choice requested event missing choice_request_id".to_string(),
                         );
                         continue;
                     };
 
-                    let entry = PendingPermissionEntry {
-                        permission_request_id: permission_request_id.clone(),
+                    let entry = PendingChoiceEntry {
+                        choice_request_id: choice_request_id.clone(),
                         message_id: event
                             .payload
                             .get("message_id")
@@ -368,17 +367,17 @@ impl AppState {
                             .and_then(serde_json::Value::as_str)
                             .map(ToString::to_string),
                         requested_details: event.payload.get("requested_details").cloned(),
-                        options: parse_permission_options(&event.payload),
+                        options: parse_choice_options(&event.payload),
                         enqueued_at: event
                             .payload
                             .get("enqueued_at")
                             .and_then(serde_json::Value::as_str)
                             .map(ToString::to_string),
                     };
-                    let existed = self.upsert_pending_permission(entry);
+                    let existed = self.upsert_pending_choice(entry);
                     self.push_event(format!(
-                        "permission requested id={} target={} kind={} pending={}",
-                        permission_request_id,
+                        "choice requested id={} target={} kind={} pending={}",
+                        choice_request_id,
                         event
                             .payload
                             .get("target_session")
@@ -389,35 +388,29 @@ impl AppState {
                             .get("requested_kind")
                             .and_then(serde_json::Value::as_str)
                             .unwrap_or("-"),
-                        self.pending_permissions.len()
+                        self.pending_choices.len()
                     ));
                     if existed {
                         self.push_status(
                             None,
-                            format!(
-                                "permission request replayed id={} (deduped)",
-                                permission_request_id
-                            ),
+                            format!("choice request replayed id={} (deduped)", choice_request_id),
                         );
                     } else {
-                        self.push_status(
-                            None,
-                            format!("permission requested id={permission_request_id}"),
-                        );
+                        self.push_status(None, format!("choice requested id={choice_request_id}"));
                     }
                 }
-                "permission.resolved" => {
-                    let Some(permission_request_id) = event
+                "choices.resolved" => {
+                    let Some(choice_request_id) = event
                         .payload
-                        .get("permission_request_id")
+                        .get("choice_request_id")
                         .and_then(serde_json::Value::as_str)
                     else {
                         self.push_event(
-                            "permission resolved event missing permission_request_id".to_string(),
+                            "choice resolved event missing choice_request_id".to_string(),
                         );
                         continue;
                     };
-                    let removed = self.remove_pending_permission(permission_request_id);
+                    let removed = self.remove_pending_choice(choice_request_id);
                     let outcome = event
                         .payload
                         .get("outcome")
@@ -429,18 +422,18 @@ impl AppState {
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or("-");
                     self.push_event(format!(
-                        "permission resolved id={} outcome={} reason_code={} pending={}",
-                        permission_request_id,
+                        "choice resolved id={} outcome={} reason_code={} pending={}",
+                        choice_request_id,
                         outcome,
                         reason_code,
-                        self.pending_permissions.len()
+                        self.pending_choices.len()
                     ));
                     if removed {
                         self.push_status(
                             None,
                             format!(
-                                "permission resolved id={} outcome={}",
-                                permission_request_id, outcome
+                                "choice resolved id={} outcome={}",
+                                choice_request_id, outcome
                             ),
                         );
                     }
@@ -453,20 +446,20 @@ impl AppState {
         }
     }
 
-    fn apply_permission_snapshot(&mut self, permission_request_ids: Vec<String>) {
-        let mut pending = Vec::<PendingPermissionEntry>::new();
-        for permission_request_id in permission_request_ids {
+    fn apply_choices_snapshot(&mut self, choice_request_ids: Vec<String>) {
+        let mut pending = Vec::<PendingChoiceEntry>::new();
+        for choice_request_id in choice_request_ids {
             if let Some(existing) = self
-                .pending_permissions
+                .pending_choices
                 .iter()
-                .find(|entry| entry.permission_request_id == permission_request_id)
+                .find(|entry| entry.choice_request_id == choice_request_id)
                 .cloned()
             {
                 pending.push(existing);
                 continue;
             }
-            pending.push(PendingPermissionEntry {
-                permission_request_id,
+            pending.push(PendingChoiceEntry {
+                choice_request_id,
                 message_id: None,
                 target_session: None,
                 requested_kind: None,
@@ -482,46 +475,46 @@ impl AppState {
                 (None, Some(_)) => std::cmp::Ordering::Greater,
                 (None, None) => std::cmp::Ordering::Equal,
             }
-            .then(left.permission_request_id.cmp(&right.permission_request_id))
+            .then(left.choice_request_id.cmp(&right.choice_request_id))
         });
-        self.pending_permissions = pending;
-        self.ensure_pending_permission_selection();
+        self.pending_choices = pending;
+        self.ensure_pending_choice_selection();
     }
 
-    fn upsert_pending_permission(&mut self, entry: PendingPermissionEntry) -> bool {
+    fn upsert_pending_choice(&mut self, entry: PendingChoiceEntry) -> bool {
         let existing_index = self
-            .pending_permissions
+            .pending_choices
             .iter()
-            .position(|value| value.permission_request_id == entry.permission_request_id);
+            .position(|value| value.choice_request_id == entry.choice_request_id);
         let existed = existing_index.is_some();
         if let Some(index) = existing_index {
-            self.pending_permissions[index] = entry;
+            self.pending_choices[index] = entry;
         } else {
-            self.pending_permissions.push(entry);
+            self.pending_choices.push(entry);
         }
-        self.pending_permissions.sort_by(|left, right| {
+        self.pending_choices.sort_by(|left, right| {
             match (&left.enqueued_at, &right.enqueued_at) {
                 (Some(left_time), Some(right_time)) => left_time.cmp(right_time),
                 (Some(_), None) => std::cmp::Ordering::Less,
                 (None, Some(_)) => std::cmp::Ordering::Greater,
                 (None, None) => std::cmp::Ordering::Equal,
             }
-            .then(left.permission_request_id.cmp(&right.permission_request_id))
+            .then(left.choice_request_id.cmp(&right.choice_request_id))
         });
-        self.ensure_pending_permission_selection();
+        self.ensure_pending_choice_selection();
         existed
     }
 
-    fn remove_pending_permission(&mut self, permission_request_id: &str) -> bool {
+    fn remove_pending_choice(&mut self, choice_request_id: &str) -> bool {
         let Some(index) = self
-            .pending_permissions
+            .pending_choices
             .iter()
-            .position(|entry| entry.permission_request_id == permission_request_id)
+            .position(|entry| entry.choice_request_id == choice_request_id)
         else {
             return false;
         };
-        self.pending_permissions.remove(index);
-        self.ensure_pending_permission_selection();
+        self.pending_choices.remove(index);
+        self.ensure_pending_choice_selection();
         true
     }
 }
@@ -547,7 +540,7 @@ fn map_stream_outcome<'a>(
     }
 }
 
-fn parse_permission_options(payload: &serde_json::Value) -> Vec<PendingPermissionOption> {
+fn parse_choice_options(payload: &serde_json::Value) -> Vec<PendingChoiceOption> {
     payload
         .get("requested_details")
         .and_then(|value| value.get("options"))
@@ -556,14 +549,14 @@ fn parse_permission_options(payload: &serde_json::Value) -> Vec<PendingPermissio
             options
                 .iter()
                 .filter_map(|option| {
-                    // Relay event payloads serialize PermissionOption (snake_case
+                    // Relay event payloads serialize ChoiceOption (snake_case
                     // Rust struct) into requested_details.options; raw upstream
                     // ACP camelCase lives separately under requested_details.raw.
                     let option_id = option
                         .get("option_id")
                         .and_then(serde_json::Value::as_str)?
                         .to_string();
-                    Some(PendingPermissionOption {
+                    Some(PendingChoiceOption {
                         option_id,
                         name: option
                             .get("name")

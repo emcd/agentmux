@@ -108,10 +108,10 @@ impl AppState {
         self.look_snapshot_lines.clear();
         self.look_snapshot_entries.clear();
         self.look_overlay_scroll = 0;
-        self.look_permission_request_index = 0;
-        self.look_permission_option_index = 0;
-        self.pending_permissions.clear();
-        self.pending_permissions_state.select(None);
+        self.look_choice_request_index = 0;
+        self.look_choice_option_index = 0;
+        self.pending_choices.clear();
+        self.pending_choices_state.select(None);
         self.chat_history.clear();
         self.event_history.clear();
         self.pending_delivery_ids = HashSet::new();

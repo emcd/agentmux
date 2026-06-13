@@ -14,7 +14,7 @@ a time; `F4` toggles between them. The active mode is shown in the footer.
   `Message`), pending-delivery indicator, send dispatch. Default startup mode.
 - **Interaction** — owns operator-driven session inspection: an interaction
   target header, the look snapshot, a Write input (relay `raww`), and
-  permission decisioning.
+  choice decisioning.
 
 Help (`F1`), recipient picker (`F2`), delivery events (`F3`), and bundle
 picker (`F5`) are overlays available in both modes.
@@ -42,9 +42,9 @@ picker (`F5`) are overlays available in both modes.
     - `interaction.rs` — interaction-mode entry, target set, raww draft
       editing + cursor, snapshot scrolling, interaction-region visibility,
       `overlay_snapshot_from_payload`, `render_transport_label`
-    - `permissions.rs` — look-permission selection/resolve,
-      `ensure_pending_permission_selection`, `selected_look_permission*`,
-      `look_pending_permissions`, `submit_permission_decision`
+    - `choices.rs` — look-choice selection/resolve,
+      `ensure_pending_choice_selection`, `selected_look_choice*`,
+      `look_pending_choices`, `submit_choice_decision`
     - `text_util.rs` — private `&str` cursor/line utilities shared across
       the compose submodules
 - `state/relay.rs`
@@ -60,14 +60,14 @@ picker (`F5`) are overlays available in both modes.
     - `communication.rs` — `render_communication_mode`, compose + chat
       history panes, peer resolution
     - `interaction.rs` — `render_interaction_mode`, target header, raww
-      pane, look snapshot, ACP entries, look permission lines
+      pane, look snapshot, ACP entries, look choice lines
     - `overlays/`
       - `mod.rs` — pure hub: submodule decls
       - `recipient_picker.rs` — recipient picker overlay, hint strip,
         per-row readiness styling
       - `bundle_picker.rs` — bundle picker overlay, status header line,
         severity styling
-      - `events.rs` — events overlay (pending permissions + delivery
+      - `events.rs` — events overlay (pending choices + delivery
         events)
       - `help.rs` — help overlay (two-column keybinding reference)
     - `cursor.rs` — active cursor, compose/raww cursor placement, position
@@ -121,13 +121,13 @@ picker (`F5`) are overlays available in both modes.
     context-sensitive — it reads `Insert into To` in Communication mode and
     `Open (look+raww)` in Interaction mode — alongside `Esc` Close and
     `Up/Down` Move.
-  - delivery + permission events,
+  - delivery + choice events,
   - bundle picker (F5): active bundle switching — browses
     `available_bundles` (sourced from `load_bundle_group_memberships` at TUI
     launch), highlights the active bundle, and on Enter replaces the active
     bundle context. The switch rebuilds the bundle-bound `RelayStreamSession`,
     resets bundle-scoped state (recipients, `last_selected_recipient`, bundle
-    status, look snapshot, pending permissions, chat history, delivery
+    status, look snapshot, pending choices, chat history, delivery
     bookkeeping, write draft), and triggers `refresh_recipients` on the new
     bundle. Selecting the active bundle is a no-op that closes the picker.
     Cross-bundle targeting for `Send` and `Look` is handled separately via the
@@ -166,8 +166,8 @@ picker (`F5`) are overlays available in both modes.
   marker so the state survives color stripping,
 - Interaction mode Write input dispatches raw writes to the active interaction
   target via relay `raww`,
-- Write/permission region replacement: when the interaction target has pending
-  permission requests and the Write input is empty, the permission
+- Write/choice region replacement: when the interaction target has pending
+  choice requests and the Write input is empty, the choice
   decisioning pane occupies the region; otherwise the Write input occupies it,
 - look snapshot rendering:
   - tmux targets: line snapshot rendering (`snapshot_lines`),
@@ -180,11 +180,11 @@ picker (`F5`) are overlays available in both modes.
 - stable rendering for validation/runtime error codes,
 - stream reconnect handling with explicit `relay_unavailable` (not reachable)
   and `relay_timeout` (reachable but unresponsive/saturated) status,
-- permission lifecycle handling:
+- choice lifecycle handling:
   - pending queue visibility from relay stream events,
-  - replay-safe dedupe keyed by `permission_request_id`,
+  - replay-safe dedupe keyed by `choice_request_id`,
   - session-scoped Interaction-mode resolution using ACP-native
-    `permission.resolve` (`selected` with explicit `option_id` or `cancelled`),
+    `choices.pick` (`selected` with explicit `option_id` or `cancelled`),
 - startup relay auto-spawn fallback when relay socket is unavailable, using the
   same resolved configuration/state/inscriptions roots as the active TUI
   launch.

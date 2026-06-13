@@ -18,7 +18,7 @@ pub(super) fn render_interaction_mode(frame: &mut Frame, area: Rect, state: &mut
     let region_height = if raww_visible {
         INTERACTION_RAWW_PANE_HEIGHT
     } else {
-        interaction_permission_pane_height(area.height)
+        interaction_choice_pane_height(area.height)
     };
     let region_height = region_height.min(area.height.saturating_sub(2).max(1));
 
@@ -36,7 +36,7 @@ pub(super) fn render_interaction_mode(frame: &mut Frame, area: Rect, state: &mut
     if raww_visible {
         render_interaction_raww_pane(frame, rows[2], state);
     } else {
-        render_look_permission_section(frame, rows[2], state);
+        render_look_choice_section(frame, rows[2], state);
     }
 }
 
@@ -137,15 +137,14 @@ fn render_look_snapshot(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_widget(paragraph, area);
 }
 
-fn render_look_permission_section(frame: &mut Frame, area: Rect, state: &AppState) {
+fn render_look_choice_section(frame: &mut Frame, area: Rect, state: &AppState) {
     let inner_width = area.width.saturating_sub(2);
-    let lines = render_look_permission_lines(state, inner_width);
-    let paragraph =
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .block(Block::default().borders(Borders::ALL).title(
-            "  Session Permissions (Left/Right request, Up/Down option, Enter select, c cancel)  ",
-        ));
+    let lines = render_look_choice_lines(state, inner_width);
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+        Block::default().borders(Borders::ALL).title(
+            "  Session Choices (Left/Right request, Up/Down option, Enter select, c cancel)  ",
+        ),
+    );
     frame.render_widget(paragraph, area);
 }
 
@@ -228,29 +227,29 @@ fn push_labeled_lines(
     rendered.push(Line::raw(""));
 }
 
-fn render_look_permission_lines(state: &AppState, width: u16) -> Vec<Line<'static>> {
-    let pending = state.look_pending_permissions();
+fn render_look_choice_lines(state: &AppState, width: u16) -> Vec<Line<'static>> {
+    let pending = state.look_pending_choices();
     if pending.is_empty() {
         return vec![
-            Line::from("(no pending permission requests for this session)"),
+            Line::from("(no pending choice requests for this session)"),
             Line::from("Press F2 to choose another session, or F4 for Communication."),
         ];
     }
 
     let request_index = state
-        .look_permission_request_index
+        .look_choice_request_index
         .min(pending.len().saturating_sub(1));
     let request = pending[request_index];
     let options = request.options.as_slice();
     let option_index = state
-        .look_permission_option_index
+        .look_choice_option_index
         .min(options.len().saturating_sub(1));
     let mut lines = vec![Line::from(Span::styled(
         format!(
             "Request {}/{}: {}",
             request_index + 1,
             pending.len(),
-            request.permission_request_id
+            request.choice_request_id
         ),
         Style::default().add_modifier(Modifier::BOLD),
     ))];
@@ -287,6 +286,6 @@ fn render_look_permission_lines(state: &AppState, width: u16) -> Vec<Line<'stati
     lines
 }
 
-fn interaction_permission_pane_height(available_height: u16) -> u16 {
+fn interaction_choice_pane_height(available_height: u16) -> u16 {
     12u16.min(available_height.saturating_sub(3).max(1))
 }

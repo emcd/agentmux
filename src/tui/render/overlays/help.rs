@@ -57,7 +57,7 @@ pub(in crate::tui::render) fn render_help_overlay(frame: &mut Frame, _state: &Ap
         Line::from("  Enter: Dispatch write to active target"),
         Line::from("  Ctrl+J: Insert newline"),
         Line::from("  Backspace: Backspace write input"),
-        Line::from("Permission (write empty and pending exists):"),
+        Line::from("Choose (write empty and pending exists):"),
         Line::from("  Left/Right: Previous/next request"),
         Line::from("  Up/Down: Previous/next ACP option"),
         Line::from("  Enter: Resolve selected option"),
