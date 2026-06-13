@@ -70,16 +70,16 @@
 
 ## 3. MCP surface
 
-- [ ] 3.1 Retire `src/mcp/server/handlers/grant.rs`. Add a new `decisions`
+- [x] 3.1 Retire `src/mcp/server/handlers/grant.rs`. Add a new `decisions`
       command to the `list` meta-tool handler (maps to `ChoicesList` relay
       request); add a standalone `choose` tool handler (maps to `ChoicesPick`
       relay request). The registered tool names are `list` (existing) and
       `choose` (new).
-- [ ] 3.2 Gate `list decisions` and `choose` on `choose` policy capability
+- [x] 3.2 Gate `list decisions` and `choose` on `choose` policy capability
       (same authz as current `grant`). `gives_choices` on the caller's
       transport is not required — any session with sufficient `choose` scope
       may resolve choices.
-- [ ] 3.3 Update MCP passthrough error codes to the renamed set from task 1.3.
+- [x] 3.3 Update MCP passthrough error codes to the renamed set from task 1.3.
 
 ## 4. CLI surface
 
@@ -89,7 +89,7 @@ appropriate here. No work in this task group.
 
 ## 5. TUI surface
 
-- [ ] 5.1 Rename all `permission` / `grant` references in `src/tui/`. Key
+- [x] 5.1 Rename all `permission` / `grant` references in `src/tui/`. Key
       symbols to rename:
       - State structs: `PendingPermissionEntry` → `PendingChoiceEntry`,
         `PendingPermissionOption` → `PendingChoiceOption`
@@ -141,16 +141,16 @@ appropriate here. No work in this task group.
       - File rename: `src/tui/state/compose/permissions.rs` →
         `src/tui/state/compose/choices.rs`; update `mod.rs` declaration and
         all `use` paths accordingly.
-- [ ] 5.2 Update documentation in the same batch:
+- [x] 5.2 Update documentation in the same batch:
       - `src/tui/README.md` — module map (references `permissions.rs` and its
         functions), behavior section, `permission.resolve` reference (:187)
       - `documentation/usage/tui.md` (:34, :69–77, :129, :166–171)
 
 ## 6. Tests and proof of absence
 
-- [ ] 6.1 Update all unit and integration tests that reference renamed wire
+- [x] 6.1 Update all unit and integration tests that reference renamed wire
       names, error codes, policy field names, or MCP tool names.
-- [ ] 6.2 Proof of absence — before reporting done, run:
+- [x] 6.2 Proof of absence — before reporting done, run:
       ```
       rg -i grant src/ data/ --type rust
       rg -i grant data/ --glob "*.toml"
@@ -164,12 +164,12 @@ appropriate here. No work in this task group.
 
 ## 7. Coordination
 
-- [ ] 7.1 After landing, amend `decouple-transport-layer/tasks.md` to note
+- [x] 7.1 After landing, amend `decouple-transport-layer/tasks.md` to note
       that `can_give_choices()` exists as a derived method on `SessionType` and
       should be incorporated as a first-class method on each `TransportImpl`
       variant, paralleling the handling of `can_be_looked`, `can_be_written`,
       and `can_stream_output`.
-- [ ] 7.2 No cross-proposal sequencing concern: `bundle_name` was removed by
+- [x] 7.2 No cross-proposal sequencing concern: `bundle_name` was removed by
       `retire-bundle-name-from-request-params` and `ui_session_id` is removed by
       task 1.1 above. `ChoicesPick` carries no reserved params after this proposal
       lands.

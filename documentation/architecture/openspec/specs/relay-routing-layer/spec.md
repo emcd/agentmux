@@ -142,7 +142,7 @@ authorized. Handler bodies SHALL NOT:
 - Evaluate requester policy controls or classify target scope tiers.
 
 Handler bodies MAY load the target bundles' configuration to validate target
-existence and to assemble delivery (member transport, permission deciders,
+existence and to assemble delivery (member transport, choice deciders,
 runtime directory) — this is delivery work, distinct from routing and
 authorization. They SHALL implement only operation-specific work: existence
 validation, snapshot capture, delivery enqueueing, raw text injection, session

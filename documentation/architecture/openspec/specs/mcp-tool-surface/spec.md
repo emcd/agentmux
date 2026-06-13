@@ -12,7 +12,7 @@ The system SHALL expose the following MCP tools for relay MVP:
 - `look`
 - `send`
 - `raww`
-- `grant`
+- `choose`
 
 The relocked pre-stable MCP surface uses `list.principals` with no
 compatibility alias for the prior `list.sessions` shape.
@@ -25,8 +25,9 @@ compatibility alias for the prior `list.sessions` shape.
 - **AND** includes `look`
 - **AND** includes `send`
 - **AND** includes `raww`
-- **AND** includes `grant`
+- **AND** includes `choose`
 - **AND** does not include `list.sessions`
+- **AND** does not include `grant`
 
 ### Requirement: MCP Help Tool
 
@@ -38,14 +39,12 @@ tool/command discovery metadata and JSON argument schemas.
 - no query (or `query="agentmux"`) returns namespace-level tool inventory
 - `query="list"` returns list meta-tool command catalog
 - `query="list.principals"` returns exact `list` command argument schema and
-  invoke shape
+  invoke shape for listing principals
+- `query="list.decisions"` returns exact `list` command argument schema and
+  invoke shape for listing pending decisions
 - `query="send"` or `query="look"` or `query="raww"` returns exact tool
   argument schemas and invoke shapes
-- `query="grant"` returns grant meta-tool command catalog
-- `query="grant.list"` returns exact `grant` command argument
-  schema and invoke shape for listing pending requests
-- `query="grant.resolve"` returns exact `grant` command argument
-  schema and invoke shape for submitting decisions
+- `query="choose"` returns the `choose` tool argument schema and invoke shape
 
 Unknown help queries SHALL fail fast with `validation_invalid_params`.
 
@@ -53,13 +52,14 @@ Unknown help queries SHALL fail fast with `validation_invalid_params`.
 
 - **WHEN** an MCP client calls `help` without `query`
 - **THEN** the response includes namespace-level tool inventory
-- **AND** includes `list`, `help`, `look`, `send`, `raww`, and `grant`
+- **AND** includes `list`, `help`, `look`, `send`, `raww`, and `choose`
 
 #### Scenario: Return list meta-tool command catalog
 
 - **WHEN** an MCP client calls `help` with `query="list"`
 - **THEN** the response lists supported `list` commands
 - **AND** includes `list.principals`
+- **AND** includes `list.decisions`
 
 #### Scenario: Return list.principals argument schema
 
@@ -68,19 +68,18 @@ Unknown help queries SHALL fail fast with `validation_invalid_params`.
 - **AND** includes canonical invoke shape with top-level tool `list`
 - **AND** includes `command="principals"`
 
-#### Scenario: Return grant meta-tool command catalog
+#### Scenario: Return list.decisions argument schema
 
-- **WHEN** an MCP client calls `help` with `query="grant"`
-- **THEN** the response lists supported `grant` commands
-- **AND** includes `grant.list`
-- **AND** includes `grant.resolve`
-
-#### Scenario: Return grant.list argument schema
-
-- **WHEN** an MCP client calls `help` with `query="grant.list"`
+- **WHEN** an MCP client calls `help` with `query="list.decisions"`
 - **THEN** the response includes JSON schema for command-scoped `args`
-- **AND** includes canonical invoke shape with top-level tool `grant`
-- **AND** includes `command="list"`
+- **AND** includes canonical invoke shape with top-level tool `list`
+- **AND** includes `command="decisions"`
+
+#### Scenario: Return choose tool argument schema
+
+- **WHEN** an MCP client calls `help` with `query="choose"`
+- **THEN** the response includes JSON argument schema for the `choose` tool
+- **AND** includes canonical invoke shape
 
 ### Requirement: Manual Bundle Configuration for MVP
 
@@ -623,38 +622,14 @@ For ACP accepted responses, MCP SHALL preserve
   `details.delivery_phase = "accepted_in_progress"`
 - **THEN** MCP returns same `details.delivery_phase` unchanged
 
-### Requirement: Advertise MCP grant meta-tool
+### Requirement: MCP list decisions request contract
 
-MCP tool inventory SHALL advertise top-level tool `grant` for ACP
-permission queue visibility and operator decisioning.
+MCP `list` with `command="decisions"` SHALL return pending ACP choice requests
+for the associated bundle.
 
-`grant` SHALL accept a `command` selector with supported values
-`list` and `resolve`. Unknown `command` values SHALL be rejected with
-`validation_invalid_params`.
-
-#### Scenario: Include grant in tool inventory
-
-- **WHEN** MCP client requests tool catalog
-- **THEN** catalog includes `grant`
-
-#### Scenario: Reject grant with unknown command selector
-
-- **WHEN** MCP client calls `grant` with `command` not in
-  `{list, resolve}`
-- **THEN** MCP rejects with `validation_invalid_params`
-
-### Requirement: MCP grant list request contract
-
-MCP `grant` with `command="list"` SHALL return pending ACP permission
-requests for the associated bundle.
-
-Request argument schema:
-
-- No `bundle_name` field is accepted. Bundle scope is derived from the
-  associated connection context.
-
-No additional positional arguments are accepted; unknown fields SHALL be
-rejected with `validation_invalid_params`.
+No `bundle_name` field is accepted; bundle scope is derived from the associated
+connection context. No additional positional arguments are accepted; unknown
+fields SHALL be rejected with `validation_invalid_params`.
 
 Successful response SHALL include:
 
@@ -664,39 +639,44 @@ Successful response SHALL include:
 Each entry in `pending_requests[]` SHALL include:
 
 - `message_id`
-- `permission_request_id`
+- `choice_request_id`
 - `target_session`
 - `requested_kind`
 - `requested_details` (including ACP option metadata)
 - `enqueued_at`
 
-These fields mirror the `permission.requested` relay event payload.
+These fields mirror the `choices.requested` relay event payload.
 
-#### Scenario: List pending permission requests for associated bundle
+#### Scenario: List pending choice requests for associated bundle
 
-- **WHEN** caller invokes `grant` with `command="list"`
+- **WHEN** caller invokes `list` with `command="decisions"`
 - **AND** the MCP stream principal has `client_class=operator` (or `ui`) and
-  `grant` capability
+  `choose` capability
 - **THEN** MCP returns `pending_requests[]` ordered by `sequence`
 - **AND** each entry contains the required field set
 
-### Requirement: MCP grant resolve request contract
+#### Scenario: Reject decisions list from principal without choose capability
 
-MCP `grant` with `command="resolve"` SHALL submit an ACP-native decision
-on a pending permission request.
+- **WHEN** caller invokes `list` with `command="decisions"`
+- **AND** the MCP stream principal lacks `choose` capability
+- **THEN** MCP returns `authorization_forbidden`
+- **AND** denial details include `capability = "choose"`
+
+### Requirement: MCP choose request contract
+
+MCP `choose` SHALL submit an ACP-native decision on a pending choice request.
 
 Request argument schema:
 
-- `permission_request_id` (required, non-empty string)
+- `choice_request_id` (required, non-empty string)
 - `outcome` (required, value `selected` or `cancelled`)
 - `option_id` (required when `outcome="selected"`, forbidden when
   `outcome="cancelled"`)
 
-No `bundle_name` field is accepted. Bundle scope is derived from the
-associated connection context.
+No `bundle_name` field is accepted. Bundle scope is derived from the associated
+connection context.
 
-The following MCP `grant resolve` payload fields SHALL be rejected with
-`validation_invalid_params`:
+The following payload fields SHALL be rejected with `validation_invalid_params`:
 
 - `decided_by`
 - `ui_session_id`
@@ -709,90 +689,90 @@ Successful response SHALL preserve relay decision payload contract including:
 
 - `schema_version`
 - `status`
-- `permission_request_id`
+- `choice_request_id`
 - `outcome`
 - `decided_by` (relay-derived, association-bound)
 - optional `reason_code`, `reason`
 
-#### Scenario: Resolve permission with explicit option id
+#### Scenario: Choose with explicit option id
 
-- **WHEN** caller invokes `grant resolve` with
-  `outcome="selected"` and explicit `option_id`
+- **WHEN** caller invokes `choose` with `outcome="selected"` and explicit
+  `option_id`
 - **AND** the MCP stream principal has `client_class=operator` (or `ui`) and
-  `grant` capability
+  `choose` capability
 - **THEN** MCP forwards the decision to relay using the supplied `option_id`
 - **AND** returns the relay decision response unchanged
 
-#### Scenario: Cancel pending permission request
+#### Scenario: Cancel a pending choice request
 
-- **WHEN** caller invokes `grant resolve` with `outcome="cancelled"`
-  and no `option_id`
+- **WHEN** caller invokes `choose` with `outcome="cancelled"` and no `option_id`
 - **THEN** MCP forwards the decision to relay
 - **AND** returns the relay decision response with cancelled outcome
 
 #### Scenario: Reject selected without option_id
 
-- **WHEN** caller invokes `grant resolve` with `outcome="selected"` and
-  missing `option_id`
+- **WHEN** caller invokes `choose` with `outcome="selected"` and missing
+  `option_id`
 - **THEN** MCP rejects with `validation_invalid_params`
 
 #### Scenario: Reject cancelled with option_id
 
-- **WHEN** caller invokes `grant resolve` with `outcome="cancelled"` and
-  any `option_id` value
+- **WHEN** caller invokes `choose` with `outcome="cancelled"` and any
+  `option_id` value
 - **THEN** MCP rejects with `validation_invalid_params`
 
 #### Scenario: Reject payload-supplied sender identity field
 
-- **WHEN** caller invokes `grant resolve` with payload containing
-  `decided_by`, `ui_session_id`, or `operator_session_id`
+- **WHEN** caller invokes `choose` with payload containing `decided_by`,
+  `ui_session_id`, or `operator_session_id`
 - **THEN** MCP rejects with `validation_invalid_params`
 
-### Requirement: MCP grant sender authority
+### Requirement: MCP choose sender authority
 
-MCP permission decision sender identity SHALL be association-derived from the
-MCP server stream registration context and SHALL NOT be caller-overridable.
+MCP choice decision sender identity SHALL be association-derived from the MCP
+server stream registration context and SHALL NOT be caller-overridable.
 
 `decided_by` in the relay decision response is relay-derived from the
 associated principal session id; MCP SHALL pass this field through unchanged
 and SHALL NOT mint or transform actor identity.
 
-#### Scenario: Use association-derived sender for permission decisions
+#### Scenario: Use association-derived sender for choice decisions
 
-- **WHEN** caller invokes MCP `grant resolve`
+- **WHEN** caller invokes MCP `choose`
 - **THEN** MCP resolves sender principal from associated session context
 - **AND** uses that principal for relay authorization/evaluation
 - **AND** echoes relay `decided_by` unchanged in the response
 
-### Requirement: MCP grant relay passthrough taxonomy
+### Requirement: MCP choose relay passthrough taxonomy
 
-MCP `grant` SHALL preserve canonical relay codes and payload semantics
-for validation, authorization, and runtime failures, including:
+MCP `list decisions` and `choose` SHALL preserve canonical relay codes and
+payload semantics for validation, authorization, and runtime failures,
+including:
 
 - `validation_invalid_params`
 - `authorization_forbidden`
-- `runtime_permission_request_already_resolved`
-- `runtime_permission_queue_full`
-- `runtime_permission_queue_unavailable`
+- `runtime_choices_request_already_resolved`
+- `runtime_choices_queue_full`
+- `runtime_choices_queue_unavailable`
 
-For denied `grant resolve` requests, denial details SHALL preserve
-`capability = "grant"`.
+For denied `choose` requests, denial details SHALL preserve
+`capability = "choose"`.
 
-#### Scenario: Preserve permission denial capability label
+#### Scenario: Preserve choice denial capability label
 
-- **WHEN** relay denies `grant resolve` by policy
+- **WHEN** relay denies `choose` by policy
 - **THEN** MCP returns `authorization_forbidden`
-- **AND** denial details include `capability = "grant"`
+- **AND** denial details include `capability = "choose"`
 
 #### Scenario: Preserve already-resolved code
 
-- **WHEN** relay rejects a `grant resolve` because the target request was
-  already resolved
-- **THEN** MCP returns `runtime_permission_request_already_resolved` unchanged
+- **WHEN** relay rejects `choose` because the target request was already
+  resolved
+- **THEN** MCP returns `runtime_choices_request_already_resolved` unchanged
 
 #### Scenario: Preserve queue-unavailable code
 
-- **WHEN** relay rejects a `grant` request because the persisted queue
-  state is unavailable
-- **THEN** MCP returns `runtime_permission_queue_unavailable` unchanged
+- **WHEN** relay rejects a `list decisions` or `choose` request because the
+  persisted queue state is unavailable
+- **THEN** MCP returns `runtime_choices_queue_unavailable` unchanged
 

@@ -15,6 +15,11 @@
       `TransportImpl` variant rather than re-deriving from `SessionType`; the
       `Pty` variant activates the forward-declared Pty capability row
       (true/true/true).
+
+      Note (from `rename-grant-to-choose`, landed): `can_give_choices() -> bool`
+      also exists on `SessionType` (returns `true` only for `Acp`; `Tmux`,
+      `Ui`, and `Pubsub` return `false`). Incorporate it as a first-class
+      method on each `TransportImpl` variant alongside the three flags above.
 - [ ] 1.4 Define supporting types: `StartupContext`, `DeliveryEnvelope`,
       `DeliveryContext`, `DeliveryResult`, `SingleDeliveryOutcome`,
       `TransportEvent`, `TransportStatus`, `TransportReadiness`,

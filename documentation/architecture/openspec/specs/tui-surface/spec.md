@@ -359,10 +359,10 @@ indicator in status presentation where shown.
 
 ### Requirement: TUI Pending Permission Visibility
 
-TUI SHALL expose pending ACP permission requests received from canonical relay
+TUI SHALL expose pending ACP choice requests received from canonical relay
 lifecycle events.
 
-Pending list entries SHALL be keyed by `permission_request_id` and include
+Pending list entries SHALL be keyed by `choice_request_id` and include
 request context sufficient for operator decisioning, including:
 
 - `message_id`
@@ -370,33 +370,32 @@ request context sufficient for operator decisioning, including:
 - `requested_kind`
 - `requested_details`
 - `enqueued_at`
-- ACP permission `options` for explicit operator selection
+- ACP choice `options` for explicit operator selection
 
-#### Scenario: Render pending request from relay permission event
+#### Scenario: Render pending request from relay choices event
 
-- **WHEN** relay emits `permission.requested`
-- **THEN** TUI adds or updates a pending row keyed by `permission_request_id`
+- **WHEN** relay emits `choices.requested`
+- **THEN** TUI adds or updates a pending row keyed by `choice_request_id`
 
 ### Requirement: Snapshot and Replay Dedupe Contract
 
-On connect/reconnect, TUI SHALL consume `permission.snapshot` plus replayed
-`permission.requested` events using dedupe by `permission_request_id` so
+On connect/reconnect, TUI SHALL consume `choices.snapshot` plus replayed
+`choices.requested` events using dedupe by `choice_request_id` so
 at-least-once replay does not create duplicate pending rows.
 
 #### Scenario: Avoid duplicate pending rows after snapshot replay
 
-- **WHEN** TUI receives `permission.snapshot`
-- **AND** relay replays matching `permission.requested` events
-- **THEN** TUI keeps one pending row per `permission_request_id`
+- **WHEN** TUI receives `choices.snapshot`
+- **AND** relay replays matching `choices.requested` events
+- **THEN** TUI keeps one pending row per `choice_request_id`
 
 ### Requirement: TUI Permission Decision Actions
 
-TUI SHALL expose deterministic decision actions keyed by
-`permission_request_id`.
+TUI SHALL expose deterministic decision actions keyed by `choice_request_id`.
 
 Action payload contract:
 
-- `permission.resolve { permission_request_id, outcome, option_id? }`
+- `choices.pick { choice_request_id, outcome, option_id? }`
 - allowed outcomes are `selected` and `cancelled`
 - `selected` requires `option_id`
 - `cancelled` must omit `option_id`
@@ -405,19 +404,19 @@ TUI SHALL NOT send caller-supplied actor identity fields in action payload.
 
 #### Scenario: Submit selected action without actor spoof fields
 
-- **WHEN** operator chooses a permission option from pending request
-- **THEN** TUI submits `permission.resolve` with
-  `permission_request_id`, `outcome=selected`, and explicit `option_id`
+- **WHEN** operator chooses a choice option from pending request
+- **THEN** TUI submits `choices.pick` with
+  `choice_request_id`, `outcome=selected`, and explicit `option_id`
 
 #### Scenario: Submit cancelled action without option id
 
-- **WHEN** operator cancels a pending permission request
-- **THEN** TUI submits `permission.resolve` with
-  `permission_request_id` and `outcome=cancelled`
+- **WHEN** operator cancels a pending choice request
+- **THEN** TUI submits `choices.pick` with
+  `choice_request_id` and `outcome=cancelled`
 
 ### Requirement: Session-Scoped Permission Workflow
 
-TUI SHALL provide a session-scoped permission workflow in `Interaction` mode
+TUI SHALL provide a session-scoped choice workflow in `Interaction` mode
 for the active interaction target session.
 
 Workflow contract:
@@ -430,14 +429,14 @@ Workflow contract:
 #### Scenario: Show session-scoped pending requests in Interaction mode
 
 - **WHEN** operator is in `Interaction` mode with active target session `acp`
-- **AND** pending permissions exist for sessions `acp` and `relay`
-- **THEN** Interaction-mode permission actions render only pending requests
+- **AND** pending choices exist for sessions `acp` and `relay`
+- **THEN** Interaction-mode choice actions render only pending requests
   for `acp`
 
 ### Requirement: Permission Terminal State Updates
 
-TUI SHALL apply terminal updates from `permission.resolved` and remove pending
-entries deterministically by `permission_request_id`.
+TUI SHALL apply terminal updates from `choices.resolved` and remove pending
+entries deterministically by `choice_request_id`.
 
 TUI-facing terminal vocabulary SHOULD align to:
 
@@ -446,7 +445,7 @@ TUI-facing terminal vocabulary SHOULD align to:
 
 #### Scenario: Remove pending item on resolved event
 
-- **WHEN** relay emits `permission.resolved` for pending request
+- **WHEN** relay emits `choices.resolved` for pending request
 - **THEN** TUI marks terminal status and clears pending row for that id
 
 ### Requirement: TUI Session Type Validation
@@ -477,7 +476,7 @@ The TUI SHALL define two top-level screen modes as peers:
 
 - `Communication` — owns send/receive workflows (chat history and compose).
 - `Interaction` — owns session-inspection workflows (look snapshot, raww
-  dispatch input, and permission decisioning).
+  dispatch input, and choice decisioning).
 
 Exactly one mode SHALL be active at any time.
 
@@ -507,7 +506,7 @@ Per-mode state SHALL be preserved across switches:
 - `Communication` retains compose draft text, focus field, and chat history
   scroll position
 - `Interaction` retains active interaction target, look snapshot scroll
-  position, raww input draft, and permission-row selection cursor
+  position, raww input draft, and choice-row selection cursor
 
 #### Scenario: F4 toggles between modes
 
@@ -545,7 +544,7 @@ delivery state vocabulary semantics in that mode.
 ### Requirement: Interaction Mode Surface
 
 `Interaction` mode SHALL render an active-target header, a look snapshot
-pane, and a raww-or-permission region.
+pane, and a raww-or-choice region.
 
 `Interaction` mode SHALL maintain an active interaction target session.
 When no interaction target is selected, the mode SHALL render an empty-target
@@ -603,33 +602,30 @@ directly from the picker.
 
 ### Requirement: Interaction Mode Permission/Raww Pane Replacement
 
-The raww input pane and the permission decisioning pane SHALL share the same
+The raww input pane and the choice decisioning pane SHALL share the same
 screen region in `Interaction` mode.
 
 Region occupancy rules:
 
-- when the active interaction target has at least one pending permission
-  request AND the raww input is empty, the permission decisioning pane
-  occupies the region
+- when the active interaction target has at least one pending choice request
+  AND the raww input is empty, the choice decisioning pane occupies the region
 - otherwise the raww input pane occupies the region
 
-#### Scenario: Permission pane replaces empty raww input on pending request
+#### Scenario: Choice pane replaces empty raww input on pending request
 
-- **WHEN** `Interaction` active target has at least one pending permission
-  request
+- **WHEN** `Interaction` active target has at least one pending choice request
 - **AND** raww input draft is empty
-- **THEN** the permission decisioning pane occupies the raww region
+- **THEN** the choice decisioning pane occupies the raww region
 
 #### Scenario: Raww keeps region while operator composes
 
-- **WHEN** `Interaction` active target has at least one pending permission
-  request
+- **WHEN** `Interaction` active target has at least one pending choice request
 - **AND** raww input draft is non-empty
 - **THEN** the raww input pane occupies the region
 
 #### Scenario: Raww keeps region with no pending requests
 
-- **WHEN** `Interaction` active target has no pending permission requests
+- **WHEN** `Interaction` active target has no pending choice requests
 - **THEN** the raww input pane occupies the region
 
 ### Requirement: Overlay Availability Across Modes
