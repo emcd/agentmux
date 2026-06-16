@@ -815,7 +815,6 @@ mod coalesce_batch_tests {
             quiescence: QuiescenceOptions {
                 quiet_window: Duration::from_millis(1),
                 quiescence_timeout: Some(Duration::from_millis(1)),
-                acp_turn_timeout_override: None,
             },
             batch_settings: PromptBatchSettings::default(),
             runtime_directory: PathBuf::from("/tmp/relay-test"),

@@ -33,15 +33,9 @@ use super::super::{AsyncDeliveryTask, SendOutcome, SendResult};
 //   activity for the active prompt; child likely exited cleanly.
 // - `acp_child_unavailable`: ACP child stdin write failed (broken pipe, child
 //   crashed, transport-level fault). Worker is transitioned to `Unavailable`.
-// - `acp_turn_timeout`: relay-imposed pre-first-activity timeout elapsed.
 // - `acp_stop_cancelled`: prompt completed with `stopReason=cancelled`.
 // - `validation_missing_acp_capability`: agent did not advertise required
 //   capability (`promptSession`, `loadSession`).
-// TODO(refactor-acp-background-reader follow-up): `acp_turn_timeout` is no
-// longer emitted; relay-side turn timeout is removed (D4). Kept declared
-// only so external consumers reading reason codes still have a reference.
-#[allow(dead_code)]
-pub(super) const ACP_REASON_CODE_TURN_TIMEOUT: &str = "acp_turn_timeout";
 pub(super) const ACP_REASON_CODE_STOP_CANCELLED: &str = "acp_stop_cancelled";
 pub(super) const ACP_ERROR_CODE_INITIALIZE_FAILED: &str = "runtime_acp_initialize_failed";
 pub(super) const ACP_ERROR_CODE_SESSION_LOAD_FAILED: &str = "runtime_acp_session_load_failed";

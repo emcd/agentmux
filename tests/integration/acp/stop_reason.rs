@@ -12,11 +12,7 @@ fn acp_cancelled_stop_reason_is_accepted_for_async_dispatch() {
         ..AcpStubOptions::default()
     };
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
-    let response = dispatch_send(
-        &config_root,
-        &temporary.path().join("tmux.sock"),
-        Some(1_000),
-    );
+    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 }
@@ -29,7 +25,7 @@ fn acp_turn_timeout_is_accepted_for_async_dispatch() {
         ..AcpStubOptions::default()
     };
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
-    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"), Some(100));
+    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 }
@@ -43,21 +39,7 @@ fn acp_coder_default_turn_timeout_is_accepted_for_async_dispatch() {
         ..AcpStubOptions::default()
     };
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
-    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"), None);
-    let result = send_result(response);
-    assert_eq!(result.outcome, SendOutcome::Queued);
-}
-
-#[test]
-fn acp_turn_timeout_request_override_is_accepted_for_async_dispatch() {
-    let temporary = TempDir::new().expect("temporary");
-    let options = AcpStubOptions {
-        prompt_delay_sec: 1,
-        coder_turn_timeout_ms: Some(5_000),
-        ..AcpStubOptions::default()
-    };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
-    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"), Some(100));
+    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 }
@@ -67,11 +49,7 @@ fn acp_successful_terminal_stop_reason_is_accepted_for_async_dispatch() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions::default();
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
-    let response = dispatch_send(
-        &config_root,
-        &temporary.path().join("tmux.sock"),
-        Some(1_000),
-    );
+    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
     assert_eq!(result.reason_code, None);
@@ -87,7 +65,7 @@ fn acp_first_activity_acceptance_prevents_late_turn_timeout_failure() {
         ..AcpStubOptions::default()
     };
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
-    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"), Some(100));
+    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
     assert_eq!(result.reason_code, None);
@@ -102,11 +80,7 @@ fn acp_async_send_returns_on_dispatch_without_waiting_for_terminal_stop_reason()
     };
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let started_at = Instant::now();
-    let response = dispatch_send(
-        &config_root,
-        &temporary.path().join("tmux.sock"),
-        Some(5_000),
-    );
+    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let elapsed = started_at.elapsed();
     let result = send_result(response);
 

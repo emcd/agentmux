@@ -49,8 +49,6 @@ fn relay_send_async_processes_repeated_target_messages_in_fifo_order() {
             targets: vec!["bravo@party".to_string()],
             broadcast: false,
             quiet_window_ms: Some(70),
-            quiescence_timeout_ms: None,
-            acp_turn_timeout_ms: None,
         },
         &config_root,
         bundle_name,
@@ -75,8 +73,6 @@ fn relay_send_async_processes_repeated_target_messages_in_fifo_order() {
             targets: vec!["bravo@party".to_string()],
             broadcast: false,
             quiet_window_ms: Some(70),
-            quiescence_timeout_ms: None,
-            acp_turn_timeout_ms: None,
         },
         &config_root,
         bundle_name,
@@ -158,8 +154,6 @@ fn relay_send_async_without_timeout_waits_for_late_quiescence() {
             targets: vec!["bravo@party".to_string()],
             broadcast: false,
             quiet_window_ms: Some(120),
-            quiescence_timeout_ms: None,
-            acp_turn_timeout_ms: None,
         },
         &config_root,
         bundle_name,
@@ -178,68 +172,6 @@ fn relay_send_async_without_timeout_waits_for_late_quiescence() {
         "bravo",
         marker,
         Duration::from_millis(3_000),
-    );
-
-    let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
-}
-
-#[test]
-fn relay_send_async_timeout_override_stops_wait_before_late_quiescence() {
-    if !tmux_available() {
-        eprintln!("skipping relay delivery test because tmux is unavailable");
-        return;
-    }
-
-    let temporary = TempDir::new().expect("temporary");
-    let bundle_name = "party";
-    let config_root =
-        write_bundle_configuration(temporary.path(), bundle_name, &["alpha", "bravo"]);
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
-    ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
-    let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
-
-    spawn_session(&paths.tmux_socket, "alpha", "exec sleep 45");
-    spawn_session(
-        &paths.tmux_socket,
-        "bravo",
-        "i=0; while [ \"$i\" -lt 80 ]; do printf '\\rWORK-%02d' \"$i\"; i=$((i+1)); sleep 0.02; done; printf '\\nIDLE\\n'; exec sleep 45",
-    );
-    wait_for_pane_contains(
-        &paths.tmux_socket,
-        "bravo",
-        "WORK-",
-        Duration::from_millis(1_200),
-    );
-
-    let marker = "ASYNC-TIMEOUT-OVERRIDE-MARKER";
-    let response = dispatch_request(
-        RelayRequest::Send {
-            request_id: Some("req-async-timeout".to_string()),
-            requester_session: "alpha".to_string(),
-            message: marker.to_string(),
-            targets: vec!["bravo@party".to_string()],
-            broadcast: false,
-            quiet_window_ms: Some(120),
-            quiescence_timeout_ms: Some(350),
-            acp_turn_timeout_ms: None,
-        },
-        &config_root,
-        bundle_name,
-        &paths.runtime_directory,
-    )
-    .expect("async send should be accepted");
-
-    let RelayResponse::Send { results, .. } = response else {
-        panic!("expected send response");
-    };
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].outcome, SendOutcome::Queued);
-
-    std::thread::sleep(Duration::from_millis(2_100));
-    let snapshot = capture_pane(&paths.tmux_socket, "bravo", "-200");
-    assert!(
-        !snapshot.contains(marker),
-        "marker should not be delivered after async timeout override, snapshot={snapshot:?}"
     );
 
     let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);

@@ -267,7 +267,7 @@ fn execute_raww(
         message_id: message_id.clone(),
         // Unbounded quiescence wait: an agent turn can run well past 30 seconds,
         // and async delivery's only hard bound is relay lifetime (shutdown).
-        quiescence: QuiescenceOptions::for_async(None, None, None),
+        quiescence: QuiescenceOptions::for_async(None),
         batch_settings: prompt_batch_settings(),
         runtime_directory: raww_runtime_directory,
         payload_mode: DeliveryPayloadMode::RawInput,

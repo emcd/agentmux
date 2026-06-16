@@ -94,8 +94,6 @@ pub(super) struct SendArguments {
     pub(super) message: String,
     pub(super) targets: Vec<String>,
     pub(super) broadcast: bool,
-    pub(super) quiescence_timeout_ms: Option<u64>,
-    pub(super) acp_turn_timeout_ms: Option<u64>,
     pub(super) output_json: bool,
     pub(super) runtime: RuntimeArguments,
 }
@@ -251,8 +249,7 @@ fn print_agentmux_help() {
         "[--inscriptions-directory PATH|--logs-directory PATH] ",
         "[--repository-root PATH]\n",
         "  send (--target NAME ... | --broadcast) [--message TEXT] ",
-        "[--quiescence-timeout-ms MS] ",
-        "[--acp-turn-timeout-ms MS] [--request-id ID] [--bundle NAME] ",
+        "[--request-id ID] [--bundle NAME] ",
         "[--as-session NAME] [--json] [--config-directory PATH] ",
         "[--state-directory PATH] [--inscriptions-directory PATH|",
         "--logs-directory PATH] [--repository-root PATH]"

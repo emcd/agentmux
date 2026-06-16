@@ -92,7 +92,6 @@ fn relay_wide_operator_send(
                 "message": "operator to bundle",
                 "targets": targets,
                 "broadcast": false,
-                "quiescence_timeout_ms": 1000,
             },
         }),
     );
@@ -582,7 +581,6 @@ fn send_to_global_target_is_delivered_to_registered_operator() {
                 "message": "hello operator",
                 "targets": [operator_id],
                 "broadcast": false,
-                "quiescence_timeout_ms": 2000,
             },
         }),
     );
@@ -731,7 +729,6 @@ fn send_mixing_relay_wide_and_session_targets_fans_out() {
                 "message": "mixed targets",
                 "targets": [operator_id, format!("bravo@{bundle_name}")],
                 "broadcast": false,
-                "quiescence_timeout_ms": 200,
             },
         }),
     );
@@ -829,7 +826,6 @@ fn send_fans_out_across_bundle_and_global_namespaces() {
                 "message": "fan out",
                 "targets": [format!("agent@{bundle_b}"), operator_id],
                 "broadcast": false,
-                "quiescence_timeout_ms": 2000,
             },
         }),
     );
@@ -918,7 +914,6 @@ fn cross_bundle_send_denied_under_home_scope() {
                 "message": "across the boundary",
                 "targets": [format!("agent@{bundle_b}")],
                 "broadcast": false,
-                "quiescence_timeout_ms": 2000,
             },
         }),
     );
@@ -974,7 +969,6 @@ fn same_bundle_send_permitted_under_home_scope() {
                 "message": "same bundle",
                 "targets": [format!("bravo@{bundle_name}")],
                 "broadcast": false,
-                "quiescence_timeout_ms": 2000,
             },
         }),
     );
@@ -1231,7 +1225,6 @@ fn global_routing_no_longer_returns_unavailable_stub() {
                 "message": "stub check",
                 "targets": [operator_id],
                 "broadcast": false,
-                "quiescence_timeout_ms": 200,
             },
         }),
     );

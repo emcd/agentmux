@@ -96,8 +96,6 @@ async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
             targets: vec!["alpha@party".to_string()],
             broadcast: false,
             quiet_window_ms: None,
-            quiescence_timeout_ms: None,
-            acp_turn_timeout_ms: None,
         },
     )
     .expect("queue async request");
@@ -504,8 +502,6 @@ async fn relay_delivery_sends_submit_in_separate_tmux_command() {
             targets: vec!["alpha@party".to_string()],
             broadcast: false,
             quiet_window_ms: Some(50),
-            quiescence_timeout_ms: Some(2_000),
-            acp_turn_timeout_ms: None,
         },
     )
     .expect("send request should succeed");
@@ -642,8 +638,6 @@ async fn relay_async_delivery_does_not_inject_while_pane_in_mode() {
             targets: vec!["alpha@party".to_string()],
             broadcast: false,
             quiet_window_ms: Some(50),
-            quiescence_timeout_ms: Some(250),
-            acp_turn_timeout_ms: None,
         },
     )
     .expect("send request should complete");
@@ -923,8 +917,6 @@ send = "all"
             targets: vec!["bravo@party".to_string(), "zulu@qa".to_string()],
             broadcast: false,
             quiet_window_ms: Some(50),
-            quiescence_timeout_ms: Some(2_000),
-            acp_turn_timeout_ms: None,
         },
     )
     .expect("cross-bundle send request should succeed");

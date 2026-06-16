@@ -5,7 +5,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    configuration::{BundleConfiguration, TargetConfiguration, load_bundle_configuration},
+    configuration::{BundleConfiguration, load_bundle_configuration},
     runtime::inscriptions::emit_inscription,
 };
 
@@ -46,8 +46,6 @@ pub(in crate::relay) fn handle_send_routed(
         targets,
         broadcast,
         quiet_window_ms,
-        quiescence_timeout_ms,
-        acp_turn_timeout_ms,
     } = request
     else {
         return Err(relay_error(
@@ -65,8 +63,6 @@ pub(in crate::relay) fn handle_send_routed(
             targets,
             broadcast,
             quiet_window_ms,
-            quiescence_timeout_ms,
-            acp_turn_timeout_ms,
         },
         configuration_root,
         bundle_catalog,
@@ -93,8 +89,6 @@ fn handle_send(
         targets,
         broadcast,
         quiet_window_ms,
-        quiescence_timeout_ms,
-        acp_turn_timeout_ms,
     } = request;
 
     if message.trim().is_empty() {
@@ -118,28 +112,6 @@ fn handle_send(
             None,
         ));
     }
-    if matches!(quiescence_timeout_ms, Some(0)) {
-        return Err(relay_error(
-            "validation_invalid_quiescence_timeout",
-            "quiescence timeout override must be greater than zero milliseconds",
-            None,
-        ));
-    }
-    if matches!(acp_turn_timeout_ms, Some(0)) {
-        return Err(relay_error(
-            "validation_invalid_acp_turn_timeout",
-            "ACP turn timeout override must be greater than zero milliseconds",
-            None,
-        ));
-    }
-    if quiescence_timeout_ms.is_some() && acp_turn_timeout_ms.is_some() {
-        return Err(relay_error(
-            "validation_conflicting_timeout_fields",
-            "quiescence_timeout_ms and acp_turn_timeout_ms are mutually exclusive",
-            None,
-        ));
-    }
-
     // The requester is authorized in its home namespace (its bundle, or
     // `GLOBAL`); strip any `@<home>` qualifier so internal lookups match. A
     // relay-wide (`@GLOBAL`) requester keeps its suffix.
@@ -169,8 +141,8 @@ fn handle_send(
 
     // The spine owns resolution and authorization; `resolve_send_route_or_broadcast`
     // builds the config-free route, `prepare_send` assembles the per-namespace
-    // delivery groups (validating target existence and transport-vs-timeout), and
-    // `execute_send` enqueues delivery.
+    // delivery groups (validating target existence), and `execute_send` enqueues
+    // delivery.
     run_target_operation(
         home_namespace,
         &authorization,
@@ -187,16 +159,7 @@ fn handle_send(
                 &targets,
             )
         },
-        |route| {
-            prepare_send(
-                route,
-                &authorization,
-                configuration_root,
-                bundle_catalog,
-                quiescence_timeout_ms,
-                acp_turn_timeout_ms,
-            )
-        },
+        |route| prepare_send(route, &authorization, configuration_root, bundle_catalog),
         |route, groups| {
             execute_send(
                 route,
@@ -207,8 +170,6 @@ fn handle_send(
                 home_namespace,
                 request_id,
                 quiet_window_ms,
-                quiescence_timeout_ms,
-                acp_turn_timeout_ms,
             )
         },
     )
@@ -251,79 +212,23 @@ fn resolve_send_route_or_broadcast(
     })
 }
 
-/// Assembles the per-namespace delivery groups for a `Send` and validates that
-/// the requested timeout override is compatible with every resolved target's
-/// transport. Target existence is folded into `assemble_delivery_groups`; a
-/// broadcast route's targets are home-bundle members and resolve through the
-/// catalog like any other bundle-bound target. Runs as the spine's `prepare`
-/// stage, before authorization.
+/// Assembles the per-namespace delivery groups for a `Send`. Target existence is
+/// folded into `assemble_delivery_groups`; a broadcast route's targets are
+/// home-bundle members and resolve through the catalog like any other
+/// bundle-bound target. Runs as the spine's `prepare` stage, before
+/// authorization.
 fn prepare_send(
     route: &ResolvedRoute,
     authorization: &AuthorizationContext,
     configuration_root: &Path,
     bundle_catalog: &BundleCatalog,
-    quiescence_timeout_ms: Option<u64>,
-    acp_turn_timeout_ms: Option<u64>,
 ) -> Result<Vec<DeliveryGroup>, RelayError> {
-    let groups = assemble_delivery_groups(
+    assemble_delivery_groups(
         authorization,
         configuration_root,
         bundle_catalog,
         &route.targets,
-    )?;
-
-    // Timeout-vs-transport validation spans every resolved target, regardless of
-    // which bundle hosts it. Relay-wide targets carry no tmux/ACP
-    // transport and are skipped.
-    let mut has_tmux_target = false;
-    let mut has_acp_target = false;
-    for group in &groups {
-        for target in &group.targets {
-            if target.relay_wide {
-                continue;
-            }
-            match group
-                .bundle
-                .members
-                .iter()
-                .find(|member| member.id == target.session_id)
-                .map(|member| &member.target)
-            {
-                Some(TargetConfiguration::Tmux(_)) => has_tmux_target = true,
-                Some(TargetConfiguration::Acp(_)) => has_acp_target = true,
-                Some(TargetConfiguration::Ui | TargetConfiguration::Pubsub) => {}
-                None => {
-                    return Err(relay_error(
-                        "internal_unexpected_failure",
-                        "resolved target session has no configured transport",
-                        Some(json!({ "target_session": target.session_id })),
-                    ));
-                }
-            }
-        }
-    }
-
-    if quiescence_timeout_ms.is_some() && has_acp_target {
-        return Err(relay_error(
-            "validation_invalid_timeout_field_for_transport",
-            "quiescence_timeout_ms is not valid for ACP targets",
-            Some(json!({
-                "field": "quiescence_timeout_ms",
-                "transport": "acp",
-            })),
-        ));
-    }
-    if acp_turn_timeout_ms.is_some() && has_tmux_target {
-        return Err(relay_error(
-            "validation_invalid_timeout_field_for_transport",
-            "acp_turn_timeout_ms is not valid for tmux targets",
-            Some(json!({
-                "field": "acp_turn_timeout_ms",
-                "transport": "tmux",
-            })),
-        ));
-    }
-    Ok(groups)
+    )
 }
 
 /// Enqueues async delivery to every authorized target and builds the `Send`
@@ -338,13 +243,10 @@ fn execute_send(
     home_namespace: &str,
     request_id: Option<String>,
     quiet_window_ms: Option<u64>,
-    quiescence_timeout_ms: Option<u64>,
-    acp_turn_timeout_ms: Option<u64>,
 ) -> Result<RelayResponse, RelayError> {
     let sender_member = sender.to_bundle_member();
     let batch_settings = prompt_batch_settings();
-    let quiescence =
-        QuiescenceOptions::for_async(quiet_window_ms, quiescence_timeout_ms, acp_turn_timeout_ms);
+    let quiescence = QuiescenceOptions::for_async(quiet_window_ms);
     let mut results = Vec::with_capacity(route.targets.len());
     // Every task carries the full recipient list across all delivery groups so
     // delivered envelopes can show co-recipients in other namespaces. Entries
