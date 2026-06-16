@@ -65,6 +65,10 @@ impl Workbench {
         self.state.message_field.as_str()
     }
 
+    pub fn to_cursor_column(&self) -> usize {
+        self.state.to_cursor_column()
+    }
+
     pub fn set_interaction_target(&mut self, target: &str) {
         self.state.set_interaction_target(target.to_string());
     }

@@ -74,8 +74,20 @@ fn handle_communication_mode_key(state: &mut AppState, key: KeyEvent) -> Result<
                 state.move_message_cursor_home();
                 return Ok(());
             }
+            KeyCode::Char('a') if state.focus == FocusField::To => {
+                state.move_to_field_cursor_home();
+                return Ok(());
+            }
             KeyCode::Char('e') if state.focus == FocusField::Message => {
                 state.move_message_cursor_end();
+                return Ok(());
+            }
+            KeyCode::Char('e') if state.focus == FocusField::To => {
+                state.move_to_field_cursor_end();
+                return Ok(());
+            }
+            KeyCode::Char('u') if state.focus == FocusField::To => {
+                state.clear_to_field();
                 return Ok(());
             }
             KeyCode::Char('j') => {
@@ -126,14 +138,26 @@ fn handle_communication_mode_key(state: &mut AppState, key: KeyEvent) -> Result<
         KeyCode::Left if state.focus == FocusField::Message => {
             state.move_message_cursor_left();
         }
+        KeyCode::Left if state.focus == FocusField::To => {
+            state.move_to_field_cursor_left();
+        }
         KeyCode::Right if state.focus == FocusField::Message => {
             state.move_message_cursor_right();
+        }
+        KeyCode::Right if state.focus == FocusField::To => {
+            state.move_to_field_cursor_right();
         }
         KeyCode::Home if state.focus == FocusField::Message => {
             state.move_message_cursor_home();
         }
+        KeyCode::Home if state.focus == FocusField::To => {
+            state.move_to_field_cursor_home();
+        }
         KeyCode::End if state.focus == FocusField::Message => {
             state.move_message_cursor_end();
+        }
+        KeyCode::End if state.focus == FocusField::To => {
+            state.move_to_field_cursor_end();
         }
         KeyCode::Backspace => state.backspace(),
         KeyCode::PageUp => state.scroll_chat_history_page_up(),

@@ -53,6 +53,9 @@ open the picker (`F2`) and press `Enter` to choose a session.
 - `Tab` / `Shift+Tab`: cycle focus (`To` <-> `Message`)
 - `Ctrl+Space`: trigger completion in `To`
 - `Up` / `Down` in `To`: navigate active completion candidate
+- `Left` / `Right` / `Home` / `End` in `To`: move cursor
+- `Ctrl+A` / `Ctrl+E` in `To`: move cursor to field start/end
+- `Ctrl+U` in `To`: clear the field
 - `Up` / `Down` in `Message`: move cursor between message lines
 - `Left` / `Right` / `Home` / `End` in `Message`: move cursor
 - `Ctrl+A` / `Ctrl+E` in `Message`: move cursor to line start/end

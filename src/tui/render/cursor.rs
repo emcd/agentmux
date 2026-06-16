@@ -68,7 +68,7 @@ fn compose_cursor_position(inner_area: Rect, state: &AppState) -> Option<(u16, u
         FocusField::To => {
             let prefix_width = "To: ".chars().count() as u16;
             let field_width = inner_width.saturating_sub(prefix_width);
-            let cursor_column = visible_cursor_column(state.to_field.as_str(), field_width);
+            let cursor_column = visible_cursor_column_count(state.to_cursor_column(), field_width);
             (
                 inner_left
                     .saturating_add(prefix_width)
@@ -104,14 +104,6 @@ fn compose_cursor_position(inner_area: Rect, state: &AppState) -> Option<(u16, u
     };
 
     Some((raw_x.min(inner_right), raw_y.min(inner_bottom)))
-}
-
-fn visible_cursor_column(value: &str, width: u16) -> u16 {
-    if width == 0 {
-        return 0;
-    }
-    let value_width = value.chars().count() as u16;
-    value_width.min(width.saturating_sub(1))
 }
 
 fn visible_cursor_column_count(count: usize, width: u16) -> u16 {
