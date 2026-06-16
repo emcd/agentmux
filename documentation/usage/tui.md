@@ -159,10 +159,12 @@ Delivery outcomes:
   - tmux look snapshots render line payloads directly.
   - ACP look snapshots render structured entries by kind:
     `user`, `agent`, `cognition`, `invocation`, `result`, `update`.
-- Write dispatch from Interaction mode routes through relay `raww` and
-  surfaces acceptance-phase metadata when provided.
+- Write dispatch from Interaction mode routes through relay `raww`; delivery is
+  asynchronous. The write is acknowledged immediately as `queued`, and its
+  terminal outcome arrives later as a `delivery_outcome` stream event.
 - Terminal outcomes are sourced from relay completion updates keyed by
-  `message_id`.
+  `message_id`, and `raww` writes are tracked and deduped the same way as chat
+  sends.
 - Choice requests are rendered from relay `choices.snapshot`,
   `choices.requested`, and `choices.resolved` events.
 - Replay is at-least-once; the TUI deduplicates pending choice rows by
