@@ -77,27 +77,6 @@ pub(super) fn resolve_roots(
     })
 }
 
-pub(super) fn parse_positive_u64(
-    value: &str,
-    flag: &str,
-    zero_code: &str,
-    zero_message: &str,
-) -> Result<u64, RuntimeError> {
-    let parsed = value
-        .parse::<u64>()
-        .map_err(|_| RuntimeError::InvalidArgument {
-            argument: flag.to_string(),
-            message: format!("invalid numeric value '{value}'"),
-        })?;
-    if parsed == 0 {
-        return Err(RuntimeError::validation(
-            zero_code,
-            zero_message.to_string(),
-        ));
-    }
-    Ok(parsed)
-}
-
 pub(super) fn parse_look_lines(value: &str) -> Result<u64, RuntimeError> {
     let lines = value.parse::<u64>().map_err(|_| {
         RuntimeError::validation(

@@ -217,8 +217,6 @@ fn normalize_request_identities(request: RelayRequest, bundle_name: &str) -> Rel
             targets,
             broadcast,
             quiet_window_ms,
-            quiescence_timeout_ms,
-            acp_turn_timeout_ms,
         } => RelayRequest::Send {
             request_id,
             requester_session: bare(requester_session),
@@ -228,8 +226,6 @@ fn normalize_request_identities(request: RelayRequest, bundle_name: &str) -> Rel
             targets,
             broadcast,
             quiet_window_ms,
-            quiescence_timeout_ms,
-            acp_turn_timeout_ms,
         },
         RelayRequest::Look {
             requester_session,

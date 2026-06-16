@@ -222,10 +222,6 @@ pub enum RelayRequest {
         broadcast: bool,
         #[serde(default)]
         quiet_window_ms: Option<u64>,
-        #[serde(default)]
-        quiescence_timeout_ms: Option<u64>,
-        #[serde(default)]
-        acp_turn_timeout_ms: Option<u64>,
     },
     Look {
         requester_session: String,

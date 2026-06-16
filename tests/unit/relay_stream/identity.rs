@@ -1163,7 +1163,6 @@ fn alpha_send_response_with_token(
                 "message": "attribution probe",
                 "targets": [operator_id],
                 "broadcast": false,
-                "quiescence_timeout_ms": 2000,
             },
         }),
     );
@@ -1294,7 +1293,6 @@ fn operator_incoming_message_for_alpha_send(
                 "message": "delivery attribution probe",
                 "targets": [operator_id],
                 "broadcast": false,
-                "quiescence_timeout_ms": 2000,
             },
         }),
     );

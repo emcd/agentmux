@@ -16,7 +16,7 @@ fn acp_worker_state_transitions_busy_then_available() {
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let response = dispatch_send(&config_root, &tmux_socket, Some(2_000));
+    let response = dispatch_send(&config_root, &tmux_socket);
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
@@ -49,7 +49,7 @@ fn acp_request_permission_keeps_worker_busy_while_pending_decision() {
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let response = dispatch_send(&config_root, &tmux_socket, Some(100));
+    let response = dispatch_send(&config_root, &tmux_socket);
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
@@ -85,11 +85,7 @@ fn acp_worker_state_stays_available_after_protocol_error() {
         ..AcpStubOptions::default()
     };
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
-    let response = dispatch_send(
-        &config_root,
-        &temporary.path().join("tmux.sock"),
-        Some(1_000),
-    );
+    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
     assert!(
@@ -124,7 +120,7 @@ fn acp_async_queue_overflow_returns_runtime_queue_full() {
 
     let mut overflow_response = None::<RelayResponse>;
     for _ in 0..70 {
-        let response = dispatch_send_result(&config_root, &tmux_socket, Some(2_000));
+        let response = dispatch_send_result(&config_root, &tmux_socket);
         match response {
             Ok(response) => {
                 if let RelayResponse::Error { error } = &response

@@ -123,27 +123,6 @@ pub(super) fn validate_send_request(params: &SendParams) -> Result<(), McpError>
             None,
         ));
     }
-    if matches!(params.quiescence_timeout_ms, Some(0)) {
-        return Err(validation_tool_error(
-            "validation_invalid_quiescence_timeout",
-            "quiescence_timeout_ms must be greater than zero milliseconds",
-            None,
-        ));
-    }
-    if matches!(params.acp_turn_timeout_ms, Some(0)) {
-        return Err(validation_tool_error(
-            "validation_invalid_acp_turn_timeout",
-            "acp_turn_timeout_ms must be greater than zero milliseconds",
-            None,
-        ));
-    }
-    if params.quiescence_timeout_ms.is_some() && params.acp_turn_timeout_ms.is_some() {
-        return Err(validation_tool_error(
-            "validation_conflicting_timeout_fields",
-            "quiescence_timeout_ms and acp_turn_timeout_ms are mutually exclusive",
-            None,
-        ));
-    }
     Ok(())
 }
 

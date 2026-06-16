@@ -130,8 +130,7 @@ This module implements the MCP stdio server for `agentmux`.
 - `McpServer`
   - tool router + handlers.
 - `SendParams`
-  - MCP `send` request schema, including optional transport-scoped timeout
-    overrides (`quiescence_timeout_ms`, `acp_turn_timeout_ms`).
+  - MCP `send` request schema.
 
 ## Module Layout
 

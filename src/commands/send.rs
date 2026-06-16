@@ -52,8 +52,6 @@ pub(super) fn run_agentmux_send(arguments: &[String]) -> Result<(), RuntimeError
             targets: parsed.targets.clone(),
             broadcast: parsed.broadcast,
             quiet_window_ms: None,
-            quiescence_timeout_ms: parsed.quiescence_timeout_ms,
-            acp_turn_timeout_ms: parsed.acp_turn_timeout_ms,
         },
     )
     .map_err(|source| shared::map_relay_request_failure(&relay_paths.relay_socket, source))?;
@@ -108,8 +106,6 @@ fn parse_send_arguments(arguments: &[String]) -> Result<SendArguments, RuntimeEr
     let mut targets = Vec::<String>::new();
     let mut broadcast = false;
     let mut message = None;
-    let mut quiescence_timeout_ms = None;
-    let mut acp_turn_timeout_ms = None;
     let mut output_json = false;
     let mut runtime = RuntimeArguments::default();
     let mut index = 0usize;
@@ -132,24 +128,6 @@ fn parse_send_arguments(arguments: &[String]) -> Result<SendArguments, RuntimeEr
             "--target" => targets.push(shared::take_value(arguments, &mut index, "--target")?),
             "--broadcast" => broadcast = true,
             "--message" => message = Some(shared::take_value(arguments, &mut index, "--message")?),
-            "--quiescence-timeout-ms" => {
-                let value = shared::take_value(arguments, &mut index, "--quiescence-timeout-ms")?;
-                quiescence_timeout_ms = Some(shared::parse_positive_u64(
-                    value.as_str(),
-                    "--quiescence-timeout-ms",
-                    "validation_invalid_quiescence_timeout",
-                    "quiescence timeout override must be greater than zero milliseconds",
-                )?);
-            }
-            "--acp-turn-timeout-ms" => {
-                let value = shared::take_value(arguments, &mut index, "--acp-turn-timeout-ms")?;
-                acp_turn_timeout_ms = Some(shared::parse_positive_u64(
-                    value.as_str(),
-                    "--acp-turn-timeout-ms",
-                    "validation_invalid_acp_turn_timeout",
-                    "ACP turn timeout override must be greater than zero milliseconds",
-                )?);
-            }
             "--json" => output_json = true,
             unknown => {
                 return Err(RuntimeError::InvalidArgument {
@@ -175,8 +153,6 @@ fn parse_send_arguments(arguments: &[String]) -> Result<SendArguments, RuntimeEr
         message,
         targets,
         broadcast,
-        quiescence_timeout_ms,
-        acp_turn_timeout_ms,
         output_json,
         runtime,
     })
@@ -303,29 +279,11 @@ fn validate_send_targets(arguments: &SendArguments) -> Result<(), RuntimeError> 
             "provide at least one --target or set --broadcast".to_string(),
         ));
     }
-    if matches!(arguments.quiescence_timeout_ms, Some(0)) {
-        return Err(RuntimeError::validation(
-            "validation_invalid_quiescence_timeout",
-            "quiescence timeout override must be greater than zero milliseconds".to_string(),
-        ));
-    }
-    if matches!(arguments.acp_turn_timeout_ms, Some(0)) {
-        return Err(RuntimeError::validation(
-            "validation_invalid_acp_turn_timeout",
-            "ACP turn timeout override must be greater than zero milliseconds".to_string(),
-        ));
-    }
-    if arguments.quiescence_timeout_ms.is_some() && arguments.acp_turn_timeout_ms.is_some() {
-        return Err(RuntimeError::validation(
-            "validation_conflicting_timeout_fields",
-            "provide either --quiescence-timeout-ms or --acp-turn-timeout-ms, not both".to_string(),
-        ));
-    }
     Ok(())
 }
 
 pub(super) fn print_send_help() {
     println!(
-        "Usage: agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--quiescence-timeout-ms MS] [--acp-turn-timeout-ms MS] [--request-id ID] [--bundle NAME] [--as-session NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--request-id ID] [--bundle NAME] [--as-session NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }

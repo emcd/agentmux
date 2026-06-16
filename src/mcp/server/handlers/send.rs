@@ -34,8 +34,6 @@ impl McpServer {
                 "request_id": params.request_id.clone(),
                 "targets": params.targets.clone(),
                 "broadcast": params.broadcast,
-                "quiescence_timeout_ms": params.quiescence_timeout_ms,
-                "acp_turn_timeout_ms": params.acp_turn_timeout_ms,
                 "message_length": params.message.len(),
             }),
         );
@@ -64,8 +62,6 @@ impl McpServer {
             targets,
             broadcast: params.broadcast,
             quiet_window_ms: None,
-            quiescence_timeout_ms: params.quiescence_timeout_ms,
-            acp_turn_timeout_ms: params.acp_turn_timeout_ms,
         };
         match self.request_relay(&request) {
             Ok(RelayResponse::Send {

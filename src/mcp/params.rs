@@ -82,12 +82,6 @@ pub(super) struct SendParams {
     /// Broadcast to all known sessions for the bundle.
     #[serde(default)]
     pub(super) broadcast: bool,
-    /// Optional quiescence timeout override in milliseconds.
-    #[serde(default)]
-    pub(super) quiescence_timeout_ms: Option<u64>,
-    /// Optional ACP turn timeout override in milliseconds.
-    #[serde(default)]
-    pub(super) acp_turn_timeout_ms: Option<u64>,
     /// Unknown fields captured for explicit validation.
     #[serde(flatten, default)]
     #[schemars(skip)]

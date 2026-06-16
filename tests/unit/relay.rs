@@ -409,8 +409,6 @@ fn send_rejects_unknown_target() {
             targets: vec!["missing@party".to_string()],
             broadcast: false,
             quiet_window_ms: None,
-            quiescence_timeout_ms: None,
-            acp_turn_timeout_ms: None,
         },
         &config_root,
         "party",
@@ -433,8 +431,6 @@ fn send_rejects_target_by_configured_session_name_alias() {
             targets: vec!["Bravo@party".to_string()],
             broadcast: false,
             quiet_window_ms: Some(1),
-            quiescence_timeout_ms: Some(1),
-            acp_turn_timeout_ms: None,
         },
         &config_root,
         "party",
@@ -458,8 +454,6 @@ fn send_accepts_global_ui_target_not_in_bundle_configuration() {
             targets: vec!["user@GLOBAL".to_string()],
             broadcast: false,
             quiet_window_ms: Some(1),
-            quiescence_timeout_ms: Some(1),
-            acp_turn_timeout_ms: None,
         },
         &config_root,
         "party",
@@ -489,8 +483,6 @@ fn send_prefers_bundle_member_when_target_id_overlaps_with_ui_session_id() {
             targets: vec!["alpha@party".to_string()],
             broadcast: false,
             quiet_window_ms: Some(1),
-            quiescence_timeout_ms: Some(1),
-            acp_turn_timeout_ms: None,
         },
         &config_root,
         "party",
@@ -522,8 +514,6 @@ fn send_broadcast_excludes_sender_session() {
             targets: Vec::new(),
             broadcast: true,
             quiet_window_ms: Some(1),
-            quiescence_timeout_ms: Some(1),
-            acp_turn_timeout_ms: None,
         },
         &config_root,
         "party",
@@ -551,8 +541,6 @@ fn send_async_returns_accepted_and_queued_outcome() {
             targets: vec!["bravo@party".to_string()],
             broadcast: false,
             quiet_window_ms: Some(1),
-            quiescence_timeout_ms: Some(1),
-            acp_turn_timeout_ms: None,
         },
         &config_root,
         "party",
@@ -569,30 +557,6 @@ fn send_async_returns_accepted_and_queued_outcome() {
 }
 
 #[test]
-fn send_rejects_zero_timeout_override() {
-    let temporary = TempDir::new().expect("temporary");
-    let config_root = write_bundle(&temporary, "party");
-    let tmux_socket = temporary.path().join("tmux.sock");
-    let response = dispatch_request(
-        RelayRequest::Send {
-            request_id: None,
-            requester_session: "alpha".to_string(),
-            message: "hello".to_string(),
-            targets: vec!["bravo@party".to_string()],
-            broadcast: false,
-            quiet_window_ms: Some(1),
-            quiescence_timeout_ms: Some(0),
-            acp_turn_timeout_ms: None,
-        },
-        &config_root,
-        "party",
-        &tmux_socket,
-    )
-    .expect_err("send should fail");
-    assert_eq!(response.code, "validation_invalid_quiescence_timeout");
-}
-
-#[test]
 fn send_broadcast_with_only_sender_returns_empty_results() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_single_member_bundle(&temporary, "party");
@@ -606,8 +570,6 @@ fn send_broadcast_with_only_sender_returns_empty_results() {
             targets: Vec::new(),
             broadcast: true,
             quiet_window_ms: Some(1),
-            quiescence_timeout_ms: Some(1),
-            acp_turn_timeout_ms: None,
         },
         &config_root,
         "party",
@@ -619,84 +581,6 @@ fn send_broadcast_with_only_sender_returns_empty_results() {
         panic!("expected send response");
     };
     assert!(results.is_empty());
-}
-
-#[test]
-fn send_rejects_quiescence_timeout_for_acp_target() {
-    let temporary = TempDir::new().expect("temporary");
-    let config_root = write_acp_bundle(&temporary, "party");
-    let tmux_socket = temporary.path().join("tmux.sock");
-    let response = dispatch_request(
-        RelayRequest::Send {
-            request_id: None,
-            requester_session: "alpha".to_string(),
-            message: "hello".to_string(),
-            targets: vec!["bravo@party".to_string()],
-            broadcast: false,
-            quiet_window_ms: Some(1),
-            quiescence_timeout_ms: Some(100),
-            acp_turn_timeout_ms: None,
-        },
-        &config_root,
-        "party",
-        &tmux_socket,
-    )
-    .expect_err("send should fail");
-    assert_eq!(
-        response.code,
-        "validation_invalid_timeout_field_for_transport"
-    );
-}
-
-#[test]
-fn send_rejects_acp_turn_timeout_for_tmux_target() {
-    let temporary = TempDir::new().expect("temporary");
-    let config_root = write_bundle(&temporary, "party");
-    let tmux_socket = temporary.path().join("tmux.sock");
-    let response = dispatch_request(
-        RelayRequest::Send {
-            request_id: None,
-            requester_session: "alpha".to_string(),
-            message: "hello".to_string(),
-            targets: vec!["bravo@party".to_string()],
-            broadcast: false,
-            quiet_window_ms: Some(1),
-            quiescence_timeout_ms: None,
-            acp_turn_timeout_ms: Some(100),
-        },
-        &config_root,
-        "party",
-        &tmux_socket,
-    )
-    .expect_err("send should fail");
-    assert_eq!(
-        response.code,
-        "validation_invalid_timeout_field_for_transport"
-    );
-}
-
-#[test]
-fn send_rejects_conflicting_timeout_fields() {
-    let temporary = TempDir::new().expect("temporary");
-    let config_root = write_bundle(&temporary, "party");
-    let tmux_socket = temporary.path().join("tmux.sock");
-    let response = dispatch_request(
-        RelayRequest::Send {
-            request_id: None,
-            requester_session: "alpha".to_string(),
-            message: "hello".to_string(),
-            targets: vec!["bravo@party".to_string()],
-            broadcast: false,
-            quiet_window_ms: Some(1),
-            quiescence_timeout_ms: Some(100),
-            acp_turn_timeout_ms: Some(200),
-        },
-        &config_root,
-        "party",
-        &tmux_socket,
-    )
-    .expect_err("send should fail");
-    assert_eq!(response.code, "validation_conflicting_timeout_fields");
 }
 
 #[test]

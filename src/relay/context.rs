@@ -13,8 +13,6 @@ pub(super) struct SendRequestContext {
     pub(super) targets: Vec<String>,
     pub(super) broadcast: bool,
     pub(super) quiet_window_ms: Option<u64>,
-    pub(super) quiescence_timeout_ms: Option<u64>,
-    pub(super) acp_turn_timeout_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug)]

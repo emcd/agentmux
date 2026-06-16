@@ -329,7 +329,7 @@ coder = "acp"
     (config_root, log_path)
 }
 
-fn acp_send_request(acp_turn_timeout_ms: Option<u64>) -> RelayRequest {
+fn acp_send_request() -> RelayRequest {
     RelayRequest::Send {
         request_id: Some("req-acp".to_string()),
         requester_session: "alpha".to_string(),
@@ -337,8 +337,6 @@ fn acp_send_request(acp_turn_timeout_ms: Option<u64>) -> RelayRequest {
         targets: vec!["bravo@party".to_string()],
         broadcast: false,
         quiet_window_ms: Some(50),
-        quiescence_timeout_ms: None,
-        acp_turn_timeout_ms,
     }
 }
 
@@ -346,16 +344,12 @@ fn acp_send_request(acp_turn_timeout_ms: Option<u64>) -> RelayRequest {
 /// the persistent ACP worker has acted on the queued task -- its
 /// `session/prompt` reached the stub, or the worker settled `unavailable` --
 /// so callers can inspect post-delivery side effects deterministically.
-pub(super) fn dispatch_send(
-    config_root: &Path,
-    tmux_socket: &Path,
-    acp_turn_timeout_ms: Option<u64>,
-) -> RelayResponse {
+pub(super) fn dispatch_send(config_root: &Path, tmux_socket: &Path) -> RelayResponse {
     let root = tmux_socket.parent().unwrap_or_else(|| Path::new("."));
     let log_path = root.join("acp_requests.log");
     let baseline_prompts = count_logged_method(&log_path, "session/prompt");
-    let response = dispatch_send_result(config_root, tmux_socket, acp_turn_timeout_ms)
-        .expect("relay request should parse");
+    let response =
+        dispatch_send_result(config_root, tmux_socket).expect("relay request should parse");
     let deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < deadline {
         if count_logged_method(&log_path, "session/prompt") > baseline_prompts
@@ -373,28 +367,16 @@ pub(super) fn dispatch_send(
 pub(super) fn dispatch_send_result(
     config_root: &Path,
     tmux_socket: &Path,
-    acp_turn_timeout_ms: Option<u64>,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
     startup_bundle(config_root, tmux_socket)?;
-    dispatch_request(
-        acp_send_request(acp_turn_timeout_ms),
-        config_root,
-        "party",
-        tmux_socket,
-    )
+    dispatch_request(acp_send_request(), config_root, "party", tmux_socket)
 }
 
 pub(super) fn dispatch_send_without_startup_result(
     config_root: &Path,
     tmux_socket: &Path,
-    acp_turn_timeout_ms: Option<u64>,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
-    dispatch_request(
-        acp_send_request(acp_turn_timeout_ms),
-        config_root,
-        "party",
-        tmux_socket,
-    )
+    dispatch_request(acp_send_request(), config_root, "party", tmux_socket)
 }
 
 fn count_logged_method(log_path: &Path, method: &str) -> usize {
@@ -530,14 +512,10 @@ where
 /// filesystem-poll path) to absorb macOS scheduling latency; with channel
 /// observation the test thread is not burning CPU on poll loops while it
 /// waits, so a generous deadline is cheap.
-pub(super) fn assert_acp_delivery_unavailable(
-    config_root: &Path,
-    tmux_socket: &Path,
-    acp_turn_timeout_ms: Option<u64>,
-) {
+pub(super) fn assert_acp_delivery_unavailable(config_root: &Path, tmux_socket: &Path) {
     let root = tmux_socket.parent().unwrap_or_else(|| Path::new("."));
     let mut receiver = subscribe_bravo_worker_state(root);
-    match dispatch_send_result(config_root, tmux_socket, acp_turn_timeout_ms) {
+    match dispatch_send_result(config_root, tmux_socket) {
         Err(error) => assert_eq!(error.code, "runtime_acp_worker_unavailable"),
         Ok(response) => {
             let _result = send_result(response);

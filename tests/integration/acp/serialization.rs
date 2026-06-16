@@ -12,11 +12,7 @@ fn acp_result_serialization_reflects_queued_async_outcome() {
         ..AcpStubOptions::default()
     };
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
-    let response = dispatch_send(
-        &config_root,
-        &temporary.path().join("tmux.sock"),
-        Some(1_000),
-    );
+    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let RelayResponse::Send { results, .. } = response else {
         panic!("expected send response");
     };

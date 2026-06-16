@@ -20,7 +20,7 @@ fn acp_send_without_startup_fails_when_worker_is_unavailable() {
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let error = dispatch_send_without_startup_result(&config_root, &tmux_socket, Some(1_000))
+    let error = dispatch_send_without_startup_result(&config_root, &tmux_socket)
         .expect_err("ACP send should fail without startup worker");
     assert_eq!(error.code, "runtime_acp_worker_unavailable");
 }
@@ -52,7 +52,7 @@ fn acp_look_returns_oldest_to_newest_session_update_lines() {
     };
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = dispatch_send(&config_root, &tmux_socket, Some(1_000));
+    let response = dispatch_send(&config_root, &tmux_socket);
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
@@ -89,7 +89,7 @@ fn acp_look_enforces_bounded_retention_and_tail_selection() {
     };
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = dispatch_send(&config_root, &tmux_socket, Some(2_000));
+    let response = dispatch_send(&config_root, &tmux_socket);
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
@@ -140,7 +140,7 @@ fn acp_look_offset_walks_backward_through_replay_buffer_with_metadata() {
     };
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = dispatch_send(&config_root, &tmux_socket, Some(1_000));
+    let response = dispatch_send(&config_root, &tmux_socket);
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
@@ -234,7 +234,7 @@ fn acp_look_reflects_outgoing_user_prompt_before_session_updates_arrive() {
     };
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = dispatch_send(&config_root, &tmux_socket, Some(1_000));
+    let response = dispatch_send(&config_root, &tmux_socket);
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
@@ -269,7 +269,7 @@ fn acp_look_captures_updates_emitted_after_prompt_response() {
     };
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = dispatch_send(&config_root, &tmux_socket, Some(1_000));
+    let response = dispatch_send(&config_root, &tmux_socket);
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
@@ -301,7 +301,7 @@ fn acp_look_reuses_persistent_worker_without_one_shot_replay_refresh() {
     };
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = dispatch_send(&config_root, &tmux_socket, Some(1_000));
+    let response = dispatch_send(&config_root, &tmux_socket);
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
@@ -357,7 +357,7 @@ fn acp_look_replaces_legacy_flattened_baseline_after_structured_load() {
     assert!(pre_load_snapshot.lines.is_empty());
     assert_eq!(pre_load_snapshot.freshness, AcpLookFreshness::Stale);
 
-    let response = dispatch_send(&config_root, &tmux_socket, Some(1_000));
+    let response = dispatch_send(&config_root, &tmux_socket);
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
