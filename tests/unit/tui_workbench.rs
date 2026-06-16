@@ -159,6 +159,76 @@ fn completion_navigation_stops_after_accept_until_retriggered() {
 }
 
 #[test]
+fn to_field_left_arrow_inserts_at_cursor() {
+    let mut state = make_state();
+    state.insert_text("abc");
+    assert_eq!(state.to_cursor_column(), 3);
+    state
+        .dispatch_event(key_event(KeyCode::Left, KeyModifiers::NONE))
+        .expect("left should be handled");
+    state
+        .dispatch_event(key_event(KeyCode::Left, KeyModifiers::NONE))
+        .expect("left should be handled");
+    assert_eq!(state.to_cursor_column(), 1);
+    state.insert_text("X");
+    assert_eq!(state.to_field(), "aXbc");
+    assert_eq!(state.to_cursor_column(), 2);
+}
+
+#[test]
+fn to_field_right_arrow_advances_cursor() {
+    let mut state = make_state();
+    state.insert_text("abc");
+    state
+        .dispatch_event(key_event(KeyCode::Home, KeyModifiers::NONE))
+        .expect("home should be handled");
+    assert_eq!(state.to_cursor_column(), 0);
+    state
+        .dispatch_event(key_event(KeyCode::Right, KeyModifiers::NONE))
+        .expect("right should be handled");
+    assert_eq!(state.to_cursor_column(), 1);
+}
+
+#[test]
+fn to_field_ctrl_a_and_ctrl_e_jump_to_bounds() {
+    let mut state = make_state();
+    state.insert_text("abc");
+    state
+        .dispatch_event(key_event(KeyCode::Char('a'), KeyModifiers::CONTROL))
+        .expect("ctrl+a should be handled");
+    assert_eq!(state.to_cursor_column(), 0);
+    state
+        .dispatch_event(key_event(KeyCode::Char('e'), KeyModifiers::CONTROL))
+        .expect("ctrl+e should be handled");
+    assert_eq!(state.to_cursor_column(), 3);
+}
+
+#[test]
+fn to_field_ctrl_u_clears_the_line() {
+    let mut state = make_state();
+    state.insert_text("master, mcp");
+    state
+        .dispatch_event(key_event(KeyCode::Char('u'), KeyModifiers::CONTROL))
+        .expect("ctrl+u should be handled");
+    assert_eq!(state.to_field(), "");
+    assert_eq!(state.to_cursor_column(), 0);
+}
+
+#[test]
+fn to_field_backspace_deletes_before_cursor() {
+    let mut state = make_state();
+    state.insert_text("abc");
+    state
+        .dispatch_event(key_event(KeyCode::Left, KeyModifiers::NONE))
+        .expect("left should be handled");
+    state
+        .dispatch_event(key_event(KeyCode::Backspace, KeyModifiers::NONE))
+        .expect("backspace should be handled");
+    assert_eq!(state.to_field(), "ac");
+    assert_eq!(state.to_cursor_column(), 1);
+}
+
+#[test]
 fn message_cursor_moves_vertically_without_history_recall() {
     let mut state = make_state();
     state.set_focus(WorkbenchField::Message);

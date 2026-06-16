@@ -32,9 +32,14 @@ impl AppState {
     pub fn insert_character(&mut self, character: char) {
         match self.focus {
             FocusField::To => {
-                self.to_field.push(character);
+                self.to_field.insert(self.to_cursor_index, character);
+                self.to_cursor_index += character.len_utf8();
                 self.on_to_field_edited();
-                self.maybe_autocomplete_at_prefixed_token();
+                // Token completion operates on the trailing recipient token, so
+                // it only applies when editing at the end of the field.
+                if self.to_cursor_index == self.to_field.len() {
+                    self.maybe_autocomplete_at_prefixed_token();
+                }
             }
             FocusField::Message => self.insert_character_in_message(character),
         }
@@ -49,9 +54,22 @@ impl AppState {
     pub fn backspace(&mut self) {
         match self.focus {
             FocusField::To => {
-                self.to_field.pop();
+                if self.to_cursor_index == 0 {
+                    return;
+                }
+                let next_cursor = super::text_util::previous_char_boundary(
+                    self.to_field.as_str(),
+                    self.to_cursor_index,
+                );
+                self.to_field
+                    .replace_range(next_cursor..self.to_cursor_index, "");
+                self.to_cursor_index = next_cursor;
                 self.on_to_field_edited();
-                self.maybe_autocomplete_at_prefixed_token();
+                // Token completion operates on the trailing recipient token, so
+                // it only applies when editing at the end of the field.
+                if self.to_cursor_index == self.to_field.len() {
+                    self.maybe_autocomplete_at_prefixed_token();
+                }
             }
             FocusField::Message => {
                 self.backspace_message();
@@ -80,8 +98,57 @@ impl AppState {
             return false;
         };
         self.commit_completed_to_token(completion_state.token_start);
+        self.to_cursor_index = self.to_field.len();
         self.to_completion = None;
         true
+    }
+
+    pub fn move_to_field_cursor_left(&mut self) {
+        if self.focus != FocusField::To || self.to_cursor_index == 0 {
+            return;
+        }
+        self.to_cursor_index =
+            super::text_util::previous_char_boundary(self.to_field.as_str(), self.to_cursor_index);
+        self.clear_to_completion();
+    }
+
+    pub fn move_to_field_cursor_right(&mut self) {
+        if self.focus != FocusField::To || self.to_cursor_index >= self.to_field.len() {
+            return;
+        }
+        self.to_cursor_index =
+            super::text_util::next_char_boundary(self.to_field.as_str(), self.to_cursor_index);
+        self.clear_to_completion();
+    }
+
+    pub fn move_to_field_cursor_home(&mut self) {
+        if self.focus != FocusField::To {
+            return;
+        }
+        self.to_cursor_index = 0;
+        self.clear_to_completion();
+    }
+
+    pub fn move_to_field_cursor_end(&mut self) {
+        if self.focus != FocusField::To {
+            return;
+        }
+        self.to_cursor_index = self.to_field.len();
+        self.clear_to_completion();
+    }
+
+    pub fn clear_to_field(&mut self) {
+        if self.focus != FocusField::To {
+            return;
+        }
+        self.to_field.clear();
+        self.to_cursor_index = 0;
+        self.clear_to_completion();
+    }
+
+    pub fn to_cursor_column(&self) -> usize {
+        let clamped = self.to_cursor_index.min(self.to_field.len());
+        self.to_field[..clamped].chars().count()
     }
 
     pub fn move_to_completion_selection(&mut self, delta: isize) -> bool {
@@ -190,6 +257,7 @@ impl AppState {
 
     pub(in crate::tui::state) fn clear_compose_fields(&mut self) {
         self.to_field.clear();
+        self.to_cursor_index = 0;
         self.message_field.clear();
         self.message_cursor_index = 0;
         self.message_cursor_preferred_column = None;
@@ -280,6 +348,7 @@ impl AppState {
         next.push_str(candidate);
         next.push_str(&self.to_field[token_end..]);
         self.to_field = next;
+        self.to_cursor_index = self.to_field.len();
     }
 
     fn commit_completed_to_token(&mut self, token_start: usize) {

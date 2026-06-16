@@ -38,7 +38,7 @@ picker (`F5`) are overlays available in both modes.
       selection insert, overlay toggles (`toggle_events_overlay`,
       `toggle_help_overlay`)
     - `editing.rs` — focus cycling, mode toggle, text/character editing,
-      message cursor, `To` completion, `clear_compose_fields`
+      message cursor, `To` cursor + completion, `clear_compose_fields`
     - `interaction.rs` — interaction-mode entry, target set, raww draft
       editing + cursor, snapshot scrolling, interaction-region visibility,
       `overlay_snapshot_from_payload`, `render_transport_label`

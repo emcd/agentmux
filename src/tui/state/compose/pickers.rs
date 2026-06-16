@@ -96,7 +96,8 @@ impl AppState {
         let session_name = recipient.session_name.clone();
         match self.focus {
             FocusField::To => {
-                self.to_field = append_recipient_token(&self.to_field, session_name.as_str())
+                self.to_field = append_recipient_token(&self.to_field, session_name.as_str());
+                self.move_to_field_cursor_end();
             }
             FocusField::Message => {
                 self.push_status(
