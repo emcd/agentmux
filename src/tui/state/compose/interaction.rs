@@ -107,14 +107,24 @@ impl AppState {
 
                 // Raww delivery is asynchronous: status is always `queued` and
                 // the terminal outcome arrives via a later delivery_outcome
-                // stream event. FE owns the follow-on TUI slice that surfaces
-                // that async outcome; this is the minimal queued acknowledgement.
+                // stream event. Enroll the message_id into pending-delivery
+                // tracking so the verb-agnostic delivery_outcome consumer
+                // (history.rs) closes it out, mirroring how chat send results
+                // are recorded. Guard against a terminal outcome that already
+                // raced ahead of this queued acknowledgement.
+                if let Some(message_id) = message_id.as_deref()
+                    && !self.terminal_delivery_message_ids.contains(message_id)
+                {
+                    self.pending_delivery_ids.insert(message_id.to_string());
+                }
+
                 self.push_status(
                     None,
                     format!("write {status} target={target_session} transport={transport_label}"),
                 );
                 self.push_event(format!(
-                    "write target={target_session} status={status} transport={transport_label} message_id={message_id_label}"
+                    "write target={target_session} status={status} transport={transport_label} message_id={message_id_label} pending={}",
+                    self.pending_deliveries_count()
                 ));
                 self.clear_raww_draft();
                 self.relay_stream_poll_error_reported = false;
