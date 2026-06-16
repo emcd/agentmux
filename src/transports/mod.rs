@@ -7,8 +7,8 @@
 pub mod contract;
 
 pub use contract::{
-    AcpTransport, DeliveryContext, DeliveryEnvelope, DeliveryResult, LookMode, LookSnapshotPayload,
-    PermissionResponse, PromptReadinessTemplate, RawWriteResult, SingleDeliveryOutcome,
-    StartupContext, TmuxTransport, Transport, TransportError, TransportEvent, TransportImpl,
-    TransportReadiness, TransportStatus,
+    AcpTransport, ChoiceMade, ChoiceToMake, Chooser, DeliveryContext, DeliveryEnvelope,
+    DeliveryResult, LookMode, LookSnapshotPayload, OutputView, PromptReadinessTemplate,
+    RawWriteResult, SingleDeliveryOutcome, StartupContext, ThingToChoose, TmuxTransport, Transport,
+    TransportError, TransportImpl, TransportReadiness, TransportStatus,
 };
