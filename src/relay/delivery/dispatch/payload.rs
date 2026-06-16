@@ -229,10 +229,10 @@ fn co_recipient_addresses(task: &AsyncDeliveryTask) -> Vec<AddressIdentity> {
 
 /// Prepares the prompt batches for a single raw-input delivery task.
 ///
-/// Only `RawInput` tasks reach this path: `deliver_one_target` (tmux raww),
-/// `enqueue_sync_delivery` (ACP raww), and the batch worker's RawInput-head
-/// delegation all carry raw input. Envelope-mode tasks are produced solely by
-/// `send.rs` and route through the async batch path
+/// Only `RawInput` tasks reach this path. Both tmux and ACP raww enqueue onto an
+/// async per-target worker, whose batch loop delegates RawInput heads to the
+/// single-task path verbatim (RawInput never coalesces). Envelope-mode tasks are
+/// produced solely by `send.rs` and route through the async batch path
 /// (`prepare_batch_delivery_payload`), never here, so this function renders no
 /// envelope and carries no UI short-circuit.
 pub(super) fn prepare_delivery_payload(

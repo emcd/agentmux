@@ -819,7 +819,6 @@ mod coalesce_batch_tests {
             },
             batch_settings: PromptBatchSettings::default(),
             runtime_directory: PathBuf::from("/tmp/relay-test"),
-            completion_sender: None,
             payload_mode,
             append_enter: true,
             choice_decider_sessions: Vec::new(),

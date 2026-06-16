@@ -9,7 +9,10 @@ use crate::configuration::{AcpTargetConfiguration, BundleMember, TargetConfigura
 
 use super::acp_client::{AcpStdioClient, PromptCompletion, PromptDispatchOutcome};
 use super::acp_state::{load_persisted_acp_session_id, persist_acp_session_id};
-use super::async_worker::{AcpWorkerReadinessState, get_acp_worker_state, set_acp_worker_state};
+use super::async_worker::{
+    AcpWorkerReadinessState, emit_sender_delivery_outcome_event, get_acp_worker_state,
+    set_acp_worker_state,
+};
 use super::results::{
     delivered_in_progress_result, delivered_result, failed_result, failed_result_with_code,
 };
@@ -142,11 +145,11 @@ pub(super) fn respawn_acp_worker_runtime(
 ///
 /// Mirrors `deliver_one_target_acp` but folds N tasks into the prompt's
 /// completion path: the on_completion callback fans the single transport
-/// outcome out to every task's `completion_sender` using each task's own
-/// `target_session` and `message_id`. The shared choice decision window
-/// (one tool-call surface per coalesced prompt) is correlated to the head
-/// task's `message_id`; that is the operator-facing message under which the
-/// decision is recorded.
+/// outcome out to every task as a per-sender `delivery_outcome` event, using
+/// each task's own sender, `target_session`, and `message_id`. The shared choice
+/// decision window (one tool-call surface per coalesced prompt) is correlated to
+/// the head task's `message_id`; that is the operator-facing message under which
+/// the decision is recorded.
 pub(super) fn deliver_batch_target_acp(
     batch: &[AsyncDeliveryTask],
     target_member: &BundleMember,
@@ -279,13 +282,13 @@ pub(super) fn deliver_batch_target_acp(
     );
 
     // Per-task correlation captured into on_completion. One ACP completion
-    // outcome maps to N synthesised per-task SendResults so each original
-    // send call's completion_sender receives a result tied to its own
-    // message_id and target_session.
+    // outcome maps to N per-task delivery_outcome events, each tied to the
+    // originating task's sender, message_id, and target_session.
     let completion_correlations: Vec<TaskCorrelation> = batch
         .iter()
         .map(|task| TaskCorrelation {
-            completion_sender: task.completion_sender.clone(),
+            sender_bundle_name: task.sender_bundle_name.clone(),
+            sender_session: task.sender.id.clone(),
             target_session: task.target_session.clone(),
             message_id: task.message_id.clone(),
         })
@@ -321,12 +324,19 @@ pub(super) fn deliver_batch_target_acp(
             );
         }
         for correlation in &completion_correlations {
-            let mut per_task = template_result.clone();
-            per_task.target_session = correlation.target_session.clone();
-            per_task.message_id = correlation.message_id.clone();
-            if let Some(sender) = correlation.completion_sender.as_ref() {
-                let _ = sender.send(Ok(per_task));
-            }
+            // `completion_bundle_name` is the target's bundle, shared across the
+            // coalesced batch (the coalesce key includes bundle_name); senders
+            // may differ per task, so they come from the correlation.
+            emit_sender_delivery_outcome_event(
+                completion_bundle_name.as_str(),
+                correlation.sender_bundle_name.as_str(),
+                correlation.sender_session.as_str(),
+                correlation.target_session.as_str(),
+                correlation.message_id.as_str(),
+                template_result.outcome.clone(),
+                template_result.reason_code.as_deref(),
+                template_result.reason.as_deref(),
+            );
         }
         set_acp_worker_state(
             completion_bundle_name.as_str(),
@@ -392,10 +402,15 @@ pub(super) fn deliver_batch_target_acp(
     }
 }
 
+/// Per-task identity captured into the batch `on_completion` closure. One ACP
+/// prompt completion fans a single terminal outcome out to every coalesced task,
+/// emitting each sender's `delivery_outcome` event routed to that sender's home
+/// bundle. Coalescing does not require a shared sender, so sender attribution is
+/// carried per task rather than read from the head.
 #[derive(Clone)]
 struct TaskCorrelation {
-    completion_sender:
-        Option<std::sync::mpsc::Sender<Result<SendResult, crate::relay::RelayError>>>,
+    sender_bundle_name: String,
+    sender_session: String,
     target_session: String,
     message_id: String,
 }
@@ -562,7 +577,8 @@ pub(super) fn deliver_one_target_acp(
     let completion_target_member_id = target_member_id.clone();
     let completion_target_session = target_session.clone();
     let completion_message_id = message_id.clone();
-    let completion_sender = task.completion_sender.clone();
+    let completion_sender_bundle_name = task.sender_bundle_name.clone();
+    let completion_sender_session = task.sender.id.clone();
     let pending_choice_outcome_reader = Arc::clone(&pending_choice_outcome_shared);
     let on_completion: crate::acp::PromptCompletionHandler = Box::new(move |completion| {
         let pending_choice_outcome = pending_choice_outcome_reader
@@ -588,9 +604,16 @@ pub(super) fn deliver_one_target_acp(
             completion_target_member_id.as_str(),
             final_state,
         );
-        if let Some(sender) = completion_sender.as_ref() {
-            let _ = sender.send(Ok(final_result));
-        }
+        emit_sender_delivery_outcome_event(
+            completion_bundle_name.as_str(),
+            completion_sender_bundle_name.as_str(),
+            completion_sender_session.as_str(),
+            final_result.target_session.as_str(),
+            final_result.message_id.as_str(),
+            final_result.outcome.clone(),
+            final_result.reason_code.as_deref(),
+            final_result.reason.as_deref(),
+        );
     });
 
     let outcome = runtime.client.prompt(

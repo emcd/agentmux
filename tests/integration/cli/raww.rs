@@ -56,14 +56,11 @@ fn raww_forwards_no_enter_and_preserves_json_contract() {
         &RelayRuntimePaths::resolve(&state_root).relay_socket,
         RelayResponse::Raww {
             schema_version: "1".to_string(),
-            status: "accepted".to_string(),
+            status: "queued".to_string(),
             target_session: "bravo".to_string(),
             transport: ListedSessionTransport::Acp,
             request_id: None,
             message_id: Some("raww-msg-1".to_string()),
-            details: Some(serde_json::json!({
-                "delivery_phase": "accepted_in_progress",
-            })),
         },
         Arc::clone(&request_log),
     );
@@ -89,11 +86,14 @@ fn raww_forwards_no_enter_and_preserves_json_contract() {
 
     assert!(output.status.success(), "command should succeed");
     let payload: Value = serde_json::from_slice(&output.stdout).expect("decode raww json payload");
-    assert_eq!(payload["status"], "accepted");
+    assert_eq!(payload["status"], "queued");
     assert_eq!(payload["target_session"], "bravo");
     assert_eq!(payload["transport"], "acp");
     assert_eq!(payload["message_id"], "raww-msg-1");
-    assert_eq!(payload["details"]["delivery_phase"], "accepted_in_progress");
+    assert!(
+        payload.get("details").is_none(),
+        "raww response must not carry a details field: {payload:?}"
+    );
 
     let requests = request_log.lock().expect("request log lock");
     assert_eq!(requests.len(), 1);

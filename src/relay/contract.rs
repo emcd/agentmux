@@ -324,6 +324,9 @@ pub enum RelayResponse {
     },
     Raww {
         schema_version: String,
+        /// Always `queued`: raww delivery is asynchronous. The terminal
+        /// delivery outcome is reported out-of-band via `delivery_outcome`
+        /// stream events, not in this immediate response.
         status: String,
         target_session: String,
         transport: ListedSessionTransport,
@@ -331,8 +334,6 @@ pub enum RelayResponse {
         request_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         message_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        details: Option<Value>,
     },
     ChoicesPick {
         schema_version: String,

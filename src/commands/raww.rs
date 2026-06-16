@@ -58,7 +58,6 @@ pub(super) fn run_agentmux_raww(arguments: &[String]) -> Result<(), RuntimeError
             transport,
             request_id,
             message_id,
-            details,
         } => {
             let mut payload = Map::new();
             payload.insert("schema_version".to_string(), Value::String(schema_version));
@@ -70,9 +69,6 @@ pub(super) fn run_agentmux_raww(arguments: &[String]) -> Result<(), RuntimeError
             }
             if let Some(value) = message_id {
                 payload.insert("message_id".to_string(), Value::String(value));
-            }
-            if let Some(value) = details {
-                payload.insert("details".to_string(), value);
             }
             Value::Object(payload)
         }
@@ -105,17 +101,7 @@ pub(super) fn run_agentmux_raww(arguments: &[String]) -> Result<(), RuntimeError
             .get("transport")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let delivery_phase = payload
-            .get("details")
-            .and_then(|details| details.get("delivery_phase"))
-            .and_then(Value::as_str);
-        if let Some(delivery_phase) = delivery_phase {
-            println!(
-                "status={status} target={target_session} transport={transport} phase={delivery_phase}"
-            );
-        } else {
-            println!("status={status} target={target_session} transport={transport}");
-        }
+        println!("status={status} target={target_session} transport={transport}");
     }
     Ok(())
 }

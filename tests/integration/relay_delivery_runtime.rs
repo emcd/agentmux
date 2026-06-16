@@ -666,7 +666,7 @@ async fn relay_async_delivery_does_not_inject_while_pane_in_mode() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn relay_raww_tmux_default_appends_enter_and_reports_dispatched_phase() {
+async fn relay_raww_tmux_default_queues_and_appends_enter() {
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
     let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
@@ -707,24 +707,34 @@ async fn relay_raww_tmux_default_appends_enter_and_reports_dispatched_phase() {
         transport,
         request_id,
         message_id,
-        details,
         ..
     } = response
     else {
         panic!("expected raww response");
     };
-    assert_eq!(status, "accepted");
+    assert_eq!(status, "queued");
     assert_eq!(target_session, "alpha@party");
     assert_eq!(transport, ListedSessionTransport::Tmux);
     assert_eq!(request_id.as_deref(), Some("req-raww-default-enter"));
     assert!(message_id.is_some(), "message_id should be present");
-    assert_eq!(
-        details
-            .as_ref()
-            .and_then(|value| value.get("delivery_phase"))
-            .and_then(serde_json::Value::as_str),
-        Some("accepted_dispatched"),
-    );
+
+    // Raww delivery now runs in a background worker; wait for the trailing Enter
+    // send-keys before reaping the relay so the paste-buffer sequence is fully
+    // observable in the log.
+    let delivery_deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if fs::read_to_string(&log_file)
+            .map(|log| log.contains("send-keys -t %1 Enter"))
+            .unwrap_or(false)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < delivery_deadline,
+            "async raww delivery did not complete within timeout"
+        );
+        sleep(Duration::from_millis(20)).await;
+    }
 
     child.start_kill().expect("kill relay");
     let _ = child.wait().await;
@@ -786,23 +796,35 @@ async fn relay_raww_tmux_no_enter_omits_enter_command() {
         target_session,
         transport,
         request_id,
-        details,
         ..
     } = response
     else {
         panic!("expected raww response");
     };
-    assert_eq!(status, "accepted");
+    assert_eq!(status, "queued");
     assert_eq!(target_session, "alpha@party");
     assert_eq!(transport, ListedSessionTransport::Tmux);
     assert_eq!(request_id.as_deref(), Some("req-raww-no-enter"));
-    assert_eq!(
-        details
-            .as_ref()
-            .and_then(|value| value.get("delivery_phase"))
-            .and_then(serde_json::Value::as_str),
-        Some("accepted_dispatched"),
-    );
+
+    // Async delivery: no_enter sends no trailing Enter, so wait for the
+    // paste-buffer command itself before reaping the relay.
+    let delivery_deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if fs::read_to_string(&log_file)
+            .map(|log| {
+                log.lines()
+                    .any(|line| line.contains(" paste-buffer ") && line.contains("-t %1"))
+            })
+            .unwrap_or(false)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < delivery_deadline,
+            "async raww delivery did not complete within timeout"
+        );
+        sleep(Duration::from_millis(20)).await;
+    }
 
     child.start_kill().expect("kill relay");
     let _ = child.wait().await;

@@ -21,8 +21,7 @@ pub(in crate::relay) use self::choice_state::{
     list_pending_choice_requests, resolve_choice_request, wait_for_choice_resolution,
 };
 pub(in crate::relay) use self::dispatch::{
-    await_acp_worker_prime_for_look, deliver_one_target, enqueue_async_delivery,
-    enqueue_sync_delivery, initialize_acp_target_for_startup, prompt_batch_settings,
-    wait_for_async_delivery_shutdown,
+    await_acp_worker_prime_for_look, enqueue_async_delivery, initialize_acp_target_for_startup,
+    prompt_batch_settings, wait_for_async_delivery_shutdown,
 };
 pub(in crate::relay) use self::quiescence::QuiescenceOptions;

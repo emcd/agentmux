@@ -351,14 +351,12 @@ pub(super) fn complete_task_outcome(
     task: &AsyncDeliveryTask,
     outcome: Result<SendResult, RelayError>,
 ) {
-    if let Some(sender) = task.completion_sender.as_ref() {
-        let _ = sender.send(outcome);
-        return;
-    }
     match outcome {
         Ok(result) => {
             emit_sender_delivery_outcome_event(
-                task,
+                task.bundle.bundle_name.as_str(),
+                task.sender_bundle_name.as_str(),
+                task.sender.id.as_str(),
                 result.target_session.as_str(),
                 result.message_id.as_str(),
                 result.outcome.clone(),
@@ -381,7 +379,9 @@ pub(super) fn complete_task_outcome(
         }
         Err(error) => {
             emit_sender_delivery_outcome_event(
-                task,
+                task.bundle.bundle_name.as_str(),
+                task.sender_bundle_name.as_str(),
+                task.sender.id.as_str(),
                 task.target_session.as_str(),
                 task.message_id.as_str(),
                 SendOutcome::Failed,
@@ -404,8 +404,16 @@ pub(super) fn complete_task_outcome(
     }
 }
 
-fn emit_sender_delivery_outcome_event(
-    task: &AsyncDeliveryTask,
+/// Routes a `delivery_outcome` event for one task back to the sender within its
+/// home bundle. Takes the sender/target identity as discrete strings rather than
+/// the whole task so ACP completion closures — which hold only cloned per-task
+/// fields, not a `&AsyncDeliveryTask` that lives long enough — can emit terminal
+/// outcomes once the agent turn finishes.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn emit_sender_delivery_outcome_event(
+    target_bundle_name: &str,
+    sender_bundle_name: &str,
+    sender_session: &str,
     target_session: &str,
     message_id: &str,
     terminal_outcome: SendOutcome,
@@ -452,7 +460,7 @@ fn emit_sender_delivery_outcome_event(
         // Describes the target in the TARGET's bundle even though the event
         // routes to the sender's bundle; cross-bundle sends would otherwise
         // misattribute the target to the sender's namespace.
-        target_session: canonical_session_id(target_session, task.bundle.bundle_name.as_str()),
+        target_session: canonical_session_id(target_session, target_bundle_name),
         created_at: time::OffsetDateTime::now_utc()
             .format(&Rfc3339)
             .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string()),
@@ -460,9 +468,5 @@ fn emit_sender_delivery_outcome_event(
     };
     // Route the sender's delivery-outcome event back to the sender within its
     // home bundle, which differs from the target's bundle for cross-bundle sends.
-    let _ = send_event_to_registered_ui(
-        task.sender_bundle_name.as_str(),
-        task.sender.id.as_str(),
-        &event,
-    );
+    let _ = send_event_to_registered_ui(sender_bundle_name, sender_session, &event);
 }

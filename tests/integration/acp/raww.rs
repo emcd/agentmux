@@ -9,7 +9,7 @@ use tempfile::TempDir;
 use super::helpers::*;
 
 #[test]
-fn acp_raww_returns_accepted_in_progress_phase() {
+fn acp_raww_returns_queued_and_dispatches_prompt() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions::default();
     let (config_root, log_path) = write_configuration(temporary.path(), &options);
@@ -29,24 +29,16 @@ fn acp_raww_returns_accepted_in_progress_phase() {
         transport,
         request_id,
         message_id,
-        details,
         ..
     } = response
     else {
         panic!("expected raww response");
     };
-    assert_eq!(status, "accepted");
+    assert_eq!(status, "queued");
     assert_eq!(target_session, "bravo@party");
     assert_eq!(transport, ListedSessionTransport::Acp);
     assert_eq!(request_id.as_deref(), Some("req-acp-raww"));
     assert!(message_id.is_some(), "message_id should be present");
-    assert_eq!(
-        details
-            .as_ref()
-            .and_then(|value| value.get("delivery_phase"))
-            .and_then(serde_json::Value::as_str),
-        Some("accepted_in_progress"),
-    );
 
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {

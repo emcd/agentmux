@@ -28,7 +28,7 @@ async fn raww_rejects_sender_like_fields_before_relay_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn raww_returns_accepted_payload_and_forwards_request_shape() {
+async fn raww_returns_queued_payload_and_forwards_request_shape() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -37,14 +37,11 @@ async fn raww_returns_accepted_payload_and_forwards_request_shape() {
                 Some("raww") => json!({
                     "kind": "raww",
                     "schema_version": "1",
-                    "status": "accepted",
+                    "status": "queued",
                     "target_session": request.get("target_session").cloned().unwrap_or(Value::Null),
                     "transport": "tmux",
                     "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
                     "message_id": "raww-1",
-                    "details": {
-                        "delivery_phase": "accepted_dispatched",
-                    },
                 }),
                 _ => json!({
                     "kind": "error",
@@ -73,12 +70,15 @@ async fn raww_returns_accepted_payload_and_forwards_request_shape() {
     let payload = decode_tool_payload(&response);
 
     assert_eq!(payload["schema_version"], "1");
-    assert_eq!(payload["status"], "accepted");
+    assert_eq!(payload["status"], "queued");
     assert_eq!(payload["target_session"], "bravo");
     assert_eq!(payload["transport"], "tmux");
     assert_eq!(payload["request_id"], "req-raww-1");
     assert_eq!(payload["message_id"], "raww-1");
-    assert_eq!(payload["details"]["delivery_phase"], "accepted_dispatched");
+    assert!(
+        payload.get("details").is_none(),
+        "raww response must not carry a details field: {payload:?}"
+    );
 
     let relay_requests = relay.requests_for_operation("raww");
     assert_eq!(relay_requests.len(), 1);
@@ -89,7 +89,7 @@ async fn raww_returns_accepted_payload_and_forwards_request_shape() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn raww_preserves_acp_accepted_in_progress_details() {
+async fn raww_returns_queued_payload_for_acp_target() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
@@ -98,13 +98,10 @@ async fn raww_preserves_acp_accepted_in_progress_details() {
                 Some("raww") => json!({
                     "kind": "raww",
                     "schema_version": "1",
-                    "status": "accepted",
+                    "status": "queued",
                     "target_session": request.get("target_session").cloned().unwrap_or(Value::Null),
                     "transport": "acp",
                     "message_id": "raww-acp-1",
-                    "details": {
-                        "delivery_phase": "accepted_in_progress",
-                    },
                 }),
                 _ => json!({
                     "kind": "error",
@@ -127,10 +124,13 @@ async fn raww_preserves_acp_accepted_in_progress_details() {
     let response = harness.call_tool(2, "raww", arguments).await;
     let payload = decode_tool_payload(&response);
 
-    assert_eq!(payload["status"], "accepted");
+    assert_eq!(payload["status"], "queued");
     assert_eq!(payload["target_session"], "charlie");
     assert_eq!(payload["transport"], "acp");
-    assert_eq!(payload["details"]["delivery_phase"], "accepted_in_progress");
+    assert!(
+        payload.get("details").is_none(),
+        "raww response must not carry a details field: {payload:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
