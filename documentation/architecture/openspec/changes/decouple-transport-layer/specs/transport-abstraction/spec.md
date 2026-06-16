@@ -50,7 +50,7 @@ The relay SHALL provide each transport a synchronous, re-entrant choice resolver
 (ACP tool-call permissions) SHALL invoke the resolver inline and block until it
 returns, so the agent turn does not progress past a pending choice. The resolver
 SHALL carry per-delivery correlation (`message_id`, `target_session`,
-`max_pending`, decider sessions) in the `ChoiceToMake` it is given, sourced from
+`pending_max`, decider sessions) in the `ChoiceToMake` it is given, sourced from
 the `DeliveryContext`. There SHALL be no inbound event channel and no
 `resolve_permission` method. The resolver SHALL unblock and return
 `ChoiceMade::Cancelled` on relay shutdown or respawn invalidation.

@@ -372,7 +372,7 @@ impl Transport for TmuxTransport {
 pub type Chooser = Arc<dyn Fn(ChoiceToMake) -> ChoiceMade + Send + Sync>;
 
 /// A pending choice handed to the [`Chooser`]. The per-delivery correlation
-/// fields (`message_id`, `target_session`, `max_pending`, `decider_sessions`)
+/// fields (`message_id`, `target_session`, `pending_max`, `decider_sessions`)
 /// are sourced from the [`DeliveryContext`] and head envelope when the transport
 /// raises a choice mid-`deliver`, since the startup-time chooser cannot close
 /// over them.
@@ -384,8 +384,9 @@ pub struct ChoiceToMake {
     pub message_id: String,
     /// The target session the choice belongs to.
     pub target_session: String,
-    /// Maximum pending choices the queue admits for this target.
-    pub max_pending: usize,
+    /// Maximum number of choices that may be pending at once for this target
+    /// before the queue rejects new ones (`runtime_choices_queue_full`).
+    pub pending_max: usize,
     /// Sessions authorized to decide this choice.
     pub decider_sessions: Vec<String>,
     /// Human-facing title for the choice (for example, a tool-call title).
@@ -469,9 +470,10 @@ pub struct DeliveryContext {
     /// worker has already proven readiness; `None` means the transport resolves
     /// it. Slice 3 finalizes the tmux quiescence parameters carried here.
     pub pre_resolved_target: Option<String>,
-    /// Maximum pending choices the queue admits for this target, used to
-    /// populate [`ChoiceToMake::max_pending`] for choices raised mid-delivery.
-    pub choices_max_pending: usize,
+    /// Maximum number of choices that may be pending at once for this target,
+    /// used to populate [`ChoiceToMake::pending_max`] for choices raised
+    /// mid-delivery.
+    pub choices_pending_max: usize,
     /// Sessions authorized to decide choices raised during this delivery, used
     /// to populate [`ChoiceToMake::decider_sessions`].
     pub choice_decider_sessions: Vec<String>,

@@ -68,7 +68,7 @@ semantics, keeps the choice-queue logic in relay, and creates no
 transport->relay back-edge (the transport holds an opaque `Arc<dyn Fn>` typed in
 `transports`). The chooser is re-entrant (the relay keys per-request state by
 choice id under a mutex + per-request condvar), so multiple in-turn choices are
-safe; per-delivery correlation it cannot close over (`message_id`, `max_pending`,
+safe; per-delivery correlation it cannot close over (`message_id`, `pending_max`,
 decider sessions) rides in `ChoiceToMake`, sourced from `DeliveryContext`.
 
 **Invariant**: the chooser MUST unblock and return `ChoiceMade::Cancelled` on

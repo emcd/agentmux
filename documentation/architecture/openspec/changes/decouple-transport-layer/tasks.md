@@ -23,7 +23,7 @@
       `Ui`, and `Pubsub` return `false`). Incorporate it as a first-class
       method on each `TransportImpl` variant alongside the three flags above.
 - [x] 1.4 Define supporting types: `StartupContext` (carries the `Chooser`),
-      `DeliveryEnvelope`, `DeliveryContext` (carries `choices_max_pending` +
+      `DeliveryEnvelope`, `DeliveryContext` (carries `choices_pending_max` +
       `choice_decider_sessions`), `DeliveryResult`, `SingleDeliveryOutcome`,
       `TransportStatus`, `TransportReadiness`, `RawWriteResult`,
       `TransportError`, `LookMode` (carries `prime_timeout`),
@@ -78,7 +78,7 @@ simpler (a handle re-fetch, not a channel re-wire).
 - [ ] 2.6 Inject `choose: Chooser` via `StartupContext`: relay constructs it
       closing over `enqueue_choice_request` + `wait_for_choice_resolution`; the
       transport populates `ChoiceToMake`'s per-delivery correlation
-      (`message_id`, `target_session`, `max_pending`, `decider_sessions`) from
+      (`message_id`, `target_session`, `pending_max`, `decider_sessions`) from
       `DeliveryContext`. No transport->relay back-edge
 - [ ] 2.7 Implement `give_output()` + an `OutputView` for `AcpTransport` holding
       the shared replay buffer `Arc` + a shared readiness signal; the handle
