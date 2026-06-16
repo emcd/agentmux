@@ -122,8 +122,10 @@ exported from `src/relay/mod.rs`.
     fit the single-batch invariant).
   - `async_worker.rs`: worker registry (tokio mpsc senders) and shutdown
     drain helpers.
-  - `acp_client.rs`, `acp_delivery.rs`, `acp_state.rs`: ACP lifecycle,
-    prompt flow, and snapshot persistence helpers.
+  - `acp_delivery.rs`: ACP lifecycle and prompt flow. ACP session-id
+    persistence and look-snapshot freshness derivation live in
+    `crate::acp::state` (moved out of `delivery/` by decouple-transport-layer
+    Slice 2a); the ACP client re-exports come directly from `crate::acp`.
   - `ui_delivery.rs`: UI-stream event emission for delivery completion.
   - `results.rs`, `quiescence.rs`: shared outcome and quiescence logic.
 

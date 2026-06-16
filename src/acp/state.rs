@@ -7,31 +7,28 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     acp::{ReplayEntry, replay_entries_to_snapshot_entries},
-    relay::{AcpLookFreshness, AcpLookSnapshotSource},
+    relay::{AcpLookFreshness, AcpLookSnapshotSource, AcpWorkerReadinessState},
     runtime::inscriptions::emit_inscription,
 };
-
-use super::async_worker::AcpWorkerReadinessState;
 
 const ACP_SESSION_STATE_SCHEMA_VERSION: u32 = 2;
 const ACP_SESSIONS_DIRECTORY: &str = "sessions";
 const ACP_SESSION_STATE_FILE: &str = "state.json";
-pub(in crate::relay) const ACP_LOOK_PRIME_TIMEOUT_MS: u64 = 750;
-pub(in crate::relay) const ACP_STARTUP_PRIME_TIMEOUT_MS: u64 = 10_000;
-pub(in crate::relay) const ACP_STALE_REASON_WORKER_INITIALIZING: &str = "acp_worker_initializing";
-pub(in crate::relay) const ACP_STALE_REASON_WORKER_UNAVAILABLE: &str = "acp_worker_unavailable";
-pub(in crate::relay) const ACP_STALE_REASON_WORKER_RECOVERING: &str = "acp_worker_recovering";
-pub(in crate::relay) const ACP_STALE_REASON_SNAPSHOT_PRIME_TIMEOUT: &str =
-    "acp_snapshot_prime_timeout";
+pub(crate) const ACP_LOOK_PRIME_TIMEOUT_MS: u64 = 750;
+pub(crate) const ACP_STARTUP_PRIME_TIMEOUT_MS: u64 = 10_000;
+const ACP_STALE_REASON_WORKER_INITIALIZING: &str = "acp_worker_initializing";
+const ACP_STALE_REASON_WORKER_UNAVAILABLE: &str = "acp_worker_unavailable";
+const ACP_STALE_REASON_WORKER_RECOVERING: &str = "acp_worker_recovering";
+const ACP_STALE_REASON_SNAPSHOT_PRIME_TIMEOUT: &str = "acp_snapshot_prime_timeout";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub(super) struct PersistedAcpSessionState {
+struct PersistedAcpSessionState {
     pub schema_version: u32,
     pub acp_session_id: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(in crate::relay) struct AcpLookSnapshot {
+pub(crate) struct AcpLookSnapshot {
     pub snapshot_entries: Vec<crate::acp::AcpSnapshotEntry>,
     pub entries_total: usize,
     pub returned_entries_count: usize,
@@ -49,7 +46,7 @@ fn acp_session_state_lock() -> &'static Mutex<()> {
     ACP_SESSION_STATE_LOCK.get_or_init(|| Mutex::new(()))
 }
 
-pub(super) fn resolve_acp_session_state_path(
+fn resolve_acp_session_state_path(
     runtime_directory: &Path,
     target_session: &str,
 ) -> Result<PathBuf, String> {
@@ -59,7 +56,7 @@ pub(super) fn resolve_acp_session_state_path(
         .join(ACP_SESSION_STATE_FILE))
 }
 
-pub(super) fn load_persisted_acp_session_id(
+pub(crate) fn load_persisted_acp_session_id(
     runtime_directory: &Path,
     target_session: &str,
 ) -> Result<Option<String>, String> {
@@ -71,7 +68,7 @@ pub(super) fn load_persisted_acp_session_id(
     Ok(state.map(|value| value.acp_session_id))
 }
 
-pub(super) fn persist_acp_session_id(
+pub(crate) fn persist_acp_session_id(
     runtime_directory: &Path,
     target_session: &str,
     session_id: &str,
@@ -87,7 +84,7 @@ pub(super) fn persist_acp_session_id(
     store_persisted_acp_session_state(path.as_path(), &state)
 }
 
-pub(in crate::relay) fn derive_acp_look_snapshot(
+pub(crate) fn derive_acp_look_snapshot(
     worker_state: Option<AcpWorkerReadinessState>,
     snapshot: Option<&[ReplayEntry]>,
     requested_entries: usize,

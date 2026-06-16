@@ -1,5 +1,6 @@
 pub mod client;
 pub mod render;
+pub mod state;
 
 pub use client::{
     AcpRequestError, AcpStdioClient, DispatchHandler, PermissionHandler, PermissionResponder,

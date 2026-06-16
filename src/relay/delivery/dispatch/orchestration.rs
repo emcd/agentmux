@@ -11,8 +11,9 @@ use time::format_description::well_known::Rfc3339;
 use crate::configuration::{BundleConfiguration, BundleMember, TargetConfiguration};
 
 use super::super::super::{AsyncDeliveryTask, DeliveryPayloadMode, RelayError, SendResult};
+use crate::acp::state::{ACP_LOOK_PRIME_TIMEOUT_MS, ACP_STARTUP_PRIME_TIMEOUT_MS};
+
 use super::super::acp_delivery::PersistentAcpWorkerRuntime;
-use super::super::acp_state::{ACP_LOOK_PRIME_TIMEOUT_MS, ACP_STARTUP_PRIME_TIMEOUT_MS};
 use super::super::async_worker::{AcpWorkerReadinessState, get_acp_worker_state};
 use super::payload::{
     PreparedBatchPayload, prepare_batch_delivery_payload, prepare_delivery_payload,
