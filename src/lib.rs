@@ -7,6 +7,7 @@ pub mod envelope;
 pub mod mcp;
 pub mod relay;
 pub mod runtime;
+pub mod transports;
 pub mod tui;
 
 /// Returns a human-readable startup line for a binary.
