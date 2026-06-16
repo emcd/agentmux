@@ -1,5 +1,4 @@
 use std::{
-    sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
@@ -157,51 +156,6 @@ pub(in crate::relay) fn enqueue_async_delivery(task: AsyncDeliveryTask) -> Resul
     enqueue_delivery_task(task)
 }
 
-// Bound on the synchronous caller's wait for its delivery worker to complete
-// the task (issues/relay/26 defense-in-depth: an ACP agent whose previous turn
-// never completes would otherwise pin the caller's blocking thread forever).
-// Matches the sync-path quiescence default, so a sync delivery behind a busy
-// ACP agent gets the same patience as one behind a busy tmux pane.
-const SYNC_DELIVERY_COMPLETION_TIMEOUT_MS: u64 = 30_000;
-
-pub(in crate::relay) fn enqueue_sync_delivery(
-    mut task: AsyncDeliveryTask,
-) -> Result<SendResult, RelayError> {
-    let target_session = task.target_session.clone();
-    let message_id = task.message_id.clone();
-    let (sender, receiver) = mpsc::channel::<Result<SendResult, RelayError>>();
-    task.completion_sender = Some(sender);
-    enqueue_delivery_task(task)?;
-    match receiver.recv_timeout(Duration::from_millis(SYNC_DELIVERY_COMPLETION_TIMEOUT_MS)) {
-        Ok(outcome) => outcome,
-        // The task stays queued on its worker; the worker's later completion
-        // send lands on this dropped receiver and is discarded.
-        Err(mpsc::RecvTimeoutError::Timeout) => {
-            crate::runtime::inscriptions::emit_inscription(
-                "relay.delivery.sync_completion_timeout",
-                &json!({
-                    "target_session": target_session,
-                    "message_id": message_id,
-                    "timeout_ms": SYNC_DELIVERY_COMPLETION_TIMEOUT_MS,
-                }),
-            );
-            Err(super::super::super::relay_error(
-                "internal_unexpected_failure",
-                "timed out waiting for sync delivery result from worker",
-                Some(json!({
-                    "target_session": target_session,
-                    "timeout_ms": SYNC_DELIVERY_COMPLETION_TIMEOUT_MS,
-                })),
-            ))
-        }
-        Err(mpsc::RecvTimeoutError::Disconnected) => Err(super::super::super::relay_error(
-            "internal_unexpected_failure",
-            "failed to receive sync delivery result from worker",
-            Some(json!({"target_session": target_session})),
-        )),
-    }
-}
-
 fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
     let bounded_acp_queue = super::super::async_worker::task_uses_acp_transport(&task)?;
     let key = super::super::async_worker::AsyncWorkerKey {
@@ -259,13 +213,6 @@ fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
             Ok(())
         }
     }
-}
-
-pub(in crate::relay) fn deliver_one_target(
-    task: &AsyncDeliveryTask,
-) -> Result<SendResult, RelayError> {
-    let mut acp_runtime = None;
-    deliver_one_target_with_worker_state(task, &mut acp_runtime)
 }
 
 pub(in crate::relay) fn deliver_one_target_with_worker_state(

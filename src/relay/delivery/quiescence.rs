@@ -51,28 +51,6 @@ impl Default for QuiescenceOptions {
 }
 
 impl QuiescenceOptions {
-    pub(in crate::relay) fn for_sync(
-        quiet_window_ms: Option<u64>,
-        quiescence_timeout_ms: Option<u64>,
-        acp_turn_timeout_ms: Option<u64>,
-    ) -> Self {
-        Self {
-            quiet_window: Duration::from_millis(
-                quiet_window_ms
-                    .filter(|value| *value > 0)
-                    .unwrap_or(QUIET_WINDOW_MS_DEFAULT),
-            ),
-            quiescence_timeout: Some(Duration::from_millis(
-                quiescence_timeout_ms
-                    .filter(|value| *value > 0)
-                    .unwrap_or(QUIESCENCE_TIMEOUT_MS_DEFAULT),
-            )),
-            acp_turn_timeout_override: acp_turn_timeout_ms
-                .filter(|value| *value > 0)
-                .map(Duration::from_millis),
-        }
-    }
-
     pub(in crate::relay) fn for_async(
         quiet_window_ms: Option<u64>,
         quiescence_timeout_ms: Option<u64>,

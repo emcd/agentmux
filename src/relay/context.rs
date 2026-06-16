@@ -1,9 +1,9 @@
-use std::{path::PathBuf, sync::mpsc};
+use std::path::PathBuf;
 
 use crate::{configuration::BundleConfiguration, envelope::PromptBatchSettings};
 
 use super::identity::IdentityIntrospectRights;
-use super::{DeliveryPayloadMode, RelayError, SendResult, delivery::QuiescenceOptions};
+use super::{DeliveryPayloadMode, delivery::QuiescenceOptions};
 
 #[derive(Clone, Debug)]
 pub(super) struct SendRequestContext {
@@ -65,7 +65,6 @@ pub(super) struct AsyncDeliveryTask {
     pub(super) quiescence: QuiescenceOptions,
     pub(super) batch_settings: PromptBatchSettings,
     pub(super) runtime_directory: PathBuf,
-    pub(super) completion_sender: Option<mpsc::Sender<Result<SendResult, RelayError>>>,
     pub(super) payload_mode: DeliveryPayloadMode,
     pub(super) append_enter: bool,
     pub(super) choice_decider_sessions: Vec<String>,

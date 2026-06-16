@@ -377,7 +377,6 @@ fn execute_send(
                 quiescence,
                 batch_settings,
                 runtime_directory: group.runtime_directory.clone(),
-                completion_sender: None,
                 payload_mode: DeliveryPayloadMode::EnvelopeMessage,
                 append_enter: true,
                 choice_decider_sessions: group.choice_decider_sessions.clone(),

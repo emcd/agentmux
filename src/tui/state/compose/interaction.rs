@@ -100,37 +100,22 @@ impl AppState {
                 transport,
                 request_id: _,
                 message_id,
-                details,
                 ..
             } => {
                 let transport_label = render_transport_label(transport);
-                let phase = details
-                    .as_ref()
-                    .and_then(|value| value.get("delivery_phase"))
-                    .and_then(serde_json::Value::as_str);
                 let message_id_label = message_id.as_deref().unwrap_or("-");
 
-                if let Some(phase) = phase {
-                    self.push_status(
-                        None,
-                        format!(
-                            "write accepted status={status} target={target_session} transport={transport_label} phase={phase}"
-                        ),
-                    );
-                    self.push_event(format!(
-                        "write target={target_session} status={status} transport={transport_label} phase={phase} message_id={message_id_label}"
-                    ));
-                } else {
-                    self.push_status(
-                        None,
-                        format!(
-                            "write accepted status={status} target={target_session} transport={transport_label}"
-                        ),
-                    );
-                    self.push_event(format!(
-                        "write target={target_session} status={status} transport={transport_label} message_id={message_id_label}"
-                    ));
-                }
+                // Raww delivery is asynchronous: status is always `queued` and
+                // the terminal outcome arrives via a later delivery_outcome
+                // stream event. FE owns the follow-on TUI slice that surfaces
+                // that async outcome; this is the minimal queued acknowledgement.
+                self.push_status(
+                    None,
+                    format!("write {status} target={target_session} transport={transport_label}"),
+                );
+                self.push_event(format!(
+                    "write target={target_session} status={status} transport={transport_label} message_id={message_id_label}"
+                ));
                 self.clear_raww_draft();
                 self.relay_stream_poll_error_reported = false;
                 Ok(())

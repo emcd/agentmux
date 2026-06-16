@@ -66,7 +66,6 @@ impl McpServer {
                 transport,
                 request_id,
                 message_id,
-                details,
             }) => {
                 let response = json!({
                     "schema_version": schema_version,
@@ -75,7 +74,6 @@ impl McpServer {
                     "transport": transport,
                     "request_id": request_id,
                     "message_id": message_id,
-                    "details": details,
                 });
                 emit_inscription(
                     "mcp.tool.raww.success",

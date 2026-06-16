@@ -10,16 +10,14 @@ use super::super::authorization::{
     load_authorization_context,
 };
 use super::super::connection::BundleCatalog;
-use super::super::delivery::{
-    QuiescenceOptions, deliver_one_target, enqueue_sync_delivery, prompt_batch_settings,
-};
+use super::super::delivery::{QuiescenceOptions, enqueue_async_delivery, prompt_batch_settings};
 use super::super::routing::{
     Addressing, Capability, OperationProfile, ResolvedRoute, requester_home_namespace,
     resolve_raww_route,
 };
 use super::super::{
     AsyncDeliveryTask, DeliveryPayloadMode, ListedSessionTransport, RelayError, RelayRequest,
-    RelayResponse, SCHEMA_VERSION, SendOutcome, bare_session_id, canonical_session_id, relay_error,
+    RelayResponse, SCHEMA_VERSION, bare_session_id, canonical_session_id, relay_error,
     unsupported_operation,
 };
 use super::routed::{
@@ -210,10 +208,12 @@ fn prepare_raww(
     })
 }
 
-/// Delivers the raw input to the authorized target and builds the response. The
-/// target is guaranteed present by `prepare_raww`. Choice deciders and the
-/// queue bound come from the target bundle's authorization, where delivery is
-/// gated.
+/// Enqueues the raw input for asynchronous delivery to the authorized target
+/// and builds the immediate `queued` response. The target is guaranteed present
+/// by `prepare_raww`. Choice deciders and the queue bound come from the target
+/// bundle's authorization, where delivery is gated. The terminal delivery
+/// outcome is reported out-of-band via `delivery_outcome` stream events; only
+/// enqueue-time failures (e.g. an unavailable ACP worker) surface synchronously.
 fn execute_raww(
     route: &ResolvedRoute,
     prepared: RawwPrepared,
@@ -265,59 +265,32 @@ fn execute_raww(
         relay_wide_target: false,
         message: text,
         message_id: message_id.clone(),
-        quiescence: QuiescenceOptions::for_sync(None, None, None),
+        // Unbounded quiescence wait: an agent turn can run well past 30 seconds,
+        // and async delivery's only hard bound is relay lifetime (shutdown).
+        quiescence: QuiescenceOptions::for_async(None, None, None),
         batch_settings: prompt_batch_settings(),
         runtime_directory: raww_runtime_directory,
-        completion_sender: None,
         payload_mode: DeliveryPayloadMode::RawInput,
         append_enter: !no_enter,
         choice_decider_sessions,
         choices_max_pending: queue_max_pending,
     };
 
-    let result = match &target_member.target {
-        TargetConfiguration::Acp(_) => enqueue_sync_delivery(task)?,
-        TargetConfiguration::Tmux(_) => deliver_one_target(&task)?,
+    // Both transports enqueue onto a per-target async worker; `enqueue_async_delivery`
+    // branches on transport internally (ACP requires a pre-existing bounded worker;
+    // tmux lazily spawns a generic worker). Only enqueue-time failures surface here.
+    match &target_member.target {
+        TargetConfiguration::Acp(_) | TargetConfiguration::Tmux(_) => {
+            enqueue_async_delivery(task)?;
+        }
         TargetConfiguration::Ui | TargetConfiguration::Pubsub => {
             unreachable!("capability gate in prepare_raww rejects can_be_written = false targets")
         }
-    };
-    if result.outcome != SendOutcome::Delivered {
-        let reason = result
-            .reason
-            .unwrap_or_else(|| "raww dispatch failed".to_string());
-        let code = if matches!(
-            result.reason_code.as_deref(),
-            Some("runtime_acp_worker_unavailable")
-        ) {
-            "runtime_target_unavailable"
-        } else {
-            "runtime_transport_write_failed"
-        };
-        return Err(relay_error(
-            code,
-            "raww dispatch failed",
-            Some(json!({
-                "target_session": result.target_session,
-                "transport": transport,
-                "reason": reason,
-                "reason_code": result.reason_code,
-            })),
-        ));
     }
 
-    let details = if transport == ListedSessionTransport::Acp {
-        Some(json!({
-            "delivery_phase": "accepted_in_progress",
-        }))
-    } else {
-        Some(json!({
-            "delivery_phase": "accepted_dispatched",
-        }))
-    };
     Ok(RelayResponse::Raww {
         schema_version: SCHEMA_VERSION.to_string(),
-        status: "accepted".to_string(),
+        status: "queued".to_string(),
         target_session: canonical_session_id(
             target_member.id.as_str(),
             raww_bundle.bundle_name.as_str(),
@@ -325,6 +298,5 @@ fn execute_raww(
         transport,
         request_id,
         message_id: Some(message_id),
-        details,
     })
 }

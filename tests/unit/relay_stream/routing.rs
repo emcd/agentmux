@@ -196,8 +196,9 @@ fn bundle_session_raww(
 /// target's suffix (mirroring `Send`) and, under `raww = all`, authorizes the
 /// cross-namespace reach: a `@GLOBAL` operator's home is `GLOBAL`, so reaching
 /// into a bundle is cross-namespace and requires `all`. Routing and
-/// authorization succeed, so the request reaches dispatch (and fails there only
-/// because the target has no live pane in this harness).
+/// authorization succeed, so the request reaches async dispatch and returns a
+/// queued raww response; the transport outcome (the absent harness pane) is
+/// reported out-of-band via a delivery_outcome event, not in this response.
 #[test]
 fn relay_wide_raww_routes_to_bundle_target_by_suffix() {
     let temporary = TempDir::new().expect("temporary directory");
@@ -215,15 +216,12 @@ fn relay_wide_raww_routes_to_bundle_target_by_suffix() {
         &format!("alpha@{bundle_name}"),
     );
 
-    assert_eq!(response["response"]["kind"], "error");
-    // Routing resolved the bundle and authorization passed at `all`; the only
-    // remaining failure is the absent tmux pane in this harness. Neither the
-    // routing rejection (`validation_missing_routing_namespace`) nor an authz
+    // Routing resolved the bundle and authorization passed at `all`, so the
+    // request reaches async dispatch and returns immediately as queued. Neither
+    // a routing rejection (`validation_missing_routing_namespace`) nor an authz
     // denial (`authorization_forbidden`) must appear.
-    assert_eq!(
-        response["response"]["error"]["code"],
-        "runtime_transport_write_failed"
-    );
+    assert_eq!(response["response"]["kind"], "raww");
+    assert_eq!(response["response"]["status"], "queued");
 }
 
 /// A relay-wide (`@GLOBAL`) principal rawwing into a bundle under only `home`
@@ -259,8 +257,9 @@ fn relay_wide_raww_into_bundle_denied_under_home_scope() {
 }
 
 /// A bundle-bound session rawwing a same-bundle peer is unaffected by the
-/// cross-namespace threshold: it is a home-tier act and succeeds under
-/// `home`, reaching dispatch (and failing only on the absent harness pane).
+/// cross-namespace threshold: it is a home-tier act and succeeds under `home`,
+/// reaching async dispatch and returning a queued raww response (the transport
+/// outcome against the absent harness pane is reported out-of-band).
 #[test]
 fn same_bundle_raww_permitted_under_home_scope() {
     let temporary = TempDir::new().expect("temporary directory");
@@ -277,11 +276,8 @@ fn same_bundle_raww_permitted_under_home_scope() {
         &format!("bravo@{bundle_name}"),
     );
 
-    assert_eq!(response["response"]["kind"], "error");
-    assert_eq!(
-        response["response"]["error"]["code"],
-        "runtime_transport_write_failed"
-    );
+    assert_eq!(response["response"]["kind"], "raww");
+    assert_eq!(response["response"]["status"], "queued");
 }
 
 /// A relay-wide principal whose raww target is bare (no `@<namespace>` suffix) is
