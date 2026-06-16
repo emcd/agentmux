@@ -28,15 +28,39 @@
 - [x] 1.5 Register `mod transports;` in `src/lib.rs`
 - [x] 1.6 Validate: `cargo check` passes; no behavior change
 
-## 2. Slice 2 — Implement Transport for ACP; inbound channel restructure
+## 2. Slice 2 — Implement Transport for ACP
+
+Split into 2a (mechanical leaf moves) and 2b (the inbound channel
+restructure). Cut by entanglement: `acp_state` and the `acp_client` shim have
+no inbound/shared-state coupling; `acp_delivery` + permission extraction + the
+channel all rewrite the same inbound surface and must land together.
+
+### Slice 2a — mechanical leaf moves
+
+- [x] 2.2 Move `relay/delivery/acp_state.rs` → `src/acp/state.rs` (wholesale;
+      `pub(in crate::relay)` internals widened to `pub(crate)` as move
+      mechanics; consumes relay's still-`pub` `AcpWorkerReadinessState` +
+      `AcpLookFreshness`/`AcpLookSnapshotSource`)
+- [x] 2.5 Delete the `relay/delivery/acp_client.rs` re-export shim and repoint
+      its one consumer (`acp_delivery.rs`) at `crate::acp`. The shim only
+      re-exported `crate::acp::{AcpStdioClient, PromptCompletion,
+      PromptDispatchOutcome}`, which already live in `src/acp/client.rs` — there
+      was no content to merge.
+- [x] 2.4 (rescoped) Leave `observability.rs` in `relay/delivery/`. It is
+      relay-side pub/sub over relay's OWN registries (ACP worker-state watch +
+      relay choices-queue broadcast, keyed by the `pub(super)`
+      `async_worker::AsyncWorkerKey`, consumed by `choice_state.rs`), not ACP
+      wire-protocol code; moving it to `src/acp/` would invert the dependency
+      direction. It moves only if `async_worker` moves too (out of scope).
+
+### Slice 2b — ACP Transport impl + inbound channel restructure
 
 - [ ] 2.1 Move `relay/delivery/acp_delivery.rs` → `src/acp/transport.rs`;
       implement `Transport` for `AcpTransport`
-- [ ] 2.2 Move `relay/delivery/acp_state.rs` → `src/acp/state.rs`
-- [ ] 2.3 Move `relay/delivery/permission_state.rs` → `src/acp/permission.rs`
-- [ ] 2.4 Move `relay/delivery/observability.rs` → `src/acp/observability.rs`
-- [ ] 2.5 Merge `relay/delivery/acp_client.rs` into existing
-      `src/acp/client.rs` (do not overwrite)
+- [ ] 2.3 (rescoped) Extract the ACP permission handling — the per-prompt
+      `PermissionHandler` closures embedded in `acp_delivery.rs` (around the
+      old lines 242 and 542), NOT a standalone `permission_state.rs` (no such
+      file exists) — into `src/acp/permission.rs`
 - [ ] 2.6 Restructure inbound event path: replace callbacks + shared state
       with transport-owned mpsc channel; `inbound()` returns `Some(Receiver)`
 - [ ] 2.7 Update `bootstrap_acp_runtime_on_worker_start` (worker.rs:379)
@@ -44,8 +68,12 @@
 - [ ] 2.8 Update `drive_acp_worker_respawn` (worker.rs:568) same as 2.7
 - [ ] 2.9 Worker treats `None` from Receiver as "expected respawn" signal,
       not error — re-subscribes rather than failing
-- [ ] 2.10 Add `TransportImpl::Acp` variant; wire into worker dispatch
-- [ ] 2.11 Validate: `cargo test` passes; ACP delivery works end-to-end
+- [ ] 2.10 Add a third `TransportEvent::DeliveryCompleted` variant so delivery
+      completion (today `emit_sender_delivery_outcome_event`, fired from the
+      background reader) flows through the single inbound surface alongside
+      replay-entries and permission-requests
+- [ ] 2.11 Add `TransportImpl::Acp` variant; wire into worker dispatch
+- [ ] 2.12 Validate: `cargo test` passes; ACP delivery works end-to-end
 
 ## 3. Slice 3 — Implement Transport for Tmux; move Tmux code
 

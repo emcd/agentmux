@@ -7,8 +7,6 @@ use serde_json::{Value, json};
 
 use crate::configuration::{AcpTargetConfiguration, BundleMember, TargetConfiguration};
 
-use super::acp_client::{AcpStdioClient, PromptCompletion, PromptDispatchOutcome};
-use super::acp_state::{load_persisted_acp_session_id, persist_acp_session_id};
 use super::async_worker::{
     AcpWorkerReadinessState, emit_sender_delivery_outcome_event, get_acp_worker_state,
     set_acp_worker_state,
@@ -19,6 +17,8 @@ use super::results::{
 use super::{
     ChoiceEventContext, ChoiceResolutionOutcome, enqueue_choice_request, wait_for_choice_resolution,
 };
+use crate::acp::state::{load_persisted_acp_session_id, persist_acp_session_id};
+use crate::acp::{AcpStdioClient, PromptCompletion, PromptDispatchOutcome};
 
 use super::super::startup_state::note_session_served_successfully;
 use super::super::{AsyncDeliveryTask, SendOutcome, SendResult};

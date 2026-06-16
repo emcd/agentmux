@@ -1,6 +1,4 @@
-mod acp_client;
 mod acp_delivery;
-mod acp_state;
 mod async_worker;
 mod choice_state;
 mod dispatch;
@@ -9,7 +7,6 @@ mod quiescence;
 mod results;
 mod ui_delivery;
 
-pub(in crate::relay) use self::acp_state::derive_acp_look_snapshot;
 pub use self::async_worker::AcpWorkerReadinessState;
 pub(in crate::relay) use self::async_worker::{
     acp_session_ready_for_startup, get_acp_worker_snapshot, get_acp_worker_state,
@@ -25,3 +22,4 @@ pub(in crate::relay) use self::dispatch::{
     prompt_batch_settings, wait_for_async_delivery_shutdown,
 };
 pub(in crate::relay) use self::quiescence::QuiescenceOptions;
+pub(in crate::relay) use crate::acp::state::derive_acp_look_snapshot;
