@@ -1,10 +1,10 @@
 ## 1. Slice 1 — Define Transport trait and dispatch enum
 
-- [ ] 1.1 Create `src/transports/mod.rs` and `src/transports/contract.rs`
-- [ ] 1.2 Define `Transport` trait with sync methods: `startup`, `deliver`,
+- [x] 1.1 Create `src/transports/mod.rs` and `src/transports/contract.rs`
+- [x] 1.2 Define `Transport` trait with sync methods: `startup`, `deliver`,
       `look`, `is_ready`, `raw_write`, `resolve_permission`, `shutdown`,
       `accept_capacity`, `inbound`
-- [ ] 1.3 Define `TransportImpl { Acp(AcpTransport), Tmux(TmuxTransport) }`
+- [x] 1.3 Define `TransportImpl { Acp(AcpTransport), Tmux(TmuxTransport) }`
       enum with match delegation for each method
 
       Note (from `add-transport-capability-flags`, landed): transport
@@ -20,13 +20,13 @@
       also exists on `SessionType` (returns `true` only for `Acp`; `Tmux`,
       `Ui`, and `Pubsub` return `false`). Incorporate it as a first-class
       method on each `TransportImpl` variant alongside the three flags above.
-- [ ] 1.4 Define supporting types: `StartupContext`, `DeliveryEnvelope`,
+- [x] 1.4 Define supporting types: `StartupContext`, `DeliveryEnvelope`,
       `DeliveryContext`, `DeliveryResult`, `SingleDeliveryOutcome`,
       `TransportEvent`, `TransportStatus`, `TransportReadiness`,
       `RawWriteResult`, `TransportError`, `LookMode`, `LookSnapshotPayload`,
       `PromptReadinessTemplate`, `PermissionResponse`
-- [ ] 1.5 Register `mod transports;` in `src/lib.rs`
-- [ ] 1.6 Validate: `cargo check` passes; no behavior change
+- [x] 1.5 Register `mod transports;` in `src/lib.rs`
+- [x] 1.6 Validate: `cargo check` passes; no behavior change
 
 ## 2. Slice 2 — Implement Transport for ACP; inbound channel restructure
 
