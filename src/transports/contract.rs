@@ -15,32 +15,50 @@
 //! worker remains responsible for wrapping transport calls in `spawn_blocking`
 //! where needed.
 //!
+//! ## Transport <-> relay interactions
+//!
+//! There is no generic inbound event channel. Each transport->relay interaction
+//! uses its natural primitive:
+//!
+//! - **Choices** (tool-call permissions, and any future operator decision) are
+//!   blocking requests: the relay injects a re-entrant [`Chooser`] via
+//!   [`StartupContext`], which the transport invokes inline and blocks on until
+//!   the operator decides. No transport->relay back-edge: the transport holds an
+//!   opaque `Arc<dyn Fn>` typed here in `transports`.
+//! - **Completion** is folded into [`Transport::deliver`], which blocks to a
+//!   terminal state and returns the per-envelope outcome; the worker fans out
+//!   from the return value.
+//! - **Output for `look`** is a concurrent read via [`Transport::give_output`],
+//!   which hands the relay an [`OutputView`] handle the look request path can
+//!   read without borrowing the worker-owned transport.
+//!
 //! ## Slice status
 //!
-//! This module is the Slice 1 scaffold: the trait, the dispatch enum, the
-//! placeholder transport structs, and the shared types. The placeholder
-//! [`Transport`] implementations have `todo!()` bodies; the real bodies arrive
-//! when ACP delivery moves here (Slice 2) and Tmux delivery moves here
-//! (Slice 3). Nothing constructs or calls these types yet, so there is no
-//! behavior change.
+//! This module is the Slice 1 scaffold (revised by the `decouple-transport-layer`
+//! contract amendment): the trait, the dispatch enum, the placeholder transport
+//! structs, and the shared types. The placeholder [`Transport`] implementations
+//! have `todo!()` bodies; the real bodies arrive when ACP delivery moves here
+//! (Slice 2) and Tmux delivery moves here (Slice 3). Nothing constructs or calls
+//! these types yet, so there is no behavior change.
 
 use std::path::PathBuf;
-use std::sync::mpsc::Receiver;
+use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::acp::{AcpSnapshotEntry, PermissionRequest, ReplayEntry};
+use crate::acp::AcpSnapshotEntry;
 use crate::configuration::BundleMember;
 // Re-export the configuration prompt-readiness template into the transport
 // contract namespace; tmux quiescence consumes it and Slice 3 wires it through
 // the delivery context. It is defined once in `configuration`; re-exporting
 // (rather than redefining) keeps the two in lockstep.
 pub use crate::configuration::PromptReadinessTemplate;
-// Reused delivery wire vocabulary. These enums currently live in the relay
+// Reused delivery/look wire vocabulary. These types currently live in the relay
 // contract; the transport layer reuses them rather than duplicating the serde
-// shapes. Relocating their canonical home into `transports` is a relay-contract
-// move deferred beyond this additive slice.
-use crate::relay::{DeliveryPayloadMode, SendOutcome};
+// shapes. Relocating their canonical home into `transports` (so transports never
+// depend on relay) is a relay-contract move deferred beyond this contract slice.
+use crate::relay::{AcpLookFreshness, AcpLookSnapshotSource, DeliveryPayloadMode, SendOutcome};
 
 /// Synchronous delivery contract implemented by each concrete transport.
 ///
@@ -48,22 +66,28 @@ use crate::relay::{DeliveryPayloadMode, SendOutcome};
 /// implementation MUST NOT impose async boundaries on the worker.
 pub trait Transport {
     /// Establishes (or re-establishes, on respawn) the transport runtime for a
-    /// target. Each call invalidates any previously issued [`inbound`] channel;
-    /// the worker re-calls [`inbound`] afterward to pick up the fresh receiver.
+    /// target. On respawn the transport may publish a fresh [`OutputView`]; the
+    /// worker re-calls [`give_output`] afterward to pick up the new handle.
     ///
-    /// [`inbound`]: Transport::inbound
+    /// [`give_output`]: Transport::give_output
     fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError>;
 
-    /// Delivers a coalesced batch of envelopes in a single transport call,
-    /// returning one outcome per envelope aligned with the input order.
+    /// Delivers a coalesced batch of envelopes in a single call, BLOCKING until
+    /// each envelope reaches a terminal state, and returning one terminal
+    /// outcome per envelope aligned with the input order. Completion is owned
+    /// here (no separate relay completion callback): the worker fans out from
+    /// the returned [`DeliveryResult`]. Choices raised mid-delivery are serviced
+    /// inline via the [`StartupContext::choose`] resolver, on the transport's own
+    /// thread, without worker involvement.
+    ///
+    /// INVARIANT: an implementation MUST observe relay shutdown and return a
+    /// terminal/dropped outcome promptly rather than parking the blocking thread
+    /// indefinitely on a wedged turn.
     fn deliver(
         &mut self,
         envelopes: Vec<DeliveryEnvelope>,
         context: &DeliveryContext,
     ) -> DeliveryResult;
-
-    /// Captures a snapshot of the target's current output for `look`.
-    fn look(&self, mode: LookMode) -> Result<LookSnapshotPayload, TransportError>;
 
     /// Reports whether the transport is ready to accept delivery.
     fn is_ready(&self) -> bool;
@@ -76,13 +100,6 @@ pub trait Transport {
         context: &DeliveryContext,
     ) -> RawWriteResult;
 
-    /// Resolves a pending permission request raised by the transport.
-    fn resolve_permission(
-        &mut self,
-        request: PermissionRequest,
-        response: PermissionResponse,
-    ) -> Result<(), TransportError>;
-
     /// Tears down the transport runtime, releasing its resources.
     fn shutdown(&mut self);
 
@@ -92,16 +109,33 @@ pub trait Transport {
     /// [`deliver`]: Transport::deliver
     fn accept_capacity(&self) -> usize;
 
-    /// Hands the worker the receiver for this transport's inbound events, or
-    /// `None` for transports without a push-based inbound stream (Tmux).
+    /// Hands the relay a concurrently-readable [`OutputView`] handle for the
+    /// `look` request path, or `None` for transports with no observable output.
     ///
-    /// The transport owns the `Sender` internally and creates a fresh channel
-    /// in [`startup`]. A `None` yielded by polling the receiver signals an
-    /// expected respawn (the old `Sender` dropped), not a delivery error: the
-    /// worker re-subscribes by re-calling this method.
+    /// The look request runs concurrently with the worker that owns the
+    /// transport, so it cannot call [`Transport`] methods directly; the handle
+    /// is the shared seam it reads instead. The worker re-fetches the handle
+    /// after every [`startup`] (ACP respawn allocates a fresh replay buffer).
     ///
     /// [`startup`]: Transport::startup
-    fn inbound(&mut self) -> Option<Receiver<TransportEvent>>;
+    fn give_output(&self) -> Option<Arc<dyn OutputView>>;
+}
+
+/// A concurrently-readable view of a transport's output for the `look` request
+/// path, published by [`Transport::give_output`].
+///
+/// The relay stores the handle per-target and reads it from the look request
+/// thread, which runs concurrently with the worker that owns the transport. The
+/// handle owns the bounded prime-wait: [`look`] reads the transport's shared
+/// readiness signal, waits up to [`LookMode::prime_timeout`] for a still-
+/// initializing target to populate its first snapshot, then returns the entries
+/// plus freshness metadata. The relay supplies only the timeout value (its
+/// look-surface policy) and remains transport-generic.
+///
+/// [`look`]: OutputView::look
+pub trait OutputView: Send + Sync {
+    /// Captures a snapshot of the target's current output.
+    fn look(&self, mode: LookMode) -> Result<LookSnapshotPayload, TransportError>;
 }
 
 /// Static dispatch over the fixed transport set.
@@ -179,15 +213,6 @@ impl TransportImpl {
         }
     }
 
-    /// Captures a snapshot; see [`Transport::look`].
-    pub fn look(&self, mode: LookMode) -> Result<LookSnapshotPayload, TransportError> {
-        match self {
-            Self::Acp(transport) => transport.look(mode),
-            Self::Tmux(transport) => transport.look(mode),
-            Self::Pty => unimplemented!("PTY transport not yet implemented"),
-        }
-    }
-
     /// Reports delivery readiness; see [`Transport::is_ready`].
     #[must_use]
     pub fn is_ready(&self) -> bool {
@@ -212,19 +237,6 @@ impl TransportImpl {
         }
     }
 
-    /// Resolves a permission request; see [`Transport::resolve_permission`].
-    pub fn resolve_permission(
-        &mut self,
-        request: PermissionRequest,
-        response: PermissionResponse,
-    ) -> Result<(), TransportError> {
-        match self {
-            Self::Acp(transport) => transport.resolve_permission(request, response),
-            Self::Tmux(transport) => transport.resolve_permission(request, response),
-            Self::Pty => unimplemented!("PTY transport not yet implemented"),
-        }
-    }
-
     /// Tears down the transport; see [`Transport::shutdown`].
     pub fn shutdown(&mut self) {
         match self {
@@ -244,11 +256,11 @@ impl TransportImpl {
         }
     }
 
-    /// Hands over the inbound event receiver; see [`Transport::inbound`].
-    pub fn inbound(&mut self) -> Option<Receiver<TransportEvent>> {
+    /// Publishes the look output handle; see [`Transport::give_output`].
+    pub fn give_output(&self) -> Option<Arc<dyn OutputView>> {
         match self {
-            Self::Acp(transport) => transport.inbound(),
-            Self::Tmux(transport) => transport.inbound(),
+            Self::Acp(transport) => transport.give_output(),
+            Self::Tmux(transport) => transport.give_output(),
             Self::Pty => unimplemented!("PTY transport not yet implemented"),
         }
     }
@@ -277,10 +289,6 @@ impl Transport for AcpTransport {
         todo!("AcpTransport::deliver — Slice 2")
     }
 
-    fn look(&self, _mode: LookMode) -> Result<LookSnapshotPayload, TransportError> {
-        todo!("AcpTransport::look — Slice 2")
-    }
-
     fn is_ready(&self) -> bool {
         todo!("AcpTransport::is_ready — Slice 2")
     }
@@ -294,14 +302,6 @@ impl Transport for AcpTransport {
         todo!("AcpTransport::raw_write — Slice 2")
     }
 
-    fn resolve_permission(
-        &mut self,
-        _request: PermissionRequest,
-        _response: PermissionResponse,
-    ) -> Result<(), TransportError> {
-        todo!("AcpTransport::resolve_permission — Slice 2")
-    }
-
     fn shutdown(&mut self) {
         todo!("AcpTransport::shutdown — Slice 2")
     }
@@ -310,8 +310,8 @@ impl Transport for AcpTransport {
         todo!("AcpTransport::accept_capacity — Slice 2")
     }
 
-    fn inbound(&mut self) -> Option<Receiver<TransportEvent>> {
-        todo!("AcpTransport::inbound — Slice 2")
+    fn give_output(&self) -> Option<Arc<dyn OutputView>> {
+        todo!("AcpTransport::give_output — Slice 2")
     }
 }
 
@@ -328,10 +328,6 @@ impl Transport for TmuxTransport {
         todo!("TmuxTransport::deliver — Slice 3")
     }
 
-    fn look(&self, _mode: LookMode) -> Result<LookSnapshotPayload, TransportError> {
-        todo!("TmuxTransport::look — Slice 3")
-    }
-
     fn is_ready(&self) -> bool {
         todo!("TmuxTransport::is_ready — Slice 3")
     }
@@ -345,14 +341,6 @@ impl Transport for TmuxTransport {
         todo!("TmuxTransport::raw_write — Slice 3")
     }
 
-    fn resolve_permission(
-        &mut self,
-        _request: PermissionRequest,
-        _response: PermissionResponse,
-    ) -> Result<(), TransportError> {
-        todo!("TmuxTransport::resolve_permission — Slice 3")
-    }
-
     fn shutdown(&mut self) {
         todo!("TmuxTransport::shutdown — Slice 3")
     }
@@ -361,17 +349,101 @@ impl Transport for TmuxTransport {
         todo!("TmuxTransport::accept_capacity — Slice 3")
     }
 
-    fn inbound(&mut self) -> Option<Receiver<TransportEvent>> {
-        todo!("TmuxTransport::inbound — Slice 3")
+    fn give_output(&self) -> Option<Arc<dyn OutputView>> {
+        todo!("TmuxTransport::give_output — Slice 3")
     }
 }
 
-/// Inputs required to establish a transport runtime for one target.
+/// Relay-provided, synchronous resolver for operator choices (tool-call
+/// permissions today; any operator decision later).
+///
+/// Injected once at [`startup`](Transport::startup), so the transport depends
+/// only downward on `transports`, never on `crate::relay`: the transport holds
+/// an opaque `Arc<dyn Fn>`; the relay constructs it closing over its choice
+/// queue. The transport invokes it on its own thread and BLOCKS until the
+/// operator decides, preserving "the agent turn does not progress past a pending
+/// choice."
+///
+/// RE-ENTRANT: the relay implementation keys per-request state by a generated
+/// choice id and guards the shared queue with a mutex plus a per-request
+/// condvar, so concurrent invocations (multiple permission requests in one turn)
+/// each manage a distinct choice safely. INVARIANT: it MUST unblock and return
+/// [`ChoiceMade::Cancelled`] on relay shutdown or respawn invalidation.
+pub type Chooser = Arc<dyn Fn(ChoiceToMake) -> ChoiceMade + Send + Sync>;
+
+/// A pending choice handed to the [`Chooser`]. The per-delivery correlation
+/// fields (`message_id`, `target_session`, `max_pending`, `decider_sessions`)
+/// are sourced from the [`DeliveryContext`] and head envelope when the transport
+/// raises a choice mid-`deliver`, since the startup-time chooser cannot close
+/// over them.
 #[derive(Clone, Debug)]
+pub struct ChoiceToMake {
+    /// Transport-native request id used to correlate the operator's response.
+    pub request_id: u64,
+    /// The originating send's message id (choice event correlation).
+    pub message_id: String,
+    /// The target session the choice belongs to.
+    pub target_session: String,
+    /// Maximum pending choices the queue admits for this target.
+    pub max_pending: usize,
+    /// Sessions authorized to decide this choice.
+    pub decider_sessions: Vec<String>,
+    /// Human-facing title for the choice (for example, a tool-call title).
+    pub title: String,
+    /// The category of choice (for example, the requested permission kind).
+    pub species: String,
+    /// Transport-native detail payload for the choice.
+    pub details: Value,
+    /// The options the operator may choose among.
+    pub options: Vec<ThingToChoose>,
+}
+
+/// One selectable option within a [`ChoiceToMake`].
+#[derive(Clone, Debug)]
+pub struct ThingToChoose {
+    pub option_id: String,
+    pub name: String,
+    pub species: String,
+}
+
+/// The resolution of a [`ChoiceToMake`], returned by the [`Chooser`]. Mirrors
+/// the relay's choice-resolution taxonomy so [`Transport::deliver`] can build
+/// the same terminal outcome.
+#[derive(Clone, Debug)]
+pub enum ChoiceMade {
+    /// An option was chosen; carries the option id and who decided.
+    Chosen {
+        option_id: String,
+        decided_by: String,
+    },
+    /// The choice was cancelled; carries the cancellation taxonomy (queue full,
+    /// queue unavailable, user cancelled, shutdown, respawn invalidation).
+    Cancelled {
+        decided_by: String,
+        reason_code: String,
+        reason: Option<String>,
+    },
+}
+
+/// Inputs required to establish a transport runtime for one target.
+#[derive(Clone)]
 pub struct StartupContext {
     pub bundle_name: String,
     pub runtime_directory: PathBuf,
     pub target_member: BundleMember,
+    /// Relay-injected, re-entrant resolver for operator choices. See [`Chooser`].
+    pub choose: Chooser,
+}
+
+impl std::fmt::Debug for StartupContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StartupContext")
+            .field("bundle_name", &self.bundle_name)
+            .field("runtime_directory", &self.runtime_directory)
+            .field("target_member", &self.target_member)
+            .field("choose", &"<Chooser>")
+            .finish()
+    }
 }
 
 /// One rendered unit to deliver to a target.
@@ -397,6 +469,12 @@ pub struct DeliveryContext {
     /// worker has already proven readiness; `None` means the transport resolves
     /// it. Slice 3 finalizes the tmux quiescence parameters carried here.
     pub pre_resolved_target: Option<String>,
+    /// Maximum pending choices the queue admits for this target, used to
+    /// populate [`ChoiceToMake::max_pending`] for choices raised mid-delivery.
+    pub choices_max_pending: usize,
+    /// Sessions authorized to decide choices raised during this delivery, used
+    /// to populate [`ChoiceToMake::decider_sessions`].
+    pub choice_decider_sessions: Vec<String>,
 }
 
 /// Outcomes for one [`Transport::deliver`] call, aligned with the input order.
@@ -416,15 +494,6 @@ pub struct SingleDeliveryOutcome {
     pub reason_code: Option<String>,
     pub reason: Option<String>,
     pub details: Option<Value>,
-}
-
-/// A push-based inbound event raised by a transport's runtime.
-#[derive(Clone, Debug)]
-pub enum TransportEvent {
-    /// New replay-buffer entries (ACP stream output).
-    ReplayEntries(Vec<ReplayEntry>),
-    /// A pending permission request awaiting operator/UI resolution (ACP).
-    PermissionRequested(PermissionRequest),
 }
 
 /// The result of a [`Transport::startup`] call.
@@ -461,39 +530,42 @@ pub struct TransportError {
     pub details: Option<Value>,
 }
 
-/// Windowing parameters for a [`Transport::look`] snapshot.
+/// Windowing parameters for an [`OutputView::look`] snapshot.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LookMode {
     /// Window size (tmux pane lines or ACP replay entries).
     pub lines: Option<u64>,
     /// Entries to skip from the newest end before the tail window (ACP only).
     pub offset: Option<u64>,
+    /// How long the handle may wait for a still-initializing target to populate
+    /// its first snapshot before returning a stale-tagged result. The relay
+    /// supplies this as its look-surface policy; a zero duration means no wait.
+    pub prime_timeout: Duration,
 }
 
-/// Transport-level snapshot payload returned by [`Transport::look`].
+/// Transport-level snapshot payload returned by [`OutputView::look`].
 ///
-/// The relay maps this onto its wire `LookSnapshotPayload`, adding ACP
-/// freshness/source metadata. Kept transport-local so the transport layer does
-/// not depend on the relay wire contract.
+/// The ACP variant carries the freshness metadata the relay forwards onto its
+/// wire `LookSnapshotPayload`. The freshness enums are reused from the relay
+/// contract for now (see the module's deferred-relocation note).
 #[derive(Clone, Debug)]
 pub enum LookSnapshotPayload {
     /// Plain text lines (tmux).
     Lines { snapshot_lines: Vec<String> },
-    /// Rendered ACP replay entries plus truncation bookkeeping.
+    /// Rendered ACP replay entries plus truncation bookkeeping and freshness.
     AcpEntries {
         snapshot_entries: Vec<AcpSnapshotEntry>,
         /// Total entries available before tail/offset windowing.
         entries_total: usize,
         /// Count actually returned after the tail-N window and `offset`.
         returned_entries_count: usize,
+        /// Whether the snapshot is fresh or stale.
+        freshness: AcpLookFreshness,
+        /// Where the snapshot was sourced from.
+        snapshot_source: AcpLookSnapshotSource,
+        /// Why the snapshot is stale, when applicable.
+        stale_reason_code: Option<String>,
+        /// Age of the snapshot in milliseconds, when known.
+        snapshot_age_ms: Option<u64>,
     },
-}
-
-/// An operator/UI decision resolving a [`PermissionRequest`].
-#[derive(Clone, Debug)]
-pub enum PermissionResponse {
-    /// The named option was selected.
-    Selected { option_id: String },
-    /// The request was cancelled without a selection.
-    Cancelled,
 }

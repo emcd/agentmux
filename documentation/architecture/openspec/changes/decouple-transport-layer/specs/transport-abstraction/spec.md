@@ -43,33 +43,78 @@ dispatch SHALL go through `TransportImpl`.
 - **WHEN** a developer reads `src/relay/delivery/`
 - **THEN** no Tmux pane operations or session lifecycle primitives are present
 
-### Requirement: Transport Inbound Event Channel
+### Requirement: Choice Resolution via Injected Resolver
 
-Transports with push-based inbound events SHALL expose an
-`mpsc::Receiver<TransportEvent>` via `inbound()` (ACP: replay entries and
-permission requests). Transports without push-based inbound events (Tmux) SHALL
-return `None` from `inbound()`.
+The relay SHALL provide each transport a synchronous, re-entrant choice resolver
+(`Chooser`) via `StartupContext`. A transport that raises an operator choice
+(ACP tool-call permissions) SHALL invoke the resolver inline and block until it
+returns, so the agent turn does not progress past a pending choice. The resolver
+SHALL carry per-delivery correlation (`message_id`, `target_session`,
+`max_pending`, decider sessions) in the `ChoiceToMake` it is given, sourced from
+the `DeliveryContext`. There SHALL be no inbound event channel and no
+`resolve_permission` method. The resolver SHALL unblock and return
+`ChoiceMade::Cancelled` on relay shutdown or respawn invalidation.
 
-Each `startup()` call invalidates any previous inbound channel. The relay
-delivery worker SHALL re-call `inbound()` and replace its stored receiver
-after every `startup()` call, at both initial bootstrap and respawn sites.
-The worker SHALL treat a `None` result from polling the inbound receiver as an
-expected respawn signal and re-subscribe, not as a delivery error.
+#### Scenario: ACP choice blocks the turn until resolved
 
-#### Scenario: ACP inbound channel on startup
+- **WHEN** an ACP agent raises a tool-call permission request mid-turn
+- **THEN** the transport invokes the injected `Chooser` and blocks
+- **AND** the agent turn does not complete until the resolver returns a
+  `ChoiceMade`
 
-- **WHEN** the relay calls `startup()` on an `AcpTransport`
-- **THEN** the transport creates a fresh mpsc channel internally
-- **AND** a subsequent `inbound()` call returns `Some(receiver)` connected
-  to the new channel
+#### Scenario: Chooser cancels on shutdown
 
-#### Scenario: Re-subscribe after ACP respawn
+- **WHEN** relay shutdown is requested while a choice is pending
+- **THEN** the `Chooser` unblocks and returns `ChoiceMade::Cancelled` with a
+  shutdown reason code rather than parking the transport thread
+
+### Requirement: Synchronous Delivery Completion
+
+`deliver()` SHALL block until each envelope reaches a terminal state and SHALL
+return one terminal outcome per envelope; the relay worker performs sender
+fan-out from the return value, not from a transport-issued completion callback or
+event. `deliver()` SHALL observe relay shutdown and return a terminal/dropped
+outcome promptly rather than parking the blocking thread indefinitely. This does
+not block the relay request path: the send RPC returns `Queued` at enqueue, and
+`deliver()` blocks only the per-target worker's `spawn_blocking` thread.
+
+#### Scenario: deliver returns the terminal outcome
+
+- **WHEN** the relay worker delivers an ACP batch
+- **THEN** `deliver()` returns only once the turn reaches a terminal state
+- **AND** the returned `DeliveryResult` carries the per-envelope terminal outcome
+
+#### Scenario: deliver yields on shutdown
+
+- **WHEN** relay shutdown is requested while `deliver()` is awaiting completion
+- **THEN** `deliver()` returns a terminal/dropped outcome promptly
+
+### Requirement: Concurrent Look via Output View Handle
+
+A transport with observable output SHALL publish an `OutputView` handle via
+`give_output()`; transports with no observable output SHALL return `None`. The
+relay SHALL read the handle from the `look` request path, which runs
+concurrently with the worker that owns the transport. The relay SHALL re-fetch
+the handle after every `startup()` call, at both initial bootstrap and respawn
+sites. The handle SHALL own the bounded prime-wait (waiting up to
+`LookMode::prime_timeout` for a still-initializing target) and SHALL return ACP
+freshness metadata so the relay remains transport-generic. A `look` racing a
+respawn SHALL return stale/unavailable metadata or a clean `TransportError`,
+never a panic or a read of the wrong target's state.
+
+#### Scenario: ACP look reads the published handle
+
+- **WHEN** a `look` request targets an ACP session
+- **THEN** the relay reads the `OutputView` handle published by `give_output()`
+- **AND** the handle returns the replay snapshot plus freshness metadata without
+  borrowing the worker-owned transport
+
+#### Scenario: Re-fetch handle after ACP respawn
 
 - **WHEN** the relay calls `startup()` again on an existing `AcpTransport`
   (respawn path)
-- **THEN** the old inbound channel is invalidated
-- **AND** the relay re-calls `inbound()` and replaces its stored receiver
-  at both `bootstrap_acp_runtime_on_worker_start` and
+- **THEN** the relay re-fetches the handle via `give_output()` and replaces its
+  stored handle at both `bootstrap_acp_runtime_on_worker_start` and
   `drive_acp_worker_respawn` callsites
 
 ### Requirement: Transport Capacity Declaration

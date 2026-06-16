@@ -2,8 +2,10 @@
 
 - [x] 1.1 Create `src/transports/mod.rs` and `src/transports/contract.rs`
 - [x] 1.2 Define `Transport` trait with sync methods: `startup`, `deliver`,
-      `look`, `is_ready`, `raw_write`, `resolve_permission`, `shutdown`,
-      `accept_capacity`, `inbound`
+      `is_ready`, `raw_write`, `shutdown`, `accept_capacity`, `give_output`
+      (revised by the contract amendment: `look` moved to the `OutputView`
+      handle, choices use the injected `Chooser`, and `inbound`/
+      `resolve_permission` are dropped)
 - [x] 1.3 Define `TransportImpl { Acp(AcpTransport), Tmux(TmuxTransport) }`
       enum with match delegation for each method
 
@@ -20,20 +22,26 @@
       also exists on `SessionType` (returns `true` only for `Acp`; `Tmux`,
       `Ui`, and `Pubsub` return `false`). Incorporate it as a first-class
       method on each `TransportImpl` variant alongside the three flags above.
-- [x] 1.4 Define supporting types: `StartupContext`, `DeliveryEnvelope`,
-      `DeliveryContext`, `DeliveryResult`, `SingleDeliveryOutcome`,
-      `TransportEvent`, `TransportStatus`, `TransportReadiness`,
-      `RawWriteResult`, `TransportError`, `LookMode`, `LookSnapshotPayload`,
-      `PromptReadinessTemplate`, `PermissionResponse`
+- [x] 1.4 Define supporting types: `StartupContext` (carries the `Chooser`),
+      `DeliveryEnvelope`, `DeliveryContext` (carries `choices_max_pending` +
+      `choice_decider_sessions`), `DeliveryResult`, `SingleDeliveryOutcome`,
+      `TransportStatus`, `TransportReadiness`, `RawWriteResult`,
+      `TransportError`, `LookMode` (carries `prime_timeout`),
+      `LookSnapshotPayload` (ACP variant carries freshness),
+      `PromptReadinessTemplate`, `OutputView`, `Chooser`, `ChoiceToMake`,
+      `ThingToChoose`, `ChoiceMade` (revised by the contract amendment:
+      `TransportEvent` + `PermissionResponse` dropped)
 - [x] 1.5 Register `mod transports;` in `src/lib.rs`
 - [x] 1.6 Validate: `cargo check` passes; no behavior change
 
 ## 2. Slice 2 — Implement Transport for ACP
 
-Split into 2a (mechanical leaf moves) and 2b (the inbound channel
-restructure). Cut by entanglement: `acp_state` and the `acp_client` shim have
-no inbound/shared-state coupling; `acp_delivery` + permission extraction + the
-channel all rewrite the same inbound surface and must land together.
+Split into 2a (mechanical leaf moves) and 2b (the ACP `Transport` impl). Cut by
+entanglement: `acp_state` and the `acp_client` shim have no shared-state
+coupling; `acp_delivery` + permission extraction + the injected-chooser /
+`give_output` wiring all rewrite the same delivery surface and land together.
+The contract amendment removed the inbound mpsc channel; 2b is correspondingly
+simpler (a handle re-fetch, not a channel re-wire).
 
 ### Slice 2a — mechanical leaf moves
 
@@ -53,27 +61,47 @@ channel all rewrite the same inbound surface and must land together.
       wire-protocol code; moving it to `src/acp/` would invert the dependency
       direction. It moves only if `async_worker` moves too (out of scope).
 
-### Slice 2b — ACP Transport impl + inbound channel restructure
+### Slice 2b — ACP Transport impl (contract amendment)
 
 - [ ] 2.1 Move `relay/delivery/acp_delivery.rs` → `src/acp/transport.rs`;
-      implement `Transport` for `AcpTransport`
+      implement `Transport` for `AcpTransport`. `deliver()` blocks to terminal
+      and returns the per-envelope outcome (folds in today's
+      `wait_for_prompt_complete_blocking` + `on_completion` body:
+      `build_acp_completion_result`, `note_session_served_successfully`,
+      `set_acp_worker_state`, and the choice-outcome correlation)
 - [ ] 2.3 (rescoped) Extract the ACP permission handling — the per-prompt
       `PermissionHandler` closures embedded in `acp_delivery.rs` (around the
       old lines 242 and 542), NOT a standalone `permission_state.rs` (no such
-      file exists) — into `src/acp/permission.rs`
-- [ ] 2.6 Restructure inbound event path: replace callbacks + shared state
-      with transport-owned mpsc channel; `inbound()` returns `Some(Receiver)`
-- [ ] 2.7 Update `bootstrap_acp_runtime_on_worker_start` (worker.rs:379)
-      to re-call `inbound()` and replace stored Receiver after startup
-- [ ] 2.8 Update `drive_acp_worker_respawn` (worker.rs:568) same as 2.7
-- [ ] 2.9 Worker treats `None` from Receiver as "expected respawn" signal,
-      not error — re-subscribes rather than failing
-- [ ] 2.10 Add a third `TransportEvent::DeliveryCompleted` variant so delivery
-      completion (today `emit_sender_delivery_outcome_event`, fired from the
-      background reader) flows through the single inbound surface alongside
-      replay-entries and permission-requests
+      file exists) — into `src/acp/permission.rs`, wiring them to the injected
+      `Chooser` (translate the ACP permission request into a `ChoiceToMake` and
+      the returned `ChoiceMade` back into the JSON-RPC responder)
+- [ ] 2.6 Inject `choose: Chooser` via `StartupContext`: relay constructs it
+      closing over `enqueue_choice_request` + `wait_for_choice_resolution`; the
+      transport populates `ChoiceToMake`'s per-delivery correlation
+      (`message_id`, `target_session`, `max_pending`, `decider_sessions`) from
+      `DeliveryContext`. No transport->relay back-edge
+- [ ] 2.7 Implement `give_output()` + an `OutputView` for `AcpTransport` holding
+      the shared replay buffer `Arc` + a shared readiness signal; the handle
+      owns the bounded prime-wait (up to `LookMode::prime_timeout`) and returns
+      `AcpEntries` with freshness/source/stale/age. Move
+      `derive_acp_look_snapshot` into the ACP `OutputView` impl; repoint
+      `handlers/look.rs` to read the handle
+- [ ] 2.8 Worker re-fetches the `give_output()` handle after every `startup()`
+      at `bootstrap_acp_runtime_on_worker_start` (worker.rs:379) and
+      `drive_acp_worker_respawn` (worker.rs:568) — a plain store, replacing the
+      worker-state-registry/replay-buffer plumbing for the look path
+- [ ] 2.9 Worker fans out terminal outcomes from `deliver()`'s return value via
+      the existing `complete_task_outcome`; remove the `on_completion` callback
+      path into relay statics
+- [ ] 2.10 Shutdown invariants: `deliver()` observes `shutdown_requested()` and
+      returns a terminal/dropped outcome promptly; the `Chooser` unblocks and
+      returns `ChoiceMade::Cancelled` on shutdown / respawn invalidation
 - [ ] 2.11 Add `TransportImpl::Acp` variant; wire into worker dispatch
-- [ ] 2.12 Validate: `cargo test` passes; ACP delivery works end-to-end
+- [ ] 2.12 Validate: `cargo test` passes; ACP delivery works end-to-end.
+      Add tests (per Reviewer General): a `look` racing respawn returns
+      stale/unavailable or a clean `TransportError` (no panic / wrong-target
+      read); `Chooser` shutdown + respawn-invalidation; `deliver()` shutdown
+      responsiveness
 
 ## 3. Slice 3 — Implement Transport for Tmux; move Tmux code
 
