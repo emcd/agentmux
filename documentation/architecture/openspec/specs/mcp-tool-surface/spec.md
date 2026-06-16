@@ -601,26 +601,21 @@ For denied raww requests, denial details SHALL preserve
 
 ### Requirement: MCP raww success payload contract
 
-MCP raww success responses SHALL preserve relay acceptance payload contract.
+MCP raww success responses SHALL preserve relay queued payload contract.
 
 Required success fields:
-- `status` (value `accepted`)
+- `status` (value `queued`)
 - `target_session`
 - `transport`
 
 Optional fields:
 - `request_id`
 - `message_id`
-- `details`
 
-For ACP accepted responses, MCP SHALL preserve
-`details.delivery_phase = "accepted_in_progress"` unchanged.
+#### Scenario: Return queued status for raww dispatch
 
-#### Scenario: Preserve ACP accepted-in-progress detail for raww
-
-- **WHEN** relay returns successful ACP raww response with
-  `details.delivery_phase = "accepted_in_progress"`
-- **THEN** MCP returns same `details.delivery_phase` unchanged
+- **WHEN** relay returns successful raww response
+- **THEN** MCP returns `status = "queued"` with required fields intact
 
 ### Requirement: MCP list decisions request contract
 

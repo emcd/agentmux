@@ -341,21 +341,21 @@ including:
   raww target class
 - **THEN** TUI surfaces the error as terminal without retry
 
-### Requirement: TUI raww accepted response handling
+### Requirement: TUI raww queued response handling
 
-TUI raww accepted responses SHALL be treated as dispatch-accepted and SHALL NOT
-be interpreted as terminal completion.
+TUI raww queued responses SHALL be treated as enqueue-accepted and SHALL NOT
+be interpreted as terminal completion. The terminal delivery outcome arrives
+out-of-band via a `delivery_outcome` stream event keyed by `message_id`.
 
-For ACP accepted responses with
-`details.delivery_phase = "accepted_in_progress"`, TUI SHALL preserve the phase
-indicator in status presentation where shown.
+TUI SHALL enroll the raww `message_id` into pending delivery tracking at
+enqueue time so the later `delivery_outcome` event closes it out.
 
-#### Scenario: Treat accepted_in_progress as non-terminal
+#### Scenario: Treat queued response as non-terminal
 
-- **WHEN** TUI receives raww response with `status = "accepted"`
-- **AND** `details.delivery_phase = "accepted_in_progress"`
+- **WHEN** TUI receives raww response with `status = "queued"`
 - **THEN** TUI marks request accepted at dispatch boundary
-- **AND** does not mark terminal completion from that response alone
+- **AND** enrolls `message_id` into pending delivery tracking
+- **AND** does not mark terminal completion until `delivery_outcome` event arrives
 
 ### Requirement: TUI Pending Choice Visibility
 

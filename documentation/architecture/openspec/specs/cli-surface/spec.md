@@ -793,23 +793,18 @@ including:
 
 When `--json` is requested, CLI raww successful output SHALL include required
 fields:
-- `status`
+- `status` (value `queued`)
 - `target_session`
 - `transport`
 
 CLI MAY include optional fields:
 - `request_id`
 - `message_id`
-- `details`
 
-For ACP accepted success, CLI SHALL preserve
-`details.delivery_phase = "accepted_in_progress"`.
+#### Scenario: Return queued status in json output
 
-#### Scenario: Preserve accepted_in_progress detail in json output
-
-- **WHEN** relay raww success includes
-  `details.delivery_phase = "accepted_in_progress"`
-- **THEN** CLI `--json` output includes same `details.delivery_phase`
+- **WHEN** relay raww dispatch succeeds
+- **THEN** CLI `--json` output includes `status = "queued"` with required fields
 
 ### Requirement: Relay Host No-Watch Flag
 

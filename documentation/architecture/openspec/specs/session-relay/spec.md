@@ -1610,8 +1610,8 @@ MVP behavior contract:
 #### Scenario: Treat permission request as first ACP activity
 
 - **WHEN** relay observes ACP `session/request_permission` before prompt result
-- **THEN** sync send MAY return phase-1 `outcome=delivered`
-- **AND** includes `details.delivery_phase = "accepted_in_progress"`
+- **THEN** relay marks worker state `busy` for the duration of the permission turn
+- **AND** worker returns to `available` only after terminal stopReason is observed
 
 #### Scenario: Keep worker non-ready while permission turn is in progress
 
@@ -2006,33 +2006,28 @@ expansion or command substitution.
 
 ### Requirement: Relay raww response contract
 
-Relay raww immediate success responses SHALL be acceptance-oriented only and
-SHALL NOT guarantee terminal completion.
+Relay raww immediate success responses SHALL be queued-only: the response
+confirms enqueue acceptance and SHALL NOT include terminal delivery outcome.
+Terminal outcomes are reported out-of-band via `delivery_outcome` stream events.
 
 Required success fields:
-- `status` (value `accepted`)
+- `status` (value `queued`)
 - `target_session`
 - `transport`
 
 Optional success fields:
 - `request_id`
 - `message_id`
-- `details`
-
-For ACP accepted success, relay SHALL include
-`details.delivery_phase = "accepted_in_progress"`.
-For tmux accepted success, relay MAY include
-`details.delivery_phase = "accepted_dispatched"`.
 
 Failure responses SHALL use canonical relay error payload shape (`code`,
-`message`, optional `details`).
+`message`, optional `details`). Only enqueue-time failures (e.g. ACP worker
+unavailable) surface synchronously.
 
-#### Scenario: Return deterministic accepted payload for acp raww
+#### Scenario: Return queued payload for raww dispatch
 
-- **WHEN** raww request to acp target is accepted at dispatch boundary
-- **THEN** relay returns success with `status = "accepted"`
+- **WHEN** raww request to any writable target is accepted at dispatch boundary
+- **THEN** relay returns success with `status = "queued"`
 - **AND** includes required fields `target_session` and `transport`
-- **AND** includes `details.delivery_phase = "accepted_in_progress"`
 
 ### Requirement: Relay raww input bounds
 
@@ -2228,9 +2223,9 @@ Mapping:
 - `cancelled` → send ACP cancelled outcome; sender-visible terminal outcome
   `failed` with `reason_code=runtime_choices_request_cancelled`
 
-For sync phase-1 responses already returned with
-`details.delivery_phase = "accepted_in_progress"`, relay SHALL keep phase-1
-response immutable.
+For raww requests with pending ACP choice turns, the queued response is already
+immutable; the sender receives the terminal `delivery_outcome` event only after
+the choice is resolved.
 
 #### Scenario: Map cancelled choice to failed terminal outcome
 
@@ -2239,12 +2234,12 @@ response immutable.
 - **AND** sender-visible terminal outcome is `failed`
 - **AND** `reason_code = runtime_choices_request_cancelled`
 
-#### Scenario: Keep sync phase-1 response immutable after later choice cancellation
+#### Scenario: Cancelled choice yields failed delivery_outcome
 
-- **WHEN** relay already returned sync phase-1 with
-  `details.delivery_phase = "accepted_in_progress"`
-- **AND** choice later resolves to cancelled
-- **THEN** relay does not mutate the earlier phase-1 response
+- **WHEN** relay already returned queued response for an ACP raww
+- **AND** the pending ACP choice later resolves to cancelled
+- **THEN** relay emits a `delivery_outcome` event with `outcome = "failed"`
+- **AND** `reason_code = runtime_choices_request_cancelled`
 
 ### Requirement: ACP Choice Option Fidelity
 
