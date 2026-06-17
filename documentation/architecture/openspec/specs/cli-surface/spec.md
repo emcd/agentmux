@@ -1,7 +1,7 @@
 # cli-surface Specification
 
 ## Purpose
-TBD - created by archiving change add-agentmux-cli-host-send-mvp. Update Purpose after archive.
+The operator-facing `agentmux` command surface plus the legacy `agentmux-relay`/`agentmux-mcp` binary entrypoints. The spec governs the `host relay/mcp`, `up`/`down`, `list principals`, `send`, `look`, `raww`, and `tui` subcommands — their argument validation, target-mode selection, response payload contracts, and authorization passthrough to relay. The CLI is a thin adapter throughout: it surfaces relay decisions unchanged and resolves `--as-session`/`--bundle` selectors against `tui.toml` defaults.
 ## Requirements
 ### Requirement: Unified Agentmux Command Topology
 

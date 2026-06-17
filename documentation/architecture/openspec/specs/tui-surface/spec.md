@@ -1,7 +1,7 @@
 # tui-surface Specification
 
 ## Purpose
-TBD - created by archiving change add-tui-mvp-workbench. Update Purpose after archive.
+The TUI surface contracts for the two-mode (Communication/Interaction) workbench. The spec governs recipient entry/autocomplete/picker overlay behavior (canonical target identifiers only; configured session `name` is not a send-target token), async delivery event inspection with the pending-deliveries indicator, the session-scoped choice decisioning workflow, snapshot/replay dedupe by `choice_request_id`, and mode-switch key bindings (F4 toggles Communication/Interaction with per-mode state preservation). TUI sender identity precedence against `users.toml` defaults and TUI raww dispatch/queued-response handling are also normative.
 ## Requirements
 ### Requirement: Initial TUI MVP Workflow Coverage
 

@@ -1,7 +1,7 @@
 # acp-client Specification
 
 ## Purpose
-TBD - created by archiving change add-acp-client-tui. Update Purpose after archive.
+The ACP integration surface — covers both the standalone `agentmux-acp` TUI binary and the shared `src/acp/` module used by the relay delivery subsystem for ACP-backed target sessions. The spec governs ACP protocol initialization, session lifecycle (session/new + session/load), the background reader thread that ingests `session/update` notifications into the shared replay buffer, stdin writer serialization, and ACP permission handling. The relay-side and binary-side contracts share one canonical vocabulary so both surfaces stay in lockstep.
 ## Requirements
 ### Requirement: ACP Client Binary
 The system SHALL provide a standalone `agentmux-acp` binary that connects directly to an ACP-compatible agent via stdio, initializes the ACP protocol, and provides an interactive text interface for sending prompts and viewing responses.
