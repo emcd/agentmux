@@ -2123,8 +2123,8 @@ connected.
 Queue contract:
 
 - bundle-scoped global FIFO ordering by monotonic enqueue `sequence`
-- `max_pending` default `256`
-- optional `[relay.choices] max-pending` override in `1..4096`
+- `pending_max` default `256`
+- optional `[relay.choices] pending-max` override in `1..4096`
 - enqueue beyond bound SHALL fail with `runtime_choices_queue_full`
 
 Connect/reconnect replay contract:
@@ -2135,7 +2135,7 @@ Connect/reconnect replay contract:
 
 #### Scenario: Reject enqueue beyond queue bound
 
-- **WHEN** pending queue depth equals effective `max_pending`
+- **WHEN** pending queue depth equals effective `pending_max`
 - **AND** another choice request is queued
 - **THEN** relay fails with `runtime_choices_queue_full`
 

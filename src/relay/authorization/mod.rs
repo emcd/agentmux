@@ -26,5 +26,5 @@ pub(in crate::relay) use checks::{
 pub(in crate::relay) use context::AuthorizationContext;
 pub(in crate::relay) use loading::load_authorization_context;
 pub(in crate::relay) use resolution::{
-    choices_max_pending, choose_authorized_ui_sessions, has_ui_session, ui_session_display_name,
+    choices_pending_max, choose_authorized_ui_sessions, has_ui_session, ui_session_display_name,
 };

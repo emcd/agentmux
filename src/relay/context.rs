@@ -66,5 +66,5 @@ pub(super) struct AsyncDeliveryTask {
     pub(super) payload_mode: DeliveryPayloadMode,
     pub(super) append_enter: bool,
     pub(super) choice_decider_sessions: Vec<String>,
-    pub(super) choices_max_pending: usize,
+    pub(super) choices_pending_max: usize,
 }

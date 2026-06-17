@@ -228,7 +228,7 @@ pub(in crate::relay) fn enqueue_choice_request(
     target_session: &str,
     requested_kind: &str,
     requested_details: Value,
-    max_pending: usize,
+    pending_max: usize,
 ) -> Result<ChoiceEnqueueResult, String> {
     let choice_request_id = Uuid::new_v4().to_string();
     let record = PendingChoiceRequest {
@@ -241,7 +241,7 @@ pub(in crate::relay) fn enqueue_choice_request(
         sequence: 0,
     };
     let stored = with_queue_state(context.runtime_directory.as_path(), |state| {
-        if state.pending.len() >= max_pending {
+        if state.pending.len() >= pending_max {
             return Err(CHOICES_QUEUE_FULL_CODE.to_string());
         }
         let mut record = record;

@@ -869,7 +869,7 @@ mod coalesce_batch_tests {
             payload_mode,
             append_enter: true,
             choice_decider_sessions: Vec::new(),
-            choices_max_pending: 0,
+            choices_pending_max: 0,
         }
     }
 

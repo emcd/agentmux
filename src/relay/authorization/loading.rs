@@ -15,9 +15,9 @@ use super::context::{AuthorizationContext, PolicyControls, PolicyScope, UiSessio
 use super::resolution::{normalize_policy_id, resolve_session_policy_controls};
 
 const RELAY_FILE: &str = "relay.toml";
-const DEFAULT_CHOICES_MAX_PENDING: usize = 256;
-const MIN_CHOICES_MAX_PENDING: usize = 1;
-const MAX_CHOICES_MAX_PENDING: usize = 4096;
+const DEFAULT_CHOICES_PENDING_MAX: usize = 256;
+const MIN_CHOICES_PENDING_MAX: usize = 1;
+const MAX_CHOICES_PENDING_MAX: usize = 4096;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -56,7 +56,7 @@ struct RawRelaySection {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 struct RawRelayChoicesSection {
     #[serde(default)]
-    max_pending: Option<usize>,
+    pending_max: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -185,7 +185,7 @@ pub(in crate::relay) fn load_authorization_context(
     let policies_path = configuration_root.join(POLICIES_FILE);
     let (presets, default_policy_id) = load_policy_presets(configuration_root)?;
 
-    let choices_max_pending = load_choices_max_pending(configuration_root)?;
+    let choices_pending_max = load_choices_pending_max(configuration_root)?;
 
     // A relay-wide (`GLOBAL`) home namespace has no bundle members; its
     // requester controls come entirely from the operator policy loaded below
@@ -259,14 +259,14 @@ pub(in crate::relay) fn load_authorization_context(
     Ok(AuthorizationContext {
         controls_by_session,
         ui_sessions,
-        choices_max_pending,
+        choices_pending_max,
     })
 }
 
-fn load_choices_max_pending(configuration_root: &Path) -> Result<usize, RelayError> {
+fn load_choices_pending_max(configuration_root: &Path) -> Result<usize, RelayError> {
     let path = configuration_root.join(RELAY_FILE);
     if !path.exists() {
-        return Ok(DEFAULT_CHOICES_MAX_PENDING);
+        return Ok(DEFAULT_CHOICES_PENDING_MAX);
     }
     let raw = fs::read_to_string(&path).map_err(|source| {
         relay_error(
@@ -291,20 +291,20 @@ fn load_choices_max_pending(configuration_root: &Path) -> Result<usize, RelayErr
     let configured = parsed
         .relay
         .and_then(|relay| relay.choices)
-        .and_then(|choices| choices.max_pending)
-        .unwrap_or(DEFAULT_CHOICES_MAX_PENDING);
-    if (MIN_CHOICES_MAX_PENDING..=MAX_CHOICES_MAX_PENDING).contains(&configured) {
+        .and_then(|choices| choices.pending_max)
+        .unwrap_or(DEFAULT_CHOICES_PENDING_MAX);
+    if (MIN_CHOICES_PENDING_MAX..=MAX_CHOICES_PENDING_MAX).contains(&configured) {
         return Ok(configured);
     }
     Err(relay_error(
         "validation_invalid_arguments",
-        "relay choices max-pending is out of supported range",
+        "relay choices pending-max is out of supported range",
         Some(json!({
             "path": path.display().to_string(),
-            "field": "relay.choices.max-pending",
+            "field": "relay.choices.pending-max",
             "value": configured,
-            "minimum": MIN_CHOICES_MAX_PENDING,
-            "maximum": MAX_CHOICES_MAX_PENDING,
+            "minimum": MIN_CHOICES_PENDING_MAX,
+            "maximum": MAX_CHOICES_PENDING_MAX,
         })),
     ))
 }
