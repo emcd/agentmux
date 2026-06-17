@@ -2,6 +2,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{acp::AcpSnapshotEntry, configuration::SessionType};
+// Delivery/look vocabulary now lives canonically in `crate::transports`. Re-export
+// it here so `crate::relay::{SendOutcome, DeliveryPayloadMode, AcpLookFreshness,
+// AcpLookSnapshotSource}` keeps resolving for relay and wire consumers, and so the
+// contract types below (SendResult, LookSnapshotPayload) can reference them.
+pub use crate::transports::vocabulary::{
+    AcpLookFreshness, AcpLookSnapshotSource, DeliveryPayloadMode, SendOutcome,
+};
 
 /// Declared session type for one listed bundle session.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -48,22 +55,6 @@ pub enum ListedBundleState {
 pub enum ListedBundleStartupHealth {
     Healthy,
     Degraded,
-}
-
-/// Freshness status for ACP-backed look snapshot responses.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum AcpLookFreshness {
-    Fresh,
-    Stale,
-}
-
-/// Source marker for ACP-backed look snapshot responses.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum AcpLookSnapshotSource {
-    LiveBuffer,
-    None,
 }
 
 /// Snapshot payload variant for look responses.
@@ -154,25 +145,6 @@ pub struct ShutdownReport {
 pub struct BundleStartupReport {
     pub ready_session_count: usize,
     pub failed_startups: Vec<StartupFailureRecord>,
-}
-
-/// Per-target delivery outcome for `send`.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SendOutcome {
-    Queued,
-    Delivered,
-    Timeout,
-    DroppedOnShutdown,
-    Failed,
-}
-
-/// Payload handling mode for one async delivery task.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum DeliveryPayloadMode {
-    EnvelopeMessage,
-    RawInput,
 }
 
 /// Structured relay error object.

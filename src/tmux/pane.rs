@@ -16,7 +16,7 @@ const LOOK_LINES_MAX: usize = 1000;
 
 static PASTE_BUFFER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-pub(super) fn resolve_active_pane_target(
+pub(crate) fn resolve_active_pane_target(
     tmux_socket: &Path,
     target_session: &str,
 ) -> Result<String, String> {
@@ -33,7 +33,7 @@ pub(super) fn resolve_active_pane_target(
     Ok(pane_target)
 }
 
-pub(super) fn resolve_window_activity_marker(
+pub(crate) fn resolve_window_activity_marker(
     tmux_socket: &Path,
     pane_target: &str,
 ) -> Result<Option<String>, String> {
@@ -68,7 +68,7 @@ pub(super) fn resolve_window_activity_marker(
     Ok(Some(marker))
 }
 
-pub(super) fn operator_interaction_active(
+pub(crate) fn operator_interaction_active(
     tmux_socket: &Path,
     target_session: &str,
     pane_target: &str,
@@ -149,7 +149,7 @@ fn active_client_key_table(
     Ok(active)
 }
 
-pub(super) fn capture_pane_snapshot(
+pub(crate) fn capture_pane_snapshot(
     tmux_socket: &Path,
     pane_target: &str,
 ) -> Result<String, String> {
@@ -160,7 +160,7 @@ pub(super) fn capture_pane_snapshot(
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-pub(super) fn capture_pane_tail_lines(
+pub(crate) fn capture_pane_tail_lines(
     tmux_socket: &Path,
     pane_target: &str,
     requested_lines: usize,
@@ -190,7 +190,7 @@ pub(super) fn capture_pane_tail_lines(
     Ok(lines)
 }
 
-pub(super) fn resolve_cursor_column(
+pub(crate) fn resolve_cursor_column(
     tmux_socket: &Path,
     pane_target: &str,
 ) -> Result<usize, String> {
@@ -204,15 +204,7 @@ pub(super) fn resolve_cursor_column(
         .map_err(|source| format!("failed to parse tmux cursor_x '{value}': {source}"))
 }
 
-pub(super) fn inject_prompt(
-    tmux_socket: &Path,
-    pane_target: &str,
-    prompt: &str,
-) -> Result<(), String> {
-    inject_literal_text(tmux_socket, pane_target, prompt, true)
-}
-
-pub(super) fn inject_literal_text(
+pub(crate) fn inject_literal_text(
     tmux_socket: &Path,
     pane_target: &str,
     text: &str,
@@ -280,7 +272,7 @@ fn load_tmux_buffer(tmux_socket: &Path, buffer_name: &str, text: &str) -> Result
     Err(stderr)
 }
 
-pub(super) fn run_tmux_command(
+pub(crate) fn run_tmux_command(
     tmux_socket: &Path,
     command_arguments: &[impl AsRef<OsStr>],
 ) -> Result<std::process::Output, String> {
@@ -299,7 +291,7 @@ pub(super) fn run_tmux_command(
     Err(stderr)
 }
 
-pub(super) fn run_tmux_command_capture(
+pub(crate) fn run_tmux_command_capture(
     tmux_socket: &Path,
     command_arguments: &[impl AsRef<OsStr>],
 ) -> Result<std::process::Output, String> {
@@ -316,7 +308,7 @@ fn tmux_program() -> String {
         .unwrap_or_else(|| "tmux".to_string())
 }
 
-pub(super) fn sanitize_diagnostic_text(text: &str) -> String {
+pub(crate) fn sanitize_diagnostic_text(text: &str) -> String {
     const CHARS_MAX: usize = 512;
     let mut clipped = text.chars().take(CHARS_MAX).collect::<String>();
     if text.chars().count() > CHARS_MAX {
@@ -325,7 +317,7 @@ pub(super) fn sanitize_diagnostic_text(text: &str) -> String {
     clipped
 }
 
-pub(super) fn emit_delivery_diagnostic(event: &str, details: &Value) {
+pub(crate) fn emit_delivery_diagnostic(event: &str, details: &Value) {
     if !delivery_diagnostics_enabled() {
         return;
     }

@@ -18,7 +18,6 @@ use super::super::routing::{
     Addressing, Capability, OperationProfile, ResolvedRoute, requester_home_namespace,
     resolve_look_route,
 };
-use super::super::tmux::{capture_pane_tail_lines, resolve_active_pane_target};
 use super::super::{
     RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION, bare_session_id,
     canonical_session_id, relay_error, unsupported_operation,
@@ -28,6 +27,7 @@ use super::routed::{
     resolve_target_bundle, run_target_operation,
 };
 use super::sender::resolve_sender_in_namespace;
+use crate::tmux::pane::{capture_pane_tail_lines, resolve_active_pane_target};
 
 const LOOK_LINES_DEFAULT: usize = 120;
 const LOOK_LINES_MAX: usize = 1000;

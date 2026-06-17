@@ -7,6 +7,7 @@ pub mod envelope;
 pub mod mcp;
 pub mod relay;
 pub mod runtime;
+pub mod tmux;
 pub mod transports;
 pub mod tui;
 
