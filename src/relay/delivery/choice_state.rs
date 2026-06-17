@@ -10,11 +10,14 @@ use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
 use crate::runtime::{inscriptions::emit_inscription, signals::shutdown_requested};
+use crate::transports::{ChoiceMade, ChoiceToMake, Chooser};
 
 use super::super::{
     canonical_session_id,
     stream::{RelayStreamEvent, send_event_to_registered_ui},
 };
+
+const CHOICES_QUEUE_UNAVAILABLE_CODE: &str = "runtime_choices_queue_unavailable";
 
 const CHOICE_CANCELLED_CODE: &str = "runtime_choices_request_cancelled";
 const CHOICE_INVALIDATED_BY_RESPAWN_CODE: &str = "runtime_choices_request_invalidated_by_respawn";
@@ -139,6 +142,84 @@ fn pending_choice_option_ids(record: &PendingChoiceRequest) -> Vec<String> {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default()
+}
+
+/// Builds the relay-injected [`Chooser`] handed to an ACP transport at startup.
+///
+/// The transport invokes this on its own thread when an agent raises a tool-call
+/// permission; it blocks here on the relay choice queue (via
+/// `enqueue_choice_request` and `wait_for_choice_resolution`) until the operator
+/// decides, then maps the relay [`ChoiceResolutionOutcome`] into the transport's
+/// [`ChoiceMade`]. The closure closes over the target's
+/// `bundle_name`/`runtime_directory`; the per-delivery decider list rides in
+/// each [`ChoiceToMake`].
+pub(in crate::relay) fn build_acp_chooser(
+    bundle_name: String,
+    runtime_directory: PathBuf,
+) -> Chooser {
+    Arc::new(move |choice: ChoiceToMake| -> ChoiceMade {
+        let context = ChoiceEventContext {
+            runtime_directory: runtime_directory.clone(),
+            bundle_name: bundle_name.clone(),
+            authorized_ui_sessions: choice.decider_sessions.clone(),
+        };
+        resolve_choice_via_relay(&context, &choice)
+    })
+}
+
+fn resolve_choice_via_relay(context: &ChoiceEventContext, choice: &ChoiceToMake) -> ChoiceMade {
+    let enqueued = match enqueue_choice_request(
+        context,
+        choice.message_id.as_str(),
+        choice.target_session.as_str(),
+        choice.species.as_str(),
+        choice.details.clone(),
+        choice.pending_max,
+    ) {
+        Ok(value) => value,
+        Err(code) if code == CHOICES_QUEUE_FULL_CODE => {
+            return ChoiceMade::Cancelled {
+                decided_by: "relay".to_string(),
+                reason_code: CHOICES_QUEUE_FULL_CODE.to_string(),
+                reason: Some("choices queue is full".to_string()),
+            };
+        }
+        Err(_) => {
+            return ChoiceMade::Cancelled {
+                decided_by: "relay".to_string(),
+                reason_code: CHOICES_QUEUE_UNAVAILABLE_CODE.to_string(),
+                reason: Some("failed to enqueue choice request".to_string()),
+            };
+        }
+    };
+
+    let Ok(outcome) = wait_for_choice_resolution(context, enqueued.choice_request_id.as_str())
+    else {
+        return ChoiceMade::Cancelled {
+            decided_by: "relay".to_string(),
+            reason_code: CHOICE_CANCELLED_CODE.to_string(),
+            reason: Some("failed while waiting for choice decision".to_string()),
+        };
+    };
+
+    match outcome {
+        ChoiceResolutionOutcome::Selected {
+            option_id,
+            decided_by,
+        } => ChoiceMade::Chosen {
+            option_id,
+            decided_by,
+        },
+        ChoiceResolutionOutcome::Cancelled {
+            decided_by,
+            reason_code,
+            reason,
+        } => ChoiceMade::Cancelled {
+            decided_by,
+            reason_code,
+            reason,
+        },
+    }
 }
 
 pub(in crate::relay) fn enqueue_choice_request(

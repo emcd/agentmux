@@ -90,6 +90,18 @@ today's wait, relocated. The ACP `on_completion` body (`build_acp_completion_res
 `note_session_served_successfully`, `set_acp_worker_state`, and the choice-outcome
 correlation) moves into `deliver()`'s internal completion path.
 
+**Behavior delta (Slice 2b, approved)**: folding completion into `deliver()`
+drops the dispatch-time `accepted_in_progress` `delivery_outcome` event ACP
+emitted the instant a prompt was submitted (before this change, a fire-and-forget
+submit returned `delivered_in_progress_result` and the worker emitted it, then the
+reader thread's `on_completion` emitted the terminal event). With `deliver()`
+synchronous-to-terminal the sender goes `Queued` (send RPC, at enqueue) directly to
+the terminal `delivery_outcome`, with no intermediate event. This is the one
+intentional behavior change in Slices 1–4; it is acceptable because
+`accepted_in_progress` was an artifact of the old fire-and-forget model and is
+redundant with the `Queued` the send RPC already returns at enqueue. Preserving it
+would require a transport->relay back-edge, which this amendment removes.
+
 **Invariant**: `deliver()` MUST observe relay shutdown and return a
 terminal/dropped outcome promptly rather than parking the blocking thread
 indefinitely on a wedged turn.
@@ -112,6 +124,35 @@ stays transport-generic.
 
 **Invariant**: a `look` racing a respawn MUST yield stale/unavailable metadata
 or a clean `TransportError`, never a panic or a read of the wrong target's state.
+
+### Slice 2b execution decisions (boundary details)
+
+Decided while implementing 2b, after tracing the delivery path end to end. These
+preserve behavior and keep relay-side scheduling out of the transport:
+
+- **Envelope/prompt boundary — relay pre-combines, relay fans out.** ACP
+  coalescing (`batch_envelopes` token-budget packing + the `accepted_len` peel
+  that feeds the worker carry buffer) is relay scheduling and stays in
+  `payload.rs`/`orchestration.rs`. The relay hands `deliver()` the already-combined
+  prompt as a single `DeliveryEnvelope` and replicates the one returned
+  `SingleDeliveryOutcome` across the N coalesced tasks (the worker's
+  `complete_task_outcome` loop already supplies each task's own sender identity).
+  This mirrors the existing tmux fan-out and avoids moving the packer.
+- **Completion captured via an on_completion slot, then blocked on.** `deliver()`
+  submits with an `on_completion` that stores the `PromptCompletion` into a shared
+  slot, then blocks on `wait_for_prompt_complete` (bounded poll + shutdown gate),
+  then builds the terminal outcome inline from the slot + the pending-choice slot.
+  On a shutdown break the slot is empty -> a dropped-on-shutdown outcome.
+- **Dual readiness, worker-mirrored (forced by decoupling).** The transport owns
+  an `AcpWorkerReadinessState` signal for `is_ready()` and the `OutputView`
+  prime-wait (it cannot call relay's `set_acp_worker_state`). The worker mirrors to
+  the global `AcpWorkerReadinessState` registry — which stays, because external
+  observers (TUI `subscribe_acp_worker_state`) and respawn/startup gating read it.
+  The worker sets global `Busy` just before `deliver()` and the terminal state
+  after, preserving the observable Busy transition.
+- **RawInput routes through `deliver()`.** ACP raww submits text as a prompt and
+  blocks to terminal today; routing RawInput tasks through `deliver()` (rendered =
+  raw text) preserves that. `raw_write()` is implemented for contract completeness.
 
 ### UI transport excluded from enum
 

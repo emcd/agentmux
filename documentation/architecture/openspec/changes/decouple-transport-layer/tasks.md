@@ -63,41 +63,43 @@ simpler (a handle re-fetch, not a channel re-wire).
 
 ### Slice 2b — ACP Transport impl (contract amendment)
 
-- [ ] 2.1 Move `relay/delivery/acp_delivery.rs` → `src/acp/transport.rs`;
+- [x] 2.1 Move `relay/delivery/acp_delivery.rs` → `src/acp/transport.rs`;
       implement `Transport` for `AcpTransport`. `deliver()` blocks to terminal
       and returns the per-envelope outcome (folds in today's
       `wait_for_prompt_complete_blocking` + `on_completion` body:
       `build_acp_completion_result`, `note_session_served_successfully`,
       `set_acp_worker_state`, and the choice-outcome correlation)
-- [ ] 2.3 (rescoped) Extract the ACP permission handling — the per-prompt
+- [x] 2.3 (rescoped) Extract the ACP permission handling — the per-prompt
       `PermissionHandler` closures embedded in `acp_delivery.rs` (around the
       old lines 242 and 542), NOT a standalone `permission_state.rs` (no such
       file exists) — into `src/acp/permission.rs`, wiring them to the injected
       `Chooser` (translate the ACP permission request into a `ChoiceToMake` and
       the returned `ChoiceMade` back into the JSON-RPC responder)
-- [ ] 2.6 Inject `choose: Chooser` via `StartupContext`: relay constructs it
+- [x] 2.6 Inject `choose: Chooser` via `StartupContext`: relay constructs it
       closing over `enqueue_choice_request` + `wait_for_choice_resolution`; the
       transport populates `ChoiceToMake`'s per-delivery correlation
       (`message_id`, `target_session`, `pending_max`, `decider_sessions`) from
       `DeliveryContext`. No transport->relay back-edge
-- [ ] 2.7 Implement `give_output()` + an `OutputView` for `AcpTransport` holding
+- [x] 2.7 Implement `give_output()` + an `OutputView` for `AcpTransport` holding
       the shared replay buffer `Arc` + a shared readiness signal; the handle
       owns the bounded prime-wait (up to `LookMode::prime_timeout`) and returns
       `AcpEntries` with freshness/source/stale/age. Move
       `derive_acp_look_snapshot` into the ACP `OutputView` impl; repoint
       `handlers/look.rs` to read the handle
-- [ ] 2.8 Worker re-fetches the `give_output()` handle after every `startup()`
+- [x] 2.8 Worker re-fetches the `give_output()` handle after every `startup()`
       at `bootstrap_acp_runtime_on_worker_start` (worker.rs:379) and
       `drive_acp_worker_respawn` (worker.rs:568) — a plain store, replacing the
       worker-state-registry/replay-buffer plumbing for the look path
-- [ ] 2.9 Worker fans out terminal outcomes from `deliver()`'s return value via
+- [x] 2.9 Worker fans out terminal outcomes from `deliver()`'s return value via
       the existing `complete_task_outcome`; remove the `on_completion` callback
-      path into relay statics
-- [ ] 2.10 Shutdown invariants: `deliver()` observes `shutdown_requested()` and
+      path into relay statics. This drops the dispatch-time `accepted_in_progress`
+      `delivery_outcome` event (approved behavior delta; see design.md
+      "Behavior delta (Slice 2b, approved)")
+- [x] 2.10 Shutdown invariants: `deliver()` observes `shutdown_requested()` and
       returns a terminal/dropped outcome promptly; the `Chooser` unblocks and
       returns `ChoiceMade::Cancelled` on shutdown / respawn invalidation
-- [ ] 2.11 Add `TransportImpl::Acp` variant; wire into worker dispatch
-- [ ] 2.12 Validate: `cargo test` passes; ACP delivery works end-to-end.
+- [x] 2.11 Add `TransportImpl::Acp` variant; wire into worker dispatch
+- [x] 2.12 Validate: `cargo test` passes; ACP delivery works end-to-end.
       Add tests (per Reviewer General): a `look` racing respawn returns
       stale/unavailable or a clean `TransportError` (no panic / wrong-target
       read); `Chooser` shutdown + respawn-invalidation; `deliver()` shutdown

@@ -12,9 +12,9 @@ use serde_json::json;
 use time::format_description::well_known::Rfc3339;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, error::SendError};
 
-use crate::acp::ReplayEntry;
 use crate::configuration::TargetConfiguration;
 use crate::runtime::{inscriptions::emit_inscription, signals::shutdown_requested};
+use crate::transports::OutputView;
 
 use super::super::stream::{RelayStreamEvent, send_event_to_registered_ui};
 use super::super::{AsyncDeliveryTask, RelayError, SendOutcome, SendResult, canonical_session_id};
@@ -59,7 +59,7 @@ pub(super) struct AsyncWorkerEntry {
     pub pending: std::sync::Arc<AtomicUsize>,
     pub bounded_acp_queue: bool,
     pub acp_state: Option<AcpWorkerReadinessState>,
-    pub acp_snapshot: Option<Arc<Mutex<Vec<ReplayEntry>>>>,
+    pub acp_output_view: Option<Arc<dyn OutputView>>,
 }
 
 pub(super) fn build_worker_key(
@@ -165,7 +165,7 @@ pub(super) fn register_worker(
                 pending,
                 bounded_acp_queue,
                 acp_state: None,
-                acp_snapshot: None,
+                acp_output_view: None,
             },
         );
     }
@@ -194,7 +194,7 @@ pub(super) fn register_worker_if_absent(
             pending,
             bounded_acp_queue,
             acp_state: None,
-            acp_snapshot: None,
+            acp_output_view: None,
         },
     );
     Ok(true)
@@ -233,34 +233,32 @@ pub(in crate::relay) fn get_acp_worker_state(
         .and_then(|entry| entry.acp_state)
 }
 
-pub(in crate::relay) fn install_acp_worker_replay_buffer(
+pub(in crate::relay) fn install_acp_worker_output_view(
     bundle_name: &str,
     runtime_directory: &Path,
     target_session: &str,
-    buffer: Arc<Mutex<Vec<ReplayEntry>>>,
+    output_view: Option<Arc<dyn OutputView>>,
 ) {
     let key = build_worker_key(bundle_name, runtime_directory, target_session);
     if let Ok(mut workers) = async_delivery_registry().workers.lock()
         && let Some(entry) = workers.get_mut(&key)
     {
-        entry.acp_snapshot = Some(buffer);
+        entry.acp_output_view = output_view;
     }
 }
 
-pub(in crate::relay) fn get_acp_worker_snapshot(
+pub(in crate::relay) fn get_acp_worker_output_view(
     bundle_name: &str,
     runtime_directory: &Path,
     target_session: &str,
-) -> Option<Arc<Vec<ReplayEntry>>> {
+) -> Option<Arc<dyn OutputView>> {
     let key = build_worker_key(bundle_name, runtime_directory, target_session);
-    let buffer = async_delivery_registry()
+    async_delivery_registry()
         .workers
         .lock()
         .ok()?
         .get(&key)
-        .and_then(|entry| entry.acp_snapshot.clone())?;
-    let snapshot = buffer.lock().ok()?.clone();
-    Some(Arc::new(snapshot))
+        .and_then(|entry| entry.acp_output_view.clone())
 }
 
 pub(in crate::relay) fn acp_session_ready_for_startup(

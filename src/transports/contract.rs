@@ -47,7 +47,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::acp::AcpSnapshotEntry;
+use crate::acp::{AcpSnapshotEntry, AcpTransport};
 use crate::configuration::BundleMember;
 // Re-export the configuration prompt-readiness template into the transport
 // contract namespace; tmux quiescence consumes it and Slice 3 wires it through
@@ -266,54 +266,10 @@ impl TransportImpl {
     }
 }
 
-/// ACP delivery transport. Placeholder for Slice 1; the implementation moves
-/// here from `relay/delivery/acp_delivery.rs` in Slice 2.
-#[derive(Debug, Default)]
-pub struct AcpTransport;
-
 /// Tmux pane delivery transport. Placeholder for Slice 1; the implementation
 /// moves here from `relay/tmux.rs` plus the quiescence loop in Slice 3.
 #[derive(Debug, Default)]
 pub struct TmuxTransport;
-
-impl Transport for AcpTransport {
-    fn startup(&mut self, _context: StartupContext) -> Result<TransportStatus, TransportError> {
-        todo!("AcpTransport::startup — Slice 2")
-    }
-
-    fn deliver(
-        &mut self,
-        _envelopes: Vec<DeliveryEnvelope>,
-        _context: &DeliveryContext,
-    ) -> DeliveryResult {
-        todo!("AcpTransport::deliver — Slice 2")
-    }
-
-    fn is_ready(&self) -> bool {
-        todo!("AcpTransport::is_ready — Slice 2")
-    }
-
-    fn raw_write(
-        &mut self,
-        _text: &str,
-        _append_enter: bool,
-        _context: &DeliveryContext,
-    ) -> RawWriteResult {
-        todo!("AcpTransport::raw_write — Slice 2")
-    }
-
-    fn shutdown(&mut self) {
-        todo!("AcpTransport::shutdown — Slice 2")
-    }
-
-    fn accept_capacity(&self) -> usize {
-        todo!("AcpTransport::accept_capacity — Slice 2")
-    }
-
-    fn give_output(&self) -> Option<Arc<dyn OutputView>> {
-        todo!("AcpTransport::give_output — Slice 2")
-    }
-}
 
 impl Transport for TmuxTransport {
     fn startup(&mut self, _context: StartupContext) -> Result<TransportStatus, TransportError> {

@@ -8,12 +8,11 @@ use tokio::sync::mpsc as tokio_mpsc;
 use serde_json::json;
 use time::format_description::well_known::Rfc3339;
 
-use crate::configuration::{BundleConfiguration, BundleMember, TargetConfiguration};
+use crate::configuration::{BundleMember, TargetConfiguration};
 
 use super::super::super::{AsyncDeliveryTask, DeliveryPayloadMode, RelayError, SendResult};
-use crate::acp::state::{ACP_LOOK_PRIME_TIMEOUT_MS, ACP_STARTUP_PRIME_TIMEOUT_MS};
+use crate::acp::state::ACP_STARTUP_PRIME_TIMEOUT_MS;
 
-use super::super::acp_delivery::PersistentAcpWorkerRuntime;
 use super::super::async_worker::{AcpWorkerReadinessState, get_acp_worker_state};
 use super::payload::{
     PreparedBatchPayload, prepare_batch_delivery_payload, prepare_delivery_payload,
@@ -21,44 +20,10 @@ use super::payload::{
 };
 use super::transport::{deliver_non_ui_target, deliver_non_ui_target_batch};
 use super::worker::{AcpWorkerBootstrap, spawn_async_delivery_worker};
+use crate::acp::AcpTransport;
 
 pub(in crate::relay) fn wait_for_async_delivery_shutdown(timeout: Duration) -> usize {
     super::super::async_worker::wait_for_async_delivery_shutdown(timeout)
-}
-
-pub(in crate::relay) fn await_acp_worker_prime_for_look(
-    bundle: &BundleConfiguration,
-    target_member: &BundleMember,
-    runtime_directory: &std::path::Path,
-) -> Result<bool, RelayError> {
-    if !matches!(target_member.target, TargetConfiguration::Acp(_)) {
-        return Ok(false);
-    }
-    let key = super::super::async_worker::AsyncWorkerKey {
-        runtime_directory: runtime_directory.to_path_buf(),
-        bundle_name: bundle.bundle_name.clone(),
-        target_session: target_member.id.clone(),
-    };
-    if !super::super::async_worker::worker_exists(&key)? {
-        return Ok(false);
-    }
-    let deadline = Instant::now() + Duration::from_millis(ACP_LOOK_PRIME_TIMEOUT_MS);
-    loop {
-        let readiness = get_acp_worker_state(
-            bundle.bundle_name.as_str(),
-            runtime_directory,
-            target_member.id.as_str(),
-        );
-        match readiness {
-            Some(AcpWorkerReadinessState::Initializing) | None => {
-                if Instant::now() >= deadline {
-                    return Ok(true);
-                }
-                thread::sleep(Duration::from_millis(25));
-            }
-            Some(_) => return Ok(false),
-        }
-    }
 }
 
 pub(in crate::relay) fn initialize_acp_target_for_startup(
@@ -218,12 +183,12 @@ fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
 
 pub(in crate::relay) fn deliver_one_target_with_worker_state(
     task: &AsyncDeliveryTask,
-    acp_runtime: &mut Option<PersistentAcpWorkerRuntime>,
+    acp_transport: &mut Option<AcpTransport>,
 ) -> Result<SendResult, RelayError> {
     let target_member = resolve_target_member(task)?;
     let prompt_batches = prepare_delivery_payload(task)?;
     let non_ui_target_member = target_member.expect("non-UI target_member must exist");
-    deliver_non_ui_target(task, non_ui_target_member, prompt_batches, acp_runtime)
+    deliver_non_ui_target(task, non_ui_target_member, prompt_batches, acp_transport)
 }
 
 /// Delivers a coalesced batch of tasks against the shared target.
@@ -244,7 +209,7 @@ pub(in crate::relay) fn deliver_one_target_with_worker_state(
 pub(in crate::relay) fn deliver_batch_with_worker_state(
     batch: &[AsyncDeliveryTask],
     pre_resolved_pane: Option<String>,
-    acp_runtime: &mut Option<PersistentAcpWorkerRuntime>,
+    acp_transport: &mut Option<AcpTransport>,
 ) -> (Vec<Result<SendResult, RelayError>>, Vec<AsyncDeliveryTask>) {
     debug_assert!(
         !batch.is_empty(),
@@ -261,7 +226,7 @@ pub(in crate::relay) fn deliver_batch_with_worker_state(
             "RawInput batches must not coalesce; got {} tasks",
             batch.len(),
         );
-        let outcome = deliver_one_target_with_worker_state(head, acp_runtime);
+        let outcome = deliver_one_target_with_worker_state(head, acp_transport);
         return (vec![outcome], Vec::new());
     }
 
@@ -297,7 +262,7 @@ pub(in crate::relay) fn deliver_batch_with_worker_state(
                 nonui_target_member,
                 prompt_batches,
                 pre_resolved_pane,
-                acp_runtime,
+                acp_transport,
             );
             (outcomes, deferred)
         }
