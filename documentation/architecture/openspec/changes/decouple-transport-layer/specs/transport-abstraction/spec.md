@@ -23,8 +23,9 @@ implementation SHALL NOT impose async boundaries on the relay worker.
 
 - **WHEN** the relay delivery worker delivers to a Tmux target
 - **THEN** it calls `TransportImpl::Tmux(t).deliver(envelopes, context)`
-- **AND** the `TmuxTransport` implementation handles pane injection and
-  quiescence polling within the sync call
+- **AND** the `TmuxTransport` implementation handles pane injection within the
+  sync call (quiescence is gated upstream by `prepare_delivery`; see the
+  Pre-Delivery Readiness Barrier requirement)
 
 ### Requirement: Transport Module Boundaries
 
@@ -117,21 +118,52 @@ never a panic or a read of the wrong target's state.
   stored handle at both `bootstrap_acp_runtime_on_worker_start` and
   `drive_acp_worker_respawn` callsites
 
-### Requirement: Transport Capacity Declaration
+### Requirement: Pre-Delivery Readiness Barrier
 
-Each transport SHALL declare per-call delivery capacity via `accept_capacity()`.
-The relay delivery worker SHALL split batches to fit the declared capacity
-without transport-specific knowledge of the limit.
+Before committing a batch, the relay delivery worker SHALL call
+`Transport::prepare_delivery(context)` to gate delivery on the target being ready
+to receive it. A transport whose readiness is observable (Tmux pane quiescence;
+Pty fd idle, when it lands) SHALL perform the wait and return the resolved
+target; a transport with no pre-delivery wait (ACP today) SHALL return ready
+immediately. The barrier SHALL run as a distinct relay-side step so the worker
+can drain task arrivals into the batch during the wait (coalesce-during-wait); it
+SHALL NOT be folded into `deliver()`. On timeout, shutdown, or target
+unavailability the barrier SHALL return an error that the worker fans across the
+coalesced batch. The resolved target SHALL ride in `DeliveryContext`'s
+`pre_resolved_target`; a transport whose handle is not a string MAY re-resolve in
+its own `deliver()`.
 
-#### Scenario: Tmux capacity enforces single delivery
+#### Scenario: Tmux waits for pane quiescence before paste
 
-- **WHEN** the relay attempts to deliver a batch to a Tmux target
-- **THEN** `accept_capacity()` returns 1
-- **AND** the worker delivers exactly one envelope per `deliver()` call
+- **WHEN** the relay delivers an envelope batch to a Tmux target
+- **THEN** `prepare_delivery()` waits for the pane to fall quiescent and returns
+  the resolved pane
+- **AND** tasks arriving during the wait are coalesced into the batch before paste
 
-#### Scenario: ACP accepts larger batches
+#### Scenario: ACP barrier returns ready immediately
 
-- **WHEN** the relay attempts to deliver a batch to an ACP target
-- **THEN** `accept_capacity()` returns up to the full batch size
-- **AND** the worker delivers all accepted envelopes in a single `deliver()`
-  call
+- **WHEN** the relay delivers to an ACP target
+- **THEN** `prepare_delivery()` returns ready without a wait
+
+### Requirement: Relay-Combined Batch Dispatch
+
+The relay delivery worker SHALL pre-combine a coalesced turn before dispatch and
+fan one terminal outcome out to every coalesced task; a transport SHALL paste
+every rendered envelope it receives, in order, within a single `deliver()` call.
+A transport that accepts at most one prompt batch per dispatch SHALL declare so
+via `SessionType::can_take_batches()` returning `false`; the relay packs
+envelopes to the token budget and peels the tail back to the worker carry buffer
+to honor that limit, with no transport-specific knowledge of the budget.
+
+#### Scenario: Tmux accepts the full coalesced batch
+
+- **WHEN** the relay delivers a coalesced batch to a Tmux target
+- **THEN** `can_take_batches()` is `true`
+- **AND** the transport pastes every rendered prompt batch in one `deliver()` call
+
+#### Scenario: ACP accepts one prompt batch per turn
+
+- **WHEN** the relay delivers a coalesced batch to an ACP target
+- **THEN** `can_take_batches()` is `false`
+- **AND** the relay peels the rendered envelopes to a single prompt batch and
+  re-queues the remainder to the worker carry buffer for the next turn
