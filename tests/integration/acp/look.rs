@@ -374,6 +374,49 @@ fn acp_look_replaces_legacy_flattened_baseline_after_structured_load() {
     assert!(!snapshot.lines.iter().any(|line| line == "LEGACY-LINE-2"));
 }
 
+/// Reviewer caution (a): a `look` racing a respawn must return clean
+/// stale/unavailable or fresh metadata, never panic or read the wrong target's
+/// buffer. A respawn clears the published `OutputView` handle and republishes it
+/// after startup; `disconnect_on_prompt` drives `Unavailable` -> respawn churn so
+/// looks pass through that window. The assertion is that every look yields a
+/// well-formed, bounded, target-scoped ACP snapshot.
+#[test]
+fn acp_look_across_respawn_window_returns_clean_snapshots() {
+    let temporary = TempDir::new().expect("temporary");
+    let options = AcpStubOptions {
+        disconnect_on_prompt: Some("before_activity".to_string()),
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    let response = dispatch_send(&config_root, &tmux_socket);
+    assert_eq!(send_result(response).outcome, SendOutcome::Queued);
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        // `expect_acp_snapshot` panics if the payload is not a well-formed
+        // `AcpEntriesV1`, so a malformed or wrong-typed response fails the test.
+        let look = dispatch_look(&config_root, &tmux_socket, "bravo", "bravo", Some(5));
+        let snapshot = expect_acp_snapshot(look);
+        assert!(
+            snapshot.returned_entries_count <= 5,
+            "look window must stay bounded across respawn",
+        );
+        assert!(
+            snapshot.returned_entries_count <= snapshot.entries_total,
+            "returned count cannot exceed the total",
+        );
+        if snapshot.freshness == AcpLookFreshness::Stale {
+            assert!(
+                snapshot.stale_reason_code.is_some(),
+                "a stale snapshot must carry a reason code",
+            );
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn wait_for_look(
     config_root: &std::path::Path,
     tmux_socket: &std::path::Path,

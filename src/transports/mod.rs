@@ -6,9 +6,10 @@
 
 pub mod contract;
 
+pub use crate::acp::AcpTransport;
 pub use contract::{
-    AcpTransport, ChoiceMade, ChoiceToMake, Chooser, DeliveryContext, DeliveryEnvelope,
-    DeliveryResult, LookMode, LookSnapshotPayload, OutputView, PromptReadinessTemplate,
-    RawWriteResult, SingleDeliveryOutcome, StartupContext, ThingToChoose, TmuxTransport, Transport,
-    TransportError, TransportImpl, TransportReadiness, TransportStatus,
+    ChoiceMade, ChoiceToMake, Chooser, DeliveryContext, DeliveryEnvelope, DeliveryResult, LookMode,
+    LookSnapshotPayload, OutputView, PromptReadinessTemplate, RawWriteResult,
+    SingleDeliveryOutcome, StartupContext, ThingToChoose, TmuxTransport, Transport, TransportError,
+    TransportImpl, TransportReadiness, TransportStatus,
 };

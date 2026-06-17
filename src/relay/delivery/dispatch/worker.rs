@@ -14,27 +14,29 @@ use crate::{
 };
 
 use super::super::super::canonical_session_id;
+use super::super::super::startup_state::note_session_served_successfully;
 use super::super::super::stream::{
     RelayStreamEvent, broadcast_event_to_bundle_ui, list_registered_ui_sessions_for_bundle,
 };
-use super::super::super::{AsyncDeliveryTask, DeliveryPayloadMode, RelayError, SendResult};
-use super::super::acp_delivery::{
-    ACP_ERROR_CODE_CONNECTION_CLOSED, ACP_ERROR_CODE_INITIALIZE_FAILED,
-    ACP_ERROR_CODE_PROMPT_FAILED, ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE, AcpBootstrapError,
-    PersistentAcpWorkerRuntime, bootstrap_acp_worker_runtime, respawn_acp_worker_runtime,
+use super::super::super::{
+    AsyncDeliveryTask, DeliveryPayloadMode, RelayError, SendOutcome, SendResult,
 };
 use super::super::async_worker::{
-    AcpWorkerReadinessState, AsyncWorkerKey, get_acp_worker_state,
-    install_acp_worker_replay_buffer, set_acp_worker_state,
+    AcpWorkerReadinessState, AsyncWorkerKey, get_acp_worker_state, install_acp_worker_output_view,
+    set_acp_worker_state,
 };
-use super::super::choice_state::{ChoiceEventContext, invalidate_pending_for_respawn};
+use super::super::choice_state::{
+    ChoiceEventContext, build_acp_chooser, invalidate_pending_for_respawn,
+};
+use crate::acp::{
+    ACP_ERROR_CODE_CONNECTION_CLOSED, ACP_ERROR_CODE_INITIALIZE_FAILED,
+    ACP_ERROR_CODE_PROMPT_FAILED, ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE, AcpBootstrapError,
+    AcpTransport,
+};
+use crate::transports::{StartupContext, Transport};
 
 const RESPAWN_BACKOFF_MAX_MS_ENVVAR: &str = "AGENTMUX_RELAY_ACP_RESPAWN_BACKOFF_MAX_MS";
 const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;
-/// Slice length for the single-flight ACP prompt-completion wait. Bounds how
-/// long the worker's blocking thread parks before re-checking the shutdown gate
-/// so a never-completing agent turn cannot pin teardown.
-const ACP_PROMPT_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const RESPAWN_SLEEP_POLL_MS: u64 = 50;
 const RESPAWN_BACKOFF_INITIAL_MS: u64 = 1_000;
 const RESPAWN_BACKOFF_CAP_DEFAULT_MS: u64 = 30_000;
@@ -103,7 +105,7 @@ async fn run_async_delivery_worker(
     bootstrap: Option<AcpWorkerBootstrap>,
 ) {
     let acp_context = bootstrap.clone();
-    let mut acp_runtime = if let Some(bootstrap) = bootstrap {
+    let mut acp_transport = if let Some(bootstrap) = bootstrap {
         bootstrap_acp_runtime_on_worker_start(&key, bootstrap).await
     } else {
         None
@@ -198,9 +200,25 @@ async fn run_async_delivery_worker(
                 }),
             );
         }
-        let (outcomes, returned_runtime, deferred) =
-            deliver_batch_blocking(batch.clone(), pre_resolved_pane, acp_runtime).await;
-        acp_runtime = returned_runtime;
+        // Mirror Busy into the global registry before delivery so external
+        // observers (the TUI worker-state stream) see the in-turn transition.
+        // The transport sets its own internal readiness on dispatch for the
+        // look path; this only covers the global mirror, and only when a
+        // runtime is present (a real delivery is about to run).
+        if let Some(ctx) = acp_context.as_ref()
+            && acp_transport.is_some()
+        {
+            set_acp_worker_state(
+                key.bundle_name.as_str(),
+                ctx.runtime_directory.as_path(),
+                ctx.target_member.id.as_str(),
+                AcpWorkerReadinessState::Busy,
+            );
+        }
+
+        let (outcomes, returned_transport, deferred) =
+            deliver_batch_blocking(batch.clone(), pre_resolved_pane, acp_transport).await;
+        acp_transport = returned_transport;
         // Push deferred (ACP-peeled) tasks back to the front of the carry queue
         // in original order so they are the head of the next iteration.
         for deferred_task in deferred.into_iter().rev() {
@@ -210,19 +228,33 @@ async fn run_async_delivery_worker(
             .first()
             .map(classify_respawn_trigger)
             .unwrap_or("worker_unavailable");
+
+        // `deliver()` folds in completion (blocks to terminal), so the
+        // transport's readiness is already settled on return. Mirror it into
+        // the global registry for external observers and the respawn gate
+        // below. `note_session_served_successfully` moves worker-side: the ACP
+        // transport no longer reaches into relay statics.
+        if let Some(ctx) = acp_context.as_ref()
+            && let Some(transport) = acp_transport.as_ref()
+        {
+            set_acp_worker_state(
+                key.bundle_name.as_str(),
+                ctx.runtime_directory.as_path(),
+                ctx.target_member.id.as_str(),
+                transport.readiness(),
+            );
+        }
         for (task, outcome) in batch.iter().zip(outcomes) {
+            if acp_context.is_some()
+                && matches!(&outcome, Ok(result) if result.outcome == SendOutcome::Delivered)
+            {
+                let _ = note_session_served_successfully(
+                    task.runtime_directory.as_path(),
+                    task.target_session.as_str(),
+                );
+            }
             super::super::async_worker::complete_task_outcome(task, outcome);
             super::super::async_worker::release_pending_slot(pending.as_ref());
-        }
-
-        // Per-target ACP single-flight: block until the previous prompt is
-        // fully complete (background reader fired `on_completion`, or
-        // synchronous dispatch failure already cleared the slot) before
-        // pulling the next task. `wait_for_prompt_complete()` is a blocking
-        // mpsc recv inside `AcpStdioClient`; run it on the blocking pool so
-        // the tokio worker thread is not pinned.
-        if acp_runtime.is_some() {
-            acp_runtime = wait_for_prompt_complete_blocking(acp_runtime).await;
         }
 
         if let Some(ctx) = acp_context.as_ref() {
@@ -237,7 +269,7 @@ async fn run_async_delivery_worker(
                     ctx,
                     trigger_reason,
                     &mut respawn_state,
-                    &mut acp_runtime,
+                    &mut acp_transport,
                 )
                 .await;
             } else if matches!(
@@ -380,7 +412,7 @@ fn drain_carry_on_shutdown(
 async fn bootstrap_acp_runtime_on_worker_start(
     key: &AsyncWorkerKey,
     bootstrap: AcpWorkerBootstrap,
-) -> Option<PersistentAcpWorkerRuntime> {
+) -> Option<AcpTransport> {
     set_acp_worker_state(
         key.bundle_name.as_str(),
         bootstrap.runtime_directory.as_path(),
@@ -389,30 +421,38 @@ async fn bootstrap_acp_runtime_on_worker_start(
     );
     let bundle_name = key.bundle_name.clone();
     let target_session = key.target_session.clone();
-    let runtime_directory = bootstrap.runtime_directory.clone();
-    let target_member = bootstrap.target_member.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        bootstrap_acp_worker_runtime(runtime_directory.as_path(), &target_member)
+    // Publish the OutputView handle BEFORE startup runs. The handle reads shared
+    // state the transport populates during startup, so a look in the initial-
+    // startup window finds the handle and runs its bounded prime-wait instead of
+    // returning an immediate unavailable snapshot.
+    let transport = AcpTransport::new();
+    install_acp_worker_output_view(
+        bundle_name.as_str(),
+        bootstrap.runtime_directory.as_path(),
+        bootstrap.target_member.id.as_str(),
+        transport.give_output(),
+    );
+    let startup_context = StartupContext {
+        bundle_name: bundle_name.clone(),
+        runtime_directory: bootstrap.runtime_directory.clone(),
+        target_member: bootstrap.target_member.clone(),
+        choose: build_acp_chooser(bundle_name.clone(), bootstrap.runtime_directory.clone()),
+    };
+    let (transport, result) = tokio::task::spawn_blocking(move || {
+        let mut transport = transport;
+        let result = transport.startup(startup_context);
+        (transport, result)
     })
     .await
     .expect("ACP worker bootstrap task panicked");
 
-    match result {
-        Ok(runtime) => {
-            install_acp_worker_replay_buffer(
-                bundle_name.as_str(),
-                bootstrap.runtime_directory.as_path(),
-                bootstrap.target_member.id.as_str(),
-                runtime.client.replay_buffer_handle(),
-            );
-            set_acp_worker_state(
-                bundle_name.as_str(),
-                bootstrap.runtime_directory.as_path(),
-                bootstrap.target_member.id.as_str(),
-                AcpWorkerReadinessState::Available,
-            );
-            Some(runtime)
-        }
+    match &result {
+        Ok(_) => set_acp_worker_state(
+            bundle_name.as_str(),
+            bootstrap.runtime_directory.as_path(),
+            bootstrap.target_member.id.as_str(),
+            AcpWorkerReadinessState::Available,
+        ),
         Err(error) => {
             set_acp_worker_state(
                 bundle_name.as_str(),
@@ -429,9 +469,12 @@ async fn bootstrap_acp_runtime_on_worker_start(
                     "reason": error.reason,
                 }),
             );
-            None
         }
     }
+    // Keep the transport (and its published handle) even on startup failure: the
+    // worker loop drives respawn off the Unavailable global state and reuses this
+    // transport, and a look still finds the handle reporting the failure state.
+    Some(transport)
 }
 
 /// Drives one batched delivery on the blocking pool. Moves the per-worker ACP
@@ -441,51 +484,23 @@ async fn bootstrap_acp_runtime_on_worker_start(
 async fn deliver_batch_blocking(
     batch: Vec<AsyncDeliveryTask>,
     pre_resolved_pane: Option<String>,
-    acp_runtime: Option<PersistentAcpWorkerRuntime>,
+    acp_transport: Option<AcpTransport>,
 ) -> (
     Vec<Result<SendResult, RelayError>>,
-    Option<PersistentAcpWorkerRuntime>,
+    Option<AcpTransport>,
     Vec<AsyncDeliveryTask>,
 ) {
     tokio::task::spawn_blocking(move || {
-        let mut local_runtime = acp_runtime;
+        let mut local_transport = acp_transport;
         let (outcomes, deferred) = super::orchestration::deliver_batch_with_worker_state(
             &batch,
             pre_resolved_pane,
-            &mut local_runtime,
+            &mut local_transport,
         );
-        (outcomes, local_runtime, deferred)
+        (outcomes, local_transport, deferred)
     })
     .await
     .expect("delivery blocking task panicked")
-}
-
-/// Awaits the per-target single-flight prompt completion on the blocking pool.
-/// Returns the runtime so the worker loop retains ownership for the next task.
-///
-/// The wait is polled in bounded slices so process shutdown can abandon it
-/// promptly: without this the worker's blocking thread could `recv()` forever
-/// on an agent that never completes its turn, pinning the runtime's blocking
-/// pool and blocking clean shutdown. On a shutdown abandon the worker returns
-/// and drops its ACP runtime, whose `Drop` kills the child.
-async fn wait_for_prompt_complete_blocking(
-    acp_runtime: Option<PersistentAcpWorkerRuntime>,
-) -> Option<PersistentAcpWorkerRuntime> {
-    tokio::task::spawn_blocking(move || {
-        if let Some(runtime) = acp_runtime.as_ref() {
-            while !runtime
-                .client
-                .wait_for_prompt_complete(ACP_PROMPT_WAIT_POLL_INTERVAL)
-            {
-                if shutdown_requested() {
-                    break;
-                }
-            }
-        }
-        acp_runtime
-    })
-    .await
-    .expect("ACP prompt-complete wait task panicked")
 }
 
 struct AcpRespawnState {
@@ -571,12 +586,15 @@ async fn drive_acp_worker_respawn(
     ctx: &AcpWorkerBootstrap,
     trigger_reason: &'static str,
     respawn_state: &mut AcpRespawnState,
-    acp_runtime: &mut Option<PersistentAcpWorkerRuntime>,
+    acp_transport: &mut Option<AcpTransport>,
 ) {
-    // Drop the dead runtime so its child and reader thread are joined before
-    // the new child is spawned. Without this, `respawn_acp_worker_runtime`
-    // would leave the zombie process unreaped until the worker task exits.
-    *acp_runtime = None;
+    // Release the dead runtime (joining its child and reader thread) but keep
+    // the transport and its published handle, marking it recovering. A `look`
+    // racing the respawn then reads a recovering/stale snapshot through the
+    // still-valid handle rather than the dead buffer or a missing handle.
+    if let Some(transport) = acp_transport.as_mut() {
+        transport.release_runtime();
+    }
 
     loop {
         if shutdown_requested() {
@@ -640,18 +658,40 @@ async fn drive_acp_worker_respawn(
         let respawn_bundle_name = key.bundle_name.clone();
         let respawn_runtime_directory = ctx.runtime_directory.clone();
         let respawn_target_member = ctx.target_member.clone();
-        let respawn_result = tokio::task::spawn_blocking(move || {
-            respawn_acp_worker_runtime(
-                respawn_bundle_name.as_str(),
-                respawn_runtime_directory.as_path(),
-                &respawn_target_member,
-            )
+        // Reuse the existing transport so its published handle stays valid across
+        // the respawn; create a fresh one (re-publishing the handle) only if it
+        // is somehow absent.
+        let transport = acp_transport.take().unwrap_or_else(|| {
+            let transport = AcpTransport::new();
+            install_acp_worker_output_view(
+                key.bundle_name.as_str(),
+                ctx.runtime_directory.as_path(),
+                ctx.target_member.id.as_str(),
+                transport.give_output(),
+            );
+            transport
+        });
+        let startup_context = StartupContext {
+            bundle_name: respawn_bundle_name.clone(),
+            runtime_directory: respawn_runtime_directory.clone(),
+            target_member: respawn_target_member,
+            choose: build_acp_chooser(
+                respawn_bundle_name.clone(),
+                respawn_runtime_directory.clone(),
+            ),
+        };
+        let (transport, respawn_result) = tokio::task::spawn_blocking(move || {
+            let mut transport = transport;
+            let result = transport.startup(startup_context);
+            (transport, result)
         })
         .await
         .expect("ACP respawn task panicked");
 
         match respawn_result {
-            Ok(runtime) => {
+            Ok(_) => {
+                // The published handle is still valid; startup repointed its
+                // replay slot, so no re-install is needed.
                 set_acp_worker_state(
                     key.bundle_name.as_str(),
                     ctx.runtime_directory.as_path(),
@@ -678,11 +718,20 @@ async fn drive_acp_worker_respawn(
                         }),
                     ),
                 );
-                *acp_runtime = Some(runtime);
+                *acp_transport = Some(transport);
                 respawn_state.reset_on_success();
                 return;
             }
             Err(error) => {
+                // Put the transport back so the next attempt reuses it (handle
+                // stays valid throughout).
+                *acp_transport = Some(transport);
+                // `startup` reports `TransportError`; the respawn classifier and
+                // permanence check still speak `AcpBootstrapError` (same code).
+                let error = AcpBootstrapError {
+                    code: error.code,
+                    reason: error.reason,
+                };
                 respawn_state.record_failure(&error);
                 emit_inscription(
                     "relay.acp.respawn.attempt_failed",

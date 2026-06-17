@@ -1,19 +1,19 @@
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde_json::json;
 use time::format_description::well_known::Rfc3339;
 
 use crate::{
+    acp::state::ACP_LOOK_PRIME_TIMEOUT_MS,
     configuration::BundleConfiguration,
     relay::{AcpLookFreshness, AcpLookSnapshotSource, LookSnapshotPayload},
     runtime::{inscriptions::emit_inscription, paths::tmux_socket_path_for_runtime_directory},
+    transports::{LookMode, LookSnapshotPayload as TransportLookSnapshotPayload},
 };
 
 use super::super::connection::BundleCatalog;
-use super::super::delivery::{
-    await_acp_worker_prime_for_look, derive_acp_look_snapshot, get_acp_worker_snapshot,
-    get_acp_worker_state,
-};
+use super::super::delivery::get_acp_worker_output_view;
 use super::super::routing::{
     Addressing, Capability, OperationProfile, ResolvedRoute, requester_home_namespace,
     resolve_look_route,
@@ -212,6 +212,34 @@ fn prepare_look(
 
 /// Captures the look snapshot for the authorized target and builds the response.
 /// The target is guaranteed present by `prepare_look`.
+/// Translates the transport-layer look snapshot into the relay's wire payload.
+/// The freshness and source enums are shared types (the transport contract
+/// reuses the relay's), so only the variant shape differs.
+fn transport_acp_snapshot_to_wire(snapshot: TransportLookSnapshotPayload) -> LookSnapshotPayload {
+    match snapshot {
+        TransportLookSnapshotPayload::AcpEntries {
+            snapshot_entries,
+            entries_total,
+            returned_entries_count,
+            freshness,
+            snapshot_source,
+            stale_reason_code,
+            snapshot_age_ms,
+        } => LookSnapshotPayload::AcpEntriesV1 {
+            snapshot_entries,
+            entries_total,
+            returned_entries_count,
+            freshness,
+            snapshot_source,
+            stale_reason_code,
+            snapshot_age_ms,
+        },
+        TransportLookSnapshotPayload::Lines { snapshot_lines } => {
+            LookSnapshotPayload::Lines { snapshot_lines }
+        }
+    }
+}
+
 fn execute_look(
     route: &ResolvedRoute,
     prepared: LookPrepared,
@@ -277,44 +305,45 @@ fn execute_look(
             unreachable!("capability gate in prepare_look rejects can_be_looked = false targets")
         }
         crate::configuration::TargetConfiguration::Acp(_) => {
-            let prime_timed_out = await_acp_worker_prime_for_look(
-                &look_bundle,
-                target,
-                look_runtime_directory.as_path(),
-            )
-            .map_err(|reason| {
-                relay_error(
-                    "internal_unexpected_failure",
-                    "failed to await ACP worker prime for look",
-                    Some(json!({"target_session": target.id, "cause": reason})),
-                )
-            })?;
-            let worker_state = get_acp_worker_state(
-                look_bundle.bundle_name.as_str(),
-                look_runtime_directory.as_path(),
-                target.id.as_str(),
-            );
-            let worker_snapshot = get_acp_worker_snapshot(
-                look_bundle.bundle_name.as_str(),
-                look_runtime_directory.as_path(),
-                target.id.as_str(),
-            );
             let requested_entries = lines.unwrap_or(ACP_LOOK_ENTRIES_DEFAULT);
-            let snapshot = derive_acp_look_snapshot(
-                worker_state,
-                worker_snapshot.as_deref().map(Vec::as_slice),
-                requested_entries,
-                offset,
-                prime_timed_out,
-            );
-            LookSnapshotPayload::AcpEntriesV1 {
-                snapshot_entries: snapshot.snapshot_entries,
-                entries_total: snapshot.entries_total,
-                returned_entries_count: snapshot.returned_entries_count,
-                freshness: snapshot.freshness,
-                snapshot_source: snapshot.snapshot_source,
-                stale_reason_code: snapshot.stale_reason_code,
-                snapshot_age_ms: snapshot.snapshot_age_ms,
+            // The look path reads the OutputView handle published by the ACP
+            // transport (which owns the bounded prime-wait + freshness). A
+            // missing handle means the worker is unstarted, failed bootstrap, or
+            // mid-respawn: surface an empty, stale/unavailable snapshot rather
+            // than reading any buffer.
+            match get_acp_worker_output_view(
+                look_bundle.bundle_name.as_str(),
+                look_runtime_directory.as_path(),
+                target.id.as_str(),
+            ) {
+                Some(view) => {
+                    let mode = LookMode {
+                        lines: Some(requested_entries as u64),
+                        offset: Some(offset as u64),
+                        prime_timeout: Duration::from_millis(ACP_LOOK_PRIME_TIMEOUT_MS),
+                    };
+                    let snapshot = view.look(mode).map_err(|error| {
+                        relay_error(
+                            "internal_unexpected_failure",
+                            "failed to capture ACP look snapshot",
+                            Some(json!({
+                                "target_session": target.id,
+                                "code": error.code,
+                                "cause": error.reason,
+                            })),
+                        )
+                    })?;
+                    transport_acp_snapshot_to_wire(snapshot)
+                }
+                None => LookSnapshotPayload::AcpEntriesV1 {
+                    snapshot_entries: Vec::new(),
+                    entries_total: 0,
+                    returned_entries_count: 0,
+                    freshness: AcpLookFreshness::Stale,
+                    snapshot_source: AcpLookSnapshotSource::None,
+                    stale_reason_code: Some("acp_worker_unavailable".to_string()),
+                    snapshot_age_ms: None,
+                },
             }
         }
     };

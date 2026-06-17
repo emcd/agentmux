@@ -1,12 +1,11 @@
+use crate::acp::AcpTransport;
 use crate::configuration::{BundleMember, TargetConfiguration, TmuxTargetConfiguration};
+use crate::transports::{DeliveryContext, DeliveryEnvelope, DeliveryResult, Transport};
 
 use super::super::super::startup_state::note_session_served_successfully;
 use super::super::super::tmux::{inject_literal_text, inject_prompt, resolve_active_pane_target};
 use super::super::super::{
     AsyncDeliveryTask, DeliveryPayloadMode, RelayError, SendOutcome, SendResult,
-};
-use super::super::acp_delivery::{
-    PersistentAcpWorkerRuntime, deliver_batch_target_acp, deliver_one_target_acp,
 };
 use super::super::quiescence::{DeliveryWaitError, wait_for_quiescent_pane};
 
@@ -17,17 +16,14 @@ pub(super) fn deliver_non_ui_target(
     task: &AsyncDeliveryTask,
     target_member: &BundleMember,
     prompt_batches: Vec<String>,
-    acp_runtime: &mut Option<PersistentAcpWorkerRuntime>,
+    acp_transport: &mut Option<AcpTransport>,
 ) -> Result<SendResult, RelayError> {
     match &target_member.target {
-        TargetConfiguration::Acp(acp) => Ok(deliver_one_target_acp(
+        TargetConfiguration::Acp(_) => Ok(deliver_acp_combined(
             task,
             target_member,
-            acp,
             prompt_batches,
-            task.target_session.clone(),
-            task.message_id.clone(),
-            acp_runtime,
+            acp_transport,
         )),
         TargetConfiguration::Tmux(tmux_target) => {
             Ok(deliver_one_target_tmux(task, tmux_target, prompt_batches))
@@ -61,12 +57,12 @@ pub(super) fn deliver_non_ui_target_batch(
     target_member: &BundleMember,
     prompt_batches: Vec<String>,
     pre_resolved_pane: Option<String>,
-    acp_runtime: &mut Option<PersistentAcpWorkerRuntime>,
+    acp_transport: &mut Option<AcpTransport>,
 ) -> Vec<Result<SendResult, RelayError>> {
     debug_assert!(!batch.is_empty());
     match &target_member.target {
-        TargetConfiguration::Acp(acp) => {
-            deliver_batch_target_acp(batch, target_member, acp, prompt_batches, acp_runtime)
+        TargetConfiguration::Acp(_) => {
+            deliver_acp_batch_via_transport(batch, target_member, prompt_batches, acp_transport)
                 .into_iter()
                 .map(Ok)
                 .collect()
@@ -84,6 +80,111 @@ pub(super) fn deliver_non_ui_target_batch(
             );
             batch.iter().map(|_| Err(error.clone())).collect()
         }
+    }
+}
+
+/// Delivers a coalesced ACP batch through the per-target [`AcpTransport`].
+///
+/// ACP coalescing is relay-side: the worker already combined the batch into a
+/// single rendered prompt, so the transport receives one envelope, blocks to
+/// terminal, and returns one outcome. That single outcome is replicated across
+/// every task in `batch` (each keeps its own `message_id`/`target_session`),
+/// matching the tmux fan-out shape.
+fn deliver_acp_batch_via_transport(
+    batch: &[AsyncDeliveryTask],
+    target_member: &BundleMember,
+    prompt_batches: Vec<String>,
+    acp_transport: &mut Option<AcpTransport>,
+) -> Vec<SendResult> {
+    let head = &batch[0];
+    let outcome = deliver_acp_combined(head, target_member, prompt_batches, acp_transport);
+    batch
+        .iter()
+        .map(|task| SendResult {
+            target_session: task.target_session.clone(),
+            message_id: task.message_id.clone(),
+            outcome: outcome.outcome.clone(),
+            reason_code: outcome.reason_code.clone(),
+            reason: outcome.reason.clone(),
+            details: outcome.details.clone(),
+        })
+        .collect()
+}
+
+/// Submits one combined ACP prompt via the transport and converts the single
+/// terminal outcome into a [`SendResult`]. Handles the no-transport
+/// (bootstrap-failed) and empty-prompt cases the same way the previous in-relay
+/// path did.
+fn deliver_acp_combined(
+    head: &AsyncDeliveryTask,
+    target_member: &BundleMember,
+    prompt_batches: Vec<String>,
+    acp_transport: &mut Option<AcpTransport>,
+) -> SendResult {
+    let target_session = head.target_session.clone();
+    let message_id = head.message_id.clone();
+
+    let Some(transport) = acp_transport.as_mut() else {
+        return SendResult {
+            target_session,
+            message_id,
+            outcome: SendOutcome::Failed,
+            reason_code: Some("runtime_acp_worker_unavailable".to_string()),
+            reason: Some("ACP worker is unavailable for target session".to_string()),
+            details: Some(serde_json::json!({ "target_session": target_member.id })),
+        };
+    };
+    let Some(prompt) = prompt_batches.into_iter().next() else {
+        return SendResult {
+            target_session,
+            message_id,
+            outcome: SendOutcome::Failed,
+            reason_code: None,
+            reason: Some("ACP delivery received no prompt batch".to_string()),
+            details: None,
+        };
+    };
+
+    let envelope = DeliveryEnvelope {
+        message_id: message_id.clone(),
+        payload_mode: head.payload_mode,
+        rendered: prompt,
+        append_enter: head.append_enter,
+    };
+    let context = DeliveryContext {
+        target_session: target_session.clone(),
+        runtime_directory: head.runtime_directory.clone(),
+        target_member: target_member.clone(),
+        pre_resolved_target: None,
+        choices_pending_max: head.choices_max_pending,
+        choice_decider_sessions: head.choice_decider_sessions.clone(),
+    };
+    let result = transport.deliver(vec![envelope], &context);
+    single_outcome_to_send_result(result, target_session, message_id)
+}
+
+fn single_outcome_to_send_result(
+    result: DeliveryResult,
+    target_session: String,
+    message_id: String,
+) -> SendResult {
+    match result.outcomes.into_iter().next() {
+        Some(outcome) => SendResult {
+            target_session: outcome.target_session,
+            message_id: outcome.message_id,
+            outcome: outcome.outcome,
+            reason_code: outcome.reason_code,
+            reason: outcome.reason,
+            details: outcome.details,
+        },
+        None => SendResult {
+            target_session,
+            message_id,
+            outcome: SendOutcome::Failed,
+            reason_code: Some("internal_unexpected_failure".to_string()),
+            reason: Some("ACP delivery produced no outcome".to_string()),
+            details: None,
+        },
     }
 }
 

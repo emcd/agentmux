@@ -1,6 +1,8 @@
 pub mod client;
+pub mod permission;
 pub mod render;
 pub mod state;
+pub mod transport;
 
 pub use client::{
     AcpRequestError, AcpStdioClient, DispatchHandler, PermissionHandler, PermissionResponder,
@@ -8,6 +10,11 @@ pub use client::{
 };
 pub use render::{
     AcpSnapshotEntry, replay_entries_to_snapshot_entries, snapshot_entries_to_plain_lines,
+};
+pub use transport::{
+    ACP_ERROR_CODE_CONNECTION_CLOSED, ACP_ERROR_CODE_INITIALIZE_FAILED,
+    ACP_ERROR_CODE_PROMPT_FAILED, ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE, AcpBootstrapError,
+    AcpTransport, PersistentAcpWorkerRuntime, bootstrap_acp_worker_runtime,
 };
 
 use serde_json::Value;
