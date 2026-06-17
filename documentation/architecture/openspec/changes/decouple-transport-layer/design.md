@@ -192,23 +192,36 @@ Slice 3 vocabulary relocation (task 3.0) and the `TmuxLifecycleError` boundary
 ```
 src/transports/
   contract.rs     — Transport trait, TransportImpl enum, shared types
+  vocabulary.rs   — delivery/look vocabulary (SendOutcome, DeliveryPayloadMode,
+                    AcpLookFreshness, AcpLookSnapshotSource); relay re-exports
+                    for backward-compat (relocated from relay in Slice 3)
 
 src/acp/          — (already exists; grows)
   transport.rs    — ACP Transport impl (from relay/delivery/acp_delivery.rs)
   state.rs        — (from relay/delivery/acp_state.rs)
-  permission.rs   — (from relay/delivery/permission_state.rs)
-  observability.rs— (from relay/delivery/observability.rs)
+  permission.rs   — ACP permission handling; extracted from inline PermissionHandler
+                    closures in acp_delivery.rs (~old lines 242, 542); wired to
+                    the injected Chooser
   client.rs       — merged with relay/delivery/acp_client.rs
+
+src/acp/          — stays in relay (NOT moved to src/acp/)
+  observability.rs— relay-side pub/sub over relay's own registries
+                    (AcpWorkerReadinessState watch + relay choices-queue broadcast,
+                    keyed by relay-internal AsyncWorkerKey); moving it would invert
+                    the dependency direction
 
 src/tmux/         — (new module)
   pane.rs         — pane ops + command plumbing (from relay/tmux.rs)
   lifecycle.rs    — session lifecycle primitives (from relay/lifecycle.rs)
-  transport.rs    — Tmux Transport impl + quiescence loop
+  transport.rs    — Tmux Transport impl + quiescence poll loop + DeliveryWaitError
+                    (DeliveryWaitError moved here with the loop; leaving it in relay
+                    while the loop lives in tmux would create a tmux->relay back-edge)
 
 src/relay/delivery/ — (relay-specific only)
   dispatch/worker.rs  — generic loop via TransportImpl
-  quiescence.rs       — shared types only (DeliveryWaitError, QuiescenceOptions)
+  quiescence.rs       — QuiescenceOptions only (DeliveryWaitError moved to src/tmux/)
   ui_delivery.rs      — stays as-is
+  observability.rs    — relay-side ACP worker state + choices-queue broadcast
 ```
 
 ## Risks / Trade-offs
