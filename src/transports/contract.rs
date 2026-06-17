@@ -80,6 +80,15 @@ pub trait Transport {
     /// inline via the [`StartupContext::choose`] resolver, on the transport's own
     /// thread, without worker involvement.
     ///
+    /// The relay decides how envelopes are grouped before this call (subject to
+    /// [`accept_capacity`]); a transport must honor whatever batch it receives.
+    /// Today the ACP worker pre-combines a coalesced turn into a single envelope
+    /// and replicates the lone outcome across the contributing tasks, so ACP's
+    /// `deliver` observes one envelope in practice even though [`accept_capacity`]
+    /// permits more.
+    ///
+    /// [`accept_capacity`]: Transport::accept_capacity
+    ///
     /// INVARIANT: an implementation MUST observe relay shutdown and return a
     /// terminal/dropped outcome promptly rather than parking the blocking thread
     /// indefinitely on a wedged turn.
@@ -103,8 +112,11 @@ pub trait Transport {
     /// Tears down the transport runtime, releasing its resources.
     fn shutdown(&mut self);
 
-    /// Reports how many envelopes the transport accepts per [`deliver`] call.
-    /// Tmux returns `1` (one paste per call); ACP accepts the full batch.
+    /// Reports the upper bound on envelopes the transport will accept per
+    /// [`deliver`] call — the willingness the relay groups against, not a promise
+    /// about the batch any single call receives. Tmux returns `1` (one paste per
+    /// call); ACP returns `usize::MAX`, though the worker still pre-combines a
+    /// turn into one envelope before dispatching (see [`deliver`]).
     ///
     /// [`deliver`]: Transport::deliver
     fn accept_capacity(&self) -> usize;

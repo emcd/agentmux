@@ -111,7 +111,7 @@ enum ResponseEnvelope {
 }
 
 pub(in crate::acp) type SharedStdin = Arc<Mutex<ChildStdin>>;
-type SharedReplay = Arc<Mutex<Vec<ReplayEntry>>>;
+pub(crate) type SharedReplay = Arc<Mutex<Vec<ReplayEntry>>>;
 type SharedPending = Arc<Mutex<HashMap<u64, mpsc::Sender<ResponseEnvelope>>>>;
 
 struct ActivePrompt {

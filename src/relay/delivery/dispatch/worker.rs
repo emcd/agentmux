@@ -421,6 +421,17 @@ async fn bootstrap_acp_runtime_on_worker_start(
     );
     let bundle_name = key.bundle_name.clone();
     let target_session = key.target_session.clone();
+    // Publish the OutputView handle BEFORE startup runs. The handle reads shared
+    // state the transport populates during startup, so a look in the initial-
+    // startup window finds the handle and runs its bounded prime-wait instead of
+    // returning an immediate unavailable snapshot.
+    let transport = AcpTransport::new();
+    install_acp_worker_output_view(
+        bundle_name.as_str(),
+        bootstrap.runtime_directory.as_path(),
+        bootstrap.target_member.id.as_str(),
+        transport.give_output(),
+    );
     let startup_context = StartupContext {
         bundle_name: bundle_name.clone(),
         runtime_directory: bootstrap.runtime_directory.clone(),
@@ -428,31 +439,20 @@ async fn bootstrap_acp_runtime_on_worker_start(
         choose: build_acp_chooser(bundle_name.clone(), bootstrap.runtime_directory.clone()),
     };
     let (transport, result) = tokio::task::spawn_blocking(move || {
-        let mut transport = AcpTransport::new();
+        let mut transport = transport;
         let result = transport.startup(startup_context);
         (transport, result)
     })
     .await
     .expect("ACP worker bootstrap task panicked");
 
-    match result {
-        Ok(_) => {
-            // Publish the look output handle the relay re-fetches after every
-            // startup; on respawn the transport allocates a fresh replay buffer.
-            install_acp_worker_output_view(
-                bundle_name.as_str(),
-                bootstrap.runtime_directory.as_path(),
-                bootstrap.target_member.id.as_str(),
-                transport.give_output(),
-            );
-            set_acp_worker_state(
-                bundle_name.as_str(),
-                bootstrap.runtime_directory.as_path(),
-                bootstrap.target_member.id.as_str(),
-                AcpWorkerReadinessState::Available,
-            );
-            Some(transport)
-        }
+    match &result {
+        Ok(_) => set_acp_worker_state(
+            bundle_name.as_str(),
+            bootstrap.runtime_directory.as_path(),
+            bootstrap.target_member.id.as_str(),
+            AcpWorkerReadinessState::Available,
+        ),
         Err(error) => {
             set_acp_worker_state(
                 bundle_name.as_str(),
@@ -469,9 +469,12 @@ async fn bootstrap_acp_runtime_on_worker_start(
                     "reason": error.reason,
                 }),
             );
-            None
         }
     }
+    // Keep the transport (and its published handle) even on startup failure: the
+    // worker loop drives respawn off the Unavailable global state and reuses this
+    // transport, and a look still finds the handle reporting the failure state.
+    Some(transport)
 }
 
 /// Drives one batched delivery on the blocking pool. Moves the per-worker ACP
@@ -585,17 +588,13 @@ async fn drive_acp_worker_respawn(
     respawn_state: &mut AcpRespawnState,
     acp_transport: &mut Option<AcpTransport>,
 ) {
-    // Drop the dead transport so its child and reader thread are joined before
-    // the new child is spawned, and clear the published look handle so a `look`
-    // racing the respawn reads no stale handle (the look path treats a missing
-    // handle as worker-unavailable rather than reading the dead buffer).
-    *acp_transport = None;
-    install_acp_worker_output_view(
-        key.bundle_name.as_str(),
-        ctx.runtime_directory.as_path(),
-        ctx.target_member.id.as_str(),
-        None,
-    );
+    // Release the dead runtime (joining its child and reader thread) but keep
+    // the transport and its published handle, marking it recovering. A `look`
+    // racing the respawn then reads a recovering/stale snapshot through the
+    // still-valid handle rather than the dead buffer or a missing handle.
+    if let Some(transport) = acp_transport.as_mut() {
+        transport.release_runtime();
+    }
 
     loop {
         if shutdown_requested() {
@@ -659,6 +658,19 @@ async fn drive_acp_worker_respawn(
         let respawn_bundle_name = key.bundle_name.clone();
         let respawn_runtime_directory = ctx.runtime_directory.clone();
         let respawn_target_member = ctx.target_member.clone();
+        // Reuse the existing transport so its published handle stays valid across
+        // the respawn; create a fresh one (re-publishing the handle) only if it
+        // is somehow absent.
+        let transport = acp_transport.take().unwrap_or_else(|| {
+            let transport = AcpTransport::new();
+            install_acp_worker_output_view(
+                key.bundle_name.as_str(),
+                ctx.runtime_directory.as_path(),
+                ctx.target_member.id.as_str(),
+                transport.give_output(),
+            );
+            transport
+        });
         let startup_context = StartupContext {
             bundle_name: respawn_bundle_name.clone(),
             runtime_directory: respawn_runtime_directory.clone(),
@@ -669,7 +681,7 @@ async fn drive_acp_worker_respawn(
             ),
         };
         let (transport, respawn_result) = tokio::task::spawn_blocking(move || {
-            let mut transport = AcpTransport::new();
+            let mut transport = transport;
             let result = transport.startup(startup_context);
             (transport, result)
         })
@@ -678,12 +690,8 @@ async fn drive_acp_worker_respawn(
 
         match respawn_result {
             Ok(_) => {
-                install_acp_worker_output_view(
-                    key.bundle_name.as_str(),
-                    ctx.runtime_directory.as_path(),
-                    ctx.target_member.id.as_str(),
-                    transport.give_output(),
-                );
+                // The published handle is still valid; startup repointed its
+                // replay slot, so no re-install is needed.
                 set_acp_worker_state(
                     key.bundle_name.as_str(),
                     ctx.runtime_directory.as_path(),
@@ -715,6 +723,9 @@ async fn drive_acp_worker_respawn(
                 return;
             }
             Err(error) => {
+                // Put the transport back so the next attempt reuses it (handle
+                // stays valid throughout).
+                *acp_transport = Some(transport);
                 // `startup` reports `TransportError`; the respawn classifier and
                 // permanence check still speak `AcpBootstrapError` (same code).
                 let error = AcpBootstrapError {

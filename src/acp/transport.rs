@@ -29,6 +29,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+use crate::acp::client::SharedReplay;
 use crate::acp::permission::{ChoiceCorrelation, build_acp_permission_handler};
 use crate::acp::state::{
     AcpLookSnapshot, derive_acp_look_snapshot, load_persisted_acp_session_id,
@@ -36,7 +37,7 @@ use crate::acp::state::{
 };
 use crate::acp::{
     AcpStdioClient, DispatchHandler, PromptCompletion, PromptCompletionHandler,
-    PromptDispatchOutcome, ReplayEntry,
+    PromptDispatchOutcome,
 };
 use crate::configuration::{AcpChannel, AcpTargetConfiguration, BundleMember, TargetConfiguration};
 use crate::relay::{AcpWorkerReadinessState, SendOutcome};
@@ -112,12 +113,24 @@ struct AcpCapabilities {
     prompt_session: bool,
 }
 
+/// State shared between an [`AcpTransport`] and the [`OutputView`] handle it
+/// publishes. Held behind an `Arc` so the handle stays valid across the
+/// transport's whole life — including the initial-startup and respawn windows
+/// when there is no live runtime yet. The transport repoints `replay` at the
+/// current runtime's buffer on every successful startup; the handle reads
+/// whichever buffer is current (or `None`) plus the readiness that drives its
+/// bounded prime-wait. This is what lets `look` actually wait through startup.
+struct AcpSharedState {
+    readiness: Mutex<AcpWorkerReadinessState>,
+    replay: Mutex<Option<SharedReplay>>,
+}
+
 /// ACP delivery transport. Owns the runtime, the injected [`Chooser`], and the
-/// shared readiness signal the [`OutputView`] reads.
+/// shared state ([`AcpSharedState`]) the published [`OutputView`] reads.
 pub struct AcpTransport {
     runtime: Option<PersistentAcpWorkerRuntime>,
     chooser: Option<crate::transports::Chooser>,
-    readiness: Arc<Mutex<AcpWorkerReadinessState>>,
+    shared: Arc<AcpSharedState>,
 }
 
 impl Default for AcpTransport {
@@ -130,10 +143,7 @@ impl std::fmt::Debug for AcpTransport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AcpTransport")
             .field("has_runtime", &self.runtime.is_some())
-            .field(
-                "readiness",
-                &*self.readiness.lock().expect("readiness mutex"),
-            )
+            .field("readiness", &self.readiness())
             .finish()
     }
 }
@@ -144,18 +154,35 @@ impl AcpTransport {
         Self {
             runtime: None,
             chooser: None,
-            readiness: Arc::new(Mutex::new(AcpWorkerReadinessState::Initializing)),
+            shared: Arc::new(AcpSharedState {
+                readiness: Mutex::new(AcpWorkerReadinessState::Initializing),
+                replay: Mutex::new(None),
+            }),
         }
     }
 
     /// Current readiness, mirrored by the relay worker into the global registry.
     #[must_use]
     pub fn readiness(&self) -> AcpWorkerReadinessState {
-        *self.readiness.lock().expect("readiness mutex")
+        *self.shared.readiness.lock().expect("readiness mutex")
     }
 
     fn set_readiness(&self, state: AcpWorkerReadinessState) {
-        *self.readiness.lock().expect("readiness mutex") = state;
+        *self.shared.readiness.lock().expect("readiness mutex") = state;
+    }
+
+    fn set_replay(&self, replay: Option<SharedReplay>) {
+        *self.shared.replay.lock().expect("replay slot mutex") = replay;
+    }
+
+    /// Releases the live runtime (joining its child) and marks the transport
+    /// recovering, clearing the published replay pointer. Used by the worker
+    /// before a respawn so a concurrent `look` reads a recovering/stale snapshot
+    /// through the still-valid handle rather than the dead buffer.
+    pub fn release_runtime(&mut self) {
+        self.runtime = None;
+        self.set_replay(None);
+        self.set_readiness(AcpWorkerReadinessState::Recovering);
     }
 }
 
@@ -165,6 +192,10 @@ impl Transport for AcpTransport {
         self.set_readiness(AcpWorkerReadinessState::Initializing);
         match bootstrap_acp_worker_runtime(&context.runtime_directory, &context.target_member) {
             Ok(runtime) => {
+                // Repoint the published handle's replay slot at the new runtime's
+                // buffer before marking ready, so a look that was prime-waiting
+                // through startup returns the fresh buffer.
+                self.set_replay(Some(runtime.client.replay_buffer_handle()));
                 self.runtime = Some(runtime);
                 self.set_readiness(AcpWorkerReadinessState::Available);
                 Ok(TransportStatus {
@@ -173,6 +204,7 @@ impl Transport for AcpTransport {
             }
             Err(error) => {
                 self.runtime = None;
+                self.set_replay(None);
                 self.set_readiness(AcpWorkerReadinessState::Unavailable);
                 Err(TransportError {
                     code: error.code,
@@ -223,7 +255,7 @@ impl Transport for AcpTransport {
                 target_member_id.as_str(),
             ));
         };
-        let readiness = Arc::clone(&self.readiness);
+        let shared = Arc::clone(&self.shared);
         let Some(runtime) = self.runtime.as_mut() else {
             return single(worker_unavailable_outcome(
                 target_session,
@@ -235,10 +267,12 @@ impl Transport for AcpTransport {
         let pending_choice: Arc<Mutex<Option<ChoiceMade>>> = Arc::new(Mutex::new(None));
         let completion_slot: Arc<Mutex<Option<PromptCompletion>>> = Arc::new(Mutex::new(None));
 
-        let readiness_for_dispatch = Arc::clone(&readiness);
+        let shared_for_dispatch = Arc::clone(&shared);
         let on_dispatched: DispatchHandler = Box::new(move || {
-            *readiness_for_dispatch.lock().expect("readiness mutex") =
-                AcpWorkerReadinessState::Busy;
+            *shared_for_dispatch
+                .readiness
+                .lock()
+                .expect("readiness mutex") = AcpWorkerReadinessState::Busy;
         });
 
         let correlation = ChoiceCorrelation {
@@ -360,6 +394,7 @@ impl Transport for AcpTransport {
         // Dropping the runtime joins the child and reader thread (its `Drop`
         // kills the child).
         self.runtime = None;
+        self.set_replay(None);
         self.set_readiness(AcpWorkerReadinessState::Unavailable);
     }
 
@@ -369,20 +404,22 @@ impl Transport for AcpTransport {
     }
 
     fn give_output(&self) -> Option<Arc<dyn OutputView>> {
-        let runtime = self.runtime.as_ref()?;
+        // Always publishes a handle, even before the first runtime exists: the
+        // handle reads the shared state, which the transport repoints across
+        // startup/respawn. This keeps the prime-wait reachable during the very
+        // windows (initial startup, respawn gap) when there is no live runtime.
         Some(Arc::new(AcpOutputView {
-            replay: runtime.client.replay_buffer_handle(),
-            readiness: Arc::clone(&self.readiness),
+            shared: Arc::clone(&self.shared),
         }))
     }
 }
 
-/// Concurrent look view over an ACP transport's replay buffer. Captures the
-/// shared replay buffer and readiness signal so the relay look path can read a
-/// snapshot without borrowing the worker-owned transport.
+/// Concurrent look view over an ACP transport's output. Captures the shared
+/// state ([`AcpSharedState`]) so the relay look path can read a snapshot without
+/// borrowing the worker-owned transport, and so the handle stays valid across
+/// startup and respawn (the transport repoints the inner replay buffer).
 struct AcpOutputView {
-    replay: Arc<Mutex<Vec<ReplayEntry>>>,
-    readiness: Arc<Mutex<AcpWorkerReadinessState>>,
+    shared: Arc<AcpSharedState>,
 }
 
 impl OutputView for AcpOutputView {
@@ -391,7 +428,7 @@ impl OutputView for AcpOutputView {
         // wait up to `prime_timeout` for the first snapshot to populate.
         let deadline = Instant::now() + mode.prime_timeout;
         let prime_timed_out = loop {
-            let state = *self.readiness.lock().expect("readiness mutex");
+            let state = *self.shared.readiness.lock().expect("readiness mutex");
             if !matches!(state, AcpWorkerReadinessState::Initializing) {
                 break false;
             }
@@ -401,8 +438,17 @@ impl OutputView for AcpOutputView {
             thread::sleep(ACP_LOOK_PRIME_POLL_INTERVAL);
         };
 
-        let worker_state = *self.readiness.lock().expect("readiness mutex");
-        let entries = self.replay.lock().expect("replay buffer mutex").clone();
+        let worker_state = *self.shared.readiness.lock().expect("readiness mutex");
+        let entries = match self
+            .shared
+            .replay
+            .lock()
+            .expect("replay slot mutex")
+            .as_ref()
+        {
+            Some(buffer) => buffer.lock().expect("replay buffer mutex").clone(),
+            None => Vec::new(),
+        };
         let requested_entries = mode
             .lines
             .map(|lines| lines as usize)
