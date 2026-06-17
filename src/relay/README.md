@@ -346,8 +346,9 @@ exported from `src/relay/mod.rs`.
   changes payload mode or UI-routing. The non-coalescing task is pushed
   back onto a local carry buffer so it heads the next iteration without
   losing its place. For tmux envelope-mode heads the worker then hoists
-  the per-target quiescence wait out of the transport: it runs
-  `wait_for_quiescent_pane` on the blocking pool, and on success performs
+  the per-target quiescence wait out of the transport: it runs the
+  transport's `prepare_delivery` readiness barrier on the blocking pool
+  (the tmux barrier polls the pane to quiescence), and on success performs
   a second `try_recv` drain (same predicate, same drain-max budget) to
   absorb any tasks that landed in the channel while the pane wait was in
   flight. The rendered envelopes then share one paste-buffer sequence

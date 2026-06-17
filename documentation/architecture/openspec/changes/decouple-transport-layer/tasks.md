@@ -165,22 +165,36 @@ follow-on.)
 
 ### Slice 4A-1 — pre-delivery barrier (land first)
 
-- [ ] 4.1 Add `Transport::prepare_delivery(&self, ctx: &DeliveryContext) ->
+- [x] 4.1 Add `Transport::prepare_delivery(&self, ctx: &DeliveryContext) ->
       Result<DeliveryPreparation, DeliveryWaitError>` to the contract.
-      `DeliveryPreparation` carries the resolved target (the `pre_resolved_target`
-      already on `DeliveryContext`). Implement the quiescence poll in the tmux
-      impl; trivial immediate-ready impls for ACP and pty (ACP's event-stream
-      quiescence is future work, tracked separately). `DeliveryPreparation`
-      starts as a string target (`Option<String>`); an opaque per-transport
-      `DeliveryTarget` handle is a deferred generalization (Pty review; see
-      design.md).
-- [ ] 4.2 Repoint the worker's quiescence hoist (`worker.rs`) to call
-      `transport.prepare_delivery(...)` instead of
-      `crate::tmux::transport::wait_for_quiescent_pane`; preserve the
-      coalesce-during-wait post-barrier drain — the `extend_batch_with_drain`
-      step MUST be explicitly preserved when swapping in `prepare_delivery`
-      (Coordinator). Removes the last Tmux import from `relay/delivery/`.
-- [ ] 4.3 Validate: `cargo test` green; tmux + ACP delivery unchanged end to end.
+      `DeliveryPreparation` carries the resolved target (`Option<String>`).
+      Implemented the quiescence poll in the tmux impl; trivial immediate-ready
+      impls for ACP and pty (ACP's event-stream quiescence is future work). An
+      opaque per-transport `DeliveryTarget` handle remains a deferred
+      generalization (Pty review). DEVIATIONS: (a) `DeliveryContext` grew two
+      primitive fields (`quiet_window: Duration`, `quiescence_timeout:
+      Option<Duration>`) — it did not previously carry the quiescence schedule,
+      which the barrier needs; the relay unpacks `QuiescenceOptions` onto them at
+      the hoist boundary (prompt-readiness already reachable via
+      `target_member`). (b) `DeliveryWaitError` moved from
+      `crate::tmux::transport` into `crate::transports::contract`: it is now the
+      barrier's trait return type, so its canonical home is the contract both
+      tmux and relay depend on downward (it can no longer live in tmux without
+      forming a relay-visible tmux-internal import).
+- [x] 4.2 Repointed the worker's quiescence hoist (`worker.rs` +
+      `dispatch/transport.rs`) to call `TmuxTransport::prepare_delivery(...)`
+      instead of `crate::tmux::transport::wait_for_quiescent_pane`; the
+      coalesce-during-wait `extend_batch_with_drain` post-barrier drain is
+      preserved unchanged. Removes the tmux-internals reach
+      (`crate::tmux::transport::{wait_for_quiescent_pane, DeliveryWaitError}`)
+      from `relay/delivery/`. `classify_tmux_quiescence_hoist` now returns the
+      tmux `BundleMember` (was `TmuxTargetConfiguration`) so the barrier can build
+      a `DeliveryContext`. NOTE: the `crate::tmux::TmuxTransport` /
+      `crate::acp::AcpTransport` *construction* imports still remain in
+      `relay/delivery/dispatch/` (transport.rs, orchestration.rs); their removal
+      is the worker-genericization proof-of-absence in 4A-2 (4.9), as scoped.
+- [x] 4.3 Validate: `cargo test` green (lib 18, integration 206, unit 273);
+      tmux + ACP delivery unchanged end to end.
 
 ### Slice 4A-2 — worker lifecycle relocation + batch capability
 

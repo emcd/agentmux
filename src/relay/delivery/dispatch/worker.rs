@@ -9,7 +9,7 @@ use time::format_description::well_known::Rfc3339;
 use tokio::{runtime::Handle, sync::mpsc::UnboundedReceiver};
 
 use crate::{
-    configuration::{BundleMember, TargetConfiguration, TmuxTargetConfiguration},
+    configuration::{BundleMember, TargetConfiguration},
     runtime::{inscriptions::emit_inscription, signals::shutdown_requested},
 };
 
@@ -164,10 +164,10 @@ async fn run_async_delivery_worker(
         // targets and RawInput heads pass through with `pre_resolved_pane`
         // unset; their transport paths are unchanged.
         let pre_resolved_pane = match classify_tmux_quiescence_hoist(&batch[0]) {
-            Some(tmux_target) => {
+            Some(tmux_member) => {
                 let head_task = batch[0].clone();
                 let wait_outcome = tokio::task::spawn_blocking(move || {
-                    super::transport::prepare_tmux_pane_for_envelope_head(&head_task, &tmux_target)
+                    super::transport::prepare_tmux_pane_for_envelope_head(&head_task, &tmux_member)
                 })
                 .await
                 .expect("tmux quiescence hoist task panicked");
@@ -355,10 +355,13 @@ fn can_coalesce_with_head(head: &AsyncDeliveryTask, candidate: &AsyncDeliveryTas
 }
 
 /// Identifies a head task that needs the worker-loop tmux quiescence hoist.
-/// Returns the cloned `TmuxTargetConfiguration` so the blocking pane wait can
-/// run without re-borrowing into the worker's bundle state. ACP/UI targets
-/// and RawInput heads return `None` — they keep their original transport flow.
-fn classify_tmux_quiescence_hoist(task: &AsyncDeliveryTask) -> Option<TmuxTargetConfiguration> {
+/// Returns the cloned tmux [`BundleMember`] so the blocking barrier can build a
+/// [`DeliveryContext`] (prompt-readiness template + runtime directory) without
+/// re-borrowing into the worker's bundle state. ACP/UI targets and RawInput
+/// heads return `None` — they keep their original transport flow.
+///
+/// [`DeliveryContext`]: crate::transports::DeliveryContext
+fn classify_tmux_quiescence_hoist(task: &AsyncDeliveryTask) -> Option<BundleMember> {
     if !matches!(task.payload_mode, DeliveryPayloadMode::EnvelopeMessage) || task.relay_wide_target
     {
         return None;
@@ -369,7 +372,7 @@ fn classify_tmux_quiescence_hoist(task: &AsyncDeliveryTask) -> Option<TmuxTarget
         .iter()
         .find(|member| member.id == task.target_session)?;
     match &target_member.target {
-        TargetConfiguration::Tmux(tmux_target) => Some(tmux_target.clone()),
+        TargetConfiguration::Tmux(_) => Some(target_member.clone()),
         _ => None,
     }
 }
