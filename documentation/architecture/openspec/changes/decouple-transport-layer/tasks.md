@@ -156,12 +156,63 @@ simpler (a handle re-fetch, not a channel re-wire).
 
 ## 4. Slice 4 — Remove direct transport imports from relay
 
-- [ ] 4.1 Remove all ACP-specific imports from `relay/delivery/`
-- [ ] 4.2 Remove all Tmux-specific imports from `relay/delivery/`
-- [ ] 4.3 Confirm `relay/delivery/` contains no direct references to
-      `acp_delivery`, `acp_state`, `permission_state`, `relay/tmux`,
-      `relay/lifecycle` tmux primitives
-- [ ] 4.4 Validate: `cargo test` passes; full integration test suite green
+Slice 4 removes the last transport-specific imports from `relay/delivery/` so
+the worker dispatches purely through `TransportImpl`. It splits in two: 4A-1
+(the pre-delivery barrier) lands first to shrink the surface; 4A-2 (lifecycle
+relocation + the batch capability) follows. See design.md "Slice 4A" for the
+decisions. (4.5–4.6 below predate this split: 4.5 has landed; 4.6 is a
+follow-on.)
+
+### Slice 4A-1 — pre-delivery barrier (land first)
+
+- [ ] 4.1 Add `Transport::prepare_delivery(&self, ctx: &DeliveryContext) ->
+      Result<DeliveryPreparation, DeliveryWaitError>` to the contract.
+      `DeliveryPreparation` carries the resolved target (the `pre_resolved_target`
+      already on `DeliveryContext`). Implement the quiescence poll in the tmux
+      impl; trivial immediate-ready impls for ACP and pty (ACP's event-stream
+      quiescence is future work, tracked separately). `DeliveryPreparation`
+      starts as a string target (`Option<String>`); an opaque per-transport
+      `DeliveryTarget` handle is a deferred generalization (Pty review; see
+      design.md).
+- [ ] 4.2 Repoint the worker's quiescence hoist (`worker.rs`) to call
+      `transport.prepare_delivery(...)` instead of
+      `crate::tmux::transport::wait_for_quiescent_pane`; preserve the
+      coalesce-during-wait post-barrier drain — the `extend_batch_with_drain`
+      step MUST be explicitly preserved when swapping in `prepare_delivery`
+      (Coordinator). Removes the last Tmux import from `relay/delivery/`.
+- [ ] 4.3 Validate: `cargo test` green; tmux + ACP delivery unchanged end to end.
+
+### Slice 4A-2 — worker lifecycle relocation + batch capability
+
+- [ ] 4.4 Relocate the ACP worker lifecycle
+      (`bootstrap_acp_runtime_on_worker_start`, `drive_acp_worker_respawn`,
+      `AcpRespawnState`) from `relay/delivery/dispatch/worker.rs` into `src/acp`
+      as an `AcpWorkerDriver` owned by `TransportImpl::Acp`. Inject the three
+      relay touchpoints (UI stream broadcast, pending-choice invalidation,
+      worker-state mirror) as closures à la `Chooser` — no `src/acp -> crate::relay`
+      import. The relay worker loop keeps only the transport-agnostic skeleton and
+      holds a `TransportImpl` instead of `Option<AcpTransport>`. Supersedes the
+      Slice 2b "Dual readiness, worker-mirrored" decision. The driver assembles
+      `StartupContext` from the injected closures and calls `transport.startup`
+      during bootstrap/respawn (ACP review: the `prepare_startup_context`
+      construction moves with the lifecycle); the relay-side closure-construction
+      site imports nothing from `src/acp` (Coordinator; gated by 4.9).
+- [ ] 4.7 Replace the `target_is_acp` match in
+      `payload.rs::prepare_batch_delivery_payload` with
+      `SessionType::can_take_batches()` (ACP `false`; Tmux/Pty `true`), exposed as
+      a first-class method on `TransportImpl` per the capability-flag family
+      (`add-transport-capability-flags`). Envelope rendering, token-budget
+      packing, the single-batch peel loop, and the `deferred -> carry` re-queue all
+      stay in relay unchanged.
+- [ ] 4.8 Remove `Transport::accept_capacity()` and its impls — dead surface
+      (zero call sites; both impls return `usize::MAX`), and a static count cannot
+      express ACP's content-dependent single-batch budget, now covered by
+      `can_take_batches`.
+- [ ] 4.9 Proof-of-absence: `relay/delivery/` contains no `crate::acp` /
+      `crate::tmux` imports and no references to `acp_delivery`, `acp_state`,
+      `permission_state`, `relay/tmux`, `relay/lifecycle` tmux primitives, or
+      `AcpTransport` / `AcpWorkerReadinessState`.
+- [ ] 4.10 Validate: `cargo test` passes; full integration suite green.
 - [x] 4.5 Decouple `AcpWorkerReadinessState` from `crate::relay` (the last
       transport->relay back-edge after Slice 3's 3.0 vocabulary move). Relocated
       the enum from `relay/delivery/async_worker.rs` into

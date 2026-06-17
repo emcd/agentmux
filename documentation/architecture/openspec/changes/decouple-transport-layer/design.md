@@ -130,7 +130,8 @@ or a clean `TransportError`, never a panic or a read of the wrong target's state
 Decided while implementing 2b, after tracing the delivery path end to end. These
 preserve behavior and keep relay-side scheduling out of the transport:
 
-- **Envelope/prompt boundary — relay pre-combines, relay fans out.** ACP
+- **Envelope/prompt boundary — relay pre-combines, relay fans out.** (Refined in
+  Slice 4A: the packer stays in relay; the ACP-ness becomes `can_take_batches`.) ACP
   coalescing (`batch_envelopes` token-budget packing + the `accepted_len` peel
   that feeds the worker carry buffer) is relay scheduling and stays in
   `payload.rs`/`orchestration.rs`. The relay hands `deliver()` the already-combined
@@ -143,7 +144,9 @@ preserve behavior and keep relay-side scheduling out of the transport:
   slot, then blocks on `wait_for_prompt_complete` (bounded poll + shutdown gate),
   then builds the terminal outcome inline from the slot + the pending-choice slot.
   On a shutdown break the slot is empty -> a dropped-on-shutdown outcome.
-- **Dual readiness, worker-mirrored (forced by decoupling).** The transport owns
+- **Dual readiness, worker-mirrored (forced by decoupling).** (Superseded in
+  Slice 4A: the mirroring moves into `src/acp/worker_driver.rs` via an injected
+  closure; the relay loop stops touching readiness.) The transport owns
   an `AcpWorkerReadinessState` signal for `is_ready()` and the `OutputView`
   prime-wait (it cannot call relay's `set_acp_worker_state`). The worker mirrors to
   the global `AcpWorkerReadinessState` registry — which stays, because external
@@ -187,6 +190,119 @@ supersedes the original "leave both in relay" wording, consistent with the
 Slice 3 vocabulary relocation (task 3.0) and the `TmuxLifecycleError` boundary
 (task 3.3): no transport surfaces a relay-owned type.
 
+### Slice 4A: worker genericization and the pre-delivery barrier
+
+Slice 4A removes the last transport-specific imports from `relay/delivery/` so
+the worker dispatches purely through `TransportImpl`. It splits in two: 4A-1
+(the barrier) lands first to shrink the surface; 4A-2 (lifecycle relocation +
+the batch capability) follows. Guiding principle (human-stated): **relay stays
+minimal and routing-focused; per-transport lifecycle lives in the transport.**
+
+#### Pre-delivery barrier: a generic quiescence/readiness gate
+
+**Decision**: Add `Transport::prepare_delivery(&self, ctx: &DeliveryContext) ->
+Result<DeliveryPreparation, DeliveryWaitError>`. The worker calls it (on the
+blocking pool) before committing the batch; on success it carries the resolved
+target (the `pre_resolved_target` that already rides in `DeliveryContext`). tmux
+runs the quiescence poll loop; ACP and pty return immediately for now. This
+replaces the worker's direct `crate::tmux::transport::wait_for_quiescent_pane`
+call — the last tmux import in `relay/delivery/`.
+
+**Rationale**: A pre-delivery wait is not a tmux quirk; it is a generic "is the
+target ready to receive this dispatch" gate. Pty will poll like tmux, and ACP
+can eventually express it as event-stream quiescence (waiting for agent activity
+on the events stream to die down) rather than a text-buffer poll. The barrier
+stays a distinct relay-side step (not folded into `deliver()`) specifically so
+the worker can drain post-wait task arrivals into the batch before paste — the
+coalesce-during-wait optimization. Folding it into `deliver()` would lose that,
+because the batch is fixed before `deliver()` is called.
+
+**Invariant**: the barrier MUST observe relay shutdown and return promptly; on
+timeout/shutdown/unavailability the worker fans the failure template across the
+coalesced batch (unchanged from today's hoist).
+
+**Target-handle shape (Pty review)**: `DeliveryPreparation` starts as a string
+target — the existing `Option<String>` `pre_resolved_target`. tmux carries the
+resolved pane; a transport whose handle is not a string (Pty's fd) re-resolves
+cheaply inside its own `deliver()`, the same path tmux already takes when
+`pre_resolved_target` is `None`. If we later want the barrier to own resolution
+for every transport (preserving "resolved exactly once"), generalize
+`DeliveryPreparation` to an opaque per-transport `DeliveryTarget` (enum or boxed
+handle). Deferred — not needed until the Pty transport lands. (Pty's quiescence
+mechanism will also differ: PTY-fd idle detection rather than tmux capture-pane
+polling, making Pty's `prepare_delivery` non-trivial when it lands; the trait
+seam is unaffected.)
+
+#### Worker lifecycle relocation (relocate-with-DI)
+
+**Decision**: Move the ACP worker lifecycle —
+`bootstrap_acp_runtime_on_worker_start`, `drive_acp_worker_respawn`,
+`AcpRespawnState`, and the readiness-registry mirroring — out of
+`relay/delivery/dispatch/worker.rs` into `src/acp` as an `AcpWorkerDriver` owned
+by `TransportImpl::Acp`. The relay worker loop keeps only the transport-agnostic
+skeleton (receive / coalesce / barrier / `deliver()` / pending-accounting /
+shutdown). The driver's three relay touchpoints — broadcast UI stream events,
+invalidate pending choices on respawn, mirror worker-state into the registry —
+are passed in as injected closures, exactly as the `Chooser` is today (`src/acp`
+must not import `crate::relay`).
+
+**Rationale**: The respawn machinery (backoff, give-up-after-N init failures,
+choice invalidation, ACP-specific stream events) is ACP-domain behavior tmux and
+pty never use. Putting a generic respawn framework on the trait would rename ACP
+behavior as generic without actually decoupling it — speculative generality.
+Relocating it into the transport behind injected closures is the honest seam and
+reuses the proven `Chooser` dependency-injection shape. This **supersedes** the
+Slice 2b "Dual readiness, worker-mirrored" decision: the worker no longer mirrors
+readiness; the driver does, via an injected closure, so the relay loop stops
+naming `AcpWorkerReadinessState` entirely. (The registry itself and
+`subscribe_acp_worker_state` stay relay-side; see task 4.6 for the naming
+follow-up, now that they are honestly ACP-scoped.)
+
+**Invariant**: respawn backoff and re-startup MUST continue to observe
+`shutdown_requested()` between sleeps and unblock promptly; the injected
+choice-invalidation MUST still fire before each respawn attempt.
+(`shutdown_requested()` is in `crate::runtime::signals`, not `crate::relay`, so
+the driver calls it directly — no new edge.)
+
+**Construction boundary (ACP + Coordinator review)**: the driver assembles the
+relay-provided closures into `StartupContext` (today built by
+`prepare_startup_context` in `worker.rs`, carrying `output_view` / `chooser` /
+`ready_signal`) during bootstrap and each respawn, then calls
+`transport.startup(ctx)` — context construction moves WITH the lifecycle, not
+left straddling in relay. Symmetrically, the relay-side site that builds the
+three closures imports nothing from `src/acp`: relay closes over its own
+services and hands the driver opaque `Arc<dyn Fn>`s, so the dependency arrow is
+`relay -> acp` only. Task 4.9's proof-of-absence is the gate.
+
+#### Batch capability flag (`can_take_batches`)
+
+**Decision**: Replace the `target_is_acp` match in
+`payload.rs::prepare_batch_delivery_payload` with `SessionType::can_take_batches()`
+(ACP → `false`; Tmux/Pty → `true`), exposed as a first-class method on
+`TransportImpl` per the capability-flag family (`add-transport-capability-flags`).
+Envelope rendering (`render_task_envelope`), token-budget packing
+(`batch_envelopes`), the single-batch peel loop, and the `deferred -> carry`
+re-queue all stay in relay unchanged.
+
+**Rationale**: The ACP peel exists for one reason — ACP `deliver()` accepts one
+prompt batch per turn (one `session/prompt`), while tmux/pty paste all batches.
+That is a transport capability, not a relay concern; but the rendering and
+packing genuinely are relay/envelope concerns and should not move into the
+transport. Reducing the coupling to one capability flag removes the
+`TargetConfiguration::Acp` knowledge from `payload.rs` (which has no `crate::acp`
+import today — only the config match) without migrating any logic. This refines
+the Slice 2b "Envelope/prompt boundary" decision: the packer still stays in
+relay; only the ACP-ness becomes a flag.
+
+#### Remove `accept_capacity`
+
+**Decision**: Delete `Transport::accept_capacity()` and its impls.
+
+**Rationale**: It has zero call sites (both impls return `usize::MAX`) and a
+static count cannot express ACP's content-dependent single-batch constraint —
+that role is filled by `can_take_batches` above. Removing it deletes dead
+contract surface rather than leaving a misleading capacity method.
+
 ## Module Boundaries After Refactor
 
 ```
@@ -202,6 +318,9 @@ src/acp/          — (already exists; grows)
   permission.rs   — ACP permission handling; extracted from inline PermissionHandler
                     closures in acp_delivery.rs (~old lines 242, 542); wired to
                     the injected Chooser
+  worker_driver.rs— ACP bootstrap + respawn lifecycle + readiness mirroring
+                    (from relay worker.rs); drives relay services via injected
+                    closures, no crate::relay import (Slice 4A-2)
   client.rs       — merged with relay/delivery/acp_client.rs
 
 src/acp/          — stays in relay (NOT moved to src/acp/)
@@ -218,7 +337,10 @@ src/tmux/         — (new module)
                     while the loop lives in tmux would create a tmux->relay back-edge)
 
 src/relay/delivery/ — (relay-specific only)
-  dispatch/worker.rs  — generic loop via TransportImpl
+  dispatch/worker.rs  — transport-agnostic loop skeleton; lifecycle dispatched via
+                        TransportImpl (ACP lifecycle now in src/acp/worker_driver.rs)
+  dispatch/payload.rs — envelope render + token-budget packing + single-batch peel;
+                        ACP-ness reduced to SessionType::can_take_batches() (Slice 4A-2)
   quiescence.rs       — QuiescenceOptions only (DeliveryWaitError moved to src/tmux/)
   ui_delivery.rs      — stays as-is
   observability.rs    — relay-side ACP worker state + choices-queue broadcast
