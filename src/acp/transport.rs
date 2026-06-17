@@ -40,9 +40,8 @@ use crate::acp::{
     PromptDispatchOutcome,
 };
 use crate::configuration::{AcpChannel, AcpTargetConfiguration, BundleMember, TargetConfiguration};
-use crate::relay::AcpWorkerReadinessState;
 use crate::runtime::signals::shutdown_requested;
-use crate::transports::SendOutcome;
+use crate::transports::{AcpWorkerReadinessState, SendOutcome};
 use crate::transports::{
     ChoiceMade, DeliveryContext, DeliveryEnvelope, DeliveryResult, LookMode, LookSnapshotPayload,
     OutputView, RawWriteResult, SingleDeliveryOutcome, StartupContext, Transport, TransportError,

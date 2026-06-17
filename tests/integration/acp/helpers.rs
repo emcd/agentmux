@@ -7,11 +7,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(super) use agentmux::relay::{AcpWorkerReadinessState, ChoicesQueueEvent};
+pub(super) use agentmux::relay::ChoicesQueueEvent;
 use agentmux::relay::{
     RelayRequest, RelayResponse, handle_request, subscribe_acp_worker_state,
     subscribe_choices_queue_events,
 };
+pub(super) use agentmux::transports::AcpWorkerReadinessState;
 use serde_json::Value;
 use tokio::sync::{broadcast, watch};
 

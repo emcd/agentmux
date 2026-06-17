@@ -13,7 +13,7 @@ use crate::configuration::{BundleMember, TargetConfiguration};
 use super::super::super::{AsyncDeliveryTask, DeliveryPayloadMode, RelayError, SendResult};
 use crate::acp::state::ACP_STARTUP_PRIME_TIMEOUT_MS;
 
-use super::super::async_worker::{AcpWorkerReadinessState, get_acp_worker_state};
+use super::super::async_worker::get_acp_worker_state;
 use super::payload::{
     PreparedBatchPayload, prepare_batch_delivery_payload, prepare_delivery_payload,
     resolve_target_member,
@@ -21,6 +21,7 @@ use super::payload::{
 use super::transport::{deliver_non_ui_target, deliver_non_ui_target_batch};
 use super::worker::{AcpWorkerBootstrap, spawn_async_delivery_worker};
 use crate::acp::AcpTransport;
+use crate::transports::AcpWorkerReadinessState;
 
 pub(in crate::relay) fn wait_for_async_delivery_shutdown(timeout: Duration) -> usize {
     super::super::async_worker::wait_for_async_delivery_shutdown(timeout)

@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     acp::{ReplayEntry, replay_entries_to_snapshot_entries},
-    relay::{AcpLookFreshness, AcpLookSnapshotSource, AcpWorkerReadinessState},
     runtime::inscriptions::emit_inscription,
+    transports::{AcpLookFreshness, AcpLookSnapshotSource, AcpWorkerReadinessState},
 };
 
 const ACP_SESSION_STATE_SCHEMA_VERSION: u32 = 2;

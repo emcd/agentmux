@@ -22,8 +22,7 @@ use super::super::super::{
     AsyncDeliveryTask, DeliveryPayloadMode, RelayError, SendOutcome, SendResult,
 };
 use super::super::async_worker::{
-    AcpWorkerReadinessState, AsyncWorkerKey, get_acp_worker_state, install_acp_worker_output_view,
-    set_acp_worker_state,
+    AsyncWorkerKey, get_acp_worker_state, install_acp_worker_output_view, set_acp_worker_state,
 };
 use super::super::choice_state::{
     ChoiceEventContext, build_acp_chooser, invalidate_pending_for_respawn,
@@ -33,7 +32,7 @@ use crate::acp::{
     ACP_ERROR_CODE_PROMPT_FAILED, ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE, AcpBootstrapError,
     AcpTransport,
 };
-use crate::transports::{StartupContext, Transport};
+use crate::transports::{AcpWorkerReadinessState, StartupContext, Transport};
 
 const RESPAWN_BACKOFF_MAX_MS_ENVVAR: &str = "AGENTMUX_RELAY_ACP_RESPAWN_BACKOFF_MAX_MS";
 const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;

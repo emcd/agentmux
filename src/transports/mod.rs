@@ -15,4 +15,7 @@ pub use contract::{
     SingleDeliveryOutcome, StartupContext, ThingToChoose, Transport, TransportError, TransportImpl,
     TransportReadiness, TransportStatus,
 };
-pub use vocabulary::{AcpLookFreshness, AcpLookSnapshotSource, DeliveryPayloadMode, SendOutcome};
+pub use vocabulary::{
+    AcpLookFreshness, AcpLookSnapshotSource, AcpWorkerReadinessState, DeliveryPayloadMode,
+    SendOutcome,
+};
