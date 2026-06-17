@@ -1,7 +1,7 @@
 # session-relay Specification
 
 ## Purpose
-TBD - created by archiving change add-mcp-session-relay-mvp. Update Purpose after archive.
+The core relay operation specifications — the largest live capability and the destination for the majority of archived changes. The spec governs bundle membership configuration, reconciliation lifecycle and startup failure visibility, session routing primitives with canonical `session@bundle` identity, and the send/look/raww/choose operation contracts with their per-target response shapes. The ACP worker lifecycle and shared replay buffer (1000-entry cap with snapshot/cursor accessors), ACP permission/choice queue (bounded at `pending_max` default 256 with `choices.snapshot`/`requested`/`resolved` event carrier), policy vocabulary and authorization evaluation order, session type taxonomy (tmux/acp/ui/pubsub), persistent relay client streams, dynamic bundle file watching, and `SessionType` transport capability flags are also normative.
 ## Requirements
 ### Requirement: Bundle Membership Configuration
 

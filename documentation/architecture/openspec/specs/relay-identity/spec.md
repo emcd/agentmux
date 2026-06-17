@@ -1,7 +1,7 @@
 # relay-identity Specification
 
 ## Purpose
-TBD - created by archiving change add-identity-federation. Update Purpose after archive.
+Verifiable session identity for relay `hello` frames plus the trusted-host and identity-introspection surfaces. The spec governs credential-bound `principal_id` assignment (stable across reconnects, stored in the durable principal store at `<state_root>/identity/principals.json`), `socket-trust` placeholder semantics with `require_session_credentials` enforcement toggle, and `[[trusted-hosts]]` configuration with the `IdentityIntrospect` request contract. The sender attribution schema (`authenticated_identity`, `on_behalf_of`) applies to Send/Look responses and `incoming_message` envelopes, with `identity.snapshot` and `identity.revoked` events for revocation and expiry.
 ## Requirements
 ### Requirement: Verifiable Session Identity
 

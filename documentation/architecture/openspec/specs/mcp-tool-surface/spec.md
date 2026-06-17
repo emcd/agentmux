@@ -1,7 +1,7 @@
 # mcp-tool-surface Specification
 
 ## Purpose
-TBD - created by archiving change add-mcp-tool-surface-contract. Update Purpose after archive.
+The MCP tool inventory and per-tool request/response contracts surfaced to MCP clients — `list`, `help`, `look`, `send`, `raww`, `choose`. The spec governs tool set stability (no temporary aliases; `grant` is not exposed after the rename-to-choose archive), canonical error taxonomy passthrough (validation precedes authorization denials with canonical denial details), list namespace selectors (`omitted`/`home-bundle`/`GLOBAL`/`*`), and sender identity inference from MCP association (caller-supplied identity fields are rejected). `relay_unavailable` fallback semantics apply to all tools when the bundle relay is unreachable.
 ## Requirements
 ### Requirement: MCP Tool Set
 

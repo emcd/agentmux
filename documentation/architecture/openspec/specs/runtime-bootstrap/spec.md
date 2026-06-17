@@ -1,7 +1,7 @@
 # runtime-bootstrap Specification
 
 ## Purpose
-TBD - created by archiving change add-runtime-bootstrap-and-xdg-layout. Update Purpose after archive.
+Runtime layout, configuration root resolution, and startup sequencing for the relay and MCP binaries. The spec governs XDG configuration/state root resolution (debug builds use repository-local `.auxiliary/configuration/agentmux/` when present), the relay-level and per-bundle runtime directory structure (`<state_root>/relay.sock`, `<bundle_runtime>/tmux.sock`, `<bundle_runtime>/sessions/<session>/identity.psk`), and sender and bundle association resolution precedence for MCP startup. It also covers MCP-to-relay connectivity handling with `relay_unavailable` tool errors, the relay auto-start helper for `agentmux tui`, and the runtime security posture (per-user ownership, 0700 bundle directories, rejection of foreign-owned runtime artifacts).
 ## Requirements
 ### Requirement: XDG Configuration Root
 

@@ -1,7 +1,7 @@
 # relay-routing-layer Specification
 
 ## Purpose
-TBD - created by archiving change add-relay-routing-layer. Update Purpose after archive.
+The shared resolution and authorization stages that every target-addressed operation (Send, Look, Raww, List) flows through before reaching its operation-specific body. The spec governs suffix-based target classification (every target MUST carry an `@<namespace>` suffix; bare ids are rejected at the resolution stage without consulting bundle configuration) and uniform cross-bundle authorization evaluated in the requester's home namespace (no per-operation cross-bundle logic; the policy schema's per-capability allowed-scope set is the sole authority for cross-bundle reach). Operation bodies SHALL exclude routing and authorization logic — they receive a fully-resolved and authorized `ResolvedRoute`.
 ## Requirements
 ### Requirement: Routing Resolution Stage
 
