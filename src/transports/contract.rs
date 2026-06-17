@@ -74,6 +74,24 @@ pub trait Transport {
     /// [`give_output`]: Transport::give_output
     fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError>;
 
+    /// Gates delivery on the target being ready to receive a batch, returning a
+    /// resolved target handle. A transport whose readiness is observable (tmux
+    /// pane quiescence; pty fd idle, later) performs the wait here; a transport
+    /// with no pre-delivery wait (ACP today) returns ready immediately, echoing
+    /// any [`DeliveryContext::pre_resolved_target`] back unchanged.
+    ///
+    /// The relay worker calls this as a distinct step BEFORE [`deliver`], so it
+    /// can drain task arrivals into the batch during the wait
+    /// (coalesce-during-wait); the barrier is deliberately NOT folded into
+    /// [`deliver`]. On timeout, shutdown, or target unavailability it returns a
+    /// [`DeliveryWaitError`] the worker fans across the coalesced batch.
+    ///
+    /// [`deliver`]: Transport::deliver
+    fn prepare_delivery(
+        &self,
+        context: &DeliveryContext,
+    ) -> Result<DeliveryPreparation, DeliveryWaitError>;
+
     /// Delivers a coalesced batch of envelopes in a single call, BLOCKING until
     /// each envelope reaches a terminal state, and returning one terminal
     /// outcome per envelope aligned with the input order. Completion is owned
@@ -210,6 +228,18 @@ impl TransportImpl {
         match self {
             Self::Acp(transport) => transport.startup(context),
             Self::Tmux(transport) => transport.startup(context),
+            Self::Pty => unimplemented!("PTY transport not yet implemented"),
+        }
+    }
+
+    /// Runs the pre-delivery readiness barrier; see [`Transport::prepare_delivery`].
+    pub fn prepare_delivery(
+        &self,
+        context: &DeliveryContext,
+    ) -> Result<DeliveryPreparation, DeliveryWaitError> {
+        match self {
+            Self::Acp(transport) => transport.prepare_delivery(context),
+            Self::Tmux(transport) => transport.prepare_delivery(context),
             Self::Pty => unimplemented!("PTY transport not yet implemented"),
         }
     }
@@ -400,6 +430,14 @@ pub struct DeliveryContext {
     /// worker has already proven readiness; `None` means the transport resolves
     /// it. Slice 3 finalizes the tmux quiescence parameters carried here.
     pub pre_resolved_target: Option<String>,
+    /// Tmux pane quiescence poll window. The relay unpacks its `QuiescenceOptions`
+    /// scheduling config into these primitives so [`Transport::prepare_delivery`]
+    /// can run the pane wait without the transport depending on relay. Ignored by
+    /// transports with no pre-delivery wait (ACP today).
+    pub quiet_window: Duration,
+    /// Deadline for the quiescence wait; `None` means unbounded (async delivery,
+    /// bounded only by relay shutdown).
+    pub quiescence_timeout: Option<Duration>,
     /// Maximum number of choices that may be pending at once for this target,
     /// used to populate [`ChoiceToMake::pending_max`] for choices raised
     /// mid-delivery.
@@ -407,6 +445,35 @@ pub struct DeliveryContext {
     /// Sessions authorized to decide choices raised during this delivery, used
     /// to populate [`ChoiceToMake::decider_sessions`].
     pub choice_decider_sessions: Vec<String>,
+}
+
+/// The resolved outcome of a [`Transport::prepare_delivery`] barrier. Carries a
+/// pre-resolved target handle (today a tmux pane string) the worker threads back
+/// into [`DeliveryContext::pre_resolved_target`] for the subsequent
+/// [`Transport::deliver`] call. A transport whose handle is not a string MAY
+/// leave this `None` and re-resolve in its own `deliver` (an opaque per-transport
+/// `DeliveryTarget` handle is a deferred generalization; see the design).
+#[derive(Clone, Debug, Default)]
+pub struct DeliveryPreparation {
+    pub pre_resolved_target: Option<String>,
+}
+
+/// A pre-delivery readiness-barrier failure surfaced by
+/// [`Transport::prepare_delivery`]. The relay maps it to a per-task `SendResult`
+/// template fanned across the coalesced batch. Its canonical home is the
+/// transport contract (the barrier's return type), so neither the tmux loop that
+/// raises it nor the relay that maps it forms a transport<->relay back-edge.
+#[derive(Debug)]
+pub enum DeliveryWaitError {
+    Timeout {
+        timeout: Duration,
+        readiness_mismatch: bool,
+        mismatch_reason: Option<String>,
+    },
+    Failed {
+        reason: String,
+    },
+    Shutdown,
 }
 
 /// Outcomes for one [`Transport::deliver`] call, aligned with the input order.

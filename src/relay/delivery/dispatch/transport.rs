@@ -1,8 +1,9 @@
 use crate::acp::AcpTransport;
-use crate::configuration::{BundleMember, TargetConfiguration, TmuxTargetConfiguration};
+use crate::configuration::{BundleMember, TargetConfiguration};
 use crate::tmux::TmuxTransport;
-use crate::tmux::transport::{DeliveryWaitError, wait_for_quiescent_pane};
-use crate::transports::{DeliveryContext, DeliveryEnvelope, DeliveryResult, Transport};
+use crate::transports::{
+    DeliveryContext, DeliveryEnvelope, DeliveryResult, DeliveryWaitError, Transport,
+};
 
 use super::super::super::startup_state::note_session_served_successfully;
 use super::super::super::{
@@ -155,6 +156,8 @@ fn deliver_acp_combined(
         runtime_directory: head.runtime_directory.clone(),
         target_member: target_member.clone(),
         pre_resolved_target: None,
+        quiet_window: head.quiescence.quiet_window,
+        quiescence_timeout: head.quiescence.quiescence_timeout,
         choices_pending_max: head.choices_pending_max,
         choice_decider_sessions: head.choice_decider_sessions.clone(),
     };
@@ -187,35 +190,33 @@ fn single_outcome_to_send_result(
     }
 }
 
-/// Worker-loop entry for the tmux quiescence hoist: waits for the head task's
-/// pane to become quiescent and returns the resolved pane target on success.
-/// Returns the per-batch failure template on timeout, shutdown, or pane
+/// Worker-loop entry for the tmux quiescence hoist: runs the transport's
+/// pre-delivery readiness barrier and returns the resolved pane target on
+/// success. Returns the per-batch failure template on timeout, shutdown, or pane
 /// unavailability — the worker fans it out to every task in the coalesced
 /// batch. Caller must have established that the head task is envelope-mode
 /// and targets a tmux session.
 ///
-/// The poll loop itself lives in [`crate::tmux::transport`]; the relay owns the
-/// `QuiescenceOptions` scheduling config and unpacks it into primitives here so
-/// the tmux module never depends on relay.
+/// The barrier (pane quiescence poll) lives in the [`TmuxTransport`]; the relay
+/// owns the `QuiescenceOptions` scheduling config and unpacks it onto the
+/// [`DeliveryContext`] here so the tmux module never depends on relay. This is
+/// the relay's only reach into tmux delivery and it now goes through the
+/// [`Transport`] trait rather than a tmux-internal helper.
 pub(super) fn prepare_tmux_pane_for_envelope_head(
     task: &AsyncDeliveryTask,
-    tmux_target: &TmuxTargetConfiguration,
+    target_member: &BundleMember,
 ) -> Result<String, Box<SendResult>> {
     debug_assert!(matches!(
         task.payload_mode,
         DeliveryPayloadMode::EnvelopeMessage
     ));
-    let tmux_socket_path = crate::runtime::paths::tmux_socket_path_for_runtime_directory(
-        task.runtime_directory.as_path(),
-    );
-    wait_for_quiescent_pane(
-        tmux_socket_path.as_path(),
-        task.target_session.as_str(),
-        task.quiescence.quiet_window,
-        task.quiescence.quiescence_timeout,
-        tmux_target.prompt_readiness.as_ref(),
-    )
-    .map_err(|error| Box::new(wait_error_to_send_result(task, error)))
+    let context = tmux_delivery_context(task, target_member, None);
+    match TmuxTransport::new().prepare_delivery(&context) {
+        Ok(preparation) => Ok(preparation
+            .pre_resolved_target
+            .expect("tmux prepare_delivery resolves a pane on success")),
+        Err(error) => Err(Box::new(wait_error_to_send_result(task, error))),
+    }
 }
 
 /// Single-task tmux delivery (the RawInput path; envelope-mode tasks always go
@@ -309,6 +310,8 @@ fn tmux_delivery_context(
         runtime_directory: head.runtime_directory.clone(),
         target_member: target_member.clone(),
         pre_resolved_target,
+        quiet_window: head.quiescence.quiet_window,
+        quiescence_timeout: head.quiescence.quiescence_timeout,
         choices_pending_max: head.choices_pending_max,
         choice_decider_sessions: head.choice_decider_sessions.clone(),
     }

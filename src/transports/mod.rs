@@ -10,10 +10,10 @@ pub mod vocabulary;
 pub use crate::acp::AcpTransport;
 pub use crate::tmux::TmuxTransport;
 pub use contract::{
-    ChoiceMade, ChoiceToMake, Chooser, DeliveryContext, DeliveryEnvelope, DeliveryResult, LookMode,
-    LookSnapshotPayload, OutputView, PromptReadinessTemplate, RawWriteResult,
-    SingleDeliveryOutcome, StartupContext, ThingToChoose, Transport, TransportError, TransportImpl,
-    TransportReadiness, TransportStatus,
+    ChoiceMade, ChoiceToMake, Chooser, DeliveryContext, DeliveryEnvelope, DeliveryPreparation,
+    DeliveryResult, DeliveryWaitError, LookMode, LookSnapshotPayload, OutputView,
+    PromptReadinessTemplate, RawWriteResult, SingleDeliveryOutcome, StartupContext, ThingToChoose,
+    Transport, TransportError, TransportImpl, TransportReadiness, TransportStatus,
 };
 pub use vocabulary::{
     AcpLookFreshness, AcpLookSnapshotSource, AcpWorkerReadinessState, DeliveryPayloadMode,

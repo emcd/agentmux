@@ -43,9 +43,10 @@ use crate::configuration::{AcpChannel, AcpTargetConfiguration, BundleMember, Tar
 use crate::runtime::signals::shutdown_requested;
 use crate::transports::{AcpWorkerReadinessState, SendOutcome};
 use crate::transports::{
-    ChoiceMade, DeliveryContext, DeliveryEnvelope, DeliveryResult, LookMode, LookSnapshotPayload,
-    OutputView, RawWriteResult, SingleDeliveryOutcome, StartupContext, Transport, TransportError,
-    TransportReadiness, TransportStatus,
+    ChoiceMade, DeliveryContext, DeliveryEnvelope, DeliveryPreparation, DeliveryResult,
+    DeliveryWaitError, LookMode, LookSnapshotPayload, OutputView, RawWriteResult,
+    SingleDeliveryOutcome, StartupContext, Transport, TransportError, TransportReadiness,
+    TransportStatus,
 };
 
 // ACP delivery failure taxonomy (see the relay delivery README for the full
@@ -213,6 +214,18 @@ impl Transport for AcpTransport {
                 })
             }
         }
+    }
+
+    fn prepare_delivery(
+        &self,
+        context: &DeliveryContext,
+    ) -> Result<DeliveryPreparation, DeliveryWaitError> {
+        // ACP has no pre-delivery wait — event-stream quiescence is future work,
+        // tracked separately. The barrier is immediately ready; echo any
+        // pre-resolved target back unchanged.
+        Ok(DeliveryPreparation {
+            pre_resolved_target: context.pre_resolved_target.clone(),
+        })
     }
 
     fn deliver(

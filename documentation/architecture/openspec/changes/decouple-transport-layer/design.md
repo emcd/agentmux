@@ -173,9 +173,14 @@ the trait — the relay still must identify UI targets separately. Low ROI.
 
 ### quiescence.rs split
 
-**Decision (revised in Slice 3, human-directed no-back-edge pass)**: The core
-poll loop moves to `src/tmux/transport.rs`. `QuiescenceOptions` stays in
-`relay/delivery/quiescence.rs`; `DeliveryWaitError` moves WITH the loop to tmux.
+**Decision (revised in Slice 3, human-directed no-back-edge pass; superseded for
+`DeliveryWaitError` in Slice 4A-1)**: The core poll loop moves to
+`src/tmux/transport.rs`. `QuiescenceOptions` stays in
+`relay/delivery/quiescence.rs`. `DeliveryWaitError` moved WITH the loop to tmux
+in Slice 3, then relocated again to `transports::contract` in Slice 4A-1 once it
+became the `prepare_delivery` trait return type (see the Slice 4A barrier
+section); a trait return type cannot live in a concrete transport without
+forcing relay-visible tmux-internal imports.
 
 **Rationale**: The poll loop is pure tmux behavior. `QuiescenceOptions` is
 genuinely relay delivery config — the `send`/`raww` handlers construct it, it
@@ -202,11 +207,24 @@ minimal and routing-focused; per-transport lifecycle lives in the transport.**
 
 **Decision**: Add `Transport::prepare_delivery(&self, ctx: &DeliveryContext) ->
 Result<DeliveryPreparation, DeliveryWaitError>`. The worker calls it (on the
-blocking pool) before committing the batch; on success it carries the resolved
-target (the `pre_resolved_target` that already rides in `DeliveryContext`). tmux
-runs the quiescence poll loop; ACP and pty return immediately for now. This
+blocking pool) before committing the batch; on success it returns a
+`DeliveryPreparation` carrying the resolved target as `Option<String>`, which the
+worker threads back into `DeliveryContext::pre_resolved_target` for `deliver`.
+tmux runs the quiescence poll loop; ACP and pty return immediately for now. This
 replaces the worker's direct `crate::tmux::transport::wait_for_quiescent_pane`
-call — the last tmux import in `relay/delivery/`.
+call — the tmux-internals reach in `relay/delivery/` (the residual
+`TmuxTransport`/`AcpTransport` construction imports there go in 4A-2's worker
+genericization, gated by the 4.9 proof-of-absence).
+
+**As built (Slice 4A-1)**: two supporting moves the original decision did not
+spell out. (1) `DeliveryContext` grows the quiescence schedule as primitives
+(`quiet_window: Duration`, `quiescence_timeout: Option<Duration>`) — it already
+carried `pre_resolved_target` and `target_member` (whence prompt-readiness), but
+not the schedule the barrier needs; the relay unpacks `QuiescenceOptions` onto
+them at the hoist boundary so the transport contract stays below relay. (2)
+`DeliveryWaitError` relocates from `crate::tmux::transport` to
+`transports::contract` as the trait return type (see the quiescence.rs-split
+decision).
 
 **Rationale**: A pre-delivery wait is not a tmux quirk; it is a generic "is the
 target ready to receive this dispatch" gate. Pty will poll like tmux, and ACP
@@ -332,16 +350,19 @@ src/acp/          — stays in relay (NOT moved to src/acp/)
 src/tmux/         — (new module)
   pane.rs         — pane ops + command plumbing (from relay/tmux.rs)
   lifecycle.rs    — session lifecycle primitives (from relay/lifecycle.rs)
-  transport.rs    — Tmux Transport impl + quiescence poll loop + DeliveryWaitError
-                    (DeliveryWaitError moved here with the loop; leaving it in relay
-                    while the loop lives in tmux would create a tmux->relay back-edge)
+  transport.rs    — Tmux Transport impl; prepare_delivery barrier wraps the
+                    (now module-private) quiescence poll loop. DeliveryWaitError
+                    lived here after Slice 3, then moved up to transports::contract
+                    in Slice 4A-1 once prepare_delivery became a trait method (its
+                    return type); see the quiescence.rs-split decision
 
 src/relay/delivery/ — (relay-specific only)
   dispatch/worker.rs  — transport-agnostic loop skeleton; lifecycle dispatched via
                         TransportImpl (ACP lifecycle now in src/acp/worker_driver.rs)
   dispatch/payload.rs — envelope render + token-budget packing + single-batch peel;
                         ACP-ness reduced to SessionType::can_take_batches() (Slice 4A-2)
-  quiescence.rs       — QuiescenceOptions only (DeliveryWaitError moved to src/tmux/)
+  quiescence.rs       — QuiescenceOptions only (DeliveryWaitError now in
+                        transports::contract; see quiescence.rs-split decision)
   ui_delivery.rs      — stays as-is
   observability.rs    — relay-side ACP worker state + choices-queue broadcast
 ```

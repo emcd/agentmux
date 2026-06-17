@@ -8,13 +8,17 @@
 //! outcome across the coalesced tasks and records `served_successfully`
 //! relay-side, keeping that relay static out of the transport.
 //!
-//! The quiescence poll loop ([`wait_for_quiescent_pane`]) lives here because it
-//! is pure tmux behavior over [`pane`](super::pane) primitives. The relay hoists
-//! the wait out of `deliver` (so post-wait task arrivals can coalesce into the
-//! batch) and passes the resolved pane back via
-//! [`DeliveryContext::pre_resolved_target`]; it calls this function directly. The
-//! relay-owned scheduling config (`QuiescenceOptions`) stays in relay — this
-//! function takes the unpacked primitives so tmux never depends on relay.
+//! The quiescence poll loop (`wait_for_quiescent_pane`, module-private) lives
+//! here because it is pure tmux behavior over [`pane`](super::pane) primitives.
+//! It is the body of [`TmuxTransport::prepare_delivery`], the pre-delivery
+//! readiness barrier: the relay hoists the wait out of `deliver` (so post-wait
+//! task arrivals can coalesce into the batch) by calling `prepare_delivery`,
+//! which resolves the pane and hands it back via
+//! [`DeliveryPreparation`](crate::transports::DeliveryPreparation); `deliver`
+//! then pastes against [`DeliveryContext::pre_resolved_target`] without
+//! re-waiting. The relay-owned scheduling config (`QuiescenceOptions`) stays in
+//! relay and is unpacked onto the [`DeliveryContext`] primitives the barrier
+//! reads, so tmux never depends on relay.
 
 use std::{
     path::Path,
@@ -26,13 +30,13 @@ use std::{
 use regex::Regex;
 use serde_json::json;
 
-use crate::configuration::PromptReadinessTemplate;
+use crate::configuration::{PromptReadinessTemplate, TargetConfiguration};
 use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 use crate::runtime::signals::shutdown_requested;
 use crate::transports::{
-    DeliveryContext, DeliveryEnvelope, DeliveryResult, OutputView, RawWriteResult, SendOutcome,
-    SingleDeliveryOutcome, StartupContext, Transport, TransportError, TransportReadiness,
-    TransportStatus,
+    DeliveryContext, DeliveryEnvelope, DeliveryPreparation, DeliveryResult, DeliveryWaitError,
+    OutputView, RawWriteResult, SendOutcome, SingleDeliveryOutcome, StartupContext, Transport,
+    TransportError, TransportReadiness, TransportStatus,
 };
 
 use super::pane::{
@@ -64,6 +68,34 @@ impl Transport for TmuxTransport {
         // establish here; the transport is ready to attempt delivery immediately.
         Ok(TransportStatus {
             readiness: TransportReadiness::Ready,
+        })
+    }
+
+    fn prepare_delivery(
+        &self,
+        context: &DeliveryContext,
+    ) -> Result<DeliveryPreparation, DeliveryWaitError> {
+        // The relay hoists this barrier out of `deliver` so post-quiescence task
+        // arrivals can coalesce into the batch. Resolve the pane once here and
+        // hand it back; `deliver` then pastes against `pre_resolved_target`
+        // without re-waiting. Quiescence scheduling rides on the context as
+        // primitives (the relay owns `QuiescenceOptions`); the prompt-readiness
+        // template comes from the tmux target member.
+        let tmux_socket_path =
+            tmux_socket_path_for_runtime_directory(context.runtime_directory.as_path());
+        let prompt_readiness = match &context.target_member.target {
+            TargetConfiguration::Tmux(tmux_target) => tmux_target.prompt_readiness.as_ref(),
+            _ => None,
+        };
+        let pane = wait_for_quiescent_pane(
+            tmux_socket_path.as_path(),
+            context.target_session.as_str(),
+            context.quiet_window,
+            context.quiescence_timeout,
+            prompt_readiness,
+        )?;
+        Ok(DeliveryPreparation {
+            pre_resolved_target: Some(pane),
         })
     }
 
@@ -189,20 +221,6 @@ fn single_result(outcome: SingleDeliveryOutcome) -> DeliveryResult {
     }
 }
 
-/// Tmux pane wait outcome surfaced to the relay, which maps it to a `SendResult`.
-#[derive(Debug)]
-pub(crate) enum DeliveryWaitError {
-    Timeout {
-        timeout: Duration,
-        readiness_mismatch: bool,
-        mismatch_reason: Option<String>,
-    },
-    Failed {
-        reason: String,
-    },
-    Shutdown,
-}
-
 #[derive(Debug)]
 struct PromptReadinessMatcher {
     prompt_regex: Regex,
@@ -268,10 +286,12 @@ fn should_emit_prompt_mismatch(
 /// matches the prompt-readiness template), returning the resolved pane.
 ///
 /// Takes the quiescence parameters as primitives — the relay owns the
-/// `QuiescenceOptions` config and unpacks it here — so this loop depends only on
-/// `crate::tmux::pane`, `crate::configuration`, and `crate::runtime`, never on
-/// `crate::relay`.
-pub(crate) fn wait_for_quiescent_pane(
+/// `QuiescenceOptions` config and unpacks it onto the [`DeliveryContext`], which
+/// [`TmuxTransport::prepare_delivery`] forwards here — so this loop depends only
+/// on `crate::tmux::pane`, `crate::configuration`, and `crate::runtime`, never on
+/// `crate::relay`. It is a private detail of the tmux barrier; the relay reaches
+/// it only through [`Transport::prepare_delivery`].
+fn wait_for_quiescent_pane(
     tmux_socket: &Path,
     target_session: &str,
     quiet_window: Duration,
