@@ -1,13 +1,13 @@
 use crate::acp::AcpTransport;
 use crate::configuration::{BundleMember, TargetConfiguration, TmuxTargetConfiguration};
+use crate::tmux::TmuxTransport;
+use crate::tmux::transport::{DeliveryWaitError, wait_for_quiescent_pane};
 use crate::transports::{DeliveryContext, DeliveryEnvelope, DeliveryResult, Transport};
 
 use super::super::super::startup_state::note_session_served_successfully;
-use super::super::super::tmux::{inject_literal_text, inject_prompt, resolve_active_pane_target};
 use super::super::super::{
     AsyncDeliveryTask, DeliveryPayloadMode, RelayError, SendOutcome, SendResult,
 };
-use super::super::quiescence::{DeliveryWaitError, wait_for_quiescent_pane};
 
 const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delivery";
 const DROPPED_ON_SHUTDOWN_REASON_CODE: &str = "dropped_on_shutdown";
@@ -25,8 +25,8 @@ pub(super) fn deliver_non_ui_target(
             prompt_batches,
             acp_transport,
         )),
-        TargetConfiguration::Tmux(tmux_target) => {
-            Ok(deliver_one_target_tmux(task, tmux_target, prompt_batches))
+        TargetConfiguration::Tmux(_) => {
+            Ok(deliver_one_target_tmux(task, target_member, prompt_batches))
         }
         TargetConfiguration::Ui | TargetConfiguration::Pubsub => {
             Err(super::super::super::session_type_not_implemented(
@@ -41,11 +41,10 @@ pub(super) fn deliver_non_ui_target(
 ///
 /// All tasks in `batch` share the same target; the rendered `prompt_batches`
 /// represent the combined envelopes. Returns one outcome per task aligned
-/// with the slice. For tmux the single transport outcome (success or the
-/// reason the K-th paste failed) is replicated per-task with each task's
-/// own `message_id`. For ACP the synchronous return is a `delivered_in_progress`
-/// per task; the final outcome is delivered later via `on_completion`
-/// (fanned out inside `deliver_batch_target_acp`).
+/// with the slice. Both transports block to a terminal outcome and return it:
+/// the relay pre-combines, the transport produces a single outcome, and it is
+/// replicated per-task with each task's own `message_id` (for tmux, the success
+/// or the reason the K-th paste failed; for ACP, the terminal turn outcome).
 ///
 /// `pre_resolved_pane` lets the worker loop hoist the tmux quiescence wait so
 /// post-quiescence task arrivals can be drained into the batch before paste.
@@ -67,8 +66,8 @@ pub(super) fn deliver_non_ui_target_batch(
                 .map(Ok)
                 .collect()
         }
-        TargetConfiguration::Tmux(tmux_target) => {
-            deliver_batch_target_tmux(batch, tmux_target, prompt_batches, pre_resolved_pane)
+        TargetConfiguration::Tmux(_) => {
+            deliver_batch_target_tmux(batch, target_member, prompt_batches, pre_resolved_pane)
                 .into_iter()
                 .map(Ok)
                 .collect()
@@ -194,6 +193,10 @@ fn single_outcome_to_send_result(
 /// unavailability — the worker fans it out to every task in the coalesced
 /// batch. Caller must have established that the head task is envelope-mode
 /// and targets a tmux session.
+///
+/// The poll loop itself lives in [`crate::tmux::transport`]; the relay owns the
+/// `QuiescenceOptions` scheduling config and unpacks it into primitives here so
+/// the tmux module never depends on relay.
 pub(super) fn prepare_tmux_pane_for_envelope_head(
     task: &AsyncDeliveryTask,
     tmux_target: &TmuxTargetConfiguration,
@@ -205,148 +208,115 @@ pub(super) fn prepare_tmux_pane_for_envelope_head(
     let tmux_socket_path = crate::runtime::paths::tmux_socket_path_for_runtime_directory(
         task.runtime_directory.as_path(),
     );
-    let tmux_socket = tmux_socket_path.as_path();
-    resolve_tmux_pane_target(task, tmux_target, tmux_socket)
+    wait_for_quiescent_pane(
+        tmux_socket_path.as_path(),
+        task.target_session.as_str(),
+        task.quiescence.quiet_window,
+        task.quiescence.quiescence_timeout,
+        tmux_target.prompt_readiness.as_ref(),
+    )
+    .map_err(|error| Box::new(wait_error_to_send_result(task, error)))
 }
 
+/// Single-task tmux delivery (the RawInput path; envelope-mode tasks always go
+/// through the hoisted batch path). Routes through [`TmuxTransport`], which
+/// resolves the active pane and pastes; `served_successfully` is recorded
+/// relay-side here so the transport stays free of relay statics.
 fn deliver_one_target_tmux(
     task: &AsyncDeliveryTask,
-    tmux_target: &TmuxTargetConfiguration,
+    target_member: &BundleMember,
     prompt_batches: Vec<String>,
 ) -> SendResult {
-    let target_session = task.target_session.clone();
-    let message_id = task.message_id.clone();
-    let tmux_socket_path = crate::runtime::paths::tmux_socket_path_for_runtime_directory(
-        task.runtime_directory.as_path(),
-    );
-    let tmux_socket = tmux_socket_path.as_path();
-
-    let pane_target = match resolve_tmux_pane_target(task, tmux_target, tmux_socket) {
-        Ok(pane_target) => pane_target,
-        Err(result) => return *result,
-    };
-
-    let failed_reason = match task.payload_mode {
-        DeliveryPayloadMode::EnvelopeMessage => {
-            let mut failed_reason = None::<String>;
-            for prompt in prompt_batches {
-                if let Err(reason) = inject_prompt(tmux_socket, &pane_target, &prompt) {
-                    failed_reason = Some(reason);
-                    break;
-                }
-            }
-            failed_reason
-        }
-        DeliveryPayloadMode::RawInput => inject_literal_text(
-            tmux_socket,
-            &pane_target,
-            task.message.as_str(),
-            task.append_enter,
-        )
-        .err(),
-    };
-    match failed_reason {
-        None => {
-            let _ = note_session_served_successfully(
-                task.runtime_directory.as_path(),
-                target_session.as_str(),
-            );
-            SendResult {
-                target_session,
-                message_id,
-                outcome: SendOutcome::Delivered,
-                reason_code: None,
-                reason: None,
-                details: None,
-            }
-        }
-        Some(reason) => SendResult {
-            target_session,
-            message_id,
-            outcome: SendOutcome::Failed,
-            reason_code: None,
-            reason: Some(reason),
-            details: None,
-        },
-    }
+    let envelopes = build_tmux_envelopes(task, prompt_batches);
+    let context = tmux_delivery_context(task, target_member, None);
+    let result = TmuxTransport::new().deliver(envelopes, &context);
+    let send_result =
+        single_outcome_to_send_result(result, task.target_session.clone(), task.message_id.clone());
+    note_tmux_delivered(task, &send_result);
+    send_result
 }
 
-/// Tmux delivery for a coalesced envelope batch. Resolves the pane and waits
-/// for quiescence ONCE on the head task, then paste-buffers each rendered
-/// prompt batch sequentially. The single delivery outcome (success or the
-/// reason the K-th paste failed) is fanned out to every task in `batch`
-/// using each task's own `message_id` and `target_session`.
-///
-/// When the worker loop has already proven the pane quiescent (post-quiescence
-/// drain path), `pre_resolved_pane` is supplied and both the wait and the
-/// pane-target lookup are skipped here.
+/// Tmux delivery for a coalesced envelope batch. The worker proves the pane
+/// quiescent once (hoist) and supplies `pre_resolved_pane`; [`TmuxTransport`]
+/// pastes every rendered prompt against it and returns one combined outcome,
+/// which is fanned out to every task in `batch` using each task's own
+/// `message_id`/`target_session`. `served_successfully` is recorded relay-side
+/// per delivered task.
 fn deliver_batch_target_tmux(
     batch: &[AsyncDeliveryTask],
-    tmux_target: &TmuxTargetConfiguration,
+    target_member: &BundleMember,
     prompt_batches: Vec<String>,
     pre_resolved_pane: Option<String>,
 ) -> Vec<SendResult> {
     let head = &batch[0];
-    let tmux_socket_path = crate::runtime::paths::tmux_socket_path_for_runtime_directory(
-        head.runtime_directory.as_path(),
-    );
-    let tmux_socket = tmux_socket_path.as_path();
-
-    let pane_target = match pre_resolved_pane {
-        Some(pane_target) => pane_target,
-        None => match resolve_tmux_pane_target(head, tmux_target, tmux_socket) {
-            Ok(pane_target) => pane_target,
-            Err(result) => {
-                // Quiescence / pane-resolution failure: every task in the batch
-                // shares the outcome (re-built per-task so message_id /
-                // target_session correlate with each original send call).
-                // `Box<SendResult>` carries the head's correlation values;
-                // replicate the variant fields.
-                return replicate_outcome_for_batch(batch, *result);
-            }
-        },
-    };
-
-    let mut failed_reason = None::<String>;
-    for prompt in prompt_batches {
-        if let Err(reason) = inject_prompt(tmux_socket, &pane_target, &prompt) {
-            failed_reason = Some(reason);
-            break;
-        }
+    let envelopes = build_tmux_envelopes(head, prompt_batches);
+    let context = tmux_delivery_context(head, target_member, pre_resolved_pane);
+    let result = TmuxTransport::new().deliver(envelopes, &context);
+    let template =
+        single_outcome_to_send_result(result, head.target_session.clone(), head.message_id.clone());
+    let results = replicate_outcome_for_batch(batch, template);
+    for (task, send_result) in batch.iter().zip(results.iter()) {
+        note_tmux_delivered(task, send_result);
     }
-    batch
-        .iter()
-        .map(|task| match &failed_reason {
-            None => {
-                let _ = note_session_served_successfully(
-                    task.runtime_directory.as_path(),
-                    task.target_session.as_str(),
-                );
-                SendResult {
-                    target_session: task.target_session.clone(),
-                    message_id: task.message_id.clone(),
-                    outcome: SendOutcome::Delivered,
-                    reason_code: None,
-                    reason: None,
-                    details: None,
-                }
-            }
-            Some(reason) => SendResult {
-                target_session: task.target_session.clone(),
-                message_id: task.message_id.clone(),
-                outcome: SendOutcome::Failed,
-                reason_code: None,
-                reason: Some(reason.clone()),
-                details: None,
-            },
-        })
-        .collect()
+    results
+}
+
+/// Records `served_successfully` for a delivered tmux task. Kept relay-side
+/// (the ACP path does the equivalent in the worker) so the transport never
+/// reaches into relay statics.
+fn note_tmux_delivered(task: &AsyncDeliveryTask, send_result: &SendResult) {
+    if send_result.outcome == SendOutcome::Delivered {
+        let _ = note_session_served_successfully(
+            task.runtime_directory.as_path(),
+            task.target_session.as_str(),
+        );
+    }
+}
+
+/// Builds the rendered envelopes handed to [`TmuxTransport::deliver`]. Envelope
+/// messages paste each coalesced prompt batch (always submitting with Enter);
+/// raw input pastes the raw message verbatim, honoring the task's `append_enter`.
+fn build_tmux_envelopes(
+    head: &AsyncDeliveryTask,
+    prompt_batches: Vec<String>,
+) -> Vec<DeliveryEnvelope> {
+    match head.payload_mode {
+        DeliveryPayloadMode::EnvelopeMessage => prompt_batches
+            .into_iter()
+            .map(|rendered| DeliveryEnvelope {
+                message_id: head.message_id.clone(),
+                payload_mode: DeliveryPayloadMode::EnvelopeMessage,
+                rendered,
+                append_enter: true,
+            })
+            .collect(),
+        DeliveryPayloadMode::RawInput => vec![DeliveryEnvelope {
+            message_id: head.message_id.clone(),
+            payload_mode: DeliveryPayloadMode::RawInput,
+            rendered: head.message.clone(),
+            append_enter: head.append_enter,
+        }],
+    }
+}
+
+fn tmux_delivery_context(
+    head: &AsyncDeliveryTask,
+    target_member: &BundleMember,
+    pre_resolved_target: Option<String>,
+) -> DeliveryContext {
+    DeliveryContext {
+        target_session: head.target_session.clone(),
+        runtime_directory: head.runtime_directory.clone(),
+        target_member: target_member.clone(),
+        pre_resolved_target,
+        choices_pending_max: head.choices_max_pending,
+        choice_decider_sessions: head.choice_decider_sessions.clone(),
+    }
 }
 
 // Reproduces a head-derived SendResult for every task in the batch, swapping
-// in each task's own correlation fields. Used when a quiescence wait or pane
-// resolution fails before the actual paste begins: there is one underlying
-// reason but N callers need their own per-task result.
+// in each task's own correlation fields. Used to fan one underlying tmux
+// delivery outcome out to N coalesced callers, each needing its own result.
 fn replicate_outcome_for_batch(
     batch: &[AsyncDeliveryTask],
     template: SendResult,
@@ -364,77 +334,51 @@ fn replicate_outcome_for_batch(
         .collect()
 }
 
-fn resolve_tmux_pane_target(
-    task: &AsyncDeliveryTask,
-    tmux_target: &TmuxTargetConfiguration,
-    tmux_socket: &std::path::Path,
-) -> Result<String, Box<SendResult>> {
-    match task.payload_mode {
-        DeliveryPayloadMode::EnvelopeMessage => wait_for_quiescent_pane(
-            tmux_socket,
-            task.target_session.as_str(),
-            task.quiescence,
-            tmux_target.prompt_readiness.as_ref(),
-        )
-        .map_err(|error| {
-            Box::new(match error {
-                DeliveryWaitError::Timeout {
-                    timeout,
-                    readiness_mismatch,
-                    mismatch_reason,
-                } => {
-                    let reason = if readiness_mismatch {
-                        let detail = mismatch_reason
-                            .map(|value| format!(": {value}"))
-                            .unwrap_or_default();
-                        format!(
-                            "prompt readiness did not match before timeout after {}ms{}",
-                            timeout.as_millis(),
-                            detail
-                        )
-                    } else {
-                        format!("quiescence wait timed out after {}ms", timeout.as_millis())
-                    };
-                    SendResult {
-                        target_session: task.target_session.clone(),
-                        message_id: task.message_id.clone(),
-                        outcome: SendOutcome::Timeout,
-                        reason_code: None,
-                        reason: Some(reason),
-                        details: None,
-                    }
-                }
-                DeliveryWaitError::Failed { reason } => SendResult {
-                    target_session: task.target_session.clone(),
-                    message_id: task.message_id.clone(),
-                    outcome: SendOutcome::Failed,
-                    reason_code: None,
-                    reason: Some(reason),
-                    details: None,
-                },
-                DeliveryWaitError::Shutdown => SendResult {
-                    target_session: task.target_session.clone(),
-                    message_id: task.message_id.clone(),
-                    outcome: SendOutcome::DroppedOnShutdown,
-                    reason_code: Some(DROPPED_ON_SHUTDOWN_REASON_CODE.to_string()),
-                    reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
-                    details: None,
-                },
-            })
-        }),
-        DeliveryPayloadMode::RawInput => {
-            resolve_active_pane_target(tmux_socket, task.target_session.as_str()).map_err(
-                |reason| {
-                    Box::new(SendResult {
-                        target_session: task.target_session.clone(),
-                        message_id: task.message_id.clone(),
-                        outcome: SendOutcome::Failed,
-                        reason_code: Some("tmux_target_unavailable".to_string()),
-                        reason: Some(reason),
-                        details: None,
-                    })
-                },
-            )
+/// Maps a tmux quiescence-wait failure to the per-task `SendResult` template the
+/// worker fans out across the coalesced batch.
+fn wait_error_to_send_result(task: &AsyncDeliveryTask, error: DeliveryWaitError) -> SendResult {
+    match error {
+        DeliveryWaitError::Timeout {
+            timeout,
+            readiness_mismatch,
+            mismatch_reason,
+        } => {
+            let reason = if readiness_mismatch {
+                let detail = mismatch_reason
+                    .map(|value| format!(": {value}"))
+                    .unwrap_or_default();
+                format!(
+                    "prompt readiness did not match before timeout after {}ms{}",
+                    timeout.as_millis(),
+                    detail
+                )
+            } else {
+                format!("quiescence wait timed out after {}ms", timeout.as_millis())
+            };
+            SendResult {
+                target_session: task.target_session.clone(),
+                message_id: task.message_id.clone(),
+                outcome: SendOutcome::Timeout,
+                reason_code: None,
+                reason: Some(reason),
+                details: None,
+            }
         }
+        DeliveryWaitError::Failed { reason } => SendResult {
+            target_session: task.target_session.clone(),
+            message_id: task.message_id.clone(),
+            outcome: SendOutcome::Failed,
+            reason_code: None,
+            reason: Some(reason),
+            details: None,
+        },
+        DeliveryWaitError::Shutdown => SendResult {
+            target_session: task.target_session.clone(),
+            message_id: task.message_id.clone(),
+            outcome: SendOutcome::DroppedOnShutdown,
+            reason_code: Some(DROPPED_ON_SHUTDOWN_REASON_CODE.to_string()),
+            reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
+            details: None,
+        },
     }
 }

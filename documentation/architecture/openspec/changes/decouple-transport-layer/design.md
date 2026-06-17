@@ -170,11 +170,22 @@ the trait — the relay still must identify UI targets separately. Low ROI.
 
 ### quiescence.rs split
 
-**Decision**: Core poll loop moves to `src/tmux/transport.rs`; shared types
-(`DeliveryWaitError`, `QuiescenceOptions`) stay in `relay/delivery/`.
+**Decision (revised in Slice 3, human-directed no-back-edge pass)**: The core
+poll loop moves to `src/tmux/transport.rs`. `QuiescenceOptions` stays in
+`relay/delivery/quiescence.rs`; `DeliveryWaitError` moves WITH the loop to tmux.
 
-**Rationale**: The poll loop is pure tmux behavior. The shared types are used
-by generic delivery helpers that remain relay-visible.
+**Rationale**: The poll loop is pure tmux behavior. `QuiescenceOptions` is
+genuinely relay delivery config — the `send`/`raww` handlers construct it, it
+rides on the async delivery task, and `ui_delivery` reuses its default timeout —
+so it stays relay-side; the loop takes the unpacked primitives
+(`quiet_window`, `quiescence_timeout`) instead of the struct. `DeliveryWaitError`
+is the loop's return type and is consumed only by the tmux delivery path, so
+leaving it in relay while the loop lives in tmux would create exactly the
+`tmux -> relay` back-edge this change eliminates; it moves to tmux and relay maps
+it to a `SendResult` at the hoist boundary (`dispatch/transport.rs`). This
+supersedes the original "leave both in relay" wording, consistent with the
+Slice 3 vocabulary relocation (task 3.0) and the `TmuxLifecycleError` boundary
+(task 3.3): no transport surfaces a relay-owned type.
 
 ## Module Boundaries After Refactor
 

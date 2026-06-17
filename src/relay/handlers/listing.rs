@@ -13,13 +13,13 @@ use super::super::lifecycle::{reconcile_loaded_bundle, shutdown_bundle_runtime};
 use super::super::routing::{
     Addressing, Capability, OperationProfile, requester_home_namespace, resolve_list_route,
 };
-use super::super::tmux::resolve_active_pane_target;
 use super::super::{
     BundleTransitionEntry, ListedBundle, ListedBundleStartupHealth, ListedBundleState,
     ListedSession, RelayError, RelayResponse, SCHEMA_VERSION, canonical_session_id,
     load_startup_failures, relay_error,
 };
 use super::routed::run_target_operation;
+use crate::tmux::pane::resolve_active_pane_target;
 
 pub(super) fn handle_bundle_up(
     bundle: &BundleConfiguration,

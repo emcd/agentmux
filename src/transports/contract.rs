@@ -49,16 +49,18 @@ use serde_json::Value;
 
 use crate::acp::{AcpSnapshotEntry, AcpTransport};
 use crate::configuration::BundleMember;
+use crate::tmux::TmuxTransport;
 // Re-export the configuration prompt-readiness template into the transport
 // contract namespace; tmux quiescence consumes it and Slice 3 wires it through
 // the delivery context. It is defined once in `configuration`; re-exporting
 // (rather than redefining) keeps the two in lockstep.
 pub use crate::configuration::PromptReadinessTemplate;
-// Reused delivery/look wire vocabulary. These types currently live in the relay
-// contract; the transport layer reuses them rather than duplicating the serde
-// shapes. Relocating their canonical home into `transports` (so transports never
-// depend on relay) is a relay-contract move deferred beyond this contract slice.
-use crate::relay::{AcpLookFreshness, AcpLookSnapshotSource, DeliveryPayloadMode, SendOutcome};
+// Delivery/look wire vocabulary. Canonical home is the sibling `vocabulary`
+// module (below `crate::relay` in dependency order), so the transport contract
+// never depends on relay. The relay re-exports these from its own contract.
+use crate::transports::vocabulary::{
+    AcpLookFreshness, AcpLookSnapshotSource, DeliveryPayloadMode, SendOutcome,
+};
 
 /// Synchronous delivery contract implemented by each concrete transport.
 ///
@@ -278,49 +280,9 @@ impl TransportImpl {
     }
 }
 
-/// Tmux pane delivery transport. Placeholder for Slice 1; the implementation
-/// moves here from `relay/tmux.rs` plus the quiescence loop in Slice 3.
-#[derive(Debug, Default)]
-pub struct TmuxTransport;
-
-impl Transport for TmuxTransport {
-    fn startup(&mut self, _context: StartupContext) -> Result<TransportStatus, TransportError> {
-        todo!("TmuxTransport::startup — Slice 3")
-    }
-
-    fn deliver(
-        &mut self,
-        _envelopes: Vec<DeliveryEnvelope>,
-        _context: &DeliveryContext,
-    ) -> DeliveryResult {
-        todo!("TmuxTransport::deliver — Slice 3")
-    }
-
-    fn is_ready(&self) -> bool {
-        todo!("TmuxTransport::is_ready — Slice 3")
-    }
-
-    fn raw_write(
-        &mut self,
-        _text: &str,
-        _append_enter: bool,
-        _context: &DeliveryContext,
-    ) -> RawWriteResult {
-        todo!("TmuxTransport::raw_write — Slice 3")
-    }
-
-    fn shutdown(&mut self) {
-        todo!("TmuxTransport::shutdown — Slice 3")
-    }
-
-    fn accept_capacity(&self) -> usize {
-        todo!("TmuxTransport::accept_capacity — Slice 3")
-    }
-
-    fn give_output(&self) -> Option<Arc<dyn OutputView>> {
-        todo!("TmuxTransport::give_output — Slice 3")
-    }
-}
+// The concrete `TmuxTransport` lives in `crate::tmux::transport` (Slice 3),
+// mirroring `AcpTransport` in `crate::acp`. `TransportImpl::Tmux` delegates to
+// it; the relay re-exports it via `transports::mod`.
 
 /// Relay-provided, synchronous resolver for operator choices (tool-call
 /// permissions today; any operator decision later).

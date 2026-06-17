@@ -23,7 +23,6 @@ mod lifecycle;
 mod routing;
 mod startup_state;
 mod stream;
-mod tmux;
 mod watcher;
 
 use self::authorization::load_authorization_context;

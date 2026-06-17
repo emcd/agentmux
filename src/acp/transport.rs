@@ -40,8 +40,9 @@ use crate::acp::{
     PromptDispatchOutcome,
 };
 use crate::configuration::{AcpChannel, AcpTargetConfiguration, BundleMember, TargetConfiguration};
-use crate::relay::{AcpWorkerReadinessState, SendOutcome};
+use crate::relay::AcpWorkerReadinessState;
 use crate::runtime::signals::shutdown_requested;
+use crate::transports::SendOutcome;
 use crate::transports::{
     ChoiceMade, DeliveryContext, DeliveryEnvelope, DeliveryResult, LookMode, LookSnapshotPayload,
     OutputView, RawWriteResult, SingleDeliveryOutcome, StartupContext, Transport, TransportError,
@@ -370,7 +371,7 @@ impl Transport for AcpTransport {
         // for contract completeness and direct raww callers.
         let envelope = DeliveryEnvelope {
             message_id: String::new(),
-            payload_mode: crate::relay::DeliveryPayloadMode::RawInput,
+            payload_mode: crate::transports::DeliveryPayloadMode::RawInput,
             rendered: text.to_string(),
             append_enter: _append_enter,
         };

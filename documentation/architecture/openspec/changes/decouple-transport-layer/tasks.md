@@ -107,23 +107,52 @@ simpler (a handle re-fetch, not a channel re-wire).
 
 ## 3. Slice 3 — Implement Transport for Tmux; move Tmux code
 
-- [ ] 3.1 Create `src/tmux/mod.rs`; register `mod tmux;` in `src/lib.rs`
-- [ ] 3.2 Move `relay/tmux.rs` → `src/tmux/pane.rs` (pane ops + command
-      plumbing)
-- [ ] 3.3 Move Tmux lifecycle primitives from `relay/lifecycle.rs` →
+- [x] 3.0 (added mid-Slice-3, human-directed) Relocate the shared delivery/look
+      vocabulary (`SendOutcome`, `DeliveryPayloadMode`, `AcpLookFreshness`,
+      `AcpLookSnapshotSource`) into `src/transports/vocabulary.rs` as its
+      canonical home; relay re-exports from `relay/contract.rs` so
+      `crate::relay::{...}` keeps resolving. Removes the transport->relay
+      back-edges in `transports/contract.rs` (now zero) and `acp/transport.rs`
+      (down to only `AcpWorkerReadinessState`). This avoids adding a NEW
+      `RelayError` back-edge for the tmux lifecycle primitives — they use a
+      transport-local error mapped to `RelayError` at the relay boundary instead
+      (see 3.3)
+- [x] 3.1 Create `src/tmux/mod.rs`; register `mod tmux;` in `src/lib.rs`
+- [x] 3.2 Move `relay/tmux.rs` → `src/tmux/pane.rs` (pane ops + command
+      plumbing). `pub(super)` widened to `pub(crate)`; dead `inject_prompt`
+      wrapper dropped (callers use `inject_literal_text` directly)
+- [x] 3.3 Move Tmux lifecycle primitives from `relay/lifecycle.rs` →
       `src/tmux/lifecycle.rs` (session_exists, create_member_once,
       create_member_with_retry, prune_owned_session, list_owned_sessions,
       cleanup_tmux_server_when_unowned, list_all_sessions,
-      startup_tmux_member, constants); relay orchestration functions stay
-- [ ] 3.4 Move core quiescence loop from `relay/delivery/quiescence.rs` →
-      `src/tmux/transport.rs`; leave shared types (DeliveryWaitError,
-      QuiescenceOptions) in relay
-- [ ] 3.5 Create `src/tmux/transport.rs`; implement `Transport` for
-      `TmuxTransport` wrapping pane/lifecycle primitives
-- [ ] 3.6 Add `TransportImpl::Tmux` variant; wire into worker dispatch
-- [ ] 3.7 Update consumer imports in `handlers.rs`, `dispatch/transport.rs`,
-      `lifecycle.rs` to use `crate::tmux::{pane::*, lifecycle::*}`
-- [ ] 3.8 Validate: `cargo test` passes; Tmux delivery works end-to-end
+      startup_tmux_member, constants); relay orchestration functions stay.
+      Primitives surface a transport-local `TmuxLifecycleError` instead of
+      `RelayError`; relay maps it via `From<TmuxLifecycleError> for RelayError`
+      in `relay/lifecycle.rs` (no new tmux->relay back-edge; see 3.0)
+- [x] 3.4 Move core quiescence loop from `relay/delivery/quiescence.rs` →
+      `src/tmux/transport.rs`. DEVIATION from the original wording: only
+      `QuiescenceOptions` stays in relay (it is relay delivery config the
+      send/raww handlers + ui_delivery populate). `DeliveryWaitError` moves WITH
+      the loop to tmux (it is the loop's return type — leaving it in relay would
+      force the tmux->relay back-edge this change is eliminating). The loop now
+      takes the quiescence parameters as primitives, so relay unpacks
+      `QuiescenceOptions` at the hoist boundary and tmux never imports it
+- [x] 3.5 Create `src/tmux/transport.rs`; implement `Transport` for
+      `TmuxTransport` wrapping pane/lifecycle primitives. Stateless: `startup`
+      returns Ready, `is_ready` true, `shutdown` no-op, `give_output` None
+      (tmux look stays a direct pane capture in the relay look handler),
+      `accept_capacity` `usize::MAX` (relay pre-combines, transport pastes all).
+      `served_successfully` stays relay-side (mirrors the ACP completion split)
+- [x] 3.6 `TransportImpl::Tmux` now delegates to the real `TmuxTransport` (no
+      more `todo!`). Tmux delivery routes through the `Transport` trait via the
+      relay-side wrappers in `dispatch/transport.rs`. Full worker genericization
+      (worker holds a `TransportImpl` instead of `Option<AcpTransport>`) remains
+      Slice 4 territory; the worker still owns ACP respawn/bootstrap directly
+- [x] 3.7 Updated consumer imports (`handlers/listing.rs`, `handlers/look.rs`,
+      `dispatch/transport.rs`, `relay/lifecycle.rs`, `delivery/quiescence.rs`) to
+      `crate::tmux::{pane, lifecycle, transport}`
+- [x] 3.8 Validate: `cargo test` passes (lib 18, integration 209, unit 273);
+      tmux delivery routes through `TmuxTransport` end-to-end
 
 ## 4. Slice 4 — Remove direct transport imports from relay
 
@@ -133,3 +162,11 @@ simpler (a handle re-fetch, not a channel re-wire).
       `acp_delivery`, `acp_state`, `permission_state`, `relay/tmux`,
       `relay/lifecycle` tmux primitives
 - [ ] 4.4 Validate: `cargo test` passes; full integration test suite green
+- [ ] 4.5 Decouple `AcpWorkerReadinessState` from `crate::relay` (the last
+      transport->relay back-edge after Slice 3's 3.0 vocabulary move). It is
+      shared between the ACP transport and relay's global worker-state registry
+      (`set_acp_worker_state`, read by TUI `subscribe_acp_worker_state` and
+      respawn/startup gating), so relocating it (to `src/transports` or
+      `src/acp`) requires repointing the registry and its external observers.
+      Filed mid-Slice-3 per human direction; larger blast radius than the 3.0
+      enum move, kept separate
