@@ -162,11 +162,36 @@ simpler (a handle re-fetch, not a channel re-wire).
       `acp_delivery`, `acp_state`, `permission_state`, `relay/tmux`,
       `relay/lifecycle` tmux primitives
 - [ ] 4.4 Validate: `cargo test` passes; full integration test suite green
-- [ ] 4.5 Decouple `AcpWorkerReadinessState` from `crate::relay` (the last
-      transport->relay back-edge after Slice 3's 3.0 vocabulary move). It is
-      shared between the ACP transport and relay's global worker-state registry
-      (`set_acp_worker_state`, read by TUI `subscribe_acp_worker_state` and
-      respawn/startup gating), so relocating it (to `src/transports` or
-      `src/acp`) requires repointing the registry and its external observers.
-      Filed mid-Slice-3 per human direction; larger blast radius than the 3.0
-      enum move, kept separate
+- [x] 4.5 Decouple `AcpWorkerReadinessState` from `crate::relay` (the last
+      transport->relay back-edge after Slice 3's 3.0 vocabulary move). Relocated
+      the enum from `relay/delivery/async_worker.rs` into
+      `src/transports/vocabulary.rs` (joining the `AcpLook*` cohort already
+      there) rather than `src/acp`, so relay/delivery imports it from the shared
+      lower layer rather than from a sibling transport. Relay re-exports it from
+      `relay/contract.rs` (surfaced at `crate::relay` via `contract::*`), so the
+      registry, the stringify in `relay/mod.rs`, and the external observer
+      (`subscribe_acp_worker_state`) keep resolving. Also repointed the residual
+      `AcpLookFreshness`/`AcpLookSnapshotSource` imports in `src/acp/state.rs`
+      from the relay re-export to `crate::transports` directly. Result:
+      `src/acp`, `src/tmux`, and `src/transports` now have **zero** `crate::relay`
+      import edges — the transports-no-relay-dependency end-state is reached.
+      Tasks 4.1–4.4 (worker genericization + quiescence-hoist barrier) remain
+      the design-gated Slice 4A and are flagged separately.
+- [ ] 4.6 (follow-on) Clean up the relay vocabulary re-exports now that the
+      canonical homes live in `crate::transports`. Audit every
+      `pub use crate::transports::vocabulary::{...}` re-export in
+      `relay/contract.rs` (and the `relay::` surface generally): keep only those
+      with genuine relay-side consumers (e.g. `SendOutcome` / `AcpLookFreshness`
+      embedded in `SendResult` / `LookSnapshotPayload`), and drop pure
+      backwards-compat shims such as `crate::relay::AcpWorkerReadinessState` — no
+      relay contract type embeds it, and its only out-of-crate consumer is the
+      test suite, already repointed at `crate::transports` in 4.5. Consumers that
+      touch transport vocabulary (tests, embedders) should target the generic
+      `crate::transports` API or a specific transport's API, never the relay
+      compat path. Also revisit `subscribe_acp_worker_state`'s name and shape: it
+      observes the relay's own worker-state registry, but the registry field is
+      ACP-specific (`acp_state: Option<AcpWorkerReadinessState>`), so the name is
+      accurate today. If Slice 4A generalizes worker readiness into a generic
+      `Transport` lifecycle concept, generalize the registry field, the enum, and
+      this observer together (a worker-agnostic readiness interface) rather than
+      leaving an ACP-named function over a now-generic registry.

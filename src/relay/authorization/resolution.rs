@@ -35,8 +35,8 @@ pub(in crate::relay) fn ui_session_display_name<'a>(
         .and_then(|session| session.display_name.as_deref())
 }
 
-pub(in crate::relay) fn choices_max_pending(authorization: &AuthorizationContext) -> usize {
-    authorization.choices_max_pending
+pub(in crate::relay) fn choices_pending_max(authorization: &AuthorizationContext) -> usize {
+    authorization.choices_pending_max
 }
 
 pub(super) fn resolve_session_policy_controls<'a>(

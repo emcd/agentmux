@@ -545,9 +545,9 @@ fn choices_pick_cancelled_emits_resolved_event_with_reason_code() {
 }
 
 #[test]
-fn choices_max_pending_out_of_range_is_rejected() {
+fn choices_pending_max_out_of_range_is_rejected() {
     let temporary = TempDir::new().expect("temporary directory");
-    let bundle_name = "party_choices_max_pending_invalid";
+    let bundle_name = "party_choices_pending_max_invalid";
     let configuration_root = write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_root, "default", bundle_name);
     write_policies_with_choose(&configuration_root, "home");
@@ -555,7 +555,7 @@ fn choices_max_pending_out_of_range_is_rejected() {
         configuration_root.join("relay.toml"),
         r#"
 [relay.choices]
-max-pending = 10000
+pending-max = 10000
 "#,
     )
     .expect("write relay configuration");
@@ -587,7 +587,7 @@ max-pending = 10000
     );
     assert_eq!(
         response["response"]["error"]["details"]["field"],
-        "relay.choices.max-pending"
+        "relay.choices.pending-max"
     );
     assert_eq!(response["response"]["error"]["details"]["value"], 10000);
     assert_eq!(response["response"]["error"]["details"]["maximum"], 4096);

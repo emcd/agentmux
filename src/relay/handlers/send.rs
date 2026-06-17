@@ -10,7 +10,7 @@ use crate::{
 };
 
 use super::super::authorization::{
-    AuthorizationContext, choices_max_pending, choose_authorized_ui_sessions, has_ui_session,
+    AuthorizationContext, choices_pending_max, choose_authorized_ui_sessions, has_ui_session,
     load_authorization_context,
 };
 use super::super::connection::BundleCatalog;
@@ -282,7 +282,7 @@ fn execute_send(
                 payload_mode: DeliveryPayloadMode::EnvelopeMessage,
                 append_enter: true,
                 choice_decider_sessions: group.choice_decider_sessions.clone(),
-                choices_max_pending: group.choices_max_pending,
+                choices_pending_max: group.choices_pending_max,
             };
             enqueue_async_delivery(task)?;
             emit_inscription(
@@ -345,7 +345,7 @@ struct DeliveryGroup {
     bundle: BundleConfiguration,
     runtime_directory: PathBuf,
     choice_decider_sessions: Vec<String>,
-    choices_max_pending: usize,
+    choices_pending_max: usize,
     targets: Vec<ResolvedTarget>,
 }
 
@@ -485,7 +485,7 @@ fn ensure_relay_wide_group(
                 },
                 runtime_directory: PathBuf::new(),
                 choice_decider_sessions: Vec::new(),
-                choices_max_pending: choices_max_pending(home_authorization),
+                choices_pending_max: choices_pending_max(home_authorization),
                 targets: Vec::new(),
             },
         );
@@ -528,7 +528,7 @@ fn ensure_bundle_group(
     let authorization = load_authorization_context(configuration_root, Some(&bundle))
         .map_err(BundleGroupError::Relay)?;
     let choice_decider_sessions = choose_authorized_ui_sessions(&authorization, &bundle);
-    let choices_max_pending = choices_max_pending(&authorization);
+    let choices_pending_max = choices_pending_max(&authorization);
     group_order.push(bundle_name.to_string());
     groups_by_bundle.insert(
         bundle_name.to_string(),
@@ -536,7 +536,7 @@ fn ensure_bundle_group(
             bundle,
             runtime_directory: paths.runtime_directory.clone(),
             choice_decider_sessions,
-            choices_max_pending,
+            choices_pending_max,
             targets: Vec::new(),
         },
     );

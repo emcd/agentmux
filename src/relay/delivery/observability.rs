@@ -19,7 +19,8 @@ use std::{
 
 use tokio::sync::{broadcast, watch};
 
-use super::async_worker::{AcpWorkerReadinessState, AsyncWorkerKey, build_worker_key};
+use super::async_worker::{AsyncWorkerKey, build_worker_key};
+use crate::transports::AcpWorkerReadinessState;
 
 const CHOICES_QUEUE_BROADCAST_CAPACITY: usize = 64;
 

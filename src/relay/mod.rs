@@ -32,7 +32,6 @@ pub use self::connection::{BundleCatalog, serve_connection};
 use self::constants::*;
 use self::context::*;
 pub use self::contract::*;
-pub use self::delivery::AcpWorkerReadinessState;
 pub use self::delivery::install_pending_choice_request_for_testing;
 pub use self::delivery::observability::{
     ChoicesQueueEvent, subscribe_acp_worker_state, subscribe_choices_queue_events,
@@ -199,11 +198,11 @@ pub fn read_acp_worker_state(
 ) -> Option<&'static str> {
     delivery::get_acp_worker_state(bundle_name, runtime_directory, target_session).map(|state| {
         match state {
-            delivery::AcpWorkerReadinessState::Initializing => "initializing",
-            delivery::AcpWorkerReadinessState::Available => "available",
-            delivery::AcpWorkerReadinessState::Busy => "busy",
-            delivery::AcpWorkerReadinessState::Recovering => "recovering",
-            delivery::AcpWorkerReadinessState::Unavailable => "unavailable",
+            AcpWorkerReadinessState::Initializing => "initializing",
+            AcpWorkerReadinessState::Available => "available",
+            AcpWorkerReadinessState::Busy => "busy",
+            AcpWorkerReadinessState::Recovering => "recovering",
+            AcpWorkerReadinessState::Unavailable => "unavailable",
         }
     })
 }

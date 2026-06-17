@@ -14,7 +14,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, error::SendError};
 
 use crate::configuration::TargetConfiguration;
 use crate::runtime::{inscriptions::emit_inscription, signals::shutdown_requested};
-use crate::transports::OutputView;
+use crate::transports::{AcpWorkerReadinessState, OutputView};
 
 use super::super::stream::{RelayStreamEvent, send_event_to_registered_ui};
 use super::super::{AsyncDeliveryTask, RelayError, SendOutcome, SendResult, canonical_session_id};
@@ -32,21 +32,6 @@ pub(super) struct AsyncWorkerKey {
     pub runtime_directory: PathBuf,
     pub bundle_name: String,
     pub target_session: String,
-}
-
-/// Readiness state for a persistent ACP worker.
-///
-/// Observers can subscribe to per-worker transitions via
-/// [`crate::relay::subscribe_acp_worker_state`]. The state is shared between
-/// the in-process registry (mutated by per-target delivery workers) and
-/// external observers (tests, TUI clients, embedders).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AcpWorkerReadinessState {
-    Initializing,
-    Available,
-    Busy,
-    Recovering,
-    Unavailable,
 }
 
 #[derive(Default)]

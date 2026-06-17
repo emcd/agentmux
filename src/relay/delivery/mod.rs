@@ -5,7 +5,6 @@ pub(in crate::relay) mod observability;
 mod quiescence;
 mod ui_delivery;
 
-pub use self::async_worker::AcpWorkerReadinessState;
 pub(in crate::relay) use self::async_worker::{
     acp_session_ready_for_startup, get_acp_worker_output_view, get_acp_worker_state,
 };

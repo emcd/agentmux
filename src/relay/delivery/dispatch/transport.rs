@@ -155,7 +155,7 @@ fn deliver_acp_combined(
         runtime_directory: head.runtime_directory.clone(),
         target_member: target_member.clone(),
         pre_resolved_target: None,
-        choices_pending_max: head.choices_max_pending,
+        choices_pending_max: head.choices_pending_max,
         choice_decider_sessions: head.choice_decider_sessions.clone(),
     };
     let result = transport.deliver(vec![envelope], &context);
@@ -309,7 +309,7 @@ fn tmux_delivery_context(
         runtime_directory: head.runtime_directory.clone(),
         target_member: target_member.clone(),
         pre_resolved_target,
-        choices_pending_max: head.choices_max_pending,
+        choices_pending_max: head.choices_pending_max,
         choice_decider_sessions: head.choice_decider_sessions.clone(),
     }
 }
