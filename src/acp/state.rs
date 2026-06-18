@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     acp::{ReplayEntry, replay_entries_to_snapshot_entries},
     runtime::inscriptions::emit_inscription,
-    transports::{AcpLookFreshness, AcpLookSnapshotSource, AcpWorkerReadinessState},
+    transports::{AcpWorkerReadinessState, LookFreshness, LookSnapshotSource},
 };
 
 const ACP_SESSION_STATE_SCHEMA_VERSION: u32 = 2;
@@ -29,11 +29,11 @@ struct PersistedAcpSessionState {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AcpLookSnapshot {
-    pub snapshot_entries: Vec<crate::acp::AcpSnapshotEntry>,
+    pub snapshot_entries: Vec<crate::transports::StructuredEntry>,
     pub entries_total: usize,
     pub returned_entries_count: usize,
-    pub freshness: AcpLookFreshness,
-    pub snapshot_source: AcpLookSnapshotSource,
+    pub freshness: LookFreshness,
+    pub snapshot_source: LookSnapshotSource,
     pub stale_reason_code: Option<String>,
     pub snapshot_age_ms: Option<u64>,
 }
@@ -107,9 +107,9 @@ pub(crate) fn derive_acp_look_snapshot(
     // still walked a live buffer.
     let has_buffer = entries_total > 0;
     let snapshot_source = if has_buffer {
-        AcpLookSnapshotSource::LiveBuffer
+        LookSnapshotSource::LiveBuffer
     } else {
-        AcpLookSnapshotSource::None
+        LookSnapshotSource::None
     };
 
     if matches!(
@@ -120,7 +120,7 @@ pub(crate) fn derive_acp_look_snapshot(
             snapshot_entries,
             entries_total,
             returned_entries_count,
-            freshness: AcpLookFreshness::Stale,
+            freshness: LookFreshness::Stale,
             snapshot_source,
             stale_reason_code: Some(ACP_STALE_REASON_WORKER_UNAVAILABLE.to_string()),
             snapshot_age_ms: None,
@@ -132,7 +132,7 @@ pub(crate) fn derive_acp_look_snapshot(
             snapshot_entries,
             entries_total,
             returned_entries_count,
-            freshness: AcpLookFreshness::Stale,
+            freshness: LookFreshness::Stale,
             snapshot_source,
             stale_reason_code: Some(ACP_STALE_REASON_WORKER_RECOVERING.to_string()),
             snapshot_age_ms: None,
@@ -149,7 +149,7 @@ pub(crate) fn derive_acp_look_snapshot(
             snapshot_entries,
             entries_total,
             returned_entries_count,
-            freshness: AcpLookFreshness::Stale,
+            freshness: LookFreshness::Stale,
             snapshot_source,
             stale_reason_code: Some(stale_reason.to_string()),
             snapshot_age_ms: None,
@@ -169,9 +169,9 @@ pub(crate) fn derive_acp_look_snapshot(
         }
     };
     let freshness = if stale_reason_code.is_some() {
-        AcpLookFreshness::Stale
+        LookFreshness::Stale
     } else {
-        AcpLookFreshness::Fresh
+        LookFreshness::Fresh
     };
     AcpLookSnapshot {
         snapshot_entries,

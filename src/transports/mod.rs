@@ -11,11 +11,11 @@ pub use crate::acp::{AcpDriverServices, AcpTransport, AcpWorkerDriver};
 pub use crate::tmux::TmuxTransport;
 pub use contract::{
     ChoiceMade, ChoiceToMake, Chooser, DeliveryContext, DeliveryEnvelope, DeliveryPreparation,
-    DeliveryResult, DeliveryWaitError, LookMode, LookSnapshotPayload, OutputView,
-    PromptReadinessTemplate, RawWriteResult, SingleDeliveryOutcome, StartupContext, ThingToChoose,
-    Transport, TransportError, TransportImpl, TransportReadiness, TransportStatus,
+    DeliveryResult, DeliveryWaitError, LookMode, OutputView, PromptReadinessTemplate,
+    RawWriteResult, SingleDeliveryOutcome, StartupContext, ThingToChoose, Transport,
+    TransportError, TransportImpl, TransportReadiness, TransportStatus,
 };
 pub use vocabulary::{
-    AcpLookFreshness, AcpLookSnapshotSource, AcpWorkerReadinessState, DeliveryPayloadMode,
-    SendOutcome,
+    AcpWorkerReadinessState, DeliveryPayloadMode, LookFreshness, LookSnapshotPayload,
+    LookSnapshotSource, SendOutcome, StructuredEntry, ToolCallStatus,
 };

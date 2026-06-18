@@ -71,7 +71,7 @@ pub(super) fn run_agentmux_look(arguments: &[String]) -> Result<(), RuntimeError
                     payload.insert("snapshot_format".to_string(), json!("lines"));
                     payload.insert("snapshot_lines".to_string(), json!(snapshot_lines));
                 }
-                LookSnapshotPayload::AcpEntriesV1 {
+                LookSnapshotPayload::StructuredEntriesV1 {
                     snapshot_entries,
                     entries_total,
                     returned_entries_count,
@@ -80,7 +80,10 @@ pub(super) fn run_agentmux_look(arguments: &[String]) -> Result<(), RuntimeError
                     stale_reason_code,
                     snapshot_age_ms,
                 } => {
-                    payload.insert("snapshot_format".to_string(), json!("acp_entries_v1"));
+                    payload.insert(
+                        "snapshot_format".to_string(),
+                        json!("structured_entries_v1"),
+                    );
                     payload.insert("snapshot_entries".to_string(), json!(snapshot_entries));
                     payload.insert("entries_total".to_string(), json!(entries_total));
                     payload.insert(

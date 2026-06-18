@@ -4,11 +4,11 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use agentmux::acp::AcpSnapshotEntry;
 use agentmux::relay::{LookSnapshotPayload, RelayError, RelayResponse};
 use agentmux::runtime::paths::{
     BundleRuntimePaths, RelayRuntimePaths, ensure_bundle_runtime_directory,
 };
+use agentmux::transports::StructuredEntry;
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -121,12 +121,12 @@ fn look_preserves_additive_acp_freshness_fields_in_machine_output() {
             captured_at: "2026-03-08T00:00:00Z".to_string(),
             authenticated_identity: None,
             on_behalf_of: None,
-            snapshot: LookSnapshotPayload::AcpEntriesV1 {
+            snapshot: LookSnapshotPayload::StructuredEntriesV1 {
                 snapshot_entries: vec![],
                 entries_total: 0,
                 returned_entries_count: 0,
-                freshness: agentmux::relay::AcpLookFreshness::Stale,
-                snapshot_source: agentmux::relay::AcpLookSnapshotSource::None,
+                freshness: agentmux::relay::LookFreshness::Stale,
+                snapshot_source: agentmux::relay::LookSnapshotSource::None,
                 stale_reason_code: Some("acp_snapshot_prime_timeout".to_string()),
                 snapshot_age_ms: None,
             },
@@ -152,7 +152,7 @@ fn look_preserves_additive_acp_freshness_fields_in_machine_output() {
 
     assert!(output.status.success(), "command should succeed");
     let payload: Value = serde_json::from_slice(&output.stdout).expect("decode look json payload");
-    assert_eq!(payload["snapshot_format"], "acp_entries_v1");
+    assert_eq!(payload["snapshot_format"], "structured_entries_v1");
     assert_eq!(payload["snapshot_entries"], serde_json::json!([]));
     assert_eq!(payload["freshness"], "stale");
     assert_eq!(payload["snapshot_source"], "none");
@@ -183,22 +183,22 @@ fn look_preserves_structured_acp_entries_in_machine_output() {
     let workspace_root = temporary.path().join("workspace");
     fs::create_dir_all(&workspace_root).expect("create workspace");
     let snapshot_entries = vec![
-        AcpSnapshotEntry::User {
+        StructuredEntry::User {
             lines: vec!["hello".to_string()],
         },
-        AcpSnapshotEntry::Agent {
+        StructuredEntry::Agent {
             lines: vec!["world".to_string()],
         },
-        AcpSnapshotEntry::Cognition {
+        StructuredEntry::Cognition {
             lines: vec!["thinking".to_string()],
         },
-        AcpSnapshotEntry::Invocation {
+        StructuredEntry::Invocation {
             call_id: "call_1".to_string(),
-            status: agentmux::acp::ToolCallStatus::Completed,
+            status: agentmux::transports::ToolCallStatus::Completed,
             invocation: serde_json::json!({"tool": "search", "args": {"q": "agentmux"}}),
             result: Some(serde_json::json!({"ok": true})),
         },
-        AcpSnapshotEntry::Update {
+        StructuredEntry::Update {
             update_kind: "custom_update".to_string(),
             lines: vec!["line-a".to_string(), "line-b".to_string()],
         },
@@ -212,12 +212,12 @@ fn look_preserves_structured_acp_entries_in_machine_output() {
             captured_at: "2026-03-08T00:00:00Z".to_string(),
             authenticated_identity: None,
             on_behalf_of: None,
-            snapshot: LookSnapshotPayload::AcpEntriesV1 {
+            snapshot: LookSnapshotPayload::StructuredEntriesV1 {
                 snapshot_entries: snapshot_entries.clone(),
                 entries_total: snapshot_entries.len(),
                 returned_entries_count: snapshot_entries.len(),
-                freshness: agentmux::relay::AcpLookFreshness::Fresh,
-                snapshot_source: agentmux::relay::AcpLookSnapshotSource::LiveBuffer,
+                freshness: agentmux::relay::LookFreshness::Fresh,
+                snapshot_source: agentmux::relay::LookSnapshotSource::LiveBuffer,
                 stale_reason_code: None,
                 snapshot_age_ms: Some(17),
             },
@@ -243,7 +243,7 @@ fn look_preserves_structured_acp_entries_in_machine_output() {
 
     assert!(output.status.success(), "command should succeed");
     let payload: Value = serde_json::from_slice(&output.stdout).expect("decode look json payload");
-    assert_eq!(payload["snapshot_format"], "acp_entries_v1");
+    assert_eq!(payload["snapshot_format"], "structured_entries_v1");
     assert_eq!(payload["freshness"], "fresh");
     assert_eq!(payload["snapshot_source"], "live_buffer");
     assert_eq!(payload["snapshot_age_ms"], serde_json::json!(17));

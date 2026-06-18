@@ -21,7 +21,7 @@
 //! reads, so tmux never depends on relay.
 
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
     thread,
     time::{Duration, Instant},
@@ -35,12 +35,15 @@ use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 use crate::runtime::signals::shutdown_requested;
 use crate::transports::{
     DeliveryContext, DeliveryEnvelope, DeliveryPreparation, DeliveryResult, DeliveryWaitError,
-    OutputView, RawWriteResult, SendOutcome, SingleDeliveryOutcome, StartupContext, Transport,
-    TransportError, TransportReadiness, TransportStatus,
+    LookMode, LookSnapshotPayload, OutputView, RawWriteResult, SendOutcome, SingleDeliveryOutcome,
+    StartupContext, Transport, TransportError, TransportReadiness, TransportStatus,
 };
 
+/// Default tmux look window applied when the caller omits a window size.
+const LOOK_LINES_DEFAULT: usize = 120;
+
 use super::pane::{
-    capture_pane_snapshot, emit_delivery_diagnostic, inject_literal_text,
+    capture_pane_snapshot, capture_pane_tail_lines, emit_delivery_diagnostic, inject_literal_text,
     operator_interaction_active, resolve_active_pane_target, resolve_cursor_column,
     resolve_window_activity_marker, sanitize_diagnostic_text,
 };
@@ -198,11 +201,70 @@ impl Transport for TmuxTransport {
     }
 
     fn give_output(&self) -> Option<Arc<dyn OutputView>> {
-        // Tmux look is a direct synchronous pane capture in the relay look
-        // handler (`capture_pane_tail_lines`), not a published handle, so there
-        // is no concurrently-read output view to hand back. Adopting an
-        // `OutputView` for tmux is a later slice.
+        // Tmux output is not worker-owned: a look is a stateless socket capture
+        // (see `TmuxOutputView`), valid independent of worker lifecycle, so the
+        // relay accessor config-constructs the view rather than reading a
+        // published handle. A future stateful/streaming tmux worker would
+        // publish here instead.
         None
+    }
+}
+
+/// A config-constructed [`OutputView`] over a tmux session's active pane.
+///
+/// Unlike the ACP view, this holds no worker-owned state: it captures the tmux
+/// pane directly through the socket, so it is valid before any delivery has
+/// spawned a worker for the session. The relay's `get_output_view` accessor
+/// constructs it from the socket path and session id.
+pub struct TmuxOutputView {
+    socket_path: PathBuf,
+    session_id: String,
+}
+
+impl TmuxOutputView {
+    /// Builds a view over the active pane of `session_id` on `socket_path`.
+    #[must_use]
+    pub fn new(socket_path: PathBuf, session_id: String) -> Self {
+        Self {
+            socket_path,
+            session_id,
+        }
+    }
+}
+
+impl OutputView for TmuxOutputView {
+    fn look(&self, mode: LookMode) -> Result<LookSnapshotPayload, TransportError> {
+        // Tmux has no offset semantics; reject a non-zero offset as a validation
+        // error the relay surfaces, rather than silently ignoring it.
+        if mode.offset.unwrap_or(0) > 0 {
+            return Err(TransportError {
+                code: "validation_offset_unsupported".to_string(),
+                reason: "offset is only supported for ACP look targets".to_string(),
+                details: Some(json!({ "offset": mode.offset })),
+            });
+        }
+        let requested_lines = mode
+            .lines
+            .map(|lines| lines as usize)
+            .unwrap_or(LOOK_LINES_DEFAULT);
+        let pane_target =
+            resolve_active_pane_target(self.socket_path.as_path(), self.session_id.as_str())
+                .map_err(|reason| TransportError {
+                    code: "internal_unexpected_failure".to_string(),
+                    reason: "failed to resolve active pane for look target".to_string(),
+                    details: Some(json!({ "cause": reason })),
+                })?;
+        let snapshot_lines = capture_pane_tail_lines(
+            self.socket_path.as_path(),
+            pane_target.as_str(),
+            requested_lines,
+        )
+        .map_err(|reason| TransportError {
+            code: "internal_unexpected_failure".to_string(),
+            reason: "failed to capture look snapshot".to_string(),
+            details: Some(json!({ "cause": reason })),
+        })?;
+        Ok(LookSnapshotPayload::Lines { snapshot_lines })
     }
 }
 

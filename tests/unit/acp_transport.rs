@@ -11,7 +11,7 @@
 use std::time::{Duration, Instant};
 
 use agentmux::acp::AcpTransport;
-use agentmux::relay::{AcpLookFreshness, AcpLookSnapshotSource};
+use agentmux::relay::{LookFreshness, LookSnapshotSource};
 use agentmux::transports::{LookMode, LookSnapshotPayload, Transport};
 
 #[test]
@@ -39,7 +39,7 @@ fn acp_output_view_prime_waits_then_times_out_while_initializing() {
         "look should prime-wait while Initializing; waited {elapsed:?}",
     );
 
-    let LookSnapshotPayload::AcpEntries {
+    let LookSnapshotPayload::StructuredEntries {
         snapshot_entries,
         entries_total,
         freshness,
@@ -52,8 +52,8 @@ fn acp_output_view_prime_waits_then_times_out_while_initializing() {
     };
     assert!(snapshot_entries.is_empty());
     assert_eq!(entries_total, 0);
-    assert_eq!(freshness, AcpLookFreshness::Stale);
-    assert_eq!(snapshot_source, AcpLookSnapshotSource::None);
+    assert_eq!(freshness, LookFreshness::Stale);
+    assert_eq!(snapshot_source, LookSnapshotSource::None);
     assert_eq!(
         stale_reason_code.as_deref(),
         Some("acp_snapshot_prime_timeout"),
@@ -78,7 +78,7 @@ fn acp_output_view_zero_prime_timeout_returns_immediately() {
         "a zero prime_timeout must not wait",
     );
 
-    let LookSnapshotPayload::AcpEntries {
+    let LookSnapshotPayload::StructuredEntries {
         freshness,
         stale_reason_code,
         ..
@@ -86,7 +86,7 @@ fn acp_output_view_zero_prime_timeout_returns_immediately() {
     else {
         panic!("expected ACP entries payload");
     };
-    assert_eq!(freshness, AcpLookFreshness::Stale);
+    assert_eq!(freshness, LookFreshness::Stale);
     assert_eq!(
         stale_reason_code.as_deref(),
         Some("acp_snapshot_prime_timeout"),

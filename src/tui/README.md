@@ -60,7 +60,7 @@ picker (`F5`) are overlays available in both modes.
     - `communication.rs` — `render_communication_mode`, compose + chat
       history panes, peer resolution
     - `interaction.rs` — `render_interaction_mode`, target header, raww
-      pane, look snapshot, ACP entries, look choice lines
+      pane, look snapshot, structured entries, look choice lines
     - `overlays/`
       - `mod.rs` — pure hub: submodule decls
       - `recipient_picker.rs` — recipient picker overlay, hint strip,

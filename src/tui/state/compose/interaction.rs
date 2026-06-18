@@ -267,16 +267,16 @@ fn overlay_snapshot_from_payload(
 ) -> (
     LookSnapshotFormat,
     Vec<String>,
-    Vec<crate::acp::AcpSnapshotEntry>,
+    Vec<crate::transports::StructuredEntry>,
 ) {
     match snapshot {
         LookSnapshotPayload::Lines { snapshot_lines } => {
             (LookSnapshotFormat::Lines, snapshot_lines, Vec::new())
         }
-        LookSnapshotPayload::AcpEntriesV1 {
+        LookSnapshotPayload::StructuredEntriesV1 {
             snapshot_entries, ..
         } => (
-            LookSnapshotFormat::AcpEntriesV1,
+            LookSnapshotFormat::StructuredEntriesV1,
             Vec::new(),
             snapshot_entries,
         ),

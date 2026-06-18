@@ -7,7 +7,7 @@ use ratatui::{
 };
 use serde_json::Value;
 
-use crate::acp::AcpSnapshotEntry;
+use crate::transports::StructuredEntry;
 
 use super::super::state::AppState;
 use super::frame::INTERACTION_RAWW_PANE_HEIGHT;
@@ -92,7 +92,7 @@ fn render_look_snapshot(frame: &mut Frame, area: Rect, state: &AppState) {
     };
     let content_width = area.width.saturating_sub(2) as usize;
     let all_lines = match state.look_snapshot_format {
-        Some(super::super::state::LookSnapshotFormat::AcpEntriesV1) => {
+        Some(super::super::state::LookSnapshotFormat::StructuredEntriesV1) => {
             let rendered =
                 render_acp_snapshot_entries(state.look_snapshot_entries.as_slice(), content_width);
             if rendered.is_empty() {
@@ -148,20 +148,20 @@ fn render_look_choice_section(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_widget(paragraph, area);
 }
 
-fn render_acp_snapshot_entries(entries: &[AcpSnapshotEntry], width: usize) -> Vec<Line<'static>> {
+fn render_acp_snapshot_entries(entries: &[StructuredEntry], width: usize) -> Vec<Line<'static>> {
     let mut rendered = Vec::<Line<'static>>::new();
     for entry in entries {
         match entry {
-            AcpSnapshotEntry::User { lines } => {
+            StructuredEntry::User { lines } => {
                 push_labeled_lines(&mut rendered, "user", Color::Green, lines, width);
             }
-            AcpSnapshotEntry::Agent { lines } => {
+            StructuredEntry::Agent { lines } => {
                 push_labeled_lines(&mut rendered, "agent", Color::Cyan, lines, width);
             }
-            AcpSnapshotEntry::Cognition { lines } => {
+            StructuredEntry::Cognition { lines } => {
                 push_labeled_lines(&mut rendered, "cognition", Color::Yellow, lines, width);
             }
-            AcpSnapshotEntry::Invocation {
+            StructuredEntry::Invocation {
                 call_id,
                 status,
                 invocation,
@@ -174,7 +174,7 @@ fn render_acp_snapshot_entries(entries: &[AcpSnapshotEntry], width: usize) -> Ve
                     push_labeled_json(&mut rendered, "result", Color::Blue, result, width);
                 }
             }
-            AcpSnapshotEntry::Update { update_kind, lines } => {
+            StructuredEntry::Update { update_kind, lines } => {
                 let mut update_lines = vec![format!("kind: {update_kind}")];
                 update_lines.extend(lines.iter().cloned());
                 push_labeled_lines(&mut rendered, "update", Color::White, &update_lines, width);

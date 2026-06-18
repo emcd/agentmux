@@ -74,8 +74,11 @@ const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delive
 const ACP_PROMPT_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// Poll cadence for the look prime-wait.
 const ACP_LOOK_PRIME_POLL_INTERVAL: Duration = Duration::from_millis(25);
-/// Fallback tail-window size when the relay does not resolve a concrete value.
-const ACP_LOOK_ENTRIES_FALLBACK: usize = 64;
+/// Default ACP look window applied when the caller omits a window size. ACP
+/// replay entries are far larger than tmux lines (each can be a full message or
+/// tool invocation), so a small default keeps the response under the MCP payload
+/// limit while still showing recent context.
+const ACP_LOOK_ENTRIES_DEFAULT: usize = 50;
 
 /// The persistent ACP runtime owned by an [`AcpTransport`]: the stdio client and
 /// the resolved session id used for every prompt.
@@ -459,7 +462,7 @@ impl OutputView for AcpOutputView {
         let requested_entries = mode
             .lines
             .map(|lines| lines as usize)
-            .unwrap_or(ACP_LOOK_ENTRIES_FALLBACK);
+            .unwrap_or(ACP_LOOK_ENTRIES_DEFAULT);
         let offset = mode.offset.map(|offset| offset as usize).unwrap_or(0);
         let snapshot = derive_acp_look_snapshot(
             Some(worker_state),
@@ -473,7 +476,7 @@ impl OutputView for AcpOutputView {
 }
 
 fn acp_snapshot_to_payload(snapshot: AcpLookSnapshot) -> LookSnapshotPayload {
-    LookSnapshotPayload::AcpEntries {
+    LookSnapshotPayload::StructuredEntries {
         snapshot_entries: snapshot.snapshot_entries,
         entries_total: snapshot.entries_total,
         returned_entries_count: snapshot.returned_entries_count,

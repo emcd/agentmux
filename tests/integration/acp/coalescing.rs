@@ -1,4 +1,5 @@
-use agentmux::acp::{ReplayEntry, ToolCallStatus, parse_replay_entries_for_test};
+use agentmux::acp::{ReplayEntry, parse_replay_entries_for_test};
+use agentmux::transports::ToolCallStatus;
 use std::collections::HashMap;
 
 #[test]
