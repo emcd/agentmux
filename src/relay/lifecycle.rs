@@ -12,7 +12,7 @@ use super::{
     BundleStartupReport, ListedSessionTransport, ReconciliationReport, RelayError, ShutdownReport,
     StartupFailureRecord, map_config, relay_error,
 };
-use crate::relay::authorization::load_authorization_context;
+use crate::relay::authorization::{choices_pending_max, load_authorization_context};
 use crate::relay::delivery::initialize_acp_target_for_startup;
 use crate::tmux::lifecycle::{
     TmuxLifecycleError, cleanup_tmux_server_when_unowned, create_member_with_retry,
@@ -64,9 +64,14 @@ pub(super) fn startup_bundle(
     runtime_directory: &Path,
 ) -> Result<BundleStartupReport, RelayError> {
     let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
-    let _authorization = load_authorization_context(configuration_root, Some(&bundle))?;
+    let authorization = load_authorization_context(configuration_root, Some(&bundle))?;
     let tmux_socket = tmux_socket_path_for_runtime_directory(runtime_directory);
-    startup_loaded_bundle(&bundle, runtime_directory, tmux_socket.as_path())
+    startup_loaded_bundle(
+        &bundle,
+        runtime_directory,
+        tmux_socket.as_path(),
+        choices_pending_max(&authorization),
+    )
 }
 
 pub(super) fn reconcile_loaded_bundle(
@@ -145,6 +150,7 @@ fn startup_loaded_bundle(
     bundle: &BundleConfiguration,
     runtime_directory: &Path,
     tmux_socket: &Path,
+    choices_pending_max: usize,
 ) -> Result<BundleStartupReport, RelayError> {
     let configured_tmux_sessions = bundle
         .members
@@ -189,6 +195,7 @@ fn startup_loaded_bundle(
                     bundle.bundle_name.as_str(),
                     runtime_directory,
                     &member,
+                    choices_pending_max,
                 ) {
                     Ok(()) => {
                         clear_session_startup_failures(runtime_directory, member.id.as_str())?;

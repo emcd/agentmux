@@ -10,8 +10,7 @@ use crate::{
 };
 
 use super::super::authorization::{
-    AuthorizationContext, choices_pending_max, choose_authorized_ui_sessions, has_ui_session,
-    load_authorization_context,
+    AuthorizationContext, choose_authorized_ui_sessions, has_ui_session, load_authorization_context,
 };
 use super::super::connection::BundleCatalog;
 use super::super::delivery::{QuiescenceOptions, enqueue_async_delivery, prompt_batch_settings};
@@ -282,7 +281,6 @@ fn execute_send(
                 payload_mode: DeliveryPayloadMode::EnvelopeMessage,
                 append_enter: true,
                 choice_decider_sessions: group.choice_decider_sessions.clone(),
-                choices_pending_max: group.choices_pending_max,
             };
             enqueue_async_delivery(task)?;
             emit_inscription(
@@ -345,7 +343,6 @@ struct DeliveryGroup {
     bundle: BundleConfiguration,
     runtime_directory: PathBuf,
     choice_decider_sessions: Vec<String>,
-    choices_pending_max: usize,
     targets: Vec<ResolvedTarget>,
 }
 
@@ -389,11 +386,7 @@ fn assemble_delivery_groups(
             // Relay-wide `@GLOBAL` target: existence is a registered UI session,
             // resolved from the sender's (operator) authorization context.
             if has_ui_session(home_authorization, session_id) {
-                let group_key = ensure_relay_wide_group(
-                    home_authorization,
-                    &mut group_order,
-                    &mut groups_by_bundle,
-                );
+                let group_key = ensure_relay_wide_group(&mut group_order, &mut groups_by_bundle);
                 push_target(
                     &mut groups_by_bundle,
                     group_key.as_str(),
@@ -463,10 +456,8 @@ fn assemble_delivery_groups(
 /// Returns the delivery-group key for a relay-wide (`@GLOBAL`) target, seeding
 /// the group when absent. Every sender's `@GLOBAL` targets land in the same
 /// synthetic `GLOBAL` group whose bundle/runtime are inert — UI delivery routes
-/// by the target's principal id through the registry. Only the sender's queue
-/// bound (from its home authorization) carries over.
+/// by the target's principal id through the registry.
 fn ensure_relay_wide_group(
-    home_authorization: &AuthorizationContext,
     group_order: &mut Vec<String>,
     groups_by_bundle: &mut HashMap<String, DeliveryGroup>,
 ) -> String {
@@ -485,7 +476,6 @@ fn ensure_relay_wide_group(
                 },
                 runtime_directory: PathBuf::new(),
                 choice_decider_sessions: Vec::new(),
-                choices_pending_max: choices_pending_max(home_authorization),
                 targets: Vec::new(),
             },
         );
@@ -528,7 +518,6 @@ fn ensure_bundle_group(
     let authorization = load_authorization_context(configuration_root, Some(&bundle))
         .map_err(BundleGroupError::Relay)?;
     let choice_decider_sessions = choose_authorized_ui_sessions(&authorization, &bundle);
-    let choices_pending_max = choices_pending_max(&authorization);
     group_order.push(bundle_name.to_string());
     groups_by_bundle.insert(
         bundle_name.to_string(),
@@ -536,7 +525,6 @@ fn ensure_bundle_group(
             bundle,
             runtime_directory: paths.runtime_directory.clone(),
             choice_decider_sessions,
-            choices_pending_max,
             targets: Vec::new(),
         },
     );

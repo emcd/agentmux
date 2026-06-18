@@ -37,6 +37,9 @@ const BATCH_DRAIN_MAX_DEFAULT: usize = 32;
 pub(super) struct AcpWorkerBootstrap {
     pub(super) target_member: BundleMember,
     pub(super) runtime_directory: std::path::PathBuf,
+    /// Per-bundle choice-queue bound, captured into the chooser closure at worker
+    /// construction so it no longer rides every delivery task and choice.
+    pub(super) choices_pending_max: usize,
 }
 
 /// Spawns the per-target async delivery worker as a tokio task.
@@ -405,6 +408,7 @@ fn build_acp_driver_services(
     let bundle_name = key.bundle_name.clone();
     let runtime_directory = bootstrap.runtime_directory.clone();
     let target_session = bootstrap.target_member.id.clone();
+    let choices_pending_max = bootstrap.choices_pending_max;
 
     AcpDriverServices {
         mirror_state: {
@@ -474,7 +478,7 @@ fn build_acp_driver_services(
                 }
             })
         },
-        chooser: build_acp_chooser(bundle_name, runtime_directory),
+        chooser: build_acp_chooser(bundle_name, runtime_directory, choices_pending_max),
     }
 }
 
@@ -577,7 +581,6 @@ mod coalesce_batch_tests {
             payload_mode,
             append_enter: true,
             choice_decider_sessions: Vec::new(),
-            choices_pending_max: 0,
         }
     }
 

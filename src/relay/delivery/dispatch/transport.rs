@@ -154,7 +154,6 @@ fn deliver_acp_combined(
         pre_resolved_target: None,
         quiet_window: head.quiescence.quiet_window,
         quiescence_timeout: head.quiescence.quiescence_timeout,
-        choices_pending_max: head.choices_pending_max,
         choice_decider_sessions: head.choice_decider_sessions.clone(),
     };
     let result = transport.deliver(vec![envelope], &context);
@@ -298,7 +297,6 @@ fn tmux_delivery_context(
         pre_resolved_target,
         quiet_window: head.quiescence.quiet_window,
         quiescence_timeout: head.quiescence.quiescence_timeout,
-        choices_pending_max: head.choices_pending_max,
         choice_decider_sessions: head.choice_decider_sessions.clone(),
     }
 }

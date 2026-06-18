@@ -30,6 +30,7 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
     bundle_name: &str,
     runtime_directory: &std::path::Path,
     target_member: &BundleMember,
+    choices_pending_max: usize,
 ) -> Result<(), (String, String, Option<serde_json::Value>)> {
     if !matches!(target_member.target, TargetConfiguration::Acp(_)) {
         return Ok(());
@@ -63,6 +64,7 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
         let bootstrap = AcpWorkerBootstrap {
             target_member: target_member.clone(),
             runtime_directory: runtime_directory.to_path_buf(),
+            choices_pending_max,
         };
         if super::super::async_worker::register_worker_if_absent(
             key.clone(),
