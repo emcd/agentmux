@@ -3,13 +3,17 @@ use serde_json::Value;
 
 use crate::{acp::AcpSnapshotEntry, configuration::SessionType};
 // Delivery/look vocabulary now lives canonically in `crate::transports`. Re-export
-// it here so `crate::relay::{SendOutcome, DeliveryPayloadMode, AcpLookFreshness,
-// AcpLookSnapshotSource, AcpWorkerReadinessState}` keeps resolving for relay, wire,
-// and external worker-state observers, and so the contract types below (SendResult,
-// LookSnapshotPayload) can reference them.
+// only the variants that relay contract wire types below embed, so external
+// deserializers of those payloads resolve them from `crate::relay`: `SendOutcome`
+// rides in `SendResult`; `AcpLookFreshness`/`AcpLookSnapshotSource` ride in
+// `LookSnapshotPayload`. `DeliveryPayloadMode` is not embedded in a wire type but is
+// re-exported as the convenience path for relay's own delivery dispatch, which
+// branches on it across the worker/handler surface. Relay-internal code that merely
+// consumes a transport-vocabulary type without embedding it (e.g. the
+// `read_acp_worker_state` stringify over `AcpWorkerReadinessState`) imports it from
+// `crate::transports` directly rather than through this re-export.
 pub use crate::transports::vocabulary::{
-    AcpLookFreshness, AcpLookSnapshotSource, AcpWorkerReadinessState, DeliveryPayloadMode,
-    SendOutcome,
+    AcpLookFreshness, AcpLookSnapshotSource, DeliveryPayloadMode, SendOutcome,
 };
 
 /// Declared session type for one listed bundle session.
