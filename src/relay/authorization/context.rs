@@ -62,7 +62,10 @@ impl PolicyControls {
             list: PolicyScope::Home,
             look: PolicyScope::Home,
             send: PolicyScope::Home,
-            raww: PolicyScope::Home,
+            // raww is raw keystroke-grade input injection; the in-code fallback
+            // (no `default` preset and no member `policy_id`) must close it by
+            // default too, matching choose/updown and the serde-omission default.
+            raww: PolicyScope::None,
             choose: PolicyScope::None,
             updown: PolicyScope::None,
             do_controls: HashMap::new(),

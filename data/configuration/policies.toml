@@ -11,6 +11,15 @@ find = 'self'
 list = 'home'
 look = 'home'
 send = 'home'
+# raww, choose, and updown carry built-in 'none' (closed) defaults, so they are
+# omitted here rather than shadowed: an omitted control resolves to its default,
+# not an override. They are listed below, commented, to document the optional
+# controls and their conservative default. raww in particular is raw
+# keystroke-grade input injection; leave it closed unless a bundle genuinely
+# needs peer raww, then uncomment with 'self', 'home', or 'all'.
+# raww = 'none'
+# choose = 'none'
+# updown = 'none'
 
 [[policies]]
 id = 'operator'
