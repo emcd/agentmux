@@ -167,6 +167,7 @@ id = "default"
 find = "self"
 list = "home"
 look = "self"
+raww = "home"
 send = "home"
 "#,
     )

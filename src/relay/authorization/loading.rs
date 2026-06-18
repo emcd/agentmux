@@ -81,7 +81,7 @@ struct RawPolicyControls {
 }
 
 fn default_raww_policy_scope() -> String {
-    "home".to_string()
+    "none".to_string()
 }
 
 fn default_choose_policy_scope() -> String {
