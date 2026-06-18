@@ -2133,6 +2133,13 @@ Connect/reconnect replay contract:
 - relay then replays pending `choices.requested` oldest→newest
 - replay is at-least-once; consumers dedupe by `choice_request_id`
 
+Naming note: the TOML key remains `pending-max` (decoded to `pending_max` in
+the deserialized struct). Relay code stores the queue bound as
+`choices_pending_max` on `AuthorizationContext` and `DeliveryContext` to
+disambiguate it from the per-correlation `pending_max` snapshot on
+`ChoiceToMake` and `PermissionContext` (which carry the same numeric value but
+describe a per-delivery snapshot, not the global queue bound).
+
 #### Scenario: Reject enqueue beyond queue bound
 
 - **WHEN** pending queue depth equals effective `pending_max`
@@ -2928,23 +2935,24 @@ derivable from its `SessionType` at check time:
 - `can_stream_output: bool` — the session's transport natively produces live
   output chunks (ACP and PTY stream output natively; Tmux requires periodic
   polling)
-- `gives_choices: bool` — the session's transport can surface choice requests
+- `can_give_choices: bool` — the session's transport can surface choice requests
   (the transport produces ACP-style option arrays for operator/UI resolution).
   Describes choice *production*, not resolution authority — any session with
   sufficient `choose` policy scope may resolve choices regardless of its own
-  `gives_choices` value.
+  `can_give_choices` value. (Renamed from `gives_choices` to align with the
+  `can_` prefix convention established by `add-transport-capability-flags`.)
 
 Capabilities SHALL be derived from the target's `SessionType` (from
 `BundleMember` configuration for bundle targets, or from `TuiSession::session_type`
 in `users.toml` for relay-wide targets):
 
-| Transport | `can_be_looked` | `can_be_written` | `can_stream_output` | `gives_choices` |
-|-----------|----------------|-----------------|--------------------|--------------  |
-| `Tmux`    | true           | true            | false              | false           |
-| `Acp`     | true           | true            | true               | true            |
-| `Pty`     | true           | true            | true               | false           |
-| `Ui`      | false          | false           | false              | false           |
-| `Pubsub`  | false          | false           | false              | false           |
+| Transport | `can_be_looked` | `can_be_written` | `can_stream_output` | `can_give_choices` |
+|-----------|----------------|-----------------|--------------------|--------------------|
+| `Tmux`    | true           | true            | false              | false              |
+| `Acp`     | true           | true            | true               | true               |
+| `Pty`     | true           | true            | true               | false              |
+| `Ui`      | false          | false           | false              | false              |
+| `Pubsub`  | false          | false           | false              | false              |
 
 `can_stream_output` is advertised on registration; streaming look semantics
 that consume it are deferred to a follow-on proposal.
@@ -2981,13 +2989,13 @@ targets (checked from `BundleMember` configuration) and relay-wide targets
   `can_be_written = true`
 - **THEN** relay proceeds to authorization policy evaluation
 
-#### Scenario: ACP session advertises gives_choices true
+#### Scenario: ACP session advertises can_give_choices true
 
 - **WHEN** an ACP-backed session registers with the relay
-- **THEN** its registered capabilities include `gives_choices = true`
+- **THEN** its registered capabilities include `can_give_choices = true`
 
-#### Scenario: Tmux session advertises gives_choices false
+#### Scenario: Tmux session advertises can_give_choices false
 
 - **WHEN** a Tmux-backed session registers with the relay
-- **THEN** its registered capabilities include `gives_choices = false`
+- **THEN** its registered capabilities include `can_give_choices = false`
 
