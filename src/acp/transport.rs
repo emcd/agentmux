@@ -291,7 +291,6 @@ impl Transport for AcpTransport {
         let correlation = ChoiceCorrelation {
             message_id: message_id.clone(),
             target_session: target_session.clone(),
-            pending_max: context.choices_pending_max,
             decider_sessions: context.choice_decider_sessions.clone(),
         };
         let on_permission =

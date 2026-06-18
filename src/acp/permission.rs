@@ -26,8 +26,6 @@ pub(crate) struct ChoiceCorrelation {
     pub message_id: String,
     /// The target session the choice belongs to.
     pub target_session: String,
-    /// Maximum number of choices that may be pending at once for this target.
-    pub pending_max: usize,
     /// Sessions authorized to decide the choice.
     pub decider_sessions: Vec<String>,
 }
@@ -82,7 +80,6 @@ fn build_choice_to_make(
         request_id: request.request_id,
         message_id: correlation.message_id.clone(),
         target_session: correlation.target_session.clone(),
-        pending_max: correlation.pending_max,
         decider_sessions: correlation.decider_sessions.clone(),
         title: request.tool_call_title.clone(),
         species: request.requested_kind.clone(),

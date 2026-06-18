@@ -151,11 +151,13 @@ fn pending_choice_option_ids(record: &PendingChoiceRequest) -> Vec<String> {
 /// `enqueue_choice_request` and `wait_for_choice_resolution`) until the operator
 /// decides, then maps the relay [`ChoiceResolutionOutcome`] into the transport's
 /// [`ChoiceMade`]. The closure closes over the target's
-/// `bundle_name`/`runtime_directory`; the per-delivery decider list rides in
-/// each [`ChoiceToMake`].
+/// `bundle_name`/`runtime_directory` and the per-bundle `choices_pending_max`
+/// queue bound; only the per-delivery decider list rides in each
+/// [`ChoiceToMake`].
 pub(in crate::relay) fn build_acp_chooser(
     bundle_name: String,
     runtime_directory: PathBuf,
+    choices_pending_max: usize,
 ) -> Chooser {
     Arc::new(move |choice: ChoiceToMake| -> ChoiceMade {
         let context = ChoiceEventContext {
@@ -163,18 +165,22 @@ pub(in crate::relay) fn build_acp_chooser(
             bundle_name: bundle_name.clone(),
             authorized_ui_sessions: choice.decider_sessions.clone(),
         };
-        resolve_choice_via_relay(&context, &choice)
+        resolve_choice_via_relay(&context, &choice, choices_pending_max)
     })
 }
 
-fn resolve_choice_via_relay(context: &ChoiceEventContext, choice: &ChoiceToMake) -> ChoiceMade {
+fn resolve_choice_via_relay(
+    context: &ChoiceEventContext,
+    choice: &ChoiceToMake,
+    choices_pending_max: usize,
+) -> ChoiceMade {
     let enqueued = match enqueue_choice_request(
         context,
         choice.message_id.as_str(),
         choice.target_session.as_str(),
         choice.species.as_str(),
         choice.details.clone(),
-        choice.pending_max,
+        choices_pending_max,
     ) {
         Ok(value) => value,
         Err(code) if code == CHOICES_QUEUE_FULL_CODE => {

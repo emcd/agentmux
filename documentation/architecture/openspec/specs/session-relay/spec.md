@@ -2135,10 +2135,10 @@ Connect/reconnect replay contract:
 
 Naming note: the TOML key remains `pending-max` (decoded to `pending_max` in
 the deserialized struct). Relay code stores the queue bound as
-`choices_pending_max` on `AuthorizationContext` and `DeliveryContext` to
-disambiguate it from the per-correlation `pending_max` snapshot on
-`ChoiceToMake` and `PermissionContext` (which carry the same numeric value but
-describe a per-delivery snapshot, not the global queue bound).
+`choices_pending_max` on `AuthorizationContext`. The ACP chooser closure
+captures this per-bundle constant at worker construction and passes it directly
+to the queue, so it does not ride `DeliveryContext`, `ChoiceToMake`, or the
+per-delivery task; only the genuinely per-delivery decider list does.
 
 #### Scenario: Reject enqueue beyond queue bound
 

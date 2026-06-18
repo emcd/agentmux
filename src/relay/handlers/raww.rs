@@ -6,8 +6,7 @@ use uuid::Uuid;
 use crate::configuration::{BundleConfiguration, TargetConfiguration};
 
 use super::super::authorization::{
-    AuthorizationContext, choices_pending_max, choose_authorized_ui_sessions,
-    load_authorization_context,
+    AuthorizationContext, choose_authorized_ui_sessions, load_authorization_context,
 };
 use super::super::connection::BundleCatalog;
 use super::super::delivery::{QuiescenceOptions, enqueue_async_delivery, prompt_batch_settings};
@@ -210,10 +209,12 @@ fn prepare_raww(
 
 /// Enqueues the raw input for asynchronous delivery to the authorized target
 /// and builds the immediate `queued` response. The target is guaranteed present
-/// by `prepare_raww`. Choice deciders and the queue bound come from the target
-/// bundle's authorization, where delivery is gated. The terminal delivery
-/// outcome is reported out-of-band via `delivery_outcome` stream events; only
-/// enqueue-time failures (e.g. an unavailable ACP worker) surface synchronously.
+/// by `prepare_raww`. Choice deciders come from the target bundle's
+/// authorization, where delivery is gated (the queue bound is a per-bundle
+/// constant captured into the ACP chooser at worker construction, not carried
+/// per delivery). The terminal delivery outcome is reported out-of-band via
+/// `delivery_outcome` stream events; only enqueue-time failures (e.g. an
+/// unavailable ACP worker) surface synchronously.
 fn execute_raww(
     route: &ResolvedRoute,
     prepared: RawwPrepared,
@@ -249,7 +250,6 @@ fn execute_raww(
     let sender_member = sender.to_bundle_member();
     let choice_decider_sessions =
         choose_authorized_ui_sessions(&target_authorization, &raww_bundle);
-    let queue_pending_max = choices_pending_max(&target_authorization);
     let task = AsyncDeliveryTask {
         bundle: raww_bundle.clone(),
         sender_bundle_name: home_namespace.to_string(),
@@ -273,7 +273,6 @@ fn execute_raww(
         payload_mode: DeliveryPayloadMode::RawInput,
         append_enter: !no_enter,
         choice_decider_sessions,
-        choices_pending_max: queue_pending_max,
     };
 
     // Both transports enqueue onto a per-target async worker; `enqueue_async_delivery`
