@@ -264,7 +264,7 @@ follow-on.)
       import edges — the transports-no-relay-dependency end-state is reached.
       Tasks 4.1–4.4 (worker genericization + quiescence-hoist barrier) remain
       the design-gated Slice 4A and are flagged separately.
-- [ ] 4.6 (follow-on) Clean up the relay vocabulary re-exports now that the
+- [x] 4.6 (follow-on) Clean up the relay vocabulary re-exports now that the
       canonical homes live in `crate::transports`. Audit every
       `pub use crate::transports::vocabulary::{...}` re-export in
       `relay/contract.rs` (and the `relay::` surface generally): keep only those
@@ -282,3 +282,24 @@ follow-on.)
       `Transport` lifecycle concept, generalize the registry field, the enum, and
       this observer together (a worker-agnostic readiness interface) rather than
       leaving an ACP-named function over a now-generic registry.
+
+      RESULT — audited the five `crate::transports::vocabulary` re-exports in
+      `relay/contract.rs` (the only relay surface re-exporting transport vocab).
+      KEPT three embedded in relay wire contract types (external deserializers
+      receive them from `crate::relay`): `SendOutcome` (in `SendResult`),
+      `AcpLookFreshness` + `AcpLookSnapshotSource` (in `LookSnapshotPayload`).
+      KEPT `DeliveryPayloadMode`: not embedded in a wire type, but it has genuine
+      first-class relay-side consumers — the delivery dispatch/handler surface
+      (worker.rs, payload.rs, transport.rs, orchestration.rs, context.rs,
+      handlers/{send,raww}.rs) branches on it — so it stays as relay's
+      convenience path rather than repointing seven in-crate sites. DROPPED
+      `AcpWorkerReadinessState`: no relay contract type embeds it, all
+      delivery-path consumers were repointed to `crate::transports` in 4.5, and
+      the out-of-crate test suite likewise; the sole remaining relay-internal
+      consumer was the `read_acp_worker_state` stringify in `relay/mod.rs`, now
+      importing the enum directly from `crate::transports`.
+      `subscribe_acp_worker_state` left untouched (name accurate over today's
+      ACP-specific registry); the worker-agnostic readiness generalization is
+      captured as a tracked todo, not actioned here. Validate: `cargo test`
+      (lib 18, integration 206/6-ignored, unit 273), clippy `-D warnings` clean,
+      fmt clean.
