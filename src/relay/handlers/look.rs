@@ -7,13 +7,13 @@ use time::format_description::well_known::Rfc3339;
 use crate::{
     acp::state::ACP_LOOK_PRIME_TIMEOUT_MS,
     configuration::BundleConfiguration,
-    relay::{AcpLookFreshness, AcpLookSnapshotSource, LookSnapshotPayload},
-    runtime::{inscriptions::emit_inscription, paths::tmux_socket_path_for_runtime_directory},
-    transports::{LookMode, LookSnapshotPayload as TransportLookSnapshotPayload},
+    relay::{LookFreshness, LookSnapshotPayload, LookSnapshotSource},
+    runtime::inscriptions::emit_inscription,
+    transports::{LookMode, LookSnapshotPayload as TransportLookSnapshotPayload, TransportError},
 };
 
 use super::super::connection::BundleCatalog;
-use super::super::delivery::get_acp_worker_output_view;
+use super::super::delivery::get_output_view;
 use super::super::routing::{
     Addressing, Capability, OperationProfile, ResolvedRoute, requester_home_namespace,
     resolve_look_route,
@@ -27,14 +27,11 @@ use super::routed::{
     resolve_target_bundle, run_target_operation,
 };
 use super::sender::resolve_sender_in_namespace;
-use crate::tmux::pane::{capture_pane_tail_lines, resolve_active_pane_target};
 
-const LOOK_LINES_DEFAULT: usize = 120;
+/// Shared upper bound on the caller-supplied look window, validated before
+/// dispatch. The per-transport *default* window lives in each transport's
+/// `OutputView::look`.
 const LOOK_LINES_MAX: usize = 1000;
-/// Default ACP look window. ACP replay entries are far larger than tmux lines
-/// (each can be a full message or tool invocation), so a small default keeps
-/// the response under the MCP payload limit while still showing recent context.
-const ACP_LOOK_ENTRIES_DEFAULT: usize = 50;
 
 /// The look target's bundle and runtime, resolved and existence-validated by
 /// `prepare_look` before authorization.
@@ -210,14 +207,12 @@ fn prepare_look(
     })
 }
 
-/// Captures the look snapshot for the authorized target and builds the response.
-/// The target is guaranteed present by `prepare_look`.
 /// Translates the transport-layer look snapshot into the relay's wire payload.
-/// The freshness and source enums are shared types (the transport contract
-/// reuses the relay's), so only the variant shape differs.
-fn transport_acp_snapshot_to_wire(snapshot: TransportLookSnapshotPayload) -> LookSnapshotPayload {
+/// The freshness and source enums are shared types (the relay re-exports the
+/// transport vocabulary), so only the variant discriminator differs.
+fn transport_snapshot_to_wire(snapshot: TransportLookSnapshotPayload) -> LookSnapshotPayload {
     match snapshot {
-        TransportLookSnapshotPayload::AcpEntries {
+        TransportLookSnapshotPayload::StructuredEntries {
             snapshot_entries,
             entries_total,
             returned_entries_count,
@@ -225,7 +220,7 @@ fn transport_acp_snapshot_to_wire(snapshot: TransportLookSnapshotPayload) -> Loo
             snapshot_source,
             stale_reason_code,
             snapshot_age_ms,
-        } => LookSnapshotPayload::AcpEntriesV1 {
+        } => LookSnapshotPayload::StructuredEntriesV1 {
             snapshot_entries,
             entries_total,
             returned_entries_count,
@@ -237,6 +232,45 @@ fn transport_acp_snapshot_to_wire(snapshot: TransportLookSnapshotPayload) -> Loo
         TransportLookSnapshotPayload::Lines { snapshot_lines } => {
             LookSnapshotPayload::Lines { snapshot_lines }
         }
+    }
+}
+
+/// The empty stale snapshot returned when an ACP look target has no published
+/// output-view handle (worker unstarted, failed bootstrap, or mid-respawn).
+/// Returned uniformly through the wire translation so the handler shapes no
+/// payload by transport identity.
+fn unavailable_acp_look_snapshot() -> TransportLookSnapshotPayload {
+    TransportLookSnapshotPayload::StructuredEntries {
+        snapshot_entries: Vec::new(),
+        entries_total: 0,
+        returned_entries_count: 0,
+        freshness: LookFreshness::Stale,
+        snapshot_source: LookSnapshotSource::None,
+        stale_reason_code: Some("acp_worker_unavailable".to_string()),
+        snapshot_age_ms: None,
+    }
+}
+
+/// Maps an `OutputView::look` failure onto a relay error. Validation-class
+/// transport codes (e.g. `validation_offset_unsupported`) become relay
+/// validation errors with their code preserved; anything else is an internal
+/// failure.
+fn map_look_transport_error(target_session: &str, error: TransportError) -> RelayError {
+    // Carry the transport's own `details` through so the underlying cause (e.g.
+    // the tmux capture failure reason) is not dropped on the relay boundary.
+    let details = Some(json!({
+        "target_session": target_session,
+        "code": error.code,
+        "details": error.details,
+    }));
+    if error.code.starts_with("validation_") {
+        relay_error(error.code.as_str(), error.reason.as_str(), details)
+    } else {
+        relay_error(
+            "internal_unexpected_failure",
+            error.reason.as_str(),
+            details,
+        )
     }
 }
 
@@ -263,90 +297,27 @@ fn execute_look(
         .find(|member| member.id == target_session_id)
         .expect("look target existence validated in prepare_look");
 
-    let snapshot = match &target.target {
-        crate::configuration::TargetConfiguration::Tmux(_) => {
-            if offset != 0 {
-                return Err(relay_error(
-                    "validation_offset_unsupported",
-                    "offset is only supported for ACP look targets",
-                    Some(json!({
-                        "target_session": target.id,
-                        "offset": offset,
-                    })),
-                ));
-            }
-            let requested_lines = lines.unwrap_or(LOOK_LINES_DEFAULT);
-            let tmux_socket =
-                tmux_socket_path_for_runtime_directory(look_runtime_directory.as_path());
-            let pane_target = resolve_active_pane_target(tmux_socket.as_path(), target.id.as_str())
-                .map_err(|reason| {
-                    relay_error(
-                        "internal_unexpected_failure",
-                        "failed to resolve active pane for look target",
-                        Some(json!({"target_session": target.id, "cause": reason})),
-                    )
-                })?;
-            let snapshot_lines = capture_pane_tail_lines(
-                tmux_socket.as_path(),
-                pane_target.as_str(),
-                requested_lines,
-            )
-            .map_err(|reason| {
-                relay_error(
-                    "internal_unexpected_failure",
-                    "failed to capture look snapshot",
-                    Some(json!({"target_session": target.id, "cause": reason})),
-                )
-            })?;
-            LookSnapshotPayload::Lines { snapshot_lines }
-        }
-        crate::configuration::TargetConfiguration::Ui
-        | crate::configuration::TargetConfiguration::Pubsub => {
-            unreachable!("capability gate in prepare_look rejects can_be_looked = false targets")
-        }
-        crate::configuration::TargetConfiguration::Acp(_) => {
-            let requested_entries = lines.unwrap_or(ACP_LOOK_ENTRIES_DEFAULT);
-            // The look path reads the OutputView handle published by the ACP
-            // transport (which owns the bounded prime-wait + freshness). A
-            // missing handle means the worker is unstarted, failed bootstrap, or
-            // mid-respawn: surface an empty, stale/unavailable snapshot rather
-            // than reading any buffer.
-            match get_acp_worker_output_view(
-                look_bundle.bundle_name.as_str(),
-                look_runtime_directory.as_path(),
-                target.id.as_str(),
-            ) {
-                Some(view) => {
-                    let mode = LookMode {
-                        lines: Some(requested_entries as u64),
-                        offset: Some(offset as u64),
-                        prime_timeout: Duration::from_millis(ACP_LOOK_PRIME_TIMEOUT_MS),
-                    };
-                    let snapshot = view.look(mode).map_err(|error| {
-                        relay_error(
-                            "internal_unexpected_failure",
-                            "failed to capture ACP look snapshot",
-                            Some(json!({
-                                "target_session": target.id,
-                                "code": error.code,
-                                "cause": error.reason,
-                            })),
-                        )
-                    })?;
-                    transport_acp_snapshot_to_wire(snapshot)
-                }
-                None => LookSnapshotPayload::AcpEntriesV1 {
-                    snapshot_entries: Vec::new(),
-                    entries_total: 0,
-                    returned_entries_count: 0,
-                    freshness: AcpLookFreshness::Stale,
-                    snapshot_source: AcpLookSnapshotSource::None,
-                    stale_reason_code: Some("acp_worker_unavailable".to_string()),
-                    snapshot_age_ms: None,
-                },
-            }
-        }
+    // One polymorphic look call: the accessor resolves the per-transport handle
+    // provenance (worker-published for ACP, config-constructed for tmux), the
+    // handle owns its own windowing default, `LookMode` validation, and (for
+    // ACP) the bounded prime-wait + freshness. A `None` handle is the ACP
+    // missing-worker case, surfaced as an empty stale/unavailable snapshot.
+    let mode = LookMode {
+        lines: lines.map(|lines| lines as u64),
+        offset: Some(offset as u64),
+        prime_timeout: Duration::from_millis(ACP_LOOK_PRIME_TIMEOUT_MS),
     };
+    let snapshot = match get_output_view(
+        look_bundle.bundle_name.as_str(),
+        look_runtime_directory.as_path(),
+        target,
+    ) {
+        Some(view) => view
+            .look(mode)
+            .map_err(|error| map_look_transport_error(target.id.as_str(), error))?,
+        None => unavailable_acp_look_snapshot(),
+    };
+    let snapshot = transport_snapshot_to_wire(snapshot);
     let response = RelayResponse::Look {
         schema_version: SCHEMA_VERSION.to_string(),
         requester_session: canonical_session_id(requester_session_id, home_namespace),
@@ -378,7 +349,7 @@ fn execute_look(
             LookSnapshotPayload::Lines { snapshot_lines } => {
                 ("lines", snapshot_lines.len(), None, None, None, None, None)
             }
-            LookSnapshotPayload::AcpEntriesV1 {
+            LookSnapshotPayload::StructuredEntriesV1 {
                 snapshot_entries,
                 entries_total,
                 freshness,
@@ -387,16 +358,16 @@ fn execute_look(
                 snapshot_age_ms,
                 ..
             } => (
-                "acp_entries_v1",
+                "structured_entries_v1",
                 snapshot_entries.len(),
                 Some(*entries_total),
                 Some(match freshness {
-                    AcpLookFreshness::Fresh => "fresh",
-                    AcpLookFreshness::Stale => "stale",
+                    LookFreshness::Fresh => "fresh",
+                    LookFreshness::Stale => "stale",
                 }),
                 Some(match snapshot_source {
-                    AcpLookSnapshotSource::LiveBuffer => "live_buffer",
-                    AcpLookSnapshotSource::None => "none",
+                    LookSnapshotSource::LiveBuffer => "live_buffer",
+                    LookSnapshotSource::None => "none",
                 }),
                 stale_reason_code.as_deref(),
                 *snapshot_age_ms,

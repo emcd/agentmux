@@ -351,7 +351,7 @@ Successful `look` responses SHALL include:
 - `requester_session`
 - `target_session`
 - `captured_at`
-- `snapshot_format` (`lines` | `acp_entries_v1`)
+- `snapshot_format` (`lines` | `structured_entries_v1`)
 
 `bundle_name` is retired from look responses; bundle context is recoverable
 from the `target_session` suffix.
@@ -359,7 +359,7 @@ from the `target_session` suffix.
 When `snapshot_format = "lines"`, MCP responses SHALL include:
 - `snapshot_lines` (`string[]`)
 
-When `snapshot_format = "acp_entries_v1"`, MCP responses SHALL include:
+When `snapshot_format = "structured_entries_v1"`, MCP responses SHALL include:
 - `snapshot_entries` (`object[]`)
 
 For ACP look targets, MCP successful responses SHALL preserve relay-authored

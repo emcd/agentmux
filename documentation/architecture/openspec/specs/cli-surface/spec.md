@@ -344,7 +344,7 @@ When relay returns tmux look payload:
 - `snapshot_format="lines"` with `snapshot_lines`.
 
 When relay returns ACP look payload:
-- `snapshot_format="acp_entries_v1"` with `snapshot_entries`.
+- `snapshot_format="structured_entries_v1"` with `snapshot_entries`.
 
 For ACP look responses, CLI machine output SHALL preserve relay additive
 freshness fields unchanged:
@@ -362,7 +362,7 @@ CLI MAY render ACP `snapshot_entries` with local presentation enhancements
 - **WHEN** operator runs `agentmux look <target-session>` and ACP payload is
   returned from relay
 - **THEN** CLI returns successful look payload unchanged
-- **AND** includes `snapshot_format="acp_entries_v1"` and `snapshot_entries`
+- **AND** includes `snapshot_format="structured_entries_v1"` and `snapshot_entries`
 
 #### Scenario: Preserve stale-success with empty ACP snapshot entries
 

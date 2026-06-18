@@ -1,6 +1,6 @@
 use agentmux::acp::snapshot_entries_to_plain_lines;
 use agentmux::relay::{
-    AcpLookFreshness, AcpLookSnapshotSource, LookSnapshotPayload, RelayResponse, SendOutcome,
+    LookFreshness, LookSnapshotPayload, LookSnapshotSource, RelayResponse, SendOutcome,
 };
 use std::{
     fs, thread,
@@ -35,8 +35,8 @@ fn acp_look_without_startup_returns_unavailable_stale_metadata() {
     let look = dispatch_look_without_startup(&config_root, &tmux_socket, "bravo", "bravo", Some(5));
     let snapshot = expect_acp_snapshot(look);
     assert!(snapshot.lines.is_empty());
-    assert_eq!(snapshot.freshness, AcpLookFreshness::Stale);
-    assert_eq!(snapshot.snapshot_source, AcpLookSnapshotSource::None);
+    assert_eq!(snapshot.freshness, LookFreshness::Stale);
+    assert_eq!(snapshot.snapshot_source, LookSnapshotSource::None);
     assert_eq!(
         snapshot.stale_reason_code.as_deref(),
         Some("acp_worker_unavailable")
@@ -69,14 +69,14 @@ fn acp_look_returns_oldest_to_newest_session_update_lines() {
         snapshot
             .entries
             .iter()
-            .all(|entry| { matches!(entry, agentmux::acp::AcpSnapshotEntry::Agent { .. }) })
+            .all(|entry| { matches!(entry, agentmux::transports::StructuredEntry::Agent { .. }) })
     );
     assert_eq!(
         snapshot.lines,
         vec!["ACP-LINE-1", "ACP-LINE-2", "ACP-LINE-3"]
     );
-    assert_eq!(snapshot.freshness, AcpLookFreshness::Fresh);
-    assert_eq!(snapshot.snapshot_source, AcpLookSnapshotSource::LiveBuffer);
+    assert_eq!(snapshot.freshness, LookFreshness::Fresh);
+    assert_eq!(snapshot.snapshot_source, LookSnapshotSource::LiveBuffer);
     assert_eq!(snapshot.stale_reason_code, None);
 }
 
@@ -199,10 +199,7 @@ fn acp_look_offset_walks_backward_through_replay_buffer_with_metadata() {
     assert_eq!(past_start.entries_total, total);
     assert_eq!(past_start.returned_entries_count, 0);
     assert!(past_start.lines.is_empty());
-    assert_eq!(
-        past_start.snapshot_source,
-        AcpLookSnapshotSource::LiveBuffer
-    );
+    assert_eq!(past_start.snapshot_source, LookSnapshotSource::LiveBuffer);
 }
 
 #[test]
@@ -215,8 +212,8 @@ fn acp_look_returns_empty_snapshot_when_no_updates_exist() {
     let look = dispatch_look(&config_root, &tmux_socket, "bravo", "bravo", Some(5));
     let snapshot = expect_acp_snapshot(look);
     assert!(snapshot.lines.is_empty());
-    assert_eq!(snapshot.freshness, AcpLookFreshness::Stale);
-    assert_eq!(snapshot.snapshot_source, AcpLookSnapshotSource::None);
+    assert_eq!(snapshot.freshness, LookFreshness::Stale);
+    assert_eq!(snapshot.snapshot_source, LookSnapshotSource::None);
     assert!(snapshot.stale_reason_code.is_some());
 }
 
@@ -250,10 +247,10 @@ fn acp_look_reflects_outgoing_user_prompt_before_session_updates_arrive() {
     assert!(
         snapshot.entries.iter().any(|entry| matches!(
             entry,
-            agentmux::acp::AcpSnapshotEntry::User { lines }
+            agentmux::transports::StructuredEntry::User { lines }
                 if lines.iter().any(|line| line == "status?")
         )),
-        "expected an AcpSnapshotEntry::User with the submitted prompt text, got {:?}",
+        "expected an StructuredEntry::User with the submitted prompt text, got {:?}",
         snapshot.entries,
     );
 }
@@ -310,8 +307,8 @@ fn acp_look_reuses_persistent_worker_without_one_shot_replay_refresh() {
     let snapshot_lines = snapshot.lines;
     assert!(snapshot_lines.iter().any(|line| line == "LIVE-LINE-1"));
     assert!(snapshot_lines.iter().any(|line| line == "LIVE-LINE-2"));
-    assert_eq!(snapshot.freshness, AcpLookFreshness::Fresh);
-    assert_eq!(snapshot.snapshot_source, AcpLookSnapshotSource::LiveBuffer);
+    assert_eq!(snapshot.freshness, LookFreshness::Fresh);
+    assert_eq!(snapshot.snapshot_source, LookSnapshotSource::LiveBuffer);
     let requests = read_request_log(&_log_path);
     assert_eq!(request_count_by_method(&requests, "session/load"), 1);
 }
@@ -355,7 +352,7 @@ fn acp_look_replaces_legacy_flattened_baseline_after_structured_load() {
         Some(10),
     ));
     assert!(pre_load_snapshot.lines.is_empty());
-    assert_eq!(pre_load_snapshot.freshness, AcpLookFreshness::Stale);
+    assert_eq!(pre_load_snapshot.freshness, LookFreshness::Stale);
 
     let response = dispatch_send(&config_root, &tmux_socket);
     let result = send_result(response);
@@ -396,7 +393,7 @@ fn acp_look_across_respawn_window_returns_clean_snapshots() {
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
         // `expect_acp_snapshot` panics if the payload is not a well-formed
-        // `AcpEntriesV1`, so a malformed or wrong-typed response fails the test.
+        // `StructuredEntriesV1`, so a malformed or wrong-typed response fails the test.
         let look = dispatch_look(&config_root, &tmux_socket, "bravo", "bravo", Some(5));
         let snapshot = expect_acp_snapshot(look);
         assert!(
@@ -407,7 +404,7 @@ fn acp_look_across_respawn_window_returns_clean_snapshots() {
             snapshot.returned_entries_count <= snapshot.entries_total,
             "returned count cannot exceed the total",
         );
-        if snapshot.freshness == AcpLookFreshness::Stale {
+        if snapshot.freshness == LookFreshness::Stale {
             assert!(
                 snapshot.stale_reason_code.is_some(),
                 "a stale snapshot must carry a reason code",
@@ -444,12 +441,12 @@ fn wait_for_look(
 
 #[derive(Debug)]
 struct AcpSnapshotView {
-    entries: Vec<agentmux::acp::AcpSnapshotEntry>,
+    entries: Vec<agentmux::transports::StructuredEntry>,
     lines: Vec<String>,
     entries_total: usize,
     returned_entries_count: usize,
-    freshness: AcpLookFreshness,
-    snapshot_source: AcpLookSnapshotSource,
+    freshness: LookFreshness,
+    snapshot_source: LookSnapshotSource,
     stale_reason_code: Option<String>,
 }
 
@@ -457,7 +454,7 @@ fn expect_acp_snapshot(look: RelayResponse) -> AcpSnapshotView {
     let RelayResponse::Look { snapshot, .. } = look else {
         panic!("expected look response");
     };
-    let LookSnapshotPayload::AcpEntriesV1 {
+    let LookSnapshotPayload::StructuredEntriesV1 {
         snapshot_entries,
         entries_total,
         returned_entries_count,
@@ -486,7 +483,7 @@ fn snapshot_lines_from_look(look: &RelayResponse) -> Vec<String> {
     };
     match snapshot {
         LookSnapshotPayload::Lines { snapshot_lines } => snapshot_lines.clone(),
-        LookSnapshotPayload::AcpEntriesV1 {
+        LookSnapshotPayload::StructuredEntriesV1 {
             snapshot_entries, ..
         } => snapshot_entries_to_plain_lines(snapshot_entries.as_slice()),
     }

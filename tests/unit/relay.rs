@@ -793,9 +793,10 @@ fn look_returns_empty_snapshot_for_acp_target_without_recorded_updates() {
     )
     .expect("look should succeed");
     let RelayResponse::Look {
-        snapshot: LookSnapshotPayload::AcpEntriesV1 {
-            snapshot_entries, ..
-        },
+        snapshot:
+            LookSnapshotPayload::StructuredEntriesV1 {
+                snapshot_entries, ..
+            },
         ..
     } = response
     else {

@@ -91,7 +91,7 @@ impl McpServer {
                         response_map.insert("snapshot_lines".to_string(), json!(snapshot_lines));
                         count
                     }
-                    LookSnapshotPayload::AcpEntriesV1 {
+                    LookSnapshotPayload::StructuredEntriesV1 {
                         snapshot_entries,
                         entries_total,
                         returned_entries_count,
@@ -101,7 +101,10 @@ impl McpServer {
                         snapshot_age_ms,
                     } => {
                         let count = snapshot_entries.len();
-                        response_map.insert("snapshot_format".to_string(), json!("acp_entries_v1"));
+                        response_map.insert(
+                            "snapshot_format".to_string(),
+                            json!("structured_entries_v1"),
+                        );
                         response_map
                             .insert("snapshot_entries".to_string(), json!(snapshot_entries));
                         response_map.insert("entries_total".to_string(), json!(entries_total));

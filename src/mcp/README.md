@@ -24,7 +24,7 @@ This module implements the MCP stdio server for `agentmux`.
     the unreachable home bundle report `hosted: false` and `ready: false` for
     every configured session.
   - `look` tmux: `snapshot_format="lines"` + `snapshot_lines`
-  - `look` ACP: `snapshot_format="acp_entries_v1"` + `snapshot_entries`
+  - `look` ACP: `snapshot_format="structured_entries_v1"` + `snapshot_entries`
     (+ freshness fields), plus `entries_total` (full replay-buffer size) and
     `returned_entries_count` (entries in this window) so callers can detect
     truncation and bound backward walks.

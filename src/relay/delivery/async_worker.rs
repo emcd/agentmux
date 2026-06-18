@@ -12,8 +12,10 @@ use serde_json::json;
 use time::format_description::well_known::Rfc3339;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, error::SendError};
 
-use crate::configuration::TargetConfiguration;
+use crate::configuration::{BundleMember, TargetConfiguration};
+use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 use crate::runtime::{inscriptions::emit_inscription, signals::shutdown_requested};
+use crate::tmux::TmuxOutputView;
 use crate::transports::{AcpWorkerReadinessState, OutputView};
 
 use super::super::stream::{RelayStreamEvent, send_event_to_registered_ui};
@@ -244,6 +246,36 @@ pub(in crate::relay) fn get_acp_worker_output_view(
         .ok()?
         .get(&key)
         .and_then(|entry| entry.acp_output_view.clone())
+}
+
+/// Resolves the polymorphic [`OutputView`] handle for a look target, hiding the
+/// per-transport handle provenance from the relay look handler.
+///
+/// Provenance: a worker-published handle from the delivery registry when present
+/// (ACP today, and any future worker-backed transport), otherwise a
+/// config-constructed [`TmuxOutputView`] for tmux members whose output is
+/// addressable directly through the socket. Returns `None` for non-lookable
+/// session types and for an ACP target with no published handle (unstarted,
+/// failed bootstrap, or mid-respawn); the look handler maps that `None` to an
+/// empty stale/unavailable snapshot.
+pub(in crate::relay) fn get_output_view(
+    bundle_name: &str,
+    runtime_directory: &Path,
+    member: &BundleMember,
+) -> Option<Arc<dyn OutputView>> {
+    match &member.target {
+        TargetConfiguration::Acp(_) => {
+            get_acp_worker_output_view(bundle_name, runtime_directory, member.id.as_str())
+        }
+        TargetConfiguration::Tmux(_) => {
+            let socket_path = tmux_socket_path_for_runtime_directory(runtime_directory);
+            Some(Arc::new(TmuxOutputView::new(
+                socket_path,
+                member.id.clone(),
+            )))
+        }
+        TargetConfiguration::Ui | TargetConfiguration::Pubsub => None,
+    }
 }
 
 pub(in crate::relay) fn acp_session_ready_for_startup(

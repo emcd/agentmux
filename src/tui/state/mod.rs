@@ -7,9 +7,9 @@ use std::{
 use ratatui::widgets::ListState;
 
 use crate::{
-    acp::AcpSnapshotEntry,
     relay::{RelayError, RelayStreamSession},
     runtime::error::RuntimeError,
+    transports::StructuredEntry,
 };
 
 use super::target::{
@@ -44,7 +44,7 @@ pub(crate) struct ChatHistoryEntry {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum LookSnapshotFormat {
     Lines,
-    AcpEntriesV1,
+    StructuredEntriesV1,
 }
 
 #[derive(Clone, Debug)]
@@ -132,7 +132,7 @@ pub(crate) struct AppState {
     pub look_captured_at: Option<String>,
     pub look_snapshot_format: Option<LookSnapshotFormat>,
     pub look_snapshot_lines: Vec<String>,
-    pub look_snapshot_entries: Vec<AcpSnapshotEntry>,
+    pub look_snapshot_entries: Vec<StructuredEntry>,
     pub look_overlay_scroll: usize,
     pub(crate) look_choice_request_index: usize,
     pub(crate) look_choice_option_index: usize,

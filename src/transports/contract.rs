@@ -47,7 +47,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::acp::{AcpDriverServices, AcpSnapshotEntry, AcpWorkerDriver};
+use crate::acp::{AcpDriverServices, AcpWorkerDriver};
 use crate::configuration::BundleMember;
 use crate::tmux::TmuxTransport;
 // Re-export the configuration prompt-readiness template into the transport
@@ -58,9 +58,7 @@ pub use crate::configuration::PromptReadinessTemplate;
 // Delivery/look wire vocabulary. Canonical home is the sibling `vocabulary`
 // module (below `crate::relay` in dependency order), so the transport contract
 // never depends on relay. The relay re-exports these from its own contract.
-use crate::transports::vocabulary::{
-    AcpLookFreshness, AcpLookSnapshotSource, DeliveryPayloadMode, SendOutcome,
-};
+use crate::transports::vocabulary::{DeliveryPayloadMode, LookSnapshotPayload, SendOutcome};
 
 /// Synchronous delivery contract implemented by each concrete transport.
 ///
@@ -557,31 +555,4 @@ pub struct LookMode {
     /// its first snapshot before returning a stale-tagged result. The relay
     /// supplies this as its look-surface policy; a zero duration means no wait.
     pub prime_timeout: Duration,
-}
-
-/// Transport-level snapshot payload returned by [`OutputView::look`].
-///
-/// The ACP variant carries the freshness metadata the relay forwards onto its
-/// wire `LookSnapshotPayload`. The freshness enums are reused from the relay
-/// contract for now (see the module's deferred-relocation note).
-#[derive(Clone, Debug)]
-pub enum LookSnapshotPayload {
-    /// Plain text lines (tmux).
-    Lines { snapshot_lines: Vec<String> },
-    /// Rendered ACP replay entries plus truncation bookkeeping and freshness.
-    AcpEntries {
-        snapshot_entries: Vec<AcpSnapshotEntry>,
-        /// Total entries available before tail/offset windowing.
-        entries_total: usize,
-        /// Count actually returned after the tail-N window and `offset`.
-        returned_entries_count: usize,
-        /// Whether the snapshot is fresh or stale.
-        freshness: AcpLookFreshness,
-        /// Where the snapshot was sourced from.
-        snapshot_source: AcpLookSnapshotSource,
-        /// Why the snapshot is stale, when applicable.
-        stale_reason_code: Option<String>,
-        /// Age of the snapshot in milliseconds, when known.
-        snapshot_age_ms: Option<u64>,
-    },
 }

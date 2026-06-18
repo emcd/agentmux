@@ -1,11 +1,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{acp::AcpSnapshotEntry, configuration::SessionType};
+use crate::{configuration::SessionType, transports::StructuredEntry};
 // Delivery/look vocabulary now lives canonically in `crate::transports`. Re-export
 // only the variants that relay contract wire types below embed, so external
 // deserializers of those payloads resolve them from `crate::relay`: `SendOutcome`
-// rides in `SendResult`; `AcpLookFreshness`/`AcpLookSnapshotSource` ride in
+// rides in `SendResult`; `LookFreshness`/`LookSnapshotSource` ride in
 // `LookSnapshotPayload`. `DeliveryPayloadMode` is not embedded in a wire type but is
 // re-exported as the convenience path for relay's own delivery dispatch, which
 // branches on it across the worker/handler surface. Relay-internal code that merely
@@ -13,7 +13,7 @@ use crate::{acp::AcpSnapshotEntry, configuration::SessionType};
 // `read_acp_worker_state` stringify over `AcpWorkerReadinessState`) imports it from
 // `crate::transports` directly rather than through this re-export.
 pub use crate::transports::vocabulary::{
-    AcpLookFreshness, AcpLookSnapshotSource, DeliveryPayloadMode, SendOutcome,
+    DeliveryPayloadMode, LookFreshness, LookSnapshotSource, SendOutcome,
 };
 
 /// Declared session type for one listed bundle session.
@@ -70,16 +70,16 @@ pub enum LookSnapshotPayload {
     Lines {
         snapshot_lines: Vec<String>,
     },
-    AcpEntriesV1 {
-        snapshot_entries: Vec<AcpSnapshotEntry>,
+    StructuredEntriesV1 {
+        snapshot_entries: Vec<StructuredEntry>,
         /// Total entries available in the replay buffer before tail/offset
         /// windowing. Lets callers detect truncation and bound backward walks.
         entries_total: usize,
         /// Count of entries actually returned in `snapshot_entries` after
         /// applying the tail-N window and `offset`.
         returned_entries_count: usize,
-        freshness: AcpLookFreshness,
-        snapshot_source: AcpLookSnapshotSource,
+        freshness: LookFreshness,
+        snapshot_source: LookSnapshotSource,
         #[serde(skip_serializing_if = "Option::is_none")]
         stale_reason_code: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]

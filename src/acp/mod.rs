@@ -9,9 +9,7 @@ pub use client::{
     AcpRequestError, AcpStdioClient, DispatchHandler, PermissionHandler, PermissionResponder,
     PromptCompletion, PromptCompletionHandler, PromptDispatchOutcome, REPLAY_BUFFER_MAX_ENTRIES,
 };
-pub use render::{
-    AcpSnapshotEntry, replay_entries_to_snapshot_entries, snapshot_entries_to_plain_lines,
-};
+pub use render::{replay_entries_to_snapshot_entries, snapshot_entries_to_plain_lines};
 pub use transport::{
     ACP_ERROR_CODE_CONNECTION_CLOSED, ACP_ERROR_CODE_INITIALIZE_FAILED,
     ACP_ERROR_CODE_PROMPT_FAILED, ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE, AcpBootstrapError,
@@ -20,6 +18,8 @@ pub use transport::{
 pub use worker_driver::{AcpDriverServices, AcpWorkerDriver};
 
 use serde_json::Value;
+
+use crate::transports::ToolCallStatus;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 
@@ -44,12 +44,6 @@ pub enum ReplayEntry {
         update_kind: String,
         lines: Vec<String>,
     },
-}
-
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub enum ToolCallStatus {
-    Pending,
-    Completed,
 }
 
 use std::collections::HashMap;

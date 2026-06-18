@@ -679,7 +679,7 @@ Successful relay look responses SHALL include:
 - `requester_session`
 - `target_session`
 - `captured_at`
-- `snapshot_format` (`lines` | `acp_entries_v1`)
+- `snapshot_format` (`lines` | `structured_entries_v1`)
 
 `bundle_name` is retired from look responses; bundle context is recoverable
 from the `target_session` suffix.
@@ -687,7 +687,7 @@ from the `target_session` suffix.
 When `snapshot_format = "lines"`, responses SHALL include:
 - `snapshot_lines` (`string[]`)
 
-When `snapshot_format = "acp_entries_v1"`, responses SHALL include:
+When `snapshot_format = "structured_entries_v1"`, responses SHALL include:
 - `snapshot_entries` (`object[]`) using canonical ACP entry vocabulary.
 
 For ACP targets, successful relay look responses SHALL additionally include:
@@ -720,7 +720,7 @@ ACP stale reason vocabulary:
 #### Scenario: Return ACP look payload with structured entries
 
 - **WHEN** look succeeds for ACP target
-- **THEN** relay returns `snapshot_format="acp_entries_v1"`
+- **THEN** relay returns `snapshot_format="structured_entries_v1"`
 - **AND** includes `snapshot_entries`
 - **AND** includes required ACP additive fields `freshness`,
   `snapshot_source`, `entries_total`, and `returned_entries_count`

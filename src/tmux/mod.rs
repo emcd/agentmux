@@ -19,4 +19,4 @@ pub mod lifecycle;
 pub mod pane;
 pub mod transport;
 
-pub use transport::TmuxTransport;
+pub use transport::{TmuxOutputView, TmuxTransport};

@@ -79,7 +79,7 @@ async fn look_forwards_offset_to_relay_request() {
                     "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
                     "target_session": request.get("target_session").cloned().unwrap_or(Value::Null),
                     "captured_at": "2026-03-10T00:00:00Z",
-                    "snapshot_format": "acp_entries_v1",
+                    "snapshot_format": "structured_entries_v1",
                     "snapshot_entries": [{"kind": "agent", "lines": ["older context"]}],
                     "entries_total": 10,
                     "returned_entries_count": 1,
@@ -130,7 +130,7 @@ async fn look_preserves_additive_acp_freshness_fields() {
                     "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
                     "target_session": request.get("target_session").cloned().unwrap_or(Value::Null),
                     "captured_at": "2026-03-10T00:00:00Z",
-                    "snapshot_format": "acp_entries_v1",
+                    "snapshot_format": "structured_entries_v1",
                     "snapshot_entries": [],
                     "entries_total": 0,
                     "returned_entries_count": 0,
@@ -158,7 +158,7 @@ async fn look_preserves_additive_acp_freshness_fields() {
     let response = harness.call_tool(2, "look", arguments).await;
     let payload = decode_tool_payload(&response);
 
-    assert_eq!(payload["snapshot_format"], "acp_entries_v1");
+    assert_eq!(payload["snapshot_format"], "structured_entries_v1");
     assert_eq!(payload["snapshot_entries"], json!([]));
     assert!(payload.get("snapshot_lines").is_none());
     assert_eq!(payload["freshness"], "stale");
@@ -179,7 +179,7 @@ async fn look_preserves_structured_acp_entries_passthrough() {
                     "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
                     "target_session": request.get("target_session").cloned().unwrap_or(Value::Null),
                     "captured_at": "2026-03-10T00:00:00Z",
-                    "snapshot_format": "acp_entries_v1",
+                    "snapshot_format": "structured_entries_v1",
                     "snapshot_entries": [
                         {
                             "kind": "user",
@@ -228,7 +228,7 @@ async fn look_preserves_structured_acp_entries_passthrough() {
     let response = harness.call_tool(2, "look", arguments).await;
     let payload = decode_tool_payload(&response);
 
-    assert_eq!(payload["snapshot_format"], "acp_entries_v1");
+    assert_eq!(payload["snapshot_format"], "structured_entries_v1");
     assert_eq!(
         payload["snapshot_entries"],
         json!([
