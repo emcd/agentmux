@@ -20,8 +20,7 @@ use super::payload::{
 };
 use super::transport::{deliver_non_ui_target, deliver_non_ui_target_batch};
 use super::worker::{AcpWorkerBootstrap, spawn_async_delivery_worker};
-use crate::acp::AcpTransport;
-use crate::transports::AcpWorkerReadinessState;
+use crate::transports::{AcpWorkerReadinessState, TransportImpl};
 
 pub(in crate::relay) fn wait_for_async_delivery_shutdown(timeout: Duration) -> usize {
     super::super::async_worker::wait_for_async_delivery_shutdown(timeout)
@@ -184,12 +183,12 @@ fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
 
 pub(in crate::relay) fn deliver_one_target_with_worker_state(
     task: &AsyncDeliveryTask,
-    acp_transport: &mut Option<AcpTransport>,
+    transport: &mut TransportImpl,
 ) -> Result<SendResult, RelayError> {
     let target_member = resolve_target_member(task)?;
     let prompt_batches = prepare_delivery_payload(task)?;
     let non_ui_target_member = target_member.expect("non-UI target_member must exist");
-    deliver_non_ui_target(task, non_ui_target_member, prompt_batches, acp_transport)
+    deliver_non_ui_target(task, non_ui_target_member, prompt_batches, transport)
 }
 
 /// Delivers a coalesced batch of tasks against the shared target.
@@ -210,7 +209,7 @@ pub(in crate::relay) fn deliver_one_target_with_worker_state(
 pub(in crate::relay) fn deliver_batch_with_worker_state(
     batch: &[AsyncDeliveryTask],
     pre_resolved_pane: Option<String>,
-    acp_transport: &mut Option<AcpTransport>,
+    transport: &mut TransportImpl,
 ) -> (Vec<Result<SendResult, RelayError>>, Vec<AsyncDeliveryTask>) {
     debug_assert!(
         !batch.is_empty(),
@@ -227,7 +226,7 @@ pub(in crate::relay) fn deliver_batch_with_worker_state(
             "RawInput batches must not coalesce; got {} tasks",
             batch.len(),
         );
-        let outcome = deliver_one_target_with_worker_state(head, acp_transport);
+        let outcome = deliver_one_target_with_worker_state(head, transport);
         return (vec![outcome], Vec::new());
     }
 
@@ -263,7 +262,7 @@ pub(in crate::relay) fn deliver_batch_with_worker_state(
                 nonui_target_member,
                 prompt_batches,
                 pre_resolved_pane,
-                acp_transport,
+                transport,
             );
             (outcomes, deferred)
         }

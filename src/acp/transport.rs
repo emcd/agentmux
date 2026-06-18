@@ -16,9 +16,9 @@
 //!
 //! The transport owns an [`AcpWorkerReadinessState`] signal for [`is_ready`] and
 //! the [`OutputView`] prime-wait, because it cannot call relay's
-//! `set_acp_worker_state`. The relay worker mirrors transitions into the global
-//! worker-state registry (which external observers and respawn/startup gating
-//! still read).
+//! `set_acp_worker_state`. The `AcpWorkerDriver` mirrors transitions into the
+//! global worker-state registry (which external observers and respawn/startup
+//! gating still read).
 //!
 //! [`is_ready`]: Transport::is_ready
 
@@ -162,7 +162,7 @@ impl AcpTransport {
         }
     }
 
-    /// Current readiness, mirrored by the relay worker into the global registry.
+    /// Current readiness, mirrored by the `AcpWorkerDriver` into the global registry.
     #[must_use]
     pub fn readiness(&self) -> AcpWorkerReadinessState {
         *self.shared.readiness.lock().expect("readiness mutex")
@@ -409,11 +409,6 @@ impl Transport for AcpTransport {
         self.runtime = None;
         self.set_replay(None);
         self.set_readiness(AcpWorkerReadinessState::Unavailable);
-    }
-
-    fn accept_capacity(&self) -> usize {
-        // ACP accepts the full batch; the relay peels by token budget upstream.
-        usize::MAX
     }
 
     fn give_output(&self) -> Option<Arc<dyn OutputView>> {

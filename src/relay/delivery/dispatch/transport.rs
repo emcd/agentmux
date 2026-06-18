@@ -1,8 +1,6 @@
-use crate::acp::AcpTransport;
 use crate::configuration::{BundleMember, TargetConfiguration};
-use crate::tmux::TmuxTransport;
 use crate::transports::{
-    DeliveryContext, DeliveryEnvelope, DeliveryResult, DeliveryWaitError, Transport,
+    DeliveryContext, DeliveryEnvelope, DeliveryResult, DeliveryWaitError, TransportImpl,
 };
 
 use super::super::super::startup_state::note_session_served_successfully;
@@ -17,18 +15,21 @@ pub(super) fn deliver_non_ui_target(
     task: &AsyncDeliveryTask,
     target_member: &BundleMember,
     prompt_batches: Vec<String>,
-    acp_transport: &mut Option<AcpTransport>,
+    transport: &mut TransportImpl,
 ) -> Result<SendResult, RelayError> {
     match &target_member.target {
         TargetConfiguration::Acp(_) => Ok(deliver_acp_combined(
             task,
             target_member,
             prompt_batches,
-            acp_transport,
+            transport,
         )),
-        TargetConfiguration::Tmux(_) => {
-            Ok(deliver_one_target_tmux(task, target_member, prompt_batches))
-        }
+        TargetConfiguration::Tmux(_) => Ok(deliver_one_target_tmux(
+            task,
+            target_member,
+            prompt_batches,
+            transport,
+        )),
         TargetConfiguration::Ui | TargetConfiguration::Pubsub => {
             Err(super::super::super::session_type_not_implemented(
                 target_member.id.as_str(),
@@ -57,22 +58,26 @@ pub(super) fn deliver_non_ui_target_batch(
     target_member: &BundleMember,
     prompt_batches: Vec<String>,
     pre_resolved_pane: Option<String>,
-    acp_transport: &mut Option<AcpTransport>,
+    transport: &mut TransportImpl,
 ) -> Vec<Result<SendResult, RelayError>> {
     debug_assert!(!batch.is_empty());
     match &target_member.target {
         TargetConfiguration::Acp(_) => {
-            deliver_acp_batch_via_transport(batch, target_member, prompt_batches, acp_transport)
+            deliver_acp_batch_via_transport(batch, target_member, prompt_batches, transport)
                 .into_iter()
                 .map(Ok)
                 .collect()
         }
-        TargetConfiguration::Tmux(_) => {
-            deliver_batch_target_tmux(batch, target_member, prompt_batches, pre_resolved_pane)
-                .into_iter()
-                .map(Ok)
-                .collect()
-        }
+        TargetConfiguration::Tmux(_) => deliver_batch_target_tmux(
+            batch,
+            target_member,
+            prompt_batches,
+            pre_resolved_pane,
+            transport,
+        )
+        .into_iter()
+        .map(Ok)
+        .collect(),
         TargetConfiguration::Ui | TargetConfiguration::Pubsub => {
             let error = super::super::super::session_type_not_implemented(
                 target_member.id.as_str(),
@@ -83,7 +88,7 @@ pub(super) fn deliver_non_ui_target_batch(
     }
 }
 
-/// Delivers a coalesced ACP batch through the per-target [`AcpTransport`].
+/// Delivers a coalesced ACP batch through the held `TransportImpl`.
 ///
 /// ACP coalescing is relay-side: the worker already combined the batch into a
 /// single rendered prompt, so the transport receives one envelope, blocks to
@@ -94,10 +99,10 @@ fn deliver_acp_batch_via_transport(
     batch: &[AsyncDeliveryTask],
     target_member: &BundleMember,
     prompt_batches: Vec<String>,
-    acp_transport: &mut Option<AcpTransport>,
+    transport: &mut TransportImpl,
 ) -> Vec<SendResult> {
     let head = &batch[0];
-    let outcome = deliver_acp_combined(head, target_member, prompt_batches, acp_transport);
+    let outcome = deliver_acp_combined(head, target_member, prompt_batches, transport);
     batch
         .iter()
         .map(|task| SendResult {
@@ -112,28 +117,19 @@ fn deliver_acp_batch_via_transport(
 }
 
 /// Submits one combined ACP prompt via the transport and converts the single
-/// terminal outcome into a [`SendResult`]. Handles the no-transport
-/// (bootstrap-failed) and empty-prompt cases the same way the previous in-relay
-/// path did.
+/// terminal outcome into a [`SendResult`]. The transport reports its own
+/// unavailability (Unavailable readiness yields `runtime_acp_worker_unavailable`
+/// inside `deliver`), so there is no external runtime presence check here; the
+/// empty-prompt case is handled the same way the previous in-relay path did.
 fn deliver_acp_combined(
     head: &AsyncDeliveryTask,
     target_member: &BundleMember,
     prompt_batches: Vec<String>,
-    acp_transport: &mut Option<AcpTransport>,
+    transport: &mut TransportImpl,
 ) -> SendResult {
     let target_session = head.target_session.clone();
     let message_id = head.message_id.clone();
 
-    let Some(transport) = acp_transport.as_mut() else {
-        return SendResult {
-            target_session,
-            message_id,
-            outcome: SendOutcome::Failed,
-            reason_code: Some("runtime_acp_worker_unavailable".to_string()),
-            reason: Some("ACP worker is unavailable for target session".to_string()),
-            details: Some(serde_json::json!({ "target_session": target_member.id })),
-        };
-    };
     let Some(prompt) = prompt_batches.into_iter().next() else {
         return SendResult {
             target_session,
@@ -190,47 +186,36 @@ fn single_outcome_to_send_result(
     }
 }
 
-/// Worker-loop entry for the tmux quiescence hoist: runs the transport's
-/// pre-delivery readiness barrier and returns the resolved pane target on
-/// success. Returns the per-batch failure template on timeout, shutdown, or pane
-/// unavailability — the worker fans it out to every task in the coalesced
-/// batch. Caller must have established that the head task is envelope-mode
+/// Builds the [`DeliveryContext`] the worker-loop tmux quiescence hoist passes to
+/// `TransportImpl::prepare_delivery`. The relay owns the `QuiescenceOptions`
+/// scheduling config and unpacks it onto the context here so the tmux module
+/// never depends on relay; `pre_resolved_target` is `None` because the barrier
+/// resolves it. Caller must have established that the head task is envelope-mode
 /// and targets a tmux session.
-///
-/// The barrier (pane quiescence poll) lives in the [`TmuxTransport`]; the relay
-/// owns the `QuiescenceOptions` scheduling config and unpacks it onto the
-/// [`DeliveryContext`] here so the tmux module never depends on relay. This is
-/// the relay's only reach into tmux delivery and it now goes through the
-/// [`Transport`] trait rather than a tmux-internal helper.
-pub(super) fn prepare_tmux_pane_for_envelope_head(
+pub(super) fn tmux_prepare_context(
     task: &AsyncDeliveryTask,
     target_member: &BundleMember,
-) -> Result<String, Box<SendResult>> {
+) -> DeliveryContext {
     debug_assert!(matches!(
         task.payload_mode,
         DeliveryPayloadMode::EnvelopeMessage
     ));
-    let context = tmux_delivery_context(task, target_member, None);
-    match TmuxTransport::new().prepare_delivery(&context) {
-        Ok(preparation) => Ok(preparation
-            .pre_resolved_target
-            .expect("tmux prepare_delivery resolves a pane on success")),
-        Err(error) => Err(Box::new(wait_error_to_send_result(task, error))),
-    }
+    tmux_delivery_context(task, target_member, None)
 }
 
 /// Single-task tmux delivery (the RawInput path; envelope-mode tasks always go
-/// through the hoisted batch path). Routes through [`TmuxTransport`], which
-/// resolves the active pane and pastes; `served_successfully` is recorded
+/// through the hoisted batch path). Routes through the held [`TransportImpl`],
+/// which resolves the active pane and pastes; `served_successfully` is recorded
 /// relay-side here so the transport stays free of relay statics.
 fn deliver_one_target_tmux(
     task: &AsyncDeliveryTask,
     target_member: &BundleMember,
     prompt_batches: Vec<String>,
+    transport: &mut TransportImpl,
 ) -> SendResult {
     let envelopes = build_tmux_envelopes(task, prompt_batches);
     let context = tmux_delivery_context(task, target_member, None);
-    let result = TmuxTransport::new().deliver(envelopes, &context);
+    let result = transport.deliver(envelopes, &context);
     let send_result =
         single_outcome_to_send_result(result, task.target_session.clone(), task.message_id.clone());
     note_tmux_delivered(task, &send_result);
@@ -238,21 +223,22 @@ fn deliver_one_target_tmux(
 }
 
 /// Tmux delivery for a coalesced envelope batch. The worker proves the pane
-/// quiescent once (hoist) and supplies `pre_resolved_pane`; [`TmuxTransport`]
-/// pastes every rendered prompt against it and returns one combined outcome,
-/// which is fanned out to every task in `batch` using each task's own
-/// `message_id`/`target_session`. `served_successfully` is recorded relay-side
-/// per delivered task.
+/// quiescent once (hoist) and supplies `pre_resolved_pane`; the held
+/// [`TransportImpl`] pastes every rendered prompt against it and returns one
+/// combined outcome, which is fanned out to every task in `batch` using each
+/// task's own `message_id`/`target_session`. `served_successfully` is recorded
+/// relay-side per delivered task.
 fn deliver_batch_target_tmux(
     batch: &[AsyncDeliveryTask],
     target_member: &BundleMember,
     prompt_batches: Vec<String>,
     pre_resolved_pane: Option<String>,
+    transport: &mut TransportImpl,
 ) -> Vec<SendResult> {
     let head = &batch[0];
     let envelopes = build_tmux_envelopes(head, prompt_batches);
     let context = tmux_delivery_context(head, target_member, pre_resolved_pane);
-    let result = TmuxTransport::new().deliver(envelopes, &context);
+    let result = transport.deliver(envelopes, &context);
     let template =
         single_outcome_to_send_result(result, head.target_session.clone(), head.message_id.clone());
     let results = replicate_outcome_for_batch(batch, template);
@@ -274,7 +260,7 @@ fn note_tmux_delivered(task: &AsyncDeliveryTask, send_result: &SendResult) {
     }
 }
 
-/// Builds the rendered envelopes handed to [`TmuxTransport::deliver`]. Envelope
+/// Builds the rendered envelopes handed to the tmux transport's `deliver`. Envelope
 /// messages paste each coalesced prompt batch (always submitting with Enter);
 /// raw input pastes the raw message verbatim, honoring the task's `append_enter`.
 fn build_tmux_envelopes(
@@ -339,7 +325,10 @@ fn replicate_outcome_for_batch(
 
 /// Maps a tmux quiescence-wait failure to the per-task `SendResult` template the
 /// worker fans out across the coalesced batch.
-fn wait_error_to_send_result(task: &AsyncDeliveryTask, error: DeliveryWaitError) -> SendResult {
+pub(super) fn wait_error_to_send_result(
+    task: &AsyncDeliveryTask,
+    error: DeliveryWaitError,
+) -> SendResult {
     match error {
         DeliveryWaitError::Timeout {
             timeout,

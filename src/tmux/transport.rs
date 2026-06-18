@@ -197,13 +197,6 @@ impl Transport for TmuxTransport {
         // are reaped by the lifecycle primitives on bundle shutdown.
     }
 
-    fn accept_capacity(&self) -> usize {
-        // Like ACP, the relay pre-combines a coalesced turn before dispatch; the
-        // transport pastes every rendered envelope it receives in order, so it
-        // accepts the full batch.
-        usize::MAX
-    }
-
     fn give_output(&self) -> Option<Arc<dyn OutputView>> {
         // Tmux look is a direct synchronous pane capture in the relay look
         // handler (`capture_pane_tail_lines`), not a published handle, so there
