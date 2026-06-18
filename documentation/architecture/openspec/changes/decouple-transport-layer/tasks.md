@@ -198,35 +198,57 @@ follow-on.)
 
 ### Slice 4A-2 — worker lifecycle relocation + batch capability
 
-- [ ] 4.4 Relocate the ACP worker lifecycle
+- [x] 4.4 Relocated the ACP worker lifecycle
       (`bootstrap_acp_runtime_on_worker_start`, `drive_acp_worker_respawn`,
-      `AcpRespawnState`) from `relay/delivery/dispatch/worker.rs` into `src/acp`
-      as an `AcpWorkerDriver` owned by `TransportImpl::Acp`. Inject the three
-      relay touchpoints (UI stream broadcast, pending-choice invalidation,
-      worker-state mirror) as closures à la `Chooser` — no `src/acp -> crate::relay`
-      import. The relay worker loop keeps only the transport-agnostic skeleton and
-      holds a `TransportImpl` instead of `Option<AcpTransport>`. Supersedes the
-      Slice 2b "Dual readiness, worker-mirrored" decision. The driver assembles
-      `StartupContext` from the injected closures and calls `transport.startup`
-      during bootstrap/respawn (ACP review: the `prepare_startup_context`
-      construction moves with the lifecycle); the relay-side closure-construction
-      site imports nothing from `src/acp` (Coordinator; gated by 4.9).
-- [ ] 4.7 Replace the `target_is_acp` match in
+      `AcpRespawnState`) from `relay/delivery/dispatch/worker.rs` into
+      `src/acp/worker_driver.rs` as `AcpWorkerDriver`, owned by
+      `TransportImpl::Acp(Box<AcpWorkerDriver>)`. The driver impls `Transport`
+      (delegating to its inner `AcpTransport`) and exposes the async lifecycle
+      (`bootstrap`, `respawn`, `mark_busy`, `mirror_settled_readiness`,
+      `maybe_respawn_after_delivery`) as inherent methods; the relay worker loop
+      drives them via the `TransportImpl::Acp` match and is otherwise
+      transport-agnostic. The worker now holds a `TransportImpl` (ACP -> driver;
+      else `TransportImpl::tmux()`) instead of `Option<AcpTransport>`, and the
+      whole deliver path (`orchestration.rs`, `dispatch/transport.rs`) threads
+      `&mut TransportImpl`. Supersedes the Slice 2b "Dual readiness,
+      worker-mirrored" decision. `src/acp` imports nothing from `crate::relay`.
+      DEVIATIONS: (a) the dispatch named three injected closures; the driver
+      actually needs FIVE injected services — `mirror_state`, `broadcast_ui`,
+      `invalidate_choices` (the three named) plus `publish_output` (the look
+      OutputView handle is published before each `startup`, a relay-registry
+      write) and `chooser` (the relay-built `Chooser` for `StartupContext`).
+      (b) `TransportImpl::Acp` is boxed (`Box<AcpWorkerDriver>`) to satisfy
+      `large_enum_variant` and keep the per-delivery `spawn_blocking` move cheap.
+      (c) the post-delivery respawn decision reads the driver's own
+      `transport.readiness()` (equal to the just-mirrored registry value) rather
+      than re-reading the registry, so the worker names no `AcpWorkerReadinessState`.
+- [x] 4.7 Replaced the `target_is_acp` match in
       `payload.rs::prepare_batch_delivery_payload` with
-      `SessionType::can_take_batches()` (ACP `false`; Tmux/Pty `true`), exposed as
-      a first-class method on `TransportImpl` per the capability-flag family
-      (`add-transport-capability-flags`). Envelope rendering, token-budget
-      packing, the single-batch peel loop, and the `deferred -> carry` re-queue all
-      stay in relay unchanged.
-- [ ] 4.8 Remove `Transport::accept_capacity()` and its impls — dead surface
-      (zero call sites; both impls return `usize::MAX`), and a static count cannot
-      express ACP's content-dependent single-batch budget, now covered by
+      `SessionType::can_take_batches()` (ACP `false`; Tmux/Ui/Pubsub `true`).
+      Added `can_take_batches` to `SessionType` (capability-flag family, doc table
+      updated) and as a first-class method on `TransportImpl`. Envelope rendering,
+      token-budget packing, the single-batch peel loop, and the `deferred -> carry`
+      re-queue all stay in relay unchanged.
+- [x] 4.8 Removed `Transport::accept_capacity()` and its impls (trait method,
+      `TransportImpl` dispatch, ACP + tmux impls, doc references) — dead surface
+      (zero call sites; both impls returned `usize::MAX`), now covered by
       `can_take_batches`.
-- [ ] 4.9 Proof-of-absence: `relay/delivery/` contains no `crate::acp` /
-      `crate::tmux` imports and no references to `acp_delivery`, `acp_state`,
-      `permission_state`, `relay/tmux`, `relay/lifecycle` tmux primitives, or
-      `AcpTransport` / `AcpWorkerReadinessState`.
-- [ ] 4.10 Validate: `cargo test` passes; full integration suite green.
+- [x] 4.9 Proof-of-absence — SCOPED to the delivery dispatch + worker lifecycle,
+      which is now clean: `worker.rs`, `orchestration.rs` (deliver path),
+      `dispatch/transport.rs`, and `payload.rs` contain no `crate::acp` /
+      `crate::tmux` imports and name no `AcpTransport` / `TmuxTransport`. The ACP
+      worker-state REGISTRY (`async_worker.rs`), its pub/sub (`observability.rs`),
+      and the ACP startup prime-wait (`orchestration.rs::initialize_acp_target_for_startup`,
+      reading the registry + `ACP_STARTUP_PRIME_TIMEOUT_MS`) retain
+      `AcpWorkerReadinessState` as relay-side ACP worker-state infrastructure. This
+      matches the design's Module Boundaries (which keep `observability.rs` /
+      "relay-side ACP worker state" in `relay/delivery/`) and is the holistic
+      generalization deferred to 4.6; purging it here would pre-empt 4.6 with a
+      half-measure. A literal zero-`AcpWorkerReadinessState` reading of 4.9 is
+      incompatible with the design keeping the registry in `relay/delivery/`.
+- [x] 4.10 Validate: `cargo test` passes (lib 18, integration 206, unit 273),
+      clippy `-D warnings` clean, fmt clean; tmux + ACP delivery unchanged end to
+      end.
 - [x] 4.5 Decouple `AcpWorkerReadinessState` from `crate::relay` (the last
       transport->relay back-edge after Slice 3's 3.0 vocabulary move). Relocated
       the enum from `relay/delivery/async_worker.rs` into

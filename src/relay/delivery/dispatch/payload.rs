@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use crate::{
-    configuration::{BundleMember, SessionType, TargetConfiguration},
+    configuration::{BundleMember, SessionType},
     envelope::{
         AddressIdentity, EnvelopeRenderInput, ManifestPreamble, PromptBatchSettings,
         batch_envelopes, parse_tokenizer_profile, render_envelope,
@@ -102,14 +102,16 @@ pub(super) fn prepare_batch_delivery_payload(
         .iter()
         .map(|task| render_task_envelope(task, target_member, created_at))
         .collect::<Vec<_>>();
-    let target_is_acp = matches!(
-        target_member.map(|member| &member.target),
-        Some(TargetConfiguration::Acp(_)),
-    );
+    // A transport that accepts at most one prompt batch per dispatch
+    // (`can_take_batches() == false`, ACP today) forces the single-batch peel
+    // below. Derived from the target's session type — the capability-flag family.
+    let single_batch_only = target_member
+        .map(|member| !member.target.session_type().can_take_batches())
+        .unwrap_or(false);
 
     let mut accepted_len = batch.len();
     let mut prompt_batches = batch_envelopes(&rendered, head.batch_settings);
-    if target_is_acp && prompt_batches.len() > 1 {
+    if single_batch_only && prompt_batches.len() > 1 {
         // ACP delivery accepts exactly one prompt batch per dispatch. Peel
         // tail envelopes until the packer produces a single batch; the peeled
         // tasks return to the worker carry buffer. A single envelope that

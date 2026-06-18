@@ -7,7 +7,7 @@
 pub mod contract;
 pub mod vocabulary;
 
-pub use crate::acp::AcpTransport;
+pub use crate::acp::{AcpDriverServices, AcpTransport, AcpWorkerDriver};
 pub use crate::tmux::TmuxTransport;
 pub use contract::{
     ChoiceMade, ChoiceToMake, Chooser, DeliveryContext, DeliveryEnvelope, DeliveryPreparation,

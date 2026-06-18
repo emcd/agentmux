@@ -32,14 +32,14 @@
 //!   which hands the relay an [`OutputView`] handle the look request path can
 //!   read without borrowing the worker-owned transport.
 //!
-//! ## Slice status
+//! ## Status
 //!
-//! This module is the Slice 1 scaffold (revised by the `decouple-transport-layer`
-//! contract amendment): the trait, the dispatch enum, the placeholder transport
-//! structs, and the shared types. The placeholder [`Transport`] implementations
-//! have `todo!()` bodies; the real bodies arrive when ACP delivery moves here
-//! (Slice 2) and Tmux delivery moves here (Slice 3). Nothing constructs or calls
-//! these types yet, so there is no behavior change.
+//! Complete (`decouple-transport-layer`): the trait, the [`TransportImpl`]
+//! dispatch enum, and the shared types live here; the ACP transport lives in
+//! `crate::acp` (driven by the `AcpWorkerDriver` lifecycle behind
+//! [`TransportImpl::Acp`]) and the tmux transport in `crate::tmux`. The relay
+//! delivery worker holds a [`TransportImpl`] per target and dispatches every
+//! agent delivery through it.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -47,7 +47,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::acp::{AcpSnapshotEntry, AcpTransport};
+use crate::acp::{AcpDriverServices, AcpSnapshotEntry, AcpWorkerDriver};
 use crate::configuration::BundleMember;
 use crate::tmux::TmuxTransport;
 // Re-export the configuration prompt-readiness template into the transport
@@ -100,14 +100,14 @@ pub trait Transport {
     /// inline via the [`StartupContext::choose`] resolver, on the transport's own
     /// thread, without worker involvement.
     ///
-    /// The relay decides how envelopes are grouped before this call (subject to
-    /// [`accept_capacity`]); a transport must honor whatever batch it receives.
-    /// Today the ACP worker pre-combines a coalesced turn into a single envelope
-    /// and replicates the lone outcome across the contributing tasks, so ACP's
-    /// `deliver` observes one envelope in practice even though [`accept_capacity`]
-    /// permits more.
-    ///
-    /// [`accept_capacity`]: Transport::accept_capacity
+    /// The relay decides how envelopes are grouped before this call; a transport
+    /// must honor whatever batch it receives. A transport that accepts at most one
+    /// prompt batch per dispatch declares so via
+    /// [`TransportImpl::can_take_batches`] returning `false`, and the relay peels
+    /// the rendered envelopes to a single batch before calling `deliver`. The ACP
+    /// worker pre-combines a coalesced turn into a single envelope and replicates
+    /// the lone outcome across the contributing tasks, so ACP's `deliver` observes
+    /// one envelope in practice.
     ///
     /// INVARIANT: an implementation MUST observe relay shutdown and return a
     /// terminal/dropped outcome promptly rather than parking the blocking thread
@@ -131,15 +131,6 @@ pub trait Transport {
 
     /// Tears down the transport runtime, releasing its resources.
     fn shutdown(&mut self);
-
-    /// Reports the upper bound on envelopes the transport will accept per
-    /// [`deliver`] call — the willingness the relay groups against, not a promise
-    /// about the batch any single call receives. Tmux returns `1` (one paste per
-    /// call); ACP returns `usize::MAX`, though the worker still pre-combines a
-    /// turn into one envelope before dispatching (see [`deliver`]).
-    ///
-    /// [`deliver`]: Transport::deliver
-    fn accept_capacity(&self) -> usize;
 
     /// Hands the relay a concurrently-readable [`OutputView`] handle for the
     /// `look` request path, or `None` for transports with no observable output.
@@ -177,8 +168,13 @@ pub trait OutputView: Send + Sync {
 /// non-object-safe if it ever went async, and enum dispatch carries zero heap
 /// overhead per call.
 pub enum TransportImpl {
-    /// ACP delivery transport (implemented in Slice 2).
-    Acp(AcpTransport),
+    /// ACP delivery transport with its worker lifecycle driver (Slice 2 / 4A-2).
+    /// The driver owns the `AcpTransport` plus its bootstrap/respawn lifecycle;
+    /// delivery methods delegate to the inner transport. Boxed: the driver is far
+    /// larger than the other variants, and the worker moves the `TransportImpl`
+    /// in and out of `spawn_blocking` each delivery, so the indirection keeps that
+    /// move cheap.
+    Acp(Box<AcpWorkerDriver>),
     /// Tmux pane delivery transport (implemented in Slice 3).
     Tmux(TmuxTransport),
     /// Forward-declared PTY transport. The capability row answers now
@@ -189,6 +185,30 @@ pub enum TransportImpl {
 }
 
 impl TransportImpl {
+    /// Builds an ACP transport with its worker lifecycle driver for one target.
+    /// The relay constructs `services` closing over its own registries; the
+    /// driver imports nothing from `crate::relay`.
+    #[must_use]
+    pub fn acp(
+        target_member: BundleMember,
+        runtime_directory: PathBuf,
+        bundle_name: String,
+        services: AcpDriverServices,
+    ) -> Self {
+        Self::Acp(Box::new(AcpWorkerDriver::new(
+            target_member,
+            runtime_directory,
+            bundle_name,
+            services,
+        )))
+    }
+
+    /// Builds a stateless tmux delivery transport.
+    #[must_use]
+    pub fn tmux() -> Self {
+        Self::Tmux(TmuxTransport::new())
+    }
+
     /// The target can be captured by `look`.
     #[must_use]
     pub fn can_be_looked(&self) -> bool {
@@ -220,6 +240,19 @@ impl TransportImpl {
         match self {
             Self::Acp(_) => true,
             Self::Tmux(_) | Self::Pty => false,
+        }
+    }
+
+    /// The target's transport accepts the full coalesced batch in a single
+    /// [`deliver`](Transport::deliver) call (Tmux/Pty). ACP accepts at most one
+    /// prompt batch per turn and returns `false`, so the relay peels the rendered
+    /// envelopes to a single batch and re-queues the remainder to the worker
+    /// carry buffer.
+    #[must_use]
+    pub fn can_take_batches(&self) -> bool {
+        match self {
+            Self::Tmux(_) | Self::Pty => true,
+            Self::Acp(_) => false,
         }
     }
 
@@ -286,16 +319,6 @@ impl TransportImpl {
         match self {
             Self::Acp(transport) => transport.shutdown(),
             Self::Tmux(transport) => transport.shutdown(),
-            Self::Pty => unimplemented!("PTY transport not yet implemented"),
-        }
-    }
-
-    /// Reports per-call delivery capacity; see [`Transport::accept_capacity`].
-    #[must_use]
-    pub fn accept_capacity(&self) -> usize {
-        match self {
-            Self::Acp(transport) => transport.accept_capacity(),
-            Self::Tmux(transport) => transport.accept_capacity(),
             Self::Pty => unimplemented!("PTY transport not yet implemented"),
         }
     }

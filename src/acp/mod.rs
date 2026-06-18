@@ -3,6 +3,7 @@ pub mod permission;
 pub mod render;
 pub mod state;
 pub mod transport;
+pub mod worker_driver;
 
 pub use client::{
     AcpRequestError, AcpStdioClient, DispatchHandler, PermissionHandler, PermissionResponder,
@@ -16,6 +17,7 @@ pub use transport::{
     ACP_ERROR_CODE_PROMPT_FAILED, ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE, AcpBootstrapError,
     AcpTransport, PersistentAcpWorkerRuntime, bootstrap_acp_worker_runtime,
 };
+pub use worker_driver::{AcpDriverServices, AcpWorkerDriver};
 
 use serde_json::Value;
 
