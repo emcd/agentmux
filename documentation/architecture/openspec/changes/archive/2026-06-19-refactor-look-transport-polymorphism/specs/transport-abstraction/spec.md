@@ -70,7 +70,7 @@ SHALL map validation-class transport error codes to relay validation errors. A
   `validation_offset_unsupported`
 - **AND** the relay surfaces it as a validation error, not an internal failure
 
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: Transport-Neutral Look Snapshot Vocabulary
 

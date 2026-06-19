@@ -688,7 +688,8 @@ When `snapshot_format = "lines"`, responses SHALL include:
 - `snapshot_lines` (`string[]`)
 
 When `snapshot_format = "structured_entries_v1"`, responses SHALL include:
-- `snapshot_entries` (`object[]`) using canonical ACP entry vocabulary.
+- `snapshot_entries` (`object[]`) using the canonical structured entry
+  vocabulary (transport-neutral; produced by ACP today).
 
 For ACP targets, successful relay look responses SHALL additionally include:
 
@@ -717,7 +718,7 @@ ACP stale reason vocabulary:
 - **AND** includes ordered `snapshot_lines` from oldest to newest
 - **AND** ACP additive fields are omitted
 
-#### Scenario: Return ACP look payload with structured entries
+#### Scenario: Return structured-entries look payload for ACP target
 
 - **WHEN** look succeeds for ACP target
 - **THEN** relay returns `snapshot_format="structured_entries_v1"`

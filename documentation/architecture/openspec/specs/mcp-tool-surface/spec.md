@@ -380,6 +380,12 @@ from transport heuristics.
 - **AND** includes canonical `snapshot_lines` payload
 - **AND** ACP additive freshness fields are omitted
 
+#### Scenario: Preserve structured-entries look payload unchanged
+
+- **WHEN** `look` succeeds for an ACP-backed target
+- **THEN** MCP returns `snapshot_format="structured_entries_v1"`
+- **AND** preserves `snapshot_entries` ordering and values unchanged
+
 ### Requirement: MCP Authorization Adapter Boundary
 
 MCP SHALL remain a request validator/adapter and SHALL perform no independent
