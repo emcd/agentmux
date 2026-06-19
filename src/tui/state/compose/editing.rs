@@ -27,6 +27,12 @@ impl AppState {
             ScreenMode::Communication => ScreenMode::Interaction,
             ScreenMode::Interaction => ScreenMode::Communication,
         };
+        // Entering Interaction without an active session leaves the operator on
+        // an empty target header with nothing to write to. Auto-open the unified
+        // picker (session column) so a target can be chosen immediately.
+        if self.mode == ScreenMode::Interaction && self.look_target.is_none() {
+            self.open_picker();
+        }
     }
 
     pub fn insert_character(&mut self, character: char) {

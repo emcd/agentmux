@@ -16,8 +16,11 @@ a time; `F4` toggles between them. The active mode is shown in the footer.
   target header, the look snapshot, a Write input (relay `raww`), and
   choice decisioning.
 
-Help (`F1`), recipient picker (`F2`), delivery events (`F3`), and bundle
-picker (`F5`) are overlays available in both modes.
+Help (`F1`), the unified picker (`F2`/`F5`), and delivery events (`F3`) are
+overlays available in both modes. The unified picker is a single window with a
+bundle column and a session column; `F2` opens it focused on sessions, `F5`
+focused on bundles. Entering Interaction mode without an active session
+auto-opens it.
 
 ## Module Map
 
@@ -34,8 +37,10 @@ picker (`F5`) are overlays available in both modes.
     and dispatch helpers. Split by concern:
     - `mod.rs` — pure hub: submodule decls and re-exports of `AppState` and
       sibling-state items
-    - `pickers.rs` — recipient/bundle picker open/close/move, picker
-      selection insert, overlay toggles (`toggle_events_overlay`,
+    - `pickers.rs` — unified picker open/close (`F2` session focus, `F5`
+      bundle focus), column focus toggle, column-scoped filter, visible
+      (filtered) index resolution, session-insert and bundle-commit
+      selection, overlay toggles (`toggle_events_overlay`,
       `toggle_help_overlay`)
     - `editing.rs` — focus cycling, mode toggle, text/character editing,
       message cursor, `To` cursor + completion, `clear_compose_fields`
@@ -63,10 +68,10 @@ picker (`F5`) are overlays available in both modes.
       pane, look snapshot, structured entries, look choice lines
     - `overlays/`
       - `mod.rs` — pure hub: submodule decls
-      - `recipient_picker.rs` — recipient picker overlay, hint strip,
-        per-row readiness styling
-      - `bundle_picker.rs` — bundle picker overlay, status header line,
-        severity styling
+      - `picker.rs` — unified bundle+session picker overlay: bundle status
+        header, column-scoped filter line, side-by-side bundle/session
+        columns with focus indication, per-row readiness styling, hint
+        strip
       - `events.rs` — events overlay (pending choices + delivery
         events)
       - `help.rs` — help overlay (two-column keybinding reference)
@@ -116,21 +121,30 @@ picker (`F5`) are overlays available in both modes.
 - `@`-prefixed tokens trigger immediate completion proposals after one suffix character,
 - overlays:
   - help,
-  - recipient picker: lists routable recipients with a one-line hint strip at
-    the foot showing the active keybindings. The `Enter` hint is
-    context-sensitive — it reads `Insert into To` in Communication mode and
-    `Open (look+raww)` in Interaction mode — alongside `Esc` Close and
-    `Up/Down` Move.
+  - unified picker (`F2`/`F5`): a single window with two side-by-side columns —
+    bundles (left) and the active bundle's sessions (right). `F2` opens it
+    focused on the session column, `F5` on the bundle column; entering
+    Interaction mode with no active session auto-opens it on the session column.
+    A column-scoped filter (typed characters, `Backspace` to erase) narrows the
+    focused column and resets its selection to the first match; `Tab`/arrows
+    switch focus and clear the filter. The foot hint strip shows the
+    context-sensitive `Enter` action — on the session column it reads
+    `session→To` in Communication mode and `session→look` in Interaction mode;
+    on the bundle column `Enter` switches the active bundle.
   - delivery + choice events,
-  - bundle picker (F5): active bundle switching — browses
-    `available_bundles` (sourced from `load_bundle_group_memberships` at TUI
-    launch), highlights the active bundle, and on Enter replaces the active
-    bundle context. The switch rebuilds the bundle-bound `RelayStreamSession`,
-    resets bundle-scoped state (recipients, `last_selected_recipient`, bundle
-    status, look snapshot, pending choices, chat history, delivery
-    bookkeeping, write draft), and triggers `refresh_recipients` on the new
-    bundle. Selecting the active bundle is a no-op that closes the picker.
-    Cross-bundle targeting for `Send` and `Look` is handled separately via the
+  - bundle column behavior: browses `available_bundles` (sourced from
+    `load_bundle_group_memberships` at TUI launch) and highlights the active
+    bundle. `Enter` on a different bundle replaces the active bundle context —
+    rebuilding the bundle-bound `RelayStreamSession`, resetting bundle-scoped
+    state (recipients, `last_selected_recipient`, bundle status, look snapshot,
+    pending choices, chat history, delivery bookkeeping, write draft), and
+    triggering `refresh_recipients` on the new bundle — then keeps the picker
+    open and hands focus to the re-enumerated session column so a session can be
+    chosen in the same window. `Enter` on the already-active bundle is a no-op
+    that just hands focus to the session column. The picker enumerates one
+    bundle at a time (the active one); relay-wide cross-bundle enumeration is
+    tracked separately (todos/tui/47). Cross-bundle targeting for `Send` and
+    `Look` is still handled via the
     `session@bundle` grammar in the `To` / look-target field: the relay resolves
     the peer bundle by suffix and authorizes the requester's capability at the
     uniform cross-bundle `all` scope (the same threshold for `send` and
@@ -144,16 +158,16 @@ picker (`F5`) are overlays available in both modes.
     enumeration context and the `Look` namespace selector, never as a sender
     binding (so a relay-wide `@GLOBAL` sender shows no `Bundle:` field in the
     header),
-- picker actions (mode-aware `Enter`, no separate `l` / `w` keys):
+- session-column `Enter` actions (mode-aware, no separate `l` / `w` keys):
   - Communication mode: insert the selected recipient into `To`,
   - Interaction mode: open the Interaction screen for the selected identity,
     running a synchronous relay `Look` so the look pane is populated with
     recent session history before the Write input takes focus,
-- picker last-selected persistence: the most recently committed picker target
+- picker last-selected persistence: the most recently committed session target
   (Communication insert or Interaction open) is tracked by session name in
   `last_selected_recipient`; when the picker reopens or the recipient list
-  refreshes, selection is resolved by name against the current list and falls
-  back deterministically to index 0 when the prior target is absent,
+  refreshes, session selection is resolved by name against the current list and
+  falls back deterministically to index 0 when the prior target is absent,
 - picker bundle status header: one-line CLI-style key=value summary of
   `bundle.hosted`, `bundle.state`, `bundle.startup_health`, and reason code
   from `relay::ListedBundle`, color-coded into four severity buckets

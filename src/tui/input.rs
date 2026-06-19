@@ -2,7 +2,7 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, Mou
 
 use crate::runtime::error::RuntimeError;
 
-use super::state::{AppState, FocusField, ScreenMode};
+use super::state::{AppState, FocusField, PickerColumn, ScreenMode};
 
 pub(crate) fn handle_event(state: &mut AppState, event: Event) -> Result<(), RuntimeError> {
     match event {
@@ -40,9 +40,6 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
 
     if state.picker_open {
         return handle_picker_key(state, key);
-    }
-    if state.bundle_picker_open {
-        return handle_bundle_picker_key(state, key);
     }
     if state.events_overlay_open {
         return handle_events_overlay_key(state, key);
@@ -270,7 +267,7 @@ fn insert_text_for_active_mode(state: &mut AppState, text: &str) {
 
 fn handle_picker_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
     match key.code {
-        KeyCode::Esc | KeyCode::F(2) => state.close_picker(),
+        KeyCode::Esc | KeyCode::F(2) | KeyCode::F(5) => state.close_picker(),
         KeyCode::F(3) => {
             state.close_picker();
             state.toggle_events_overlay();
@@ -279,39 +276,24 @@ fn handle_picker_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeE
             state.close_picker();
             state.toggle_mode();
         }
-        KeyCode::F(5) => {
-            state.close_picker();
-            state.open_bundle_picker();
+        KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right => {
+            state.toggle_picker_focus();
         }
         KeyCode::Down => state.move_picker_selection(1),
         KeyCode::Up => state.move_picker_selection(-1),
-        KeyCode::Enter => match state.mode {
-            ScreenMode::Communication => state.insert_picker_selection(),
-            ScreenMode::Interaction => return state.enter_interaction_from_picker(),
+        KeyCode::Enter => match state.picker_focus {
+            PickerColumn::Bundles => return state.commit_selected_picker_bundle(),
+            PickerColumn::Sessions => match state.mode {
+                ScreenMode::Communication => state.insert_picker_selection(),
+                ScreenMode::Interaction => return state.enter_interaction_from_picker(),
+            },
         },
-        _ => {}
-    }
-    Ok(())
-}
-
-fn handle_bundle_picker_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
-    match key.code {
-        KeyCode::Esc | KeyCode::F(5) => state.close_bundle_picker(),
-        KeyCode::F(2) => {
-            state.close_bundle_picker();
-            state.open_picker();
+        KeyCode::Backspace => state.picker_filter_backspace(),
+        KeyCode::Char(character)
+            if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+        {
+            state.picker_filter_push(character);
         }
-        KeyCode::F(3) => {
-            state.close_bundle_picker();
-            state.toggle_events_overlay();
-        }
-        KeyCode::F(4) => {
-            state.close_bundle_picker();
-            state.toggle_mode();
-        }
-        KeyCode::Down => state.move_bundle_picker_selection(1),
-        KeyCode::Up => state.move_bundle_picker_selection(-1),
-        KeyCode::Enter => return state.switch_to_selected_bundle(),
         _ => {}
     }
     Ok(())

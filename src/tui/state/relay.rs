@@ -68,21 +68,20 @@ impl AppState {
         }
     }
 
-    pub fn switch_to_selected_bundle(&mut self) -> Result<(), RuntimeError> {
-        let Some(index) = self.bundle_picker_state.selected() else {
+    /// Commits the bundle-column selection in the unified picker. Selecting the
+    /// active bundle is a no-op that simply hands focus to the session column;
+    /// selecting a different bundle switches the active context, re-enumerates
+    /// its sessions, and keeps the picker open focused on those sessions so the
+    /// operator can pick one in the same window.
+    pub fn commit_selected_picker_bundle(&mut self) -> Result<(), RuntimeError> {
+        let Some(target_bundle) = self.selected_picker_bundle() else {
             return Err(RuntimeError::validation(
                 "validation_unknown_target",
                 "bundle switch requires a selected bundle in picker",
             ));
         };
-        let Some(target_bundle) = self.available_bundles.get(index).cloned() else {
-            return Err(RuntimeError::validation(
-                "validation_unknown_target",
-                "bundle picker selection is out of range",
-            ));
-        };
         if target_bundle == self.bundle_name {
-            self.bundle_picker_open = false;
+            self.focus_picker_session_column();
             return Ok(());
         }
         self.bundle_name = target_bundle.clone();
@@ -92,7 +91,7 @@ impl AppState {
             self.sender_session.clone(),
         );
         self.reset_bundle_scoped_state();
-        self.bundle_picker_open = false;
+        self.focus_picker_session_column();
         self.push_status(None, format!("Switched to bundle {target_bundle}."));
         self.refresh_recipients()
     }
@@ -101,7 +100,7 @@ impl AppState {
         self.recipients.clear();
         self.last_selected_recipient = None;
         self.bundle_status = None;
-        self.picker_state.select(None);
+        self.picker_session_state.select(None);
         self.look_target = None;
         self.look_captured_at = None;
         self.look_snapshot_format = None;

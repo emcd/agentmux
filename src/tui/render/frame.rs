@@ -10,8 +10,7 @@ use super::super::sender_bound_bundle;
 use super::super::state::AppState;
 use super::cursor::render_active_cursor;
 use super::overlays::{
-    bundle_picker::render_bundle_picker_overlay, events::render_events_overlay,
-    help::render_help_overlay, recipient_picker::render_picker_overlay,
+    events::render_events_overlay, help::render_help_overlay, picker::render_picker_overlay,
 };
 
 pub(super) const WORKBENCH_MIN_CHAT_HEIGHT: u16 = 1;
@@ -39,9 +38,6 @@ pub(crate) fn render(frame: &mut Frame, state: &mut AppState) {
     }
     if state.picker_open {
         render_picker_overlay(frame, state);
-    }
-    if state.bundle_picker_open {
-        render_bundle_picker_overlay(frame, state);
     }
     if state.events_overlay_open {
         render_events_overlay(frame, state);
