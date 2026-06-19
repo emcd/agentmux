@@ -176,10 +176,7 @@ async fn list_rejects_missing_or_invalid_command() {
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let missing_command = harness.call_tool(2, "list", Map::new()).await;
-    assert_eq!(
-        error_code(&missing_command),
-        Some("validation_invalid_params")
-    );
+    assert_param_deserialize_error(&missing_command, "command");
 
     let invalid_command = harness
         .call_tool(

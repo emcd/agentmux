@@ -30,8 +30,7 @@ pub(super) const NAMESPACE_AGENTMUX: &str = "agentmux";
 #[schemars(deny_unknown_fields)]
 pub(super) struct ListParams {
     /// List command selector. Allowed values: `principals`, `decisions`.
-    #[serde(default)]
-    pub(super) command: Option<String>,
+    pub(super) command: String,
     /// Command-scoped arguments.
     #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
     #[serde(default)]
@@ -47,6 +46,7 @@ pub(super) struct ListParams {
 pub(super) struct HelpParams {
     /// Namespace, tool, or command query (for example `list` or `list.principals`).
     #[serde(default)]
+    #[schemars(with = "String")]
     pub(super) query: Option<String>,
     /// Unknown fields captured for explicit validation.
     #[serde(flatten, default)]
@@ -61,6 +61,7 @@ pub(super) struct ListArgs {
     /// a bundle name selects that bundle; `GLOBAL` selects relay-wide
     /// principals; `*` fans out across all namespaces.
     #[serde(default)]
+    #[schemars(with = "String")]
     pub(super) namespace: Option<String>,
     /// Unknown fields captured for explicit validation.
     #[serde(flatten, default)]
@@ -73,6 +74,7 @@ pub(super) struct ListArgs {
 pub(super) struct SendParams {
     /// Optional client request identifier echoed in responses.
     #[serde(default)]
+    #[schemars(with = "String")]
     pub(super) request_id: Option<String>,
     /// Message body to route to targets.
     pub(super) message: String,
@@ -96,10 +98,12 @@ pub(super) struct LookParams {
     pub(super) target_session: String,
     /// Optional snapshot window size: tmux pane lines, or ACP replay entries.
     #[serde(default)]
+    #[schemars(with = "u64")]
     pub(super) lines: Option<u64>,
     /// Optional entries to skip from the newest end before the tail-N window,
     /// for walking backward through older ACP replay context. ACP targets only.
     #[serde(default)]
+    #[schemars(with = "u64")]
     pub(super) offset: Option<u64>,
     /// Unknown fields captured for explicit validation.
     #[serde(flatten, default)]
@@ -121,12 +125,15 @@ pub(super) struct ListDecisionsArgs {
 pub(super) struct ChooseParams {
     /// Required choice request identifier returned by `list` command="decisions".
     #[serde(default)]
+    #[schemars(with = "String")]
     pub(super) choice_request_id: Option<String>,
     /// Required decision outcome (`selected` or `cancelled`).
     #[serde(default)]
+    #[schemars(with = "String")]
     pub(super) outcome: Option<String>,
     /// Required option_id when outcome is `selected`; forbidden when `cancelled`.
     #[serde(default)]
+    #[schemars(with = "String")]
     pub(super) option_id: Option<String>,
     /// Unknown fields captured for explicit validation. Caller-supplied
     /// sender-like identity fields (`decided_by`, `ui_session_id`,
@@ -141,8 +148,7 @@ pub(super) struct ChooseParams {
 #[schemars(deny_unknown_fields)]
 pub(super) struct UpdownParams {
     /// Updown subcommand selector. Required; allowed values: `up`, `down`.
-    #[serde(default)]
-    pub(super) command: Option<String>,
+    pub(super) command: String,
     /// Command-scoped arguments.
     #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
     #[serde(default)]
@@ -166,8 +172,7 @@ pub(super) struct UpdownArgs {
 #[schemars(deny_unknown_fields)]
 pub(super) struct NewParams {
     /// New subcommand selector. Required; allowed value: `peer`.
-    #[serde(default)]
-    pub(super) command: Option<String>,
+    pub(super) command: String,
     /// Command-scoped arguments.
     #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
     #[serde(default)]
@@ -183,13 +188,16 @@ pub(super) struct NewParams {
 pub(super) struct NewPeerArgs {
     /// Principal identifier to register, in `<id>@<namespace>` form.
     #[serde(default)]
+    #[schemars(with = "String")]
     pub(super) principal_id: Option<String>,
     /// Optional scope recorded on the principal (set for `@RELAY`/`@EXTERNAL`).
     #[serde(default)]
+    #[schemars(with = "String")]
     pub(super) scope: Option<String>,
     /// Optional absolute path; when present the PSK is written there instead of
     /// being returned in the response.
     #[serde(default)]
+    #[schemars(with = "String")]
     pub(super) output_path: Option<String>,
     /// Unknown fields captured for explicit validation.
     #[serde(flatten, default)]
@@ -201,8 +209,7 @@ pub(super) struct NewPeerArgs {
 #[schemars(deny_unknown_fields)]
 pub(super) struct ChangeParams {
     /// Change subcommand selector. Required; allowed value: `psk`.
-    #[serde(default)]
-    pub(super) command: Option<String>,
+    pub(super) command: String,
     /// Command-scoped arguments.
     #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
     #[serde(default)]
@@ -218,6 +225,7 @@ pub(super) struct ChangeParams {
 pub(super) struct ChangePskArgs {
     /// Principal identifier whose credential is rotated.
     #[serde(default)]
+    #[schemars(with = "String")]
     pub(super) principal_id: Option<String>,
     /// Unknown fields captured for explicit validation.
     #[serde(flatten, default)]
@@ -237,6 +245,7 @@ pub(super) struct RawwParams {
     pub(super) no_enter: bool,
     /// Optional client request identifier echoed in responses.
     #[serde(default)]
+    #[schemars(with = "String")]
     pub(super) request_id: Option<String>,
     /// Unknown fields captured for explicit validation.
     #[serde(flatten, default)]
