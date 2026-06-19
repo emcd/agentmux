@@ -6,7 +6,7 @@ use agentmux::{
     runtime::error::RuntimeError,
     tui::{
         TuiLaunchOptions,
-        workbench::{Workbench, WorkbenchField, WorkbenchMode},
+        workbench::{Workbench, WorkbenchField, WorkbenchMode, WorkbenchPickerColumn},
     },
 };
 
@@ -328,6 +328,11 @@ fn f4_preserves_per_mode_drafts_across_switches() {
     state
         .dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE))
         .expect("f4 should switch to interaction");
+    // Entering Interaction without a target auto-opens the picker; dismiss it
+    // so typing lands in the Write (raww) input rather than the picker filter.
+    state
+        .dispatch_event(key_event(KeyCode::Esc, KeyModifiers::NONE))
+        .expect("esc should close the auto-opened picker");
     for character in "echo".chars() {
         state
             .dispatch_event(key_event(KeyCode::Char(character), KeyModifiers::NONE))
@@ -352,6 +357,9 @@ fn interaction_mode_typing_updates_raww_draft() {
     state
         .dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE))
         .expect("f4 should switch to interaction");
+    state
+        .dispatch_event(key_event(KeyCode::Esc, KeyModifiers::NONE))
+        .expect("esc should close the auto-opened picker");
     for character in "ls".chars() {
         state
             .dispatch_event(key_event(KeyCode::Char(character), KeyModifiers::NONE))
@@ -366,6 +374,11 @@ fn interaction_mode_enter_without_target_is_validation_error() {
     state
         .dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE))
         .expect("f4 should switch to interaction");
+    // Close the auto-opened picker so Enter exercises the raww dispatch path,
+    // which requires an active interaction target.
+    state
+        .dispatch_event(key_event(KeyCode::Esc, KeyModifiers::NONE))
+        .expect("esc should close the auto-opened picker");
     let result = state.dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE));
     match result {
         Err(RuntimeError::Validation { code, .. }) => {
@@ -396,9 +409,10 @@ fn picker_enter_in_interaction_mode_requires_selected_recipient() {
     state
         .dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE))
         .expect("f4 should switch to interaction");
-    state
-        .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
-        .expect("f2 should open picker");
+    // Interaction entry without a target auto-opens the picker on the session
+    // column; with no recipients there is nothing to select.
+    assert!(state.picker_open());
+    assert_eq!(state.picker_column(), WorkbenchPickerColumn::Sessions);
     let result = state.dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE));
     match result {
         Err(RuntimeError::Validation { code, .. }) => {
@@ -415,9 +429,9 @@ fn picker_enter_in_interaction_mode_attempts_look_for_selected_target() {
     state
         .dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE))
         .expect("f4 should switch to interaction");
-    state
-        .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
-        .expect("f2 should open picker");
+    // The picker auto-opens on the session column with the lone recipient
+    // selected, so Enter attempts a look against it.
+    assert!(state.picker_open());
     let result = state.dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE));
     match result {
         Err(RuntimeError::Validation { code, .. }) => {
@@ -431,24 +445,70 @@ fn picker_enter_in_interaction_mode_attempts_look_for_selected_target() {
 }
 
 #[test]
-fn picker_retires_legacy_l_and_w_keys() {
+fn picker_typing_filters_focused_session_column() {
+    let mut state = make_state();
+    state.set_recipients(&["master", "mcp", "relay"]);
+    state
+        .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
+        .expect("f2 should open picker");
+    assert_eq!(state.picker_column(), WorkbenchPickerColumn::Sessions);
+    // Printable keys accumulate into the column-scoped filter and narrow the
+    // session list to the first match.
+    state
+        .dispatch_event(key_event(KeyCode::Char('m'), KeyModifiers::NONE))
+        .expect("filter char should be handled");
+    state
+        .dispatch_event(key_event(KeyCode::Char('c'), KeyModifiers::NONE))
+        .expect("filter char should be handled");
+    assert_eq!(state.picker_filter(), "mc");
+    assert!(state.picker_open());
+    // "mc" matches only "mcp"; Enter inserts it.
+    state
+        .dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE))
+        .expect("enter should insert the filtered selection");
+    assert_eq!(state.to_field(), "mcp");
+    assert!(!state.picker_open());
+}
+
+#[test]
+fn picker_tab_switches_focus_and_clears_filter() {
     let mut state = make_state();
     state.set_recipients(&["master"]);
     state
         .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
-        .expect("f2 should open picker");
+        .expect("f2 should open picker on the session column");
+    assert_eq!(state.picker_column(), WorkbenchPickerColumn::Sessions);
     state
-        .dispatch_event(key_event(KeyCode::Char('l'), KeyModifiers::NONE))
-        .expect("retired l key should be a no-op");
+        .dispatch_event(key_event(KeyCode::Char('z'), KeyModifiers::NONE))
+        .expect("filter char should be handled");
+    assert_eq!(state.picker_filter(), "z");
     state
-        .dispatch_event(key_event(KeyCode::Char('w'), KeyModifiers::NONE))
-        .expect("retired w key should be a no-op");
-    assert!(
-        state.picker_open(),
-        "picker should remain open after retired keys"
-    );
-    assert_eq!(state.mode(), WorkbenchMode::Communication);
-    assert_eq!(state.interaction_target(), None);
+        .dispatch_event(key_event(KeyCode::Tab, KeyModifiers::NONE))
+        .expect("tab should switch picker focus");
+    assert_eq!(state.picker_column(), WorkbenchPickerColumn::Bundles);
+    assert_eq!(state.picker_filter(), "");
+}
+
+#[test]
+fn f4_into_interaction_without_target_auto_opens_picker() {
+    let mut state = make_state();
+    state
+        .dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE))
+        .expect("f4 should switch to interaction");
+    assert_eq!(state.mode(), WorkbenchMode::Interaction);
+    assert!(state.picker_open());
+    assert_eq!(state.picker_column(), WorkbenchPickerColumn::Sessions);
+}
+
+#[test]
+fn f4_into_interaction_with_target_does_not_auto_open_picker() {
+    let mut state = make_state();
+    state.set_interaction_target("master");
+    state
+        .dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE))
+        .expect("f4 should switch to interaction");
+    assert_eq!(state.mode(), WorkbenchMode::Interaction);
+    assert!(!state.picker_open());
 }
 
 #[test]
@@ -592,17 +652,18 @@ fn picker_has_no_selection_when_recipient_list_is_empty() {
 }
 
 #[test]
-fn bundle_picker_f5_toggles_overlay() {
+fn f5_toggles_unified_picker_on_bundle_column() {
     let mut state = make_state();
-    assert!(!state.bundle_picker_open());
+    assert!(!state.picker_open());
     state
         .dispatch_event(key_event(KeyCode::F(5), KeyModifiers::NONE))
-        .expect("f5 should open bundle picker");
-    assert!(state.bundle_picker_open());
+        .expect("f5 should open the unified picker");
+    assert!(state.picker_open());
+    assert_eq!(state.picker_column(), WorkbenchPickerColumn::Bundles);
     state
         .dispatch_event(key_event(KeyCode::F(5), KeyModifiers::NONE))
-        .expect("f5 should close bundle picker");
-    assert!(!state.bundle_picker_open());
+        .expect("f5 should close the unified picker");
+    assert!(!state.picker_open());
 }
 
 #[test]
@@ -620,7 +681,7 @@ fn bundle_picker_highlights_active_bundle_on_open() {
 }
 
 #[test]
-fn bundle_picker_enter_on_active_bundle_is_no_op_and_closes() {
+fn bundle_picker_enter_on_active_bundle_hands_focus_to_sessions() {
     let mut state = make_state();
     state.set_recipients(&["alpha", "bravo"]);
     state
@@ -634,8 +695,11 @@ fn bundle_picker_enter_on_active_bundle_is_no_op_and_closes() {
         .collect::<Vec<_>>();
     state
         .dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE))
-        .expect("enter on active bundle should be a no-op");
-    assert!(!state.bundle_picker_open());
+        .expect("enter on the active bundle should be a no-op switch");
+    // Selecting the active bundle does not switch context; it keeps the picker
+    // open and hands focus to the session column in the same window.
+    assert!(state.picker_open());
+    assert_eq!(state.picker_column(), WorkbenchPickerColumn::Sessions);
     assert_eq!(state.bundle_name(), original_bundle.as_str());
     assert_eq!(
         state
@@ -673,7 +737,10 @@ fn bundle_picker_enter_on_different_bundle_switches_and_resets_bundle_scoped_sta
     assert_eq!(state.bundle_name(), target_bundle.as_str());
     assert!(state.recipients().is_empty());
     assert_eq!(state.last_selected_recipient(), None);
-    assert!(!state.bundle_picker_open());
+    // The switch keeps the picker open and hands focus to the (re-enumerated)
+    // session column so a session can be picked in the same window.
+    assert!(state.picker_open());
+    assert_eq!(state.picker_column(), WorkbenchPickerColumn::Sessions);
     match result {
         Err(RuntimeError::Validation { code, .. }) => assert_eq!(code, "relay_unavailable"),
         Err(RuntimeError::Io { source, .. }) => {
@@ -695,7 +762,8 @@ fn bundle_picker_enter_with_no_available_bundles_returns_validation_error() {
     state
         .dispatch_event(key_event(KeyCode::F(5), KeyModifiers::NONE))
         .expect("f5 should open bundle picker");
-    assert!(state.bundle_picker_open());
+    assert!(state.picker_open());
+    assert_eq!(state.picker_column(), WorkbenchPickerColumn::Bundles);
     assert_eq!(state.bundle_picker_selected_index(), None);
     let result = state.dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE));
     match result {

@@ -42,10 +42,10 @@ open the picker (`F2`) and press `Enter` to choose a session.
 
 - `Ctrl+C`: quit
 - `F1`: open/close help overlay
-- `F2`: open/close recipient picker
+- `F2`: open/close the picker focused on the session column
 - `F3`: open/close delivery events overlay
 - `F4`: toggle between Communication and Interaction modes
-- `F5`: open/close bundle picker
+- `F5`: open/close the picker focused on the bundle column
 - `Ctrl+R`: refresh recipients
 
 ### Communication mode
@@ -68,6 +68,10 @@ open the picker (`F2`) and press `Enter` to choose a session.
 
 ### Interaction mode
 
+Entering Interaction mode without an active session auto-opens the picker on the
+session column so you can choose a target immediately. Dismiss it with `Esc` (or
+choose a session) to reach the Write input.
+
 - `PgUp` / `PgDn`: scroll look snapshot
 - Write input (active when write has text, or no pending choice requests):
   - `Left` / `Right` / `Up` / `Down` / `Home` / `End`: move write cursor
@@ -84,7 +88,12 @@ open the picker (`F2`) and press `Enter` to choose a session.
 - `Up` / `Down` with an empty write input and no pending requests: scroll the
   look snapshot
 
-### Recipient picker (`F2`)
+### Picker (`F2` / `F5`)
+
+The picker is a single window with two side-by-side columns: **Bundles** (left)
+and **Sessions** (right, the active bundle's recipients). `F2` opens it focused
+on the session column; `F5` opens it focused on the bundle column. The focused
+column is marked with a `▶` and a highlighted title.
 
 The picker header surfaces a one-line bundle status in CLI-style key=value
 format (`bundle=NAME hosted=yes|no state=up|down ...`) and color-codes it:
@@ -97,33 +106,32 @@ format (`bundle=NAME hosted=yes|no state=up|down ...`) and color-codes it:
 This distinguishes `hosted=true, state=down` (bundle is up but every session
 failed startup) from `hosted=false, state=down` (bundle has not been started).
 
-Each recipient row reflects the session's per-session readiness from the relay
+Each session row reflects the session's per-session readiness from the relay
 list payload. Sessions that are not yet ready render dimmed and gain a
 trailing `[not ready]` marker so the state is legible even without color.
 
-- `Up` / `Down`: move recipient selection
-- `Enter` (Communication mode): insert selected recipient into `To`
-- `Enter` (Interaction mode): open the Interaction screen for the selected
-  identity — the relay `Look` runs synchronously so the look pane is populated
-  with recent session history before the Write input takes focus
-- `Esc` / `F2`: close picker
+Keys:
 
-The picker remembers the most recently committed recipient by session name
-across close/reopen and across recipient list refreshes. When the prior
-target is no longer present in the current list, the selection falls back
-deterministically to the first available session.
+- `Up` / `Down`: move selection within the focused column
+- `Tab` / `Shift+Tab` / `Left` / `Right`: switch focus between columns (clears
+  the filter)
+- printable characters: append to the filter for the focused column; the list
+  narrows to matches (case-insensitive, name or display name) and the selection
+  resets to the first match
+- `Backspace`: erase the last filter character
+- `Enter` on the bundle column: switch the active bundle (a no-op for the
+  already-active bundle), then keep the picker open and hand focus to the
+  re-enumerated session column
+- `Enter` on the session column (Communication mode): insert the selected
+  recipient into `To`
+- `Enter` on the session column (Interaction mode): open the Interaction screen
+  for the selected identity — the relay `Look` runs synchronously so the look
+  pane is populated with recent session history before the Write input takes
+  focus
+- `Esc` / `F2` / `F5`: close the picker
 
-### Bundle picker (`F5`)
-
-The bundle picker browses the bundles discovered at TUI launch (from configured
-bundle files) and lets the operator switch which bundle the TUI is targeting.
-
-- `Up` / `Down`: move bundle selection
-- `Enter`: switch the active bundle context
-- `Esc` / `F5`: close picker
-
-The active bundle is highlighted and labeled `[active]`. Selecting it again
-closes the picker as a no-op. Selecting a different bundle:
+The active bundle is highlighted and labeled `[active]`. Switching to a
+different bundle:
 
 - replaces the active bundle context (header `Bundle:` indicator reflects the
   new bundle),
@@ -135,6 +143,12 @@ closes the picker as a no-op. Selecting a different bundle:
   unhosted/unreachable, the refresh fails fast and surfaces a relay error in
   the status pane (the bundle context stays switched).
 
+The picker remembers the most recently committed session by name across
+close/reopen and across recipient list refreshes. When the prior target is no
+longer present in the current list, the session selection falls back
+deterministically to the first available session.
+
+The picker lists one bundle's sessions at a time (the active bundle).
 Cross-bundle targeting is governed by policy scope: reaching sessions in
 another bundle requires the `all` scope for the operation, and the relay
 denies insufficient scope with `authorization_forbidden`.

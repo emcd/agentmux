@@ -8,11 +8,7 @@ use super::geometry::{
 };
 
 pub(super) fn render_active_cursor(frame: &mut Frame, area: Rect, state: &AppState) {
-    if state.help_overlay_open
-        || state.picker_open
-        || state.bundle_picker_open
-        || state.events_overlay_open
-    {
+    if state.help_overlay_open || state.picker_open || state.events_overlay_open {
         return;
     }
     match state.mode {

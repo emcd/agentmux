@@ -8,7 +8,7 @@ use super::{
     input,
     state::{
         AppState, ChatHistoryDirection, ChatHistoryEntry, FocusField, PendingChoiceEntry,
-        Recipient, ScreenMode, TuiLaunchOptions,
+        PickerColumn, Recipient, ScreenMode, TuiLaunchOptions,
     },
 };
 
@@ -22,6 +22,14 @@ pub enum WorkbenchField {
 pub enum WorkbenchMode {
     Communication,
     Interaction,
+}
+
+/// Which column of the unified picker currently holds focus. Mirrors the
+/// internal `PickerColumn` for the public workbench/test surface.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkbenchPickerColumn {
+    Bundles,
+    Sessions,
 }
 
 pub struct Workbench {
@@ -90,7 +98,7 @@ impl Workbench {
     }
 
     pub fn picker_selected_index(&self) -> Option<usize> {
-        self.state.picker_state.selected()
+        self.state.picker_session_state.selected()
     }
 
     pub fn message_cursor_line_and_column(&self) -> (usize, usize) {
@@ -148,12 +156,19 @@ impl Workbench {
         self.state.picker_open
     }
 
-    pub fn bundle_picker_open(&self) -> bool {
-        self.state.bundle_picker_open
+    pub fn picker_column(&self) -> WorkbenchPickerColumn {
+        match self.state.picker_focus {
+            PickerColumn::Bundles => WorkbenchPickerColumn::Bundles,
+            PickerColumn::Sessions => WorkbenchPickerColumn::Sessions,
+        }
+    }
+
+    pub fn picker_filter(&self) -> &str {
+        self.state.picker_filter.as_str()
     }
 
     pub fn bundle_picker_selected_index(&self) -> Option<usize> {
-        self.state.bundle_picker_state.selected()
+        self.state.picker_bundle_state.selected()
     }
 
     pub fn bundle_name(&self) -> &str {

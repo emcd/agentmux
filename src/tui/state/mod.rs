@@ -70,6 +70,16 @@ pub(crate) enum ScreenMode {
     Interaction,
 }
 
+/// Which column of the unified bundle+session picker currently has keyboard
+/// focus. The filter and Up/Down navigation apply to the focused column; the
+/// other column shows its full (unfiltered) list.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum PickerColumn {
+    Bundles,
+    #[default]
+    Sessions,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct StatusEntry {
     pub code: Option<String>,
@@ -113,11 +123,12 @@ pub(crate) struct AppState {
     pub last_selected_recipient: Option<String>,
     pub available_bundles: Vec<String>,
     pub picker_open: bool,
-    pub bundle_picker_open: bool,
+    pub picker_focus: PickerColumn,
+    pub picker_filter: String,
     pub events_overlay_open: bool,
     pub help_overlay_open: bool,
-    pub picker_state: ListState,
-    pub bundle_picker_state: ListState,
+    pub picker_session_state: ListState,
+    pub picker_bundle_state: ListState,
     pub mode: ScreenMode,
     pub focus: FocusField,
     pub to_field: String,
@@ -181,11 +192,12 @@ impl AppState {
             last_selected_recipient: None,
             available_bundles,
             picker_open: false,
-            bundle_picker_open: false,
+            picker_focus: PickerColumn::Sessions,
+            picker_filter: String::new(),
             events_overlay_open: false,
             help_overlay_open: false,
-            picker_state: ListState::default(),
-            bundle_picker_state: ListState::default(),
+            picker_session_state: ListState::default(),
+            picker_bundle_state: ListState::default(),
             mode: ScreenMode::Communication,
             focus: FocusField::To,
             to_field: String::new(),

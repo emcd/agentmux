@@ -56,7 +56,7 @@ impl AppState {
                 self.look_snapshot_format = Some(look_snapshot_format);
                 self.look_snapshot_lines = look_snapshot_lines;
                 self.look_snapshot_entries = look_snapshot_entries;
-                self.picker_open = false;
+                self.close_picker();
                 self.enter_interaction_mode();
                 self.push_status(None, format!("look captured target={target_session}"));
                 self.relay_stream_poll_error_reported = false;
