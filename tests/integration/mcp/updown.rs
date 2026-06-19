@@ -268,7 +268,7 @@ async fn updown_rejects_missing_command_selector() {
     let arguments = Map::new();
     let response = harness.call_tool(2, "updown", arguments).await;
 
-    assert_eq!(error_code(&response), Some("validation_invalid_params"));
+    assert_param_deserialize_error(&response, "command");
     assert!(relay.requests_for_operation("up").is_empty());
     assert!(relay.requests_for_operation("down").is_empty());
 }

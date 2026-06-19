@@ -29,18 +29,7 @@ impl McpServer {
         Parameters(params): Parameters<UpdownParams>,
     ) -> Result<CallToolResult, McpError> {
         validate_updown_params(&params)?;
-        let command = params
-            .command
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                validation_tool_error(
-                    "validation_invalid_params",
-                    "command is required; allowed values are \"up\" or \"down\"",
-                    None,
-                )
-            })?;
+        let command = params.command.trim();
         let args = parse_meta_tool_args::<UpdownArgs>(params.args.clone()).map_err(|reason| {
             validation_tool_error(
                 "validation_invalid_params",

@@ -31,18 +31,7 @@ impl McpServer {
         Parameters(params): Parameters<ChangeParams>,
     ) -> Result<CallToolResult, McpError> {
         validate_change_params(&params)?;
-        let command = params
-            .command
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                validation_tool_error(
-                    "validation_invalid_params",
-                    "command is required; allowed value is \"psk\"",
-                    None,
-                )
-            })?;
+        let command = params.command.trim();
         match command {
             CHANGE_COMMAND_PSK => {
                 let args = parse_meta_tool_args::<ChangePskArgs>(params.args.clone()).map_err(

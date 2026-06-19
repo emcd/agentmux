@@ -45,18 +45,7 @@ impl McpServer {
         Parameters(params): Parameters<ListParams>,
     ) -> Result<CallToolResult, McpError> {
         validate_list_params(&params)?;
-        let command = params
-            .command
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                validation_tool_error(
-                    "validation_invalid_params",
-                    "command is required; allowed values are \"principals\" or \"decisions\"",
-                    None,
-                )
-            })?;
+        let command = params.command.trim();
         match command {
             LIST_COMMAND_PRINCIPALS => self.list_principals(&params),
             LIST_COMMAND_DECISIONS => self.list_decisions(&params),

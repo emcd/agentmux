@@ -28,18 +28,7 @@ impl McpServer {
         Parameters(params): Parameters<NewParams>,
     ) -> Result<CallToolResult, McpError> {
         validate_new_params(&params)?;
-        let command = params
-            .command
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                validation_tool_error(
-                    "validation_invalid_params",
-                    "command is required; allowed value is \"peer\"",
-                    None,
-                )
-            })?;
+        let command = params.command.trim();
         match command {
             NEW_COMMAND_PEER => {
                 let args = parse_meta_tool_args::<NewPeerArgs>(params.args.clone()).map_err(
