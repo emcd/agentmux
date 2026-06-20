@@ -147,6 +147,8 @@ fn deliver_acp_combined(
         rendered: prompt,
         append_enter: head.append_enter,
         choice_decider_sessions: head.choice_decider_sessions.clone(),
+        quiet_window: head.quiescence.quiet_window,
+        quiescence_timeout: head.quiescence.quiescence_timeout,
     };
     let context = DeliveryContext {
         target_session: target_session.clone(),
@@ -276,6 +278,8 @@ fn build_tmux_envelopes(
                 rendered,
                 append_enter: true,
                 choice_decider_sessions: head.choice_decider_sessions.clone(),
+                quiet_window: head.quiescence.quiet_window,
+                quiescence_timeout: head.quiescence.quiescence_timeout,
             })
             .collect(),
         DeliveryPayloadMode::RawInput => vec![DeliveryEnvelope {
@@ -284,6 +288,8 @@ fn build_tmux_envelopes(
             rendered: head.message.clone(),
             append_enter: head.append_enter,
             choice_decider_sessions: head.choice_decider_sessions.clone(),
+            quiet_window: head.quiescence.quiet_window,
+            quiescence_timeout: head.quiescence.quiescence_timeout,
         }],
     }
 }
