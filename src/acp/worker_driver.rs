@@ -17,8 +17,8 @@
 //! mirroring the `Chooser` pattern from Slice 2b.
 
 use std::{
-    path::PathBuf,
-    sync::Arc,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -35,9 +35,7 @@ use crate::transports::{
 };
 
 use super::{
-    ACP_ERROR_CODE_CONNECTION_CLOSED, ACP_ERROR_CODE_INITIALIZE_FAILED,
-    ACP_ERROR_CODE_PROMPT_FAILED, ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE, AcpBootstrapError,
-    AcpTransport,
+    ACP_ERROR_CODE_INITIALIZE_FAILED, AcpBootstrapError, AcpTransport, bootstrap_acp_worker_runtime,
 };
 
 const RESPAWN_BACKOFF_MAX_MS_ENVVAR: &str = "AGENTMUX_RELAY_ACP_RESPAWN_BACKOFF_MAX_MS";
@@ -45,6 +43,12 @@ const RESPAWN_SLEEP_POLL_MS: u64 = 50;
 const RESPAWN_BACKOFF_INITIAL_MS: u64 = 1_000;
 const RESPAWN_BACKOFF_CAP_DEFAULT_MS: u64 = 30_000;
 const RESPAWN_INIT_FAILURE_THRESHOLD: u32 = 3;
+/// Idle poll interval for the respawn monitor's shutdown gate.
+const RESPAWN_MONITOR_POLL_MS: u64 = 100;
+/// Generic respawn trigger label. The internal delivery task signals a boolean
+/// respawn-needed edge (no reason code), so the monitor reports this for the
+/// respawn stream events and inscriptions.
+const RESPAWN_TRIGGER_REASON: &str = "worker_unavailable";
 
 /// Mirrors the worker readiness state into the relay's global registry.
 pub type MirrorStateFn = Arc<dyn Fn(AcpWorkerReadinessState) + Send + Sync>;
@@ -87,15 +91,17 @@ impl std::fmt::Debug for AcpDriverServices {
     }
 }
 
-/// Owns the per-target ACP transport and its bootstrap/respawn lifecycle.
+/// Owns the per-target ACP transport and its bootstrap lifecycle.
 ///
 /// Held by `TransportImpl::Acp`. Delivery trait methods delegate to the inner
-/// [`AcpTransport`]; the async `bootstrap`/`respawn` lifecycle and the
-/// readiness-mirroring helpers are inherent methods the relay worker drives via
-/// the `TransportImpl::Acp` match.
+/// [`AcpTransport`] under a brief lock. The transport is shared with the
+/// driver-owned async respawn monitor (spawned in [`bootstrap`](Self::bootstrap))
+/// via `Arc<Mutex<…>>`, so respawn runs off the relay worker loop: the monitor
+/// drives recovery while the worker keeps submitting writes. The monitor never
+/// holds the lock across `.await` or the blocking child spawn, so a concurrent
+/// `mailw` is never stalled.
 pub struct AcpWorkerDriver {
-    transport: Option<AcpTransport>,
-    respawn_state: AcpRespawnState,
+    transport: Arc<Mutex<AcpTransport>>,
     bundle_name: String,
     runtime_directory: PathBuf,
     target_member: BundleMember,
@@ -114,8 +120,10 @@ impl AcpWorkerDriver {
         max_prompt_tokens: usize,
     ) -> Self {
         Self {
-            transport: Some(AcpTransport::new(max_prompt_tokens)),
-            respawn_state: AcpRespawnState::new(),
+            transport: Arc::new(Mutex::new(AcpTransport::new(
+                max_prompt_tokens,
+                Some(Arc::clone(&services.mirror_state)),
+            ))),
             bundle_name,
             runtime_directory,
             target_member,
@@ -132,61 +140,48 @@ impl AcpWorkerDriver {
         self.max_prompt_tokens
     }
 
-    /// Checks if the internal delivery task signaled that a respawn is needed.
-    /// Returns the trigger reason if a respawn is needed, `None` otherwise.
-    /// The relay worker should call `maybe_respawn_after_delivery` when this
-    /// returns `Some`.
-    pub fn check_respawn_needed(&mut self) -> Option<String> {
-        self.transport
-            .as_mut()
-            .expect("acp driver transport present")
-            .check_respawn_needed()
-    }
-
-    fn transport_ref(&self) -> &AcpTransport {
-        self.transport
-            .as_ref()
-            .expect("acp driver transport present")
-    }
-
     fn target_session(&self) -> &str {
         self.target_member.id.as_str()
     }
 
-    fn startup_context(&self) -> StartupContext {
-        StartupContext {
-            bundle_name: self.bundle_name.clone(),
-            runtime_directory: self.runtime_directory.clone(),
-            target_member: self.target_member.clone(),
-            choose: self.services.chooser.clone(),
-        }
+    /// Locks the shared transport. Locks are brief by construction (the respawn
+    /// monitor never holds the lock across `.await` or the blocking child spawn).
+    fn lock_transport(&self) -> std::sync::MutexGuard<'_, AcpTransport> {
+        self.transport.lock().expect("acp transport mutex poisoned")
     }
 
-    /// Establishes the ACP runtime when the worker starts. Mirrors the readiness
-    /// transitions and publishes the look handle before `startup` runs, so a
-    /// `look` in the initial-startup window finds the handle. The transport (and
-    /// its published handle) is kept even on failure: the worker drives respawn
-    /// off the Unavailable state and reuses this transport.
+    /// Establishes the ACP runtime when the worker starts and spawns the
+    /// driver-owned respawn monitor. Mirrors the readiness transitions and
+    /// publishes the look handle before bootstrap runs, so a `look` in the
+    /// initial-startup window finds the handle. The blocking child spawn runs off
+    /// the transport lock (via `spawn_blocking`); the fast install happens under a
+    /// brief lock. On initial-bootstrap failure the transport is signalled for
+    /// respawn so the monitor retries with backoff.
     pub async fn bootstrap(&mut self) {
         (self.services.mirror_state)(AcpWorkerReadinessState::Initializing);
-        (self.services.publish_output)(self.transport_ref().give_output());
-        let startup_context = self.startup_context();
-        let transport = self
-            .transport
-            .take()
-            .expect("acp driver transport present at bootstrap");
-        let (transport, result) = tokio::task::spawn_blocking(move || {
-            let mut transport = transport;
-            let result = transport.startup(startup_context);
-            (transport, result)
+        let handle = self.lock_transport().give_output();
+        (self.services.publish_output)(handle);
+
+        // Set chooser/target identity ahead of the establish; the freshly-built
+        // transport already reads Initializing from construction.
+        self.lock_transport()
+            .prepare_for_startup(self.services.chooser.clone(), self.target_member.id.clone());
+
+        let runtime_directory = self.runtime_directory.clone();
+        let target_member = self.target_member.clone();
+        let bootstrap_result = tokio::task::spawn_blocking(move || {
+            bootstrap_acp_worker_runtime(&runtime_directory, &target_member)
         })
         .await
         .expect("ACP worker bootstrap task panicked");
-        self.transport = Some(transport);
 
-        match &result {
-            Ok(_) => (self.services.mirror_state)(AcpWorkerReadinessState::Available),
+        match bootstrap_result {
+            Ok(runtime) => {
+                self.lock_transport().install_runtime(runtime);
+                (self.services.mirror_state)(AcpWorkerReadinessState::Available);
+            }
             Err(error) => {
+                self.lock_transport().mark_runtime_unavailable();
                 (self.services.mirror_state)(AcpWorkerReadinessState::Unavailable);
                 emit_inscription(
                     "relay.acp.worker.bootstrap_failed",
@@ -197,190 +192,47 @@ impl AcpWorkerDriver {
                         "reason": error.reason,
                     }),
                 );
+                // No delivery task is running to emit the respawn-needed signal,
+                // so prime it directly: the monitor will retry with backoff.
+                self.lock_transport().signal_respawn();
             }
         }
+
+        self.spawn_respawn_monitor();
     }
 
-    /// Marks the target Busy before a delivery batch so external observers see
-    /// the in-turn transition.
-    pub fn mark_busy(&self) {
-        (self.services.mirror_state)(AcpWorkerReadinessState::Busy);
-    }
-
-    /// Mirrors the transport's settled readiness after `deliver` returns
-    /// (`deliver` folds in completion, so readiness is final on return).
-    pub fn mirror_settled_readiness(&self) {
-        (self.services.mirror_state)(self.transport_ref().readiness());
-    }
-
-    /// Drives respawn when the post-delivery readiness is Unavailable, otherwise
-    /// resets the backoff. `reason_code` is the head outcome's reason code, used
-    /// to classify the respawn trigger.
-    pub async fn maybe_respawn_after_delivery(&mut self, reason_code: Option<String>) {
-        match self.transport_ref().readiness() {
-            AcpWorkerReadinessState::Unavailable => {
-                let trigger_reason = classify_respawn_trigger(reason_code.as_deref());
-                self.respawn(trigger_reason).await;
-            }
-            AcpWorkerReadinessState::Available | AcpWorkerReadinessState::Busy => {
-                self.respawn_state.reset_on_success();
-            }
-            AcpWorkerReadinessState::Initializing | AcpWorkerReadinessState::Recovering => {}
-        }
-    }
-
-    /// Releases the dead runtime and re-establishes it with capped exponential
-    /// backoff, mirroring Recovering/Available/Unavailable transitions,
-    /// broadcasting respawn stream events, and invalidating pending choices
-    /// before each attempt. Returns when startup succeeds, the failure is
-    /// permanent, the retry budget is exhausted, or shutdown is requested.
-    pub async fn respawn(&mut self, trigger_reason: &'static str) {
-        // Release the dead runtime (joining its child + reader thread) but keep
-        // the transport and its published handle, marking it recovering. A look
-        // racing the respawn reads a recovering/stale snapshot through the
-        // still-valid handle rather than the dead buffer or a missing handle.
-        if let Some(transport) = self.transport.as_mut() {
-            transport.release_runtime();
-        }
-
-        loop {
-            if shutdown_requested() {
-                return;
-            }
-            let backoff = self.respawn_state.advance();
-            (self.services.mirror_state)(AcpWorkerReadinessState::Recovering);
-            emit_inscription(
-                "relay.acp.respawn.triggered",
-                &json!({
-                    "bundle_name": self.bundle_name,
-                    "target_session": self.target_session(),
-                    "attempt": self.respawn_state.attempt,
-                    "trigger_reason": trigger_reason,
-                    "backoff_ms": backoff.as_millis() as u64,
-                }),
-            );
-            (self.services.broadcast_ui)(
-                "acp_worker_respawn_started",
-                json!({
-                    "attempt": self.respawn_state.attempt,
-                    "trigger_reason": trigger_reason,
-                    "backoff_ms": backoff.as_millis() as u64,
-                }),
-            );
-
-            if !sleep_with_shutdown_gate(backoff).await {
-                return;
-            }
-
-            (self.services.invalidate_choices)();
-
-            // Reuse the existing transport so its published handle stays valid
-            // across the respawn; create a fresh one (re-publishing the handle)
-            // only if it is somehow absent.
-            let publish_output = Arc::clone(&self.services.publish_output);
-            let max_prompt_tokens = self.max_prompt_tokens;
-            let transport = self.transport.take().unwrap_or_else(|| {
-                let transport = AcpTransport::new(max_prompt_tokens);
-                publish_output(transport.give_output());
-                transport
-            });
-            let startup_context = self.startup_context();
-            let (transport, respawn_result) = tokio::task::spawn_blocking(move || {
-                let mut transport = transport;
-                let result = transport.startup(startup_context);
-                (transport, result)
-            })
-            .await
-            .expect("ACP respawn task panicked");
-
-            match respawn_result {
-                Ok(_) => {
-                    // The published handle is still valid; startup repointed its
-                    // replay slot, so no re-install is needed.
-                    (self.services.mirror_state)(AcpWorkerReadinessState::Available);
-                    emit_inscription(
-                        "relay.acp.respawn.succeeded",
-                        &json!({
-                            "bundle_name": self.bundle_name,
-                            "target_session": self.target_session(),
-                            "attempt": self.respawn_state.attempt,
-                        }),
-                    );
-                    (self.services.broadcast_ui)(
-                        "acp_worker_respawn_completed",
-                        json!({
-                            "attempt": self.respawn_state.attempt,
-                            "outcome": "succeeded",
-                        }),
-                    );
-                    self.transport = Some(transport);
-                    self.respawn_state.reset_on_success();
-                    return;
-                }
-                Err(error) => {
-                    // Put the transport back so the next attempt reuses it (the
-                    // handle stays valid throughout).
-                    self.transport = Some(transport);
-                    // `startup` reports `TransportError`; the respawn classifier
-                    // and permanence check still speak `AcpBootstrapError` (same
-                    // code).
-                    let error = AcpBootstrapError {
-                        code: error.code,
-                        reason: error.reason,
-                    };
-                    self.respawn_state.record_failure(&error);
-                    emit_inscription(
-                        "relay.acp.respawn.attempt_failed",
-                        &json!({
-                            "bundle_name": self.bundle_name,
-                            "target_session": self.target_session(),
-                            "attempt": self.respawn_state.attempt,
-                            "error_code": error.code,
-                            "reason": error.reason,
-                        }),
-                    );
-                    if error.is_permanent() || self.respawn_state.should_give_up() {
-                        (self.services.mirror_state)(AcpWorkerReadinessState::Unavailable);
-                        emit_inscription(
-                            "relay.acp.respawn.permanent_failure",
-                            &json!({
-                                "bundle_name": self.bundle_name,
-                                "target_session": self.target_session(),
-                                "attempts": self.respawn_state.attempt,
-                                "final_error_code": error.code,
-                                "reason": error.reason,
-                            }),
-                        );
-                        (self.services.broadcast_ui)(
-                            "acp_worker_respawn_completed",
-                            json!({
-                                "attempts": self.respawn_state.attempt,
-                                "outcome": "permanent_failure",
-                                "final_error_code": error.code,
-                                "reason": error.reason,
-                            }),
-                        );
-                        return;
-                    }
-                }
-            }
-        }
+    /// Spawns the driver-owned async respawn monitor. It subscribes to the
+    /// transport's stable respawn-needed signal and drives respawn off the relay
+    /// worker loop, sharing the transport via `Arc<Mutex<…>>`.
+    fn spawn_respawn_monitor(&self) {
+        let transport = Arc::clone(&self.transport);
+        let respawn_needed = self.lock_transport().respawn_needed_subscribe();
+        let services = self.services.clone();
+        let bundle_name = self.bundle_name.clone();
+        let runtime_directory = self.runtime_directory.clone();
+        let target_member = self.target_member.clone();
+        tokio::spawn(acp_respawn_monitor(
+            transport,
+            respawn_needed,
+            services,
+            AcpRespawnState::new(),
+            bundle_name,
+            runtime_directory,
+            target_member,
+        ));
     }
 }
 
 impl Transport for AcpWorkerDriver {
     fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError> {
-        self.transport
-            .as_mut()
-            .expect("acp driver transport present")
-            .startup(context)
+        self.lock_transport().startup(context)
     }
 
     fn prepare_delivery(
         &self,
         context: &DeliveryContext,
     ) -> Result<DeliveryPreparation, DeliveryWaitError> {
-        self.transport_ref().prepare_delivery(context)
+        self.lock_transport().prepare_delivery(context)
     }
 
     fn deliver(
@@ -388,28 +240,19 @@ impl Transport for AcpWorkerDriver {
         envelopes: Vec<DeliveryEnvelope>,
         context: &DeliveryContext,
     ) -> DeliveryResult {
-        self.transport
-            .as_mut()
-            .expect("acp driver transport present")
-            .deliver(envelopes, context)
+        self.lock_transport().deliver(envelopes, context)
     }
 
     fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
-        self.transport
-            .as_mut()
-            .expect("acp driver transport present")
-            .mailw(envelope)
+        self.lock_transport().mailw(envelope)
     }
 
     fn raww(&mut self, content: String, append_enter: bool) -> OutcomeFuture {
-        self.transport
-            .as_mut()
-            .expect("acp driver transport present")
-            .raww(content, append_enter)
+        self.lock_transport().raww(content, append_enter)
     }
 
     fn is_ready(&self) -> bool {
-        self.transport_ref().is_ready()
+        self.lock_transport().is_ready()
     }
 
     fn raw_write(
@@ -418,32 +261,206 @@ impl Transport for AcpWorkerDriver {
         append_enter: bool,
         context: &DeliveryContext,
     ) -> RawWriteResult {
-        self.transport
-            .as_mut()
-            .expect("acp driver transport present")
-            .raw_write(text, append_enter, context)
+        self.lock_transport().raw_write(text, append_enter, context)
     }
 
     fn shutdown(&mut self) {
-        if let Some(transport) = self.transport.as_mut() {
-            transport.shutdown();
-        }
+        self.lock_transport().shutdown();
     }
 
     fn give_output(&self) -> Option<Arc<dyn OutputView>> {
-        self.transport_ref().give_output()
+        self.lock_transport().give_output()
     }
 }
 
-/// Maps the head outcome's reason code to the respawn trigger label. A missing
-/// code (an `Err` outcome or an `Ok` without a code) is a generic worker
-/// unavailability.
-fn classify_respawn_trigger(reason_code: Option<&str>) -> &'static str {
-    match reason_code {
-        Some(code) if code == ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE => "transport_unavailable",
-        Some(code) if code == ACP_ERROR_CODE_PROMPT_FAILED => "serialization_failed",
-        Some(code) if code == ACP_ERROR_CODE_CONNECTION_CLOSED => "connection_closed",
-        _ => "worker_unavailable",
+/// Driver-owned async respawn monitor. Subscribes to the transport's stable
+/// respawn-needed signal and drives respawn off the relay worker loop. The
+/// transport is shared via `Arc<Mutex<AcpTransport>>`; the monitor locks only for
+/// the fast release/install steps — never across `.await` or the blocking child
+/// spawn — so a concurrent worker `mailw` is never stalled. Exits on relay
+/// shutdown.
+async fn acp_respawn_monitor(
+    transport: Arc<Mutex<AcpTransport>>,
+    mut respawn_needed: tokio::sync::watch::Receiver<bool>,
+    services: AcpDriverServices,
+    mut respawn_state: AcpRespawnState,
+    bundle_name: String,
+    runtime_directory: PathBuf,
+    target_member: BundleMember,
+) {
+    let poll = Duration::from_millis(RESPAWN_MONITOR_POLL_MS);
+    loop {
+        tokio::select! {
+            biased;
+            changed = respawn_needed.changed() => {
+                if changed.is_err() {
+                    // All senders dropped: the transport is gone.
+                    return;
+                }
+            }
+            _ = tokio::time::sleep(poll) => {}
+        }
+        if shutdown_requested() {
+            return;
+        }
+        if !*respawn_needed.borrow_and_update() {
+            continue;
+        }
+        run_acp_respawn(
+            &transport,
+            &services,
+            &mut respawn_state,
+            bundle_name.as_str(),
+            runtime_directory.as_path(),
+            &target_member,
+        )
+        .await;
+        // Reset the signal so a later Unavailable turn re-triggers the monitor.
+        transport
+            .lock()
+            .expect("acp transport mutex poisoned")
+            .clear_respawn_signal();
+    }
+}
+
+/// Releases the dead runtime and re-establishes it with capped exponential
+/// backoff, mirroring Recovering/Available/Unavailable transitions, broadcasting
+/// respawn stream events, and invalidating pending choices before each attempt.
+/// Returns when re-establish succeeds, the failure is permanent, the retry budget
+/// is exhausted, or shutdown is requested. The blocking child spawn runs off the
+/// transport lock; only the fast release/install steps hold it.
+async fn run_acp_respawn(
+    transport: &Arc<Mutex<AcpTransport>>,
+    services: &AcpDriverServices,
+    respawn_state: &mut AcpRespawnState,
+    bundle_name: &str,
+    runtime_directory: &Path,
+    target_member: &BundleMember,
+) {
+    let target_session = target_member.id.as_str();
+    // Release the dead runtime (joining its child + reader thread) but keep the
+    // transport and its published handle, marking it Recovering. A look racing the
+    // respawn reads a recovering/stale snapshot through the still-valid handle.
+    transport
+        .lock()
+        .expect("acp transport mutex poisoned")
+        .release_runtime();
+
+    loop {
+        if shutdown_requested() {
+            return;
+        }
+        let backoff = respawn_state.advance();
+        (services.mirror_state)(AcpWorkerReadinessState::Recovering);
+        emit_inscription(
+            "relay.acp.respawn.triggered",
+            &json!({
+                "bundle_name": bundle_name,
+                "target_session": target_session,
+                "attempt": respawn_state.attempt,
+                "trigger_reason": RESPAWN_TRIGGER_REASON,
+                "backoff_ms": backoff.as_millis() as u64,
+            }),
+        );
+        (services.broadcast_ui)(
+            "acp_worker_respawn_started",
+            json!({
+                "attempt": respawn_state.attempt,
+                "trigger_reason": RESPAWN_TRIGGER_REASON,
+                "backoff_ms": backoff.as_millis() as u64,
+            }),
+        );
+
+        if !sleep_with_shutdown_gate(backoff).await {
+            return;
+        }
+
+        (services.invalidate_choices)();
+
+        // Set chooser/target + clear the prior channel under a brief lock; the
+        // chooser is already set from initial startup, re-set for safety.
+        transport
+            .lock()
+            .expect("acp transport mutex poisoned")
+            .prepare_for_startup(services.chooser.clone(), target_member.id.clone());
+
+        // Bootstrap the new runtime OFF the lock (blocking child spawn).
+        let bootstrap_dir = runtime_directory.to_path_buf();
+        let bootstrap_member = target_member.clone();
+        let bootstrap_result = tokio::task::spawn_blocking(move || {
+            bootstrap_acp_worker_runtime(&bootstrap_dir, &bootstrap_member)
+        })
+        .await
+        .expect("ACP respawn bootstrap task panicked");
+
+        match bootstrap_result {
+            Ok(runtime) => {
+                // Install under a brief lock; the published handle stays valid
+                // (install repoints its replay slot).
+                transport
+                    .lock()
+                    .expect("acp transport mutex poisoned")
+                    .install_runtime(runtime);
+                (services.mirror_state)(AcpWorkerReadinessState::Available);
+                emit_inscription(
+                    "relay.acp.respawn.succeeded",
+                    &json!({
+                        "bundle_name": bundle_name,
+                        "target_session": target_session,
+                        "attempt": respawn_state.attempt,
+                    }),
+                );
+                (services.broadcast_ui)(
+                    "acp_worker_respawn_completed",
+                    json!({
+                        "attempt": respawn_state.attempt,
+                        "outcome": "succeeded",
+                    }),
+                );
+                respawn_state.reset_on_success();
+                return;
+            }
+            Err(error) => {
+                respawn_state.record_failure(&error);
+                emit_inscription(
+                    "relay.acp.respawn.attempt_failed",
+                    &json!({
+                        "bundle_name": bundle_name,
+                        "target_session": target_session,
+                        "attempt": respawn_state.attempt,
+                        "error_code": error.code,
+                        "reason": error.reason,
+                    }),
+                );
+                if error.is_permanent() || respawn_state.should_give_up() {
+                    transport
+                        .lock()
+                        .expect("acp transport mutex poisoned")
+                        .mark_runtime_unavailable();
+                    (services.mirror_state)(AcpWorkerReadinessState::Unavailable);
+                    emit_inscription(
+                        "relay.acp.respawn.permanent_failure",
+                        &json!({
+                            "bundle_name": bundle_name,
+                            "target_session": target_session,
+                            "attempts": respawn_state.attempt,
+                            "final_error_code": error.code,
+                            "reason": error.reason,
+                        }),
+                    );
+                    (services.broadcast_ui)(
+                        "acp_worker_respawn_completed",
+                        json!({
+                            "attempts": respawn_state.attempt,
+                            "outcome": "permanent_failure",
+                            "final_error_code": error.code,
+                            "reason": error.reason,
+                        }),
+                    );
+                    return;
+                }
+            }
+        }
     }
 }
 

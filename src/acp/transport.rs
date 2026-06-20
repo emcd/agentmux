@@ -131,10 +131,23 @@ struct AcpCapabilities {
 struct AcpSharedState {
     readiness: Mutex<AcpWorkerReadinessState>,
     replay: Mutex<Option<SharedReplay>>,
+    /// Mirrors per-turn readiness transitions into the relay global registry.
+    /// Travels with the readiness it mirrors so both the internal delivery task
+    /// and the `on_dispatched` closure reach it through the shared `Arc`. `None`
+    /// in tests constructed without a relay registry.
+    mirror_state: Option<ReadinessMirror>,
 }
 
 /// Channel capacity for the internal ACP delivery task's write queue.
 const ACP_WRITE_CHANNEL_CAPACITY: usize = 256;
+
+/// Mirrors a per-turn readiness transition into the relay's global worker-state
+/// registry. Injected by the `AcpWorkerDriver` (structurally identical to its
+/// `MirrorStateFn`), so the internal delivery task mirrors its own Busy/settled
+/// transitions and the relay worker no longer drives `mark_busy` /
+/// `mirror_settled_readiness`. `None` in tests that construct the transport
+/// without a relay registry.
+type ReadinessMirror = Arc<dyn Fn(AcpWorkerReadinessState) + Send + Sync>;
 
 /// Items enqueued onto the ACP transport's internal ordered write channel.
 ///
@@ -176,10 +189,12 @@ pub struct AcpTransport {
     max_prompt_tokens: usize,
     /// Target session id, captured at startup for permission correlation.
     target_session: String,
-    /// Receiver for respawn-needed signals from the delivery task. The driver
-    /// checks this after each delivery; if `true`, calls `maybe_respawn_after_delivery`.
-    /// Paired with the `respawn_needed_tx` cloned into the delivery task.
-    respawn_needed_rx: Option<tokio::sync::watch::Receiver<bool>>,
+    /// Stable respawn-needed signal. Created once at construction (not per
+    /// delivery task) so the driver-owned async respawn monitor can hold a single
+    /// long-lived subscription across respawns. The internal delivery task holds a
+    /// clone and sets it `true` when a turn ends Unavailable; the monitor awaits
+    /// the change, drives the respawn, then resets it to `false`.
+    respawn_needed_tx: tokio::sync::watch::Sender<bool>,
 }
 
 impl std::fmt::Debug for AcpTransport {
@@ -195,19 +210,51 @@ impl std::fmt::Debug for AcpTransport {
 
 impl AcpTransport {
     #[must_use]
-    pub fn new(max_prompt_tokens: usize) -> Self {
+    pub fn new(max_prompt_tokens: usize, mirror_state: Option<ReadinessMirror>) -> Self {
         Self {
             runtime: None,
             chooser: None,
             shared: Arc::new(AcpSharedState {
                 readiness: Mutex::new(AcpWorkerReadinessState::Initializing),
                 replay: Mutex::new(None),
+                mirror_state,
             }),
             write_tx: None,
             shutdown_tx: None,
             max_prompt_tokens,
             target_session: String::new(),
-            respawn_needed_rx: None,
+            respawn_needed_tx: tokio::sync::watch::channel(false).0,
+        }
+    }
+
+    /// Subscribes to the stable respawn-needed signal. The driver-owned respawn
+    /// monitor holds one subscription for the transport's whole life.
+    pub fn respawn_needed_subscribe(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.respawn_needed_tx.subscribe()
+    }
+
+    /// Resets the respawn-needed signal to `false` after the monitor has handled
+    /// a respawn, so a subsequent Unavailable turn re-triggers it.
+    pub fn clear_respawn_signal(&self) {
+        let _ = self.respawn_needed_tx.send(false);
+    }
+
+    /// Primes the respawn-needed signal directly (no delivery task running yet).
+    /// Used after an initial-bootstrap failure so the driver's respawn monitor
+    /// retries with backoff.
+    pub fn signal_respawn(&self) {
+        let _ = self.respawn_needed_tx.send(true);
+    }
+
+    /// Re-primes the respawn signal when a write arrives but no runtime is live
+    /// and the worker has settled Unavailable. This preserves the prior
+    /// "every delivery to a dead worker re-attempts recovery" behavior: a
+    /// recoverable worker recovers, and a permanently-dead one re-publishes its
+    /// Unavailable transition for observers. A transient respawn window
+    /// (Recovering) is skipped so an in-flight respawn is not disturbed.
+    fn resignal_respawn_if_dead(&self) {
+        if matches!(self.readiness(), AcpWorkerReadinessState::Unavailable) {
+            self.signal_respawn();
         }
     }
 
@@ -247,23 +294,13 @@ impl AcpTransport {
     /// ACP runtime. Called from [`Transport::startup`] after the runtime is
     /// established. Takes the client and session_id from the runtime so the task
     /// owns them exclusively — the transport only needs the shared replay handle
-    /// and readiness state after startup.
-    /// Checks if the delivery task signaled that a respawn is needed (the turn
-    /// ended with Unavailable readiness). Returns `true` once per signal; the
-    /// driver calls `maybe_respawn_after_delivery` when this returns `true`.
-    pub fn check_respawn_needed(&mut self) -> Option<String> {
-        if let Some(rx) = self.respawn_needed_rx.as_mut()
-            && *rx.borrow_and_update()
-        {
-            return Some("worker_unavailable".to_string());
-        }
-        None
-    }
-
+    /// and readiness state after startup. The task holds a clone of the stable
+    /// respawn-needed sender, which it sets `true` when a turn ends Unavailable so
+    /// the driver-owned respawn monitor can react.
     fn spawn_delivery_task(&mut self) {
         let (tx, rx) = mpsc::channel::<WriteItem>(ACP_WRITE_CHANNEL_CAPACITY);
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-        let (respawn_needed_tx, respawn_needed_rx) = tokio::sync::watch::channel(false);
+        let respawn_needed_tx = self.respawn_needed_tx.clone();
         let shared = Arc::clone(&self.shared);
         let max_prompt_tokens = self.max_prompt_tokens;
         let chooser = self.chooser.clone();
@@ -292,7 +329,47 @@ impl AcpTransport {
 
         self.write_tx = Some(tx);
         self.shutdown_tx = Some(shutdown_tx);
-        self.respawn_needed_rx = Some(respawn_needed_rx);
+    }
+
+    /// Sets the chooser/target identity and clears any prior delivery channel
+    /// ahead of (re-)establishing the runtime. Brief and lock-safe: it holds no
+    /// blocking work, so the driver-owned respawn monitor can call it under the
+    /// transport lock without stalling a concurrent `mailw`. Readiness is the
+    /// caller's responsibility (initial bootstrap marks Initializing; respawn
+    /// leaves the released Recovering state in place).
+    pub(crate) fn prepare_for_startup(
+        &mut self,
+        chooser: crate::transports::Chooser,
+        target_session: String,
+    ) {
+        self.chooser = Some(chooser);
+        self.target_session = target_session;
+        // Close any existing delivery task's channel before creating a new
+        // runtime; the old task drains and exits.
+        self.write_tx = None;
+    }
+
+    /// Installs a freshly bootstrapped runtime: repoints the published replay
+    /// handle at the new buffer, marks the transport Available, and spawns the
+    /// internal delivery task. Brief and lock-safe — the blocking child spawn
+    /// already happened in `bootstrap_acp_worker_runtime`, so the respawn monitor
+    /// holds the transport lock only for these fast field updates.
+    pub(crate) fn install_runtime(&mut self, runtime: PersistentAcpWorkerRuntime) {
+        // Repoint the published handle's replay slot at the new runtime's buffer
+        // before marking ready, so a look that was prime-waiting through the
+        // (re-)establish returns the fresh buffer.
+        self.set_replay(Some(runtime.client.replay_buffer_handle()));
+        self.runtime = Some(runtime);
+        self.set_readiness(AcpWorkerReadinessState::Available);
+        self.spawn_delivery_task();
+    }
+
+    /// Marks the transport Unavailable with no live runtime (initial-bootstrap
+    /// failure or permanent respawn give-up).
+    pub(crate) fn mark_runtime_unavailable(&mut self) {
+        self.runtime = None;
+        self.set_replay(None);
+        self.set_readiness(AcpWorkerReadinessState::Unavailable);
     }
 
     /// Creates an unavailable outcome preserving the caller's message_id and
@@ -310,30 +387,17 @@ impl AcpTransport {
 
 impl Transport for AcpTransport {
     fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError> {
-        self.chooser = Some(context.choose);
-        self.target_session = context.target_member.id.clone();
+        self.prepare_for_startup(context.choose, context.target_member.id.clone());
         self.set_readiness(AcpWorkerReadinessState::Initializing);
-        // Close any existing delivery task's channel before creating a new runtime.
-        // The old task will drain and exit; we'll spawn a fresh one below.
-        self.write_tx = None;
         match bootstrap_acp_worker_runtime(&context.runtime_directory, &context.target_member) {
             Ok(runtime) => {
-                // Repoint the published handle's replay slot at the new runtime's
-                // buffer before marking ready, so a look that was prime-waiting
-                // through startup returns the fresh buffer.
-                self.set_replay(Some(runtime.client.replay_buffer_handle()));
-                self.runtime = Some(runtime);
-                self.set_readiness(AcpWorkerReadinessState::Available);
-                // Spawn the internal delivery task for this runtime.
-                self.spawn_delivery_task();
+                self.install_runtime(runtime);
                 Ok(TransportStatus {
                     readiness: TransportReadiness::Ready,
                 })
             }
             Err(error) => {
-                self.runtime = None;
-                self.set_replay(None);
-                self.set_readiness(AcpWorkerReadinessState::Unavailable);
+                self.mark_runtime_unavailable();
                 Err(TransportError {
                     code: error.code,
                     reason: error.reason,
@@ -377,6 +441,7 @@ impl Transport for AcpTransport {
                 }
             }
         } else {
+            self.resignal_respawn_if_dead();
             let _ = outcome_tx.send(self.unavailable_outcome_with_id(&envelope.message_id));
         }
         outcome_rx
@@ -404,6 +469,7 @@ impl Transport for AcpTransport {
                 }
             }
         } else {
+            self.resignal_respawn_if_dead();
             let _ = outcome_tx.send(self.unavailable_outcome_with_id(""));
         }
         outcome_rx
@@ -428,6 +494,9 @@ impl Transport for AcpTransport {
         let target_session = context.target_session.clone();
         let message_id = envelope.message_id.clone();
         if self.write_tx.is_none() {
+            // No live runtime: re-attempt recovery (recoverable workers recover;
+            // permanently-dead ones re-publish their Unavailable transition).
+            self.resignal_respawn_if_dead();
             return single(worker_unavailable_outcome(
                 target_session,
                 message_id,
@@ -567,6 +636,24 @@ struct TurnContext<'a> {
     shared: &'a Arc<AcpSharedState>,
     chooser: &'a Option<crate::transports::Chooser>,
     target_session: &'a str,
+}
+
+/// Sets the transport-internal readiness and mirrors the transition to the relay
+/// global registry when a mirror is installed. Centralizes the per-turn readiness
+/// transitions inside the delivery task so the relay worker no longer drives
+/// `mark_busy` / `mirror_settled_readiness`.
+fn set_turn_readiness(ctx: &TurnContext, state: AcpWorkerReadinessState) {
+    set_shared_readiness(ctx.shared, state);
+}
+
+/// Writes `state` to the shared readiness slot and mirrors it to the relay global
+/// registry when a mirror is installed. Shared by [`set_turn_readiness`] and the
+/// `on_dispatched` Busy transition (which holds the `Arc` directly).
+fn set_shared_readiness(shared: &AcpSharedState, state: AcpWorkerReadinessState) {
+    *shared.readiness.lock().expect("readiness mutex") = state;
+    if let Some(mirror) = shared.mirror_state.as_ref() {
+        mirror(state);
+    }
 }
 
 /// A batch of rendered envelopes with their metadata, ready for combining.
@@ -854,10 +941,7 @@ fn submit_envelope_turn(
 
     let shared_for_dispatch = Arc::clone(ctx.shared);
     let on_dispatched: DispatchHandler = Box::new(move || {
-        *shared_for_dispatch
-            .readiness
-            .lock()
-            .expect("readiness mutex") = AcpWorkerReadinessState::Busy;
+        set_shared_readiness(&shared_for_dispatch, AcpWorkerReadinessState::Busy);
     });
 
     let on_permission = if let Some(chooser) = ctx.chooser {
@@ -908,12 +992,11 @@ fn submit_envelope_turn(
                 message_id.to_string(),
                 ctx.target_session,
             );
-            *ctx.shared.readiness.lock().expect("readiness mutex") = final_state;
+            set_turn_readiness(ctx, final_state);
             outcome
         }
         PromptDispatchOutcome::TransportUnavailable { reason } => {
-            *ctx.shared.readiness.lock().expect("readiness mutex") =
-                AcpWorkerReadinessState::Unavailable;
+            set_turn_readiness(ctx, AcpWorkerReadinessState::Unavailable);
             failed_outcome_with_code(
                 ctx.target_session.to_string(),
                 message_id.to_string(),
@@ -923,8 +1006,7 @@ fn submit_envelope_turn(
             )
         }
         PromptDispatchOutcome::SerializationFailed(reason) => {
-            *ctx.shared.readiness.lock().expect("readiness mutex") =
-                AcpWorkerReadinessState::Unavailable;
+            set_turn_readiness(ctx, AcpWorkerReadinessState::Unavailable);
             failed_outcome_with_code(
                 ctx.target_session.to_string(),
                 message_id.to_string(),

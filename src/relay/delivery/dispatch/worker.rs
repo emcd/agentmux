@@ -266,13 +266,12 @@ async fn run_async_delivery_worker(
                 }),
             );
         }
-        // Mirror Busy into the global registry before delivery so external
-        // observers (the TUI worker-state stream) see the in-turn transition.
-        // The driver owns the mirror (ACP only); tmux has no worker-state.
-        if let TransportImpl::Acp(driver) = &transport {
-            driver.mark_busy();
-        }
 
+        // The ACP internal delivery task now mirrors its own Busy/settled
+        // readiness transitions into the global registry (it holds the relay
+        // mirror), and the driver-owned respawn monitor drives recovery off its
+        // stable respawn-needed signal. So the worker no longer calls
+        // mark_busy / mirror_settled_readiness / maybe_respawn_after_delivery.
         let (outcomes, returned_transport, deferred) =
             deliver_batch_blocking(batch.clone(), pre_resolved_pane, transport).await;
         transport = returned_transport;
@@ -280,20 +279,6 @@ async fn run_async_delivery_worker(
         // in original order so they are the head of the next iteration.
         for deferred_task in deferred.into_iter().rev() {
             carry.push_front(deferred_task);
-        }
-        // The head outcome's reason code classifies the respawn trigger (all
-        // coalesced tasks share one outcome by construction).
-        let head_reason_code = outcomes
-            .first()
-            .and_then(|outcome| outcome.as_ref().ok())
-            .and_then(|result| result.reason_code.clone());
-
-        // `deliver()` folds in completion (blocks to terminal), so the
-        // transport's readiness is already settled on return. The driver mirrors
-        // it into the global registry for external observers and the respawn gate
-        // below (ACP only).
-        if let TransportImpl::Acp(driver) = &transport {
-            driver.mirror_settled_readiness();
         }
         for (task, outcome) in batch.iter().zip(outcomes) {
             if is_acp && matches!(&outcome, Ok(result) if result.outcome == SendOutcome::Delivered)
@@ -305,13 +290,6 @@ async fn run_async_delivery_worker(
             }
             super::super::async_worker::complete_task_outcome(task, outcome);
             super::super::async_worker::release_pending_slot(pending.as_ref());
-        }
-
-        // Respawn the ACP runtime when post-delivery readiness is Unavailable,
-        // else reset the backoff. The driver decides off its own transport's
-        // settled readiness (equal to what was just mirrored).
-        if let TransportImpl::Acp(driver) = &mut transport {
-            driver.maybe_respawn_after_delivery(head_reason_code).await;
         }
     }
     super::super::async_worker::unregister_worker(&key);
