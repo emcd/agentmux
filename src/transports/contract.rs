@@ -343,6 +343,26 @@ impl TransportImpl {
         }
     }
 
+    /// Submits one envelope via the non-blocking write seam; see
+    /// [`Transport::mailw`].
+    pub fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
+        match self {
+            Self::Acp(transport) => transport.mailw(envelope),
+            Self::Tmux(transport) => transport.mailw(envelope),
+            Self::Pty => unimplemented!("PTY transport not yet implemented"),
+        }
+    }
+
+    /// Submits raw input via the non-blocking write seam; see
+    /// [`Transport::raww`].
+    pub fn raww(&mut self, content: String, append_enter: bool) -> OutcomeFuture {
+        match self {
+            Self::Acp(transport) => transport.raww(content, append_enter),
+            Self::Tmux(transport) => transport.raww(content, append_enter),
+            Self::Pty => unimplemented!("PTY transport not yet implemented"),
+        }
+    }
+
     /// Reports delivery readiness; see [`Transport::is_ready`].
     #[must_use]
     pub fn is_ready(&self) -> bool {

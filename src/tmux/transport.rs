@@ -56,7 +56,7 @@ const TMUX_TARGET_UNAVAILABLE_CODE: &str = "tmux_target_unavailable";
 /// against the runtime's tmux socket; the only construction-time state is the
 /// per-prompt token budget the internal delivery task consumes when combining a
 /// coalesced envelope group (write-interface refactor sections 2-3).
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TmuxTransport {
     max_prompt_tokens: usize,
 }
