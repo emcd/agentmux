@@ -132,6 +132,17 @@ impl AcpWorkerDriver {
         self.max_prompt_tokens
     }
 
+    /// Checks if the internal delivery task signaled that a respawn is needed.
+    /// Returns the trigger reason if a respawn is needed, `None` otherwise.
+    /// The relay worker should call `maybe_respawn_after_delivery` when this
+    /// returns `Some`.
+    pub fn check_respawn_needed(&mut self) -> Option<String> {
+        self.transport
+            .as_mut()
+            .expect("acp driver transport present")
+            .check_respawn_needed()
+    }
+
     fn transport_ref(&self) -> &AcpTransport {
         self.transport
             .as_ref()

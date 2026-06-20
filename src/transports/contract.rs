@@ -512,6 +512,9 @@ pub struct DeliveryEnvelope {
     pub rendered: String,
     /// Whether to submit (append Enter) after writing, for raw input.
     pub append_enter: bool,
+    /// Sessions authorized to decide choices raised during this envelope's
+    /// delivery, threaded to [`ChoiceToMake::decider_sessions`].
+    pub choice_decider_sessions: Vec<String>,
 }
 
 /// Per-batch context shared by every envelope in a [`Transport::deliver`] call.
