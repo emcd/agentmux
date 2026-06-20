@@ -217,6 +217,7 @@ pub trait OutputView: Send + Sync {
 /// fixed and small, sync RPITIT-free methods would still make the trait
 /// non-object-safe if it ever went async, and enum dispatch carries zero heap
 /// overhead per call.
+#[allow(clippy::large_enum_variant)]
 pub enum TransportImpl {
     /// ACP delivery transport with its worker lifecycle driver (Slice 2 / 4A-2).
     /// The driver owns the `AcpTransport` plus its bootstrap/respawn lifecycle;
@@ -512,6 +513,14 @@ pub struct DeliveryEnvelope {
     pub rendered: String,
     /// Whether to submit (append Enter) after writing, for raw input.
     pub append_enter: bool,
+    /// Quiescence poll window for the transport's internal delivery task.
+    /// The transport uses this as the quiet period before declaring the target
+    /// ready to receive a flush group. Ignored by transports with no
+    /// quiescence wait (ACP).
+    pub quiet_window: Duration,
+    /// Deadline for the quiescence wait; `None` means unbounded (bounded only
+    /// by relay shutdown). Ignored by transports with no quiescence wait.
+    pub quiescence_timeout: Option<Duration>,
 }
 
 /// Per-batch context shared by every envelope in a [`Transport::deliver`] call.

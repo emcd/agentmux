@@ -39,6 +39,7 @@ use crate::acp::{
     AcpStdioClient, DispatchHandler, PromptCompletion, PromptCompletionHandler,
     PromptDispatchOutcome,
 };
+
 use crate::configuration::{AcpChannel, AcpTargetConfiguration, BundleMember, TargetConfiguration};
 use crate::runtime::signals::shutdown_requested;
 use crate::transports::{AcpWorkerReadinessState, SendOutcome};
@@ -388,6 +389,8 @@ impl Transport for AcpTransport {
             payload_mode: crate::transports::DeliveryPayloadMode::RawInput,
             rendered: text.to_string(),
             append_enter: _append_enter,
+            quiet_window: Duration::ZERO,
+            quiescence_timeout: None,
         };
         let result = self.deliver(vec![envelope], context);
         match result.outcomes.into_iter().next() {

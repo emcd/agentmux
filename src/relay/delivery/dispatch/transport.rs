@@ -146,6 +146,8 @@ fn deliver_acp_combined(
         payload_mode: head.payload_mode,
         rendered: prompt,
         append_enter: head.append_enter,
+        quiet_window: head.quiescence.quiet_window,
+        quiescence_timeout: head.quiescence.quiescence_timeout,
     };
     let context = DeliveryContext {
         target_session: target_session.clone(),
@@ -274,6 +276,8 @@ fn build_tmux_envelopes(
                 payload_mode: DeliveryPayloadMode::EnvelopeMessage,
                 rendered,
                 append_enter: true,
+                quiet_window: head.quiescence.quiet_window,
+                quiescence_timeout: head.quiescence.quiescence_timeout,
             })
             .collect(),
         DeliveryPayloadMode::RawInput => vec![DeliveryEnvelope {
@@ -281,6 +285,8 @@ fn build_tmux_envelopes(
             payload_mode: DeliveryPayloadMode::RawInput,
             rendered: head.message.clone(),
             append_enter: head.append_enter,
+            quiet_window: head.quiescence.quiet_window,
+            quiescence_timeout: head.quiescence.quiescence_timeout,
         }],
     }
 }
