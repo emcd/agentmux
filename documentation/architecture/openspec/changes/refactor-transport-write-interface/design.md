@@ -79,30 +79,39 @@ type-dependent step is *construction* (the worker builds a `UiTransport`,
 `TmuxTransport`, or ACP driver per target from `session_type()`), which is
 inherent and unavoidable.
 
-UI delivery payload shape — RESOLVED to option (b) (FE + RG concur): the relay
-builds the `RelayStreamEvent` and hands it to the `UiTransportServices`
-broadcaster; `DeliveryEnvelope` stays lean. Rejected (a) — extending
-`DeliveryEnvelope` with sender/cc — because those are relay-domain *attribution*,
-not rendering inputs; carrying them on the envelope so only the UI transport
-reads them smears routing semantics across every transport and cuts against the
-no-relay-dependency invariant. Under (b) the asymmetry (relay assembles the UI
-event while other transports own their rendering) is contained and acceptable.
+UI delivery payload shape — RESOLVED to R1, an interim compromise toward option
+C. `DeliveryEnvelope` carries relay-populated, transport-read-only attribution
+(`sender_session`, `cc_sessions`, `authenticated_identity`; `on_behalf_of`
+deferred unless the task carries it); `UiTransport` builds the `RelayStreamEvent`
+from the envelope.
 
-Requirements for (b): the UI stream event MUST carry sender, cc, message_id — and
-ideally `authenticated_identity` / `on_behalf_of` — sourced from the relay's
-authenticated post-authz view (not the envelope), keeping attribution
-relay-authoritative (Extensions Protocol). The TUI already renders structured
-stream events and dedupes by message_id, so this needs zero TUI contract change.
-Spec note: under (b), UI "delivery" == event accepted by the broadcaster (the TUI
-is a passive subscriber; no per-recipient render ack), so `UiTransport`'s
-`SingleDeliveryOutcome` is success-on-broadcast, not confirmed-rendered.
+Why not the originally-favored option (b) (lean envelope; relay builds the
+event): it is incompatible with the committed `mailw(DeliveryEnvelope)` seam.
+Sender and cc are per-message and are not on a lean envelope, nor reconstructable
+inside `UiTransport` — the injected broadcaster closes over the *target*, not the
+per-message sender/cc — so `UiTransport::mailw` cannot build the event from a lean
+envelope. The only ways to honor uniform `mailw` are (R1) carry the attribution
+on the envelope, or (R2) give UI a non-`mailw` broadcast seam with a worker-side
+event build. R2 reintroduces a worker fork against the "dumb worker / no routing
+fork" goal, so R1 wins.
 
-Deferred alternative — "option C", render-in-transport (`mailw` receives a
+R1 still honors FE's *substantive* requirements: attribution stays
+relay-authoritative and transport-read-only (the transport never *sets* it), and
+the fields are plain owned data with no `crate::relay` dependency (Extensions
+Protocol attribution authority preserved). Only the "keep `DeliveryEnvelope`
+lean" aesthetic bends. The TUI already renders structured stream events and
+dedupes by message_id, so this needs zero TUI contract change. Spec note: UI
+"delivery" == event accepted by the broadcaster (the TUI is a passive subscriber;
+no per-recipient render ack), so `UiTransport`'s `SingleDeliveryOutcome` is
+success-on-broadcast, not confirmed-rendered.
+
+The clean end-state — "option C", render-in-transport (`mailw` receives a
 structured `DeliveryEnvelope`; every transport renders internally, UI reads the
-structured fields directly): cleaner uniform end-state but a strictly larger
-change (reshapes `DeliveryEnvelope` into a structured message, relocates
-rendering into Tmux/ACP, mirrors attribution into transport-safe types). Tracked
-as post-change follow-up in todos/relay/94, likely its own OpenSpec change.
+structured fields directly) — reshapes `DeliveryEnvelope` into a full structured
+message, relocates rendering into Tmux/ACP, and mirrors attribution into
+transport-safe types. R1's fields are deliberately shaped to migrate into it.
+Tracked as a post-change follow-up in todos/relay/94, likely its own OpenSpec
+change.
 
 ### Decision: transport-internal FIFO ordering; raww is a batch barrier
 

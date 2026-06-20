@@ -96,18 +96,24 @@ it would otherwise require).
 - [ ] 4.5 Construct `UiTransport` for `Ui` targets in the worker (replacing the
       tmux fallback for non-ACP targets), threading the UI services; route the
       Pubsub stub by target type
-- [ ] 4.6 UI delivery payload shape — RESOLVED to option (b) (FE + RG concur):
-      the relay builds the UI stream event and hands it to the
-      `UiTransportServices` broadcaster; `DeliveryEnvelope` stays lean. The event
-      MUST carry sender, cc, message_id — and ideally `authenticated_identity` /
-      `on_behalf_of` — sourced from the relay's authenticated post-authz view (not
-      the envelope), so attribution stays relay-authoritative and the TUI renders
-      it consistently (TUI already dedupes by message_id; zero TUI contract
-      change). Note in the spec: under (b), UI "delivery" == event accepted by the
-      broadcaster (the TUI is a passive subscriber; no per-recipient render ack),
-      so `UiTransport`'s `SingleDeliveryOutcome` is success-on-broadcast, not
-      confirmed-rendered. (Render-in-transport — "option C" — is deferred to
-      todos/relay/94 as post-change follow-up.)
+- [ ] 4.6 UI delivery payload shape — RESOLVED to R1 (interim compromise toward
+      option C). `DeliveryEnvelope` carries relay-populated, transport-read-only
+      attribution (`sender_session`, `cc_sessions`, `authenticated_identity`;
+      `on_behalf_of` deferred unless the task carries it) so `UiTransport` builds
+      the `RelayStreamEvent` from the envelope. Chosen because lean-(b) is
+      incompatible with the committed `mailw(DeliveryEnvelope)` seam: sender/cc are
+      per-message and not reconstructable inside `UiTransport` (the injected
+      broadcaster closes over the target, not the per-message sender/cc), so
+      `UiTransport::mailw` cannot build the event from a lean envelope. R1 keeps
+      the worker dumb and the delivery loop uniform, and preserves FE's substantive
+      requirements — attribution stays relay-authoritative, transport-read-only,
+      and carries no `crate::relay` dependency (plain owned data); only the "lean"
+      aesthetic bends. The fields are shaped to migrate into option C cleanly.
+      Spec note: UI "delivery" == event accepted by the broadcaster (the TUI is a
+      passive subscriber; no per-recipient render ack), so `UiTransport`'s
+      `SingleDeliveryOutcome` is success-on-broadcast, not confirmed-rendered. The
+      clean structured-message end-state (render-in-transport, "option C") is
+      deferred to todos/relay/94.
 
 ## 5. Relay worker loop refactor
 
