@@ -9,17 +9,22 @@ through two non-blocking write methods defined on the `Transport` trait in
 - `mailw(envelope: DeliveryEnvelope) -> OutcomeFuture` — relay-wrapped message
   write. The transport SHALL enqueue the envelope in its internal ordered channel
   and return an outcome future immediately. The transport SHALL resolve the future
-  with a terminal `SendResult` when the write is delivered or reaches a terminal
-  failure state.
+  with a terminal `SingleDeliveryOutcome` when the write is delivered or reaches a
+  terminal failure state. `OutcomeFuture` is `oneshot::Receiver<SingleDeliveryOutcome>`:
+  it carries the transport-side outcome, not the relay `SendResult`, preserving the
+  transport contract's independence from `crate::relay`. The relay worker maps the
+  resolved `SingleDeliveryOutcome` onto its `SendResult`.
 - `raww(content: String, append_enter: bool) -> OutcomeFuture` — raw input
   write. The transport SHALL enqueue the raw write in its internal ordered channel
   and return an outcome future immediately. `raww` items act as batch barriers:
   the transport SHALL flush any buffered `mailw` items before delivering the raw
   write, maintaining FIFO ordering across both write types.
 
-Each transport type (ACP, Tmux) SHALL implement these methods in its own module.
-The relay SHALL dispatch via a `TransportImpl` enum that delegates without
-dynamic allocation.
+Each transport type (ACP, Tmux, Ui, and Pubsub when it lands) SHALL implement
+these methods in its own module. The relay SHALL dispatch via a `TransportImpl`
+enum that delegates without dynamic allocation, and SHALL submit `mailw`/`raww`
+uniformly for every target with no transport-type routing fork in the delivery
+loop.
 
 The trait methods SHALL be non-blocking at the relay boundary. The relay
 delivery worker runs a concurrent produce-and-collect loop that simultaneously
@@ -49,6 +54,16 @@ pending outcome futures with a `DroppedOnShutdown` result promptly.
 - **AND** the `TmuxTransport` implementation buffers the envelope, waits for
   pane quiescence using the per-envelope quiescence hints, pastes all buffered
   envelopes, and resolves all pending outcome futures
+
+#### Scenario: UI delivery via TransportImpl
+
+- **WHEN** the relay delivery worker delivers to a `Ui` target
+- **THEN** it calls `TransportImpl::Ui(t).mailw(envelope)` like any other
+  transport and receives an outcome future
+- **AND** the `UiTransport` implementation emits the message as a relay stream
+  event through its injected broadcaster closure and resolves the outcome future
+  immediately (no quiescence wait, combining, or token budget)
+- **AND** no `Ui`/`Pubsub` delivery short-circuit appears in the dispatch path
 
 #### Scenario: Concurrent produce loop keeps feeding transport during quiescence wait
 
@@ -92,18 +107,24 @@ pending outcome futures with a `DroppedOnShutdown` result promptly.
 ### Requirement: Transport Module Boundaries
 
 ACP-specific delivery code SHALL reside in `src/acp/`. Tmux-specific delivery
-code SHALL reside in `src/tmux/`. The relay delivery subsystem SHALL NOT
-contain transport-specific logic; all transport dispatch SHALL go through
-`TransportImpl`. Specifically, the relay delivery subsystem SHALL NOT contain:
+code SHALL reside in `src/tmux/`. UI stream-broadcast delivery code SHALL reside
+in its own transport module (`UiTransport`), not in the relay delivery subsystem.
+The relay delivery subsystem SHALL NOT contain transport-specific logic; all
+transport dispatch SHALL go through `TransportImpl`. Specifically, the relay
+delivery subsystem SHALL NOT contain:
 - quiescence scheduling or pane-identifier propagation,
 - batch-combining or prompt-packing logic (including `batch_envelopes` and
   token-budget peeling),
-- per-transport `TargetConfiguration::Acp`/`Tmux` dispatch arms for delivery.
+- per-transport `TargetConfiguration::Acp`/`Tmux`/`Ui`/`Pubsub` dispatch arms for
+  delivery, nor a relay-internal UI delivery path (`deliver_one_target_ui`,
+  `should_route_to_ui`).
 
-Transport-deliverable targets SHALL be identified via
-`TargetConfiguration::is_transport_delivered() -> bool`; non-deliverable session
-types (`Ui`, `Pubsub`) SHALL be rejected via this capability flag without a
-transport-identity match.
+Every target SHALL be transport-delivered: `Ui` and `Pubsub` are first-class
+transports (`TransportImpl::Ui`, and `TransportImpl::Pubsub` forward-declared as
+a stub like `Pty`), so the relay worker submits `mailw`/`raww` uniformly without a
+transport-deliverability capability flag. The only target-type-dependent step is
+transport *construction* (selecting `UiTransport`/`TmuxTransport`/ACP driver from
+`session_type()`), which is inherent.
 
 #### Scenario: ACP code in src/acp/
 
@@ -116,37 +137,42 @@ transport-identity match.
 - **THEN** no Tmux pane operations, quiescence scheduling, or session lifecycle
   primitives are present
 
-#### Scenario: Non-deliverable target rejected via capability flag
+#### Scenario: UI target delivered through its transport, not a relay path
 
-- **WHEN** the relay receives a delivery task for a `Ui` or `Pubsub` target
-- **THEN** it rejects the task via `is_transport_delivered()` returning false
-- **AND** no `TargetConfiguration::Ui | Pubsub` arm appears in the transport
+- **WHEN** the relay receives a delivery task for a `Ui` target
+- **THEN** it dispatches `mailw` through `TransportImpl::Ui` uniformly, with no
+  `is_transport_delivered()` flag and no transport-type routing fork
+- **AND** no `TargetConfiguration::Ui | Pubsub` delivery arm or
+  `deliver_one_target_ui` / `should_route_to_ui` short-circuit appears in the
   dispatch path
 
 ### Requirement: Synchronous Delivery Completion
 
 `mailw()` and `raww()` SHALL each return an outcome future that resolves with a
-terminal `SendResult` when the write reaches a terminal state. The relay worker
-performs sender fan-out by awaiting the returned futures; there is no
-transport-issued completion callback or event separate from the future. The
-transport SHALL NOT drop a write without resolving its outcome future. On relay
-shutdown, all pending futures SHALL resolve with a dropped/shutdown outcome
-promptly. This does not block the relay request path: the send RPC returns
-`Queued` at enqueue, and outcome futures are awaited only on the per-target
-worker.
+terminal `SingleDeliveryOutcome` when the write reaches a terminal state; the
+relay worker maps that outcome onto its `SendResult` (the future carries the
+transport-side type, not the relay `SendResult`, preserving the no-relay-dependency
+invariant). The relay worker performs sender fan-out by awaiting the returned
+futures; there is no transport-issued completion callback or event separate from
+the future. The transport SHALL NOT drop a write without resolving its outcome
+future. On relay shutdown, all pending futures SHALL resolve with a
+dropped/shutdown outcome promptly. This does not block the relay request path: the
+send RPC returns `Queued` at enqueue, and outcome futures are awaited only on the
+per-target worker.
 
 #### Scenario: mailw future resolves on delivery
 
 - **WHEN** the relay worker calls `mailw(envelope)` on a transport
 - **THEN** it receives a future immediately
-- **AND** the future resolves with a terminal `SendResult` once the transport
-  delivers (or fails to deliver) the write
+- **AND** the future resolves with a terminal `SingleDeliveryOutcome` once the
+  transport delivers (or fails to deliver) the write, which the relay worker maps
+  onto its `SendResult` at the collect site
 
 #### Scenario: Shutdown resolves all pending futures
 
 - **WHEN** relay shutdown is requested while outcome futures are pending
 - **THEN** each transport resolves all pending futures with a dropped/shutdown
-  `SendResult` promptly
+  `SingleDeliveryOutcome` promptly
 
 ## REMOVED Requirements
 
