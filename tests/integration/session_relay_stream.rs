@@ -505,6 +505,145 @@ fn relay_async_send_emits_terminal_delivery_outcome_to_sender_ui_stream() {
     sender_handle.join().expect("join sender relay stream");
 }
 
+// Writes the standard configuration plus a configured (non-`@GLOBAL`) `display`
+// UI member, so a send can target a configured UI session whose UI stream may
+// register after the first delivery.
+fn write_bundle_configuration_with_ui_member(temporary: &TempDir, bundle_name: &str) -> PathBuf {
+    let configuration_root = write_bundle_configuration(temporary, bundle_name);
+    let bundles_directory = configuration_root.join("bundles");
+    std::fs::write(
+        bundles_directory.join(format!("{bundle_name}.toml")),
+        r#"
+format-version = 1
+
+[[sessions]]
+id = "alpha"
+name = "Alpha"
+directory = "/tmp"
+coder = "shell"
+
+[[sessions]]
+id = "display"
+name = "Display"
+directory = "/tmp"
+
+[sessions.ui]
+"#,
+    )
+    .expect("rewrite bundle configuration with ui member");
+    configuration_root
+}
+
+// Regression: a configured UI target whose first send precedes its UI stream
+// registration must recover and deliver via `UiTransport` once the stream
+// connects. The per-target worker resolves UI routing per delivery (not latched
+// for its lifetime), so the second send routes to UI even though the first bound
+// the worker before any UI stream existed.
+#[test]
+fn relay_configured_ui_target_recovers_after_late_stream_registration() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = format!("party-{}", Uuid::new_v4().simple());
+    let configuration_root = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths =
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+    let display_target = format!("display@{bundle_name}");
+
+    // Send #1 to the configured UI target BEFORE any UI stream registers. The
+    // per-target worker is created and routes this delivery on the non-UI path
+    // (the registry has no UI entry yet). Under a latched resolution this would
+    // bind the worker to non-UI for its lifetime.
+    let first = dispatch_request(
+        RelayRequest::Send {
+            request_id: Some("req-ui-pre".to_string()),
+            requester_session: "alpha".to_string(),
+            message: "before registration".to_string(),
+            targets: vec![display_target.clone()],
+            broadcast: false,
+            quiet_window_ms: None,
+        },
+        &configuration_root,
+        bundle_name.as_str(),
+        &bundle_paths.runtime_directory,
+    )
+    .expect("first send response");
+    let RelayResponse::Send { results, .. } = first else {
+        panic!("expected send response");
+    };
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].outcome, SendOutcome::Queued);
+
+    // Let the worker process send #1 so the routing decision is exercised once
+    // while no UI stream exists.
+    thread::sleep(Duration::from_millis(300));
+
+    // The UI client now connects and registers a Ui stream for `display`.
+    let (mut ui_client, ui_handle) = spawn_relay_stream(&configuration_root, &bundle_paths);
+    let read_stream = ui_client.try_clone().expect("clone stream");
+    let mut reader = BufReader::new(read_stream);
+    send_json(
+        &mut ui_client,
+        hello_payload(bundle_name.as_str(), "display"),
+    );
+    let hello_ack = read_json(&mut reader);
+    assert_eq!(hello_ack["frame"], "hello_ack");
+
+    // Send #2 to the same target: the worker must re-evaluate routing, observe
+    // the now-registered UI stream, and deliver via UiTransport.
+    let second = dispatch_request(
+        RelayRequest::Send {
+            request_id: Some("req-ui-post".to_string()),
+            requester_session: "alpha".to_string(),
+            message: "after registration".to_string(),
+            targets: vec![display_target.clone()],
+            broadcast: false,
+            quiet_window_ms: None,
+        },
+        &configuration_root,
+        bundle_name.as_str(),
+        &bundle_paths.runtime_directory,
+    )
+    .expect("second send response");
+    let RelayResponse::Send {
+        results: second_results,
+        ..
+    } = second
+    else {
+        panic!("expected send response");
+    };
+    assert_eq!(second_results.len(), 1);
+    assert_eq!(second_results[0].outcome, SendOutcome::Queued);
+
+    let events = collect_events_for_target(
+        &ui_client,
+        &mut reader,
+        display_target.as_str(),
+        Duration::from_secs(3),
+    );
+    let incoming = events
+        .iter()
+        .find(|value| value["event"]["event_type"] == "incoming_message")
+        .expect("incoming message after late registration (worker recovered to UI)");
+    assert_eq!(incoming["event"]["payload"]["body"], "after registration");
+    let delivered = events
+        .iter()
+        .find(|value| {
+            value["event"]["event_type"] == "delivery_outcome"
+                && value["event"]["payload"]["phase"] == "delivered"
+        })
+        .expect("delivered outcome after late registration");
+    assert_eq!(delivered["event"]["payload"]["outcome"], "success");
+    assert_eq!(
+        delivered["event"]["payload"]["message_id"],
+        second_results[0].message_id
+    );
+
+    ui_client
+        .shutdown(std::net::Shutdown::Both)
+        .expect("shutdown ui stream");
+    ui_handle.join().expect("join relay stream");
+}
+
 // ---------------------------------------------------------------------------
 // Choose-authorized choices list and submitter gating
 // ---------------------------------------------------------------------------

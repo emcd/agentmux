@@ -104,12 +104,14 @@ async fn run_async_delivery_worker(
     bootstrap: Option<AcpWorkerBootstrap>,
 ) {
     // Hold one `TransportImpl` for this target's lifetime: ACP targets get a
-    // driver that owns the ACP runtime + bootstrap/respawn lifecycle. Non-ACP
-    // targets start on the tmux transport and resolve their final kind from the
-    // first head task — UI-routed targets swap to a `UiTransport` (see
-    // `transport_resolved` below). ACP lifecycle, readiness mirroring, and
-    // respawn live in the driver; the loop drives them via the
-    // `TransportImpl::Acp` match and otherwise stays transport-agnostic.
+    // driver that owns the ACP runtime + bootstrap/respawn lifecycle; everything
+    // else gets the stateless tmux transport. UI-routed deliveries use a separate
+    // lazily-built `UiTransport` (see `ui_transport` below), chosen per delivery
+    // rather than latched, so a configured UI target whose first send precedes
+    // the UI stream registration recovers once the stream connects. ACP
+    // lifecycle, readiness mirroring, and respawn live in the driver; the loop
+    // drives them via the `TransportImpl::Acp` match and otherwise stays
+    // transport-agnostic.
     // Per-prompt token budget threaded into the transport at construction. Today
     // resolved from the env-backed prompt-batch settings; the write-interface
     // refactor moves the budget read here (construction time) off the per-delivery
@@ -133,10 +135,10 @@ async fn run_async_delivery_worker(
         None => TransportImpl::tmux(max_prompt_tokens),
     };
     let is_acp = matches!(transport, TransportImpl::Acp(_));
-    // ACP is resolved via its bootstrap; non-ACP workers resolve UI vs tmux from
-    // the first head task (matching the prior per-delivery `should_route_to_ui`
-    // timing) and the kind is stable for the worker's lifetime.
-    let mut transport_resolved = is_acp;
+    // Lazily-built UI transport, reused across deliveries once a head task routes
+    // to UI. Built separately from `transport` (the tmux/ACP delivery transport)
+    // because UI routing is re-evaluated per delivery, not latched.
+    let mut ui_transport: Option<TransportImpl> = None;
     let poll_interval = Duration::from_millis(ASYNC_WORKER_POLL_INTERVAL_MS);
     let drain_max = batch_drain_max();
     // Carry buffer: tasks consumed from the channel that did not coalesce with
@@ -182,32 +184,33 @@ async fn run_async_delivery_worker(
             break;
         }
 
-        // Resolve the non-ACP transport kind from the first head task.
-        if !transport_resolved {
-            match task_routes_to_ui(&head) {
-                Ok(true) => {
-                    transport = TransportImpl::ui(build_ui_transport_services(&key));
-                    transport_resolved = true;
-                }
-                Ok(false) => transport_resolved = true,
-                Err(error) => {
-                    // Internal failure resolving routing; fail this head and
-                    // retry kind resolution on the next task.
-                    super::super::async_worker::complete_task_outcome(&head, Err(error));
-                    super::super::async_worker::release_pending_slot(pending.as_ref());
-                    continue;
-                }
+        // Re-evaluate UI routing per head task (registry-dependent, like the
+        // former per-delivery `should_route_to_ui`): a configured UI target whose
+        // first send precedes the UI stream registration must recover and route
+        // through `UiTransport` once the stream connects, so the decision must
+        // not be latched for the worker's lifetime.
+        let route_to_ui = match task_routes_to_ui(&head) {
+            Ok(value) => value,
+            Err(error) => {
+                // Internal failure resolving routing; fail this head and retry on
+                // the next task.
+                super::super::async_worker::complete_task_outcome(&head, Err(error));
+                super::super::async_worker::release_pending_slot(pending.as_ref());
+                continue;
             }
-        }
+        };
 
         let mut batch = coalesce_batch(head, drain_max, &mut carry, &mut receiver);
 
         // Interim mixed worker: UI targets deliver via `UiTransport::mailw`;
         // tmux/ACP stay on the legacy `deliver` path until the worker-loop
         // unification (section 5). The Ui/Pubsub routing short-circuit no longer
-        // lives in the dispatch modules.
-        if matches!(transport, TransportImpl::Ui(_)) {
-            deliver_ui_batch(&batch, &mut transport, pending.as_ref()).await;
+        // lives in the dispatch modules. The UI transport is built once on first
+        // use and reused (its services depend only on the worker key).
+        if route_to_ui {
+            let ui = ui_transport
+                .get_or_insert_with(|| TransportImpl::ui(build_ui_transport_services(&key)));
+            deliver_ui_batch(&batch, ui, pending.as_ref()).await;
             continue;
         }
 
@@ -530,8 +533,9 @@ fn build_acp_driver_services(
 
 /// Reports whether a task delivers to a UI subscriber rather than a coder
 /// transport: relay-wide (`@GLOBAL`) targets and registered `Ui`-type sessions.
-/// Resolved once per worker at first delivery to pick the transport kind, with
-/// the same registry-resolution timing the prior dispatch short-circuit used.
+/// Evaluated per head task (not latched), matching the registry-resolution
+/// timing of the prior `should_route_to_ui` dispatch short-circuit so a UI
+/// target registering after its first send still recovers onto `UiTransport`.
 fn task_routes_to_ui(task: &AsyncDeliveryTask) -> Result<bool, RelayError> {
     if task.relay_wide_target {
         return Ok(true);
