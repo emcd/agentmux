@@ -38,8 +38,12 @@
       during the wait into the current group
 - [x] 2.6 On shutdown signal, drain channel and resolve all pending outcome
       senders with `DroppedOnShutdown`
-- [x] 2.7 Remove `TmuxTransport::prepare_delivery` implementation
-- [x] 2.8 Remove `TmuxTransport::deliver` implementation
+- [ ] 2.7 Remove `TmuxTransport::prepare_delivery` implementation (deferred:
+      still present; lands when Section 5 removes the last relay `deliver`/
+      `prepare_delivery` callsite — was checked prematurely)
+- [ ] 2.8 Remove `TmuxTransport::deliver` implementation (deferred: still
+      present; lands with the Section 5/6 callsite removal — was checked
+      prematurely)
 
 ## 3. ACP transport
 
@@ -49,26 +53,34 @@
       outcome receiver
 - [x] 3.3 Implement `raww`: enqueue raw item into channel; return outcome
       receiver (FIFO with mailw items)
-- [x] 3.4 Implement internal ACP delivery task:
-      - drain buffer (blocking recv, wait for ≥1 item)
-      - call `driver.mark_busy()` before turn submission
-      - for contiguous `Envelope` items: concatenate into one combined prompt
-        respecting the configured token budget (call `batch_envelopes` from
-        `crate::envelope`); excess items remain in the channel for the next turn
-      - for `Raw` items: flush any accumulated envelope group first, then
-        submit the raw content as its own turn
-      - submit turn; call `driver.mirror_settled_readiness()` after
-      - call `driver.maybe_respawn_after_delivery(outcome)` keyed off turn result
-      - fan turn outcome to all outcome senders for the submitted group
+- [ ] 3.4 Implement internal ACP delivery task. Done: drain buffer; combine
+      contiguous `Envelope` items into one combined prompt respecting the token
+      budget (excess remains in the channel for the next turn); flush the
+      envelope group before a `Raw` item, then submit the raw content as its own
+      turn; fan the turn outcome to all outcome senders for the submitted group;
+      set the transport-internal `shared.readiness` (Busy on dispatch, settled
+      after turn). NOT done (was checked prematurely; reopened under Resolution B
+      — `relay` lane): the readiness transitions are not mirrored to the relay
+      global registry, and respawn is not driven. Section 3 originally specified
+      `driver.mark_busy()` / `driver.mirror_settled_readiness()` /
+      `driver.maybe_respawn_after_delivery()` calls, but the internal task cannot
+      call driver methods; the actual mechanism is (a) inject a `MirrorStateFn`
+      into the task so it mirrors every readiness transition globally itself, and
+      (b) drive respawn off the existing `respawn_needed` watch via a driver-owned
+      async path (the signal is currently emitted but never consumed). Tracked as
+      tasks 5.6/5.7 below.
 - [x] 3.5 Add respawn-invalidation coordination: a shutdown/respawn-signal
       channel from the ACP driver to the internal task; on respawn signal, drain
       channel and resolve all pending outcome senders with `Cancelled` before
       `release_runtime()` is called
 - [x] 3.6 On relay shutdown, drain channel and resolve all outcome senders with
       `DroppedOnShutdown`
-- [x] 3.7 Remove `AcpTransport::prepare_delivery` stub (returns ready immediately)
-- [x] 3.8 Remove `AcpTransport::deliver` implementation; `batch_envelopes`
-      relay-side call and `can_take_batches` are deleted
+- [ ] 3.7 Remove `AcpTransport::prepare_delivery` stub (deferred: still present;
+      lands with the Section 5/6 callsite removal — was checked prematurely)
+- [ ] 3.8 Remove `AcpTransport::deliver` implementation; `batch_envelopes`
+      relay-side call and `can_take_batches` are deleted (deferred: `deliver`
+      still present and `batch_envelopes`/`can_take_batches` still used by the
+      relay batch path; lands with Section 5/6 — was checked prematurely)
 
 ## 4. Ui / Pubsub transports
 
@@ -136,8 +148,21 @@ it would otherwise require).
       and the `pre_resolved_pane` path from the worker loop; remove
       `note_tmux_delivered` from `dispatch/transport.rs`
 - [ ] 5.5 Remove `driver.mark_busy()`, `driver.mirror_settled_readiness()`, and
-      `driver.maybe_respawn_after_delivery()` from the relay worker loop (these
-      relocate to the ACP transport's internal task per section 3)
+      `driver.maybe_respawn_after_delivery()` from the relay worker loop. (These
+      were originally expected to relocate under Section 3 but did not; the
+      relocation is completed by 5.6/5.7 below so the worker loop becomes fully
+      transport-agnostic — no `TransportImpl::Acp` match in the loop body.)
+- [ ] 5.6 Relocate the ACP global readiness mirror into the internal delivery
+      task (closes the reopened part of 3.4): inject a `MirrorStateFn` into
+      `acp_delivery_task` so it mirrors every readiness transition (Busy on
+      dispatch, settled Available/Unavailable after the turn) to the relay global
+      registry itself, removing the need for `driver.mark_busy()` /
+      `driver.mirror_settled_readiness()`.
+- [ ] 5.7 Relocate ACP respawn driving off the worker (closes the reopened part
+      of 3.4): consume the currently-dead `respawn_needed` watch signal via a
+      driver-owned async path so `driver.maybe_respawn_after_delivery()` is no
+      longer called from the worker loop, resolving the `&mut` ownership overlap
+      between the worker's `mailw` and the respawn lifecycle.
 
 ## 6. Relay dispatch cleanup
 
