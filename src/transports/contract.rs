@@ -1,10 +1,11 @@
 //! Transport interface contract for the relay delivery subsystem.
 //!
 //! The relay delivery worker dispatches every agent delivery operation through
-//! the synchronous [`Transport`] trait. Concrete transports (ACP, Tmux) each
-//! implement the trait in their own module; the relay selects between them via
-//! the [`TransportImpl`] enum, which delegates by `match` with no dynamic
-//! allocation.
+//! the [`Transport`] trait. Concrete transports (ACP, Tmux, UI) each implement
+//! the trait in their own module; the relay selects between them via the
+//! [`TransportImpl`] enum, which delegates by `match` with no dynamic
+//! allocation. Promoting UI (and the forward-declared Pubsub) to first-class
+//! transports retires the relay's former `Acp/Tmux/Ui/Pubsub` routing fork.
 //!
 //! ## Write boundary: non-blocking, future-resolved
 //!
@@ -59,6 +60,7 @@ use tokio::sync::oneshot;
 use crate::acp::{AcpDriverServices, AcpWorkerDriver};
 use crate::configuration::BundleMember;
 use crate::tmux::TmuxTransport;
+use crate::transports::ui::{UiTransport, UiTransportServices};
 // Re-export the configuration prompt-readiness template into the transport
 // contract namespace; tmux quiescence consumes it and Slice 3 wires it through
 // the delivery context. It is defined once in `configuration`; re-exporting
@@ -228,6 +230,16 @@ pub enum TransportImpl {
     Acp(Box<AcpWorkerDriver>),
     /// Tmux pane delivery transport (implemented in Slice 3).
     Tmux(TmuxTransport),
+    /// UI stream-broadcast transport. Delivers via `mailw` (a single broadcast
+    /// with a bounded reconnect wait); not lookable, not raw-writable, not
+    /// batchable. Promoting UI to a first-class transport retires the relay's
+    /// `Acp/Tmux/Ui/Pubsub` routing fork.
+    Ui(UiTransport),
+    /// Forward-declared pub/sub fan-out transport. The capability row answers now
+    /// (mirrors UI: not lookable/writable/streamable/batchable); delivery methods
+    /// are unimplemented until the Pubsub transport lands. When it does, this
+    /// becomes `Pubsub(PubsubTransport)`.
+    Pubsub,
     /// Forward-declared PTY transport. The capability row answers now
     /// (look/write/stream all true); delivery methods are unimplemented until
     /// the PTY transport lands as the long-term replacement for Tmux. When it
@@ -263,11 +275,20 @@ impl TransportImpl {
         Self::Tmux(TmuxTransport::new(max_prompt_tokens))
     }
 
+    /// Builds a UI stream-broadcast transport for one target. The relay
+    /// constructs `services` closing over its own stream registry; the transport
+    /// imports nothing from `crate::relay`.
+    #[must_use]
+    pub fn ui(services: UiTransportServices) -> Self {
+        Self::Ui(UiTransport::new(services))
+    }
+
     /// The target can be captured by `look`.
     #[must_use]
     pub fn can_be_looked(&self) -> bool {
         match self {
             Self::Acp(_) | Self::Tmux(_) | Self::Pty => true,
+            Self::Ui(_) | Self::Pubsub => false,
         }
     }
 
@@ -276,6 +297,7 @@ impl TransportImpl {
     pub fn can_be_written(&self) -> bool {
         match self {
             Self::Acp(_) | Self::Tmux(_) | Self::Pty => true,
+            Self::Ui(_) | Self::Pubsub => false,
         }
     }
 
@@ -284,7 +306,7 @@ impl TransportImpl {
     pub fn can_stream_output(&self) -> bool {
         match self {
             Self::Acp(_) | Self::Pty => true,
-            Self::Tmux(_) => false,
+            Self::Tmux(_) | Self::Ui(_) | Self::Pubsub => false,
         }
     }
 
@@ -293,7 +315,7 @@ impl TransportImpl {
     pub fn can_give_choices(&self) -> bool {
         match self {
             Self::Acp(_) => true,
-            Self::Tmux(_) | Self::Pty => false,
+            Self::Tmux(_) | Self::Ui(_) | Self::Pubsub | Self::Pty => false,
         }
     }
 
@@ -306,7 +328,7 @@ impl TransportImpl {
     pub fn can_take_batches(&self) -> bool {
         match self {
             Self::Tmux(_) | Self::Pty => true,
-            Self::Acp(_) => false,
+            Self::Acp(_) | Self::Ui(_) | Self::Pubsub => false,
         }
     }
 
@@ -315,6 +337,8 @@ impl TransportImpl {
         match self {
             Self::Acp(transport) => transport.startup(context),
             Self::Tmux(transport) => transport.startup(context),
+            Self::Ui(transport) => transport.startup(context),
+            Self::Pubsub => unimplemented!("Pubsub transport not yet implemented"),
             Self::Pty => unimplemented!("PTY transport not yet implemented"),
         }
     }
@@ -327,6 +351,8 @@ impl TransportImpl {
         match self {
             Self::Acp(transport) => transport.prepare_delivery(context),
             Self::Tmux(transport) => transport.prepare_delivery(context),
+            Self::Ui(transport) => transport.prepare_delivery(context),
+            Self::Pubsub => unimplemented!("Pubsub transport not yet implemented"),
             Self::Pty => unimplemented!("PTY transport not yet implemented"),
         }
     }
@@ -340,6 +366,8 @@ impl TransportImpl {
         match self {
             Self::Acp(transport) => transport.deliver(envelopes, context),
             Self::Tmux(transport) => transport.deliver(envelopes, context),
+            Self::Ui(transport) => transport.deliver(envelopes, context),
+            Self::Pubsub => unimplemented!("Pubsub transport not yet implemented"),
             Self::Pty => unimplemented!("PTY transport not yet implemented"),
         }
     }
@@ -350,6 +378,8 @@ impl TransportImpl {
         match self {
             Self::Acp(transport) => transport.mailw(envelope),
             Self::Tmux(transport) => transport.mailw(envelope),
+            Self::Ui(transport) => transport.mailw(envelope),
+            Self::Pubsub => unimplemented!("Pubsub transport not yet implemented"),
             Self::Pty => unimplemented!("PTY transport not yet implemented"),
         }
     }
@@ -360,6 +390,8 @@ impl TransportImpl {
         match self {
             Self::Acp(transport) => transport.raww(content, append_enter),
             Self::Tmux(transport) => transport.raww(content, append_enter),
+            Self::Ui(transport) => transport.raww(content, append_enter),
+            Self::Pubsub => unimplemented!("Pubsub transport not yet implemented"),
             Self::Pty => unimplemented!("PTY transport not yet implemented"),
         }
     }
@@ -370,6 +402,8 @@ impl TransportImpl {
         match self {
             Self::Acp(transport) => transport.is_ready(),
             Self::Tmux(transport) => transport.is_ready(),
+            Self::Ui(transport) => transport.is_ready(),
+            Self::Pubsub => unimplemented!("Pubsub transport not yet implemented"),
             Self::Pty => unimplemented!("PTY transport not yet implemented"),
         }
     }
@@ -384,6 +418,8 @@ impl TransportImpl {
         match self {
             Self::Acp(transport) => transport.raw_write(text, append_enter, context),
             Self::Tmux(transport) => transport.raw_write(text, append_enter, context),
+            Self::Ui(transport) => transport.raw_write(text, append_enter, context),
+            Self::Pubsub => unimplemented!("Pubsub transport not yet implemented"),
             Self::Pty => unimplemented!("PTY transport not yet implemented"),
         }
     }
@@ -393,6 +429,8 @@ impl TransportImpl {
         match self {
             Self::Acp(transport) => transport.shutdown(),
             Self::Tmux(transport) => transport.shutdown(),
+            Self::Ui(transport) => transport.shutdown(),
+            Self::Pubsub => unimplemented!("Pubsub transport not yet implemented"),
             Self::Pty => unimplemented!("PTY transport not yet implemented"),
         }
     }
@@ -402,6 +440,8 @@ impl TransportImpl {
         match self {
             Self::Acp(transport) => transport.give_output(),
             Self::Tmux(transport) => transport.give_output(),
+            Self::Ui(transport) => transport.give_output(),
+            Self::Pubsub => unimplemented!("Pubsub transport not yet implemented"),
             Self::Pty => unimplemented!("PTY transport not yet implemented"),
         }
     }
@@ -522,8 +562,22 @@ pub struct DeliveryEnvelope {
     /// quiescence wait (ACP).
     pub quiet_window: Duration,
     /// Deadline for the quiescence wait; `None` means unbounded (bounded only
-    /// by relay shutdown). Ignored by transports with no quiescence wait.
+    /// by relay shutdown). Ignored by transports with no quiescence wait. The UI
+    /// transport reuses this as the cap on its reconnect wait.
     pub quiescence_timeout: Option<Duration>,
+    /// Canonical `session@namespace` id of the sender. Relay-populated,
+    /// transport-read-only attribution: only the UI transport reads it (to build
+    /// the `incoming_message` stream event); delivery transports (Tmux/ACP) carry
+    /// the empty string and ignore it. This is the interim R1 shape pending the
+    /// structured-message end-state ("option C").
+    pub sender_session: String,
+    /// Canonical `session@namespace` ids of the message's co-recipients (Cc).
+    /// Relay-populated, transport-read-only; only the UI transport reads it.
+    pub cc_sessions: Vec<String>,
+    /// The sender's verified `principal_id`, carried to the UI recipient; `None`
+    /// for socket-trust senders. Relay-populated, transport-read-only; only the
+    /// UI transport reads it.
+    pub authenticated_identity: Option<String>,
 }
 
 /// Per-batch context shared by every envelope in a [`Transport::deliver`] call.

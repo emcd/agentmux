@@ -24,3 +24,5 @@ mod tui;
 mod tui_session;
 #[path = "unit/tui_workbench.rs"]
 mod tui_workbench;
+#[path = "unit/ui_transport.rs"]
+mod ui_transport;

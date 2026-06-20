@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use crate::{
-    configuration::{BundleMember, SessionType},
+    configuration::BundleMember,
     envelope::{
         AddressIdentity, EnvelopeRenderInput, ManifestPreamble, PromptBatchSettings,
         batch_envelopes, parse_tokenizer_profile, render_envelope,
@@ -9,31 +9,25 @@ use crate::{
     runtime::inscriptions::emit_inscription,
 };
 
-use super::super::super::stream::resolve_registered_session_type;
 use super::super::super::{
-    AsyncDeliveryTask, DeliveryPayloadMode, RelayError, SCHEMA_VERSION, SendResult,
-    bare_session_id, canonical_session_id,
+    AsyncDeliveryTask, DeliveryPayloadMode, RelayError, SCHEMA_VERSION, bare_session_id,
+    canonical_session_id,
 };
-use super::super::ui_delivery::deliver_one_target_ui;
 
 const PROMPT_TOKENS_MAX_ENVVAR: &str = "AGENTMUX_MAX_PROMPT_TOKENS";
 const TOKENIZER_PROFILE_ENVVAR: &str = "AGENTMUX_TOKENIZER_PROFILE";
 
 /// Outcome of preparing a coalesced delivery batch.
 ///
-/// `Immediate` short-circuits when the head task routes to UI; batch length
-/// is always 1 in that case by construction (UI-routed tasks do not coalesce).
-/// `Batched` carries the rendered prompt batches plus a count of how many
-/// input tasks contributed envelopes to those batches. Any tail tasks beyond
-/// `accepted_len` were peeled because the rendered batches did not fit a
-/// single ACP prompt; those tasks are pushed back onto the worker's carry
-/// buffer for the next iteration.
-pub(super) enum PreparedBatchPayload {
-    Immediate(SendResult),
-    Batched {
-        prompt_batches: Vec<String>,
-        accepted_len: usize,
-    },
+/// Carries the rendered prompt batches plus a count of how many input tasks
+/// contributed envelopes to those batches. Any tail tasks beyond `accepted_len`
+/// were peeled because the rendered batches did not fit a single ACP prompt;
+/// those tasks are pushed back onto the worker's carry buffer for the next
+/// iteration. UI-routed targets never reach this path — they are first-class
+/// transports delivered via `UiTransport::mailw` in the worker loop.
+pub(super) struct PreparedBatchPayload {
+    pub(super) prompt_batches: Vec<String>,
+    pub(super) accepted_len: usize,
 }
 
 pub(super) fn resolve_target_member(
@@ -83,21 +77,6 @@ pub(super) fn prepare_batch_delivery_payload(
         head.payload_mode,
     );
 
-    if should_route_to_ui(head)? {
-        // UI heads are non-coalescable (the worker enforces relay_wide_target ==
-        // false to coalesce), so this path always has batch.len() == 1.
-        debug_assert_eq!(batch.len(), 1, "UI-routed envelope tasks must not coalesce",);
-        let cc_sessions = co_recipient_sessions(head);
-        return Ok(PreparedBatchPayload::Immediate(deliver_one_target_ui(
-            head,
-            head.sender.id.as_str(),
-            cc_sessions.as_slice(),
-            head.target_session.clone(),
-            head.message_id.clone(),
-            head.message.as_str(),
-        )));
-    }
-
     let rendered = batch
         .iter()
         .map(|task| render_task_envelope(task, target_member, created_at))
@@ -124,7 +103,7 @@ pub(super) fn prepare_batch_delivery_payload(
             prompt_batches = batch_envelopes(&rendered[..accepted_len], head.batch_settings);
         }
     }
-    Ok(PreparedBatchPayload::Batched {
+    Ok(PreparedBatchPayload {
         prompt_batches,
         accepted_len,
     })
@@ -197,7 +176,7 @@ fn canonical_target_session(task: &AsyncDeliveryTask) -> String {
 
 /// Canonical ids of the task's co-recipients: the full recipient list minus
 /// the task's own target.
-fn co_recipient_sessions(task: &AsyncDeliveryTask) -> Vec<String> {
+pub(super) fn co_recipient_sessions(task: &AsyncDeliveryTask) -> Vec<String> {
     let target_session = canonical_target_session(task);
     task.all_target_sessions
         .iter()
@@ -250,28 +229,6 @@ pub(super) fn prepare_delivery_payload(
         ));
     }
     Ok(vec![task.message.clone()])
-}
-
-fn should_route_to_ui(task: &AsyncDeliveryTask) -> Result<bool, RelayError> {
-    if task.relay_wide_target {
-        return Ok(true);
-    }
-    let resolved_session_type = resolve_registered_session_type(
-        task.bundle.bundle_name.as_str(),
-        task.target_session.as_str(),
-    )
-    .map_err(|source| {
-        super::super::super::relay_error(
-            "internal_unexpected_failure",
-            "failed to resolve relay stream session type",
-            Some(json!({
-                "bundle_name": task.bundle.bundle_name,
-                "target_session": task.target_session,
-                "cause": source.to_string(),
-            })),
-        )
-    })?;
-    Ok(matches!(resolved_session_type, Some(SessionType::Ui)))
 }
 
 pub(in crate::relay) fn prompt_batch_settings() -> PromptBatchSettings {

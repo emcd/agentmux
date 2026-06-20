@@ -245,30 +245,22 @@ pub(in crate::relay) fn deliver_batch_with_worker_state(
         Err(error) => return (fanned_errors(batch, error), Vec::new()),
     };
 
-    match prepared {
-        PreparedBatchPayload::Immediate(result) => {
-            // UI head: batch.len() == 1 by construction (the coalesce
-            // predicate refuses to coalesce UI-routed tasks).
-            (vec![Ok(result)], Vec::new())
-        }
-        PreparedBatchPayload::Batched {
-            prompt_batches,
-            accepted_len,
-        } => {
-            debug_assert!(accepted_len >= 1);
-            let nonui_target_member = target_member.expect("non-UI target_member must exist");
-            let accepted = &batch[..accepted_len];
-            let deferred = batch[accepted_len..].to_vec();
-            let outcomes = deliver_non_ui_target_batch(
-                accepted,
-                nonui_target_member,
-                prompt_batches,
-                pre_resolved_pane,
-                transport,
-            );
-            (outcomes, deferred)
-        }
-    }
+    let PreparedBatchPayload {
+        prompt_batches,
+        accepted_len,
+    } = prepared;
+    debug_assert!(accepted_len >= 1);
+    let nonui_target_member = target_member.expect("non-UI target_member must exist");
+    let accepted = &batch[..accepted_len];
+    let deferred = batch[accepted_len..].to_vec();
+    let outcomes = deliver_non_ui_target_batch(
+        accepted,
+        nonui_target_member,
+        prompt_batches,
+        pre_resolved_pane,
+        transport,
+    );
+    (outcomes, deferred)
 }
 
 // Fans a single `RelayError` out into one `Err` per task in `batch`, so the

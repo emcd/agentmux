@@ -5,6 +5,7 @@
 //! in `src/acp/` (Slice 2) and `src/tmux/` (Slice 3).
 
 pub mod contract;
+pub mod ui;
 pub mod vocabulary;
 
 pub use crate::acp::{AcpDriverServices, AcpTransport, AcpWorkerDriver};
@@ -14,6 +15,10 @@ pub use contract::{
     DeliveryResult, DeliveryWaitError, LookMode, OutcomeFuture, OutputView,
     PromptReadinessTemplate, RawWriteResult, SingleDeliveryOutcome, StartupContext, ThingToChoose,
     Transport, TransportError, TransportImpl, TransportReadiness, TransportStatus,
+};
+pub use ui::{
+    UiBroadcastFn, UiBroadcastStatus, UiIncomingMessage, UiOutcomePhase, UiPhaseFn, UiTransport,
+    UiTransportServices,
 };
 pub use vocabulary::{
     AcpWorkerReadinessState, DeliveryPayloadMode, LookFreshness, LookSnapshotPayload,

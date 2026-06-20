@@ -126,7 +126,11 @@ exported from `src/relay/mod.rs`.
     persistence and look-snapshot freshness derivation live in
     `crate::acp::state` (moved out of `delivery/` by decouple-transport-layer
     Slice 2a); the ACP client re-exports come directly from `crate::acp`.
-  - `ui_delivery.rs`: UI-stream event emission for delivery completion.
+  - UI delivery is a first-class transport (`crate::transports::ui::UiTransport`),
+    not a relay-internal special case: the worker resolves UI-routed targets to a
+    `UiTransport` and delivers via `mailw`. The relay-side stream-broadcast
+    touchpoints are injected as closures by `dispatch/worker.rs`
+    (`build_ui_transport_services`), so the transport never imports `crate::relay`.
   - `results.rs`, `quiescence.rs`: shared outcome and quiescence logic.
 
 ## Runtime Behavior Notes

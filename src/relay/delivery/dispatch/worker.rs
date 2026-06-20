@@ -4,19 +4,21 @@ use std::{
     time::Duration,
 };
 
-use serde_json::json;
+use serde_json::{Value, json};
 use time::format_description::well_known::Rfc3339;
 use tokio::{runtime::Handle, sync::mpsc::UnboundedReceiver};
 
 use crate::{
-    configuration::{BundleMember, TargetConfiguration},
+    configuration::{BundleMember, SessionType, TargetConfiguration},
     runtime::{inscriptions::emit_inscription, signals::shutdown_requested},
 };
 
 use super::super::super::canonical_session_id;
 use super::super::super::startup_state::note_session_served_successfully;
 use super::super::super::stream::{
-    RelayStreamEvent, broadcast_event_to_bundle_ui, list_registered_ui_sessions_for_bundle,
+    RelayStreamEvent, StreamEventSendOutcome, broadcast_event_to_bundle_ui,
+    list_registered_ui_sessions_for_bundle, resolve_registered_session_type,
+    send_event_to_registered_ui,
 };
 use super::super::super::{
     AsyncDeliveryTask, DeliveryPayloadMode, RelayError, SendOutcome, SendResult,
@@ -27,7 +29,12 @@ use super::super::async_worker::{
 use super::super::choice_state::{
     ChoiceEventContext, build_acp_chooser, invalidate_pending_for_respawn,
 };
-use crate::transports::{AcpDriverServices, TransportImpl};
+use super::super::quiescence::QUIESCENCE_TIMEOUT_MS_DEFAULT;
+use super::payload::co_recipient_sessions;
+use crate::transports::{
+    AcpDriverServices, DeliveryEnvelope, SingleDeliveryOutcome, TransportImpl, UiBroadcastStatus,
+    UiIncomingMessage, UiOutcomePhase, UiTransportServices,
+};
 
 const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;
 const BATCH_DRAIN_MAX_ENVVAR: &str = "AGENTMUX_RELAY_BATCH_DRAIN_MAX";
@@ -98,10 +105,13 @@ async fn run_async_delivery_worker(
 ) {
     // Hold one `TransportImpl` for this target's lifetime: ACP targets get a
     // driver that owns the ACP runtime + bootstrap/respawn lifecycle; everything
-    // else gets the stateless tmux transport (the deliver path still routes by
-    // target type, so UI/Pubsub never paste to it). ACP lifecycle, readiness
-    // mirroring, and respawn live in the driver; the loop drives them via the
-    // `TransportImpl::Acp` match and otherwise stays transport-agnostic.
+    // else gets the stateless tmux transport. UI-routed deliveries use a separate
+    // lazily-built `UiTransport` (see `ui_transport` below), chosen per delivery
+    // rather than latched, so a configured UI target whose first send precedes
+    // the UI stream registration recovers once the stream connects. ACP
+    // lifecycle, readiness mirroring, and respawn live in the driver; the loop
+    // drives them via the `TransportImpl::Acp` match and otherwise stays
+    // transport-agnostic.
     // Per-prompt token budget threaded into the transport at construction. Today
     // resolved from the env-backed prompt-batch settings; the write-interface
     // refactor moves the budget read here (construction time) off the per-delivery
@@ -125,11 +135,15 @@ async fn run_async_delivery_worker(
         None => TransportImpl::tmux(max_prompt_tokens),
     };
     let is_acp = matches!(transport, TransportImpl::Acp(_));
+    // Lazily-built UI transport, reused across deliveries once a head task routes
+    // to UI. Built separately from `transport` (the tmux/ACP delivery transport)
+    // because UI routing is re-evaluated per delivery, not latched.
+    let mut ui_transport: Option<TransportImpl> = None;
     let poll_interval = Duration::from_millis(ASYNC_WORKER_POLL_INTERVAL_MS);
     let drain_max = batch_drain_max();
     // Carry buffer: tasks consumed from the channel that did not coalesce with
-    // the current head (different payload mode or UI-routing), plus ACP tasks
-    // peeled back because the rendered prompt exceeded one budget batch. Drained
+    // the current head (different payload mode or relay-wide flag), plus ACP
+    // tasks peeled back because the rendered prompt exceeded one budget batch. Drained
     // before the channel on the next iteration so original ordering survives.
     let mut carry: VecDeque<AsyncDeliveryTask> = VecDeque::new();
 
@@ -170,7 +184,36 @@ async fn run_async_delivery_worker(
             break;
         }
 
+        // Re-evaluate UI routing per head task (registry-dependent, like the
+        // former per-delivery `should_route_to_ui`): a configured UI target whose
+        // first send precedes the UI stream registration must recover and route
+        // through `UiTransport` once the stream connects, so the decision must
+        // not be latched for the worker's lifetime.
+        let route_to_ui = match task_routes_to_ui(&head) {
+            Ok(value) => value,
+            Err(error) => {
+                // Internal failure resolving routing; fail this head and retry on
+                // the next task.
+                super::super::async_worker::complete_task_outcome(&head, Err(error));
+                super::super::async_worker::release_pending_slot(pending.as_ref());
+                continue;
+            }
+        };
+
         let mut batch = coalesce_batch(head, drain_max, &mut carry, &mut receiver);
+
+        // Interim mixed worker: UI targets deliver via `UiTransport::mailw`;
+        // tmux/ACP stay on the legacy `deliver` path until the worker-loop
+        // unification (section 5). The Ui/Pubsub routing short-circuit no longer
+        // lives in the dispatch modules. The UI transport is built once on first
+        // use and reused (its services depend only on the worker key).
+        if route_to_ui {
+            let ui = ui_transport
+                .get_or_insert_with(|| TransportImpl::ui(build_ui_transport_services(&key)));
+            deliver_ui_batch(&batch, ui, pending.as_ref()).await;
+            continue;
+        }
+
         let pre_quiescence_count = batch.len();
 
         // Tmux envelope-mode heads: hoist the quiescence wait out of the
@@ -284,10 +327,11 @@ fn batch_drain_max() -> usize {
 
 /// Collects up to `drain_max` tasks into a coalesce batch starting with `head`.
 ///
-/// Only `EnvelopeMessage` tasks targeting non-UI sessions coalesce. The first
-/// task whose payload mode or UI-routing differs from the head is pushed to
+/// Only non-relay-wide `EnvelopeMessage` tasks coalesce. The first task whose
+/// payload mode or `relay_wide_target` flag differs from the head is pushed to
 /// the front of `carry` so it heads the next worker iteration. The channel
 /// is read non-blocking via `try_recv`; an empty channel ends the drain.
+/// (UI vs non-UI routing is resolved separately, per delivery, after coalesce.)
 pub(super) fn coalesce_batch(
     head: AsyncDeliveryTask,
     drain_max: usize,
@@ -325,7 +369,7 @@ pub(super) fn extend_batch_with_drain(
             break;
         };
         if !can_coalesce_with_head(&batch[0], &candidate) {
-            // Different mode or UI-routing: defer so the head of the next
+            // Different mode or relay-wide flag: defer so the head of the next
             // iteration starts a fresh batch with this task.
             carry.push_front(candidate);
             break;
@@ -335,8 +379,8 @@ pub(super) fn extend_batch_with_drain(
 }
 
 /// Coalesce predicate: the candidate must share the head's payload mode and
-/// UI-routing. Target session, runtime, and bundle are guaranteed identical
-/// by the per-target worker registry key — assert in debug for safety.
+/// `relay_wide_target` flag. Target session, runtime, and bundle are guaranteed
+/// identical by the per-target worker registry key — assert in debug for safety.
 fn can_coalesce_with_head(head: &AsyncDeliveryTask, candidate: &AsyncDeliveryTask) -> bool {
     debug_assert_eq!(head.target_session, candidate.target_session);
     debug_assert_eq!(head.runtime_directory, candidate.runtime_directory);
@@ -486,6 +530,215 @@ fn build_acp_driver_services(
         },
         chooser: build_acp_chooser(bundle_name, runtime_directory, choices_pending_max),
     }
+}
+
+/// Reports whether a task delivers to a UI subscriber rather than a coder
+/// transport: relay-wide (`@GLOBAL`) targets and registered `Ui`-type sessions.
+/// Evaluated per head task (not latched), matching the registry-resolution
+/// timing of the prior `should_route_to_ui` dispatch short-circuit so a UI
+/// target registering after its first send still recovers onto `UiTransport`.
+fn task_routes_to_ui(task: &AsyncDeliveryTask) -> Result<bool, RelayError> {
+    if task.relay_wide_target {
+        return Ok(true);
+    }
+    let resolved_session_type = resolve_registered_session_type(
+        task.bundle.bundle_name.as_str(),
+        task.target_session.as_str(),
+    )
+    .map_err(|source| {
+        super::super::super::relay_error(
+            "internal_unexpected_failure",
+            "failed to resolve relay stream session type",
+            Some(json!({
+                "bundle_name": task.bundle.bundle_name,
+                "target_session": task.target_session,
+                "cause": source.to_string(),
+            })),
+        )
+    })?;
+    Ok(matches!(resolved_session_type, Some(SessionType::Ui)))
+}
+
+/// Builds the UI broadcast touchpoints the `UiTransport` invokes. Each closure
+/// closes over this target's `(bundle_name, target_session)` and the relay's own
+/// stream registry; the transport holds them as opaque `Arc<dyn Fn>`s, so
+/// `src/transports` imports nothing from `crate::relay` (mirrors
+/// `build_acp_driver_services`).
+fn build_ui_transport_services(key: &AsyncWorkerKey) -> UiTransportServices {
+    let bundle_name = key.bundle_name.clone();
+    let target_session = key.target_session.clone();
+    UiTransportServices {
+        broadcast_incoming: {
+            let bundle_name = bundle_name.clone();
+            let target_session = target_session.clone();
+            Arc::new(move |incoming: &UiIncomingMessage| {
+                let mut payload = json!({
+                    "message_id": incoming.message_id,
+                    "sender_session": incoming.sender_session,
+                    "body": incoming.body,
+                    "cc_sessions": if incoming.cc_sessions.is_empty() {
+                        Value::Null
+                    } else {
+                        json!(incoming.cc_sessions)
+                    },
+                });
+                if let Some(authenticated_identity) = &incoming.authenticated_identity {
+                    payload["authenticated_identity"] =
+                        Value::String(authenticated_identity.clone());
+                }
+                let event = RelayStreamEvent {
+                    event_type: "incoming_message".to_string(),
+                    target_session: canonical_session_id(
+                        target_session.as_str(),
+                        bundle_name.as_str(),
+                    ),
+                    created_at: now_rfc3339(),
+                    payload,
+                };
+                stream_send_to_broadcast_status(send_event_to_registered_ui(
+                    bundle_name.as_str(),
+                    target_session.as_str(),
+                    &event,
+                ))
+            })
+        },
+        emit_phase: {
+            let bundle_name = bundle_name.clone();
+            let target_session = target_session.clone();
+            Arc::new(move |phase: UiOutcomePhase| {
+                let mut payload = serde_json::Map::new();
+                payload.insert("message_id".to_string(), Value::String(phase.message_id));
+                payload.insert("phase".to_string(), Value::String(phase.phase.to_string()));
+                payload.insert(
+                    "outcome".to_string(),
+                    phase
+                        .outcome
+                        .map(|value| Value::String(value.to_string()))
+                        .unwrap_or(Value::Null),
+                );
+                if let Some(reason_code) = phase.reason_code {
+                    payload.insert("reason_code".to_string(), Value::String(reason_code));
+                }
+                if let Some(reason) = phase.reason {
+                    payload.insert("reason".to_string(), Value::String(reason));
+                }
+                let event = RelayStreamEvent {
+                    event_type: "delivery_outcome".to_string(),
+                    target_session: canonical_session_id(
+                        target_session.as_str(),
+                        bundle_name.as_str(),
+                    ),
+                    created_at: now_rfc3339(),
+                    payload: Value::Object(payload),
+                };
+                stream_send_to_broadcast_status(send_event_to_registered_ui(
+                    bundle_name.as_str(),
+                    target_session.as_str(),
+                    &event,
+                ))
+            })
+        },
+    }
+}
+
+/// Maps a relay stream-send result onto the transport-side [`UiBroadcastStatus`],
+/// keeping the relay's `StreamEventSendOutcome` taxonomy out of `transports`.
+fn stream_send_to_broadcast_status(
+    result: Result<StreamEventSendOutcome, std::io::Error>,
+) -> UiBroadcastStatus {
+    match result {
+        Ok(StreamEventSendOutcome::Delivered) => UiBroadcastStatus::Delivered,
+        Ok(StreamEventSendOutcome::NoUiEndpoint | StreamEventSendOutcome::Disconnected) => {
+            UiBroadcastStatus::NoUi
+        }
+        Err(source) => {
+            UiBroadcastStatus::Failed(format!("failed to emit relay stream event: {source}"))
+        }
+    }
+}
+
+/// Delivers a coalesced batch of UI-routed tasks via `UiTransport::mailw`,
+/// awaiting each outcome future and completing the originating task. UI tasks do
+/// not combine into one turn (each is its own broadcast), so the batch is fanned
+/// one mailw per task.
+async fn deliver_ui_batch(
+    batch: &[AsyncDeliveryTask],
+    transport: &mut TransportImpl,
+    pending: &std::sync::atomic::AtomicUsize,
+) {
+    for task in batch {
+        let envelope = build_ui_envelope(task);
+        let outcome = transport.mailw(envelope).await;
+        let send_result = match outcome {
+            Ok(outcome) => Ok(ui_outcome_to_send_result(task, outcome)),
+            Err(_) => Ok(ui_dropped_send_result(task)),
+        };
+        super::super::async_worker::complete_task_outcome(task, send_result);
+        super::super::async_worker::release_pending_slot(pending);
+    }
+}
+
+/// Builds the [`DeliveryEnvelope`] for a UI-routed task. `rendered` carries the
+/// raw message body (the UI renders its own framing, unlike coder transports);
+/// the R1 attribution fields are relay-populated and read only by the UI
+/// transport. `quiescence_timeout` is resolved here so the transport's reconnect
+/// cap matches the relay quiescence default.
+fn build_ui_envelope(task: &AsyncDeliveryTask) -> DeliveryEnvelope {
+    DeliveryEnvelope {
+        message_id: task.message_id.clone(),
+        payload_mode: task.payload_mode,
+        rendered: task.message.clone(),
+        append_enter: task.append_enter,
+        choice_decider_sessions: task.choice_decider_sessions.clone(),
+        quiet_window: task.quiescence.quiet_window,
+        quiescence_timeout: Some(
+            task.quiescence
+                .quiescence_timeout
+                .unwrap_or(Duration::from_millis(QUIESCENCE_TIMEOUT_MS_DEFAULT)),
+        ),
+        sender_session: canonical_session_id(
+            task.sender.id.as_str(),
+            task.sender_bundle_name.as_str(),
+        ),
+        cc_sessions: co_recipient_sessions(task),
+        authenticated_identity: task.authenticated_identity.clone(),
+    }
+}
+
+/// Maps a UI transport outcome onto the relay `SendResult`, substituting the
+/// task's own correlation fields (the transport leaves them blank; the relay is
+/// authoritative for them).
+fn ui_outcome_to_send_result(
+    task: &AsyncDeliveryTask,
+    outcome: SingleDeliveryOutcome,
+) -> SendResult {
+    SendResult {
+        target_session: task.target_session.clone(),
+        message_id: task.message_id.clone(),
+        outcome: outcome.outcome,
+        reason_code: outcome.reason_code,
+        reason: outcome.reason,
+        details: outcome.details,
+    }
+}
+
+/// Result for a UI task whose outcome future was dropped before resolving (the
+/// transport's delivery thread vanished); treated as a shutdown drop.
+fn ui_dropped_send_result(task: &AsyncDeliveryTask) -> SendResult {
+    SendResult {
+        target_session: task.target_session.clone(),
+        message_id: task.message_id.clone(),
+        outcome: SendOutcome::DroppedOnShutdown,
+        reason_code: Some("dropped_on_shutdown".to_string()),
+        reason: Some("ui delivery worker dropped before completion".to_string()),
+        details: None,
+    }
+}
+
+fn now_rfc3339() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
 /// Drives one batched delivery on the blocking pool. Moves the per-worker

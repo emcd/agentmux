@@ -12,7 +12,8 @@ use std::time::Duration;
 
 const QUIET_WINDOW_MS_DEFAULT: u64 = 750;
 // Also caps the UI-reconnect delivery wait when the caller set no explicit
-// quiescence timeout (see `deliver_one_target_ui`).
+// quiescence timeout; the worker resolves it into the UI envelope before
+// `UiTransport::mailw` (see `build_ui_envelope`).
 pub(super) const QUIESCENCE_TIMEOUT_MS_DEFAULT: u64 = 30_000;
 
 #[derive(Clone, Copy, Debug)]
