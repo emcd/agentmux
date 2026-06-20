@@ -52,15 +52,27 @@ const PROMPT_INSPECT_LINES_DEFAULT: usize = 3;
 const PROMPT_INSPECT_LINES_MAX: usize = 40;
 const TMUX_TARGET_UNAVAILABLE_CODE: &str = "tmux_target_unavailable";
 
-/// Tmux pane delivery transport. Stateless — pane resolution and pasting happen
-/// per `deliver` call against the runtime's tmux socket.
-#[derive(Debug, Default)]
-pub struct TmuxTransport;
+/// Tmux pane delivery transport. Pane resolution and pasting happen per delivery
+/// against the runtime's tmux socket; the only construction-time state is the
+/// per-prompt token budget the internal delivery task consumes when combining a
+/// coalesced envelope group (write-interface refactor sections 2-3).
+#[derive(Debug)]
+pub struct TmuxTransport {
+    max_prompt_tokens: usize,
+}
 
 impl TmuxTransport {
     #[must_use]
-    pub fn new() -> Self {
-        Self
+    pub fn new(max_prompt_tokens: usize) -> Self {
+        Self { max_prompt_tokens }
+    }
+
+    /// Per-prompt token budget captured at construction, threaded from session
+    /// configuration. Consumed by the internal delivery task when combining a
+    /// coalesced envelope group.
+    #[must_use]
+    pub fn max_prompt_tokens(&self) -> usize {
+        self.max_prompt_tokens
     }
 }
 

@@ -6,14 +6,22 @@
 //! the [`TransportImpl`] enum, which delegates by `match` with no dynamic
 //! allocation.
 //!
-//! ## Why synchronous
+//! ## Write boundary: non-blocking, future-resolved
 //!
-//! ACP delivery is deliberately synchronous and moved by value into
-//! `spawn_blocking`; "the sync core never crosses `.await`" is an explicit
-//! relay invariant. Making these methods `async` would invert that contract and
-//! force each implementation to manage its own `spawn_blocking`. The relay
-//! worker remains responsible for wrapping transport calls in `spawn_blocking`
-//! where needed.
+//! The write methods ([`Transport::mailw`] for relay-framed envelopes,
+//! [`Transport::raww`] for raw input) do not block. Each enqueues the write onto
+//! the transport's own internal ordered channel and returns an [`OutcomeFuture`]
+//! that resolves when the transport's internal delivery task drives that write
+//! to a terminal [`SingleDeliveryOutcome`]. The transport owns that task, its
+//! `spawn_blocking`, and the quiescence/coalesce waits; the relay worker
+//! concurrently submits new writes and collects resolved futures without
+//! blocking on any single one.
+//!
+//! This retires the earlier "the sync core never crosses `.await`; the worker
+//! owns `spawn_blocking`" invariant: ownership of the blocking delivery moves
+//! into each transport. The legacy synchronous [`Transport::deliver`] and
+//! [`Transport::prepare_delivery`] remain during the transition and are removed
+//! once their last relay callsites move onto the write methods.
 //!
 //! ## Transport <-> relay interactions
 //!
@@ -46,6 +54,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
+use tokio::sync::oneshot;
 
 use crate::acp::{AcpDriverServices, AcpWorkerDriver};
 use crate::configuration::BundleMember;
@@ -60,10 +69,24 @@ pub use crate::configuration::PromptReadinessTemplate;
 // never depends on relay. The relay re-exports these from its own contract.
 use crate::transports::vocabulary::{DeliveryPayloadMode, LookSnapshotPayload, SendOutcome};
 
-/// Synchronous delivery contract implemented by each concrete transport.
+/// A pending delivery outcome handed back by the non-blocking write methods
+/// ([`Transport::mailw`], [`Transport::raww`]). It resolves to the terminal
+/// [`SingleDeliveryOutcome`] once the transport's internal delivery task settles
+/// the write; the sender half lives inside the transport's ordered channel item.
 ///
-/// The relay worker wraps these calls in `spawn_blocking` where needed; an
-/// implementation MUST NOT impose async boundaries on the worker.
+/// Carries the transport-side [`SingleDeliveryOutcome`], not the relay
+/// `SendResult`: the transport contract never depends on `crate::relay`, so the
+/// relay worker maps the resolved outcome onto its own `SendResult` at the
+/// collect site.
+pub type OutcomeFuture = oneshot::Receiver<SingleDeliveryOutcome>;
+
+/// Delivery contract implemented by each concrete transport.
+///
+/// The non-blocking write methods ([`mailw`](Transport::mailw),
+/// [`raww`](Transport::raww)) return an [`OutcomeFuture`]; each transport owns
+/// its own internal delivery task and `spawn_blocking`. The legacy synchronous
+/// [`deliver`](Transport::deliver)/[`prepare_delivery`](Transport::prepare_delivery)
+/// seam remains during the write-interface transition.
 pub trait Transport {
     /// Establishes (or re-establishes, on respawn) the transport runtime for a
     /// target. On respawn the transport may publish a fresh [`OutputView`]; the
@@ -115,6 +138,35 @@ pub trait Transport {
         envelopes: Vec<DeliveryEnvelope>,
         context: &DeliveryContext,
     ) -> DeliveryResult;
+
+    /// Submits one relay-framed envelope for delivery WITHOUT blocking, returning
+    /// an [`OutcomeFuture`] that resolves when the transport's internal delivery
+    /// task drives this envelope to a terminal [`SingleDeliveryOutcome`]. The
+    /// transport buffers the envelope on its own ordered channel, coalesces it
+    /// with contiguous envelopes during its quiescence wait, and resolves the
+    /// future once the combined turn settles.
+    ///
+    /// Replaces the blocking [`deliver`](Transport::deliver) seam; see the
+    /// module-level "Write boundary" note. Default body is an additions-only stub;
+    /// each transport overrides it when its internal delivery task lands
+    /// (write-interface refactor sections 2-3).
+    fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
+        let _ = envelope;
+        unimplemented!("mailw lands with the per-transport internal delivery task")
+    }
+
+    /// Submits raw input (no envelope framing) for `raww` WITHOUT blocking,
+    /// returning an [`OutcomeFuture`] that resolves when the write settles. FIFO
+    /// with [`mailw`](Transport::mailw) on the transport's internal channel: a raw
+    /// item flushes any buffered envelope group first, then delivers as its own
+    /// write, acting as a batch barrier.
+    ///
+    /// Replaces the blocking [`raw_write`](Transport::raw_write) seam. Default body
+    /// is an additions-only stub overridden when the internal delivery task lands.
+    fn raww(&mut self, content: String, append_enter: bool) -> OutcomeFuture {
+        let _ = (content, append_enter);
+        unimplemented!("raww lands with the per-transport internal delivery task")
+    }
 
     /// Reports whether the transport is ready to accept delivery.
     fn is_ready(&self) -> bool;
@@ -192,19 +244,22 @@ impl TransportImpl {
         runtime_directory: PathBuf,
         bundle_name: String,
         services: AcpDriverServices,
+        max_prompt_tokens: usize,
     ) -> Self {
         Self::Acp(Box::new(AcpWorkerDriver::new(
             target_member,
             runtime_directory,
             bundle_name,
             services,
+            max_prompt_tokens,
         )))
     }
 
-    /// Builds a stateless tmux delivery transport.
+    /// Builds a tmux delivery transport carrying the per-prompt token budget the
+    /// internal delivery task consumes when combining a coalesced envelope group.
     #[must_use]
-    pub fn tmux() -> Self {
-        Self::Tmux(TmuxTransport::new())
+    pub fn tmux(max_prompt_tokens: usize) -> Self {
+        Self::Tmux(TmuxTransport::new(max_prompt_tokens))
     }
 
     /// The target can be captured by `look`.
@@ -284,6 +339,26 @@ impl TransportImpl {
         match self {
             Self::Acp(transport) => transport.deliver(envelopes, context),
             Self::Tmux(transport) => transport.deliver(envelopes, context),
+            Self::Pty => unimplemented!("PTY transport not yet implemented"),
+        }
+    }
+
+    /// Submits one envelope via the non-blocking write seam; see
+    /// [`Transport::mailw`].
+    pub fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
+        match self {
+            Self::Acp(transport) => transport.mailw(envelope),
+            Self::Tmux(transport) => transport.mailw(envelope),
+            Self::Pty => unimplemented!("PTY transport not yet implemented"),
+        }
+    }
+
+    /// Submits raw input via the non-blocking write seam; see
+    /// [`Transport::raww`].
+    pub fn raww(&mut self, content: String, append_enter: bool) -> OutcomeFuture {
+        match self {
+            Self::Acp(transport) => transport.raww(content, append_enter),
+            Self::Tmux(transport) => transport.raww(content, append_enter),
             Self::Pty => unimplemented!("PTY transport not yet implemented"),
         }
     }

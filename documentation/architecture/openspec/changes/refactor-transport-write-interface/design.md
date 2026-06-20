@@ -44,6 +44,66 @@ one `deliver()` call and could not submit additional writes during the
 transport's internal wait, losing the coalesce-during-wait opportunity without
 a compensating mechanism.
 
+### Decision: `OutcomeFuture` carries the transport-side outcome, not `SendResult`
+
+`OutcomeFuture` is `oneshot::Receiver<SingleDeliveryOutcome>`, not
+`oneshot::Receiver<SendResult>`. `SendResult` is a `crate::relay` type, and the
+transport contract (`src/transports/`) must never depend on `crate::relay` — the
+no-relay-dependency invariant from `decouple-transport-layer`. `SingleDeliveryOutcome`
+already exists in the transport contract precisely so the transport vocabulary can
+evolve independently of the relay wire contract. The relay worker maps the resolved
+`SingleDeliveryOutcome` onto its `SendResult` at the collect site (section 5.3).
+
+### Decision: `Ui` and `Pubsub` are first-class transports
+
+The relay's `Acp/Tmux/Ui/Pubsub` routing fork — and the relay-internal
+`deliver_one_target_ui` / `should_route_to_ui` path — exists for exactly one
+reason: `Ui` and `Pubsub` are delivered by relay-internal fan-out instead of
+through a `TransportImpl`. A capability flag such as `is_transport_delivered()`
+would only paper over that gap (and its truth table is identical to the existing
+`can_be_written` / `can_be_looked` — capability *is* the routing answer here).
+The root fix is to promote `Ui` and `Pubsub` to transports:
+
+- `UiTransport` implements `Transport`. `mailw` emits the message as a relay
+  stream event through an injected broadcaster closure (`UiTransportServices`,
+  mirroring `AcpDriverServices`) and resolves the `OutcomeFuture` immediately —
+  UI delivery is a single broadcast with no quiescence, combining, or token
+  budget. `raww` resolves unsupported (UI is not raw-writable); `give_output`
+  returns `None` (UI is not lookable).
+- `Pubsub` is forward-declared as a `TransportImpl::Pubsub` stub variant (like
+  `Pty`) until its transport lands.
+
+With both promoted, the worker dispatches `mailw`/`raww` uniformly for every
+target. There is no transport-type gate in the delivery loop; the only
+type-dependent step is *construction* (the worker builds a `UiTransport`,
+`TmuxTransport`, or ACP driver per target from `session_type()`), which is
+inherent and unavoidable.
+
+UI delivery payload shape — RESOLVED to option (b) (FE + RG concur): the relay
+builds the `RelayStreamEvent` and hands it to the `UiTransportServices`
+broadcaster; `DeliveryEnvelope` stays lean. Rejected (a) — extending
+`DeliveryEnvelope` with sender/cc — because those are relay-domain *attribution*,
+not rendering inputs; carrying them on the envelope so only the UI transport
+reads them smears routing semantics across every transport and cuts against the
+no-relay-dependency invariant. Under (b) the asymmetry (relay assembles the UI
+event while other transports own their rendering) is contained and acceptable.
+
+Requirements for (b): the UI stream event MUST carry sender, cc, message_id — and
+ideally `authenticated_identity` / `on_behalf_of` — sourced from the relay's
+authenticated post-authz view (not the envelope), keeping attribution
+relay-authoritative (Extensions Protocol). The TUI already renders structured
+stream events and dedupes by message_id, so this needs zero TUI contract change.
+Spec note: under (b), UI "delivery" == event accepted by the broadcaster (the TUI
+is a passive subscriber; no per-recipient render ack), so `UiTransport`'s
+`SingleDeliveryOutcome` is success-on-broadcast, not confirmed-rendered.
+
+Deferred alternative — "option C", render-in-transport (`mailw` receives a
+structured `DeliveryEnvelope`; every transport renders internally, UI reads the
+structured fields directly): cleaner uniform end-state but a strictly larger
+change (reshapes `DeliveryEnvelope` into a structured message, relocates
+rendering into Tmux/ACP, mirrors attribution into transport-safe types). Tracked
+as post-change follow-up in todos/relay/94, likely its own OpenSpec change.
+
 ### Decision: transport-internal FIFO ordering; raww is a batch barrier
 
 Both `mailw` and `raww` calls are submitted to the transport through a single

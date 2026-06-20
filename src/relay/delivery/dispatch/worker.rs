@@ -102,6 +102,11 @@ async fn run_async_delivery_worker(
     // target type, so UI/Pubsub never paste to it). ACP lifecycle, readiness
     // mirroring, and respawn live in the driver; the loop drives them via the
     // `TransportImpl::Acp` match and otherwise stays transport-agnostic.
+    // Per-prompt token budget threaded into the transport at construction. Today
+    // resolved from the env-backed prompt-batch settings; the write-interface
+    // refactor moves the budget read here (construction time) off the per-delivery
+    // payload path.
+    let max_prompt_tokens = super::prompt_batch_settings().max_prompt_tokens;
     let mut transport = match bootstrap {
         Some(bootstrap) => {
             let services = build_acp_driver_services(&key, &bootstrap);
@@ -110,13 +115,14 @@ async fn run_async_delivery_worker(
                 bootstrap.runtime_directory,
                 key.bundle_name.clone(),
                 services,
+                max_prompt_tokens,
             );
             if let TransportImpl::Acp(driver) = &mut transport {
                 driver.bootstrap().await;
             }
             transport
         }
-        None => TransportImpl::tmux(),
+        None => TransportImpl::tmux(max_prompt_tokens),
     };
     let is_acp = matches!(transport, TransportImpl::Acp(_));
     let poll_interval = Duration::from_millis(ASYNC_WORKER_POLL_INTERVAL_MS);
