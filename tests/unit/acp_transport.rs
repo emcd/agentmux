@@ -14,9 +14,11 @@ use agentmux::acp::AcpTransport;
 use agentmux::relay::{LookFreshness, LookSnapshotSource};
 use agentmux::transports::{LookMode, LookSnapshotPayload, Transport};
 
+const TEST_MAX_PROMPT_TOKENS: usize = 4096;
+
 #[test]
 fn acp_output_view_prime_waits_then_times_out_while_initializing() {
-    let transport = AcpTransport::new();
+    let transport = AcpTransport::new(TEST_MAX_PROMPT_TOKENS);
     let view = transport
         .give_output()
         .expect("ACP transport always publishes a handle");
@@ -62,7 +64,7 @@ fn acp_output_view_prime_waits_then_times_out_while_initializing() {
 
 #[test]
 fn acp_output_view_zero_prime_timeout_returns_immediately() {
-    let transport = AcpTransport::new();
+    let transport = AcpTransport::new(TEST_MAX_PROMPT_TOKENS);
     let view = transport.give_output().expect("handle");
 
     let started = Instant::now();

@@ -27,6 +27,7 @@ use serde_json::{Value, json};
 use crate::configuration::BundleMember;
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::signals::shutdown_requested;
+use crate::transports::contract::OutcomeFuture;
 use crate::transports::{
     AcpWorkerReadinessState, Chooser, DeliveryContext, DeliveryEnvelope, DeliveryPreparation,
     DeliveryResult, DeliveryWaitError, OutputView, RawWriteResult, StartupContext, Transport,
@@ -113,7 +114,7 @@ impl AcpWorkerDriver {
         max_prompt_tokens: usize,
     ) -> Self {
         Self {
-            transport: Some(AcpTransport::new()),
+            transport: Some(AcpTransport::new(max_prompt_tokens)),
             respawn_state: AcpRespawnState::new(),
             bundle_name,
             runtime_directory,
@@ -266,8 +267,9 @@ impl AcpWorkerDriver {
             // across the respawn; create a fresh one (re-publishing the handle)
             // only if it is somehow absent.
             let publish_output = Arc::clone(&self.services.publish_output);
+            let max_prompt_tokens = self.max_prompt_tokens;
             let transport = self.transport.take().unwrap_or_else(|| {
-                let transport = AcpTransport::new();
+                let transport = AcpTransport::new(max_prompt_tokens);
                 publish_output(transport.give_output());
                 transport
             });
@@ -379,6 +381,20 @@ impl Transport for AcpWorkerDriver {
             .as_mut()
             .expect("acp driver transport present")
             .deliver(envelopes, context)
+    }
+
+    fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
+        self.transport
+            .as_mut()
+            .expect("acp driver transport present")
+            .mailw(envelope)
+    }
+
+    fn raww(&mut self, content: String, append_enter: bool) -> OutcomeFuture {
+        self.transport
+            .as_mut()
+            .expect("acp driver transport present")
+            .raww(content, append_enter)
     }
 
     fn is_ready(&self) -> bool {

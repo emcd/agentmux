@@ -28,6 +28,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
+use tokio::sync::mpsc;
 
 use crate::acp::client::SharedReplay;
 use crate::acp::permission::{ChoiceCorrelation, build_acp_permission_handler};
@@ -36,11 +37,13 @@ use crate::acp::state::{
     persist_acp_session_id,
 };
 use crate::acp::{
-    AcpStdioClient, DispatchHandler, PromptCompletion, PromptCompletionHandler,
-    PromptDispatchOutcome,
+    AcpStdioClient, DispatchHandler, PermissionResponder, PromptCompletion,
+    PromptCompletionHandler, PromptDispatchOutcome,
 };
 use crate::configuration::{AcpChannel, AcpTargetConfiguration, BundleMember, TargetConfiguration};
+use crate::envelope::PromptBatchSettings;
 use crate::runtime::signals::shutdown_requested;
+use crate::transports::contract::OutcomeFuture;
 use crate::transports::{AcpWorkerReadinessState, SendOutcome};
 use crate::transports::{
     ChoiceMade, DeliveryContext, DeliveryEnvelope, DeliveryPreparation, DeliveryResult,
@@ -129,18 +132,46 @@ struct AcpSharedState {
     replay: Mutex<Option<SharedReplay>>,
 }
 
+/// Channel capacity for the internal ACP delivery task's write queue.
+const ACP_WRITE_CHANNEL_CAPACITY: usize = 256;
+
+/// Items enqueued onto the ACP transport's internal ordered write channel.
+///
+/// Both [`Transport::mailw`] and [`Transport::raww`] submit through a single
+/// FIFO channel. The internal delivery task processes them in order; a `Raw`
+/// item acts as a batch barrier (flushes any preceding `Envelope` group first).
+enum WriteItem {
+    /// Relay-framed envelope for buffered combining and turn submission.
+    Envelope {
+        envelope: DeliveryEnvelope,
+        outcome_tx: tokio::sync::oneshot::Sender<SingleDeliveryOutcome>,
+    },
+    /// Raw input delivered without buffering; acts as a batch barrier.
+    Raw {
+        content: String,
+        append_enter: bool,
+        outcome_tx: tokio::sync::oneshot::Sender<SingleDeliveryOutcome>,
+    },
+}
+
 /// ACP delivery transport. Owns the runtime, the injected [`Chooser`], and the
 /// shared state ([`AcpSharedState`]) the published [`OutputView`] reads.
+///
+/// The transport's internal delivery task receives [`WriteItem`]s through an
+/// ordered channel, combines contiguous envelopes respecting the token budget,
+/// and submits turns to the ACP runtime. `mailw`/`raww` enqueue items and return
+/// [`OutcomeFuture`]s that resolve when the turn settles.
 pub struct AcpTransport {
     runtime: Option<PersistentAcpWorkerRuntime>,
     chooser: Option<crate::transports::Chooser>,
     shared: Arc<AcpSharedState>,
-}
-
-impl Default for AcpTransport {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// Sender for the internal delivery task's write queue. `None` before first
+    /// startup or after `release_runtime()`.
+    write_tx: Option<mpsc::Sender<WriteItem>>,
+    /// Per-prompt token budget for envelope combining.
+    max_prompt_tokens: usize,
+    /// Target session id, captured at startup for permission correlation.
+    target_session: String,
 }
 
 impl std::fmt::Debug for AcpTransport {
@@ -148,13 +179,15 @@ impl std::fmt::Debug for AcpTransport {
         f.debug_struct("AcpTransport")
             .field("has_runtime", &self.runtime.is_some())
             .field("readiness", &self.readiness())
+            .field("has_write_channel", &self.write_tx.is_some())
+            .field("max_prompt_tokens", &self.max_prompt_tokens)
             .finish()
     }
 }
 
 impl AcpTransport {
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(max_prompt_tokens: usize) -> Self {
         Self {
             runtime: None,
             chooser: None,
@@ -162,6 +195,9 @@ impl AcpTransport {
                 readiness: Mutex::new(AcpWorkerReadinessState::Initializing),
                 replay: Mutex::new(None),
             }),
+            write_tx: None,
+            max_prompt_tokens,
+            target_session: String::new(),
         }
     }
 
@@ -180,20 +216,64 @@ impl AcpTransport {
     }
 
     /// Releases the live runtime (joining its child) and marks the transport
-    /// recovering, clearing the published replay pointer. Used by the worker
-    /// before a respawn so a concurrent `look` reads a recovering/stale snapshot
-    /// through the still-valid handle rather than the dead buffer.
+    /// recovering, clearing the published replay pointer. Closes the write
+    /// channel so the internal delivery task drains pending items and exits
+    /// cleanly before the runtime is dropped. Used by the worker before a
+    /// respawn so a concurrent `look` reads a recovering/stale snapshot through
+    /// the still-valid handle rather than the dead buffer.
     pub fn release_runtime(&mut self) {
+        // Close the write channel first so the delivery task drains, processes
+        // any remaining items, and exits before the runtime is dropped.
+        self.write_tx = None;
         self.runtime = None;
         self.set_replay(None);
         self.set_readiness(AcpWorkerReadinessState::Recovering);
+    }
+
+    /// Spawns the internal delivery task that drains the write channel, combines
+    /// contiguous envelopes respecting the token budget, and submits turns to the
+    /// ACP runtime. Called from [`Transport::startup`] after the runtime is
+    /// established. Takes the client and session_id from the runtime so the task
+    /// owns them exclusively — the transport only needs the shared replay handle
+    /// and readiness state after startup.
+    fn spawn_delivery_task(&mut self) {
+        let (tx, rx) = mpsc::channel::<WriteItem>(ACP_WRITE_CHANNEL_CAPACITY);
+        let shared = Arc::clone(&self.shared);
+        let max_prompt_tokens = self.max_prompt_tokens;
+        let chooser = self.chooser.clone();
+        let target_session = self.target_session.clone();
+
+        // Take the client and session_id from the runtime. The transport keeps
+        // the replay handle (already published via shared state) and no longer
+        // needs the client directly — all prompt submission goes through the task.
+        let runtime = self.runtime.take().expect("runtime present at task spawn");
+        let client = runtime.client;
+        let session_id = runtime.session_id;
+
+        std::thread::spawn(move || {
+            acp_delivery_task(
+                rx,
+                client,
+                session_id,
+                shared,
+                chooser,
+                max_prompt_tokens,
+                target_session,
+            );
+        });
+
+        self.write_tx = Some(tx);
     }
 }
 
 impl Transport for AcpTransport {
     fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError> {
         self.chooser = Some(context.choose);
+        self.target_session = context.target_member.id.clone();
         self.set_readiness(AcpWorkerReadinessState::Initializing);
+        // Close any existing delivery task's channel before creating a new runtime.
+        // The old task will drain and exit; we'll spawn a fresh one below.
+        self.write_tx = None;
         match bootstrap_acp_worker_runtime(&context.runtime_directory, &context.target_member) {
             Ok(runtime) => {
                 // Repoint the published handle's replay slot at the new runtime's
@@ -202,6 +282,8 @@ impl Transport for AcpTransport {
                 self.set_replay(Some(runtime.client.replay_buffer_handle()));
                 self.runtime = Some(runtime);
                 self.set_readiness(AcpWorkerReadinessState::Available);
+                // Spawn the internal delivery task for this runtime.
+                self.spawn_delivery_task();
                 Ok(TransportStatus {
                     readiness: TransportReadiness::Ready,
                 })
@@ -223,12 +305,38 @@ impl Transport for AcpTransport {
         &self,
         context: &DeliveryContext,
     ) -> Result<DeliveryPreparation, DeliveryWaitError> {
-        // ACP has no pre-delivery wait — event-stream quiescence is future work,
-        // tracked separately. The barrier is immediately ready; echo any
-        // pre-resolved target back unchanged.
+        // ACP has no pre-delivery wait — the internal delivery task handles
+        // quiescence internally. Echo any pre-resolved target back unchanged.
         Ok(DeliveryPreparation {
             pre_resolved_target: context.pre_resolved_target.clone(),
         })
+    }
+
+    fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
+        let (outcome_tx, outcome_rx) = tokio::sync::oneshot::channel();
+        if let Some(tx) = self.write_tx.as_ref() {
+            let _ = tx.try_send(WriteItem::Envelope {
+                envelope,
+                outcome_tx,
+            });
+        } else {
+            let _ = outcome_tx.send(unavailable_outcome());
+        }
+        outcome_rx
+    }
+
+    fn raww(&mut self, content: String, append_enter: bool) -> OutcomeFuture {
+        let (outcome_tx, outcome_rx) = tokio::sync::oneshot::channel();
+        if let Some(tx) = self.write_tx.as_ref() {
+            let _ = tx.try_send(WriteItem::Raw {
+                content,
+                append_enter,
+                outcome_tx,
+            });
+        } else {
+            let _ = outcome_tx.send(unavailable_outcome());
+        }
+        outcome_rx
     }
 
     fn deliver(
@@ -236,9 +344,10 @@ impl Transport for AcpTransport {
         envelopes: Vec<DeliveryEnvelope>,
         context: &DeliveryContext,
     ) -> DeliveryResult {
-        // ACP coalescing happens relay-side: the worker pre-combines the batch
-        // into a single rendered prompt and replicates the returned outcome
-        // across the coalesced tasks. Exactly one envelope is expected here.
+        // Legacy synchronous path: delegate to the write channel and block on
+        // the outcome. This preserves backward compatibility during the
+        // write-interface transition; it will be removed once all relay callsites
+        // move to mailw/raww.
         let Some(envelope) = envelopes.into_iter().next() else {
             return single(failed_outcome(
                 context.target_session.clone(),
@@ -248,121 +357,23 @@ impl Transport for AcpTransport {
         };
         let target_session = context.target_session.clone();
         let message_id = envelope.message_id.clone();
-        let target_member_id = context.target_member.id.clone();
-
-        if context.target_member.working_directory.is_none() {
-            return single(failed_outcome(
+        if self.write_tx.is_none() {
+            return single(worker_unavailable_outcome(
                 target_session,
                 message_id,
-                "ACP target is missing working directory",
+                context.target_member.id.as_str(),
             ));
         }
-        if matches!(self.readiness(), AcpWorkerReadinessState::Unavailable) {
-            return single(worker_unavailable_outcome(
+        let rx = self.mailw(envelope);
+        match rx.blocking_recv() {
+            Ok(outcome) => single(outcome),
+            Err(_) => single(failed_outcome_with_code(
                 target_session,
                 message_id,
-                target_member_id.as_str(),
-            ));
-        }
-        let Some(chooser) = self.chooser.clone() else {
-            return single(worker_unavailable_outcome(
-                target_session,
-                message_id,
-                target_member_id.as_str(),
-            ));
-        };
-        let shared = Arc::clone(&self.shared);
-        let Some(runtime) = self.runtime.as_mut() else {
-            return single(worker_unavailable_outcome(
-                target_session,
-                message_id,
-                target_member_id.as_str(),
-            ));
-        };
-
-        let pending_choice: Arc<Mutex<Option<ChoiceMade>>> = Arc::new(Mutex::new(None));
-        let completion_slot: Arc<Mutex<Option<PromptCompletion>>> = Arc::new(Mutex::new(None));
-
-        let shared_for_dispatch = Arc::clone(&shared);
-        let on_dispatched: DispatchHandler = Box::new(move || {
-            *shared_for_dispatch
-                .readiness
-                .lock()
-                .expect("readiness mutex") = AcpWorkerReadinessState::Busy;
-        });
-
-        let correlation = ChoiceCorrelation {
-            message_id: message_id.clone(),
-            target_session: target_session.clone(),
-            decider_sessions: context.choice_decider_sessions.clone(),
-        };
-        let on_permission =
-            build_acp_permission_handler(chooser, correlation, Arc::clone(&pending_choice));
-
-        let completion_writer = Arc::clone(&completion_slot);
-        let on_completion: PromptCompletionHandler = Box::new(move |completion| {
-            *completion_writer.lock().expect("completion slot mutex") = Some(completion);
-        });
-
-        let session_id = runtime.session_id.clone();
-        let dispatch = runtime.client.prompt(
-            session_id.as_str(),
-            envelope.rendered.as_str(),
-            Some(on_dispatched),
-            Some(on_permission),
-            on_completion,
-        );
-
-        match dispatch {
-            PromptDispatchOutcome::Submitted => {
-                // Block until the turn reaches a terminal state. Polled in bounded
-                // slices so process shutdown can abandon a never-completing turn.
-                loop {
-                    if runtime
-                        .client
-                        .wait_for_prompt_complete(ACP_PROMPT_WAIT_POLL_INTERVAL)
-                    {
-                        break;
-                    }
-                    if shutdown_requested() {
-                        break;
-                    }
-                }
-                let completion = completion_slot
-                    .lock()
-                    .expect("completion slot mutex")
-                    .take();
-                let pending = pending_choice.lock().expect("pending_choice mutex").take();
-                let (final_state, outcome) = build_acp_completion_result(
-                    completion,
-                    pending,
-                    target_session,
-                    message_id,
-                    target_member_id.as_str(),
-                );
-                self.set_readiness(final_state);
-                single(outcome)
-            }
-            PromptDispatchOutcome::TransportUnavailable { reason } => {
-                self.set_readiness(AcpWorkerReadinessState::Unavailable);
-                single(failed_outcome_with_code(
-                    target_session,
-                    message_id,
-                    ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE,
-                    "ACP child stdin write failed",
-                    Some(json!({ "target_session": target_member_id, "reason": reason })),
-                ))
-            }
-            PromptDispatchOutcome::SerializationFailed(reason) => {
-                self.set_readiness(AcpWorkerReadinessState::Unavailable);
-                single(failed_outcome_with_code(
-                    target_session,
-                    message_id,
-                    ACP_ERROR_CODE_PROMPT_FAILED,
-                    "ACP session/prompt dispatch failed",
-                    Some(json!({ "target_session": target_member_id, "reason": reason })),
-                ))
-            }
+                ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE,
+                "ACP delivery task dropped outcome sender",
+                None,
+            )),
         }
     }
 
@@ -377,37 +388,30 @@ impl Transport for AcpTransport {
         &mut self,
         text: &str,
         _append_enter: bool,
-        context: &DeliveryContext,
+        _context: &DeliveryContext,
     ) -> RawWriteResult {
-        // ACP raww submits the raw text as a prompt and blocks to terminal, the
-        // same submit path envelope delivery uses. The relay routes RawInput
-        // tasks through `deliver()` (rendered = raw text), so this method exists
-        // for contract completeness and direct raww callers.
-        let envelope = DeliveryEnvelope {
-            message_id: String::new(),
-            payload_mode: crate::transports::DeliveryPayloadMode::RawInput,
-            rendered: text.to_string(),
-            append_enter: _append_enter,
-        };
-        let result = self.deliver(vec![envelope], context);
-        match result.outcomes.into_iter().next() {
-            Some(outcome) if matches!(outcome.outcome, SendOutcome::Delivered) => {
+        // Legacy synchronous path: delegate to the write channel and block.
+        // This preserves backward compatibility during the transition.
+        let rx = self.raww(text.to_string(), _append_enter);
+        match rx.blocking_recv() {
+            Ok(outcome) if matches!(outcome.outcome, SendOutcome::Delivered) => {
                 RawWriteResult::Written
             }
-            Some(outcome) => RawWriteResult::Failed {
+            Ok(outcome) => RawWriteResult::Failed {
                 reason: outcome
                     .reason
                     .unwrap_or_else(|| "ACP raw write failed".to_string()),
             },
-            None => RawWriteResult::Failed {
-                reason: "ACP raw write produced no outcome".to_string(),
+            Err(_) => RawWriteResult::Failed {
+                reason: "ACP delivery task dropped outcome sender".to_string(),
             },
         }
     }
 
     fn shutdown(&mut self) {
-        // Dropping the runtime joins the child and reader thread (its `Drop`
-        // kills the child).
+        // Close the write channel so the delivery task drains and exits, then
+        // drop the runtime (joins the child and reader thread).
+        self.write_tx = None;
         self.runtime = None;
         self.set_replay(None);
         self.set_readiness(AcpWorkerReadinessState::Unavailable);
@@ -485,6 +489,341 @@ fn acp_snapshot_to_payload(snapshot: AcpLookSnapshot) -> LookSnapshotPayload {
         stale_reason_code: snapshot.stale_reason_code,
         snapshot_age_ms: snapshot.snapshot_age_ms,
     }
+}
+
+/// Internal ACP delivery task. Runs on a dedicated thread, draining the write
+/// channel, combining contiguous envelopes respecting the token budget, and
+/// submitting turns to the ACP runtime. Exits when the channel closes (sender
+/// dropped by `release_runtime()` or `shutdown()`).
+fn acp_delivery_task(
+    mut rx: mpsc::Receiver<WriteItem>,
+    mut client: AcpStdioClient,
+    session_id: String,
+    shared: Arc<AcpSharedState>,
+    chooser: Option<crate::transports::Chooser>,
+    max_prompt_tokens: usize,
+    target_session: String,
+) {
+    let batch_settings = PromptBatchSettings {
+        max_prompt_tokens,
+        ..Default::default()
+    };
+
+    loop {
+        // Block until at least one item arrives.
+        let Some(first) = rx.blocking_recv() else {
+            // Channel closed — transport shutting down or respawning.
+            break;
+        };
+
+        // Drain any additional items that arrived while we were waiting.
+        let mut items = vec![first];
+        while let Ok(item) = rx.try_recv() {
+            items.push(item);
+        }
+
+        for item in items {
+            match item {
+                WriteItem::Envelope {
+                    envelope,
+                    outcome_tx,
+                } => {
+                    // Combine contiguous envelopes respecting the token budget.
+                    let mut rendered_batch = vec![envelope.rendered.clone()];
+                    let mut message_ids = vec![envelope.message_id.clone()];
+                    let mut outcome_senders = vec![outcome_tx];
+
+                    // Peek ahead: absorb contiguous Envelope items (not Raw).
+                    while let Ok(peek) = rx.try_recv() {
+                        match peek {
+                            WriteItem::Envelope {
+                                envelope: next_env,
+                                outcome_tx: next_tx,
+                            } => {
+                                rendered_batch.push(next_env.rendered.clone());
+                                message_ids.push(next_env.message_id.clone());
+                                outcome_senders.push(next_tx);
+                            }
+                            WriteItem::Raw {
+                                content,
+                                append_enter,
+                                outcome_tx: raw_tx,
+                            } => {
+                                // Raw is a batch barrier: flush the envelope
+                                // group first, then deliver the raw write.
+                                if !rendered_batch.is_empty() {
+                                    flush_envelope_group(
+                                        &mut client,
+                                        &session_id,
+                                        &shared,
+                                        &chooser,
+                                        &batch_settings,
+                                        &rendered_batch,
+                                        &message_ids,
+                                        outcome_senders,
+                                        &target_session,
+                                    );
+                                    rendered_batch = Vec::new();
+                                    message_ids = Vec::new();
+                                    outcome_senders = Vec::new();
+                                }
+                                // Deliver raw immediately (no combining).
+                                let result = submit_raw_turn(
+                                    &mut client,
+                                    &session_id,
+                                    &shared,
+                                    &chooser,
+                                    &content,
+                                    append_enter,
+                                    &target_session,
+                                );
+                                let _ = raw_tx.send(result);
+                                // Continue with empty batch.
+                            }
+                        }
+                    }
+
+                    // Flush any remaining envelope group.
+                    if !rendered_batch.is_empty() {
+                        flush_envelope_group(
+                            &mut client,
+                            &session_id,
+                            &shared,
+                            &chooser,
+                            &batch_settings,
+                            &rendered_batch,
+                            &message_ids,
+                            outcome_senders,
+                            &target_session,
+                        );
+                    }
+                }
+                WriteItem::Raw {
+                    content,
+                    append_enter,
+                    outcome_tx,
+                } => {
+                    // Standalone raw write (no preceding envelope group).
+                    let result = submit_raw_turn(
+                        &mut client,
+                        &session_id,
+                        &shared,
+                        &chooser,
+                        &content,
+                        append_enter,
+                        &target_session,
+                    );
+                    let _ = outcome_tx.send(result);
+                }
+            }
+        }
+    }
+    // Task exited — channel closed. Pending items were drained above.
+}
+
+/// Combines a group of rendered envelopes into one turn prompt respecting the
+/// token budget, submits each batch as a turn, and fans the outcome to the
+/// senders for that batch. If the group exceeds the budget, it is split into
+/// multiple batches; each batch is submitted as a separate turn and the outcome
+/// is fanned to the senders whose envelopes landed in that batch.
+#[allow(clippy::too_many_arguments)]
+fn flush_envelope_group(
+    client: &mut AcpStdioClient,
+    session_id: &str,
+    shared: &Arc<AcpSharedState>,
+    chooser: &Option<crate::transports::Chooser>,
+    batch_settings: &PromptBatchSettings,
+    rendered: &[String],
+    message_ids: &[String],
+    outcome_senders: Vec<tokio::sync::oneshot::Sender<SingleDeliveryOutcome>>,
+    target_session: &str,
+) {
+    // Partition senders into batches using the same logic as batch_envelopes.
+    let budget = batch_settings.max_prompt_tokens.max(1);
+    let mut batches: Vec<(
+        String,
+        String, // head message_id for permission correlation
+        Vec<tokio::sync::oneshot::Sender<SingleDeliveryOutcome>>,
+    )> = Vec::new();
+    let mut current_prompt = String::new();
+    let mut current_message_id = String::new();
+    let mut current_senders: Vec<tokio::sync::oneshot::Sender<SingleDeliveryOutcome>> = Vec::new();
+
+    for ((envelope, msg_id), sender) in rendered.iter().zip(message_ids.iter()).zip(outcome_senders)
+    {
+        if current_prompt.is_empty() {
+            current_prompt.push_str(envelope);
+            current_message_id = msg_id.clone();
+            current_senders.push(sender);
+            continue;
+        }
+
+        let candidate = format!("{current_prompt}\n\n{envelope}");
+        let estimated =
+            crate::envelope::estimate_prompt_tokens(&candidate, batch_settings.tokenizer_profile);
+        if estimated <= budget {
+            current_prompt = candidate;
+            current_senders.push(sender);
+        } else {
+            batches.push((current_prompt, current_message_id, current_senders));
+            current_prompt = envelope.clone();
+            current_message_id = msg_id.clone();
+            current_senders = vec![sender];
+        }
+    }
+    if !current_prompt.is_empty() {
+        batches.push((current_prompt, current_message_id, current_senders));
+    }
+
+    // Submit each batch as a turn and fan the outcome to its senders.
+    for (batch_prompt, message_id, senders) in batches {
+        let outcome = submit_envelope_turn(
+            client,
+            session_id,
+            shared,
+            chooser,
+            &batch_prompt,
+            &message_id,
+            target_session,
+        );
+        for tx in senders {
+            let _ = tx.send(outcome.clone());
+        }
+    }
+}
+
+/// Submits one combined prompt as an ACP turn, blocking until completion.
+fn submit_envelope_turn(
+    client: &mut AcpStdioClient,
+    session_id: &str,
+    shared: &Arc<AcpSharedState>,
+    chooser: &Option<crate::transports::Chooser>,
+    prompt: &str,
+    message_id: &str,
+    target_session: &str,
+) -> SingleDeliveryOutcome {
+    let pending_choice: Arc<Mutex<Option<ChoiceMade>>> = Arc::new(Mutex::new(None));
+    let completion_slot: Arc<Mutex<Option<PromptCompletion>>> = Arc::new(Mutex::new(None));
+
+    let shared_for_dispatch = Arc::clone(shared);
+    let on_dispatched: DispatchHandler = Box::new(move || {
+        *shared_for_dispatch
+            .readiness
+            .lock()
+            .expect("readiness mutex") = AcpWorkerReadinessState::Busy;
+    });
+
+    // Build a permission handler if a chooser is available. The correlation
+    // uses empty strings for message_id/target_session since the envelope
+    // metadata is not available at the turn-submission level; the chooser
+    // resolves choices regardless.
+    let on_permission = if let Some(chooser) = chooser {
+        let correlation = ChoiceCorrelation {
+            message_id: message_id.to_string(),
+            target_session: target_session.to_string(),
+            decider_sessions: Vec::new(),
+        };
+        build_acp_permission_handler(chooser.clone(), correlation, Arc::clone(&pending_choice))
+    } else {
+        Box::new(|_req, mut responder: PermissionResponder| {
+            // No chooser available — respond with cancelled.
+            responder.respond(None);
+        })
+    };
+
+    let completion_writer = Arc::clone(&completion_slot);
+    let on_completion: PromptCompletionHandler = Box::new(move |completion| {
+        *completion_writer.lock().expect("completion slot mutex") = Some(completion);
+    });
+
+    let dispatch = client.prompt(
+        session_id,
+        prompt,
+        Some(on_dispatched),
+        Some(on_permission),
+        on_completion,
+    );
+
+    match dispatch {
+        PromptDispatchOutcome::Submitted => {
+            loop {
+                if client.wait_for_prompt_complete(ACP_PROMPT_WAIT_POLL_INTERVAL) {
+                    break;
+                }
+                if shutdown_requested() {
+                    break;
+                }
+            }
+            let completion = completion_slot
+                .lock()
+                .expect("completion slot mutex")
+                .take();
+            let pending = pending_choice.lock().expect("pending_choice mutex").take();
+            let (final_state, outcome) = build_acp_completion_result(
+                completion,
+                pending,
+                String::new(), // target_session — not available at this level
+                String::new(), // message_id — not available at this level
+                "",            // target_member_id — not available at this level
+            );
+            *shared.readiness.lock().expect("readiness mutex") = final_state;
+            outcome
+        }
+        PromptDispatchOutcome::TransportUnavailable { reason } => {
+            *shared.readiness.lock().expect("readiness mutex") =
+                AcpWorkerReadinessState::Unavailable;
+            failed_outcome_with_code(
+                String::new(),
+                String::new(),
+                ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE,
+                "ACP child stdin write failed",
+                Some(json!({ "reason": reason })),
+            )
+        }
+        PromptDispatchOutcome::SerializationFailed(reason) => {
+            *shared.readiness.lock().expect("readiness mutex") =
+                AcpWorkerReadinessState::Unavailable;
+            failed_outcome_with_code(
+                String::new(),
+                String::new(),
+                ACP_ERROR_CODE_PROMPT_FAILED,
+                "ACP session/prompt dispatch failed",
+                Some(json!({ "reason": reason })),
+            )
+        }
+    }
+}
+
+/// Submits raw content as an ACP turn (no envelope framing).
+fn submit_raw_turn(
+    client: &mut AcpStdioClient,
+    session_id: &str,
+    shared: &Arc<AcpSharedState>,
+    chooser: &Option<crate::transports::Chooser>,
+    content: &str,
+    _append_enter: bool,
+    target_session: &str,
+) -> SingleDeliveryOutcome {
+    submit_envelope_turn(
+        client,
+        session_id,
+        shared,
+        chooser,
+        content,
+        "",
+        target_session,
+    )
+}
+
+/// Outcome for writes submitted when no transport runtime is available.
+fn unavailable_outcome() -> SingleDeliveryOutcome {
+    failed_outcome_with_code(
+        String::new(),
+        String::new(),
+        ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE,
+        "ACP transport unavailable (no runtime)",
+        None,
+    )
 }
 
 /// Builds the per-target ACP runtime. Used by the relay worker for initial
