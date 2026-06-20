@@ -142,8 +142,8 @@ async fn run_async_delivery_worker(
     let poll_interval = Duration::from_millis(ASYNC_WORKER_POLL_INTERVAL_MS);
     let drain_max = batch_drain_max();
     // Carry buffer: tasks consumed from the channel that did not coalesce with
-    // the current head (different payload mode or UI-routing), plus ACP tasks
-    // peeled back because the rendered prompt exceeded one budget batch. Drained
+    // the current head (different payload mode or relay-wide flag), plus ACP
+    // tasks peeled back because the rendered prompt exceeded one budget batch. Drained
     // before the channel on the next iteration so original ordering survives.
     let mut carry: VecDeque<AsyncDeliveryTask> = VecDeque::new();
 
@@ -327,10 +327,11 @@ fn batch_drain_max() -> usize {
 
 /// Collects up to `drain_max` tasks into a coalesce batch starting with `head`.
 ///
-/// Only `EnvelopeMessage` tasks targeting non-UI sessions coalesce. The first
-/// task whose payload mode or UI-routing differs from the head is pushed to
+/// Only non-relay-wide `EnvelopeMessage` tasks coalesce. The first task whose
+/// payload mode or `relay_wide_target` flag differs from the head is pushed to
 /// the front of `carry` so it heads the next worker iteration. The channel
 /// is read non-blocking via `try_recv`; an empty channel ends the drain.
+/// (UI vs non-UI routing is resolved separately, per delivery, after coalesce.)
 pub(super) fn coalesce_batch(
     head: AsyncDeliveryTask,
     drain_max: usize,
@@ -368,7 +369,7 @@ pub(super) fn extend_batch_with_drain(
             break;
         };
         if !can_coalesce_with_head(&batch[0], &candidate) {
-            // Different mode or UI-routing: defer so the head of the next
+            // Different mode or relay-wide flag: defer so the head of the next
             // iteration starts a fresh batch with this task.
             carry.push_front(candidate);
             break;
@@ -378,8 +379,8 @@ pub(super) fn extend_batch_with_drain(
 }
 
 /// Coalesce predicate: the candidate must share the head's payload mode and
-/// UI-routing. Target session, runtime, and bundle are guaranteed identical
-/// by the per-target worker registry key — assert in debug for safety.
+/// `relay_wide_target` flag. Target session, runtime, and bundle are guaranteed
+/// identical by the per-target worker registry key — assert in debug for safety.
 fn can_coalesce_with_head(head: &AsyncDeliveryTask, candidate: &AsyncDeliveryTask) -> bool {
     debug_assert_eq!(head.target_session, candidate.target_session);
     debug_assert_eq!(head.runtime_directory, candidate.runtime_directory);
