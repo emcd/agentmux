@@ -78,25 +78,27 @@ dispatches `mailw` uniformly for every target, eliminating the
 `Acp/Tmux/Ui/Pubsub` routing branch (and the `is_transport_delivered` predicate
 it would otherwise require).
 
-- [ ] 4.1 Add `UiTransport` implementing `Transport` in its own module (e.g.
-      `src/transports/ui.rs`): `mailw` emits the message as a relay stream event
-      via an injected broadcaster closure and resolves the `OutcomeFuture`
-      immediately (no quiescence, no combining, no token budget — UI delivery is
-      a single broadcast)
-- [ ] 4.2 Add `UiTransportServices` carrying the injected `Arc<dyn Fn>` stream
-      broadcaster (and any UI registry touchpoints), constructed relay-side
+- [x] 4.1 Add `UiTransport` implementing `Transport` in its own module
+      (`src/transports/ui.rs`): `mailw` emits the message as a relay stream event
+      via an injected broadcaster closure and resolves the `OutcomeFuture` after a
+      bounded UI-reconnect wait (no quiescence/combining/token budget; the
+      reconnect wait runs on its own thread so `mailw` stays non-blocking)
+- [x] 4.2 Add `UiTransportServices` carrying the injected `Arc<dyn Fn>` stream
+      broadcaster (`broadcast_incoming`) plus the `delivery_outcome` phase emitter
+      (`emit_phase`), constructed relay-side (`build_ui_transport_services`)
       closing over the relay stream — no `crate::relay` import (mirrors
       `AcpDriverServices`)
-- [ ] 4.3 `UiTransport::raww` resolves its future with an unsupported/failed
+- [x] 4.3 `UiTransport::raww` resolves its future with an unsupported/failed
       outcome (UI is not raw-writable); `give_output` returns `None` (UI is not
       lookable); `is_ready` returns true
-- [ ] 4.4 Add `TransportImpl::Ui(UiTransport)` variant; forward-declare
+- [x] 4.4 Add `TransportImpl::Ui(UiTransport)` variant; forward-declare
       `TransportImpl::Pubsub` as a stub variant (like `Pty`) until the Pubsub
-      transport lands
-- [ ] 4.5 Construct `UiTransport` for `Ui` targets in the worker (replacing the
-      tmux fallback for non-ACP targets), threading the UI services; route the
-      Pubsub stub by target type
-- [ ] 4.6 UI delivery payload shape — RESOLVED to R1 (interim compromise toward
+      transport lands (capability rows + delegate arms for both)
+- [x] 4.5 Construct `UiTransport` for `Ui` targets in the worker: non-ACP
+      workers resolve their transport kind from the first head task
+      (`task_routes_to_ui`) and swap to `UiTransport`, threading the UI services;
+      Pubsub stub variant added (no Pubsub targets route yet)
+- [x] 4.6 UI delivery payload shape — RESOLVED to R1 (interim compromise toward
       option C). `DeliveryEnvelope` carries relay-populated, transport-read-only
       attribution (`sender_session`, `cc_sessions`, `authenticated_identity`;
       `on_behalf_of` deferred unless the task carries it) so `UiTransport` builds
@@ -170,9 +172,11 @@ it would otherwise require).
       submission): verify token-budget split produces correct group boundaries
 - [ ] 7.5 Add unit tests for ACP respawn-invalidation: verify that a respawn
       signal resolves all pending outcome futures with `Cancelled`
-- [ ] 7.6 Add unit tests for `UiTransport::mailw`: verify it broadcasts a stream
-      event via the injected services closure and resolves the outcome future
-      immediately; verify `raww` resolves unsupported and `give_output` is `None`
+- [x] 7.6 Add unit tests for `UiTransport::mailw` (`tests/unit/ui_transport.rs`):
+      verify it broadcasts a stream event via the injected services closure and
+      resolves the outcome future; verify the bounded reconnect wait resolves
+      `Timeout` when no UI connects; verify `raww` resolves unsupported and
+      `give_output` is `None`
 - [ ] 7.7 Confirm integration tests (send, raww, quiescence, ACP turn, UI
       delivery) remain green; update context construction as needed
 - [ ] 7.8 Run `cargo clippy --all-targets` and `cargo test` clean

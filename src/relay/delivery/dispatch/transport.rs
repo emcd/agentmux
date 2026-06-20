@@ -149,6 +149,10 @@ fn deliver_acp_combined(
         choice_decider_sessions: head.choice_decider_sessions.clone(),
         quiet_window: head.quiescence.quiet_window,
         quiescence_timeout: head.quiescence.quiescence_timeout,
+        // R1 UI attribution: read only by the UI transport. ACP ignores it.
+        sender_session: String::new(),
+        cc_sessions: Vec::new(),
+        authenticated_identity: None,
     };
     let context = DeliveryContext {
         target_session: target_session.clone(),
@@ -280,6 +284,10 @@ fn build_tmux_envelopes(
                 choice_decider_sessions: head.choice_decider_sessions.clone(),
                 quiet_window: head.quiescence.quiet_window,
                 quiescence_timeout: head.quiescence.quiescence_timeout,
+                // R1 UI attribution: read only by the UI transport. Tmux ignores it.
+                sender_session: String::new(),
+                cc_sessions: Vec::new(),
+                authenticated_identity: None,
             })
             .collect(),
         DeliveryPayloadMode::RawInput => vec![DeliveryEnvelope {
@@ -290,6 +298,10 @@ fn build_tmux_envelopes(
             choice_decider_sessions: head.choice_decider_sessions.clone(),
             quiet_window: head.quiescence.quiet_window,
             quiescence_timeout: head.quiescence.quiescence_timeout,
+            // R1 UI attribution: read only by the UI transport. Tmux ignores it.
+            sender_session: String::new(),
+            cc_sessions: Vec::new(),
+            authenticated_identity: None,
         }],
     }
 }
