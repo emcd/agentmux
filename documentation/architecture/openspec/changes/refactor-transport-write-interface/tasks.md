@@ -22,34 +22,34 @@
 
 ## 2. Tmux transport
 
-- [ ] 2.1 Add internal ordered channel to `TmuxTransport` carrying a
+- [x] 2.1 Add internal ordered channel to `TmuxTransport` carrying a
       `WriteItem` enum (`Envelope(DeliveryEnvelope, OutcomeSender)` |
       `Raw(String, bool, OutcomeSender)`)
-- [ ] 2.2 Implement `mailw`: enqueue envelope into channel; return outcome
+- [x] 2.2 Implement `mailw`: enqueue envelope into channel; return outcome
       receiver
-- [ ] 2.3 Implement `raww`: enqueue raw item into channel; return outcome
+- [x] 2.3 Implement `raww`: enqueue raw item into channel; return outcome
       receiver (not delivered directly — preserves FIFO ordering)
-- [ ] 2.4 Implement internal Tmux delivery task: drain items in FIFO order;
+- [x] 2.4 Implement internal Tmux delivery task: drain items in FIFO order;
       accumulate contiguous `Envelope` items into a flush group; on `Raw` item,
       flush any accumulated group first (paste), then deliver the raw write;
       use head envelope's quiescence hints for the current flush group
-- [ ] 2.5 Within the internal task: wait for quiescence before each flush group
+- [x] 2.5 Within the internal task: wait for quiescence before each flush group
       using head-envelope hints; absorb additional `Envelope` items that arrive
       during the wait into the current group
-- [ ] 2.6 On shutdown signal, drain channel and resolve all pending outcome
+- [x] 2.6 On shutdown signal, drain channel and resolve all pending outcome
       senders with `DroppedOnShutdown`
-- [ ] 2.7 Remove `TmuxTransport::prepare_delivery` implementation
-- [ ] 2.8 Remove `TmuxTransport::deliver` implementation
+- [x] 2.7 Remove `TmuxTransport::prepare_delivery` implementation
+- [x] 2.8 Remove `TmuxTransport::deliver` implementation
 
 ## 3. ACP transport
 
-- [ ] 3.1 Add internal ordered channel to `AcpTransport` carrying the same
+- [x] 3.1 Add internal ordered channel to `AcpTransport` carrying the same
       `WriteItem` enum as Tmux
-- [ ] 3.2 Implement `mailw`: enqueue rendered envelope into channel; return
+- [x] 3.2 Implement `mailw`: enqueue rendered envelope into channel; return
       outcome receiver
-- [ ] 3.3 Implement `raww`: enqueue raw item into channel; return outcome
+- [x] 3.3 Implement `raww`: enqueue raw item into channel; return outcome
       receiver (FIFO with mailw items)
-- [ ] 3.4 Implement internal ACP delivery task:
+- [x] 3.4 Implement internal ACP delivery task:
       - drain buffer (blocking recv, wait for ≥1 item)
       - call `driver.mark_busy()` before turn submission
       - for contiguous `Envelope` items: concatenate into one combined prompt
@@ -60,14 +60,14 @@
       - submit turn; call `driver.mirror_settled_readiness()` after
       - call `driver.maybe_respawn_after_delivery(outcome)` keyed off turn result
       - fan turn outcome to all outcome senders for the submitted group
-- [ ] 3.5 Add respawn-invalidation coordination: a shutdown/respawn-signal
+- [x] 3.5 Add respawn-invalidation coordination: a shutdown/respawn-signal
       channel from the ACP driver to the internal task; on respawn signal, drain
       channel and resolve all pending outcome senders with `Cancelled` before
       `release_runtime()` is called
-- [ ] 3.6 On relay shutdown, drain channel and resolve all outcome senders with
+- [x] 3.6 On relay shutdown, drain channel and resolve all outcome senders with
       `DroppedOnShutdown`
-- [ ] 3.7 Remove `AcpTransport::prepare_delivery` stub (returns ready immediately)
-- [ ] 3.8 Remove `AcpTransport::deliver` implementation; `batch_envelopes`
+- [x] 3.7 Remove `AcpTransport::prepare_delivery` stub (returns ready immediately)
+- [x] 3.8 Remove `AcpTransport::deliver` implementation; `batch_envelopes`
       relay-side call and `can_take_batches` are deleted
 
 ## 4. Ui / Pubsub transports
