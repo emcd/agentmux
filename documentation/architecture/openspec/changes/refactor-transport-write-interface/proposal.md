@@ -85,12 +85,16 @@ waits, multi-prompt combining, or a transport-type routing fork — it submits
 - The ACP and Tmux `OutputView` / look path is unchanged.
 - The `AcpDriverServices` injection pattern is unchanged; `UiTransportServices`
   mirrors it for the UI stream broadcaster.
-- **UI delivery payload shape — RESOLVED to option (b)** (FE + RG concur): the
-  relay builds the stream event and hands it to the `UiTransportServices`
-  broadcaster; `DeliveryEnvelope` stays lean. The event carries sender, cc,
-  message_id (and ideally `authenticated_identity` / `on_behalf_of`) from the
-  relay's authenticated view, keeping attribution relay-authoritative. UI
-  "delivery" == event accepted by the broadcaster (passive subscriber, no render
-  ack). Render-in-transport ("option C") is deferred to todos/relay/94 as a
-  post-change follow-up.
+- **UI delivery payload shape — RESOLVED to R1** (interim compromise toward
+  option C): `DeliveryEnvelope` carries relay-populated, transport-read-only
+  attribution (`sender_session`, `cc_sessions`, `authenticated_identity`;
+  `on_behalf_of` deferred) so `UiTransport` builds the stream event from the
+  envelope. The originally-favored lean option (b) proved incompatible with the
+  committed `mailw(DeliveryEnvelope)` seam — per-message sender/cc are not on a
+  lean envelope nor reconstructable inside `UiTransport`. R1 keeps the delivery
+  loop uniform and preserves attribution authority (relay-populated, read-only,
+  no `crate::relay` dependency); only the "lean" aesthetic bends. UI "delivery"
+  == event accepted by the broadcaster (passive subscriber, no render ack). The
+  clean structured-message end-state (render-in-transport, "option C") is deferred
+  to todos/relay/94.
 - Wire protocol is unchanged; only the relay↔transport internal interface changes.
