@@ -275,7 +275,7 @@ impl AcpTransport {
         std::thread::spawn(move || {
             let channels = DeliveryChannels {
                 rx,
-                _shutdown_rx: shutdown_rx,
+                shutdown_rx,
                 respawn_needed_tx,
             };
             acp_delivery_task(
@@ -292,6 +292,18 @@ impl AcpTransport {
         self.write_tx = Some(tx);
         self.shutdown_tx = Some(shutdown_tx);
         self.respawn_needed_rx = Some(respawn_needed_rx);
+    }
+
+    /// Creates an unavailable outcome preserving the caller's message_id and
+    /// this transport's target_session.
+    fn unavailable_outcome_with_id(&self, message_id: &str) -> SingleDeliveryOutcome {
+        failed_outcome_with_code(
+            self.target_session.clone(),
+            message_id.to_string(),
+            ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE,
+            "ACP transport unavailable (no runtime)",
+            None,
+        )
     }
 }
 
@@ -348,18 +360,23 @@ impl Transport for AcpTransport {
                 envelope,
                 outcome_tx,
             }) {
-                // Channel full or closed — resolve with terminal outcome.
+                // Channel full or closed — resolve with terminal outcome,
+                // preserving the envelope's message_id and target_session.
                 match e.into_inner() {
-                    WriteItem::Envelope { outcome_tx, .. } => {
-                        let _ = outcome_tx.send(unavailable_outcome());
+                    WriteItem::Envelope {
+                        outcome_tx,
+                        envelope,
+                    } => {
+                        let _ =
+                            outcome_tx.send(self.unavailable_outcome_with_id(&envelope.message_id));
                     }
                     WriteItem::Raw { outcome_tx, .. } => {
-                        let _ = outcome_tx.send(unavailable_outcome());
+                        let _ = outcome_tx.send(self.unavailable_outcome_with_id(""));
                     }
                 }
             }
         } else {
-            let _ = outcome_tx.send(unavailable_outcome());
+            let _ = outcome_tx.send(self.unavailable_outcome_with_id(&envelope.message_id));
         }
         outcome_rx
     }
@@ -373,16 +390,20 @@ impl Transport for AcpTransport {
                 outcome_tx,
             }) {
                 match e.into_inner() {
-                    WriteItem::Envelope { outcome_tx, .. } => {
-                        let _ = outcome_tx.send(unavailable_outcome());
+                    WriteItem::Envelope {
+                        outcome_tx,
+                        envelope,
+                    } => {
+                        let _ =
+                            outcome_tx.send(self.unavailable_outcome_with_id(&envelope.message_id));
                     }
                     WriteItem::Raw { outcome_tx, .. } => {
-                        let _ = outcome_tx.send(unavailable_outcome());
+                        let _ = outcome_tx.send(self.unavailable_outcome_with_id(""));
                     }
                 }
             }
         } else {
-            let _ = outcome_tx.send(unavailable_outcome());
+            let _ = outcome_tx.send(self.unavailable_outcome_with_id(""));
         }
         outcome_rx
     }
@@ -558,7 +579,7 @@ struct EnvelopeBatch {
 /// Channels connecting the transport to its internal delivery task.
 struct DeliveryChannels {
     rx: mpsc::Receiver<WriteItem>,
-    _shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
     respawn_needed_tx: tokio::sync::watch::Sender<bool>,
 }
 
@@ -593,9 +614,21 @@ fn acp_delivery_task(
         target_session: _,
     } = ctx;
     let mut rx = channels.rx;
+    let mut shutdown_rx = channels.shutdown_rx;
     let respawn_needed_tx = channels.respawn_needed_tx;
 
     loop {
+        // Check the shutdown signal before blocking on the write channel.
+        // If the transport is shutting down or respawning, drain remaining
+        // items and resolve their senders with DroppedOnShutdown.
+        if matches!(
+            shutdown_rx.try_recv(),
+            Ok(()) | Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+        ) {
+            drain_and_resolve_shutdown(&mut rx);
+            break;
+        }
+
         let Some(first) = rx.blocking_recv() else {
             break;
         };
@@ -670,9 +703,29 @@ fn signal_respawn_if_needed(
     }
 }
 
+/// Drains all remaining items from the write channel and resolves their outcome
+/// senders with DroppedOnShutdown. Called when the shutdown/respawn signal fires.
+fn drain_and_resolve_shutdown(rx: &mut mpsc::Receiver<WriteItem>) {
+    while let Ok(item) = rx.try_recv() {
+        let outcome_tx = match item {
+            WriteItem::Envelope { outcome_tx, .. } => outcome_tx,
+            WriteItem::Raw { outcome_tx, .. } => outcome_tx,
+        };
+        let _ = outcome_tx.send(SingleDeliveryOutcome {
+            target_session: String::new(),
+            message_id: String::new(),
+            outcome: SendOutcome::Failed,
+            reason_code: Some(DROPPED_ON_SHUTDOWN_REASON_CODE.to_string()),
+            reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
+            details: None,
+        });
+    }
+}
+
 /// Combines a group of rendered envelopes into one turn prompt respecting the
 /// token budget, submits each batch as a turn, and fans the outcome to the
-/// senders for that batch.
+/// senders for that batch. Each sender receives its own message_id in the
+/// outcome, even when multiple envelopes are combined into one turn.
 #[allow(clippy::type_complexity)]
 fn flush_envelope_group(
     client: &mut AcpStdioClient,
@@ -681,15 +734,19 @@ fn flush_envelope_group(
     batch: &mut EnvelopeBatch,
 ) {
     let budget = batch_settings.max_prompt_tokens.max(1);
+    // Each group: (combined prompt, head message_id, head decider_sessions,
+    //               per-sender message_ids, per-sender outcome senders)
     let mut groups: Vec<(
         String,
         String,
         Vec<String>,
+        Vec<String>,
         Vec<tokio::sync::oneshot::Sender<SingleDeliveryOutcome>>,
     )> = Vec::new();
     let mut cur_prompt = String::new();
-    let mut cur_msg_id = String::new();
-    let mut cur_deciders: Vec<String> = Vec::new();
+    let mut cur_head_msg_id = String::new();
+    let mut cur_head_deciders: Vec<String> = Vec::new();
+    let mut cur_msg_ids: Vec<String> = Vec::new();
     let mut cur_senders: Vec<tokio::sync::oneshot::Sender<SingleDeliveryOutcome>> = Vec::new();
 
     for (((rendered, msg_id), deciders), sender) in batch
@@ -701,8 +758,9 @@ fn flush_envelope_group(
     {
         if cur_prompt.is_empty() {
             cur_prompt = rendered;
-            cur_msg_id = msg_id;
-            cur_deciders = deciders;
+            cur_head_msg_id = msg_id.clone();
+            cur_head_deciders = deciders;
+            cur_msg_ids.push(msg_id);
             cur_senders.push(sender);
             continue;
         }
@@ -711,23 +769,39 @@ fn flush_envelope_group(
             crate::envelope::estimate_prompt_tokens(&candidate, batch_settings.tokenizer_profile);
         if est <= budget {
             cur_prompt = candidate;
+            cur_msg_ids.push(msg_id);
             cur_senders.push(sender);
         } else {
-            groups.push((cur_prompt, cur_msg_id, cur_deciders, cur_senders));
+            groups.push((
+                cur_prompt,
+                cur_head_msg_id,
+                cur_head_deciders,
+                cur_msg_ids,
+                cur_senders,
+            ));
             cur_prompt = rendered;
-            cur_msg_id = msg_id;
-            cur_deciders = deciders;
+            cur_head_msg_id = msg_id.clone();
+            cur_head_deciders = deciders;
+            cur_msg_ids = vec![msg_id];
             cur_senders = vec![sender];
         }
     }
     if !cur_prompt.is_empty() {
-        groups.push((cur_prompt, cur_msg_id, cur_deciders, cur_senders));
+        groups.push((
+            cur_prompt,
+            cur_head_msg_id,
+            cur_head_deciders,
+            cur_msg_ids,
+            cur_senders,
+        ));
     }
 
-    for (prompt, msg_id, deciders, senders) in groups {
+    for (prompt, msg_id, deciders, msg_ids, senders) in groups {
         let outcome = submit_envelope_turn(client, ctx, &prompt, &msg_id, &deciders);
-        for tx in senders {
-            let _ = tx.send(outcome.clone());
+        for (sender_msg_id, tx) in msg_ids.into_iter().zip(senders) {
+            let mut sender_outcome = outcome.clone();
+            sender_outcome.message_id = sender_msg_id;
+            let _ = tx.send(sender_outcome);
         }
     }
 }
@@ -835,17 +909,6 @@ fn submit_raw_turn(
     _append_enter: bool,
 ) -> SingleDeliveryOutcome {
     submit_envelope_turn(client, ctx, content, "", &[])
-}
-
-/// Outcome for writes submitted when no transport runtime is available.
-fn unavailable_outcome() -> SingleDeliveryOutcome {
-    failed_outcome_with_code(
-        String::new(),
-        String::new(),
-        ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE,
-        "ACP transport unavailable (no runtime)",
-        None,
-    )
 }
 
 /// Builds the per-target ACP runtime. Used by the relay worker for initial
