@@ -617,14 +617,17 @@ fn acp_delivery_task(
     let mut shutdown_rx = channels.shutdown_rx;
     let respawn_needed_tx = channels.respawn_needed_tx;
 
-    loop {
-        // Check the shutdown signal before blocking on the write channel.
-        // If the transport is shutting down or respawning, drain remaining
-        // items and resolve their senders with DroppedOnShutdown.
-        if matches!(
+    // Helper: check if shutdown/respawn signal fired. Returns true if shutdown
+    // is active. Caller is responsible for resolving any held senders.
+    let is_shutdown = |shutdown_rx: &mut tokio::sync::oneshot::Receiver<()>| -> bool {
+        matches!(
             shutdown_rx.try_recv(),
             Ok(()) | Err(tokio::sync::oneshot::error::TryRecvError::Closed)
-        ) {
+        )
+    };
+
+    loop {
+        if is_shutdown(&mut shutdown_rx) {
             drain_and_resolve_shutdown(&mut rx);
             break;
         }
@@ -638,6 +641,13 @@ fn acp_delivery_task(
                 envelope,
                 outcome_tx,
             } => {
+                // Check after receive — shutdown may have fired between the
+                // pre-receive check and the actual receive.
+                if is_shutdown(&mut shutdown_rx) {
+                    let _ = outcome_tx.send(dropped_on_shutdown_outcome());
+                    drain_and_resolve_shutdown(&mut rx);
+                    break;
+                }
                 let mut batch = EnvelopeBatch {
                     rendered: vec![envelope.rendered.clone()],
                     message_ids: vec![envelope.message_id.clone()],
@@ -645,7 +655,6 @@ fn acp_delivery_task(
                     outcome_senders: vec![outcome_tx],
                 };
 
-                // Absorb contiguous Envelope items; stop at Raw or channel empty.
                 loop {
                     match rx.try_recv() {
                         Ok(WriteItem::Envelope {
@@ -664,6 +673,14 @@ fn acp_delivery_task(
                             append_enter,
                             outcome_tx: raw_tx,
                         }) => {
+                            if is_shutdown(&mut shutdown_rx) {
+                                let _ = raw_tx.send(dropped_on_shutdown_outcome());
+                                for tx in batch.outcome_senders.drain(..) {
+                                    let _ = tx.send(dropped_on_shutdown_outcome());
+                                }
+                                drain_and_resolve_shutdown(&mut rx);
+                                break;
+                            }
                             flush_envelope_group(&mut client, &ctx, &batch_settings, &mut batch);
                             signal_respawn_if_needed(ctx.shared, &respawn_needed_tx);
                             let result =
@@ -672,6 +689,13 @@ fn acp_delivery_task(
                             break;
                         }
                         Err(_) => {
+                            if is_shutdown(&mut shutdown_rx) {
+                                for tx in batch.outcome_senders.drain(..) {
+                                    let _ = tx.send(dropped_on_shutdown_outcome());
+                                }
+                                drain_and_resolve_shutdown(&mut rx);
+                                break;
+                            }
                             flush_envelope_group(&mut client, &ctx, &batch_settings, &mut batch);
                             signal_respawn_if_needed(ctx.shared, &respawn_needed_tx);
                             break;
@@ -684,6 +708,11 @@ fn acp_delivery_task(
                 append_enter,
                 outcome_tx,
             } => {
+                if is_shutdown(&mut shutdown_rx) {
+                    let _ = outcome_tx.send(dropped_on_shutdown_outcome());
+                    drain_and_resolve_shutdown(&mut rx);
+                    break;
+                }
                 let result = submit_raw_turn(&mut client, &ctx, content.as_str(), append_enter);
                 let _ = outcome_tx.send(result);
                 signal_respawn_if_needed(ctx.shared, &respawn_needed_tx);
@@ -711,14 +740,19 @@ fn drain_and_resolve_shutdown(rx: &mut mpsc::Receiver<WriteItem>) {
             WriteItem::Envelope { outcome_tx, .. } => outcome_tx,
             WriteItem::Raw { outcome_tx, .. } => outcome_tx,
         };
-        let _ = outcome_tx.send(SingleDeliveryOutcome {
-            target_session: String::new(),
-            message_id: String::new(),
-            outcome: SendOutcome::Failed,
-            reason_code: Some(DROPPED_ON_SHUTDOWN_REASON_CODE.to_string()),
-            reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
-            details: None,
-        });
+        let _ = outcome_tx.send(dropped_on_shutdown_outcome());
+    }
+}
+
+/// A DroppedOnShutdown outcome for items resolved during shutdown/respawn.
+fn dropped_on_shutdown_outcome() -> SingleDeliveryOutcome {
+    SingleDeliveryOutcome {
+        target_session: String::new(),
+        message_id: String::new(),
+        outcome: SendOutcome::Failed,
+        reason_code: Some(DROPPED_ON_SHUTDOWN_REASON_CODE.to_string()),
+        reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
+        details: None,
     }
 }
 
