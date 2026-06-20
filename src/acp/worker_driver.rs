@@ -99,6 +99,7 @@ pub struct AcpWorkerDriver {
     runtime_directory: PathBuf,
     target_member: BundleMember,
     services: AcpDriverServices,
+    max_prompt_tokens: usize,
 }
 
 impl AcpWorkerDriver {
@@ -109,6 +110,7 @@ impl AcpWorkerDriver {
         runtime_directory: PathBuf,
         bundle_name: String,
         services: AcpDriverServices,
+        max_prompt_tokens: usize,
     ) -> Self {
         Self {
             transport: Some(AcpTransport::new()),
@@ -117,7 +119,16 @@ impl AcpWorkerDriver {
             runtime_directory,
             target_member,
             services,
+            max_prompt_tokens,
         }
+    }
+
+    /// Per-prompt token budget captured at construction, threaded from session
+    /// configuration. Handed to the internal ACP delivery task (write-interface
+    /// refactor section 3) when combining a coalesced envelope group into one turn.
+    #[must_use]
+    pub fn max_prompt_tokens(&self) -> usize {
+        self.max_prompt_tokens
     }
 
     fn transport_ref(&self) -> &AcpTransport {
