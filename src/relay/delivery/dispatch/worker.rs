@@ -13,8 +13,7 @@ use super::super::super::canonical_session_id;
 use super::super::super::startup_state::note_session_served_successfully;
 use super::super::super::stream::{
     RelayStreamEvent, StreamEventSendOutcome, broadcast_event_to_bundle_ui,
-    list_registered_ui_sessions_for_bundle, resolve_registered_session_type,
-    send_event_to_registered_ui,
+    list_registered_ui_sessions_for_bundle, send_event_to_registered_ui,
 };
 use super::super::super::{
     AsyncDeliveryTask, DeliveryPayloadMode, RelayError, SendOutcome, SendResult,
@@ -105,23 +104,27 @@ async fn run_async_delivery_worker(
     pending: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     bootstrap: Option<AcpWorkerBootstrap>,
 ) {
-    // Hold one `TransportImpl` for this target's lifetime: ACP targets get a
-    // driver that owns the ACP runtime + bootstrap/respawn lifecycle; everything
-    // else gets the tmux transport. UI-routed deliveries use a separate
-    // lazily-built `UiTransport` (see `ui_transport` below), chosen per delivery
-    // rather than latched, so a configured UI target whose first send precedes
-    // the UI stream registration recovers once the stream connects. ACP
-    // lifecycle, readiness mirroring, and respawn live entirely in the driver and
-    // its internal delivery task; the loop never names an ACP type.
+    // Hold one `TransportImpl` for this target's lifetime. The transport KIND is
+    // the only target-type-dependent decision, and it is fixed at construction
+    // from the configured `session_type()` (transport-abstraction spec): ACP
+    // targets get the bootstrap driver here; every other target's transport is
+    // built lazily from its first task (a non-ACP worker has no bundle member at
+    // spawn time — the task carries it) and then latched. Delivery is uniform:
+    // the loop submits `mailw`/`raww` for every target with no registry-based
+    // re-routing and no transport-deliverability gate. ACP lifecycle, readiness
+    // mirroring, and respawn live entirely in the driver and its internal task;
+    // the loop never names an ACP type.
     //
     // The loop is a concurrent produce-and-collect: it submits each task to the
-    // transport via the non-blocking `mailw`/`raww` seam (uniformly for every
-    // target — no transport-type gate) and concurrently collects the resolved
-    // `OutcomeFuture`s. Coalescing, quiescence, the token-budget combine, and the
-    // blocking IO all live inside each transport's internal delivery task now, so
-    // the worker no longer batches, hoists quiescence, or owns `spawn_blocking`.
+    // transport via the non-blocking `mailw`/`raww` seam and concurrently collects
+    // the resolved `OutcomeFuture`s. Coalescing, quiescence, the token-budget
+    // combine, and the blocking IO all live inside each transport's internal
+    // delivery task now, so the worker no longer batches, hoists quiescence, or
+    // owns `spawn_blocking`.
     let max_prompt_tokens = super::prompt_batch_settings().max_prompt_tokens;
-    let mut transport = match bootstrap {
+    // `None` until the transport is constructed: eagerly for ACP (bootstrap),
+    // lazily from the first task's `session_type()` for every other target.
+    let mut transport: Option<TransportImpl> = match bootstrap {
         Some(bootstrap) => {
             let services = build_acp_driver_services(&key, &bootstrap);
             let mut transport = TransportImpl::acp(
@@ -134,16 +137,10 @@ async fn run_async_delivery_worker(
             if let TransportImpl::Acp(driver) = &mut transport {
                 driver.bootstrap().await;
             }
-            transport
+            Some(transport)
         }
-        None => TransportImpl::tmux(max_prompt_tokens),
+        None => None,
     };
-    // ACP establishes its runtime in `bootstrap()` above; tmux defers `startup()`
-    // until the first coder task arrives (it needs that task's resolved
-    // `BundleMember` for prompt-readiness + runtime directory).
-    let mut non_ui_started = matches!(transport, TransportImpl::Acp(_));
-    // Lazily-built UI transport, reused across deliveries once a task routes to UI.
-    let mut ui_transport: Option<TransportImpl> = None;
     let poll_interval = Duration::from_millis(ASYNC_WORKER_POLL_INTERVAL_MS);
     // In-flight writes: each entry awaits one transport `OutcomeFuture` and yields
     // its originating task so the collect arm can complete it. Completion order is
@@ -156,8 +153,7 @@ async fn run_async_delivery_worker(
     loop {
         if shutdown_requested() {
             shutdown_drain(
-                &mut transport,
-                ui_transport.as_mut(),
+                transport.as_mut(),
                 &mut inflight,
                 &mut receiver,
                 pending.as_ref(),
@@ -182,8 +178,7 @@ async fn run_async_delivery_worker(
                             task,
                             &key,
                             &mut transport,
-                            &mut ui_transport,
-                            &mut non_ui_started,
+                            max_prompt_tokens,
                             &mut inflight,
                             pending.as_ref(),
                         );
@@ -205,38 +200,52 @@ async fn run_async_delivery_worker(
 }
 
 /// Submits one task to its transport via the non-blocking write seam and spawns
-/// an in-flight collector for its outcome. UI-routed tasks go to the lazily-built
-/// `UiTransport`; coder tasks go to the held ACP/tmux transport (rendering the
-/// envelope per task for `mailw`, or submitting the raw body via `raww`). A
-/// routing or render failure completes the task immediately and releases its slot.
+/// an in-flight collector for its outcome. On the worker's first task the
+/// transport is constructed from the target's configured `session_type()` and
+/// latched (`build_worker_transport`). Delivery is then uniform: `Ui` builds the
+/// stream envelope, coder transports (ACP/Tmux) render the framed envelope or
+/// submit raw input, and the forward-declared `Pubsub` stub yields an explicit
+/// not-implemented outcome (it is not deliverable). A construction or render
+/// failure completes the task immediately and releases its slot.
 fn submit_task(
     task: AsyncDeliveryTask,
     key: &AsyncWorkerKey,
-    transport: &mut TransportImpl,
-    ui_transport: &mut Option<TransportImpl>,
-    non_ui_started: &mut bool,
+    transport: &mut Option<TransportImpl>,
+    max_prompt_tokens: usize,
     inflight: &mut JoinSet<InflightOutcome>,
     pending: &std::sync::atomic::AtomicUsize,
 ) {
-    // Re-evaluate UI routing per task (registry-dependent): a configured UI
-    // target whose first send precedes the UI stream registration must recover
-    // and route through `UiTransport` once the stream connects, so the decision
-    // is not latched for the worker's lifetime.
-    let route_to_ui = match task_routes_to_ui(&task) {
-        Ok(value) => value,
-        Err(error) => {
-            super::super::async_worker::complete_task_outcome(&task, Err(error));
-            super::super::async_worker::release_pending_slot(pending);
-            return;
+    if transport.is_none() {
+        match build_worker_transport(&task, key, max_prompt_tokens) {
+            Ok(built) => *transport = Some(built),
+            Err(error) => {
+                super::super::async_worker::complete_task_outcome(&task, Err(error));
+                super::super::async_worker::release_pending_slot(pending);
+                return;
+            }
         }
-    };
+    }
+    let transport = transport
+        .as_mut()
+        .expect("worker transport constructed above");
 
-    let (future, record_served) = if route_to_ui {
-        let ui =
-            ui_transport.get_or_insert_with(|| TransportImpl::ui(build_ui_transport_services(key)));
-        (ui.mailw(build_ui_envelope(&task)), false)
+    let (future, record_served) = if matches!(transport, TransportImpl::Pubsub) {
+        // Forward-declared stub: not deliverable. Its `mailw`/`raww` are
+        // `unimplemented!`, so produce an explicit terminal outcome instead of
+        // calling them.
+        super::super::async_worker::complete_task_outcome(
+            &task,
+            Err(super::super::super::session_type_not_implemented(
+                task.target_session.as_str(),
+                SessionType::Pubsub,
+            )),
+        );
+        super::super::async_worker::release_pending_slot(pending);
+        return;
+    } else if matches!(transport, TransportImpl::Ui(_)) {
+        (transport.mailw(build_ui_envelope(&task)), false)
     } else {
-        match prepare_coder_write(&task, transport, non_ui_started) {
+        match prepare_coder_write(&task, transport) {
             Ok(future) => (future, true),
             Err(error) => {
                 super::super::async_worker::complete_task_outcome(&task, Err(error));
@@ -249,31 +258,55 @@ fn submit_task(
     inflight.spawn(async move { (task, record_served, future.await.ok()) });
 }
 
-/// Renders a coder task and submits it via the non-blocking write seam, lazily
-/// running `startup()` on first use so the transport's internal delivery task is
-/// running. Envelope-mode tasks render their own envelope and go through `mailw`;
+/// Constructs the worker's transport from the target's configured session type —
+/// the only target-type-dependent step (transport-abstraction spec). Relay-wide
+/// `@GLOBAL` targets have no bundle-member transport config and deliver via the UI
+/// stream by principal, so they construct `UiTransport`. Configured members select
+/// by `session_type()`: `Tmux` → `TmuxTransport` (with `startup()` so its internal
+/// delivery task runs), `Ui` → `UiTransport`, `Pubsub` → the forward-declared stub.
+/// ACP targets never reach here — they are constructed with a bootstrap driver,
+/// and the enqueue path rejects ACP tasks unless that driver already exists.
+fn build_worker_transport(
+    task: &AsyncDeliveryTask,
+    key: &AsyncWorkerKey,
+    max_prompt_tokens: usize,
+) -> Result<TransportImpl, RelayError> {
+    if task.relay_wide_target {
+        return Ok(TransportImpl::ui(build_ui_transport_services(key)));
+    }
+    let target_member =
+        resolve_target_member(task)?.expect("configured non-relay-wide target must have a member");
+    match target_member.target.session_type() {
+        SessionType::Tmux => {
+            let mut transport = TransportImpl::tmux(max_prompt_tokens);
+            // tmux ignores the `choose` resolver (it raises no operator choices),
+            // so a cancelling no-op chooser satisfies the `StartupContext` contract.
+            let context = StartupContext {
+                bundle_name: task.bundle.bundle_name.clone(),
+                runtime_directory: task.runtime_directory.clone(),
+                target_member: target_member.clone(),
+                choose: noop_tmux_chooser(),
+            };
+            let _ = transport.startup(context);
+            Ok(transport)
+        }
+        SessionType::Ui => Ok(TransportImpl::ui(build_ui_transport_services(key))),
+        SessionType::Pubsub => Ok(TransportImpl::Pubsub),
+        SessionType::Acp => Err(super::super::super::relay_error(
+            "internal_unexpected_failure",
+            "ACP target reached the non-bootstrap worker construction path",
+            Some(json!({ "target_session": task.target_session })),
+        )),
+    }
+}
+
+/// Renders a coder task and submits it via the non-blocking write seam.
+/// Envelope-mode tasks render their framed envelope and go through `mailw`;
 /// raw-input tasks go through `raww` with the task's `append_enter`.
 fn prepare_coder_write(
     task: &AsyncDeliveryTask,
     transport: &mut TransportImpl,
-    non_ui_started: &mut bool,
 ) -> Result<OutcomeFuture, RelayError> {
-    if !*non_ui_started {
-        let target_member =
-            resolve_target_member(task)?.expect("non-UI coder target must have a bundle member");
-        // Only tmux reaches this lazy `startup`; ACP started in `bootstrap()`.
-        // tmux ignores the `choose` resolver (it raises no operator choices), so a
-        // cancelling no-op chooser satisfies the `StartupContext` contract.
-        let context = StartupContext {
-            bundle_name: task.bundle.bundle_name.clone(),
-            runtime_directory: task.runtime_directory.clone(),
-            target_member: target_member.clone(),
-            choose: noop_tmux_chooser(),
-        };
-        let _ = transport.startup(context);
-        *non_ui_started = true;
-    }
-
     match task.payload_mode {
         DeliveryPayloadMode::EnvelopeMessage => {
             let target_member = resolve_target_member(task)?;
@@ -315,21 +348,20 @@ fn collect_outcome(
     super::super::async_worker::release_pending_slot(pending);
 }
 
-/// Drains the worker on relay shutdown: signals the transports so their internal
-/// delivery tasks resolve every in-flight write terminally, collects those
+/// Drains the worker on relay shutdown: signals the transport so its internal
+/// delivery task resolves every in-flight write terminally, collects those
 /// resolutions to completion, then drops the not-yet-submitted queued tasks. The
 /// transport contract guarantees prompt terminal resolution on shutdown, so the
-/// `join_next` drain does not park indefinitely.
+/// `join_next` drain does not park indefinitely. The transport is `None` if no
+/// task ever arrived to construct it.
 async fn shutdown_drain(
-    transport: &mut TransportImpl,
-    ui_transport: Option<&mut TransportImpl>,
+    transport: Option<&mut TransportImpl>,
     inflight: &mut JoinSet<InflightOutcome>,
     receiver: &mut UnboundedReceiver<AsyncDeliveryTask>,
     pending: &std::sync::atomic::AtomicUsize,
 ) {
-    transport.shutdown();
-    if let Some(ui) = ui_transport {
-        ui.shutdown();
+    if let Some(transport) = transport {
+        transport.shutdown();
     }
     while let Some(joined) = inflight.join_next().await {
         collect_outcome(joined, pending);
@@ -449,33 +481,6 @@ fn build_acp_driver_services(
         },
         chooser: build_acp_chooser(bundle_name, runtime_directory, choices_pending_max),
     }
-}
-
-/// Reports whether a task delivers to a UI subscriber rather than a coder
-/// transport: relay-wide (`@GLOBAL`) targets and registered `Ui`-type sessions.
-/// Evaluated per head task (not latched), matching the registry-resolution
-/// timing of the prior `should_route_to_ui` dispatch short-circuit so a UI
-/// target registering after its first send still recovers onto `UiTransport`.
-fn task_routes_to_ui(task: &AsyncDeliveryTask) -> Result<bool, RelayError> {
-    if task.relay_wide_target {
-        return Ok(true);
-    }
-    let resolved_session_type = resolve_registered_session_type(
-        task.bundle.bundle_name.as_str(),
-        task.target_session.as_str(),
-    )
-    .map_err(|source| {
-        super::super::super::relay_error(
-            "internal_unexpected_failure",
-            "failed to resolve relay stream session type",
-            Some(json!({
-                "bundle_name": task.bundle.bundle_name,
-                "target_session": task.target_session,
-                "cause": source.to_string(),
-            })),
-        )
-    })?;
-    Ok(matches!(resolved_session_type, Some(SessionType::Ui)))
 }
 
 /// Builds the UI broadcast touchpoints the `UiTransport` invokes. Each closure

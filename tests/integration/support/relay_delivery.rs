@@ -197,6 +197,57 @@ send = "home"
     config_root
 }
 
+/// Writes a bundle with one tmux coder session and one bare `pubsub`-marker
+/// session, reusing the standard coders/policies/users config. Used to prove a
+/// configured Pubsub member is constructed as the forward-declared stub transport
+/// and yields a not-implemented outcome rather than being misrouted to tmux.
+pub(crate) fn write_bundle_with_pubsub_member(
+    root: &Path,
+    bundle_name: &str,
+    tmux_session: &str,
+    pubsub_session: &str,
+) -> PathBuf {
+    let coders = vec![CoderSpec {
+        id: "default".to_string(),
+        initial_command: "sh -lc 'exec sleep 45'".to_string(),
+        resume_command: "sh -lc 'exec sleep 45'".to_string(),
+        prompt_regex: None,
+        prompt_inspect_lines: None,
+        prompt_idle_column: None,
+    }];
+    let sessions = vec![SessionSpec {
+        id: tmux_session.to_string(),
+        name: Some(tmux_session.to_string()),
+        directory: PathBuf::from("/tmp"),
+        coder: "default".to_string(),
+        coder_session_id: None,
+    }];
+    // Reuse the helper to lay down coders/policies/users; then re-write the bundle
+    // file to add the bare pubsub session alongside the tmux one.
+    let config_root = write_bundle_configuration_members(root, bundle_name, &coders, &sessions);
+    let mut bundle_toml = String::from("format-version = 1\nautostart = true\n");
+    bundle_toml.push_str(
+        format!(
+            "\n[[sessions]]\nid = \"{tmux_session}\"\nname = \"{tmux_session}\"\ndirectory = \"/tmp\"\ncoder = \"default\"\n",
+        )
+        .as_str(),
+    );
+    bundle_toml.push_str(
+        format!(
+            "\n[[sessions]]\nid = \"{pubsub_session}\"\ndirectory = \"/tmp\"\n[sessions.pubsub]\n",
+        )
+        .as_str(),
+    );
+    fs::write(
+        config_root
+            .join("bundles")
+            .join(format!("{bundle_name}.toml")),
+        bundle_toml,
+    )
+    .expect("write bundle config with pubsub member");
+    config_root
+}
+
 pub(crate) fn spawn_session(socket: &Path, session_name: &str, shell_command: &str) {
     let output = tmux_command(
         socket,

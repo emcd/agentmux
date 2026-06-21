@@ -15,7 +15,8 @@ use tokio::time::{sleep, timeout};
 
 use crate::support::relay_delivery::{
     drain_child_stdout, spawn_relay_with_fake_tmux, spawn_relay_with_fake_tmux_and_env,
-    wait_for_relay_ready, write_bundle_configuration, write_fake_tmux_script,
+    wait_for_relay_ready, write_bundle_configuration, write_bundle_with_pubsub_member,
+    write_fake_tmux_script,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -143,6 +144,85 @@ async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
         inscriptions.contains("\"event\":\"relay.send.async.completed\"")
             && inscriptions.contains("\"outcome\":\"dropped_on_shutdown\""),
         "expected dropped_on_shutdown async terminal inscription, inscriptions={inscriptions:?}"
+    );
+}
+
+/// A send to a configured `pubsub` member must construct the forward-declared
+/// `TransportImpl::Pubsub` stub (chosen from the member's `session_type()`, the
+/// only target-type-dependent step) and yield a not-implemented terminal outcome
+/// — it must NOT fall through to tmux delivery. Regresses the Section 5
+/// construct-from-session_type model against the prior registry-routing default
+/// that misrouted non-UI targets to tmux.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn relay_send_to_configured_pubsub_member_is_not_implemented_and_skips_tmux() {
+    let temporary = TempDir::new().expect("temporary");
+    let bundle_name = "party";
+    let config_root =
+        write_bundle_with_pubsub_member(temporary.path(), bundle_name, "alpha", "pub1");
+    let state_root = temporary.path().join("state");
+    let fake_tmux_script = temporary.path().join("fake-tmux.sh");
+    let attempts_file = temporary.path().join("attempts.txt");
+    let log_file = temporary.path().join("fake-tmux.log");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
+
+    let relay_socket = state_root.join("relay.sock");
+    let mut child = spawn_relay_with_fake_tmux(
+        bundle_name,
+        &config_root,
+        &state_root,
+        &inscriptions_root,
+        &fake_tmux_script,
+    );
+    wait_for_relay_ready(&relay_socket).await;
+
+    let send_response = request_relay(
+        &relay_socket,
+        "party",
+        "alpha",
+        &RelayRequest::Send {
+            request_id: Some("req-pubsub".to_string()),
+            requester_session: "alpha".to_string(),
+            message: "to a pubsub member".to_string(),
+            targets: vec!["pub1@party".to_string()],
+            broadcast: false,
+            quiet_window_ms: None,
+        },
+    )
+    .expect("send to pubsub target");
+    let RelayResponse::Send { results, .. } = send_response else {
+        panic!("expected send response");
+    };
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].outcome, SendOutcome::Queued);
+
+    // Poll the inscriptions for the terminal async outcome for pub1.
+    let inscriptions_path = inscriptions_root.join("relay.log");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let inscriptions = loop {
+        let current = fs::read_to_string(&inscriptions_path).unwrap_or_default();
+        if current.contains("\"event\":\"relay.send.async.completed\"")
+            && current.contains("\"target_session\":\"pub1\"")
+        {
+            break current;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for pubsub async completion, inscriptions={current:?}");
+        }
+        sleep(Duration::from_millis(50)).await;
+    };
+
+    child.start_kill().expect("kill relay");
+    let _ = child.wait().await;
+
+    assert!(
+        inscriptions.contains("runtime_session_type_not_implemented"),
+        "pubsub send should complete as not-implemented, inscriptions={inscriptions:?}"
+    );
+    let tmux_log = fs::read_to_string(&log_file).unwrap_or_default();
+    assert!(
+        !tmux_log.contains("pub1"),
+        "pubsub target must not attempt tmux delivery, tmux_log={tmux_log:?}"
     );
 }
 
