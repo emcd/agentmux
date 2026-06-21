@@ -14,7 +14,6 @@ pub(in crate::relay) use self::choice_state::{
     resolve_choice_request,
 };
 pub(in crate::relay) use self::dispatch::{
-    enqueue_async_delivery, initialize_acp_target_for_startup, prompt_batch_settings,
-    wait_for_async_delivery_shutdown,
+    enqueue_async_delivery, initialize_acp_target_for_startup, wait_for_async_delivery_shutdown,
 };
 pub(in crate::relay) use self::quiescence::QuiescenceOptions;

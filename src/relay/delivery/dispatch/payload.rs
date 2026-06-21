@@ -4,31 +4,17 @@ use crate::{
     configuration::BundleMember,
     envelope::{
         AddressIdentity, EnvelopeRenderInput, ManifestPreamble, PromptBatchSettings,
-        batch_envelopes, parse_tokenizer_profile, render_envelope,
+        parse_tokenizer_profile, render_envelope,
     },
     runtime::inscriptions::emit_inscription,
 };
 
 use super::super::super::{
-    AsyncDeliveryTask, DeliveryPayloadMode, RelayError, SCHEMA_VERSION, bare_session_id,
-    canonical_session_id,
+    AsyncDeliveryTask, RelayError, SCHEMA_VERSION, bare_session_id, canonical_session_id,
 };
 
 const PROMPT_TOKENS_MAX_ENVVAR: &str = "AGENTMUX_MAX_PROMPT_TOKENS";
 const TOKENIZER_PROFILE_ENVVAR: &str = "AGENTMUX_TOKENIZER_PROFILE";
-
-/// Outcome of preparing a coalesced delivery batch.
-///
-/// Carries the rendered prompt batches plus a count of how many input tasks
-/// contributed envelopes to those batches. Any tail tasks beyond `accepted_len`
-/// were peeled because the rendered batches did not fit a single ACP prompt;
-/// those tasks are pushed back onto the worker's carry buffer for the next
-/// iteration. UI-routed targets never reach this path — they are first-class
-/// transports delivered via `UiTransport::mailw` in the worker loop.
-pub(super) struct PreparedBatchPayload {
-    pub(super) prompt_batches: Vec<String>,
-    pub(super) accepted_len: usize,
-}
 
 pub(super) fn resolve_target_member(
     task: &AsyncDeliveryTask,
@@ -48,74 +34,14 @@ pub(super) fn resolve_target_member(
     Ok(target_member)
 }
 
-/// Prepares a coalesced batch of envelope-mode tasks for delivery.
-///
-/// All tasks in `batch` share `(runtime_directory, bundle_name, target_session)`
-/// (guaranteed by the per-target worker key) and identical `payload_mode` and
-/// `relay_wide_target` (guaranteed by the worker coalesce predicate). Each task's
-/// envelope is rendered with its own sender/cc/message_id, then packed via
-/// `batch_envelopes` against the head task's `batch_settings`.
-///
-/// For ACP targets the underlying transport accepts exactly one prompt batch,
-/// so when the packer produces more than one batch this function peels tail
-/// tasks back to a single-batch result. The number of tasks that successfully
-/// contributed to the returned `prompt_batches` is reported via `accepted_len`;
-/// the caller re-queues `batch[accepted_len..]` for the next iteration.
-pub(super) fn prepare_batch_delivery_payload(
-    batch: &[AsyncDeliveryTask],
-    target_member: Option<&BundleMember>,
-    created_at: &str,
-) -> Result<PreparedBatchPayload, RelayError> {
-    debug_assert!(
-        !batch.is_empty(),
-        "prepare_batch_delivery_payload requires a non-empty batch",
-    );
-    let head = &batch[0];
-    debug_assert!(
-        matches!(head.payload_mode, DeliveryPayloadMode::EnvelopeMessage),
-        "batched payloads only support envelope-mode tasks; head was {:?}",
-        head.payload_mode,
-    );
-
-    let rendered = batch
-        .iter()
-        .map(|task| render_task_envelope(task, target_member, created_at))
-        .collect::<Vec<_>>();
-    // A transport that accepts at most one prompt batch per dispatch
-    // (`can_take_batches() == false`, ACP today) forces the single-batch peel
-    // below. Derived from the target's session type — the capability-flag family.
-    let single_batch_only = target_member
-        .map(|member| !member.target.session_type().can_take_batches())
-        .unwrap_or(false);
-
-    let mut accepted_len = batch.len();
-    let mut prompt_batches = batch_envelopes(&rendered, head.batch_settings);
-    if single_batch_only && prompt_batches.len() > 1 {
-        // ACP delivery accepts exactly one prompt batch per dispatch. Peel
-        // tail envelopes until the packer produces a single batch; the peeled
-        // tasks return to the worker carry buffer. A single envelope that
-        // overflows on its own still ships as one batch (we never return an
-        // empty accepted_len): if the first envelope alone produces > 1
-        // batch, that condition predates batch-drain and remains handled by
-        // the existing one-batch debug_assert in `deliver_one_target_acp`.
-        while accepted_len > 1 && prompt_batches.len() > 1 {
-            accepted_len -= 1;
-            prompt_batches = batch_envelopes(&rendered[..accepted_len], head.batch_settings);
-        }
-    }
-    Ok(PreparedBatchPayload {
-        prompt_batches,
-        accepted_len,
-    })
-}
-
-/// Renders one task's envelope without batching, shared by the single-task
-/// and batch payload preparers, and emits the per-task
+/// Renders one task's envelope and emits the per-task
 /// `relay.send.envelope.metadata` inscription so each task's envelope is
 /// independently traceable. All address identities carry canonical
 /// `session@namespace` ids so recipients in any namespace can derive a reply
-/// address.
-fn render_task_envelope(
+/// address. The worker calls this per task before submitting via `mailw`; each
+/// transport's internal delivery task combines the contiguous rendered envelopes
+/// (respecting its own token budget) into a turn.
+pub(super) fn render_task_envelope(
     task: &AsyncDeliveryTask,
     target_member: Option<&BundleMember>,
     created_at: &str,
@@ -206,29 +132,6 @@ fn co_recipient_addresses(task: &AsyncDeliveryTask) -> Vec<AddressIdentity> {
             }
         })
         .collect()
-}
-
-/// Prepares the prompt batches for a single raw-input delivery task.
-///
-/// Only `RawInput` tasks reach this path. Both tmux and ACP raww enqueue onto an
-/// async per-target worker, whose batch loop delegates RawInput heads to the
-/// single-task path verbatim (RawInput never coalesces). Envelope-mode tasks are
-/// produced solely by `send.rs` and route through the async batch path
-/// (`prepare_batch_delivery_payload`), never here, so this function renders no
-/// envelope and carries no UI short-circuit.
-pub(super) fn prepare_delivery_payload(
-    task: &AsyncDeliveryTask,
-) -> Result<Vec<String>, RelayError> {
-    if task.relay_wide_target {
-        return Err(super::super::super::relay_error(
-            "internal_unexpected_failure",
-            "raw delivery tasks do not support ui targets",
-            Some(json!({
-                "target_session": task.target_session,
-            })),
-        ));
-    }
-    Ok(vec![task.message.clone()])
 }
 
 pub(in crate::relay) fn prompt_batch_settings() -> PromptBatchSettings {

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::{configuration::BundleConfiguration, envelope::PromptBatchSettings};
+use crate::configuration::BundleConfiguration;
 
 use super::identity::IdentityIntrospectRights;
 use super::{DeliveryPayloadMode, delivery::QuiescenceOptions};
@@ -61,7 +61,6 @@ pub(super) struct AsyncDeliveryTask {
     pub(super) message: String,
     pub(super) message_id: String,
     pub(super) quiescence: QuiescenceOptions,
-    pub(super) batch_settings: PromptBatchSettings,
     pub(super) runtime_directory: PathBuf,
     pub(super) payload_mode: DeliveryPayloadMode,
     pub(super) append_enter: bool,

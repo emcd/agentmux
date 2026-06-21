@@ -37,7 +37,14 @@
       using head-envelope hints; absorb additional `Envelope` items that arrive
       during the wait into the current group
 - [x] 2.6 On shutdown signal, drain channel and resolve all pending outcome
-      senders with `DroppedOnShutdown`
+      senders with `DroppedOnShutdown`. (Section 5 conformance fix: the three
+      tmux shutdown-drop sites emitted `SendOutcome::Failed` + reason_code
+      `dropped_on_shutdown`; corrected to `SendOutcome::DroppedOnShutdown` so the
+      worker — which now reports the transport's outcome faithfully — surfaces the
+      `dropped_on_shutdown` outcome the relay shutdown taxonomy expects. The ACP
+      equivalent (`dropped_on_shutdown_outcome`, task 3.6) still emits
+      `SendOutcome::Failed`; latent, not exercised by a test — flagged for the ACP
+      lane.)
 - [ ] 2.7 Remove `TmuxTransport::prepare_delivery` implementation (deferred:
       still present; lands when Section 5 removes the last relay `deliver`/
       `prepare_delivery` callsite — was checked prematurely)
@@ -131,57 +138,75 @@ it would otherwise require).
 
 ## 5. Relay worker loop refactor
 
-- [ ] 5.1 Replace the coalesce-hoist-drain pattern in `dispatch/worker.rs` with
-      a concurrent produce-and-collect loop using `select!`: simultaneously
-      drain new tasks from the relay channel (calling `mailw`/`raww` per task,
-      **uniformly for every target — no transport-type gate**) and collect
-      resolved outcome futures; continue until the channel is empty and all
-      outcome futures have resolved
-- [ ] 5.2 In the produce pass: render each task's payload individually; call
-      `mailw` or `raww` on the transport; push the returned `OutcomeFuture` onto
-      a pending set
-- [ ] 5.3 In the collect pass: as futures resolve, map each
-      `SingleDeliveryOutcome` onto `SendResult`, fan out to each original sender,
-      call `note_session_served_successfully`, release pending slots, and record
-      delivery inscriptions
-- [ ] 5.4 Remove `classify_tmux_quiescence_hoist`, `extend_batch_with_drain`,
-      and the `pre_resolved_pane` path from the worker loop; remove
-      `note_tmux_delivered` from `dispatch/transport.rs`
-- [ ] 5.5 Remove `driver.mark_busy()`, `driver.mirror_settled_readiness()`, and
-      `driver.maybe_respawn_after_delivery()` from the relay worker loop. (These
-      were originally expected to relocate under Section 3 but did not; the
-      relocation is completed by 5.6/5.7 below so the worker loop becomes fully
-      transport-agnostic — no `TransportImpl::Acp` match in the loop body.)
-- [ ] 5.6 Relocate the ACP global readiness mirror into the internal delivery
-      task (closes the reopened part of 3.4): inject a `MirrorStateFn` into
-      `acp_delivery_task` so it mirrors every readiness transition (Busy on
-      dispatch, settled Available/Unavailable after the turn) to the relay global
-      registry itself, removing the need for `driver.mark_busy()` /
-      `driver.mirror_settled_readiness()`.
-- [ ] 5.7 Relocate ACP respawn driving off the worker (closes the reopened part
-      of 3.4): consume the currently-dead `respawn_needed` watch signal via a
-      driver-owned async path so `driver.maybe_respawn_after_delivery()` is no
-      longer called from the worker loop, resolving the `&mut` ownership overlap
-      between the worker's `mailw` and the respawn lifecycle.
+- [x] 5.1 Replace the coalesce-hoist-drain pattern in `dispatch/worker.rs` with
+      a concurrent produce-and-collect loop using `select!` (produce arm:
+      `receiver.recv()`; collect arm: `JoinSet::join_next()` over the in-flight
+      write outcomes; plus a shutdown-poll tick). Calls `mailw`/`raww` per task,
+      **uniformly for every target — no transport-type gate**; the loop runs
+      until the senders drop and the in-flight set drains. (`JoinSet` is the
+      tokio-native pending set; the crate has no `futures`/`FuturesUnordered`
+      dependency.)
+- [x] 5.2 In the produce pass (`submit_task`/`prepare_coder_write`): render each
+      coder task's envelope individually via `render_task_envelope` (or submit the
+      raw body via `raww`); call `mailw`/`raww`; spawn a `JoinSet` collector that
+      awaits the returned `OutcomeFuture`. Tmux `startup()` is run lazily on first
+      coder task (it needs that task's resolved `BundleMember`); ACP started in
+      `bootstrap()`.
+- [x] 5.3 In the collect pass (`collect_outcome`): map each
+      `SingleDeliveryOutcome` onto `SendResult` (`outcome_to_send_result`), fan out
+      via `complete_task_outcome` (which emits the sender outcome event + the
+      `relay.send.async.completed` inscription), call
+      `note_session_served_successfully` for delivered coder writes, and release
+      the pending slot.
+- [x] 5.4 Removed `classify_tmux_quiescence_hoist`, `extend_batch_with_drain`,
+      `coalesce_batch`/`can_coalesce_with_head`, the carry buffer, and the
+      `pre_resolved_pane` path from the worker loop; `note_tmux_delivered`
+      removed along with the whole `dispatch/transport.rs` (deleted).
+- [x] 5.5 The relay worker loop no longer calls `driver.mark_busy()`,
+      `driver.mirror_settled_readiness()`, or `driver.maybe_respawn_after_delivery()`
+      (those were already retired in the Section 3 ACP fixup); the loop body has no
+      `TransportImpl::Acp` match — it is fully transport-agnostic.
+- [x] 5.6 ACP global readiness mirror relocated into the internal delivery task
+      (done in the Section 3 ACP fixup, commit c838997): the task holds the
+      `ReadinessMirror` on `AcpSharedState` and mirrors every Busy/settled
+      transition to the relay global registry itself.
+- [x] 5.7 ACP respawn driving relocated off the worker (done in the Section 3 ACP
+      fixup, commit c838997): a driver-owned async respawn monitor consumes the
+      transport's stable `respawn_needed` watch over `Arc<Mutex<AcpTransport>>`.
 
 ## 6. Relay dispatch cleanup
 
-- [ ] 6.1 Delete `deliver_non_ui_target_batch` and `deliver_non_ui_target` from
-      `dispatch/transport.rs`
-- [ ] 6.2 Delete `deliver_acp_batch_via_transport`, `deliver_acp_combined`,
+Section 5 stranded most of these as dead `pub(super)` helpers (clippy `-D
+warnings`), so the forced subset (6.1-6.4, 6.7) landed with Section 5. The
+remainder (6.5, 6.6, plus the legacy `deliver`/`prepare_delivery` trait-method
+removals deferred under 1.2/1.3/2.7/2.8/3.7/3.8) is a pure-removal follow-up: the
+trait/enum methods are `pub` so they raise no dead-code warning, and `tmux`'s
+internal delivery task still shares `wait_for_quiescent_pane` with the legacy
+`deliver`, so deleting the seam is a coherent separate commit.
+
+- [x] 6.1 Deleted `deliver_non_ui_target_batch` and `deliver_non_ui_target`
+      (the whole `dispatch/transport.rs` was deleted).
+- [x] 6.2 Deleted `deliver_acp_batch_via_transport`, `deliver_acp_combined`,
       `build_tmux_envelopes`, `deliver_batch_target_tmux`,
-      `deliver_one_target_tmux`, and all ACP/Tmux dispatch helpers
-- [ ] 6.3 Delete `tmux_prepare_context`, `wait_error_to_send_result` (now
-      transport-internal)
-- [ ] 6.4 Delete `batch_envelopes` and the token-budget peel loop from
-      `dispatch/orchestration.rs`; remove `PreparedBatchPayload::Batched`
-      machinery
+      `deliver_one_target_tmux`, and the rest of the ACP/Tmux dispatch helpers
+      (all in the deleted `dispatch/transport.rs`).
+- [x] 6.3 Deleted `tmux_prepare_context`, `wait_error_to_send_result` (the
+      transport's internal task now owns the quiescence wait + its error mapping).
+- [x] 6.4 Deleted the relay-side token-budget peel loop and `PreparedBatchPayload`
+      (`prepare_batch_delivery_payload`) from the dispatch payload path, plus the
+      now-dead per-task `AsyncDeliveryTask.batch_settings` field (budget reads at
+      transport construction time per 1.6). NOTE: the `batch_envelopes` function
+      itself is retained — it is now consumed by the ACP transport's internal
+      delivery task to combine a contiguous envelope group into one turn.
 - [ ] 6.5 Delete `can_take_batches()` from `SessionType` / `TargetConfiguration`
+      (still present; `pub`, no dead-code warning — folds into the seam-removal
+      commit).
 - [ ] 6.6 Remove `DeliveryContext` quiescence and `n_target` fields from all
-      construction sites
-- [ ] 6.7 Delete `deliver_one_target_ui` and `should_route_to_ui`; UI delivery
-      now flows through `UiTransport::mailw`, so no `Ui`/`Pubsub` short-circuit
-      remains in the dispatch path
+      construction sites (deferred with the `deliver`/`prepare_delivery` removal —
+      `DeliveryContext` is still the legacy seam's parameter).
+- [x] 6.7 `deliver_one_target_ui` and `should_route_to_ui` were already removed in
+      Section 4 (UI delivery flows through `UiTransport::mailw`); only doc-comment
+      references remain. No `Ui`/`Pubsub` short-circuit remains in the dispatch path.
 
 ## 7. Tests and validation
 

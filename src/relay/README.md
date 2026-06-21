@@ -105,21 +105,19 @@ exported from `src/relay/mod.rs`.
 - `delivery/`
   - transport-specific delivery decomposition:
   - `dispatch/mod.rs`: delivery dispatch re-export hub.
-  - `dispatch/orchestration.rs`: delivery startup, enqueue, per-target
-    orchestration, and the batch-drain entry point that fans one transport
-    outcome out to N coalesced tasks.
-  - `dispatch/payload.rs`: envelope/raw payload preparation, UI routing, and
-    the multi-envelope batch preparer that packs coalesced envelopes against
-    the prompt-token budget and peels the tail when ACP cannot accept the
-    rendered multi-batch result in a single dispatch.
-  - `dispatch/transport.rs`: ACP/tmux transport-specific dispatch, including
-    the batch variants that share one quiescence wait (tmux) or one
-    choice decision window (ACP) across the coalesced tasks.
-  - `dispatch/worker.rs`: per-target tokio worker task; ACP bootstrap,
-    respawn, and the blocking delivery body are run on the blocking pool
-    via `spawn_blocking`. Holds a carry buffer that re-queues tasks the
-    coalesce loop did not accept (mode-divergent head, ACP tail peeled to
-    fit the single-batch invariant).
+  - `dispatch/orchestration.rs`: delivery startup, ACP target priming, and the
+    enqueue path that registers/feeds the per-target worker.
+  - `dispatch/payload.rs`: per-task envelope rendering (`render_task_envelope`),
+    target-member resolution, and the prompt-batch settings read. Coalescing and
+    the token-budget combine now live inside each transport's internal delivery
+    task, not here.
+  - `dispatch/worker.rs`: per-target tokio worker task. A concurrent
+    produce-and-collect loop (`select!` over `receiver.recv()` and a `JoinSet` of
+    in-flight write outcomes) submits each task to its transport via the
+    non-blocking `mailw`/`raww` seam — uniformly for every target, with no
+    transport-type gate — and collects the resolved `OutcomeFuture`s. The
+    blocking IO, quiescence/coalesce waits, ACP bootstrap/respawn, and readiness
+    mirroring all live inside the transports now; the loop never names an ACP type.
   - `async_worker.rs`: worker registry (tokio mpsc senders) and shutdown
     drain helpers.
   - `acp_delivery.rs`: ACP lifecycle and prompt flow. ACP session-id
@@ -324,10 +322,13 @@ exported from `src/relay/mod.rs`.
   exceed the cap receive a `runtime_connection_limit_reached` error.
 - Stream events are correlated by `message_id` for send completion workflows.
 - Per-target delivery workers run as tokio tasks (`tokio::spawn`) reading
-  from a `tokio::sync::mpsc::UnboundedReceiver`. The blocking ACP / tmux
-  delivery body, the ACP single-flight prompt-completion wait, and the
-  ACP bootstrap and respawn paths are offloaded to `tokio::task::spawn_blocking`
-  so a tokio runtime worker thread is never pinned during transport IO.
+  from a `tokio::sync::mpsc::UnboundedReceiver`. The worker is a concurrent
+  produce-and-collect loop: it submits each task to its transport via the
+  non-blocking `mailw`/`raww` seam and collects the resolved `OutcomeFuture`s
+  from a `JoinSet`, so a transport's blocking IO never pins the worker. Each
+  transport owns its own internal delivery task and its `spawn_blocking` /
+  blocking thread (tmux pane quiescence + paste; the ACP single-flight
+  prompt-completion wait; ACP bootstrap and a driver-owned respawn monitor).
   Worker tasks normally run on the host's main runtime; sync callers that
   enqueue work without an ambient runtime (CLI helpers, unit tests) fall
   back to a process-wide multi-thread runtime created on demand. Worker
@@ -343,32 +344,20 @@ exported from `src/relay/mod.rs`.
   with `Runtime::shutdown_timeout` instead of an implicit drop, so any residual
   stuck blocking task is abandoned within a bounded window rather than hanging
   the process.
-- Each worker iteration coalesces a burst of pending envelope-mode tasks
-  into one transport delivery. After the first task is received, the worker
-  drains additional ready tasks via `try_recv` up to
-  `AGENTMUX_RELAY_BATCH_DRAIN_MAX` (default 32), stopping at any task that
-  changes payload mode or UI-routing. The non-coalescing task is pushed
-  back onto a local carry buffer so it heads the next iteration without
-  losing its place. For tmux envelope-mode heads the worker then hoists
-  the per-target quiescence wait out of the transport: it runs the
-  transport's `prepare_delivery` readiness barrier on the blocking pool
-  (the tmux barrier polls the pane to quiescence), and on success performs
-  a second `try_recv` drain (same predicate, same drain-max budget) to
-  absorb any tasks that landed in the channel while the pane wait was in
-  flight. The rendered envelopes then share one paste-buffer sequence
-  against the pre-resolved pane (the transport skips its own wait when a
-  pre-resolved pane is supplied). ACP heads skip the hoist: the ACP single-
-  flight prompt-completion wait runs *between* worker iterations, so the
-  next iteration's blocking `recv` plus initial coalesce drain already
-  absorb anything that queued during the previous turn. ACP-coalesced
-  tasks share one `session/prompt` dispatch and one choice-decision
-  window; ACP cannot accept multi-batch payloads, so when the packer
-  produces more than one prompt batch the tail tasks are peeled back to
-  the carry buffer to preserve the single-batch invariant. A mid-batch
-  transport failure propagates the same outcome to every task in the batch
-  (one delivery, one outcome by construction). When two or more tasks
-  coalesce, the worker emits a `relay.chat.batch_drain.coalesced`
-  inscription with the total `drained_count`, per-task `message_ids`, and
-  the `pre_quiescence_count` / `post_quiescence_count` split so the
-  operator can distinguish bursts already queued at batch assembly from
-  bursts absorbed during the quiescence wait.
+- Coalescing now lives inside each transport's internal delivery task, not the
+  worker. The worker renders each task individually and submits it via
+  `mailw`/`raww`; the transport buffers writes on its own ordered channel and,
+  during its readiness/quiescence wait, absorbs contiguous envelopes into one
+  flush group (tmux: one paste-buffer sequence against the resolved pane; ACP:
+  one `session/prompt` turn respecting the prompt-token budget, with overflow
+  left on the channel for the next turn). FIFO ordering at the target is
+  preserved because the worker enqueues to the transport in receive order, and a
+  raw write acts as a batch barrier that flushes the preceding envelope group
+  first. The worker no longer batches, hoists the quiescence wait, holds a carry
+  buffer, or emits a `batch_drain.coalesced` inscription.
+- On shutdown the worker signals its transport(s) to resolve every in-flight
+  write with `DroppedOnShutdown`, collects those resolutions, then drops any
+  not-yet-submitted queued tasks (`complete_task_on_shutdown`). The transport
+  contract guarantees prompt terminal resolution on shutdown, so the drain is
+  bounded; the relay binary additionally tears its runtime down with
+  `Runtime::shutdown_timeout` as a final guarantee.

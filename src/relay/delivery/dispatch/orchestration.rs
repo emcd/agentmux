@@ -6,21 +6,15 @@ use std::{
 use tokio::sync::mpsc as tokio_mpsc;
 
 use serde_json::json;
-use time::format_description::well_known::Rfc3339;
 
 use crate::configuration::{BundleMember, TargetConfiguration};
 
-use super::super::super::{AsyncDeliveryTask, DeliveryPayloadMode, RelayError, SendResult};
+use super::super::super::{AsyncDeliveryTask, RelayError};
 use crate::acp::state::ACP_STARTUP_PRIME_TIMEOUT_MS;
 
 use super::super::async_worker::get_acp_worker_state;
-use super::payload::{
-    PreparedBatchPayload, prepare_batch_delivery_payload, prepare_delivery_payload,
-    resolve_target_member,
-};
-use super::transport::{deliver_non_ui_target, deliver_non_ui_target_batch};
 use super::worker::{AcpWorkerBootstrap, spawn_async_delivery_worker};
-use crate::transports::{AcpWorkerReadinessState, TransportImpl};
+use crate::transports::AcpWorkerReadinessState;
 
 pub(in crate::relay) fn wait_for_async_delivery_shutdown(timeout: Duration) -> usize {
     super::super::async_worker::wait_for_async_delivery_shutdown(timeout)
@@ -181,95 +175,4 @@ fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
             Ok(())
         }
     }
-}
-
-pub(in crate::relay) fn deliver_one_target_with_worker_state(
-    task: &AsyncDeliveryTask,
-    transport: &mut TransportImpl,
-) -> Result<SendResult, RelayError> {
-    let target_member = resolve_target_member(task)?;
-    let prompt_batches = prepare_delivery_payload(task)?;
-    let non_ui_target_member = target_member.expect("non-UI target_member must exist");
-    deliver_non_ui_target(task, non_ui_target_member, prompt_batches, transport)
-}
-
-/// Delivers a coalesced batch of tasks against the shared target.
-///
-/// Returns one outcome per task in `batch`, aligned to its slice index, plus
-/// the tail tasks that were peeled (ACP single-batch invariant) and must
-/// return to the worker's carry buffer for the next iteration.
-///
-/// RawInput tasks never coalesce (the worker's `can_coalesce_with_head`
-/// predicate refuses them), so a RawInput head implies `batch.len() == 1`
-/// and is delegated to the single-task path verbatim — the existing tmux
-/// raw-input semantics carry through unchanged.
-///
-/// `pre_resolved_pane` is supplied by the worker loop when it has already
-/// performed the tmux quiescence wait so that post-quiescence task arrivals
-/// could be drained into the batch. Threaded into `deliver_non_ui_target_batch`
-/// where it short-circuits the in-transport pane resolution + wait.
-pub(in crate::relay) fn deliver_batch_with_worker_state(
-    batch: &[AsyncDeliveryTask],
-    pre_resolved_pane: Option<String>,
-    transport: &mut TransportImpl,
-) -> (Vec<Result<SendResult, RelayError>>, Vec<AsyncDeliveryTask>) {
-    debug_assert!(
-        !batch.is_empty(),
-        "deliver_batch_with_worker_state requires a non-empty batch",
-    );
-    let head = &batch[0];
-
-    // Raw-input head: never coalesces by predicate; fall through to the
-    // single-task path so the existing tmux raw-input shape is preserved.
-    if matches!(head.payload_mode, DeliveryPayloadMode::RawInput) {
-        debug_assert_eq!(
-            batch.len(),
-            1,
-            "RawInput batches must not coalesce; got {} tasks",
-            batch.len(),
-        );
-        let outcome = deliver_one_target_with_worker_state(head, transport);
-        return (vec![outcome], Vec::new());
-    }
-
-    let created_at = time::OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
-    let target_member = match resolve_target_member(head) {
-        Ok(value) => value,
-        Err(error) => return (fanned_errors(batch, error), Vec::new()),
-    };
-
-    let prepared = match prepare_batch_delivery_payload(batch, target_member, created_at.as_str()) {
-        Ok(value) => value,
-        Err(error) => return (fanned_errors(batch, error), Vec::new()),
-    };
-
-    let PreparedBatchPayload {
-        prompt_batches,
-        accepted_len,
-    } = prepared;
-    debug_assert!(accepted_len >= 1);
-    let nonui_target_member = target_member.expect("non-UI target_member must exist");
-    let accepted = &batch[..accepted_len];
-    let deferred = batch[accepted_len..].to_vec();
-    let outcomes = deliver_non_ui_target_batch(
-        accepted,
-        nonui_target_member,
-        prompt_batches,
-        pre_resolved_pane,
-        transport,
-    );
-    (outcomes, deferred)
-}
-
-// Fans a single `RelayError` out into one `Err` per task in `batch`, so the
-// caller can call `complete_task_outcome` once per task without losing the
-// shared cause when target resolution or envelope rendering fails before
-// transport.
-fn fanned_errors(
-    batch: &[AsyncDeliveryTask],
-    error: RelayError,
-) -> Vec<Result<SendResult, RelayError>> {
-    batch.iter().map(|_| Err(error.clone())).collect()
 }

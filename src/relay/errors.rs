@@ -77,22 +77,6 @@ pub(super) fn unsupported_operation(
     )
 }
 
-/// Builds the structured error for a session whose declared session type does
-/// not yet have an implemented delivery path (`ui`, `pubsub`).
-pub(super) fn session_type_not_implemented(
-    session_id: &str,
-    session_type: SessionType,
-) -> RelayError {
-    relay_error(
-        "runtime_session_type_not_implemented",
-        "session type delivery is not yet implemented",
-        Some(json!({
-            "session_id": session_id,
-            "session_type": session_type,
-        })),
-    )
-}
-
 pub(super) fn map_tui_config(error: ConfigurationError) -> RelayError {
     match error {
         ConfigurationError::InvalidConfiguration { path, message } => relay_error(
