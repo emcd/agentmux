@@ -78,7 +78,10 @@ pub(super) fn unsupported_operation(
 }
 
 /// Builds the structured error for a session whose declared session type does
-/// not yet have an implemented delivery path (`ui`, `pubsub`).
+/// not yet have an implemented delivery path. With UI promoted to a first-class
+/// transport, the only such type is the forward-declared `Pubsub` stub: a
+/// configured Pubsub target is constructed as `TransportImpl::Pubsub` and yields
+/// this terminal outcome rather than being misrouted to another transport.
 pub(super) fn session_type_not_implemented(
     session_id: &str,
     session_type: SessionType,

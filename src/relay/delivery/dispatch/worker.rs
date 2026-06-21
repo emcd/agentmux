@@ -1,15 +1,11 @@
-use std::{
-    collections::VecDeque,
-    sync::{Arc, OnceLock},
-    time::Duration,
-};
+use std::{sync::Arc, sync::OnceLock, time::Duration};
 
 use serde_json::{Value, json};
 use time::format_description::well_known::Rfc3339;
-use tokio::{runtime::Handle, sync::mpsc::UnboundedReceiver};
+use tokio::{runtime::Handle, sync::mpsc::UnboundedReceiver, task::JoinSet};
 
 use crate::{
-    configuration::{BundleMember, SessionType, TargetConfiguration},
+    configuration::{BundleMember, SessionType},
     runtime::{inscriptions::emit_inscription, signals::shutdown_requested},
 };
 
@@ -17,8 +13,7 @@ use super::super::super::canonical_session_id;
 use super::super::super::startup_state::note_session_served_successfully;
 use super::super::super::stream::{
     RelayStreamEvent, StreamEventSendOutcome, broadcast_event_to_bundle_ui,
-    list_registered_ui_sessions_for_bundle, resolve_registered_session_type,
-    send_event_to_registered_ui,
+    list_registered_ui_sessions_for_bundle, send_event_to_registered_ui,
 };
 use super::super::super::{
     AsyncDeliveryTask, DeliveryPayloadMode, RelayError, SendOutcome, SendResult,
@@ -30,15 +25,21 @@ use super::super::choice_state::{
     ChoiceEventContext, build_acp_chooser, invalidate_pending_for_respawn,
 };
 use super::super::quiescence::QUIESCENCE_TIMEOUT_MS_DEFAULT;
-use super::payload::co_recipient_sessions;
+use super::payload::{co_recipient_sessions, render_task_envelope, resolve_target_member};
 use crate::transports::{
-    AcpDriverServices, DeliveryEnvelope, SingleDeliveryOutcome, TransportImpl, UiBroadcastStatus,
-    UiIncomingMessage, UiOutcomePhase, UiTransportServices,
+    AcpDriverServices, ChoiceMade, ChoiceToMake, Chooser, DeliveryEnvelope, OutcomeFuture,
+    SingleDeliveryOutcome, StartupContext, TransportImpl, UiBroadcastStatus, UiIncomingMessage,
+    UiOutcomePhase, UiTransportServices,
 };
 
 const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;
-const BATCH_DRAIN_MAX_ENVVAR: &str = "AGENTMUX_RELAY_BATCH_DRAIN_MAX";
-const BATCH_DRAIN_MAX_DEFAULT: usize = 32;
+
+/// One in-flight write awaiting its transport [`OutcomeFuture`]. Carries the
+/// originating task and whether a successful delivery should clear startup
+/// failures (`true` for coder transports, `false` for UI), so the collect site
+/// can map the resolved outcome onto a `SendResult` and complete the task. The
+/// outcome is `None` if the future was dropped before resolving.
+type InflightOutcome = (AsyncDeliveryTask, bool, Option<SingleDeliveryOutcome>);
 
 #[derive(Clone)]
 pub(super) struct AcpWorkerBootstrap {
@@ -103,21 +104,27 @@ async fn run_async_delivery_worker(
     pending: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     bootstrap: Option<AcpWorkerBootstrap>,
 ) {
-    // Hold one `TransportImpl` for this target's lifetime: ACP targets get a
-    // driver that owns the ACP runtime + bootstrap/respawn lifecycle; everything
-    // else gets the stateless tmux transport. UI-routed deliveries use a separate
-    // lazily-built `UiTransport` (see `ui_transport` below), chosen per delivery
-    // rather than latched, so a configured UI target whose first send precedes
-    // the UI stream registration recovers once the stream connects. ACP
-    // lifecycle, readiness mirroring, and respawn live in the driver; the loop
-    // drives them via the `TransportImpl::Acp` match and otherwise stays
-    // transport-agnostic.
-    // Per-prompt token budget threaded into the transport at construction. Today
-    // resolved from the env-backed prompt-batch settings; the write-interface
-    // refactor moves the budget read here (construction time) off the per-delivery
-    // payload path.
+    // Hold one `TransportImpl` for this target's lifetime. The transport KIND is
+    // the only target-type-dependent decision, and it is fixed at construction
+    // from the configured `session_type()` (transport-abstraction spec): ACP
+    // targets get the bootstrap driver here; every other target's transport is
+    // built lazily from its first task (a non-ACP worker has no bundle member at
+    // spawn time — the task carries it) and then latched. Delivery is uniform:
+    // the loop submits `mailw`/`raww` for every target with no registry-based
+    // re-routing and no transport-deliverability gate. ACP lifecycle, readiness
+    // mirroring, and respawn live entirely in the driver and its internal task;
+    // the loop never names an ACP type.
+    //
+    // The loop is a concurrent produce-and-collect: it submits each task to the
+    // transport via the non-blocking `mailw`/`raww` seam and concurrently collects
+    // the resolved `OutcomeFuture`s. Coalescing, quiescence, the token-budget
+    // combine, and the blocking IO all live inside each transport's internal
+    // delivery task now, so the worker no longer batches, hoists quiescence, or
+    // owns `spawn_blocking`.
     let max_prompt_tokens = super::prompt_batch_settings().max_prompt_tokens;
-    let mut transport = match bootstrap {
+    // `None` until the transport is constructed: eagerly for ACP (bootstrap),
+    // lazily from the first task's `session_type()` for every other target.
+    let mut transport: Option<TransportImpl> = match bootstrap {
         Some(bootstrap) => {
             let services = build_acp_driver_services(&key, &bootstrap);
             let mut transport = TransportImpl::acp(
@@ -130,298 +137,264 @@ async fn run_async_delivery_worker(
             if let TransportImpl::Acp(driver) = &mut transport {
                 driver.bootstrap().await;
             }
-            transport
+            Some(transport)
         }
-        None => TransportImpl::tmux(max_prompt_tokens),
+        None => None,
     };
-    let is_acp = matches!(transport, TransportImpl::Acp(_));
-    // Lazily-built UI transport, reused across deliveries once a head task routes
-    // to UI. Built separately from `transport` (the tmux/ACP delivery transport)
-    // because UI routing is re-evaluated per delivery, not latched.
-    let mut ui_transport: Option<TransportImpl> = None;
     let poll_interval = Duration::from_millis(ASYNC_WORKER_POLL_INTERVAL_MS);
-    let drain_max = batch_drain_max();
-    // Carry buffer: tasks consumed from the channel that did not coalesce with
-    // the current head (different payload mode or relay-wide flag), plus ACP
-    // tasks peeled back because the rendered prompt exceeded one budget batch. Drained
-    // before the channel on the next iteration so original ordering survives.
-    let mut carry: VecDeque<AsyncDeliveryTask> = VecDeque::new();
+    // In-flight writes: each entry awaits one transport `OutcomeFuture` and yields
+    // its originating task so the collect arm can complete it. Completion order is
+    // independent of submission order; FIFO ordering at the target is preserved by
+    // the transport's internal channel, into which the produce arm enqueues in
+    // receive order.
+    let mut inflight: JoinSet<InflightOutcome> = JoinSet::new();
+    let mut senders_dropped = false;
 
     loop {
         if shutdown_requested() {
-            drain_carry_on_shutdown(&mut carry, pending.as_ref());
-            super::super::async_worker::drop_pending_async_tasks_on_shutdown(
+            shutdown_drain(
+                transport.as_mut(),
+                &mut inflight,
                 &mut receiver,
                 pending.as_ref(),
-            );
+            )
+            .await;
             break;
         }
-        let head = if let Some(carried) = carry.pop_front() {
-            carried
-        } else {
-            let received = tokio::select! {
-                biased;
-                value = receiver.recv() => value,
-                _ = tokio::time::sleep(poll_interval) => {
-                    // Poll-tick: re-evaluate shutdown gate without consuming a task.
-                    continue;
-                }
-            };
-            match received {
-                Some(task) => task,
-                // All senders dropped; worker is no longer reachable.
-                None => break,
-            }
-        };
-        if shutdown_requested() {
-            super::super::async_worker::complete_task_on_shutdown(&head);
-            super::super::async_worker::release_pending_slot(pending.as_ref());
-            drain_carry_on_shutdown(&mut carry, pending.as_ref());
-            super::super::async_worker::drop_pending_async_tasks_on_shutdown(
-                &mut receiver,
-                pending.as_ref(),
-            );
+        if senders_dropped && inflight.is_empty() {
+            // No more producers and nothing in flight: the worker is unreachable.
             break;
         }
-
-        // Re-evaluate UI routing per head task (registry-dependent, like the
-        // former per-delivery `should_route_to_ui`): a configured UI target whose
-        // first send precedes the UI stream registration must recover and route
-        // through `UiTransport` once the stream connects, so the decision must
-        // not be latched for the worker's lifetime.
-        let route_to_ui = match task_routes_to_ui(&head) {
-            Ok(value) => value,
-            Err(error) => {
-                // Internal failure resolving routing; fail this head and retry on
-                // the next task.
-                super::super::async_worker::complete_task_outcome(&head, Err(error));
-                super::super::async_worker::release_pending_slot(pending.as_ref());
-                continue;
-            }
-        };
-
-        let mut batch = coalesce_batch(head, drain_max, &mut carry, &mut receiver);
-
-        // Interim mixed worker: UI targets deliver via `UiTransport::mailw`;
-        // tmux/ACP stay on the legacy `deliver` path until the worker-loop
-        // unification (section 5). The Ui/Pubsub routing short-circuit no longer
-        // lives in the dispatch modules. The UI transport is built once on first
-        // use and reused (its services depend only on the worker key).
-        if route_to_ui {
-            let ui = ui_transport
-                .get_or_insert_with(|| TransportImpl::ui(build_ui_transport_services(&key)));
-            deliver_ui_batch(&batch, ui, pending.as_ref()).await;
-            continue;
-        }
-
-        let pre_quiescence_count = batch.len();
-
-        // Tmux envelope-mode heads: hoist the quiescence wait out of the
-        // transport so any tasks arriving during the wait can be coalesced
-        // into this batch via a post-quiescence try_recv drain. ACP/UI
-        // targets and RawInput heads pass through with `pre_resolved_pane`
-        // unset; their transport paths are unchanged.
-        let pre_resolved_pane = match classify_tmux_quiescence_hoist(&batch[0]) {
-            Some(tmux_member) => {
-                let head_task = batch[0].clone();
-                let prepare_context =
-                    super::transport::tmux_prepare_context(&head_task, &tmux_member);
-                // Move the held transport into the blocking pool to run the
-                // barrier (the tmux pane quiescence poll) and move it back.
-                let moved_transport = transport;
-                let (returned_transport, wait_outcome) = tokio::task::spawn_blocking(move || {
-                    let outcome = moved_transport.prepare_delivery(&prepare_context);
-                    (moved_transport, outcome)
-                })
-                .await
-                .expect("tmux quiescence hoist task panicked");
-                transport = returned_transport;
-                match wait_outcome {
-                    Ok(preparation) => {
-                        extend_batch_with_drain(&mut batch, drain_max, &mut carry, &mut receiver);
-                        preparation.pre_resolved_target
+        tokio::select! {
+            maybe_task = receiver.recv(), if !senders_dropped => {
+                match maybe_task {
+                    Some(task) => {
+                        if shutdown_requested() {
+                            super::super::async_worker::complete_task_on_shutdown(&task);
+                            super::super::async_worker::release_pending_slot(pending.as_ref());
+                            continue;
+                        }
+                        submit_task(
+                            task,
+                            &key,
+                            &mut transport,
+                            max_prompt_tokens,
+                            &mut inflight,
+                            pending.as_ref(),
+                        );
                     }
-                    Err(error) => {
-                        let template =
-                            super::transport::wait_error_to_send_result(&head_task, error);
-                        complete_batch_with_template(&batch, template, pending.as_ref());
-                        continue;
-                    }
+                    None => senders_dropped = true,
                 }
             }
-            None => None,
-        };
-        let post_quiescence_count = batch.len() - pre_quiescence_count;
-
-        if batch.len() > 1 {
-            emit_inscription(
-                "relay.send.batch_drain.coalesced",
-                &json!({
-                    "bundle_name": batch[0].bundle.bundle_name,
-                    "target_session": batch[0].target_session,
-                    "drained_count": batch.len(),
-                    "pre_quiescence_count": pre_quiescence_count,
-                    "post_quiescence_count": post_quiescence_count,
-                    "message_ids": batch.iter().map(|task| &task.message_id).collect::<Vec<_>>(),
-                }),
-            );
-        }
-
-        // The ACP internal delivery task now mirrors its own Busy/settled
-        // readiness transitions into the global registry (it holds the relay
-        // mirror), and the driver-owned respawn monitor drives recovery off its
-        // stable respawn-needed signal. So the worker no longer calls
-        // mark_busy / mirror_settled_readiness / maybe_respawn_after_delivery.
-        let (outcomes, returned_transport, deferred) =
-            deliver_batch_blocking(batch.clone(), pre_resolved_pane, transport).await;
-        transport = returned_transport;
-        // Push deferred (ACP-peeled) tasks back to the front of the carry queue
-        // in original order so they are the head of the next iteration.
-        for deferred_task in deferred.into_iter().rev() {
-            carry.push_front(deferred_task);
-        }
-        for (task, outcome) in batch.iter().zip(outcomes) {
-            if is_acp && matches!(&outcome, Ok(result) if result.outcome == SendOutcome::Delivered)
-            {
-                let _ = note_session_served_successfully(
-                    task.runtime_directory.as_path(),
-                    task.target_session.as_str(),
-                );
+            joined = inflight.join_next(), if !inflight.is_empty() => {
+                if let Some(joined) = joined {
+                    collect_outcome(joined, pending.as_ref());
+                }
             }
-            super::super::async_worker::complete_task_outcome(task, outcome);
-            super::super::async_worker::release_pending_slot(pending.as_ref());
+            _ = tokio::time::sleep(poll_interval) => {
+                // Poll tick: re-evaluate the shutdown gate even while idle.
+            }
         }
     }
     super::super::async_worker::unregister_worker(&key);
 }
 
-fn batch_drain_max() -> usize {
-    std::env::var(BATCH_DRAIN_MAX_ENVVAR)
-        .ok()
-        .and_then(|raw| raw.trim().parse::<usize>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(BATCH_DRAIN_MAX_DEFAULT)
-}
-
-/// Collects up to `drain_max` tasks into a coalesce batch starting with `head`.
-///
-/// Only non-relay-wide `EnvelopeMessage` tasks coalesce. The first task whose
-/// payload mode or `relay_wide_target` flag differs from the head is pushed to
-/// the front of `carry` so it heads the next worker iteration. The channel
-/// is read non-blocking via `try_recv`; an empty channel ends the drain.
-/// (UI vs non-UI routing is resolved separately, per delivery, after coalesce.)
-pub(super) fn coalesce_batch(
-    head: AsyncDeliveryTask,
-    drain_max: usize,
-    carry: &mut VecDeque<AsyncDeliveryTask>,
-    receiver: &mut UnboundedReceiver<AsyncDeliveryTask>,
-) -> Vec<AsyncDeliveryTask> {
-    let coalescable = matches!(head.payload_mode, DeliveryPayloadMode::EnvelopeMessage)
-        && !head.relay_wide_target;
-    let mut batch = vec![head];
-    if !coalescable {
-        return batch;
-    }
-    extend_batch_with_drain(&mut batch, drain_max, carry, receiver);
-    batch
-}
-
-/// Drains carry-then-channel into an existing coalescable batch under the
-/// head-coalesce predicate, up to `drain_max`. Used by `coalesce_batch` for the
-/// pre-wait drain and by the worker loop for the post-quiescence drain that
-/// absorbs tasks arriving while the per-target pane wait was in flight.
-pub(super) fn extend_batch_with_drain(
-    batch: &mut Vec<AsyncDeliveryTask>,
-    drain_max: usize,
-    carry: &mut VecDeque<AsyncDeliveryTask>,
-    receiver: &mut UnboundedReceiver<AsyncDeliveryTask>,
+/// Submits one task to its transport via the non-blocking write seam and spawns
+/// an in-flight collector for its outcome. On the worker's first task the
+/// transport is constructed from the target's configured `session_type()` and
+/// latched (`build_worker_transport`). Delivery is then uniform: `Ui` builds the
+/// stream envelope, coder transports (ACP/Tmux) render the framed envelope or
+/// submit raw input, and the forward-declared `Pubsub` stub yields an explicit
+/// not-implemented outcome (it is not deliverable). A construction or render
+/// failure completes the task immediately and releases its slot.
+fn submit_task(
+    task: AsyncDeliveryTask,
+    key: &AsyncWorkerKey,
+    transport: &mut Option<TransportImpl>,
+    max_prompt_tokens: usize,
+    inflight: &mut JoinSet<InflightOutcome>,
+    pending: &std::sync::atomic::AtomicUsize,
 ) {
-    debug_assert!(!batch.is_empty(), "extend requires a non-empty head batch");
-    while batch.len() < drain_max {
-        let candidate = if let Some(task) = carry.pop_front() {
-            Some(task)
-        } else {
-            receiver.try_recv().ok()
-        };
-        let Some(candidate) = candidate else {
-            break;
-        };
-        if !can_coalesce_with_head(&batch[0], &candidate) {
-            // Different mode or relay-wide flag: defer so the head of the next
-            // iteration starts a fresh batch with this task.
-            carry.push_front(candidate);
-            break;
+    if transport.is_none() {
+        match build_worker_transport(&task, key, max_prompt_tokens) {
+            Ok(built) => *transport = Some(built),
+            Err(error) => {
+                super::super::async_worker::complete_task_outcome(&task, Err(error));
+                super::super::async_worker::release_pending_slot(pending);
+                return;
+            }
         }
-        batch.push(candidate);
+    }
+    let transport = transport
+        .as_mut()
+        .expect("worker transport constructed above");
+
+    let (future, record_served) = if matches!(transport, TransportImpl::Pubsub) {
+        // Forward-declared stub: not deliverable. Its `mailw`/`raww` are
+        // `unimplemented!`, so produce an explicit terminal outcome instead of
+        // calling them.
+        super::super::async_worker::complete_task_outcome(
+            &task,
+            Err(super::super::super::session_type_not_implemented(
+                task.target_session.as_str(),
+                SessionType::Pubsub,
+            )),
+        );
+        super::super::async_worker::release_pending_slot(pending);
+        return;
+    } else if matches!(transport, TransportImpl::Ui(_)) {
+        (transport.mailw(build_ui_envelope(&task)), false)
+    } else {
+        match prepare_coder_write(&task, transport) {
+            Ok(future) => (future, true),
+            Err(error) => {
+                super::super::async_worker::complete_task_outcome(&task, Err(error));
+                super::super::async_worker::release_pending_slot(pending);
+                return;
+            }
+        }
+    };
+
+    inflight.spawn(async move { (task, record_served, future.await.ok()) });
+}
+
+/// Constructs the worker's transport from the target's configured session type —
+/// the only target-type-dependent step (transport-abstraction spec). Relay-wide
+/// `@GLOBAL` targets have no bundle-member transport config and deliver via the UI
+/// stream by principal, so they construct `UiTransport`. Configured members select
+/// by `session_type()`: `Tmux` → `TmuxTransport` (with `startup()` so its internal
+/// delivery task runs), `Ui` → `UiTransport`, `Pubsub` → the forward-declared stub.
+/// ACP targets never reach here — they are constructed with a bootstrap driver,
+/// and the enqueue path rejects ACP tasks unless that driver already exists.
+fn build_worker_transport(
+    task: &AsyncDeliveryTask,
+    key: &AsyncWorkerKey,
+    max_prompt_tokens: usize,
+) -> Result<TransportImpl, RelayError> {
+    if task.relay_wide_target {
+        return Ok(TransportImpl::ui(build_ui_transport_services(key)));
+    }
+    let target_member =
+        resolve_target_member(task)?.expect("configured non-relay-wide target must have a member");
+    match target_member.target.session_type() {
+        SessionType::Tmux => {
+            let mut transport = TransportImpl::tmux(max_prompt_tokens);
+            // tmux ignores the `choose` resolver (it raises no operator choices),
+            // so a cancelling no-op chooser satisfies the `StartupContext` contract.
+            let context = StartupContext {
+                bundle_name: task.bundle.bundle_name.clone(),
+                runtime_directory: task.runtime_directory.clone(),
+                target_member: target_member.clone(),
+                choose: noop_tmux_chooser(),
+            };
+            let _ = transport.startup(context);
+            Ok(transport)
+        }
+        SessionType::Ui => Ok(TransportImpl::ui(build_ui_transport_services(key))),
+        SessionType::Pubsub => Ok(TransportImpl::Pubsub),
+        SessionType::Acp => Err(super::super::super::relay_error(
+            "internal_unexpected_failure",
+            "ACP target reached the non-bootstrap worker construction path",
+            Some(json!({ "target_session": task.target_session })),
+        )),
     }
 }
 
-/// Coalesce predicate: the candidate must share the head's payload mode and
-/// `relay_wide_target` flag. Target session, runtime, and bundle are guaranteed
-/// identical by the per-target worker registry key — assert in debug for safety.
-fn can_coalesce_with_head(head: &AsyncDeliveryTask, candidate: &AsyncDeliveryTask) -> bool {
-    debug_assert_eq!(head.target_session, candidate.target_session);
-    debug_assert_eq!(head.runtime_directory, candidate.runtime_directory);
-    debug_assert_eq!(head.bundle.bundle_name, candidate.bundle.bundle_name);
-    matches!(head.payload_mode, DeliveryPayloadMode::EnvelopeMessage)
-        && matches!(candidate.payload_mode, DeliveryPayloadMode::EnvelopeMessage)
-        && head.relay_wide_target == candidate.relay_wide_target
-}
-
-/// Identifies a head task that needs the worker-loop tmux quiescence hoist.
-/// Returns the cloned tmux [`BundleMember`] so the blocking barrier can build a
-/// [`DeliveryContext`] (prompt-readiness template + runtime directory) without
-/// re-borrowing into the worker's bundle state. ACP/UI targets and RawInput
-/// heads return `None` — they keep their original transport flow.
-///
-/// [`DeliveryContext`]: crate::transports::DeliveryContext
-fn classify_tmux_quiescence_hoist(task: &AsyncDeliveryTask) -> Option<BundleMember> {
-    if !matches!(task.payload_mode, DeliveryPayloadMode::EnvelopeMessage) || task.relay_wide_target
-    {
-        return None;
-    }
-    let target_member = task
-        .bundle
-        .members
-        .iter()
-        .find(|member| member.id == task.target_session)?;
-    match &target_member.target {
-        TargetConfiguration::Tmux(_) => Some(target_member.clone()),
-        _ => None,
+/// Renders a coder task and submits it via the non-blocking write seam.
+/// Envelope-mode tasks render their framed envelope and go through `mailw`;
+/// raw-input tasks go through `raww` with the task's `append_enter`.
+fn prepare_coder_write(
+    task: &AsyncDeliveryTask,
+    transport: &mut TransportImpl,
+) -> Result<OutcomeFuture, RelayError> {
+    match task.payload_mode {
+        DeliveryPayloadMode::EnvelopeMessage => {
+            let target_member = resolve_target_member(task)?;
+            let rendered = render_task_envelope(task, target_member, now_rfc3339().as_str());
+            Ok(transport.mailw(build_coder_envelope(task, rendered)))
+        }
+        DeliveryPayloadMode::RawInput => {
+            Ok(transport.raww(task.message.clone(), task.append_enter))
+        }
     }
 }
 
-/// Fans a single failure template across every task in a coalesced batch,
-/// preserving each task's own `message_id` / `target_session`, then completes
-/// the tasks and releases their pending slots. Used when the worker-loop
-/// quiescence hoist fails before paste begins so all coalesced tasks receive
-/// the same outcome and the loop can continue.
-fn complete_batch_with_template(
-    batch: &[AsyncDeliveryTask],
-    template: SendResult,
+/// Maps one resolved in-flight outcome onto a `SendResult`, fans it back to the
+/// originating sender, records `served_successfully` for delivered coder writes,
+/// and releases the pending slot. A panicked collector task only releases the
+/// slot (a panic is a bug, not a delivery result).
+fn collect_outcome(
+    joined: Result<InflightOutcome, tokio::task::JoinError>,
     pending: &std::sync::atomic::AtomicUsize,
 ) {
-    for task in batch {
-        let outcome = Ok(SendResult {
-            target_session: task.target_session.clone(),
-            message_id: task.message_id.clone(),
-            outcome: template.outcome.clone(),
-            reason_code: template.reason_code.clone(),
-            reason: template.reason.clone(),
-            details: template.details.clone(),
-        });
-        super::super::async_worker::complete_task_outcome(task, outcome);
-        super::super::async_worker::release_pending_slot(pending);
+    let (task, record_served, outcome) = match joined {
+        Ok(value) => value,
+        Err(_join_error) => {
+            super::super::async_worker::release_pending_slot(pending);
+            return;
+        }
+    };
+    let send_result = match outcome {
+        Some(outcome) => outcome_to_send_result(&task, outcome),
+        None => dropped_send_result(&task),
+    };
+    if record_served && send_result.outcome == SendOutcome::Delivered {
+        let _ = note_session_served_successfully(
+            task.runtime_directory.as_path(),
+            task.target_session.as_str(),
+        );
     }
+    super::super::async_worker::complete_task_outcome(&task, Ok(send_result));
+    super::super::async_worker::release_pending_slot(pending);
 }
 
-fn drain_carry_on_shutdown(
-    carry: &mut VecDeque<AsyncDeliveryTask>,
+/// Drains the worker on relay shutdown: signals the transport so its internal
+/// delivery task resolves every in-flight write terminally, collects those
+/// resolutions to completion, then drops the not-yet-submitted queued tasks. The
+/// transport contract guarantees prompt terminal resolution on shutdown, so the
+/// `join_next` drain does not park indefinitely. The transport is `None` if no
+/// task ever arrived to construct it.
+async fn shutdown_drain(
+    transport: Option<&mut TransportImpl>,
+    inflight: &mut JoinSet<InflightOutcome>,
+    receiver: &mut UnboundedReceiver<AsyncDeliveryTask>,
     pending: &std::sync::atomic::AtomicUsize,
 ) {
-    while let Some(task) = carry.pop_front() {
-        super::super::async_worker::complete_task_on_shutdown(&task);
-        super::super::async_worker::release_pending_slot(pending);
+    if let Some(transport) = transport {
+        transport.shutdown();
+    }
+    while let Some(joined) = inflight.join_next().await {
+        collect_outcome(joined, pending);
+    }
+    super::super::async_worker::drop_pending_async_tasks_on_shutdown(receiver, pending);
+}
+
+/// A cancelling no-op [`Chooser`] for the tmux `StartupContext`. Tmux never
+/// raises operator choices, so this is never invoked; it exists only to satisfy
+/// the contract's required resolver field.
+fn noop_tmux_chooser() -> Chooser {
+    Arc::new(|_choice: ChoiceToMake| ChoiceMade::Cancelled {
+        decided_by: String::new(),
+        reason_code: "choice_unsupported".to_string(),
+        reason: Some("tmux transport does not raise operator choices".to_string()),
+    })
+}
+
+/// Builds the [`DeliveryEnvelope`] for a coder (ACP/tmux) task from its rendered
+/// envelope text. Envelope-mode writes always submit with Enter. The R1 UI
+/// attribution fields are blank — coder transports ignore them.
+fn build_coder_envelope(task: &AsyncDeliveryTask, rendered: String) -> DeliveryEnvelope {
+    DeliveryEnvelope {
+        message_id: task.message_id.clone(),
+        payload_mode: task.payload_mode,
+        rendered,
+        append_enter: true,
+        choice_decider_sessions: task.choice_decider_sessions.clone(),
+        quiet_window: task.quiescence.quiet_window,
+        quiescence_timeout: task.quiescence.quiescence_timeout,
+        sender_session: String::new(),
+        cc_sessions: Vec::new(),
+        authenticated_identity: None,
     }
 }
 
@@ -508,33 +481,6 @@ fn build_acp_driver_services(
         },
         chooser: build_acp_chooser(bundle_name, runtime_directory, choices_pending_max),
     }
-}
-
-/// Reports whether a task delivers to a UI subscriber rather than a coder
-/// transport: relay-wide (`@GLOBAL`) targets and registered `Ui`-type sessions.
-/// Evaluated per head task (not latched), matching the registry-resolution
-/// timing of the prior `should_route_to_ui` dispatch short-circuit so a UI
-/// target registering after its first send still recovers onto `UiTransport`.
-fn task_routes_to_ui(task: &AsyncDeliveryTask) -> Result<bool, RelayError> {
-    if task.relay_wide_target {
-        return Ok(true);
-    }
-    let resolved_session_type = resolve_registered_session_type(
-        task.bundle.bundle_name.as_str(),
-        task.target_session.as_str(),
-    )
-    .map_err(|source| {
-        super::super::super::relay_error(
-            "internal_unexpected_failure",
-            "failed to resolve relay stream session type",
-            Some(json!({
-                "bundle_name": task.bundle.bundle_name,
-                "target_session": task.target_session,
-                "cause": source.to_string(),
-            })),
-        )
-    })?;
-    Ok(matches!(resolved_session_type, Some(SessionType::Ui)))
 }
 
 /// Builds the UI broadcast touchpoints the `UiTransport` invokes. Each closure
@@ -635,27 +581,6 @@ fn stream_send_to_broadcast_status(
     }
 }
 
-/// Delivers a coalesced batch of UI-routed tasks via `UiTransport::mailw`,
-/// awaiting each outcome future and completing the originating task. UI tasks do
-/// not combine into one turn (each is its own broadcast), so the batch is fanned
-/// one mailw per task.
-async fn deliver_ui_batch(
-    batch: &[AsyncDeliveryTask],
-    transport: &mut TransportImpl,
-    pending: &std::sync::atomic::AtomicUsize,
-) {
-    for task in batch {
-        let envelope = build_ui_envelope(task);
-        let outcome = transport.mailw(envelope).await;
-        let send_result = match outcome {
-            Ok(outcome) => Ok(ui_outcome_to_send_result(task, outcome)),
-            Err(_) => Ok(ui_dropped_send_result(task)),
-        };
-        super::super::async_worker::complete_task_outcome(task, send_result);
-        super::super::async_worker::release_pending_slot(pending);
-    }
-}
-
 /// Builds the [`DeliveryEnvelope`] for a UI-routed task. `rendered` carries the
 /// raw message body (the UI renders its own framing, unlike coder transports);
 /// the R1 attribution fields are relay-populated and read only by the UI
@@ -683,13 +608,11 @@ fn build_ui_envelope(task: &AsyncDeliveryTask) -> DeliveryEnvelope {
     }
 }
 
-/// Maps a UI transport outcome onto the relay `SendResult`, substituting the
-/// task's own correlation fields (the transport leaves them blank; the relay is
-/// authoritative for them).
-fn ui_outcome_to_send_result(
-    task: &AsyncDeliveryTask,
-    outcome: SingleDeliveryOutcome,
-) -> SendResult {
+/// Maps a transport outcome onto the relay `SendResult`, substituting the task's
+/// own correlation fields (the transport leaves them blank; the relay is
+/// authoritative for them). Shared by every transport — the worker dispatches
+/// `mailw`/`raww` uniformly, so the collect site maps outcomes uniformly too.
+fn outcome_to_send_result(task: &AsyncDeliveryTask, outcome: SingleDeliveryOutcome) -> SendResult {
     SendResult {
         target_session: task.target_session.clone(),
         message_id: task.message_id.clone(),
@@ -700,15 +623,15 @@ fn ui_outcome_to_send_result(
     }
 }
 
-/// Result for a UI task whose outcome future was dropped before resolving (the
-/// transport's delivery thread vanished); treated as a shutdown drop.
-fn ui_dropped_send_result(task: &AsyncDeliveryTask) -> SendResult {
+/// Result for a task whose outcome future was dropped before resolving (the
+/// transport's delivery task vanished); treated as a shutdown drop.
+fn dropped_send_result(task: &AsyncDeliveryTask) -> SendResult {
     SendResult {
         target_session: task.target_session.clone(),
         message_id: task.message_id.clone(),
         outcome: SendOutcome::DroppedOnShutdown,
         reason_code: Some("dropped_on_shutdown".to_string()),
-        reason: Some("ui delivery worker dropped before completion".to_string()),
+        reason: Some("delivery worker dropped before completion".to_string()),
         details: None,
     }
 }
@@ -717,32 +640,6 @@ fn now_rfc3339() -> String {
     time::OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
-}
-
-/// Drives one batched delivery on the blocking pool. Moves the per-worker
-/// transport into the blocking task and back out, so its sync state machine
-/// never crosses an `.await`. Returns one outcome per accepted task plus any
-/// ACP-peeled tasks that must be re-queued for the next worker iteration.
-async fn deliver_batch_blocking(
-    batch: Vec<AsyncDeliveryTask>,
-    pre_resolved_pane: Option<String>,
-    transport: TransportImpl,
-) -> (
-    Vec<Result<SendResult, RelayError>>,
-    TransportImpl,
-    Vec<AsyncDeliveryTask>,
-) {
-    tokio::task::spawn_blocking(move || {
-        let mut local_transport = transport;
-        let (outcomes, deferred) = super::orchestration::deliver_batch_with_worker_state(
-            &batch,
-            pre_resolved_pane,
-            &mut local_transport,
-        );
-        (outcomes, local_transport, deferred)
-    })
-    .await
-    .expect("delivery blocking task panicked")
 }
 
 fn acp_respawn_stream_event(
@@ -758,155 +655,5 @@ fn acp_respawn_stream_event(
             .format(&Rfc3339)
             .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string()),
         payload,
-    }
-}
-
-#[cfg(test)]
-mod coalesce_batch_tests {
-    //! Locality-justified inline coverage: `coalesce_batch` operates over
-    //! crate-private types (`AsyncDeliveryTask`, `DeliveryPayloadMode`,
-    //! `QuiescenceOptions`) that aren't part of any stable contract, so
-    //! external `tests/` files cannot name them without a `#[doc(hidden)] pub`
-    //! escape hatch that would be more API surface than this is worth. The
-    //! coalesce loop's branches are all reachable from the heterogeneous
-    //! queue case the Coordinator named; the rest are obvious from the code.
-    use std::collections::VecDeque;
-    use std::path::PathBuf;
-    use std::time::Duration;
-
-    use super::*;
-    use crate::configuration::{
-        BundleConfiguration, BundleMember, TargetConfiguration, TmuxTargetConfiguration,
-    };
-    use crate::envelope::PromptBatchSettings;
-    use crate::relay::delivery::QuiescenceOptions;
-
-    fn task(message_id: &str, payload_mode: DeliveryPayloadMode) -> AsyncDeliveryTask {
-        let member = BundleMember {
-            id: "bravo".to_string(),
-            name: None,
-            working_directory: None,
-            target: TargetConfiguration::Tmux(TmuxTargetConfiguration {
-                start_command: "sh -c 'exit 0'".to_string(),
-                prompt_readiness: None,
-            }),
-            coder_session_id: None,
-            policy_id: None,
-        };
-        AsyncDeliveryTask {
-            bundle: BundleConfiguration {
-                schema_version: "1".to_string(),
-                bundle_name: "party".to_string(),
-                autostart: false,
-                groups: Vec::new(),
-                members: vec![member.clone()],
-            },
-            sender_bundle_name: "party".to_string(),
-            sender: member.clone(),
-            authenticated_identity: None,
-            all_target_sessions: vec!["bravo@party".to_string()],
-            target_session: "bravo".to_string(),
-            relay_wide_target: false,
-            message: String::new(),
-            message_id: message_id.to_string(),
-            quiescence: QuiescenceOptions {
-                quiet_window: Duration::from_millis(1),
-                quiescence_timeout: Some(Duration::from_millis(1)),
-            },
-            batch_settings: PromptBatchSettings::default(),
-            runtime_directory: PathBuf::from("/tmp/relay-test"),
-            payload_mode,
-            append_enter: true,
-            choice_decider_sessions: Vec::new(),
-        }
-    }
-
-    /// Pre- and post-quiescence drain regression across one heterogeneous
-    /// stream. Simulates the worker loop without the tmux pane wait by driving
-    /// `coalesce_batch` (pre-wait) and then `extend_batch_with_drain` directly
-    /// (post-wait) against a single `UnboundedReceiver`.
-    ///
-    /// Stream timeline:
-    /// - `e1` is queued first → becomes head of the first iteration.
-    /// - `r2` arrives before the pre-wait drain → must end the first batch
-    ///   (mode-divergent) and head the second iteration.
-    /// - `e3` arrives before the second pre-wait drain → becomes the head of
-    ///   iteration three.
-    /// - `e4`, `e5` arrive *during* iteration three's quiescence wait → the
-    ///   post-wait drain must absorb them into the same batch (the operator-
-    ///   observed bug case: drained_count=3 with pre=1/post=2).
-    ///
-    /// One test covers every coalesce-batch branch the slice introduces
-    /// (head-is-envelope, head-is-raw skip, mode-change carry pushback,
-    /// multi-task pack) plus the post-wait extension being the same helper.
-    #[test]
-    fn pre_and_post_quiescence_drains_cover_heterogeneous_stream() {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("build current-thread runtime");
-        runtime.block_on(async move {
-            let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-            let mut carry: VecDeque<AsyncDeliveryTask> = VecDeque::new();
-            let mut iterations: Vec<Vec<String>> = Vec::new();
-
-            // Iteration 1: pre-wait drain only — [e1].
-            sender
-                .send(task("e1", DeliveryPayloadMode::EnvelopeMessage))
-                .expect("seed e1");
-            sender
-                .send(task("r2", DeliveryPayloadMode::RawInput))
-                .expect("seed r2");
-            let head = receiver.try_recv().expect("e1 head");
-            let batch = coalesce_batch(head, 32, &mut carry, &mut receiver);
-            iterations.push(batch.iter().map(|t| t.message_id.clone()).collect());
-
-            // Iteration 2: RawInput head, pre-wait drain returns it alone.
-            let head = carry
-                .pop_front()
-                .or_else(|| receiver.try_recv().ok())
-                .expect("r2 head");
-            let batch = coalesce_batch(head, 32, &mut carry, &mut receiver);
-            iterations.push(batch.iter().map(|t| t.message_id.clone()).collect());
-
-            // Iteration 3: envelope head, *post-wait* drain absorbs e4/e5
-            // that landed in the channel while the quiescence wait was in
-            // flight (simulated by sending after coalesce_batch returns).
-            sender
-                .send(task("e3", DeliveryPayloadMode::EnvelopeMessage))
-                .expect("seed e3");
-            let head = receiver.try_recv().expect("e3 head");
-            let mut batch = coalesce_batch(head, 32, &mut carry, &mut receiver);
-            let pre_quiescence_count = batch.len();
-            // Tasks arriving during the (skipped) quiescence wait:
-            sender
-                .send(task("e4", DeliveryPayloadMode::EnvelopeMessage))
-                .expect("seed e4");
-            sender
-                .send(task("e5", DeliveryPayloadMode::EnvelopeMessage))
-                .expect("seed e5");
-            extend_batch_with_drain(&mut batch, 32, &mut carry, &mut receiver);
-            assert_eq!(pre_quiescence_count, 1, "pre-wait batch should be [e3]");
-            assert_eq!(
-                batch.len() - pre_quiescence_count,
-                2,
-                "post-wait drain should absorb e4 and e5",
-            );
-            iterations.push(batch.iter().map(|t| t.message_id.clone()).collect());
-
-            assert_eq!(
-                iterations,
-                vec![
-                    vec!["e1".to_string()],
-                    vec!["r2".to_string()],
-                    vec!["e3".to_string(), "e4".to_string(), "e5".to_string()],
-                ],
-            );
-            assert!(carry.is_empty(), "no tasks should be stranded in carry");
-            assert!(
-                receiver.try_recv().is_err(),
-                "no tasks should be left in the channel",
-            );
-        });
     }
 }

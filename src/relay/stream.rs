@@ -494,19 +494,6 @@ pub(super) fn notify_trusted_hosts_of_revocation(
     count
 }
 
-pub(super) fn resolve_registered_session_type(
-    bundle_name: &str,
-    session_id: &str,
-) -> Result<Option<SessionType>, io::Error> {
-    let registry = stream_registry();
-    let entries = registry
-        .entries
-        .lock()
-        .map_err(|_| io::Error::other("failed to lock stream registry"))?;
-    let key = registry_key_for_target(bundle_name, session_id);
-    Ok(entries.get(&key).map(|entry| entry.session_type))
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum StreamEventSendOutcome {
     Delivered,

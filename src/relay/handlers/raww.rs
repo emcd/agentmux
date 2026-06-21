@@ -9,7 +9,7 @@ use super::super::authorization::{
     AuthorizationContext, choose_authorized_ui_sessions, load_authorization_context,
 };
 use super::super::connection::BundleCatalog;
-use super::super::delivery::{QuiescenceOptions, enqueue_async_delivery, prompt_batch_settings};
+use super::super::delivery::{QuiescenceOptions, enqueue_async_delivery};
 use super::super::routing::{
     Addressing, Capability, OperationProfile, ResolvedRoute, requester_home_namespace,
     resolve_raww_route,
@@ -268,7 +268,6 @@ fn execute_raww(
         // Unbounded quiescence wait: an agent turn can run well past 30 seconds,
         // and async delivery's only hard bound is relay lifetime (shutdown).
         quiescence: QuiescenceOptions::for_async(None),
-        batch_settings: prompt_batch_settings(),
         runtime_directory: raww_runtime_directory,
         payload_mode: DeliveryPayloadMode::RawInput,
         append_enter: !no_enter,

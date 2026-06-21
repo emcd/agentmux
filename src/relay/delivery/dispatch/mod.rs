@@ -1,6 +1,5 @@
 mod orchestration;
 mod payload;
-mod transport;
 mod worker;
 
 pub(in crate::relay) use self::orchestration::{

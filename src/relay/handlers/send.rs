@@ -13,7 +13,7 @@ use super::super::authorization::{
     AuthorizationContext, choose_authorized_ui_sessions, has_ui_session, load_authorization_context,
 };
 use super::super::connection::BundleCatalog;
-use super::super::delivery::{QuiescenceOptions, enqueue_async_delivery, prompt_batch_settings};
+use super::super::delivery::{QuiescenceOptions, enqueue_async_delivery};
 use super::super::routing::{
     Addressing, Capability, OperationProfile, ResolvedRoute, ResolvedTarget as RouteTarget,
     resolve_send_route,
@@ -244,7 +244,6 @@ fn execute_send(
     quiet_window_ms: Option<u64>,
 ) -> Result<RelayResponse, RelayError> {
     let sender_member = sender.to_bundle_member();
-    let batch_settings = prompt_batch_settings();
     let quiescence = QuiescenceOptions::for_async(quiet_window_ms);
     let mut results = Vec::with_capacity(route.targets.len());
     // Every task carries the full recipient list across all delivery groups so
@@ -276,7 +275,6 @@ fn execute_send(
                 message: message.to_string(),
                 message_id: message_id.clone(),
                 quiescence,
-                batch_settings,
                 runtime_directory: group.runtime_directory.clone(),
                 payload_mode: DeliveryPayloadMode::EnvelopeMessage,
                 append_enter: true,

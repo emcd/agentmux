@@ -492,7 +492,7 @@ fn drain_remaining_as_dropped(receiver: &mut mpsc::Receiver<WriteItem>, target_s
         let _ = sender.send(SingleDeliveryOutcome {
             target_session: target_session.to_string(),
             message_id,
-            outcome: SendOutcome::Failed,
+            outcome: SendOutcome::DroppedOnShutdown,
             reason_code: Some("dropped_on_shutdown".to_string()),
             reason: Some("delivery dropped due to relay shutdown".to_string()),
             details: None,
@@ -509,7 +509,7 @@ fn drain_group_as_dropped(
         let _ = sender.send(SingleDeliveryOutcome {
             target_session: target_session.to_string(),
             message_id: envelope.message_id,
-            outcome: SendOutcome::Failed,
+            outcome: SendOutcome::DroppedOnShutdown,
             reason_code: Some("dropped_on_shutdown".to_string()),
             reason: Some("delivery dropped due to relay shutdown".to_string()),
             details: None,
@@ -793,7 +793,7 @@ fn make_dropped_on_shutdown(target_session: &str, message_id: &str) -> SingleDel
     SingleDeliveryOutcome {
         target_session: target_session.to_string(),
         message_id: message_id.to_string(),
-        outcome: SendOutcome::Failed,
+        outcome: SendOutcome::DroppedOnShutdown,
         reason_code: Some("dropped_on_shutdown".to_string()),
         reason: Some("delivery dropped due to relay shutdown".to_string()),
         details: None,
