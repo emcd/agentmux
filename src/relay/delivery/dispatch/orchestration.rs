@@ -156,7 +156,7 @@ fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
                     "ACP worker queue is full",
                     Some(json!({
                         "target_session": task.target_session,
-                        "max_pending": 64,
+                        "pending_max": 64,
                     })),
                 ));
             }

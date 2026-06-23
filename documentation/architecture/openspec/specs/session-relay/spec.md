@@ -1534,7 +1534,7 @@ Worker model SHALL be:
 
 - one worker per target session (one child process, one background reader thread)
 - serialized request queue per worker
-- fixed queue bound `max_pending = 64`
+- fixed queue bound `pending_max = 64`
 - initialized during bundle startup/session startup pass for hosted bundles
 - anchored by relay runtime context (relay socket/runtime directory), not tmux
   transport semantics
