@@ -1,7 +1,7 @@
 # pane-envelope Specification
 
 ## Purpose
-The pane-text envelope format for tmux-delivered messages. The spec governs the RFC 822-style header block (required `Message-Id`, `Date`, `From`, `To`; optional `Cc`, `Subject`), MIME multipart boundary framing without a top-level `Content-Type` header, the required `text/plain` chat body part, and prompt batching under a default 4096-token budget with order-preserving splits. Canonical machine metadata (`schema_version`, `message_id`, `bundle_name`, `sender_session`, `target_sessions`, `created_at`) is carried out-of-band by relay-managed metadata streams rather than pane preamble.
+The pane-text envelope format for tmux-delivered messages. The spec governs the RFC 822-style header block (required `Message-Id`, `Date`, `From`, `To`; optional `Cc`, `Subject`), MIME multipart boundary framing without a top-level `Content-Type` header, the required `text/plain` chat body part, and prompt batching under a default 4096-token budget with order-preserving splits. Canonical machine metadata (`schema_version`, `message_id`, `namespace`, `sender_session`, `target_sessions`, `created_at`) is carried out-of-band by relay-managed metadata streams rather than pane preamble.
 ## Requirements
 ### Requirement: RFC 822-Style Header Block
 
