@@ -67,10 +67,14 @@ use crate::transports::ui::{UiTransport, UiTransportServices};
 // the delivery context. It is defined once in `configuration`; re-exporting
 // (rather than redefining) keeps the two in lockstep.
 pub use crate::configuration::PromptReadinessTemplate;
+// Pane-envelope rendering helpers. Canonical home is the transport-safe
+// `crate::envelope` module (it imports no relay internals), so coder transports
+// can render their own pane text from the structured delivery message.
+use crate::envelope::{AddressIdentity, EnvelopeRenderInput, render_envelope};
 // Delivery/look wire vocabulary. Canonical home is the sibling `vocabulary`
 // module (below `crate::relay` in dependency order), so the transport contract
 // never depends on relay. The relay re-exports these from its own contract.
-use crate::transports::vocabulary::{DeliveryPayloadMode, LookSnapshotPayload, SendOutcome};
+use crate::transports::vocabulary::{LookSnapshotPayload, SendOutcome};
 
 /// A pending delivery outcome handed back by the non-blocking write methods
 /// ([`Transport::mailw`], [`Transport::raww`]). It resolves to the terminal
@@ -442,16 +446,22 @@ impl std::fmt::Debug for StartupContext {
     }
 }
 
-/// One rendered unit to deliver to a target.
+/// One structured message to deliver to a target, plus the per-write control
+/// hints the transport's internal delivery task needs.
+///
+/// The relay populates [`message`](Self::message) with relay-authored attribution
+/// after routing and authorization; the transport renders its own representation
+/// from those fields (coder transports render pane-envelope text, UI builds a
+/// stream event) and never infers or mutates attribution. The remaining fields
+/// are per-write transport control, not message content.
 #[derive(Clone, Debug)]
 pub struct DeliveryEnvelope {
     /// Correlation id echoed back in the [`SingleDeliveryOutcome`].
     pub message_id: String,
-    /// Whether `rendered` is an envelope-framed message or raw input.
-    pub payload_mode: DeliveryPayloadMode,
-    /// The fully rendered text handed to the transport.
-    pub rendered: String,
-    /// Whether to submit (append Enter) after writing, for raw input.
+    /// Structured, transport-neutral message data. The receiving transport
+    /// renders the representation it owns from these fields.
+    pub message: DeliveryMessage,
+    /// Whether to submit (append Enter) after writing the rendered text.
     pub append_enter: bool,
     /// Sessions authorized to decide choices raised during this envelope's
     /// delivery, threaded to [`ChoiceToMake::decider_sessions`].
@@ -465,19 +475,71 @@ pub struct DeliveryEnvelope {
     /// by relay shutdown). Ignored by transports with no quiescence wait. The UI
     /// transport reuses this as the cap on its reconnect wait.
     pub quiescence_timeout: Option<Duration>,
-    /// Canonical `session@namespace` id of the sender. Relay-populated,
-    /// transport-read-only attribution: only the UI transport reads it (to build
-    /// the `incoming_message` stream event); delivery transports (Tmux/ACP) carry
-    /// the empty string and ignore it. This is the interim R1 shape pending the
-    /// structured-message end-state ("option C").
-    pub sender_session: String,
-    /// Canonical `session@namespace` ids of the message's co-recipients (Cc).
-    /// Relay-populated, transport-read-only; only the UI transport reads it.
-    pub cc_sessions: Vec<String>,
-    /// The sender's verified `principal_id`, carried to the UI recipient; `None`
-    /// for socket-trust senders. Relay-populated, transport-read-only; only the
-    /// UI transport reads it.
+}
+
+/// One party (sender, target, or co-recipient) of a structured delivery message.
+/// Transport-neutral so the UI transport does not depend on pane-envelope
+/// addressing vocabulary; coder transports convert it into an
+/// [`AddressIdentity`] when rendering.
+#[derive(Clone, Debug)]
+pub struct DeliveryParty {
+    /// Canonical `session@namespace` id.
+    pub session: String,
+    /// Configured display name, when known.
+    pub display_name: Option<String>,
+}
+
+/// Structured, transport-neutral message data sufficient for any transport to
+/// render its own representation without importing `crate::relay` or parsing
+/// already-rendered text. The relay authors every field; transports treat them
+/// as read-only input.
+#[derive(Clone, Debug)]
+pub struct DeliveryMessage {
+    /// The message body text.
+    pub body: String,
+    /// RFC 3339 creation timestamp, rendered into the `Date` header.
+    pub created_at: String,
+    /// The routing namespace qualifying canonical `session@namespace` ids
+    /// (a session bundle, or a relay-wide namespace such as `GLOBAL`).
+    pub namespace: String,
+    /// Canonical sender identity.
+    pub sender: DeliveryParty,
+    /// Canonical target identity.
+    pub target: DeliveryParty,
+    /// Canonical co-recipient identities (the full target set minus this
+    /// envelope's own recipient), including co-recipients in other namespaces.
+    pub cc: Vec<DeliveryParty>,
+    /// The sender's verified `principal_id`, when present; `None` for
+    /// socket-trust senders.
     pub authenticated_identity: Option<String>,
+}
+
+impl DeliveryParty {
+    fn to_address(&self) -> AddressIdentity {
+        AddressIdentity {
+            session_name: self.session.clone(),
+            display_name: self.display_name.clone(),
+        }
+    }
+}
+
+impl DeliveryMessage {
+    /// Renders this message as RFC 822/MIME pane-envelope text. Coder transports
+    /// (Tmux/ACP) call this before writing to the harness; UI does not render
+    /// pane text. `message_id` is the owning envelope's correlation id, which
+    /// seeds the MIME boundary and `Message-Id` header.
+    #[must_use]
+    pub fn render_pane_envelope(&self, message_id: &str) -> String {
+        render_envelope(&EnvelopeRenderInput {
+            message_id: message_id.to_string(),
+            created_at: self.created_at.clone(),
+            from: self.sender.to_address(),
+            to: vec![self.target.to_address()],
+            cc: self.cc.iter().map(DeliveryParty::to_address).collect(),
+            subject: None,
+            body: self.body.clone(),
+        })
+    }
 }
 
 /// A quiescence-barrier failure surfaced by the tmux transport's internal

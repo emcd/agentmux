@@ -107,10 +107,12 @@ exported from `src/relay/mod.rs`.
   - `dispatch/mod.rs`: delivery dispatch re-export hub.
   - `dispatch/orchestration.rs`: delivery startup, ACP target priming, and the
     enqueue path that registers/feeds the per-target worker.
-  - `dispatch/payload.rs`: per-task envelope rendering (`render_task_envelope`),
-    target-member resolution, and the prompt-batch settings read. Coalescing and
-    the token-budget combine now live inside each transport's internal delivery
-    task, not here.
+  - `dispatch/payload.rs`: structured delivery-message construction
+    (`build_delivery_message`) and the out-of-band metadata inscription
+    (`emit_envelope_metadata_inscription`), target-member resolution, and the
+    prompt-batch settings read. Pane-envelope rendering, coalescing, and the
+    token-budget combine now live inside each transport's internal delivery task,
+    not here.
   - `dispatch/worker.rs`: per-target tokio worker task. A concurrent
     produce-and-collect loop (`select!` over `receiver.recv()` and a `JoinSet` of
     in-flight write outcomes) submits each task to its transport via the

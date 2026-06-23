@@ -11,9 +11,10 @@ pub mod vocabulary;
 pub use crate::acp::{AcpDriverServices, AcpTransport, AcpWorkerDriver};
 pub use crate::tmux::TmuxTransport;
 pub use contract::{
-    ChoiceMade, ChoiceToMake, Chooser, DeliveryEnvelope, DeliveryWaitError, LookMode,
-    OutcomeFuture, OutputView, PromptReadinessTemplate, SingleDeliveryOutcome, StartupContext,
-    ThingToChoose, Transport, TransportError, TransportImpl, TransportReadiness, TransportStatus,
+    ChoiceMade, ChoiceToMake, Chooser, DeliveryEnvelope, DeliveryMessage, DeliveryParty,
+    DeliveryWaitError, LookMode, OutcomeFuture, OutputView, PromptReadinessTemplate,
+    SingleDeliveryOutcome, StartupContext, ThingToChoose, Transport, TransportError, TransportImpl,
+    TransportReadiness, TransportStatus,
 };
 pub use ui::{
     UiBroadcastFn, UiBroadcastStatus, UiIncomingMessage, UiOutcomePhase, UiPhaseFn, UiTransport,

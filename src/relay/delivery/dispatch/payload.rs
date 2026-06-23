@@ -2,11 +2,9 @@ use serde_json::json;
 
 use crate::{
     configuration::BundleMember,
-    envelope::{
-        AddressIdentity, EnvelopeRenderInput, ManifestPreamble, PromptBatchSettings,
-        parse_tokenizer_profile, render_envelope,
-    },
+    envelope::{ManifestPreamble, PromptBatchSettings, parse_tokenizer_profile},
     runtime::inscriptions::emit_inscription,
+    transports::{DeliveryMessage, DeliveryParty},
 };
 
 use super::super::super::{
@@ -34,62 +32,72 @@ pub(super) fn resolve_target_member(
     Ok(target_member)
 }
 
-/// Renders one task's envelope and emits the per-task
-/// `relay.send.envelope.metadata` inscription so each task's envelope is
-/// independently traceable. All address identities carry canonical
+/// Builds the structured, transport-neutral [`DeliveryMessage`] for one task from
+/// relay-authored routing and attribution. All party identities carry canonical
 /// `session@namespace` ids so recipients in any namespace can derive a reply
-/// address. The worker calls this per task before submitting via `mailw`; each
-/// transport's internal delivery task combines the contiguous rendered envelopes
-/// (respecting its own token budget) into a turn.
-pub(super) fn render_task_envelope(
+/// address. The relay no longer renders pane-envelope text on the delivery path:
+/// the receiving transport renders its own representation (coder transports a
+/// pane envelope, UI a stream event) from these fields.
+pub(super) fn build_delivery_message(
     task: &AsyncDeliveryTask,
     target_member: Option<&BundleMember>,
     created_at: &str,
-) -> String {
-    let sender_session =
-        canonical_session_id(task.sender.id.as_str(), task.sender_bundle_name.as_str());
-    let target_session = canonical_target_session(task);
-    let cc_sessions = co_recipient_sessions(task);
+) -> DeliveryMessage {
+    DeliveryMessage {
+        body: task.message.clone(),
+        created_at: created_at.to_string(),
+        namespace: task.bundle.bundle_name.clone(),
+        sender: DeliveryParty {
+            session: canonical_session_id(
+                task.sender.id.as_str(),
+                task.sender_bundle_name.as_str(),
+            ),
+            display_name: task.sender.name.clone(),
+        },
+        target: DeliveryParty {
+            session: canonical_target_session(task),
+            display_name: target_member.and_then(|member| member.name.clone()),
+        },
+        cc: co_recipient_parties(task),
+        authenticated_identity: task.authenticated_identity.clone(),
+    }
+}
 
+/// Emits the per-task `relay.send.envelope.metadata` inscription so each task's
+/// envelope is independently traceable. The canonical routing/audit metadata is
+/// preserved out-of-band from the same structured [`DeliveryMessage`] the
+/// transport renders — never injected into pane text.
+pub(super) fn emit_envelope_metadata_inscription(message: &DeliveryMessage, message_id: &str) {
+    let cc_sessions: Vec<String> = message
+        .cc
+        .iter()
+        .map(|party| party.session.clone())
+        .collect();
     let manifest = ManifestPreamble {
         schema_version: SCHEMA_VERSION.to_string(),
-        message_id: task.message_id.clone(),
-        bundle_name: task.bundle.bundle_name.clone(),
-        sender_session: sender_session.clone(),
-        target_sessions: vec![target_session.clone()],
+        message_id: message_id.to_string(),
+        namespace: message.namespace.clone(),
+        sender_session: message.sender.session.clone(),
+        target_sessions: vec![message.target.session.clone()],
         cc_sessions: if cc_sessions.is_empty() {
             None
         } else {
             Some(cc_sessions)
         },
-        created_at: created_at.to_string(),
+        created_at: message.created_at.clone(),
     };
     emit_inscription(
         "relay.send.envelope.metadata",
         &json!({
             "schema_version": manifest.schema_version,
             "message_id": manifest.message_id,
-            "bundle_name": manifest.bundle_name,
+            "namespace": manifest.namespace,
             "sender_session": manifest.sender_session,
             "target_sessions": manifest.target_sessions,
             "cc_sessions": manifest.cc_sessions,
             "created_at": manifest.created_at,
         }),
     );
-    render_envelope(&EnvelopeRenderInput {
-        manifest,
-        from: AddressIdentity {
-            session_name: sender_session,
-            display_name: task.sender.name.clone(),
-        },
-        to: vec![AddressIdentity {
-            session_name: target_session,
-            display_name: target_member.and_then(|member| member.name.clone()),
-        }],
-        cc: co_recipient_addresses(task),
-        subject: None,
-        body: task.message.clone(),
-    })
 }
 
 /// Canonical `session@namespace` id of the task's own delivery target.
@@ -111,23 +119,23 @@ pub(super) fn co_recipient_sessions(task: &AsyncDeliveryTask) -> Vec<String> {
         .collect()
 }
 
-/// Builds Cc addresses for the task's co-recipients. Members of the delivery
+/// Builds Cc parties for the task's co-recipients. Members of the delivery
 /// bundle contribute their configured display name; co-recipients in other
 /// namespaces are absent from this bundle's configuration and carry the
 /// canonical id alone.
-fn co_recipient_addresses(task: &AsyncDeliveryTask) -> Vec<AddressIdentity> {
+fn co_recipient_parties(task: &AsyncDeliveryTask) -> Vec<DeliveryParty> {
     co_recipient_sessions(task)
         .into_iter()
-        .map(|session_name| {
-            let local_id = bare_session_id(session_name.as_str(), task.bundle.bundle_name.as_str());
+        .map(|session| {
+            let local_id = bare_session_id(session.as_str(), task.bundle.bundle_name.as_str());
             let display_name = task
                 .bundle
                 .members
                 .iter()
                 .find(|member| member.id == local_id)
                 .and_then(|member| member.name.clone());
-            AddressIdentity {
-                session_name,
+            DeliveryParty {
+                session,
                 display_name,
             }
         })

@@ -20,9 +20,10 @@
 //! The TUI is a passive subscriber: there is no per-recipient render ack. A UI
 //! delivery succeeds when the stream event reaches a registered, connected UI
 //! endpoint. If no UI is connected, the transport polls up to the envelope's
-//! `quiescence_timeout` for one to reconnect, then resolves `Timeout`. This is
-//! the interim R1 shape (relay-populated attribution carried on the envelope);
-//! the clean structured-message end-state ("option C") is deferred.
+//! `quiescence_timeout` for one to reconnect, then resolves `Timeout`. The
+//! transport builds its `incoming_message` event directly from the envelope's
+//! structured [`DeliveryMessage`](crate::transports::DeliveryMessage): it reads
+//! the relay-authored attribution as-is and never parses pane-envelope text.
 
 use std::sync::Arc;
 use std::thread;
@@ -145,12 +146,13 @@ impl Transport for UiTransport {
             .quiescence_timeout
             .unwrap_or(Duration::from_millis(UI_RECONNECT_TIMEOUT_MS_DEFAULT));
         let message_id = envelope.message_id.clone();
+        let message = envelope.message;
         let incoming = UiIncomingMessage {
             message_id: envelope.message_id,
-            sender_session: envelope.sender_session,
-            body: envelope.rendered,
-            cc_sessions: envelope.cc_sessions,
-            authenticated_identity: envelope.authenticated_identity,
+            sender_session: message.sender.session,
+            body: message.body,
+            cc_sessions: message.cc.into_iter().map(|party| party.session).collect(),
+            authenticated_identity: message.authenticated_identity,
         };
         // Run the bounded reconnect wait off the async worker thread so `mailw`
         // stays non-blocking; resolve the future when it settles.

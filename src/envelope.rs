@@ -21,12 +21,16 @@ const OPTIONAL_HEADER_CC: &str = "Cc";
 const OPTIONAL_HEADER_SUBJECT: &str = "Subject";
 const PART_HEADER_CONTENT_TYPE: &str = "Content-Type";
 
-/// Canonical machine-readable manifest line that starts each envelope.
+/// Canonical machine-readable delivery metadata preserved out-of-band (in the
+/// relay's `relay.send.envelope.metadata` inscription), never injected into pane
+/// text. The relay authors this from the structured delivery message; coder
+/// transports render their own pane envelopes from the same fields without
+/// touching this preamble.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ManifestPreamble {
     pub schema_version: String,
     pub message_id: String,
-    pub bundle_name: String,
+    pub namespace: String,
     pub sender_session: String,
     pub target_sessions: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -45,10 +49,14 @@ pub struct AddressIdentity {
     pub display_name: Option<String>,
 }
 
-/// Input shape for rendering one RFC 822/MIME pane envelope.
+/// Input shape for rendering one RFC 822/MIME pane envelope. Carries only the
+/// fields that appear in the rendered pane text; canonical routing/audit metadata
+/// (schema version, namespace, session lists) lives out-of-band in
+/// [`ManifestPreamble`], not here.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnvelopeRenderInput {
-    pub manifest: ManifestPreamble,
+    pub message_id: String,
+    pub created_at: String,
     pub from: AddressIdentity,
     pub to: Vec<AddressIdentity>,
     pub cc: Vec<AddressIdentity>,
@@ -125,16 +133,13 @@ impl Error for EnvelopeParseError {}
 /// Renders one envelope as RFC 822-style headers + boundary-delimited body.
 pub fn render_envelope(input: &EnvelopeRenderInput) -> String {
     let mut lines = Vec::new();
-    let boundary = deterministic_boundary(&input.manifest.message_id);
+    let boundary = deterministic_boundary(&input.message_id);
     lines.push(format!("--{boundary}"));
     lines.push(format!(
         "{REQUIRED_HEADER_MESSAGE_ID}: {}",
-        input.manifest.message_id
+        input.message_id
     ));
-    lines.push(format!(
-        "{REQUIRED_HEADER_DATE}: {}",
-        input.manifest.created_at
-    ));
+    lines.push(format!("{REQUIRED_HEADER_DATE}: {}", input.created_at));
     lines.push(format!(
         "{REQUIRED_HEADER_FROM}: {}",
         render_address(&input.from)

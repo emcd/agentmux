@@ -25,11 +25,13 @@ use super::super::choice_state::{
     ChoiceEventContext, build_acp_chooser, invalidate_pending_for_respawn,
 };
 use super::super::quiescence::QUIESCENCE_TIMEOUT_MS_DEFAULT;
-use super::payload::{co_recipient_sessions, render_task_envelope, resolve_target_member};
+use super::payload::{
+    build_delivery_message, emit_envelope_metadata_inscription, resolve_target_member,
+};
 use crate::transports::{
-    AcpDriverServices, ChoiceMade, ChoiceToMake, Chooser, DeliveryEnvelope, OutcomeFuture,
-    SingleDeliveryOutcome, StartupContext, TransportImpl, UiBroadcastStatus, UiIncomingMessage,
-    UiOutcomePhase, UiTransportServices,
+    AcpDriverServices, ChoiceMade, ChoiceToMake, Chooser, DeliveryEnvelope, DeliveryMessage,
+    OutcomeFuture, SingleDeliveryOutcome, StartupContext, TransportImpl, UiBroadcastStatus,
+    UiIncomingMessage, UiOutcomePhase, UiTransportServices,
 };
 
 const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;
@@ -300,9 +302,11 @@ fn build_worker_transport(
     }
 }
 
-/// Renders a coder task and submits it via the non-blocking write seam.
-/// Envelope-mode tasks render their framed envelope and go through `mailw`;
-/// raw-input tasks go through `raww` with the task's `append_enter`.
+/// Builds a coder task's structured payload and submits it via the non-blocking
+/// write seam. Envelope-mode tasks build a [`DeliveryMessage`] (and emit the
+/// out-of-band metadata inscription) then go through `mailw`, where the transport
+/// renders its own pane envelope; raw-input tasks go through `raww` with the
+/// task's `append_enter`.
 fn prepare_coder_write(
     task: &AsyncDeliveryTask,
     transport: &mut TransportImpl,
@@ -310,8 +314,9 @@ fn prepare_coder_write(
     match task.payload_mode {
         DeliveryPayloadMode::EnvelopeMessage => {
             let target_member = resolve_target_member(task)?;
-            let rendered = render_task_envelope(task, target_member, now_rfc3339().as_str());
-            Ok(transport.mailw(build_coder_envelope(task, rendered)))
+            let message = build_delivery_message(task, target_member, now_rfc3339().as_str());
+            emit_envelope_metadata_inscription(&message, task.message_id.as_str());
+            Ok(transport.mailw(build_coder_envelope(task, message)))
         }
         DeliveryPayloadMode::RawInput => {
             Ok(transport.raww(task.message.clone(), task.append_enter))
@@ -380,21 +385,17 @@ fn noop_tmux_chooser() -> Chooser {
     })
 }
 
-/// Builds the [`DeliveryEnvelope`] for a coder (ACP/tmux) task from its rendered
-/// envelope text. Envelope-mode writes always submit with Enter. The R1 UI
-/// attribution fields are blank — coder transports ignore them.
-fn build_coder_envelope(task: &AsyncDeliveryTask, rendered: String) -> DeliveryEnvelope {
+/// Builds the [`DeliveryEnvelope`] for a coder (ACP/tmux) task from its structured
+/// message. Envelope-mode writes always submit with Enter; the transport renders
+/// the pane envelope from `message` before paste/turn submission.
+fn build_coder_envelope(task: &AsyncDeliveryTask, message: DeliveryMessage) -> DeliveryEnvelope {
     DeliveryEnvelope {
         message_id: task.message_id.clone(),
-        payload_mode: task.payload_mode,
-        rendered,
+        message,
         append_enter: true,
         choice_decider_sessions: task.choice_decider_sessions.clone(),
         quiet_window: task.quiescence.quiet_window,
         quiescence_timeout: task.quiescence.quiescence_timeout,
-        sender_session: String::new(),
-        cc_sessions: Vec::new(),
-        authenticated_identity: None,
     }
 }
 
@@ -581,16 +582,21 @@ fn stream_send_to_broadcast_status(
     }
 }
 
-/// Builds the [`DeliveryEnvelope`] for a UI-routed task. `rendered` carries the
-/// raw message body (the UI renders its own framing, unlike coder transports);
-/// the R1 attribution fields are relay-populated and read only by the UI
-/// transport. `quiescence_timeout` is resolved here so the transport's reconnect
-/// cap matches the relay quiescence default.
+/// Builds the [`DeliveryEnvelope`] for a UI-routed task from the same structured
+/// [`DeliveryMessage`] coder transports receive; the UI transport reads its
+/// attribution fields to build the `incoming_message` stream event instead of
+/// rendering pane text. `quiescence_timeout` is resolved here so the transport's
+/// reconnect cap matches the relay quiescence default.
 fn build_ui_envelope(task: &AsyncDeliveryTask) -> DeliveryEnvelope {
+    let target_member = task
+        .bundle
+        .members
+        .iter()
+        .find(|member| member.id == task.target_session);
+    let message = build_delivery_message(task, target_member, now_rfc3339().as_str());
     DeliveryEnvelope {
         message_id: task.message_id.clone(),
-        payload_mode: task.payload_mode,
-        rendered: task.message.clone(),
+        message,
         append_enter: task.append_enter,
         choice_decider_sessions: task.choice_decider_sessions.clone(),
         quiet_window: task.quiescence.quiet_window,
@@ -599,12 +605,6 @@ fn build_ui_envelope(task: &AsyncDeliveryTask) -> DeliveryEnvelope {
                 .quiescence_timeout
                 .unwrap_or(Duration::from_millis(QUIESCENCE_TIMEOUT_MS_DEFAULT)),
         ),
-        sender_session: canonical_session_id(
-            task.sender.id.as_str(),
-            task.sender_bundle_name.as_str(),
-        ),
-        cc_sessions: co_recipient_sessions(task),
-        authenticated_identity: task.authenticated_identity.clone(),
     }
 }
 

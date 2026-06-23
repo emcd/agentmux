@@ -1,20 +1,13 @@
 use agentmux::envelope::{
-    AddressIdentity, ENVELOPE_SCHEMA_VERSION, EnvelopeRenderInput, ManifestPreamble,
-    PromptBatchSettings, TokenizerProfile, batch_envelope_groups, parse_address, parse_envelope,
-    parse_tokenizer_profile, render_address, render_envelope,
+    AddressIdentity, EnvelopeRenderInput, PromptBatchSettings, TokenizerProfile,
+    batch_envelope_groups, parse_address, parse_envelope, parse_tokenizer_profile, render_address,
+    render_envelope,
 };
 
 fn sample_render_input() -> EnvelopeRenderInput {
     EnvelopeRenderInput {
-        manifest: ManifestPreamble {
-            schema_version: ENVELOPE_SCHEMA_VERSION.to_string(),
-            message_id: "msg-1".to_string(),
-            bundle_name: "party".to_string(),
-            sender_session: "alpha".to_string(),
-            target_sessions: vec!["bravo".to_string()],
-            cc_sessions: Some(vec!["charlie".to_string()]),
-            created_at: "2026-03-05T00:00:00Z".to_string(),
-        },
+        message_id: "msg-1".to_string(),
+        created_at: "2026-03-05T00:00:00Z".to_string(),
         from: AddressIdentity {
             session_name: "alpha".to_string(),
             display_name: Some("Alpha".to_string()),

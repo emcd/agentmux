@@ -63,8 +63,10 @@ type OutcomeSender = oneshot::Sender<SingleDeliveryOutcome>;
 
 /// One item on the transport's internal ordered channel.
 enum WriteItem {
-    /// Relay-framed envelope with its outcome sender.
-    Envelope(DeliveryEnvelope, OutcomeSender),
+    /// Structured delivery message with its outcome sender. Boxed to keep the
+    /// channel item small (the message carries full attribution), so the `Raw`
+    /// variant does not inflate every queued item.
+    Envelope(Box<DeliveryEnvelope>, OutcomeSender),
     /// Raw input (content, append_enter) with its outcome sender.
     Raw(String, bool, OutcomeSender),
 }
@@ -184,7 +186,7 @@ impl Transport for TmuxTransport {
             });
             return receiver;
         }
-        self.enqueue(WriteItem::Envelope(envelope, sender));
+        self.enqueue(WriteItem::Envelope(Box::new(envelope), sender));
         receiver
     }
 
@@ -277,7 +279,7 @@ fn run_delivery_task(
         // Stop at the first raw item (after flushing the preceding group).
         match item {
             WriteItem::Envelope(env, sender) => {
-                group.push((env, sender));
+                group.push((*env, sender));
             }
             WriteItem::Raw(content, append_enter, sender) => {
                 // Raw is a batch barrier: flush preceding envelopes first.
@@ -307,7 +309,7 @@ fn run_delivery_task(
         loop {
             match receiver.try_recv() {
                 Ok(WriteItem::Envelope(env, sender)) => {
-                    group.push((env, sender));
+                    group.push((*env, sender));
                 }
                 Ok(WriteItem::Raw(content, append_enter, sender)) => {
                     // Flush the group accumulated before this raw.
@@ -488,7 +490,7 @@ fn flush_and_resolve(
             loop {
                 match receiver.try_recv() {
                     Ok(WriteItem::Envelope(env, sender)) => {
-                        group.push((env, sender));
+                        group.push((*env, sender));
                         absorbed = true;
                     }
                     Ok(WriteItem::Raw(content, append_enter, sender)) => {
@@ -569,10 +571,13 @@ fn paste_group(
 
     let mut failed_reason = None::<String>;
     for (envelope, _) in group.iter() {
+        // Render the structured message into pane-envelope text here, just
+        // before paste — representation rendering is the transport's job.
+        let rendered = envelope.message.render_pane_envelope(&envelope.message_id);
         if let Err(reason) = inject_literal_text(
             tmux_socket_path,
             &pane_target,
-            envelope.rendered.as_str(),
+            rendered.as_str(),
             envelope.append_enter,
         ) {
             failed_reason = Some(reason);
