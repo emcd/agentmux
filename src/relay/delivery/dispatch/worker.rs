@@ -123,7 +123,7 @@ async fn run_async_delivery_worker(
     // combine, and the blocking IO all live inside each transport's internal
     // delivery task now, so the worker no longer batches, hoists quiescence, or
     // owns `spawn_blocking`.
-    let max_prompt_tokens = super::prompt_batch_settings().max_prompt_tokens;
+    let prompt_tokens_max = super::prompt_batch_settings().prompt_tokens_max;
     // `None` until the transport is constructed: eagerly for ACP (bootstrap),
     // lazily from the first task's `session_type()` for every other target.
     let mut transport: Option<TransportImpl> = match bootstrap {
@@ -134,7 +134,7 @@ async fn run_async_delivery_worker(
                 bootstrap.runtime_directory,
                 key.bundle_name.clone(),
                 services,
-                max_prompt_tokens,
+                prompt_tokens_max,
             );
             if let TransportImpl::Acp(driver) = &mut transport {
                 driver.bootstrap().await;
@@ -180,7 +180,7 @@ async fn run_async_delivery_worker(
                             task,
                             &key,
                             &mut transport,
-                            max_prompt_tokens,
+                            prompt_tokens_max,
                             &mut inflight,
                             pending.as_ref(),
                         );
@@ -213,12 +213,12 @@ fn submit_task(
     task: AsyncDeliveryTask,
     key: &AsyncWorkerKey,
     transport: &mut Option<TransportImpl>,
-    max_prompt_tokens: usize,
+    prompt_tokens_max: usize,
     inflight: &mut JoinSet<InflightOutcome>,
     pending: &std::sync::atomic::AtomicUsize,
 ) {
     if transport.is_none() {
-        match build_worker_transport(&task, key, max_prompt_tokens) {
+        match build_worker_transport(&task, key, prompt_tokens_max) {
             Ok(built) => *transport = Some(built),
             Err(error) => {
                 super::super::async_worker::complete_task_outcome(&task, Err(error));
@@ -271,7 +271,7 @@ fn submit_task(
 fn build_worker_transport(
     task: &AsyncDeliveryTask,
     key: &AsyncWorkerKey,
-    max_prompt_tokens: usize,
+    prompt_tokens_max: usize,
 ) -> Result<TransportImpl, RelayError> {
     if task.relay_wide_target {
         return Ok(TransportImpl::ui(build_ui_transport_services(key)));
@@ -280,7 +280,7 @@ fn build_worker_transport(
         resolve_target_member(task)?.expect("configured non-relay-wide target must have a member");
     match target_member.target.session_type() {
         SessionType::Tmux => {
-            let mut transport = TransportImpl::tmux(max_prompt_tokens);
+            let mut transport = TransportImpl::tmux(prompt_tokens_max);
             // tmux ignores the `choose` resolver (it raises no operator choices),
             // so a cancelling no-op chooser satisfies the `StartupContext` contract.
             let context = StartupContext {

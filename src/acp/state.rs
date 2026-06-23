@@ -46,21 +46,18 @@ fn acp_session_state_lock() -> &'static Mutex<()> {
     ACP_SESSION_STATE_LOCK.get_or_init(|| Mutex::new(()))
 }
 
-fn resolve_acp_session_state_path(
-    runtime_directory: &Path,
-    target_session: &str,
-) -> Result<PathBuf, String> {
-    Ok(runtime_directory
+fn resolve_acp_session_state_path(runtime_directory: &Path, target_session: &str) -> PathBuf {
+    runtime_directory
         .join(ACP_SESSIONS_DIRECTORY)
         .join(target_session)
-        .join(ACP_SESSION_STATE_FILE))
+        .join(ACP_SESSION_STATE_FILE)
 }
 
 pub(crate) fn load_persisted_acp_session_id(
     runtime_directory: &Path,
     target_session: &str,
 ) -> Result<Option<String>, String> {
-    let path = resolve_acp_session_state_path(runtime_directory, target_session)?;
+    let path = resolve_acp_session_state_path(runtime_directory, target_session);
     let _guard = acp_session_state_lock()
         .lock()
         .map_err(|_| "failed to lock ACP session state".to_string())?;
@@ -73,7 +70,7 @@ pub(crate) fn persist_acp_session_id(
     target_session: &str,
     session_id: &str,
 ) -> Result<(), String> {
-    let path = resolve_acp_session_state_path(runtime_directory, target_session)?;
+    let path = resolve_acp_session_state_path(runtime_directory, target_session);
     let _guard = acp_session_state_lock()
         .lock()
         .map_err(|_| "failed to lock ACP session state".to_string())?;
