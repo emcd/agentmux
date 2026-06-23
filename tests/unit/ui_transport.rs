@@ -12,22 +12,35 @@ use std::sync::{
 use std::time::Duration;
 
 use agentmux::transports::{
-    DeliveryEnvelope, DeliveryPayloadMode, SendOutcome, Transport, UiBroadcastStatus,
+    DeliveryEnvelope, DeliveryMessage, DeliveryParty, SendOutcome, Transport, UiBroadcastStatus,
     UiIncomingMessage, UiTransport, UiTransportServices,
 };
 
 fn ui_envelope(quiescence_timeout: Option<Duration>) -> DeliveryEnvelope {
     DeliveryEnvelope {
         message_id: "m-1".to_string(),
-        payload_mode: DeliveryPayloadMode::EnvelopeMessage,
-        rendered: "hello ui".to_string(),
+        message: DeliveryMessage {
+            body: "hello ui".to_string(),
+            created_at: "2026-03-05T00:00:00Z".to_string(),
+            namespace: "party".to_string(),
+            sender: DeliveryParty {
+                session: "alice@party".to_string(),
+                display_name: Some("Alice".to_string()),
+            },
+            target: DeliveryParty {
+                session: "bob@party".to_string(),
+                display_name: Some("Bob".to_string()),
+            },
+            cc: vec![DeliveryParty {
+                session: "carol@party".to_string(),
+                display_name: None,
+            }],
+            authenticated_identity: Some("principal-alice".to_string()),
+        },
         append_enter: true,
         choice_decider_sessions: Vec::new(),
         quiet_window: Duration::from_millis(1),
         quiescence_timeout,
-        sender_session: "alice@party".to_string(),
-        cc_sessions: vec!["carol@party".to_string()],
-        authenticated_identity: Some("principal-alice".to_string()),
     }
 }
 

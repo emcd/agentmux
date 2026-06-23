@@ -779,15 +779,38 @@ async fn relay_delivery_sends_submit_in_separate_tmux_command() {
 
     let inscriptions =
         fs::read_to_string(inscriptions_root.join("relay.log")).expect("read relay inscriptions");
+    // Isolate the envelope-metadata event itself: a whole-log substring scan
+    // would match `bundle_name`/`namespace` carried by unrelated inscriptions
+    // (e.g. relay.send.async.queued), so assert on this event's own `details`.
+    let metadata_details = inscriptions
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|event| {
+            event.get("event").and_then(serde_json::Value::as_str)
+                == Some("relay.send.envelope.metadata")
+        })
+        .and_then(|event| event.get("details").cloned())
+        .expect("expected a relay.send.envelope.metadata inscription with details");
+    let details = metadata_details
+        .as_object()
+        .expect("envelope metadata details is an object");
+    for field in [
+        "schema_version",
+        "message_id",
+        "namespace",
+        "sender_session",
+        "target_sessions",
+        "created_at",
+    ] {
+        assert!(
+            details.contains_key(field),
+            "envelope metadata must include {field}, details={details:?}"
+        );
+    }
     assert!(
-        inscriptions.contains("\"event\":\"relay.send.envelope.metadata\"")
-            && inscriptions.contains("\"schema_version\"")
-            && inscriptions.contains("\"message_id\"")
-            && inscriptions.contains("\"bundle_name\"")
-            && inscriptions.contains("\"sender_session\"")
-            && inscriptions.contains("\"target_sessions\"")
-            && inscriptions.contains("\"created_at\""),
-        "expected out-of-band envelope metadata inscription, inscriptions={inscriptions:?}"
+        !details.contains_key("bundle_name"),
+        "envelope metadata must use namespace, not the retired bundle_name field, \
+         details={details:?}"
     );
 }
 

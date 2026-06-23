@@ -38,7 +38,7 @@ The envelope SHALL use boundary-delimited framing in pane text.
 
 Boundary token introduction SHALL be:
 
-- first boundary line immediately after header block:
+- leading boundary line preceding the header block:
   - `--agentmux-<message-id-without-hyphens>`
 
 Envelope end SHALL be indicated by matching closing boundary:

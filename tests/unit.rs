@@ -4,6 +4,8 @@ mod acp_transport;
 mod association;
 #[path = "unit/config/mod.rs"]
 mod config;
+#[path = "unit/delivery_message.rs"]
+mod delivery_message;
 #[path = "unit/envelope.rs"]
 mod envelope;
 #[path = "unit/relay.rs"]

@@ -2,9 +2,10 @@
 //!
 //! `AcpTransport` owns the per-target `PersistentAcpWorkerRuntime` (moved here
 //! from the relay delivery worker, which previously threaded it through
-//! `spawn_blocking`). [`Transport::mailw`] enqueues a rendered envelope on the
-//! transport's internal channel and returns an outcome future; the internal
-//! delivery task combines a contiguous envelope group into one ACP turn, drives
+//! `spawn_blocking`). [`Transport::mailw`] enqueues a structured delivery
+//! message on the transport's internal channel and returns an outcome future;
+//! the internal delivery task renders each message into pane-envelope text,
+//! combines a contiguous group into one ACP turn under the token budget, drives
 //! it to a terminal state (folding in what used to be the reader thread's
 //! `on_completion` body), and resolves the future for each contributing task.
 //!
@@ -153,9 +154,11 @@ type ReadinessMirror = Arc<dyn Fn(AcpWorkerReadinessState) + Send + Sync>;
 /// FIFO channel. The internal delivery task processes them in order; a `Raw`
 /// item acts as a batch barrier (flushes any preceding `Envelope` group first).
 enum WriteItem {
-    /// Relay-framed envelope for buffered combining and turn submission.
+    /// Structured delivery message for buffered combining and turn submission.
+    /// Boxed to keep the channel item small (the message carries full
+    /// attribution), so the `Raw` variant does not inflate every queued item.
     Envelope {
-        envelope: DeliveryEnvelope,
+        envelope: Box<DeliveryEnvelope>,
         outcome_tx: tokio::sync::oneshot::Sender<SingleDeliveryOutcome>,
     },
     /// Raw input delivered without buffering; acts as a batch barrier.
@@ -409,7 +412,7 @@ impl Transport for AcpTransport {
         let (outcome_tx, outcome_rx) = tokio::sync::oneshot::channel();
         if let Some(tx) = self.write_tx.as_ref() {
             if let Err(e) = tx.try_send(WriteItem::Envelope {
-                envelope,
+                envelope: Box::new(envelope),
                 outcome_tx,
             }) {
                 // Channel full or closed — resolve with terminal outcome,
@@ -659,7 +662,7 @@ fn acp_delivery_task(
                     break;
                 }
                 let mut batch = EnvelopeBatch {
-                    rendered: vec![envelope.rendered.clone()],
+                    rendered: vec![envelope.message.render_pane_envelope(&envelope.message_id)],
                     message_ids: vec![envelope.message_id.clone()],
                     decider_sessions: vec![envelope.choice_decider_sessions.clone()],
                     outcome_senders: vec![outcome_tx],
@@ -671,7 +674,9 @@ fn acp_delivery_task(
                             envelope: next_env,
                             outcome_tx: next_tx,
                         }) => {
-                            batch.rendered.push(next_env.rendered.clone());
+                            batch
+                                .rendered
+                                .push(next_env.message.render_pane_envelope(&next_env.message_id));
                             batch.message_ids.push(next_env.message_id.clone());
                             batch
                                 .decider_sessions
