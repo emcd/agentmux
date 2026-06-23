@@ -25,6 +25,7 @@ use std::{
 use serde_json::{Value, json};
 
 use crate::configuration::BundleMember;
+use crate::envelope::PromptBatchSettings;
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::signals::shutdown_requested;
 use crate::transports::contract::OutcomeFuture;
@@ -115,11 +116,11 @@ impl AcpWorkerDriver {
         runtime_directory: PathBuf,
         namespace: String,
         services: AcpDriverServices,
-        prompt_tokens_max: usize,
+        batch_settings: PromptBatchSettings,
     ) -> Self {
         Self {
             transport: Arc::new(Mutex::new(AcpTransport::new(
-                prompt_tokens_max,
+                batch_settings,
                 Some(Arc::clone(&services.mirror_state)),
             ))),
             namespace,

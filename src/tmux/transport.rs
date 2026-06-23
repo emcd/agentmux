@@ -88,7 +88,7 @@ struct DeliveryTaskContext {
 /// delivery task drains the channel, groups contiguous envelopes, waits for
 /// pane quiescence, and pastes.
 pub struct TmuxTransport {
-    prompt_tokens_max: usize,
+    batch_settings: PromptBatchSettings,
     sender: Option<mpsc::Sender<WriteItem>>,
     task_context: Option<DeliveryTaskContext>,
     shutdown_flag: Arc<AtomicBool>,
@@ -97,7 +97,7 @@ pub struct TmuxTransport {
 impl std::fmt::Debug for TmuxTransport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TmuxTransport")
-            .field("prompt_tokens_max", &self.prompt_tokens_max)
+            .field("batch_settings", &self.batch_settings)
             .field("sender", &self.sender.as_ref().map(|_| "..."))
             .finish()
     }
@@ -105,9 +105,9 @@ impl std::fmt::Debug for TmuxTransport {
 
 impl TmuxTransport {
     #[must_use]
-    pub fn new(prompt_tokens_max: usize) -> Self {
+    pub fn new(batch_settings: PromptBatchSettings) -> Self {
         Self {
-            prompt_tokens_max,
+            batch_settings,
             sender: None,
             task_context: None,
             shutdown_flag: Arc::new(AtomicBool::new(false)),
@@ -127,10 +127,7 @@ impl TmuxTransport {
         let (sender, receiver) = mpsc::channel(WRITE_CHANNEL_CAPACITY);
         self.sender = Some(sender);
         let shutdown_flag = Arc::clone(&self.shutdown_flag);
-        let batch_settings = PromptBatchSettings {
-            prompt_tokens_max: self.prompt_tokens_max,
-            ..Default::default()
-        };
+        let batch_settings = self.batch_settings;
         thread::spawn(move || {
             run_delivery_task(receiver, ctx, shutdown_flag, batch_settings);
         });

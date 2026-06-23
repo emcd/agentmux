@@ -70,7 +70,7 @@ pub use crate::configuration::PromptReadinessTemplate;
 // Pane-envelope rendering helpers. Canonical home is the transport-safe
 // `crate::envelope` module (it imports no relay internals), so coder transports
 // can render their own pane text from the structured delivery message.
-use crate::envelope::{AddressIdentity, EnvelopeRenderInput, render_envelope};
+use crate::envelope::{AddressIdentity, EnvelopeRenderInput, PromptBatchSettings, render_envelope};
 // Delivery/look wire vocabulary. Canonical home is the sibling `vocabulary`
 // module (below `crate::relay` in dependency order), so the transport contract
 // never depends on relay. The relay re-exports these from its own contract.
@@ -209,22 +209,23 @@ impl TransportImpl {
         runtime_directory: PathBuf,
         namespace: String,
         services: AcpDriverServices,
-        prompt_tokens_max: usize,
+        batch_settings: PromptBatchSettings,
     ) -> Self {
         Self::Acp(Box::new(AcpWorkerDriver::new(
             target_member,
             runtime_directory,
             namespace,
             services,
-            prompt_tokens_max,
+            batch_settings,
         )))
     }
 
-    /// Builds a tmux delivery transport carrying the per-prompt token budget the
-    /// internal delivery task consumes when combining a coalesced envelope group.
+    /// Builds a tmux delivery transport carrying the prompt-batch settings (token
+    /// budget and tokenizer profile) the internal delivery task consumes when
+    /// combining a coalesced envelope group.
     #[must_use]
-    pub fn tmux(prompt_tokens_max: usize) -> Self {
-        Self::Tmux(TmuxTransport::new(prompt_tokens_max))
+    pub fn tmux(batch_settings: PromptBatchSettings) -> Self {
+        Self::Tmux(TmuxTransport::new(batch_settings))
     }
 
     /// Builds a UI stream-broadcast transport for one target. The relay

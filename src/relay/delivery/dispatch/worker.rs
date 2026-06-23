@@ -6,6 +6,7 @@ use tokio::{runtime::Handle, sync::mpsc::UnboundedReceiver, task::JoinSet};
 
 use crate::{
     configuration::{BundleMember, SessionType},
+    envelope::PromptBatchSettings,
     runtime::{inscriptions::emit_inscription, signals::shutdown_requested},
 };
 
@@ -123,7 +124,7 @@ async fn run_async_delivery_worker(
     // combine, and the blocking IO all live inside each transport's internal
     // delivery task now, so the worker no longer batches, hoists quiescence, or
     // owns `spawn_blocking`.
-    let prompt_tokens_max = super::prompt_batch_settings().prompt_tokens_max;
+    let batch_settings = super::prompt_batch_settings();
     // `None` until the transport is constructed: eagerly for ACP (bootstrap),
     // lazily from the first task's `session_type()` for every other target.
     let mut transport: Option<TransportImpl> = match bootstrap {
@@ -134,7 +135,7 @@ async fn run_async_delivery_worker(
                 bootstrap.runtime_directory,
                 key.namespace.clone(),
                 services,
-                prompt_tokens_max,
+                batch_settings,
             );
             if let TransportImpl::Acp(driver) = &mut transport {
                 driver.bootstrap().await;
@@ -180,7 +181,7 @@ async fn run_async_delivery_worker(
                             task,
                             &key,
                             &mut transport,
-                            prompt_tokens_max,
+                            batch_settings,
                             &mut inflight,
                             pending.as_ref(),
                         );
@@ -213,12 +214,12 @@ fn submit_task(
     task: AsyncDeliveryTask,
     key: &AsyncWorkerKey,
     transport: &mut Option<TransportImpl>,
-    prompt_tokens_max: usize,
+    batch_settings: PromptBatchSettings,
     inflight: &mut JoinSet<InflightOutcome>,
     pending: &std::sync::atomic::AtomicUsize,
 ) {
     if transport.is_none() {
-        match build_worker_transport(&task, key, prompt_tokens_max) {
+        match build_worker_transport(&task, key, batch_settings) {
             Ok(built) => *transport = Some(built),
             Err(error) => {
                 super::super::async_worker::complete_task_outcome(&task, Err(error));
@@ -271,7 +272,7 @@ fn submit_task(
 fn build_worker_transport(
     task: &AsyncDeliveryTask,
     key: &AsyncWorkerKey,
-    prompt_tokens_max: usize,
+    batch_settings: PromptBatchSettings,
 ) -> Result<TransportImpl, RelayError> {
     if task.relay_wide_target {
         return Ok(TransportImpl::ui(build_ui_transport_services(key)));
@@ -280,7 +281,7 @@ fn build_worker_transport(
         resolve_target_member(task)?.expect("configured non-relay-wide target must have a member");
     match target_member.target.session_type() {
         SessionType::Tmux => {
-            let mut transport = TransportImpl::tmux(prompt_tokens_max);
+            let mut transport = TransportImpl::tmux(batch_settings);
             // tmux ignores the `choose` resolver (it raises no operator choices),
             // so a cancelling no-op chooser satisfies the `StartupContext` contract.
             let context = StartupContext {

@@ -186,8 +186,9 @@ pub struct AcpTransport {
     /// Shutdown signal to the delivery task. Dropping this signals the task to
     /// drain pending items and exit. `None` before first startup.
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
-    /// Per-prompt token budget for envelope combining.
-    prompt_tokens_max: usize,
+    /// Prompt-batch settings (token budget and tokenizer profile) for envelope
+    /// combining.
+    batch_settings: PromptBatchSettings,
     /// Target session id, captured at startup for permission correlation.
     target_session: String,
     /// Stable respawn-needed signal. Created once at construction (not per
@@ -204,14 +205,14 @@ impl std::fmt::Debug for AcpTransport {
             .field("has_runtime", &self.runtime.is_some())
             .field("readiness", &self.readiness())
             .field("has_write_channel", &self.write_tx.is_some())
-            .field("prompt_tokens_max", &self.prompt_tokens_max)
+            .field("batch_settings", &self.batch_settings)
             .finish()
     }
 }
 
 impl AcpTransport {
     #[must_use]
-    pub fn new(prompt_tokens_max: usize, mirror_state: Option<ReadinessMirror>) -> Self {
+    pub fn new(batch_settings: PromptBatchSettings, mirror_state: Option<ReadinessMirror>) -> Self {
         Self {
             runtime: None,
             chooser: None,
@@ -222,7 +223,7 @@ impl AcpTransport {
             }),
             write_tx: None,
             shutdown_tx: None,
-            prompt_tokens_max,
+            batch_settings,
             target_session: String::new(),
             respawn_needed_tx: tokio::sync::watch::channel(false).0,
         }
@@ -303,7 +304,7 @@ impl AcpTransport {
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
         let respawn_needed_tx = self.respawn_needed_tx.clone();
         let shared = Arc::clone(&self.shared);
-        let prompt_tokens_max = self.prompt_tokens_max;
+        let batch_settings = self.batch_settings;
         let chooser = self.chooser.clone();
         let target_session = self.target_session.clone();
 
@@ -323,7 +324,7 @@ impl AcpTransport {
                 session_id,
                 shared,
                 chooser,
-                prompt_tokens_max,
+                batch_settings,
                 target_session,
             );
         });
@@ -597,13 +598,9 @@ fn acp_delivery_task(
     session_id: String,
     shared: Arc<AcpSharedState>,
     chooser: Option<crate::transports::Chooser>,
-    prompt_tokens_max: usize,
+    batch_settings: PromptBatchSettings,
     target_session: String,
 ) {
-    let batch_settings = PromptBatchSettings {
-        prompt_tokens_max,
-        ..Default::default()
-    };
     let ctx = TurnContext {
         session_id: &session_id,
         shared: &shared,
