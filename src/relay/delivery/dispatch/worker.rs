@@ -52,12 +52,13 @@ pub(super) struct AcpWorkerBootstrap {
 
 /// Spawns the per-target async delivery worker as a tokio task.
 ///
-/// The worker awaits delivery tasks on a `tokio::sync::mpsc::UnboundedReceiver`
-/// and offloads the synchronous ACP / tmux delivery body to `spawn_blocking`,
-/// so the tokio runtime worker thread is not pinned during the IO. ACP
-/// bootstrap, respawn, and the per-target single-flight wait for prompt
-/// completion are likewise offloaded to blocking tasks. Shutdown is observed
-/// via `shutdown_requested()` polled between receives.
+/// The worker runs a concurrent produce-and-collect loop: a `select!` over
+/// `receiver.recv()` and a `JoinSet` of in-flight `OutcomeFuture`s submits
+/// each task to its transport via the non-blocking `mailw`/`raww` seam and
+/// collects the resolved outcomes. Blocking IO, quiescence/coalesce waits,
+/// ACP bootstrap/respawn, and readiness mirroring all live inside the
+/// transports' internal delivery tasks. Shutdown is observed via
+/// `shutdown_requested()` polled between receives.
 pub(super) fn spawn_async_delivery_worker(
     key: AsyncWorkerKey,
     receiver: UnboundedReceiver<AsyncDeliveryTask>,
@@ -71,15 +72,14 @@ pub(super) fn spawn_async_delivery_worker(
 
 /// Resolves the tokio runtime handle that hosts delivery worker tasks.
 ///
-/// In production the relay binary runs under `#[tokio::main]` and worker
-/// enqueue happens inside `spawn_blocking` from the relay accept loop or
-/// inline from an async stream handler, so a current runtime handle is
-/// always available and we reuse it. In CLI/test contexts where workers are
-/// enqueued without an ambient runtime (one-shot `request_relay` callers,
-/// startup helpers driven directly from sync tests), a process-wide
-/// fallback multi-thread runtime is created on demand. Both surfaces give
-/// the worker the multi-thread + blocking pool flavor it needs for the
-/// `spawn_blocking` calls inside the task body.
+/// In production the relay binary runs under `#[tokio::main]`, so a current
+/// runtime handle is always available and we reuse it. In CLI/test contexts
+/// where workers are enqueued without an ambient runtime (one-shot
+/// `request_relay` callers, startup helpers driven directly from sync
+/// tests), a process-wide fallback multi-thread runtime is created on
+/// demand. The fallback is multi-thread with a blocking pool because the
+/// transports' internal delivery tasks submit blocking IO via
+/// `spawn_blocking`.
 fn delivery_runtime_handle() -> Handle {
     if let Ok(handle) = Handle::try_current() {
         return handle;

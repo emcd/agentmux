@@ -114,8 +114,8 @@ pub struct PromptReadinessTemplate {
 
 /// Validated session type and delivery target configuration for one member.
 ///
-/// `Tmux` and `Acp` carry transport configuration; `Ui` and `Pubsub` are bare
-/// markers whose delivery paths are not yet implemented.
+/// `Tmux` and `Acp` carry transport configuration; `Ui` is first-class
+/// (`src/transports/ui.rs`); only `Pubsub` remains unimplemented.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "transport", content = "config")]
 pub enum TargetConfiguration {

@@ -120,16 +120,18 @@ exported from `src/relay/mod.rs`.
     mirroring all live inside the transports now; the loop never names an ACP type.
   - `async_worker.rs`: worker registry (tokio mpsc senders) and shutdown
     drain helpers.
-  - `acp_delivery.rs`: ACP lifecycle and prompt flow. ACP session-id
-    persistence and look-snapshot freshness derivation live in
-    `crate::acp::state` (moved out of `delivery/` by decouple-transport-layer
-    Slice 2a); the ACP client re-exports come directly from `crate::acp`.
+  - `choice_state.rs`: process-local choices queue (in-memory only; no persisted
+    state) and the ACP chooser closure that captures `choices_pending_max`.
+  - `observability.rs`: in-process pub/sub for ACP worker-state and
+    choices-queue mutations, exposed to tests and embedders.
+  - ACP lifecycle and prompt flow live in `src/acp/` (see `crate::acp`); the
+    `delivery/` module is no longer the home of ACP internals.
   - UI delivery is a first-class transport (`crate::transports::ui::UiTransport`),
     not a relay-internal special case: the worker resolves UI-routed targets to a
     `UiTransport` and delivers via `mailw`. The relay-side stream-broadcast
     touchpoints are injected as closures by `dispatch/worker.rs`
     (`build_ui_transport_services`), so the transport never imports `crate::relay`.
-  - `results.rs`, `quiescence.rs`: shared outcome and quiescence logic.
+  - `quiescence.rs`: shared quiescence wait primitive.
 
 ## Runtime Behavior Notes
 
