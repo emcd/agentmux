@@ -84,6 +84,24 @@ fn list_help_output_includes_sessions_subcommand() {
 }
 
 #[test]
+fn version_flag_prints_crate_version_and_succeeds() {
+    for flag in ["--version", "-V"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+            .arg(flag)
+            .output()
+            .unwrap_or_else(|err| panic!("run agentmux {flag}: {err}"));
+        assert!(output.status.success(), "{flag} should succeed: {output:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let expected = format!("agentmux {}", env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            stdout.trim(),
+            expected,
+            "unexpected {flag} output: {stdout}"
+        );
+    }
+}
+
+#[test]
 fn bare_agentmux_without_tty_prints_help_and_fails() {
     let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
         .output()
