@@ -38,11 +38,11 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
             })),
         ));
     }
-    let key = super::super::async_worker::AsyncWorkerKey {
-        runtime_directory: runtime_directory.to_path_buf(),
-        bundle_name: bundle_name.to_string(),
-        target_session: target_member.id.clone(),
-    };
+    let key = super::super::async_worker::build_worker_key(
+        bundle_name,
+        runtime_directory,
+        target_member.id.as_str(),
+    );
     if !super::super::async_worker::worker_exists(&key).map_err(|error| {
         (
             "internal_unexpected_failure".to_string(),
@@ -119,12 +119,12 @@ pub(in crate::relay) fn enqueue_async_delivery(task: AsyncDeliveryTask) -> Resul
 }
 
 fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
-    let bounded_acp_queue = super::super::async_worker::task_uses_acp_transport(&task)?;
-    let key = super::super::async_worker::AsyncWorkerKey {
-        runtime_directory: task.runtime_directory.clone(),
-        bundle_name: task.bundle.bundle_name.clone(),
-        target_session: task.target_session.clone(),
-    };
+    let bounded_acp_queue = super::super::async_worker::task_uses_acp_transport(&task);
+    let key = super::super::async_worker::build_worker_key(
+        task.bundle.bundle_name.as_str(),
+        task.runtime_directory.as_path(),
+        task.target_session.as_str(),
+    );
     if bounded_acp_queue && !super::super::async_worker::worker_exists(&key)? {
         return Err(super::super::super::relay_error(
             "runtime_acp_worker_unavailable",
@@ -137,6 +137,11 @@ fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
     match super::super::async_worker::try_existing_worker(&key, task)? {
         None => Ok(()),
         Some(task) => {
+            // ACP workers are pre-created during startup and never lazily created
+            // here. Reaching the new-worker path with an ACP task means its worker
+            // has gone away, so report it unavailable rather than spin up a
+            // non-bootstrap worker. This guard makes the rest of this arm provably
+            // non-ACP, so the worker created below is always unbounded.
             if bounded_acp_queue {
                 return Err(super::super::super::relay_error(
                     "runtime_acp_worker_unavailable",
@@ -148,22 +153,7 @@ fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
             }
             let (sender, receiver) = tokio_mpsc::unbounded_channel::<AsyncDeliveryTask>();
             let pending = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            if bounded_acp_queue
-                && !super::super::async_worker::reserve_acp_pending_slot(pending.as_ref())
-            {
-                return Err(super::super::super::relay_error(
-                    "runtime_acp_queue_full",
-                    "ACP worker queue is full",
-                    Some(json!({
-                        "target_session": task.target_session,
-                        "max_pending": 64,
-                    })),
-                ));
-            }
             sender.send(task).map_err(|source| {
-                if bounded_acp_queue {
-                    super::super::async_worker::release_pending_slot(pending.as_ref());
-                }
                 super::super::super::relay_error(
                     "internal_unexpected_failure",
                     "failed to enqueue async delivery task",
@@ -171,7 +161,7 @@ fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
                 )
             })?;
             spawn_async_delivery_worker(key.clone(), receiver, pending.clone(), None);
-            super::super::async_worker::register_worker(key, sender, pending, bounded_acp_queue);
+            super::super::async_worker::register_worker(key, sender, pending, false);
             Ok(())
         }
     }

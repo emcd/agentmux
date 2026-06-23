@@ -145,5 +145,5 @@ fn acp_async_queue_overflow_returns_runtime_queue_full() {
     assert_eq!(error.code, "runtime_acp_queue_full");
     let details = error.details.expect("overflow details");
     assert_eq!(details["target_session"], "bravo");
-    assert_eq!(details["max_pending"], 64);
+    assert_eq!(details["pending_max"], 64);
 }

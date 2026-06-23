@@ -23,15 +23,6 @@ pub(in crate::relay) struct QuiescenceOptions {
     pub quiescence_timeout: Option<Duration>,
 }
 
-impl Default for QuiescenceOptions {
-    fn default() -> Self {
-        Self {
-            quiet_window: Duration::from_millis(QUIET_WINDOW_MS_DEFAULT),
-            quiescence_timeout: Some(Duration::from_millis(QUIESCENCE_TIMEOUT_MS_DEFAULT)),
-        }
-    }
-}
-
 impl QuiescenceOptions {
     /// Async delivery is unbounded by design — bounded only by the relay
     /// lifetime via shutdown — so `quiescence_timeout` is always `None` here.

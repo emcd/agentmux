@@ -27,7 +27,7 @@ const ASYNC_SHUTDOWN_WAIT_POLL_MS: u64 = 25;
 const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delivery";
 const DROPPED_ON_SHUTDOWN_REASON_CODE: &str = "dropped_on_shutdown";
 const ACP_ERROR_CODE_QUEUE_FULL: &str = "runtime_acp_queue_full";
-const ACP_MAX_PENDING: usize = 64;
+const ACP_PENDING_MAX: usize = 64;
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(super) struct AsyncWorkerKey {
@@ -120,7 +120,7 @@ pub(super) fn try_existing_worker(
                 "ACP worker queue is full",
                 Some(json!({
                     "target_session": task.target_session,
-                    "max_pending": ACP_MAX_PENDING,
+                    "pending_max": ACP_PENDING_MAX,
                 })),
             ));
         }
@@ -295,20 +295,19 @@ pub(super) fn unregister_worker(key: &AsyncWorkerKey) {
     }
 }
 
-pub(super) fn task_uses_acp_transport(task: &AsyncDeliveryTask) -> Result<bool, RelayError> {
-    Ok(task
-        .bundle
+pub(super) fn task_uses_acp_transport(task: &AsyncDeliveryTask) -> bool {
+    task.bundle
         .members
         .iter()
         .find(|member| member.id == task.target_session)
         .map(|member| matches!(member.target, TargetConfiguration::Acp(_)))
-        .unwrap_or(false))
+        .unwrap_or(false)
 }
 
 pub(super) fn reserve_acp_pending_slot(pending: &AtomicUsize) -> bool {
     let mut current = pending.load(Ordering::Relaxed);
     loop {
-        if current >= ACP_MAX_PENDING {
+        if current >= ACP_PENDING_MAX {
             return false;
         }
         match pending.compare_exchange_weak(
