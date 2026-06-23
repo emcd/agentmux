@@ -25,13 +25,13 @@ pub(super) fn parse_host_relay_arguments(
             "--all" | "--include-bundle" | "--exclude-bundle" => {
                 return Err(RuntimeError::validation(
                     "validation_invalid_arguments",
-                    format!("'{}' is not supported in relay host MVP", arguments[index]),
+                    format!("'{}' is not supported by relay host", arguments[index]),
                 ));
             }
             value if !value.starts_with('-') => {
                 return Err(RuntimeError::validation(
                     "validation_invalid_arguments",
-                    format!("'{}' is not supported in relay host MVP", value),
+                    format!("'{}' is not supported by relay host", value),
                 ));
             }
             unknown => {

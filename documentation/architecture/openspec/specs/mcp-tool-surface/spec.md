@@ -5,7 +5,7 @@ The MCP tool inventory and per-tool request/response contracts surfaced to MCP c
 ## Requirements
 ### Requirement: MCP Tool Set
 
-The system SHALL expose the following MCP tools for relay MVP:
+The system SHALL expose the following MCP tools:
 
 - `list`
 - `help`
@@ -81,10 +81,10 @@ Unknown help queries SHALL fail fast with `validation_invalid_params`.
 - **THEN** the response includes JSON argument schema for the `choose` tool
 - **AND** includes canonical invoke shape
 
-### Requirement: Manual Bundle Configuration for MVP
+### Requirement: Manual Bundle Configuration
 
-The system SHALL treat bundle definitions as operator-managed configuration in
-MVP and SHALL NOT expose MCP tools that mutate bundle configuration.
+The system SHALL treat bundle definitions as operator-managed configuration
+and SHALL NOT expose MCP tools that mutate bundle configuration.
 
 #### Scenario: Exclude configuration mutation tools from MCP surface
 

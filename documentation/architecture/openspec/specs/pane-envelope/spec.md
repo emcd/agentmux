@@ -126,10 +126,10 @@ The system SHALL reserve MIME part type
 `application/vnd.agentmux.path-pointer+json` for future pointer-style
 attachments.
 
-#### Scenario: Ignore reserved extension part in MVP
+#### Scenario: Ignore reserved extension part
 
 - **WHEN** parser encounters reserved path-pointer MIME part
-- **THEN** parser ignores the part for MVP message execution
+- **THEN** parser ignores the part for message execution
 - **AND** does not treat presence as malformed
 
 ### Requirement: Prompt Batching Under Token Budget

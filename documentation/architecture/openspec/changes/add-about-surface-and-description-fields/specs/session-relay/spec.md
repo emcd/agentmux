@@ -47,7 +47,7 @@ Relay SHALL provide a read-only operation named `about`.
 - `requester_session` (required)
 - `session_id` (optional)
 
-MVP `about` scope SHALL remain same-bundle only. Bundle scope is derived
+`about` scope SHALL remain same-bundle only. Bundle scope is derived
 from the request's routing namespace (frame-level namespace, defaulting to
 the connection's bound bundle); no in-payload bundle selector is accepted.
 
@@ -105,7 +105,7 @@ Relay SHALL evaluate `about` requests in this order:
 2. authorization policy evaluation
 3. response construction
 
-`about` authorization SHALL reuse capability label `list.read` in MVP.
+`about` authorization SHALL reuse capability label `list.read`.
 
 If request is valid/resolved but denied by policy, relay SHALL return
 `authorization_forbidden` with canonical denial details schema.

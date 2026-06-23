@@ -172,7 +172,7 @@ invocation SHALL use the same resolved runtime roots as TUI startup:
 
 ### Requirement: TUI Auto-Spawn Relay Lifecycle Ownership
 
-In MVP, relay auto-start from `agentmux tui` SHALL be bootstrap-only.
+Relay auto-start from `agentmux tui` SHALL be bootstrap-only.
 
 `agentmux tui` SHALL NOT terminate a relay process on TUI exit solely because
 that relay was auto-started by that TUI invocation.
@@ -378,7 +378,7 @@ Group naming rules:
 
 - reserved/system group names are uppercase
 - custom group names are lowercase
-- MVP reserved group `ALL` is implicit and selects all configured bundles
+- The reserved group `ALL` is implicit and selects all configured bundles
 
 #### Scenario: Resolve custom group for bundle lifecycle command
 
@@ -427,7 +427,7 @@ trust boundary:
 
 ### Requirement: Persistent Relay Client Mode for MCP and TUI
 
-MCP and TUI relay clients SHALL use persistent relay stream connections in MVP
+MCP and TUI relay clients SHALL use persistent relay stream connections
 rather than per-request reconnect behavior.
 
 MCP and TUI clients SHALL perform `hello` registration on stream setup before
@@ -511,8 +511,7 @@ Bundle resolution for session-selected `agentmux send` SHALL be:
 2. `default-bundle` from active global `tui.toml`
 3. fail-fast `validation_unknown_bundle`
 
-Association-derived sender fallback SHALL NOT be used for these surfaces in
-MVP.
+Association-derived sender fallback SHALL NOT be used for these surfaces.
 
 If selected session resolves to invalid sender identity, runtime SHALL fail with
 `validation_unknown_sender`.

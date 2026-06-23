@@ -3,9 +3,9 @@
 ## Purpose
 The TUI surface contracts for the two-mode (Communication/Interaction) workbench. The spec governs recipient entry/autocomplete/picker overlay behavior (canonical target identifiers only; configured session `name` is not a send-target token), async delivery event inspection with the pending-deliveries indicator, the session-scoped choice decisioning workflow, snapshot/replay dedupe by `choice_request_id`, and mode-switch key bindings (F4 toggles Communication/Interaction with per-mode state preservation). TUI sender identity precedence against `users.toml` defaults and TUI raww dispatch/queued-response handling are also normative.
 ## Requirements
-### Requirement: Initial TUI MVP Workflow Coverage
+### Requirement: Initial TUI Workflow Coverage
 
-The system SHALL define an initial TUI MVP that covers these operator
+The system SHALL define an initial TUI that covers these operator
 workflows:
 
 - recipient discovery/selection,
@@ -13,8 +13,8 @@ workflows:
 - look snapshot inspection,
 - delivery-events inspection and pending indicator.
 
-The MVP SHALL reuse existing relay delivery and inspection semantics.
-The MVP SHALL consume inbound message and delivery-outcome updates from relay
+The TUI SHALL reuse existing relay delivery and inspection semantics.
+The TUI SHALL consume inbound message and delivery-outcome updates from relay
 stream transport contracts defined in
 `add-relay-stream-hello-transport-mvp`.
 
@@ -71,7 +71,7 @@ The TUI SHALL support `@`-prefixed completion trigger behavior in `To`:
 The TUI SHALL provide a keyboard-opened recipient picker overlay (default
 shortcut `F2`) that allows inserting recipients into `To`.
 
-Function keys are reserved for overlay windows in MVP; completion behavior
+Function keys are reserved for overlay windows. Completion behavior
 SHALL NOT depend on `F4`.
 
 #### Scenario: Use Tab for in-place recipient completion
@@ -113,7 +113,7 @@ The TUI SHALL provide a delivery events overlay (default shortcut `F3`) for
 outcome visibility and SHALL expose a pending-deliveries indicator in the main
 surface status context.
 
-#### Scenario: Send requests use async mode in MVP
+#### Scenario: Send requests use async mode
 
 - **WHEN** an operator sends a message from TUI
 - **THEN** the relay request uses async delivery behavior
@@ -132,17 +132,17 @@ The TUI target identifier grammar SHALL support:
 - local identifiers: `<session-id>`
 - qualified identifiers: `<bundle-id>/<session-id>` (reserved for future use)
 
-MVP delivery/inspection behavior SHALL remain same-bundle-only.
+Delivery/inspection behavior SHALL remain same-bundle-only.
 
-Qualified identifiers implying cross-bundle scope SHALL be rejected in MVP with
+Qualified identifiers implying cross-bundle scope SHALL be rejected with
 unsupported-scope validation behavior.
 
-#### Scenario: Accept local identifier in MVP
+#### Scenario: Accept local identifier
 
 - **WHEN** an operator targets `<session-id>` in associated bundle context
 - **THEN** the TUI treats that target as valid for send/look workflows
 
-#### Scenario: Reject cross-bundle-qualified identifier in MVP
+#### Scenario: Reject cross-bundle-qualified identifier
 
 - **WHEN** an operator targets `<bundle-id>/<session-id>` outside associated
   bundle context
@@ -169,9 +169,9 @@ operator-visible error rendering.
 - **WHEN** send or look invocation fails with `validation_unknown_target`
 - **THEN** the TUI error surface includes that stable validation code
 
-### Requirement: Explicit MVP Non-Goals
+### Requirement: Explicit Non-Goals
 
-The initial TUI MVP SHALL exclude:
+The TUI SHALL exclude:
 
 - cross-bundle delivery/inspection implementation,
 - multi-relay host-fleet orchestration UI,
@@ -180,9 +180,9 @@ The initial TUI MVP SHALL exclude:
 - rich-editor extensions (attachments/templates/multi-buffer drafts),
 - free-form `@mention` parser semantics.
 
-#### Scenario: Defer free-form mention parser in MVP
+#### Scenario: Defer free-form mention parser
 
-- **WHEN** evaluating MVP compose behavior
+- **WHEN** evaluating compose behavior
 - **THEN** recipient entry remains explicit `To` with deterministic IDs
 - **AND** free-form mention parsing remains out of scope
 
@@ -203,9 +203,9 @@ Bundle resolution:
 2. `default-bundle` from global `users.toml`
 3. fail-fast `validation_unknown_bundle`
 
-`agentmux tui --sender` SHALL NOT be supported in MVP.
+`agentmux tui --sender` SHALL NOT be supported.
 
-Association-derived sender fallback SHALL NOT be used for TUI startup in MVP.
+Association-derived sender fallback SHALL NOT be used for TUI startup.
 
 TUI runtime SHALL use resolved session `id` consistently for
 relay-backed operations in that process.

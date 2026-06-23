@@ -8,14 +8,14 @@ relying on external docs that may drift from active runtime config.
 
 - Add one read-only `about` contract across relay, CLI, and MCP.
 - Add optional bundle/session `description` fields in bundle config.
-- Keep MVP scope same-bundle only.
-- Reuse existing authorization capability mapping (`list.read`) for MVP.
+- Keep scope same-bundle only.
+- Reuse existing authorization capability mapping (`list.read`).
 - Lock deterministic machine-readable schema and selector/error behavior.
 
 ## Non-Goals
 
 - No authorization model redesign.
-- No cross-bundle about support in MVP.
+- No cross-bundle about support.
 - No mutable write/update surface for descriptions.
 
 ## Decisions
@@ -30,7 +30,7 @@ relying on external docs that may drift from active runtime config.
     - session `description` <= 512 UTF-8 characters.
 - Decision: about auth reuses `list.read`; deny path remains
   `authorization_forbidden` with canonical details schema.
-- Decision: about remains same-bundle only in MVP. Bundle scope is derived
+- Decision: about remains same-bundle only. Bundle scope is derived
   structurally from the request's routing namespace; no in-payload bundle
   selector is accepted in the relay or MCP request.
 - Decision: response shape is exact and stable across CLI machine output and MCP
@@ -45,8 +45,8 @@ relying on external docs that may drift from active runtime config.
 ## Risks / Trade-offs
 
 - Reusing `list.read` for `about` may couple future policy granularity for
-  metadata visibility. This is acceptable for MVP simplicity and can be split
-  later if needed.
+  metadata visibility. This is acceptable for current simplicity and can be
+  split later if needed.
 - Explicit null serialization constrains adapter flexibility but avoids
   cross-surface drift.
 

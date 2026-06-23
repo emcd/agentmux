@@ -14,12 +14,12 @@ can drift from active configuration.
 - Add CLI read surface:
   - `agentmux about`
   - `agentmux about --session <session-id>`
-  - optional `--bundle <bundle-id>` selector with same-bundle MVP lock
+  - optional `--bundle <bundle-id>` selector with same-bundle lock
 - Add MCP read surface:
   - tool `about` with optional `session_id` and `bundle_name`
 - Add relay `about` operation contract with deterministic response schema,
   selector semantics, and error taxonomy.
-- Reuse authorization capability `list.read` for `about` in MVP.
+- Reuse authorization capability `list.read` for `about`.
 
 ## Impact
 
