@@ -3,12 +3,12 @@
 //! Pure directory module. This file is an operator-hub: it only declares
 //! submodules and re-exports the public surface (`McpConfiguration`,
 //! `McpServer`, `run`). All other types (`McpState`, the shared relay
-//! helpers, the `#[tool_handler]` impl) live in `core.rs`; the per-tool
+//! helpers, the `#[tool_handler]` impl) live in `service.rs`; the per-tool
 //! `#[tool_router]` impl blocks live in `handlers/`.
 
-mod core;
 mod handlers;
+mod service;
 
-pub use core::McpConfiguration;
-pub(crate) use core::McpServer;
-pub use core::run;
+pub use service::McpConfiguration;
+pub(crate) use service::McpServer;
+pub use service::run;

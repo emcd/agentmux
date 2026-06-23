@@ -140,8 +140,8 @@ This module implements the MCP stdio server for `agentmux`.
   - Pure directory module holding the MCP server surface.
 - `server/mod.rs`
   - Operator-hub: only `mod` declarations and re-exports. Re-exports
-    `McpConfiguration` and `run` from `core`.
-- `server/core.rs`
+    `McpConfiguration` and `run` from `service`.
+- `server/service.rs`
   - `McpConfiguration`, `McpState`, `McpServer`, the shared relay helpers
     (`request_relay`, `request_relay_with_namespace`, `map_relay_stream_failure`),
     the `#[tool_handler] impl rmcp::ServerHandler for McpServer`, and

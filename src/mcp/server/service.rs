@@ -1,4 +1,4 @@
-//! MCP server core: state types, shared relay helpers, the `#[tool_handler]`
+//! MCP server service: state types, shared relay helpers, the `#[tool_handler]`
 //! impl, and `pub async fn run`. The per-tool `#[tool_router]` impl blocks
 //! live in `handlers/`.
 
