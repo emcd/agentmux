@@ -43,14 +43,14 @@ pub(super) struct HelloFrame {
 
 /// Registry key for a live stream connection.
 ///
-/// Session principals are keyed by `(bundle_name, session_id)` because their
+/// Session principals are keyed by `(namespace, session_id)` because their
 /// identity is bundle-local. Non-session principals (`@GLOBAL`, `@EXTERNAL`,
 /// `@RELAY`) are relay-wide and keyed by `principal_id` alone; a single relay
 /// socket serves every bundle, so these connections are not bundle-bound.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(super) enum RegistryKey {
     Session {
-        bundle_name: String,
+        namespace: String,
         session_id: String,
     },
     RelayWide {
@@ -78,9 +78,9 @@ impl StreamRegistration {
 
     /// Returns the bound bundle name for session principals; `None` for
     /// relay-wide principals, which carry no connection bundle binding.
-    pub(super) fn bundle_name(&self) -> Option<&str> {
+    pub(super) fn namespace(&self) -> Option<&str> {
         match &self.key {
-            RegistryKey::Session { bundle_name, .. } => Some(bundle_name.as_str()),
+            RegistryKey::Session { namespace, .. } => Some(namespace.as_str()),
             RegistryKey::RelayWide { .. } => None,
         }
     }
@@ -184,8 +184,8 @@ static STREAM_REGISTRY: OnceLock<StreamRegistry> = OnceLock::new();
 ///
 /// Non-session principals (`@GLOBAL`/`@EXTERNAL`/`@RELAY`) resolve to a
 /// relay-wide key; bare member ids and bundle-local sessions resolve to a
-/// `(bundle_name, session_id)` key.
-fn registry_key_for_target(bundle_name: &str, session_id: &str) -> RegistryKey {
+/// `(namespace, session_id)` key.
+fn registry_key_for_target(namespace: &str, session_id: &str) -> RegistryKey {
     match classify_principal_id(session_id) {
         Some(PrincipalType::User | PrincipalType::Application | PrincipalType::Relay) => {
             RegistryKey::RelayWide {
@@ -193,7 +193,7 @@ fn registry_key_for_target(bundle_name: &str, session_id: &str) -> RegistryKey {
             }
         }
         _ => RegistryKey::Session {
-            bundle_name: bundle_name.to_string(),
+            namespace: namespace.to_string(),
             session_id: session_id.to_string(),
         },
     }
@@ -430,18 +430,18 @@ pub(super) fn revoke_streams_for_identity(principal_id: &str, response: &RelayRe
     )
 }
 
-/// Tears down every live session connection bound to `bundle_name`. Used by the
+/// Tears down every live session connection bound to `namespace`. Used by the
 /// bundle file watcher when a bundle is unloaded (file removed) or reloaded
 /// (file modified): each affected session receives the supplied typed error
 /// frame (`runtime_bundle_unloaded` / `runtime_bundle_reloaded`) ahead of EOF.
 /// Relay-wide principals (`@GLOBAL`/`@EXTERNAL`/`@RELAY`) are never bundle-bound
 /// and are left untouched. Returns the number of connections torn down.
-pub(super) fn evict_streams_for_bundle(bundle_name: &str, response: &RelayResponse) -> usize {
+pub(super) fn evict_streams_for_bundle(namespace: &str, response: &RelayResponse) -> usize {
     evict_streams(
         |key, _entry| {
             matches!(
                 key,
-                RegistryKey::Session { bundle_name: bound, .. } if bound == bundle_name
+                RegistryKey::Session { namespace: bound, .. } if bound == namespace
             )
         },
         response,
@@ -506,7 +506,7 @@ pub(super) enum StreamEventSendOutcome {
 // receives events across all bundles). Session ids are returned for
 // bundle-local entries and `principal_id`s for relay-wide entries; both forms
 // round-trip through `send_event_to_registered_ui`, which re-derives the key.
-pub(super) fn list_registered_ui_sessions_for_bundle(bundle_name: &str) -> Vec<String> {
+pub(super) fn list_registered_ui_sessions_for_bundle(namespace: &str) -> Vec<String> {
     let registry = stream_registry();
     let Ok(entries) = registry.entries.lock() else {
         return Vec::new();
@@ -520,9 +520,9 @@ pub(super) fn list_registered_ui_sessions_for_bundle(bundle_name: &str) -> Vec<S
             entry.writer.as_ref()?;
             match key {
                 RegistryKey::Session {
-                    bundle_name: entry_bundle,
+                    namespace: entry_bundle,
                     session_id,
-                } if entry_bundle == bundle_name => Some(session_id.clone()),
+                } if entry_bundle == namespace => Some(session_id.clone()),
                 RegistryKey::RelayWide { principal_id } => Some(principal_id.clone()),
                 RegistryKey::Session { .. } => None,
             }
@@ -561,16 +561,16 @@ pub(super) fn list_registered_relay_wide_sessions() -> Vec<(String, SessionType)
 // existing per-session filtering still works; bundle-local recipient ids are
 // bare and must be qualified, relay-wide principal ids pass through unchanged.
 pub(super) fn broadcast_event_to_bundle_ui(
-    bundle_name: &str,
+    namespace: &str,
     template: &RelayStreamEvent,
 ) -> Vec<String> {
-    let ui_session_ids = list_registered_ui_sessions_for_bundle(bundle_name);
+    let ui_session_ids = list_registered_ui_sessions_for_bundle(namespace);
     let mut delivered = Vec::new();
     for ui_session_id in ui_session_ids {
         let mut event = template.clone();
-        event.target_session = canonical_session_id(ui_session_id.as_str(), bundle_name);
+        event.target_session = canonical_session_id(ui_session_id.as_str(), namespace);
         if matches!(
-            send_event_to_registered_ui(bundle_name, ui_session_id.as_str(), &event),
+            send_event_to_registered_ui(namespace, ui_session_id.as_str(), &event),
             Ok(StreamEventSendOutcome::Delivered)
         ) {
             delivered.push(ui_session_id);
@@ -580,12 +580,12 @@ pub(super) fn broadcast_event_to_bundle_ui(
 }
 
 pub(super) fn send_event_to_registered_ui(
-    bundle_name: &str,
+    namespace: &str,
     session_id: &str,
     event: &RelayStreamEvent,
 ) -> Result<StreamEventSendOutcome, io::Error> {
     let registry = stream_registry();
-    let key = registry_key_for_target(bundle_name, session_id);
+    let key = registry_key_for_target(namespace, session_id);
     let (session_type, writer) = {
         let entries = registry
             .entries

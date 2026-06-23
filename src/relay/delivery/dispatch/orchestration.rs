@@ -21,7 +21,7 @@ pub(in crate::relay) fn wait_for_async_delivery_shutdown(timeout: Duration) -> u
 }
 
 pub(in crate::relay) fn initialize_acp_target_for_startup(
-    bundle_name: &str,
+    namespace: &str,
     runtime_directory: &std::path::Path,
     target_member: &BundleMember,
     choices_pending_max: usize,
@@ -39,7 +39,7 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
         ));
     }
     let key = super::super::async_worker::build_worker_key(
-        bundle_name,
+        namespace,
         runtime_directory,
         target_member.id.as_str(),
     );
@@ -82,7 +82,7 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
     let deadline = Instant::now() + Duration::from_millis(ACP_STARTUP_PRIME_TIMEOUT_MS);
     loop {
         let readiness =
-            get_acp_worker_state(bundle_name, runtime_directory, target_member.id.as_str());
+            get_acp_worker_state(namespace, runtime_directory, target_member.id.as_str());
         match readiness {
             Some(AcpWorkerReadinessState::Available | AcpWorkerReadinessState::Busy) => {
                 return Ok(());

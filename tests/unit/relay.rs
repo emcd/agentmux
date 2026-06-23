@@ -826,7 +826,7 @@ fn look_denies_same_bundle_non_self_target_under_default_self_scope() {
     let details = response.details.expect("authorization details");
     assert_eq!(details["capability"], "look.inspect");
     assert_eq!(details["requester_session"], "alpha");
-    assert_eq!(details["bundle_name"], "party");
+    assert_eq!(details["namespace"], "party");
     // The routing/authorization spine reports the canonical `<session>@<bundle>`
     // target uniformly (same-bundle and cross-bundle alike).
     assert_eq!(details["target_session"], "bravo@party");

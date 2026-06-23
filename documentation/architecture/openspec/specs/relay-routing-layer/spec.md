@@ -11,7 +11,7 @@ operation handler. The resolution stage SHALL operate **without consulting
 bundle configuration or the bundle catalog** — it classifies targets from their
 principal-ID suffixes alone — and SHALL:
 
-- Parse each target's `@<namespace>` suffix into a `ResolvedTarget { bundle_name,
+- Parse each target's `@<namespace>` suffix into a `ResolvedTarget { namespace,
   session_id, relay_wide }`: an `@GLOBAL` suffix marks a relay-wide target; an
   `@<bundle>` suffix names that bundle; the bundle-local session id is the
   portion before the suffix.
@@ -21,7 +21,7 @@ principal-ID suffixes alone — and SHALL:
 - Identify the requester's dispatch (home) bundle: the sender's bound bundle
   for session principals, or the bundle named by the first bundle-qualified
   target for relay-wide principals.
-- Return a `ResolvedRoute { dispatch_bundle_name, requester_session, targets }`
+- Return a `ResolvedRoute { dispatch_namespace, requester_session, targets }`
   to the authorization stage.
 
 Target existence (membership), transport type, and runtime directory are NOT
@@ -31,10 +31,10 @@ body after authorization (see Operation Body Contract).
 #### Scenario: Single target classified from its suffix
 
 - **WHEN** the relay receives a Look or Raww request targeting `agent@bundle-a`
-- **THEN** the resolution stage produces `ResolvedTarget { bundle_name:
+- **THEN** the resolution stage produces `ResolvedTarget { namespace:
   bundle-a, session_id: agent, relay_wide: false }` without loading bundle
   configuration
-- **AND** `dispatch_bundle_name` is the requester's home bundle
+- **AND** `dispatch_namespace` is the requester's home bundle
 
 #### Scenario: Multi-target Send classified per target
 

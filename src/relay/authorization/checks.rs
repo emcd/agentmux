@@ -23,7 +23,7 @@ use super::resolution::{controls_for_requester, resolve_relay_principal_controls
 struct AuthorizationDecisionContext<'a> {
     capability: &'a str,
     requester_session: &'a str,
-    bundle_name: &'a str,
+    namespace: &'a str,
     reason: &'a str,
     target_session: Option<&'a str>,
     targets: Option<&'a [String]>,
@@ -119,7 +119,7 @@ pub(in crate::relay) fn authorize_route(
         AuthorizationDecisionContext {
             capability: profile.capability.label(),
             requester_session: route.requester_session.as_str(),
-            bundle_name: dispatch_namespace,
+            namespace: dispatch_namespace,
             reason: tier_denial_reason(minimum),
             target_session,
             targets,
@@ -153,7 +153,7 @@ fn route_target_identifiers(route: &ResolvedRoute) -> Vec<String> {
         .iter()
         .filter_map(|target| {
             target.session_id.as_ref().map(|session_id| {
-                canonical_session_id(session_id.as_str(), target.bundle_name.as_str())
+                canonical_session_id(session_id.as_str(), target.namespace.as_str())
             })
         })
         .collect()
@@ -183,7 +183,7 @@ pub(in crate::relay) fn authorize_choose(
         AuthorizationDecisionContext {
             capability: "choose",
             requester_session,
-            bundle_name: bundle.bundle_name.as_str(),
+            namespace: bundle.bundle_name.as_str(),
             reason: "choose policy scope does not allow choice decisions",
             target_session: None,
             targets: None,
@@ -216,7 +216,7 @@ pub(in crate::relay) fn authorize_updown(
         AuthorizationDecisionContext {
             capability: "updown",
             requester_session,
-            bundle_name: bundle.bundle_name.as_str(),
+            namespace: bundle.bundle_name.as_str(),
             reason: "updown policy scope does not allow bundle up/down transitions",
             target_session: None,
             targets: None,
@@ -240,7 +240,7 @@ pub(in crate::relay) fn authorize_choose_for_list(
         AuthorizationDecisionContext {
             capability: "choose",
             requester_session,
-            bundle_name: bundle.bundle_name.as_str(),
+            namespace: bundle.bundle_name.as_str(),
             reason: "choose policy scope does not allow choices list",
             target_session: None,
             targets: None,
@@ -259,7 +259,7 @@ fn authorize_scope(
     Err(authorization_forbidden(
         context.capability,
         context.requester_session,
-        context.bundle_name,
+        context.namespace,
         context.reason,
         context.target_session,
         context.targets,
@@ -270,7 +270,7 @@ fn authorize_scope(
 fn authorization_forbidden(
     capability: &str,
     requester_session: &str,
-    bundle_name: &str,
+    namespace: &str,
     reason: &str,
     target_session: Option<&str>,
     targets: Option<&[String]>,
@@ -279,7 +279,7 @@ fn authorization_forbidden(
     let mut details = json!({
         "capability": capability,
         "requester_session": requester_session,
-        "bundle_name": bundle_name,
+        "namespace": namespace,
         "reason": reason,
     });
     if let Some(value) = target_session

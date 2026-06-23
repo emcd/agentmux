@@ -73,11 +73,11 @@ fn choices_queue_publishers()
 /// Callers typically pair this with [`tokio::sync::watch::Receiver::changed`]
 /// and read [`tokio::sync::watch::Receiver::borrow`].
 pub fn subscribe_acp_worker_state(
-    bundle_name: &str,
+    namespace: &str,
     runtime_directory: &Path,
     target_session: &str,
 ) -> watch::Receiver<Option<AcpWorkerReadinessState>> {
-    let key = build_worker_key(bundle_name, runtime_directory, target_session);
+    let key = build_worker_key(namespace, runtime_directory, target_session);
     let mut publishers = worker_state_publishers()
         .lock()
         .expect("worker state publishers mutex poisoned");
@@ -146,15 +146,15 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn publishers_deliver_state_and_queue_events_to_subscribers() {
         let runtime_directory = PathBuf::from("/tmp/agentmux-observability-test-fake-runtime");
-        let bundle_name = "obstest_bundle";
+        let namespace = "obstest_bundle";
         let target_session = "obstest_target";
 
         // Worker-state watch: subscribe first, then publish, then await the
         // change notification and read the borrowed value.
         let mut state_receiver =
-            subscribe_acp_worker_state(bundle_name, runtime_directory.as_path(), target_session);
+            subscribe_acp_worker_state(namespace, runtime_directory.as_path(), target_session);
         assert_eq!(*state_receiver.borrow_and_update(), None);
-        let key = build_worker_key(bundle_name, runtime_directory.as_path(), target_session);
+        let key = build_worker_key(namespace, runtime_directory.as_path(), target_session);
         publish_acp_worker_state(&key, AcpWorkerReadinessState::Unavailable);
         state_receiver
             .changed()

@@ -75,7 +75,7 @@ pub(super) struct OperationProfile {
 /// with no session id.
 #[derive(Clone, Debug)]
 pub(super) struct ResolvedTarget {
-    pub bundle_name: String,
+    pub namespace: String,
     pub session_id: Option<String>,
     pub relay_wide: bool,
 }
@@ -134,7 +134,7 @@ impl ResolvedTarget {
     /// The asymmetry is intentional; the integration tests exercise both
     /// directions.
     fn reachable_at_home_tier(&self, dispatch_namespace: &str) -> bool {
-        self.relay_wide || self.bundle_name == dispatch_namespace
+        self.relay_wide || self.namespace == dispatch_namespace
     }
 
     /// Classifies this target's relationship to the requester within the
@@ -200,15 +200,15 @@ fn resolve_target(dispatch_namespace: &str, target: &str) -> Result<ResolvedTarg
     let requested = target.trim();
     match classify_principal_id(requested) {
         Some(PrincipalType::User) => Ok(ResolvedTarget {
-            bundle_name: dispatch_namespace.to_string(),
+            namespace: dispatch_namespace.to_string(),
             session_id: Some(requested.to_string()),
             relay_wide: true,
         }),
         Some(PrincipalType::Session) => {
-            let (session_id, bundle_name) = split_principal_id(requested)
+            let (session_id, namespace) = split_principal_id(requested)
                 .expect("session classification implies a parseable suffix");
             Ok(ResolvedTarget {
-                bundle_name: bundle_name.to_string(),
+                namespace: namespace.to_string(),
                 session_id: Some(session_id.to_string()),
                 relay_wide: false,
             })
@@ -305,7 +305,7 @@ pub(super) fn resolve_raww_route(
 /// List names no session target — routing is purely which bundle to enumerate,
 /// already resolved by the connection layer's dispatch split — so the route
 /// carries a single bundle-level target (no session id, never relay-wide) and
-/// the stage cannot fail. The target's `bundle_name` is the enumerated bundle; a
+/// the stage cannot fail. The target's `namespace` is the enumerated bundle; a
 /// cross-namespace enumeration (a peer bundle) raises the required tier to
 /// `all`, while a same-namespace one stays at `home`.
 ///
@@ -321,7 +321,7 @@ pub(super) fn resolve_list_route(
         dispatch_namespace: dispatch_namespace.to_string(),
         requester_session: requester_session.to_string(),
         targets: vec![ResolvedTarget {
-            bundle_name: enumerate_bundle.to_string(),
+            namespace: enumerate_bundle.to_string(),
             session_id: None,
             relay_wide: false,
         }],

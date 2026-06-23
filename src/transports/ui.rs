@@ -11,7 +11,7 @@
 //! The broadcast reaches the relay's stream registry (`send_event_to_registered_ui`)
 //! and emits relay stream events. Both are injected as opaque `Arc<dyn Fn>`s in
 //! [`UiTransportServices`], constructed relay-side closing over the target's
-//! `(bundle_name, target_session)`; the transport invokes them without a
+//! `(namespace, target_session)`; the transport invokes them without a
 //! back-edge, so `src/transports` never imports `crate::relay` (mirrors the
 //! `AcpDriverServices` pattern).
 //!
@@ -95,7 +95,7 @@ pub type UiBroadcastFn = Arc<dyn Fn(&UiIncomingMessage) -> UiBroadcastStatus + S
 pub type UiPhaseFn = Arc<dyn Fn(UiOutcomePhase) -> UiBroadcastStatus + Send + Sync>;
 
 /// Relay-provided UI broadcast touchpoints, injected once when the transport is
-/// built. Each closure closes over the target's `(bundle_name, target_session)`
+/// built. Each closure closes over the target's `(namespace, target_session)`
 /// and the relay stream registry; the transport holds opaque `Arc<dyn Fn>`s, so
 /// `src/transports` never imports `crate::relay`.
 #[derive(Clone)]

@@ -101,7 +101,7 @@ impl std::fmt::Debug for AcpDriverServices {
 /// `mailw` is never stalled.
 pub struct AcpWorkerDriver {
     transport: Arc<Mutex<AcpTransport>>,
-    bundle_name: String,
+    namespace: String,
     runtime_directory: PathBuf,
     target_member: BundleMember,
     services: AcpDriverServices,
@@ -113,7 +113,7 @@ impl AcpWorkerDriver {
     pub fn new(
         target_member: BundleMember,
         runtime_directory: PathBuf,
-        bundle_name: String,
+        namespace: String,
         services: AcpDriverServices,
         prompt_tokens_max: usize,
     ) -> Self {
@@ -122,7 +122,7 @@ impl AcpWorkerDriver {
                 prompt_tokens_max,
                 Some(Arc::clone(&services.mirror_state)),
             ))),
-            bundle_name,
+            namespace,
             runtime_directory,
             target_member,
             services,
@@ -175,7 +175,7 @@ impl AcpWorkerDriver {
                 emit_inscription(
                     "relay.acp.worker.bootstrap_failed",
                     &json!({
-                        "bundle_name": self.bundle_name,
+                        "namespace": self.namespace,
                         "target_session": self.target_session(),
                         "error_code": error.code,
                         "reason": error.reason,
@@ -197,7 +197,7 @@ impl AcpWorkerDriver {
         let transport = Arc::clone(&self.transport);
         let respawn_needed = self.lock_transport().respawn_needed_subscribe();
         let services = self.services.clone();
-        let bundle_name = self.bundle_name.clone();
+        let namespace = self.namespace.clone();
         let runtime_directory = self.runtime_directory.clone();
         let target_member = self.target_member.clone();
         tokio::spawn(acp_respawn_monitor(
@@ -205,7 +205,7 @@ impl AcpWorkerDriver {
             respawn_needed,
             services,
             AcpRespawnState::new(),
-            bundle_name,
+            namespace,
             runtime_directory,
             target_member,
         ));
@@ -249,7 +249,7 @@ async fn acp_respawn_monitor(
     mut respawn_needed: tokio::sync::watch::Receiver<bool>,
     services: AcpDriverServices,
     mut respawn_state: AcpRespawnState,
-    bundle_name: String,
+    namespace: String,
     runtime_directory: PathBuf,
     target_member: BundleMember,
 ) {
@@ -275,7 +275,7 @@ async fn acp_respawn_monitor(
             &transport,
             &services,
             &mut respawn_state,
-            bundle_name.as_str(),
+            namespace.as_str(),
             runtime_directory.as_path(),
             &target_member,
         )
@@ -298,7 +298,7 @@ async fn run_acp_respawn(
     transport: &Arc<Mutex<AcpTransport>>,
     services: &AcpDriverServices,
     respawn_state: &mut AcpRespawnState,
-    bundle_name: &str,
+    namespace: &str,
     runtime_directory: &Path,
     target_member: &BundleMember,
 ) {
@@ -320,7 +320,7 @@ async fn run_acp_respawn(
         emit_inscription(
             "relay.acp.respawn.triggered",
             &json!({
-                "bundle_name": bundle_name,
+                "namespace": namespace,
                 "target_session": target_session,
                 "attempt": respawn_state.attempt,
                 "trigger_reason": RESPAWN_TRIGGER_REASON,
@@ -370,7 +370,7 @@ async fn run_acp_respawn(
                 emit_inscription(
                     "relay.acp.respawn.succeeded",
                     &json!({
-                        "bundle_name": bundle_name,
+                        "namespace": namespace,
                         "target_session": target_session,
                         "attempt": respawn_state.attempt,
                     }),
@@ -390,7 +390,7 @@ async fn run_acp_respawn(
                 emit_inscription(
                     "relay.acp.respawn.attempt_failed",
                     &json!({
-                        "bundle_name": bundle_name,
+                        "namespace": namespace,
                         "target_session": target_session,
                         "attempt": respawn_state.attempt,
                         "error_code": error.code,
@@ -406,7 +406,7 @@ async fn run_acp_respawn(
                     emit_inscription(
                         "relay.acp.respawn.permanent_failure",
                         &json!({
-                            "bundle_name": bundle_name,
+                            "namespace": namespace,
                             "target_session": target_session,
                             "attempts": respawn_state.attempt,
                             "final_error_code": error.code,

@@ -48,10 +48,7 @@ pub(super) fn build_delivery_message(
         created_at: created_at.to_string(),
         namespace: task.bundle.bundle_name.clone(),
         sender: DeliveryParty {
-            session: canonical_session_id(
-                task.sender.id.as_str(),
-                task.sender_bundle_name.as_str(),
-            ),
+            session: canonical_session_id(task.sender.id.as_str(), task.sender_namespace.as_str()),
             display_name: task.sender.name.clone(),
         },
         target: DeliveryParty {

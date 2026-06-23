@@ -37,10 +37,10 @@ pub(super) struct RequestPrincipal {
 #[derive(Clone, Debug)]
 pub(super) struct AsyncDeliveryTask {
     pub(super) bundle: BundleConfiguration,
-    /// Home bundle of the sender. Differs from `bundle` (the delivery context)
+    /// Home namespace of the sender. Differs from `bundle` (the delivery context)
     /// for cross-bundle fan-out, where `bundle` is the target's bundle; used to
     /// attribute and route the sender independently of the target's namespace.
-    pub(super) sender_bundle_name: String,
+    pub(super) sender_namespace: String,
     pub(super) sender: crate::configuration::BundleMember,
     /// Verified `principal_id` of the sender, carried into the delivered
     /// message envelope on the recipient side. `None` for socket-trust senders

@@ -124,11 +124,11 @@ pub(super) fn resolve_target_bundle(
     home_namespace: &str,
     home_bundle: Option<&BundleConfiguration>,
     home_runtime_directory: Option<&Path>,
-    target_bundle_name: &str,
+    target_namespace: &str,
     configuration_root: &Path,
     bundle_catalog: &BundleCatalog,
 ) -> Result<(BundleConfiguration, PathBuf), RelayError> {
-    if target_bundle_name == home_namespace
+    if target_namespace == home_namespace
         && let Some(home_bundle) = home_bundle
     {
         let runtime = home_runtime_directory
@@ -136,14 +136,14 @@ pub(super) fn resolve_target_bundle(
             .unwrap_or_default();
         return Ok((home_bundle.clone(), runtime));
     }
-    let Some(paths) = bundle_catalog.lookup(target_bundle_name) else {
+    let Some(paths) = bundle_catalog.lookup(target_namespace) else {
         return Err(relay_error(
             "validation_unknown_bundle",
             "target bundle is not configured on this relay",
-            Some(json!({ "bundle_name": target_bundle_name })),
+            Some(json!({ "bundle_name": target_namespace })),
         ));
     };
     let bundle =
-        load_bundle_configuration(configuration_root, target_bundle_name).map_err(map_config)?;
+        load_bundle_configuration(configuration_root, target_namespace).map_err(map_config)?;
     Ok((bundle, paths.runtime_directory.clone()))
 }

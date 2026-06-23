@@ -149,7 +149,7 @@ fn prepare_look(
     bundle_catalog: &BundleCatalog,
 ) -> Result<LookPrepared, RelayError> {
     let target_route = &route.targets[0];
-    let target_bundle_name = target_route.bundle_name.as_str();
+    let target_namespace = target_route.namespace.as_str();
     let target_session_id = target_route
         .session_id
         .as_deref()
@@ -176,7 +176,7 @@ fn prepare_look(
         home_namespace,
         home_bundle,
         home_runtime_directory,
-        target_bundle_name,
+        target_namespace,
         configuration_root,
         bundle_catalog,
     )?;
@@ -189,14 +189,14 @@ fn prepare_look(
             "validation_unknown_target",
             "target_session is not in bundle configuration",
             Some(json!({
-                "target_session": canonical_session_id(target_session_id, target_bundle_name),
+                "target_session": canonical_session_id(target_session_id, target_namespace),
             })),
         ));
     };
     let session_type = member.target.session_type();
     if !session_type.can_be_looked() {
         return Err(unsupported_operation(
-            canonical_session_id(target_session_id, target_bundle_name).as_str(),
+            canonical_session_id(target_session_id, target_namespace).as_str(),
             session_type,
             "can_be_looked",
         ));
@@ -376,7 +376,7 @@ fn execute_look(
         emit_inscription(
             "relay.look.response",
             &json!({
-                "bundle_name": look_bundle.bundle_name,
+                "namespace": look_bundle.bundle_name,
                 "requester_session": requester_session,
                 "target_session": target_session,
                 "snapshot_format": snapshot_format,

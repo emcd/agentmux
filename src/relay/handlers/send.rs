@@ -129,7 +129,7 @@ fn handle_send(
     emit_inscription(
         "relay.send.request",
         &json!({
-            "bundle_name": home_namespace,
+            "namespace": home_namespace,
             "requester_session": sender.session_id,
             "broadcast": broadcast,
             "target_count": targets.len(),
@@ -199,7 +199,7 @@ fn resolve_send_route_or_broadcast(
         .iter()
         .filter(|member| member.id != sender.session_id)
         .map(|member| RouteTarget {
-            bundle_name: home_namespace.to_string(),
+            namespace: home_namespace.to_string(),
             session_id: Some(member.id.clone()),
             relay_wide: false,
         })
@@ -266,7 +266,7 @@ fn execute_send(
             let message_id = Uuid::new_v4().to_string();
             let task = AsyncDeliveryTask {
                 bundle: group.bundle.clone(),
-                sender_bundle_name: home_namespace.to_string(),
+                sender_namespace: home_namespace.to_string(),
                 sender: sender_member.clone(),
                 authenticated_identity: authenticated_identity.clone(),
                 all_target_sessions: all_recipient_sessions.clone(),
@@ -284,7 +284,7 @@ fn execute_send(
             emit_inscription(
                 "relay.send.async.queued",
                 &json!({
-                    "bundle_name": group.bundle.bundle_name,
+                    "namespace": group.bundle.bundle_name,
                     "sender_session": sender.session_id,
                     "target_session": target.session_id,
                     "message_id": message_id,
@@ -325,7 +325,7 @@ fn execute_send(
         emit_inscription(
             "relay.send.response",
             &json!({
-            "bundle_name": home_namespace,
+            "namespace": home_namespace,
             "requester_session": requester_session,
             "result_count": results.len(),
             "delivered_count": delivered_count,
@@ -398,16 +398,16 @@ fn assemble_delivery_groups(
             }
             continue;
         }
-        let bundle_name = target.bundle_name.as_str();
+        let namespace = target.namespace.as_str();
         match ensure_bundle_group(
-            bundle_name,
+            namespace,
             configuration_root,
             bundle_catalog,
             &mut group_order,
             &mut groups_by_bundle,
         ) {
             Ok(()) => {
-                let is_member = groups_by_bundle.get(bundle_name).is_some_and(|group| {
+                let is_member = groups_by_bundle.get(namespace).is_some_and(|group| {
                     group
                         .bundle
                         .members
@@ -417,18 +417,18 @@ fn assemble_delivery_groups(
                 if is_member {
                     push_target(
                         &mut groups_by_bundle,
-                        bundle_name,
+                        namespace,
                         ResolvedTarget {
                             session_id: session_id.to_string(),
                             relay_wide: false,
                         },
                     );
                 } else {
-                    unknown_targets.push(canonical_session_id(session_id, bundle_name));
+                    unknown_targets.push(canonical_session_id(session_id, namespace));
                 }
             }
             Err(BundleGroupError::UnknownBundle) => {
-                unknown_targets.push(canonical_session_id(session_id, bundle_name));
+                unknown_targets.push(canonical_session_id(session_id, namespace));
             }
             Err(BundleGroupError::Relay(error)) => return Err(error),
         }
@@ -446,7 +446,7 @@ fn assemble_delivery_groups(
     // target (e.g. the home group when every target was a peer or relay-wide).
     Ok(group_order
         .into_iter()
-        .filter_map(|bundle_name| groups_by_bundle.remove(&bundle_name))
+        .filter_map(|namespace| groups_by_bundle.remove(&namespace))
         .filter(|group| !group.targets.is_empty())
         .collect())
 }
@@ -485,40 +485,40 @@ fn ensure_relay_wide_group(
 /// exist by the time this is called.
 fn push_target(
     groups_by_bundle: &mut HashMap<String, DeliveryGroup>,
-    bundle_name: &str,
+    namespace: &str,
     target: ResolvedTarget,
 ) {
-    if let Some(group) = groups_by_bundle.get_mut(bundle_name) {
+    if let Some(group) = groups_by_bundle.get_mut(namespace) {
         group.targets.push(target);
     }
 }
 
-/// Ensures a delivery group exists for `bundle_name`, loading the bundle's
+/// Ensures a delivery group exists for `namespace`, loading the bundle's
 /// configuration and authorization from the catalog when first seen. The home
 /// group (when the sender is bundle-bound) and already-seen peers are seeded, so
 /// they short-circuit; an unconfigured bundle is reported so the caller can fold
 /// it into `validation_unknown_target`.
 fn ensure_bundle_group(
-    bundle_name: &str,
+    namespace: &str,
     configuration_root: &Path,
     bundle_catalog: &BundleCatalog,
     group_order: &mut Vec<String>,
     groups_by_bundle: &mut HashMap<String, DeliveryGroup>,
 ) -> Result<(), BundleGroupError> {
-    if groups_by_bundle.contains_key(bundle_name) {
+    if groups_by_bundle.contains_key(namespace) {
         return Ok(());
     }
-    let Some(paths) = bundle_catalog.lookup(bundle_name) else {
+    let Some(paths) = bundle_catalog.lookup(namespace) else {
         return Err(BundleGroupError::UnknownBundle);
     };
-    let bundle = load_bundle_configuration(configuration_root, bundle_name)
+    let bundle = load_bundle_configuration(configuration_root, namespace)
         .map_err(|error| BundleGroupError::Relay(map_config(error)))?;
     let authorization = load_authorization_context(configuration_root, Some(&bundle))
         .map_err(BundleGroupError::Relay)?;
     let choice_decider_sessions = choose_authorized_ui_sessions(&authorization, &bundle);
-    group_order.push(bundle_name.to_string());
+    group_order.push(namespace.to_string());
     groups_by_bundle.insert(
-        bundle_name.to_string(),
+        namespace.to_string(),
         DeliveryGroup {
             bundle,
             runtime_directory: paths.runtime_directory.clone(),

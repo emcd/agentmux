@@ -207,14 +207,14 @@ impl TransportImpl {
     pub fn acp(
         target_member: BundleMember,
         runtime_directory: PathBuf,
-        bundle_name: String,
+        namespace: String,
         services: AcpDriverServices,
         prompt_tokens_max: usize,
     ) -> Self {
         Self::Acp(Box::new(AcpWorkerDriver::new(
             target_member,
             runtime_directory,
-            bundle_name,
+            namespace,
             services,
             prompt_tokens_max,
         )))
@@ -428,7 +428,7 @@ pub enum ChoiceMade {
 /// Inputs required to establish a transport runtime for one target.
 #[derive(Clone)]
 pub struct StartupContext {
-    pub bundle_name: String,
+    pub namespace: String,
     pub runtime_directory: PathBuf,
     pub target_member: BundleMember,
     /// Relay-injected, re-entrant resolver for operator choices. See [`Chooser`].
@@ -438,7 +438,7 @@ pub struct StartupContext {
 impl std::fmt::Debug for StartupContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StartupContext")
-            .field("bundle_name", &self.bundle_name)
+            .field("namespace", &self.namespace)
             .field("runtime_directory", &self.runtime_directory)
             .field("target_member", &self.target_member)
             .field("choose", &"<Chooser>")

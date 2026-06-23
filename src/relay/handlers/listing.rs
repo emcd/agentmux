@@ -185,7 +185,7 @@ fn execute_list(
                 "internal_unexpected_failure",
                 "failed to load startup failure history",
                 Some(json!({
-                    "bundle_name": enumerate_bundle.bundle_name,
+                    "namespace": enumerate_bundle.bundle_name,
                     "cause": cause,
                 })),
             )
@@ -215,7 +215,7 @@ fn execute_list(
         emit_inscription(
             "relay.list.response",
             &json!({
-                "bundle_name": bundle.id,
+                "namespace": bundle.id,
                 "requester_session": requester_session_id,
                 "hosted": bundle.hosted,
                 "state": bundle.state,

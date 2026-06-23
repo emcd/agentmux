@@ -190,13 +190,13 @@ pub(in crate::relay) fn build_identity_snapshot_event(
 
 pub(in crate::relay) fn emit_choices_snapshot_for_ui_registration(
     configuration_root: &Path,
-    bundle_name: &str,
+    namespace: &str,
     runtime_directory: &Path,
     ui_session_id: &str,
 ) -> Result<(), RelayError> {
     choices::emit_choices_snapshot_for_ui_registration(
         configuration_root,
-        bundle_name,
+        namespace,
         runtime_directory,
         ui_session_id,
     )
@@ -204,8 +204,8 @@ pub(in crate::relay) fn emit_choices_snapshot_for_ui_registration(
 
 /// Rewrites canonical `session@bundle` identities in an incoming request to
 /// their bundle-local form so internal lookups match configured member ids.
-fn normalize_request_identities(request: RelayRequest, bundle_name: &str) -> RelayRequest {
-    let bare = |id: String| bare_session_id(id.as_str(), bundle_name);
+fn normalize_request_identities(request: RelayRequest, namespace: &str) -> RelayRequest {
+    let bare = |id: String| bare_session_id(id.as_str(), namespace);
     match request {
         RelayRequest::List { requester_session } => RelayRequest::List {
             requester_session: requester_session.map(bare),

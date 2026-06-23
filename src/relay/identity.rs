@@ -20,28 +20,28 @@ const PSK_BYTE_LENGTH: usize = 32;
 const PRINCIPAL_FILE_MODE: u32 = 0o600;
 const PRINCIPAL_STORE_FORMAT_VERSION: u32 = 1;
 
-/// Returns the canonical `session@bundle` identity for a session id.
+/// Returns the canonical `session@namespace` identity for a session id.
 ///
 /// Global-user identities already carry the `@GLOBAL` suffix and are their own
-/// canonical form; bundle-local identities are qualified with the bundle name.
-pub(super) fn canonical_session_id(session_id: &str, bundle_name: &str) -> String {
+/// canonical form; bundle-local identities are qualified with the namespace.
+pub(super) fn canonical_session_id(session_id: &str, namespace: &str) -> String {
     if session_id.ends_with(GLOBAL_SESSION_SUFFIX) {
         session_id.to_string()
     } else {
-        format!("{session_id}@{bundle_name}")
+        format!("{session_id}@{namespace}")
     }
 }
 
 /// Returns the bundle-local session id for a possibly-canonical identity.
 ///
-/// Strips a trailing `@{bundle_name}` qualifier so internal lookups match
+/// Strips a trailing `@{namespace}` qualifier so internal lookups match
 /// configured member ids; global-user (`@GLOBAL`) identities and already-bare
 /// ids are returned unchanged.
-pub(super) fn bare_session_id(session_id: &str, bundle_name: &str) -> String {
+pub(super) fn bare_session_id(session_id: &str, namespace: &str) -> String {
     if session_id.ends_with(GLOBAL_SESSION_SUFFIX) {
         return session_id.to_string();
     }
-    let qualifier = format!("@{bundle_name}");
+    let qualifier = format!("@{namespace}");
     session_id
         .strip_suffix(qualifier.as_str())
         .unwrap_or(session_id)

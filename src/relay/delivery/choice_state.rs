@@ -83,7 +83,7 @@ pub(in crate::relay) struct ChoiceDecisionRequest {
 #[derive(Clone, Debug)]
 pub(in crate::relay) struct ChoiceEventContext {
     pub(in crate::relay) runtime_directory: PathBuf,
-    pub(in crate::relay) bundle_name: String,
+    pub(in crate::relay) namespace: String,
     pub(in crate::relay) authorized_ui_sessions: Vec<String>,
 }
 
@@ -151,18 +151,18 @@ fn pending_choice_option_ids(record: &PendingChoiceRequest) -> Vec<String> {
 /// `enqueue_choice_request` and `wait_for_choice_resolution`) until the operator
 /// decides, then maps the relay [`ChoiceResolutionOutcome`] into the transport's
 /// [`ChoiceMade`]. The closure closes over the target's
-/// `bundle_name`/`runtime_directory` and the per-bundle `choices_pending_max`
+/// `namespace`/`runtime_directory` and the per-bundle `choices_pending_max`
 /// queue bound; only the per-delivery decider list rides in each
 /// [`ChoiceToMake`].
 pub(in crate::relay) fn build_acp_chooser(
-    bundle_name: String,
+    namespace: String,
     runtime_directory: PathBuf,
     choices_pending_max: usize,
 ) -> Chooser {
     Arc::new(move |choice: ChoiceToMake| -> ChoiceMade {
         let context = ChoiceEventContext {
             runtime_directory: runtime_directory.clone(),
-            bundle_name: bundle_name.clone(),
+            namespace: namespace.clone(),
             authorized_ui_sessions: choice.decider_sessions.clone(),
         };
         resolve_choice_via_relay(&context, &choice, choices_pending_max)
@@ -361,7 +361,7 @@ pub(in crate::relay) fn emit_choices_snapshot_then_replay(
     let pending = list_pending_choice_requests(context.runtime_directory.as_path())?;
     let snapshot_event = RelayStreamEvent {
         event_type: "choices.snapshot".to_string(),
-        target_session: canonical_session_id(ui_session_id, context.bundle_name.as_str()),
+        target_session: canonical_session_id(ui_session_id, context.namespace.as_str()),
         created_at: timestamp_rfc3339(),
         payload: json!({
             "pending_count": pending.len(),
@@ -371,11 +371,10 @@ pub(in crate::relay) fn emit_choices_snapshot_then_replay(
                 .collect::<Vec<_>>(),
         }),
     };
-    let _ =
-        send_event_to_registered_ui(context.bundle_name.as_str(), ui_session_id, &snapshot_event);
+    let _ = send_event_to_registered_ui(context.namespace.as_str(), ui_session_id, &snapshot_event);
     for request in pending {
-        let event = choices_requested_event(ui_session_id, &context.bundle_name, &request);
-        let _ = send_event_to_registered_ui(context.bundle_name.as_str(), ui_session_id, &event);
+        let event = choices_requested_event(ui_session_id, &context.namespace, &request);
+        let _ = send_event_to_registered_ui(context.namespace.as_str(), ui_session_id, &event);
     }
     Ok(())
 }
@@ -428,7 +427,7 @@ pub(in crate::relay) fn invalidate_pending_for_respawn(
         emit_inscription(
             "relay.acp.respawn.choice_invalidated",
             &json!({
-                "bundle_name": context.bundle_name,
+                "namespace": context.namespace,
                 "choice_request_id": record.choice_request_id,
                 "message_id": record.message_id,
                 "target_session": record.target_session,
@@ -525,13 +524,13 @@ fn cancel_choice_request_on_shutdown(
 
 fn emit_choices_requested_event(context: &ChoiceEventContext, request: &PendingChoiceRequest) {
     for ui_session_id in &context.authorized_ui_sessions {
-        let event = choices_requested_event(ui_session_id.as_str(), &context.bundle_name, request);
-        let _ = send_event_to_registered_ui(context.bundle_name.as_str(), ui_session_id, &event);
+        let event = choices_requested_event(ui_session_id.as_str(), &context.namespace, request);
+        let _ = send_event_to_registered_ui(context.namespace.as_str(), ui_session_id, &event);
     }
     emit_inscription(
         "relay.choices.requested",
         &json!({
-            "bundle_name": context.bundle_name,
+            "namespace": context.namespace,
             "choice_request_id": request.choice_request_id,
             "message_id": request.message_id,
             "target_session": request.target_session,
@@ -567,7 +566,7 @@ fn emit_choices_resolved_event(
     for ui_session_id in &context.authorized_ui_sessions {
         let event = RelayStreamEvent {
             event_type: "choices.resolved".to_string(),
-            target_session: canonical_session_id(ui_session_id, context.bundle_name.as_str()),
+            target_session: canonical_session_id(ui_session_id, context.namespace.as_str()),
             created_at: timestamp_rfc3339(),
             payload: json!({
                 "message_id": request.message_id,
@@ -579,12 +578,12 @@ fn emit_choices_resolved_event(
                 "resolved_at": timestamp_rfc3339(),
             }),
         };
-        let _ = send_event_to_registered_ui(context.bundle_name.as_str(), ui_session_id, &event);
+        let _ = send_event_to_registered_ui(context.namespace.as_str(), ui_session_id, &event);
     }
     emit_inscription(
         "relay.choices.resolved",
         &json!({
-            "bundle_name": context.bundle_name,
+            "namespace": context.namespace,
             "choice_request_id": request.choice_request_id,
             "message_id": request.message_id,
             "outcome": outcome_label,
@@ -594,17 +593,17 @@ fn emit_choices_resolved_event(
 
 fn choices_requested_event(
     ui_session_id: &str,
-    bundle_name: &str,
+    namespace: &str,
     request: &PendingChoiceRequest,
 ) -> RelayStreamEvent {
     RelayStreamEvent {
         event_type: "choices.requested".to_string(),
-        target_session: canonical_session_id(ui_session_id, bundle_name),
+        target_session: canonical_session_id(ui_session_id, namespace),
         created_at: timestamp_rfc3339(),
         payload: json!({
             "message_id": request.message_id,
             "choice_request_id": request.choice_request_id,
-            "target_session": canonical_session_id(request.target_session.as_str(), bundle_name),
+            "target_session": canonical_session_id(request.target_session.as_str(), namespace),
             "requested_kind": request.requested_kind,
             "requested_details": request.requested_details,
             "enqueued_at": request.enqueued_at,
