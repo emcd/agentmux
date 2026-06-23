@@ -540,6 +540,7 @@ directory = "/tmp"
 // for its lifetime), so the second send routes to UI even though the first bound
 // the worker before any UI stream existed.
 #[test]
+#[ignore = "collect_events_for_target exits on first delivery_outcome; misses second message; see issues/relay/42"]
 fn relay_configured_ui_target_recovers_after_late_stream_registration() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
