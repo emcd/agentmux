@@ -105,7 +105,6 @@ pub struct AcpWorkerDriver {
     runtime_directory: PathBuf,
     target_member: BundleMember,
     services: AcpDriverServices,
-    max_prompt_tokens: usize,
 }
 
 impl AcpWorkerDriver {
@@ -116,27 +115,18 @@ impl AcpWorkerDriver {
         runtime_directory: PathBuf,
         bundle_name: String,
         services: AcpDriverServices,
-        max_prompt_tokens: usize,
+        prompt_tokens_max: usize,
     ) -> Self {
         Self {
             transport: Arc::new(Mutex::new(AcpTransport::new(
-                max_prompt_tokens,
+                prompt_tokens_max,
                 Some(Arc::clone(&services.mirror_state)),
             ))),
             bundle_name,
             runtime_directory,
             target_member,
             services,
-            max_prompt_tokens,
         }
-    }
-
-    /// Per-prompt token budget captured at construction, threaded from session
-    /// configuration. Handed to the internal ACP delivery task (write-interface
-    /// refactor section 3) when combining a coalesced envelope group into one turn.
-    #[must_use]
-    pub fn max_prompt_tokens(&self) -> usize {
-        self.max_prompt_tokens
     }
 
     fn target_session(&self) -> &str {

@@ -187,7 +187,7 @@ pub struct AcpTransport {
     /// drain pending items and exit. `None` before first startup.
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
     /// Per-prompt token budget for envelope combining.
-    max_prompt_tokens: usize,
+    prompt_tokens_max: usize,
     /// Target session id, captured at startup for permission correlation.
     target_session: String,
     /// Stable respawn-needed signal. Created once at construction (not per
@@ -204,14 +204,14 @@ impl std::fmt::Debug for AcpTransport {
             .field("has_runtime", &self.runtime.is_some())
             .field("readiness", &self.readiness())
             .field("has_write_channel", &self.write_tx.is_some())
-            .field("max_prompt_tokens", &self.max_prompt_tokens)
+            .field("prompt_tokens_max", &self.prompt_tokens_max)
             .finish()
     }
 }
 
 impl AcpTransport {
     #[must_use]
-    pub fn new(max_prompt_tokens: usize, mirror_state: Option<ReadinessMirror>) -> Self {
+    pub fn new(prompt_tokens_max: usize, mirror_state: Option<ReadinessMirror>) -> Self {
         Self {
             runtime: None,
             chooser: None,
@@ -222,7 +222,7 @@ impl AcpTransport {
             }),
             write_tx: None,
             shutdown_tx: None,
-            max_prompt_tokens,
+            prompt_tokens_max,
             target_session: String::new(),
             respawn_needed_tx: tokio::sync::watch::channel(false).0,
         }
@@ -303,7 +303,7 @@ impl AcpTransport {
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
         let respawn_needed_tx = self.respawn_needed_tx.clone();
         let shared = Arc::clone(&self.shared);
-        let max_prompt_tokens = self.max_prompt_tokens;
+        let prompt_tokens_max = self.prompt_tokens_max;
         let chooser = self.chooser.clone();
         let target_session = self.target_session.clone();
 
@@ -323,7 +323,7 @@ impl AcpTransport {
                 session_id,
                 shared,
                 chooser,
-                max_prompt_tokens,
+                prompt_tokens_max,
                 target_session,
             );
         });
@@ -606,11 +606,11 @@ fn acp_delivery_task(
     session_id: String,
     shared: Arc<AcpSharedState>,
     chooser: Option<crate::transports::Chooser>,
-    max_prompt_tokens: usize,
+    prompt_tokens_max: usize,
     target_session: String,
 ) {
     let batch_settings = PromptBatchSettings {
-        max_prompt_tokens,
+        prompt_tokens_max,
         ..Default::default()
     };
     let ctx = TurnContext {

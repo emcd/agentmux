@@ -95,14 +95,14 @@ pub enum TokenizerProfile {
 /// Prompt batching settings for envelope injection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PromptBatchSettings {
-    pub max_prompt_tokens: usize,
+    pub prompt_tokens_max: usize,
     pub tokenizer_profile: TokenizerProfile,
 }
 
 impl Default for PromptBatchSettings {
     fn default() -> Self {
         Self {
-            max_prompt_tokens: PROMPT_TOKENS_MAX_DEFAULT,
+            prompt_tokens_max: PROMPT_TOKENS_MAX_DEFAULT,
             tokenizer_profile: TokenizerProfile::default(),
         }
     }
@@ -349,7 +349,7 @@ pub fn batch_envelope_groups(
     envelopes: &[String],
     settings: PromptBatchSettings,
 ) -> Vec<EnvelopeBatchGroup> {
-    let budget = settings.max_prompt_tokens.max(1);
+    let budget = settings.prompt_tokens_max.max(1);
     let mut groups: Vec<EnvelopeBatchGroup> = Vec::new();
     let mut current = String::new();
     let mut member_count = 0usize;

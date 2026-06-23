@@ -209,22 +209,22 @@ impl TransportImpl {
         runtime_directory: PathBuf,
         bundle_name: String,
         services: AcpDriverServices,
-        max_prompt_tokens: usize,
+        prompt_tokens_max: usize,
     ) -> Self {
         Self::Acp(Box::new(AcpWorkerDriver::new(
             target_member,
             runtime_directory,
             bundle_name,
             services,
-            max_prompt_tokens,
+            prompt_tokens_max,
         )))
     }
 
     /// Builds a tmux delivery transport carrying the per-prompt token budget the
     /// internal delivery task consumes when combining a coalesced envelope group.
     #[must_use]
-    pub fn tmux(max_prompt_tokens: usize) -> Self {
-        Self::Tmux(TmuxTransport::new(max_prompt_tokens))
+    pub fn tmux(prompt_tokens_max: usize) -> Self {
+        Self::Tmux(TmuxTransport::new(prompt_tokens_max))
     }
 
     /// Builds a UI stream-broadcast transport for one target. The relay

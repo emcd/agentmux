@@ -200,7 +200,7 @@ fn batch_envelope_groups_splits_on_budget_and_reports_member_counts() {
     let kept_together = batch_envelope_groups(
         &envelopes,
         PromptBatchSettings {
-            max_prompt_tokens: 100,
+            prompt_tokens_max: 100,
             tokenizer_profile: TokenizerProfile::WhitespaceRough,
         },
     );
@@ -216,7 +216,7 @@ fn batch_envelope_groups_splits_on_budget_and_reports_member_counts() {
     let split = batch_envelope_groups(
         &envelopes,
         PromptBatchSettings {
-            max_prompt_tokens: 2,
+            prompt_tokens_max: 2,
             tokenizer_profile: TokenizerProfile::WhitespaceRough,
         },
     );
@@ -230,7 +230,7 @@ fn batch_envelope_groups_splits_on_budget_and_reports_member_counts() {
     let two_then_one = batch_envelope_groups(
         &envelopes,
         PromptBatchSettings {
-            max_prompt_tokens: 4,
+            prompt_tokens_max: 4,
             tokenizer_profile: TokenizerProfile::WhitespaceRough,
         },
     );

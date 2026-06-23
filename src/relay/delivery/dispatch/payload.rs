@@ -11,7 +11,7 @@ use super::super::super::{
     AsyncDeliveryTask, RelayError, SCHEMA_VERSION, bare_session_id, canonical_session_id,
 };
 
-const PROMPT_TOKENS_MAX_ENVVAR: &str = "AGENTMUX_MAX_PROMPT_TOKENS";
+const PROMPT_TOKENS_MAX_ENVVAR: &str = "AGENTMUX_PROMPT_TOKENS_MAX";
 const TOKENIZER_PROFILE_ENVVAR: &str = "AGENTMUX_TOKENIZER_PROFILE";
 
 pub(super) fn resolve_target_member(
@@ -143,18 +143,18 @@ fn co_recipient_parties(task: &AsyncDeliveryTask) -> Vec<DeliveryParty> {
 }
 
 pub(in crate::relay) fn prompt_batch_settings() -> PromptBatchSettings {
-    let max_prompt_tokens = std::env::var(PROMPT_TOKENS_MAX_ENVVAR)
+    let prompt_tokens_max = std::env::var(PROMPT_TOKENS_MAX_ENVVAR)
         .ok()
         .and_then(|value| value.trim().parse::<usize>().ok())
         .filter(|value| *value > 0)
-        .unwrap_or(PromptBatchSettings::default().max_prompt_tokens);
+        .unwrap_or(PromptBatchSettings::default().prompt_tokens_max);
     let tokenizer_profile = std::env::var(TOKENIZER_PROFILE_ENVVAR)
         .ok()
         .as_deref()
         .and_then(parse_tokenizer_profile)
         .unwrap_or_default();
     PromptBatchSettings {
-        max_prompt_tokens,
+        prompt_tokens_max,
         tokenizer_profile,
     }
 }

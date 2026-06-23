@@ -5,8 +5,10 @@
 //! [`raww`](Transport::raww) without blocking; the internal task drains the
 //! channel in FIFO order, accumulates contiguous envelopes into flush groups,
 //! waits for pane quiescence (using per-envelope hints from the head envelope),
-//! and pastes the group. Raw writes act as batch barriers: the task flushes any
-//! buffered envelope group before delivering the raw write.
+//! renders each envelope's pane text and combines them into token-budget-bounded
+//! prompts (the same greedy split the ACP transport applies to its turns), and
+//! pastes each combined prompt. Raw writes act as batch barriers: the task
+//! flushes any buffered envelope group before delivering the raw write.
 //!
 //! During the quiescence wait the task continues to drain the channel, absorbing
 //! any envelopes that arrive into the current flush group (coalesce-during-wait).
@@ -32,6 +34,7 @@ use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::configuration::{PromptReadinessTemplate, TargetConfiguration};
+use crate::envelope::{PromptBatchSettings, batch_envelope_groups};
 use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 use crate::runtime::signals::shutdown_requested;
 use crate::transports::{
@@ -85,7 +88,7 @@ struct DeliveryTaskContext {
 /// delivery task drains the channel, groups contiguous envelopes, waits for
 /// pane quiescence, and pastes.
 pub struct TmuxTransport {
-    max_prompt_tokens: usize,
+    prompt_tokens_max: usize,
     sender: Option<mpsc::Sender<WriteItem>>,
     task_context: Option<DeliveryTaskContext>,
     shutdown_flag: Arc<AtomicBool>,
@@ -94,7 +97,7 @@ pub struct TmuxTransport {
 impl std::fmt::Debug for TmuxTransport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TmuxTransport")
-            .field("max_prompt_tokens", &self.max_prompt_tokens)
+            .field("prompt_tokens_max", &self.prompt_tokens_max)
             .field("sender", &self.sender.as_ref().map(|_| "..."))
             .finish()
     }
@@ -102,20 +105,13 @@ impl std::fmt::Debug for TmuxTransport {
 
 impl TmuxTransport {
     #[must_use]
-    pub fn new(max_prompt_tokens: usize) -> Self {
+    pub fn new(prompt_tokens_max: usize) -> Self {
         Self {
-            max_prompt_tokens,
+            prompt_tokens_max,
             sender: None,
             task_context: None,
             shutdown_flag: Arc::new(AtomicBool::new(false)),
         }
-    }
-
-    /// Per-prompt token budget captured at construction, threaded from session
-    /// configuration. Available for future use by the internal delivery task.
-    #[must_use]
-    pub fn max_prompt_tokens(&self) -> usize {
-        self.max_prompt_tokens
     }
 
     /// Starts the internal delivery task if not already running and `startup()`
@@ -131,8 +127,12 @@ impl TmuxTransport {
         let (sender, receiver) = mpsc::channel(WRITE_CHANNEL_CAPACITY);
         self.sender = Some(sender);
         let shutdown_flag = Arc::clone(&self.shutdown_flag);
+        let batch_settings = PromptBatchSettings {
+            prompt_tokens_max: self.prompt_tokens_max,
+            ..Default::default()
+        };
         thread::spawn(move || {
-            run_delivery_task(receiver, ctx, shutdown_flag);
+            run_delivery_task(receiver, ctx, shutdown_flag, batch_settings);
         });
         true
     }
@@ -235,6 +235,7 @@ fn run_delivery_task(
     mut receiver: mpsc::Receiver<WriteItem>,
     ctx: DeliveryTaskContext,
     shutdown_flag: Arc<AtomicBool>,
+    batch_settings: PromptBatchSettings,
 ) {
     let tmux_socket_path = tmux_socket_path_for_runtime_directory(ctx.runtime_directory.as_path());
 
@@ -268,7 +269,7 @@ fn run_delivery_task(
                         prompt_readiness.as_ref(),
                         &mut receiver,
                         &shutdown_flag,
-                        &ctx.target_session,
+                        batch_settings,
                     );
                 }
                 return;
@@ -291,7 +292,7 @@ fn run_delivery_task(
                         prompt_readiness.as_ref(),
                         &mut receiver,
                         &shutdown_flag,
-                        &ctx.target_session,
+                        batch_settings,
                     );
                 }
                 let _ = sender.send(deliver_raw(
@@ -321,7 +322,7 @@ fn run_delivery_task(
                             prompt_readiness.as_ref(),
                             &mut receiver,
                             &shutdown_flag,
-                            &ctx.target_session,
+                            batch_settings,
                         );
                     }
                     let _ = sender.send(deliver_raw(
@@ -342,7 +343,7 @@ fn run_delivery_task(
                             prompt_readiness.as_ref(),
                             &mut receiver,
                             &shutdown_flag,
-                            &ctx.target_session,
+                            batch_settings,
                         );
                     }
                     break;
@@ -357,7 +358,7 @@ fn run_delivery_task(
                             prompt_readiness.as_ref(),
                             &mut receiver,
                             &shutdown_flag,
-                            &ctx.target_session,
+                            batch_settings,
                         );
                     }
                     drain_remaining_as_dropped(&mut receiver, &ctx.target_session);
@@ -425,7 +426,7 @@ fn flush_and_resolve(
     prompt_readiness: Option<&PromptReadinessTemplate>,
     receiver: &mut mpsc::Receiver<WriteItem>,
     shutdown_flag: &AtomicBool,
-    task_target_session: &str,
+    batch_settings: PromptBatchSettings,
 ) {
     if group.is_empty() {
         return;
@@ -444,7 +445,7 @@ fn flush_and_resolve(
         if shutdown_flag.load(Ordering::Acquire) {
             for (envelope, sender) in group.drain(..) {
                 let _ = sender.send(make_dropped_on_shutdown(
-                    task_target_session,
+                    target_session,
                     &envelope.message_id,
                 ));
             }
@@ -463,7 +464,7 @@ fn flush_and_resolve(
             Err(DeliveryWaitError::Shutdown) => {
                 for (envelope, sender) in group.drain(..) {
                     let _ = sender.send(make_dropped_on_shutdown(
-                        task_target_session,
+                        target_session,
                         &envelope.message_id,
                     ));
                 }
@@ -498,7 +499,7 @@ fn flush_and_resolve(
                             deferred_raw = Some((content, append_enter, sender));
                             break;
                         } else {
-                            paste_group(group, tmux_socket_path, target_session);
+                            paste_group(group, tmux_socket_path, target_session, batch_settings);
                             let _ = sender.send(deliver_raw(
                                 tmux_socket_path,
                                 target_session,
@@ -510,8 +511,8 @@ fn flush_and_resolve(
                     }
                     Err(mpsc::error::TryRecvError::Empty) => break,
                     Err(mpsc::error::TryRecvError::Disconnected) => {
-                        paste_group(group, tmux_socket_path, target_session);
-                        drain_remaining_as_dropped(receiver, task_target_session);
+                        paste_group(group, tmux_socket_path, target_session, batch_settings);
+                        drain_remaining_as_dropped(receiver, target_session);
                         return;
                     }
                 }
@@ -528,7 +529,7 @@ fn flush_and_resolve(
     }
 
     // Paste the group. Each sender gets its own message_id.
-    paste_group(group, tmux_socket_path, target_session);
+    paste_group(group, tmux_socket_path, target_session, batch_settings);
 
     // Deliver the deferred raw (batch barrier) if one was saved.
     if let Some((content, append_enter, sender)) = deferred_raw {
@@ -541,12 +542,17 @@ fn flush_and_resolve(
     }
 }
 
-/// Paste all envelopes in the group and resolve each sender with its own
-/// message_id. Does NOT consume items from the channel.
+/// Renders the group's structured messages into pane-envelope text, combines
+/// them into token-budget-bounded prompts, and pastes each combined prompt as
+/// one injection — the same greedy split the ACP transport applies to its
+/// combined turns (via [`batch_envelope_groups`]). Each contributing sender is
+/// resolved with its own message_id and the outcome of the prompt it rode in.
+/// Does NOT consume items from the channel.
 fn paste_group(
     group: &mut Vec<(DeliveryEnvelope, OutcomeSender)>,
     tmux_socket_path: &Path,
     target_session: &str,
+    batch_settings: PromptBatchSettings,
 ) {
     if group.is_empty() {
         return;
@@ -569,42 +575,52 @@ fn paste_group(
         }
     };
 
-    let mut failed_reason = None::<String>;
-    for (envelope, _) in group.iter() {
-        // Render the structured message into pane-envelope text here, just
-        // before paste — representation rendering is the transport's job.
-        let rendered = envelope.message.render_pane_envelope(&envelope.message_id);
-        if let Err(reason) = inject_literal_text(
+    // Render each structured message into pane-envelope text, then split the
+    // contiguous group into token-budget-bounded prompts. A lone envelope over
+    // budget forms its own prompt; envelope order is preserved across prompts.
+    let rendered: Vec<String> = group
+        .iter()
+        .map(|(envelope, _)| envelope.message.render_pane_envelope(&envelope.message_id))
+        .collect();
+    let budget_groups = batch_envelope_groups(&rendered, batch_settings);
+
+    let mut members = group.drain(..);
+    for budget_group in budget_groups {
+        // Slice the parallel sender vector to this prompt's contributing members.
+        let prompt_members: Vec<(String, OutcomeSender)> = members
+            .by_ref()
+            .take(budget_group.member_count)
+            .map(|(envelope, sender)| (envelope.message_id, sender))
+            .collect();
+        // Envelope-mode writes always submit with Enter; the combined prompt is
+        // pasted once for the whole budget group.
+        let inject_result = inject_literal_text(
             tmux_socket_path,
             &pane_target,
-            rendered.as_str(),
-            envelope.append_enter,
-        ) {
-            failed_reason = Some(reason);
-            break;
+            budget_group.combined_prompt.as_str(),
+            true,
+        );
+        for (message_id, sender) in prompt_members {
+            let outcome = match &inject_result {
+                Ok(()) => SingleDeliveryOutcome {
+                    target_session: target_session.to_string(),
+                    message_id,
+                    outcome: SendOutcome::Delivered,
+                    reason_code: None,
+                    reason: None,
+                    details: None,
+                },
+                Err(reason) => SingleDeliveryOutcome {
+                    target_session: target_session.to_string(),
+                    message_id,
+                    outcome: SendOutcome::Failed,
+                    reason_code: None,
+                    reason: Some(reason.clone()),
+                    details: None,
+                },
+            };
+            let _ = sender.send(outcome);
         }
-    }
-
-    for (envelope, sender) in group.drain(..) {
-        let outcome = match &failed_reason {
-            None => SingleDeliveryOutcome {
-                target_session: target_session.to_string(),
-                message_id: envelope.message_id.clone(),
-                outcome: SendOutcome::Delivered,
-                reason_code: None,
-                reason: None,
-                details: None,
-            },
-            Some(reason) => SingleDeliveryOutcome {
-                target_session: target_session.to_string(),
-                message_id: envelope.message_id.clone(),
-                outcome: SendOutcome::Failed,
-                reason_code: None,
-                reason: Some(reason.clone()),
-                details: None,
-            },
-        };
-        let _ = sender.send(outcome);
     }
 }
 
