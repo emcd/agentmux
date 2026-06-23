@@ -12,8 +12,8 @@ bundle configuration or the bundle catalog** — it classifies targets from thei
 principal-ID suffixes alone — and SHALL:
 
 - Parse each target's `@<namespace>` suffix into a `ResolvedTarget { namespace,
-  session_id, relay_wide }`: an `@GLOBAL` suffix marks a relay-wide target; an
-  `@<bundle>` suffix names that bundle; the bundle-local session id is the
+  session_id, relay_wide }`: an `@GLOBAL` suffix marks a relay-wide target; any
+  other `@<namespace>` suffix names that namespace; the bare session id is the
   portion before the suffix.
 - Reject a target that carries no suffix with `validation_unqualified_target`.
   The stage never resolves a bare id against bundle membership or the UI
@@ -40,7 +40,7 @@ body after authorization (see Operation Body Contract).
 
 - **WHEN** the relay receives a Send request with targets in multiple bundles
 - **THEN** the resolution stage produces one `ResolvedTarget` per target, each
-  classified to its own bundle from its suffix
+  classified to its own namespace from its suffix
 
 #### Scenario: Unqualified target rejected at resolution
 
@@ -135,7 +135,7 @@ cross-bundle raww from a relay-wide principal.
 ### Requirement: Operation Body Contract
 
 Operation handler bodies SHALL receive a `ResolvedRoute` whose targets are
-already classified (located to a bundle or the relay-wide registry) and
+already classified (located to a namespace in the unified live registry) and
 authorized. Handler bodies SHALL NOT:
 
 - Parse `@<namespace>` suffixes from principal IDs.
