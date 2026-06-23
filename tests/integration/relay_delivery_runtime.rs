@@ -226,6 +226,116 @@ async fn relay_send_to_configured_pubsub_member_is_not_implemented_and_skips_tmu
     );
 }
 
+/// A configured Pubsub send latches the forward-declared `TransportImpl::Pubsub`
+/// stub in the delivery worker (delivery is guarded and answered with a
+/// not-implemented outcome). The worker keeps that latched stub until relay
+/// shutdown, when `shutdown_drain` calls `TransportImpl::shutdown()` on it. This
+/// regresses the stub's lifecycle delegate: a graceful SIGINT after a Pubsub
+/// delivery attempt must tear down cleanly, not panic the delivery worker on the
+/// stub's `shutdown()` (which was `unimplemented!`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn relay_graceful_shutdown_after_pubsub_send_does_not_panic() {
+    let temporary = TempDir::new().expect("temporary");
+    let bundle_name = "party";
+    let config_root =
+        write_bundle_with_pubsub_member(temporary.path(), bundle_name, "alpha", "pub1");
+    let state_root = temporary.path().join("state");
+    let fake_tmux_script = temporary.path().join("fake-tmux.sh");
+    let attempts_file = temporary.path().join("attempts.txt");
+    let log_file = temporary.path().join("fake-tmux.log");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
+
+    let relay_socket = state_root.join("relay.sock");
+    let mut child = spawn_relay_with_fake_tmux(
+        bundle_name,
+        &config_root,
+        &state_root,
+        &inscriptions_root,
+        &fake_tmux_script,
+    );
+    wait_for_relay_ready(&relay_socket).await;
+
+    let send_response = request_relay(
+        &relay_socket,
+        "party",
+        "alpha",
+        &RelayRequest::Send {
+            request_id: Some("req-pubsub-shutdown".to_string()),
+            requester_session: "alpha".to_string(),
+            message: "to a pubsub member".to_string(),
+            targets: vec!["pub1@party".to_string()],
+            broadcast: false,
+            quiet_window_ms: None,
+        },
+    )
+    .expect("send to pubsub target");
+    let RelayResponse::Send { results, .. } = send_response else {
+        panic!("expected send response");
+    };
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].outcome, SendOutcome::Queued);
+
+    // Wait for the terminal async completion for pub1 so the worker has
+    // constructed and latched the `Pubsub` stub before shutdown.
+    let inscriptions_path = inscriptions_root.join("relay.log");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let current = fs::read_to_string(&inscriptions_path).unwrap_or_default();
+        if current.contains("\"event\":\"relay.send.async.completed\"")
+            && current.contains("\"target_session\":\"pub1\"")
+        {
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for pubsub async completion, inscriptions={current:?}");
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+
+    // Drain the relay's stderr concurrently: a panic in `shutdown_drain` (the
+    // default panic hook writes there) is otherwise swallowed — the worker task
+    // unwinds without aborting the process — so the panic message is the reliable
+    // signal. Concurrent draining also keeps the pipe from blocking the child.
+    let stderr_handle = child.stderr.take().expect("relay stderr piped");
+    let stderr_reader = tokio::spawn(async move {
+        let mut buf = String::new();
+        let mut reader = stderr_handle;
+        let _ = tokio::io::AsyncReadExt::read_to_string(&mut reader, &mut buf).await;
+        buf
+    });
+
+    // Graceful SIGINT after the Pubsub delivery attempt: `shutdown_drain` calls
+    // `shutdown()` on the latched Pubsub stub, which must be a safe no-op.
+    let pid = child.id().expect("relay pid");
+    let pid = i32::try_from(pid).expect("relay pid fits i32");
+    let kill_result = unsafe { libc::kill(pid, libc::SIGINT) };
+    assert_eq!(kill_result, 0, "failed to send SIGINT");
+
+    let wait_result = timeout(Duration::from_secs(5), child.wait()).await;
+    let status = match wait_result {
+        Ok(result) => result.expect("wait relay"),
+        Err(_) => {
+            child.start_kill().expect("kill relay after timeout");
+            panic!("relay did not exit after SIGINT following a pubsub send");
+        }
+    };
+
+    let stderr = stderr_reader.await.expect("join relay stderr reader");
+    assert!(
+        !stderr.contains("panicked"),
+        "the latched Pubsub stub panicked the delivery worker during shutdown:\n{stderr}"
+    );
+    assert!(
+        status.success(),
+        "relay should exit cleanly after a pubsub send + SIGINT, status={status}"
+    );
+    assert!(
+        !relay_socket.exists(),
+        "relay socket should be removed during shutdown"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn relay_sigint_ignores_server_exited_unexpectedly_during_shutdown_cleanup() {
     let temporary = TempDir::new().expect("temporary");

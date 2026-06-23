@@ -309,7 +309,11 @@ impl TransportImpl {
             Self::Acp(transport) => transport.is_ready(),
             Self::Tmux(transport) => transport.is_ready(),
             Self::Ui(transport) => transport.is_ready(),
-            Self::Pubsub => unimplemented!("Pubsub transport not yet implemented"),
+            // The delivery worker latches a `Pubsub` stub for a configured Pubsub
+            // target (delivery is guarded and answered with a not-implemented
+            // outcome), so its query/lifecycle delegates must not panic. It is
+            // never ready to deliver.
+            Self::Pubsub => false,
             Self::Pty => unimplemented!("PTY transport not yet implemented"),
         }
     }
@@ -320,7 +324,12 @@ impl TransportImpl {
             Self::Acp(transport) => transport.shutdown(),
             Self::Tmux(transport) => transport.shutdown(),
             Self::Ui(transport) => transport.shutdown(),
-            Self::Pubsub => unimplemented!("Pubsub transport not yet implemented"),
+            // The `Pubsub` stub owns no runtime, so teardown is a no-op — and it
+            // MUST NOT panic: the delivery worker latches this stub for a
+            // configured Pubsub target and calls `shutdown()` on it during relay
+            // shutdown (`shutdown_drain`). `Pty` is not yet constructible, so it
+            // can never be a latched shutdown target and stays loudly unimplemented.
+            Self::Pubsub => {}
             Self::Pty => unimplemented!("PTY transport not yet implemented"),
         }
     }
@@ -331,7 +340,8 @@ impl TransportImpl {
             Self::Acp(transport) => transport.give_output(),
             Self::Tmux(transport) => transport.give_output(),
             Self::Ui(transport) => transport.give_output(),
-            Self::Pubsub => unimplemented!("Pubsub transport not yet implemented"),
+            // The latched `Pubsub` stub is not lookable; it publishes no handle.
+            Self::Pubsub => None,
             Self::Pty => unimplemented!("PTY transport not yet implemented"),
         }
     }

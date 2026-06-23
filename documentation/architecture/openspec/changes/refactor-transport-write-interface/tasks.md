@@ -125,7 +125,16 @@ it would otherwise require).
       lookable); `is_ready` returns true
 - [x] 4.4 Add `TransportImpl::Ui(UiTransport)` variant; forward-declare
       `TransportImpl::Pubsub` as a stub variant (like `Pty`) until the Pubsub
-      transport lands (capability rows + delegate arms for both)
+      transport lands (capability rows + delegate arms for both). Section 7
+      blocker fix (RG): the worker LATCHES `TransportImpl::Pubsub` for a configured
+      Pubsub target (then answers delivery with a not-implemented outcome), so its
+      lifecycle/query delegates are reached — `shutdown()` (called by
+      `shutdown_drain` on every latched transport) and `is_ready()`/`give_output()`
+      must be safe no-op/`false`/`None` stubs, not `unimplemented!`. Left those
+      three `unimplemented!` panicked the delivery worker on graceful relay
+      shutdown after any Pubsub send. `Pty` stays loudly unimplemented (it is not
+      yet constructible, so never a latched shutdown target). Regressed by
+      `relay_graceful_shutdown_after_pubsub_send_does_not_panic`.
 - [x] 4.5 Construct `UiTransport` for `Ui` targets in the worker: non-ACP
       workers resolve their transport kind from the first head task
       (`task_routes_to_ui`) and swap to `UiTransport`, threading the UI services;
