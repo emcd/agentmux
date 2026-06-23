@@ -133,7 +133,7 @@ The maximum-prompt-tokens budget is configured at transport construction time,
 not threaded as a per-`mailw` parameter. Each transport that delivers to a
 coder/agent harness (ACP, and in principle any future harness transport)
 receives this limit at construction and applies it internally during its
-combining step. The ACP transport may call `batch_envelopes` from
+combining step. The ACP transport calls the pure `batch_envelope_groups` from
 `crate::envelope` without a relay back-edge. The relay has no visibility into
 prompt-size budgeting; the cap is transport-internal.
 

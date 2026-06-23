@@ -213,6 +213,9 @@ internally; any excess is held in the transport's buffer for the next turn
 without relay involvement. The relay worker dispatches one write per task and
 does not pre-combine.
 
-**Migration**: Delete `batch_envelopes`, the `can_take_batches` flag, and the
-relay-side peel/carry loop. The ACP transport acquires its own combining step.
-The relay worker loop no longer calls `deliver_non_ui_target_batch`.
+**Migration**: Delete the relay-side `batch_envelopes` (`Vec<String>`)
+projection, the `can_take_batches` flag, and the relay-side peel/carry loop. The
+ACP transport acquires its own combining step: its internal delivery task calls
+the single pure `envelope::batch_envelope_groups` (combined prompt + member
+count) and slices the per-group outcome senders from the boundaries. The relay
+worker loop no longer calls `deliver_non_ui_target_batch`.

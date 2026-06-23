@@ -321,38 +321,64 @@ pub fn estimate_prompt_tokens(text: &str, profile: TokenizerProfile) -> usize {
     estimate.max(1)
 }
 
-/// Batches envelopes into prompts under token budget while preserving order.
-pub fn batch_envelopes(envelopes: &[String], settings: PromptBatchSettings) -> Vec<String> {
-    if envelopes.is_empty() {
-        return Vec::new();
-    }
+/// One token-budget-bounded group produced by [`batch_envelope_groups`].
+///
+/// `combined_prompt` is the blank-line-joined text submitted as a single turn;
+/// `member_count` is how many consecutive input envelopes it covers, so a caller
+/// holding parallel per-envelope data (message ids, outcome senders) can slice
+/// those vectors to the group.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EnvelopeBatchGroup {
+    pub combined_prompt: String,
+    pub member_count: usize,
+}
 
+/// Groups envelopes into token-budget-bounded prompts while preserving order.
+///
+/// Envelopes are combined greedily; one that would push the running prompt past
+/// the budget starts a new group (a lone envelope already over budget forms its
+/// own group). Pure over the rendered text and settings. The ACP delivery task
+/// uses the group boundaries (`member_count`) to fan each turn's outcome to the
+/// contributing senders.
+pub fn batch_envelope_groups(
+    envelopes: &[String],
+    settings: PromptBatchSettings,
+) -> Vec<EnvelopeBatchGroup> {
     let budget = settings.max_prompt_tokens.max(1);
-    let mut batches = Vec::new();
+    let mut groups: Vec<EnvelopeBatchGroup> = Vec::new();
     let mut current = String::new();
+    let mut member_count = 0usize;
 
     for envelope in envelopes {
-        if current.is_empty() {
+        if member_count == 0 {
             current.push_str(envelope);
+            member_count = 1;
             continue;
         }
 
         let candidate = format!("{current}\n\n{envelope}");
-        let estimated = estimate_prompt_tokens(&candidate, settings.tokenizer_profile);
-        if estimated <= budget {
+        if estimate_prompt_tokens(&candidate, settings.tokenizer_profile) <= budget {
             current = candidate;
+            member_count += 1;
             continue;
         }
 
-        batches.push(current);
-        current = envelope.clone();
+        groups.push(EnvelopeBatchGroup {
+            combined_prompt: std::mem::take(&mut current),
+            member_count,
+        });
+        current.push_str(envelope);
+        member_count = 1;
     }
 
-    if !current.is_empty() {
-        batches.push(current);
+    if member_count > 0 {
+        groups.push(EnvelopeBatchGroup {
+            combined_prompt: current,
+            member_count,
+        });
     }
 
-    batches
+    groups
 }
 
 /// Parses profile values for `AGENTMUX_TOKENIZER_PROFILE`.

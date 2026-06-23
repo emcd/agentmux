@@ -1,6 +1,6 @@
 use agentmux::envelope::{
     AddressIdentity, ENVELOPE_SCHEMA_VERSION, EnvelopeRenderInput, ManifestPreamble,
-    PromptBatchSettings, TokenizerProfile, batch_envelopes, parse_address, parse_envelope,
+    PromptBatchSettings, TokenizerProfile, batch_envelope_groups, parse_address, parse_envelope,
     parse_tokenizer_profile, render_address, render_envelope,
 };
 
@@ -195,14 +195,16 @@ hello
 }
 
 #[test]
-fn batching_keeps_order_and_splits_when_budget_would_be_exceeded() {
+fn batch_envelope_groups_splits_on_budget_and_reports_member_counts() {
     let envelopes = vec![
         "alpha one".to_string(),
         "bravo two".to_string(),
         "charlie three".to_string(),
     ];
 
-    let kept_together = batch_envelopes(
+    // A budget large enough to hold every envelope yields one group covering all
+    // three members, joined in order with a blank line.
+    let kept_together = batch_envelope_groups(
         &envelopes,
         PromptBatchSettings {
             max_prompt_tokens: 100,
@@ -210,11 +212,15 @@ fn batching_keeps_order_and_splits_when_budget_would_be_exceeded() {
         },
     );
     assert_eq!(kept_together.len(), 1);
-    assert!(kept_together[0].contains("alpha one"));
-    assert!(kept_together[0].contains("bravo two"));
-    assert!(kept_together[0].contains("charlie three"));
+    assert_eq!(kept_together[0].member_count, 3);
+    assert_eq!(
+        kept_together[0].combined_prompt,
+        "alpha one\n\nbravo two\n\ncharlie three"
+    );
 
-    let split = batch_envelopes(
+    // A budget too small to combine any pair splits into one single-member group
+    // per envelope, preserving order; member counts stay aligned with the source.
+    let split = batch_envelope_groups(
         &envelopes,
         PromptBatchSettings {
             max_prompt_tokens: 2,
@@ -222,9 +228,28 @@ fn batching_keeps_order_and_splits_when_budget_would_be_exceeded() {
         },
     );
     assert_eq!(split.len(), 3);
-    assert_eq!(split[0], "alpha one");
-    assert_eq!(split[1], "bravo two");
-    assert_eq!(split[2], "charlie three");
+    assert!(split.iter().all(|group| group.member_count == 1));
+    let prompts: Vec<&str> = split.iter().map(|g| g.combined_prompt.as_str()).collect();
+    assert_eq!(prompts, ["alpha one", "bravo two", "charlie three"]);
+
+    // An intermediate budget that fits exactly two envelopes produces a 2-member
+    // group followed by a 1-member group — the boundary the ACP task slices on.
+    let two_then_one = batch_envelope_groups(
+        &envelopes,
+        PromptBatchSettings {
+            max_prompt_tokens: 4,
+            tokenizer_profile: TokenizerProfile::WhitespaceRough,
+        },
+    );
+    assert_eq!(
+        two_then_one
+            .iter()
+            .map(|g| g.member_count)
+            .collect::<Vec<_>>(),
+        [2, 1]
+    );
+    assert_eq!(two_then_one[0].combined_prompt, "alpha one\n\nbravo two");
+    assert_eq!(two_then_one[1].combined_prompt, "charlie three");
 }
 
 #[test]

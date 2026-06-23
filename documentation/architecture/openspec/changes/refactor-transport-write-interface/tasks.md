@@ -50,9 +50,9 @@
       `dropped_on_shutdown`; corrected to `SendOutcome::DroppedOnShutdown` so the
       worker — which now reports the transport's outcome faithfully — surfaces the
       `dropped_on_shutdown` outcome the relay shutdown taxonomy expects. The ACP
-      equivalent (`dropped_on_shutdown_outcome`, task 3.6) still emits
-      `SendOutcome::Failed`; latent, not exercised by a test — flagged for the ACP
-      lane.)
+      equivalent (`dropped_on_shutdown_outcome` and the in-flight-turn shutdown
+      branch in `build_acp_completion_result`) was likewise corrected to
+      `SendOutcome::DroppedOnShutdown` in Section 7 — see task 3.6.)
 - [x] 2.7 Removed `TmuxTransport::prepare_delivery` (and its `single_result`
       helper). The internal delivery task owns the quiescence wait;
       `wait_for_quiescent_pane` is retained for it.
@@ -87,15 +87,20 @@
       channel and resolve all pending outcome senders with `Cancelled` before
       `release_runtime()` is called
 - [x] 3.6 On relay shutdown, drain channel and resolve all outcome senders with
-      `DroppedOnShutdown`
+      `DroppedOnShutdown`. (Corrected in Section 7: both ACP shutdown-drop sites —
+      `dropped_on_shutdown_outcome` for queued writes and the no-completion branch
+      of `build_acp_completion_result` for an in-flight turn — emitted
+      `SendOutcome::Failed`; both now emit `DroppedOnShutdown`, matching tmux 2.6.
+      Covered by the `relay_sigint_*` integration tests. The distinct
+      respawn-invalidation→`Cancelled` path is task 7.5, deferred to issues/acp/11.)
 - [x] 3.7 Removed `AcpTransport::prepare_delivery` stub (and the
       `AcpWorkerDriver` forward).
 - [x] 3.8 Removed `AcpTransport::deliver` and `AcpTransport::raw_write` (plus the
       now-dead `single`/`worker_unavailable_outcome` helpers and the
       `runtime_acp_worker_unavailable` code). `can_take_batches` is deleted (6.5).
-      `batch_envelopes` is RETAINED — the relay-side batch path was already gone
-      in Section 5, and the ACP internal delivery task consumes it to combine a
-      contiguous envelope group into one turn (see 6.4).
+      The token-budget combining lives in the pure `envelope::batch_envelope_groups`
+      (Section 7), which the ACP internal delivery task calls to combine a
+      contiguous envelope group into one turn (see 6.4 / 7.4).
 
 ## 4. Ui / Pubsub transports
 
@@ -207,9 +212,13 @@ deleted; `cargo check`/`clippy -D warnings`/`fmt` clean.
 - [x] 6.4 Deleted the relay-side token-budget peel loop and `PreparedBatchPayload`
       (`prepare_batch_delivery_payload`) from the dispatch payload path, plus the
       now-dead per-task `AsyncDeliveryTask.batch_settings` field (budget reads at
-      transport construction time per 1.6). NOTE: the `batch_envelopes` function
-      itself is retained — it is now consumed by the ACP transport's internal
-      delivery task to combine a contiguous envelope group into one turn.
+      transport construction time per 1.6). NOTE (corrected in Section 7): the old
+      `batch_envelopes` (Vec<String>) was NOT consumed by the ACP task — the task
+      reimplemented the same greedy grouping inline, leaving `batch_envelopes`
+      called only by its own test. It was deleted (the spec already scheduled its
+      removal); the grouping now lives in one pure `envelope::batch_envelope_groups`
+      (returns combined prompt + member_count), which the ACP delivery task calls
+      to slice per-group senders. See task 7.4.
 - [x] 6.5 Deleted `can_take_batches()` from `SessionType` (the only definition;
       `TargetConfiguration` has none) and the `TransportImpl::can_take_batches`
       mirror, plus the `can_take_batches` column from the capability-table
@@ -224,23 +233,36 @@ deleted; `cargo check`/`clippy -D warnings`/`fmt` clean.
 
 ## 7. Tests and validation
 
-- [ ] 7.1 Update or replace `coalesce_batch_tests` inline test to cover the new
-      concurrent produce-and-collect loop
-- [ ] 7.2 Add unit tests for `TmuxTransport::mailw` buffering and quiescence
-      dispatch (mock quiescence source): verify that envelopes arriving during a
-      quiescence wait are absorbed into the flush group
-- [ ] 7.3 Add unit tests for `TmuxTransport` FIFO ordering: verify that a `raww`
-      item causes the preceding mailw batch to flush first; verify three-batch
-      scenario (N envelopes → raww → M envelopes)
-- [ ] 7.4 Add unit tests for `AcpTransport::mailw` combining (mock ACP turn
-      submission): verify token-budget split produces correct group boundaries
-- [ ] 7.5 Add unit tests for ACP respawn-invalidation: verify that a respawn
-      signal resolves all pending outcome futures with `Cancelled`
+- [x] 7.1 Superseded: the inline `coalesce_batch_tests` was deleted with the
+      Section 5 worker rewrite (no coalesce loop remains). The new concurrent
+      produce-and-collect loop is exercised end-to-end by the `relay_delivery_runtime`
+      integration suite (send fan-out, raww queueing, pubsub-skips-tmux, shutdown
+      drops), not a worker-internal unit test — the loop has no public seam to unit
+      test without a relay test-harness, which integration already provides.
+- [x] 7.2 Covered by integration rather than a unit test: the tmux internal
+      delivery task calls real tmux (`resolve_active_pane_target`/`inject_literal_text`)
+      with no quiescence injection seam, so a unit test would require a production
+      mock seam (rejected per the project test policy). Quiescence-absorb behavior
+      is covered by `relay_async_delivery_does_not_inject_while_pane_in_mode`.
+- [x] 7.3 Covered by integration (same reason as 7.2): tmux FIFO / raww-as-barrier
+      is covered by `relay_delivery_sends_submit_in_separate_tmux_command` and the
+      `relay_raww_tmux_*` tests.
+- [x] 7.4 The token-budget grouping was extracted to a pure public function,
+      `envelope::batch_envelope_groups`, which the ACP delivery task now calls
+      (removing the inline duplication). Unit-tested in `tests/unit/envelope.rs`
+      (`batch_envelope_groups_splits_on_budget_and_reports_member_counts`):
+      verifies combine-under-budget, split-over-budget, and an intermediate budget
+      producing a 2-member then 1-member group boundary.
+- [ ] 7.5 Deferred to issues/acp/11. The respawn-invalidation→`Cancelled` outcome
+      is a distinct path from shutdown→`DroppedOnShutdown` (3.6, now fixed): respawn
+      closes the write channel and the dropped outcome future is mapped worker-side,
+      so the `Cancelled` semantics and their test belong with the acp/11 split.
 - [x] 7.6 Add unit tests for `UiTransport::mailw` (`tests/unit/ui_transport.rs`):
       verify it broadcasts a stream event via the injected services closure and
       resolves the outcome future; verify the bounded reconnect wait resolves
       `Timeout` when no UI connects; verify `raww` resolves unsupported and
       `give_output` is `None`
-- [ ] 7.7 Confirm integration tests (send, raww, quiescence, ACP turn, UI
-      delivery) remain green; update context construction as needed
-- [ ] 7.8 Run `cargo clippy --all-targets` and `cargo test` clean
+- [x] 7.7 Integration tests (send, raww, quiescence, ACP turn, UI delivery)
+      green: 210 passed / 6 ignored (pre-existing flaky, tracked).
+- [x] 7.8 `cargo clippy --all-targets -- -D warnings` and `cargo test` clean
+      (17 lib, 210 integration, 282 unit; fmt clean).

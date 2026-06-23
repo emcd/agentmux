@@ -754,95 +754,56 @@ fn drain_and_resolve_shutdown(rx: &mut mpsc::Receiver<WriteItem>) {
     }
 }
 
-/// A DroppedOnShutdown outcome for items resolved during shutdown/respawn.
+/// A DroppedOnShutdown outcome for writes resolved during relay shutdown. Mirrors
+/// the tmux transport's shutdown-drop outcome so the relay shutdown taxonomy
+/// reports `dropped_on_shutdown` (not a generic failure) uniformly across
+/// transports. (Respawn invalidation is a distinct path: it closes the channel,
+/// and the worker maps the dropped future to its own outcome.)
 fn dropped_on_shutdown_outcome() -> SingleDeliveryOutcome {
     SingleDeliveryOutcome {
         target_session: String::new(),
         message_id: String::new(),
-        outcome: SendOutcome::Failed,
+        outcome: SendOutcome::DroppedOnShutdown,
         reason_code: Some(DROPPED_ON_SHUTDOWN_REASON_CODE.to_string()),
         reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
         details: None,
     }
 }
 
-/// Combines a group of rendered envelopes into one turn prompt respecting the
-/// token budget, submits each batch as a turn, and fans the outcome to the
-/// senders for that batch. Each sender receives its own message_id in the
-/// outcome, even when multiple envelopes are combined into one turn.
-#[allow(clippy::type_complexity)]
+/// Combines a contiguous batch of rendered envelopes into token-budget-bounded
+/// turn prompts via [`crate::envelope::batch_envelope_groups`], submits each
+/// group as one turn, and fans that turn's outcome to the contributing senders.
+/// Each sender receives its own message_id in the outcome, even when multiple
+/// envelopes are combined into one turn. The group's head message_id and decider
+/// sessions correlate any choice raised mid-turn.
 fn flush_envelope_group(
     client: &mut AcpStdioClient,
     ctx: &TurnContext,
     batch_settings: &PromptBatchSettings,
     batch: &mut EnvelopeBatch,
 ) {
-    let budget = batch_settings.max_prompt_tokens.max(1);
-    // Each group: (combined prompt, head message_id, head decider_sessions,
-    //               per-sender message_ids, per-sender outcome senders)
-    let mut groups: Vec<(
-        String,
-        String,
-        Vec<String>,
-        Vec<String>,
-        Vec<tokio::sync::oneshot::Sender<SingleDeliveryOutcome>>,
-    )> = Vec::new();
-    let mut cur_prompt = String::new();
-    let mut cur_head_msg_id = String::new();
-    let mut cur_head_deciders: Vec<String> = Vec::new();
-    let mut cur_msg_ids: Vec<String> = Vec::new();
-    let mut cur_senders: Vec<tokio::sync::oneshot::Sender<SingleDeliveryOutcome>> = Vec::new();
+    let groups = crate::envelope::batch_envelope_groups(&batch.rendered, *batch_settings);
+    batch.rendered.clear();
+    let mut message_ids = batch.message_ids.drain(..);
+    let mut decider_sessions = batch.decider_sessions.drain(..);
+    let mut outcome_senders = batch.outcome_senders.drain(..);
 
-    for (((rendered, msg_id), deciders), sender) in batch
-        .rendered
-        .drain(..)
-        .zip(batch.message_ids.drain(..))
-        .zip(batch.decider_sessions.drain(..))
-        .zip(batch.outcome_senders.drain(..))
-    {
-        if cur_prompt.is_empty() {
-            cur_prompt = rendered;
-            cur_head_msg_id = msg_id.clone();
-            cur_head_deciders = deciders;
-            cur_msg_ids.push(msg_id);
-            cur_senders.push(sender);
-            continue;
-        }
-        let candidate = format!("{cur_prompt}\n\n{rendered}");
-        let est =
-            crate::envelope::estimate_prompt_tokens(&candidate, batch_settings.tokenizer_profile);
-        if est <= budget {
-            cur_prompt = candidate;
-            cur_msg_ids.push(msg_id);
-            cur_senders.push(sender);
-        } else {
-            groups.push((
-                cur_prompt,
-                cur_head_msg_id,
-                cur_head_deciders,
-                cur_msg_ids,
-                cur_senders,
-            ));
-            cur_prompt = rendered;
-            cur_head_msg_id = msg_id.clone();
-            cur_head_deciders = deciders;
-            cur_msg_ids = vec![msg_id];
-            cur_senders = vec![sender];
-        }
-    }
-    if !cur_prompt.is_empty() {
-        groups.push((
-            cur_prompt,
-            cur_head_msg_id,
-            cur_head_deciders,
-            cur_msg_ids,
-            cur_senders,
-        ));
-    }
-
-    for (prompt, msg_id, deciders, msg_ids, senders) in groups {
-        let outcome = submit_envelope_turn(client, ctx, &prompt, &msg_id, &deciders);
-        for (sender_msg_id, tx) in msg_ids.into_iter().zip(senders) {
+    for group in groups {
+        let group_msg_ids: Vec<String> = message_ids.by_ref().take(group.member_count).collect();
+        let group_deciders: Vec<Vec<String>> =
+            decider_sessions.by_ref().take(group.member_count).collect();
+        let group_senders: Vec<tokio::sync::oneshot::Sender<SingleDeliveryOutcome>> =
+            outcome_senders.by_ref().take(group.member_count).collect();
+        let head_msg_id = group_msg_ids.first().cloned().unwrap_or_default();
+        let head_deciders = group_deciders.into_iter().next().unwrap_or_default();
+        let outcome = submit_envelope_turn(
+            client,
+            ctx,
+            &group.combined_prompt,
+            &head_msg_id,
+            &head_deciders,
+        );
+        for (sender_msg_id, tx) in group_msg_ids.into_iter().zip(group_senders) {
             let mut sender_outcome = outcome.clone();
             sender_outcome.message_id = sender_msg_id;
             let _ = tx.send(sender_outcome);
@@ -1046,16 +1007,19 @@ fn build_acp_completion_result(
     }
 
     let Some(completion) = completion else {
-        // No completion observed before the wait was abandoned: shutdown.
+        // No completion observed before the wait was abandoned: shutdown. Report
+        // the dropped-on-shutdown outcome (not a generic failure), matching the
+        // queued-write drop path and the tmux transport.
         return (
             AcpWorkerReadinessState::Available,
-            failed_outcome_with_code(
+            SingleDeliveryOutcome {
                 target_session,
                 message_id,
-                DROPPED_ON_SHUTDOWN_REASON_CODE,
-                DROPPED_ON_SHUTDOWN_REASON,
-                None,
-            ),
+                outcome: SendOutcome::DroppedOnShutdown,
+                reason_code: Some(DROPPED_ON_SHUTDOWN_REASON_CODE.to_string()),
+                reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
+                details: None,
+            },
         );
     };
 
