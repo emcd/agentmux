@@ -454,7 +454,7 @@ Sessions that reference a coder inherit that coder's prompt-readiness settings.
 ### Requirement: Async Queue Lifecycle and Ordering
 
 For `delivery_mode=async`, relay SHALL maintain an in-memory pending queue.
-The queue SHALL be non-durable in MVP.
+The queue SHALL be non-durable.
 Relay SHALL preserve FIFO ordering per target session and SHALL NOT deduplicate
 or coalesce queued messages.
 
@@ -462,7 +462,7 @@ or coalesce queued messages.
 
 - **WHEN** relay exits or restarts before delivering queued async targets
 - **THEN** pending async entries are discarded
-- **AND** they are not recovered from durable storage in MVP
+- **AND** they are not recovered from durable storage
 
 #### Scenario: Preserve per-target FIFO ordering
 
@@ -494,7 +494,7 @@ Relay SHALL emit inscriptions for async queue lifecycle transitions.
 
 ### Requirement: Async Queue Growth Risk Disclosure
 
-The system SHALL document that MVP async queueing has no built-in hard cap and
+The system SHALL document that async queueing has no built-in hard cap and
 may grow without bound if targets never become ready.
 
 #### Scenario: Document unbounded queue risk for operators
@@ -1011,7 +1011,7 @@ The policies file is authoritative: every control accepts the full scope
 ladder at parse time, and the consuming authorization checks give each value
 its effect via scope rank order.
 
-For current self-target-only `do` MVP behavior:
+For current self-target-only `do` behavior:
 
 - `none` and `self` are operative
 - `home` and `all` are reserved/non-operative until non-self `do`
@@ -1029,11 +1029,11 @@ For current self-target-only `do` MVP behavior:
 - **AND** requested action id is not present in `do` control map
 - **THEN** relay treats authorization scope as `none`
 
-#### Scenario: Treat do all-home/all-all scopes as reserved in current MVP
+#### Scenario: Treat do all-home/all-all scopes as reserved
 
 - **WHEN** relay evaluates `do` authorization
 - **AND** action scope is `home` or `all`
-- **THEN** relay treats scope as reserved/non-operative for current MVP
+- **THEN** relay treats scope as reserved/non-operative
 - **AND** non-self `do` execution remains unsupported by runtime contract
 
 ### Requirement: Centralized Authorization Decision Point
@@ -1263,7 +1263,7 @@ For ACP targets, relay SHALL:
   replacement (in-memory),
 - ingest replay content from live `session/update` as append in ACP
   receive order (in-memory),
-- preserve source order (oldest -> newest) without dedupe in MVP,
+- preserve source order (oldest -> newest) without dedupe,
 - retain at most 1000 ACP snapshot entries per session in the in-memory
   buffer,
 - evict oldest entries first when retention exceeds 1000,
@@ -1486,7 +1486,7 @@ Mapping SHALL include:
 Relay SHALL use ACP terminal completion signals from the background reader to
 maintain internal worker readiness state for scheduling.
 
-MVP state model:
+State model:
 
 - `available`: worker healthy and ready for next prompt
 - `busy`: prompt accepted and turn in progress
@@ -1502,7 +1502,7 @@ The `busy` transition now occurs on write-success, not on first `session/update`
 observation. Reader thread exit is an additional `unavailable` trigger,
 mirroring the write-failure path.
 
-MVP sender-surface contract:
+Sender-surface contract:
 
 - these transitions SHALL NOT require additional sender-facing `send` outputs
 - send success semantics remain phase-1 delivery acknowledgment only
@@ -1534,7 +1534,7 @@ Worker model SHALL be:
 
 - one worker per target session (one child process, one background reader thread)
 - serialized request queue per worker
-- fixed MVP queue bound `max_pending = 64`
+- fixed queue bound `max_pending = 64`
 - initialized during bundle startup/session startup pass for hosted bundles
 - anchored by relay runtime context (relay socket/runtime directory), not tmux
   transport semantics
@@ -1607,9 +1607,9 @@ Failure taxonomy SHALL include:
 ### Requirement: ACP Permission Request Readiness Signal
 
 Relay SHALL treat ACP `session/request_permission` as in-progress turn activity
-for ACP readiness tracking in MVP.
+for ACP readiness tracking.
 
-MVP behavior contract:
+Behavior contract:
 
 - `session/request_permission` observed before terminal completion SHALL count
   as first activity for two-phase sync acknowledgment semantics
@@ -1655,7 +1655,7 @@ For request-path operations such as `send`, relay SHALL:
 
 ### Requirement: Relay List Sessions Request Scope
 
-Relay SHALL support only single-bundle session listing requests in MVP.
+Relay SHALL support only single-bundle session listing requests.
 Relay SHALL NOT accept all-bundle list selectors.
 
 #### Scenario: Reject all-bundle relay list selector
@@ -1680,7 +1680,7 @@ When preflight fails, relay SHALL:
 - set `state_reason_code=runtime_startup_failed`,
 - skip the per-session startup pass.
 
-Per-transport readiness predicates in MVP:
+Per-transport readiness predicates:
 
 - tmux session is ready when configured session exists and relay resolves an
   active pane target.
@@ -1745,7 +1745,7 @@ Relay SHALL provide machine-readable startup failure visibility via:
    `relay.session_start_failed`,
 2. persisted bounded per-bundle startup failure history.
 
-Persisted history contract in MVP:
+Persisted history contract:
 
 - fixed bound `max_startup_failures=256`,
 - oldest-first eviction when bound is exceeded,
@@ -1816,7 +1816,7 @@ reason precedence.
 Relay SHALL evaluate ACP look freshness deterministically from shared worker
 state and update recency.
 
-MVP deterministic thresholds:
+Deterministic thresholds:
 
 - `acp_look_prime_timeout_ms = 750`
 - `acp_stream_stalled_after_ms = 5000`
@@ -1889,14 +1889,14 @@ but SHALL NOT be the sole machine carrier.
 Relay SHALL expose a raw direct-write operation named `raww` for a single
 explicit target session.
 
-Request contract (MVP):
+Request contract:
 - `target_session` (required)
 - `text` (required UTF-8 string)
 - `no_enter` (optional boolean, default `false`)
 - `request_id` (optional)
 - optional bundle selector with same-bundle-only enforcement
 
-`raww` SHALL NOT support broadcast in MVP.
+`raww` SHALL NOT support broadcast.
 
 #### Scenario: Reject raww broadcast shape
 
@@ -2041,7 +2041,7 @@ unavailable) surface synchronously.
 
 ### Requirement: Relay raww input bounds
 
-Relay raww SHALL accept UTF-8 multiline text in MVP and SHALL reject payloads
+Relay raww SHALL accept UTF-8 multiline text and SHALL reject payloads
 larger than 32 KiB (UTF-8 bytes) with `validation_invalid_params`.
 
 #### Scenario: Reject oversized raww text payload

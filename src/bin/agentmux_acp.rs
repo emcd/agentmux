@@ -302,7 +302,7 @@ fn run_tui(
                     if !app.prompt_active {
                         continue;
                     }
-                    // Handle prompt synchronously for MVP
+                    // Handle prompt synchronously
                     // (TUI freezes during prompt — acceptable for debugging use case)
                     let session = session_id.to_string();
                     let permission_handler: agentmux::acp::PermissionHandler = Box::new(

@@ -43,7 +43,7 @@ entrypoints.
 
 ### Requirement: Relay Host Bundle Selection
 
-`agentmux host relay` SHALL be no-selector command in MVP.
+`agentmux host relay` SHALL be no-selector command.
 
 `agentmux host relay` SHALL accept optional `--no-autostart`.
 
@@ -136,7 +136,7 @@ If both sources are present, the system SHALL reject invocation with
 If neither source is present, the system SHALL reject invocation with
 `validation_missing_message_input`.
 
-The MVP system SHALL NOT enter interactive line-capture mode when stdin is a
+The system SHALL NOT enter interactive line-capture mode when stdin is a
 TTY and `--message` is omitted.
 
 #### Scenario: Read message body from option flag
@@ -216,14 +216,14 @@ the process exits.
 - **AND** inscriptions record a per-bundle startup failure event with the
   same structured details
 
-### Requirement: Relay Host CLI Scope (MVP)
+### Requirement: Relay Host CLI Scope
 
-MVP `agentmux host relay` SHALL support:
+`agentmux host relay` SHALL support:
 
 - no selector (default autostart mode)
 - `--no-autostart` (process-only mode)
 
-MVP `agentmux host relay` SHALL NOT support:
+`agentmux host relay` SHALL NOT support:
 
 - positional `<bundle-id>`
 - `--group <GROUP>`
@@ -265,7 +265,7 @@ The system SHALL expose a read-only inspection command:
 dispatch bundle) or a peer-qualified `<session>@<bundle>` id that inspects a
 session in a peer bundle.
 
-`agentmux look` SHALL return canonical structured JSON output in MVP.
+`agentmux look` SHALL return canonical structured JSON output.
 `agentmux look` authorization SHALL use capability label `look.inspect`.
 Policy control `look` determines allowed scope (`self`, `home`, `all`).
 Cross-bundle look (a `<session>@<bundle>` target naming a peer bundle) requires
@@ -406,7 +406,7 @@ context:
 - optional `--as-session <session-selector>`
 - optional `--bundle <bundle-id>`
 
-`agentmux tui --sender` SHALL NOT be supported in MVP.
+`agentmux tui --sender` SHALL NOT be supported.
 
 Bundle selection SHALL resolve as:
 
@@ -562,7 +562,7 @@ Transport-incompatible timeout flags SHALL fail fast with
 
 - `--as-session <session-selector>`
 
-`agentmux send --sender` SHALL NOT be supported in MVP.
+`agentmux send --sender` SHALL NOT be supported.
 
 Send bundle resolution SHALL be:
 

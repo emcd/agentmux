@@ -6,7 +6,7 @@ The CLI SHALL expose read-only runtime introspection commands:
 
 - `agentmux about`
 - `agentmux about --session <session-id>`
-- `agentmux about --bundle <bundle-id>` (same-bundle MVP constraint applies)
+- `agentmux about --bundle <bundle-id>` (same-bundle constraint applies)
 
 `about` authorization SHALL map to capability `list.read`.
 

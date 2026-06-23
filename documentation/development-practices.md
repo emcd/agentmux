@@ -100,7 +100,7 @@ confuse a future reader, do not write it.
 - Reference external tracking by selector, label, or name: todo IDs,
   design labels (`D5`), OpenSpec change IDs, issue numbers, or notebook
   note references.
-- Use implementation-status language: "MVP", "this slice", "Phase 2",
+- Use implementation-status language: "this slice", "Phase 2",
   "not part of the current contract", or any phrasing that implies
   temporary state without explaining the actual constraint.
 - Explain what the code does — well-named identifiers already do that.
