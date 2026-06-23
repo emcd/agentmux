@@ -20,11 +20,15 @@ Optional headers MAY include:
 - `Cc`
 - `Subject`
 
+Coder transports SHALL render these headers from structured delivery message
+data supplied by the relay.
+
 #### Scenario: Render required headers
 
-- **WHEN** relay renders an envelope
+- **WHEN** a coder transport renders a structured delivery message
 - **THEN** all required headers are present exactly once
-- **AND** removed transport headers are not rendered
+- **AND** no `Content-Type`, `MIME-Version`, or other transport header is emitted
+  in the header block
 
 #### Scenario: Accept envelope without subject header
 
@@ -69,23 +73,14 @@ Envelope end SHALL be indicated by matching closing boundary:
 
 - `--<boundary>--`
 
-The parser SHALL derive the boundary token from the first boundary line and
-require the same token in the closing boundary line.
-
 The renderer SHALL NOT emit top-level multipart `Content-Type` header in pane
 text.
 
 #### Scenario: Render boundary-delimited envelope without top-level content type
 
-- **WHEN** relay renders envelope headers and body
+- **WHEN** a coder transport renders envelope headers and body
 - **THEN** envelope includes boundary start and closing marker
 - **AND** top-level `Content-Type: multipart/mixed; boundary=...` is absent
-
-#### Scenario: Reject closing boundary token mismatch
-
-- **WHEN** parsed envelope closing boundary token differs from first boundary
-  token
-- **THEN** parser reports envelope as malformed
 
 ### Requirement: Required Text Body Part
 
@@ -97,7 +92,7 @@ The renderer SHALL NOT emit per-part `Content-Transfer-Encoding` header.
 
 #### Scenario: Include chat body part without transfer-encoding header
 
-- **WHEN** relay renders envelope body part
+- **WHEN** a coder transport renders envelope body part
 - **THEN** exactly one `text/plain` chat body part is present
 - **AND** `Content-Transfer-Encoding` is absent
 
@@ -109,6 +104,10 @@ Each delivered envelope's `Cc` header SHALL list every co-recipient of the
 message — the full target set minus the envelope's own recipient — including
 co-recipients in other namespaces.
 
+The relay SHALL derive the co-recipient list and supply it as structured delivery
+message data. Coder transports SHALL render the supplied co-recipient list into
+the `Cc` header and SHALL NOT use it for routing.
+
 #### Scenario: Preserve routing independent of Cc header
 
 - **WHEN** envelope includes `Cc` header values
@@ -118,7 +117,7 @@ co-recipients in other namespaces.
 
 - **WHEN** a message targets recipients in more than one namespace
 - **THEN** each delivered envelope's `Cc` lists the co-recipients from every
-  other namespace as canonical ids
+  other namespace as canonical `session@namespace` ids
 
 ### Requirement: Extension Part Reservation
 
@@ -139,18 +138,22 @@ when under configured token budget.
 
 Default token budget SHALL be:
 
-- `max_prompt_tokens = 4096`
+- `prompt_tokens_max = 4096`
 
 The system SHALL estimate token count using configured tokenizer profile.
 
+The coder transport that submits the prompt SHALL perform token-budget grouping
+on its own rendered pane-envelope text.
+
 #### Scenario: Keep envelopes in one prompt under budget
 
-- **WHEN** multiple envelopes together are at or below configured token budget
+- **WHEN** multiple rendered envelopes together are at or below configured token
+  budget
 - **THEN** system injects them in one prompt preserving envelope order
 
 #### Scenario: Split prompts when adding next envelope exceeds budget
 
-- **WHEN** adding next envelope would exceed configured token budget
+- **WHEN** adding next rendered envelope would exceed configured token budget
 - **THEN** system starts a new prompt for that envelope
 - **AND** preserves original envelope order across prompts
 
@@ -169,6 +172,12 @@ closing boundary, or required text body part are missing or invalid.
 - **WHEN** parsed envelope lacks required `text/plain` body part
 - **THEN** parser reports envelope as malformed
 
+#### Scenario: Reject closing boundary token mismatch
+
+- **WHEN** parsed envelope closing boundary token differs from first boundary
+  token
+- **THEN** parser reports envelope as malformed
+
 ### Requirement: Out-Of-Band Machine Metadata
 
 Canonical machine metadata for routing/audit SHALL be preserved out-of-band in
@@ -179,7 +188,7 @@ Required out-of-band metadata fields SHALL include:
 
 - `schema_version`
 - `message_id`
-- `bundle_name`
+- `namespace`
 - `sender_session`
 - `target_sessions`
 - `created_at`
@@ -188,14 +197,18 @@ Optional out-of-band metadata fields MAY include:
 
 - `cc_sessions`
 
+The relay SHALL emit this metadata from the same structured delivery message data
+that coder transports use for pane-envelope rendering. The `namespace` field is
+the routing namespace used to qualify canonical `session@namespace` identities.
+
 #### Scenario: Preserve machine metadata without pane preamble
 
-- **WHEN** relay emits an injected envelope
+- **WHEN** a coder transport renders an injected envelope
 - **THEN** pane text excludes JSON manifest preamble
 - **AND** equivalent machine metadata remains available out-of-band
 
 #### Scenario: Preserve canonical metadata field set out-of-band
 
-- **WHEN** relay emits simplified pane envelope text
+- **WHEN** relay emits metadata for a structured delivery message
 - **THEN** out-of-band metadata includes all required canonical fields
 
