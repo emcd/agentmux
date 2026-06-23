@@ -93,7 +93,7 @@ pub fn subscribe_acp_worker_state(
 /// The receiver only observes events that arrive after the subscription is
 /// established. Slow consumers see [`tokio::sync::broadcast::error::RecvError::Lagged`]
 /// and must catch up via [`crate::relay::list_pending_choice_requests`]
-/// (or equivalent persisted state) before resuming live consumption.
+/// before resuming live consumption.
 pub fn subscribe_choices_queue_events(
     runtime_directory: &Path,
 ) -> broadcast::Receiver<ChoicesQueueEvent> {
@@ -137,7 +137,7 @@ pub(super) fn publish_choices_queue_event(runtime_directory: &Path, event: Choic
 // ACP integration tests; this inline test only proves the publish/subscribe
 // primitive itself wires watch and broadcast correctly when the publishers
 // are invoked. One `#[test]` covers both channels because their setup is
-// shared and CLAUDE.md bounds inline blocks to one test function.
+// shared.
 #[cfg(test)]
 mod tests {
     use super::*;
