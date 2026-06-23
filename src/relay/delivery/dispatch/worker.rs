@@ -6,6 +6,7 @@ use tokio::{runtime::Handle, sync::mpsc::UnboundedReceiver, task::JoinSet};
 
 use crate::{
     configuration::{BundleMember, SessionType},
+    envelope::PromptBatchSettings,
     runtime::{inscriptions::emit_inscription, signals::shutdown_requested},
 };
 
@@ -123,7 +124,7 @@ async fn run_async_delivery_worker(
     // combine, and the blocking IO all live inside each transport's internal
     // delivery task now, so the worker no longer batches, hoists quiescence, or
     // owns `spawn_blocking`.
-    let prompt_tokens_max = super::prompt_batch_settings().prompt_tokens_max;
+    let batch_settings = super::prompt_batch_settings();
     // `None` until the transport is constructed: eagerly for ACP (bootstrap),
     // lazily from the first task's `session_type()` for every other target.
     let mut transport: Option<TransportImpl> = match bootstrap {
@@ -132,9 +133,9 @@ async fn run_async_delivery_worker(
             let mut transport = TransportImpl::acp(
                 bootstrap.target_member,
                 bootstrap.runtime_directory,
-                key.bundle_name.clone(),
+                key.namespace.clone(),
                 services,
-                prompt_tokens_max,
+                batch_settings,
             );
             if let TransportImpl::Acp(driver) = &mut transport {
                 driver.bootstrap().await;
@@ -180,7 +181,7 @@ async fn run_async_delivery_worker(
                             task,
                             &key,
                             &mut transport,
-                            prompt_tokens_max,
+                            batch_settings,
                             &mut inflight,
                             pending.as_ref(),
                         );
@@ -213,12 +214,12 @@ fn submit_task(
     task: AsyncDeliveryTask,
     key: &AsyncWorkerKey,
     transport: &mut Option<TransportImpl>,
-    prompt_tokens_max: usize,
+    batch_settings: PromptBatchSettings,
     inflight: &mut JoinSet<InflightOutcome>,
     pending: &std::sync::atomic::AtomicUsize,
 ) {
     if transport.is_none() {
-        match build_worker_transport(&task, key, prompt_tokens_max) {
+        match build_worker_transport(&task, key, batch_settings) {
             Ok(built) => *transport = Some(built),
             Err(error) => {
                 super::super::async_worker::complete_task_outcome(&task, Err(error));
@@ -271,7 +272,7 @@ fn submit_task(
 fn build_worker_transport(
     task: &AsyncDeliveryTask,
     key: &AsyncWorkerKey,
-    prompt_tokens_max: usize,
+    batch_settings: PromptBatchSettings,
 ) -> Result<TransportImpl, RelayError> {
     if task.relay_wide_target {
         return Ok(TransportImpl::ui(build_ui_transport_services(key)));
@@ -280,11 +281,11 @@ fn build_worker_transport(
         resolve_target_member(task)?.expect("configured non-relay-wide target must have a member");
     match target_member.target.session_type() {
         SessionType::Tmux => {
-            let mut transport = TransportImpl::tmux(prompt_tokens_max);
+            let mut transport = TransportImpl::tmux(batch_settings);
             // tmux ignores the `choose` resolver (it raises no operator choices),
             // so a cancelling no-op chooser satisfies the `StartupContext` contract.
             let context = StartupContext {
-                bundle_name: task.bundle.bundle_name.clone(),
+                namespace: task.bundle.bundle_name.clone(),
                 runtime_directory: task.runtime_directory.clone(),
                 target_member: target_member.clone(),
                 choose: noop_tmux_chooser(),
@@ -407,19 +408,19 @@ fn build_acp_driver_services(
     key: &AsyncWorkerKey,
     bootstrap: &AcpWorkerBootstrap,
 ) -> AcpDriverServices {
-    let bundle_name = key.bundle_name.clone();
+    let namespace = key.namespace.clone();
     let runtime_directory = bootstrap.runtime_directory.clone();
     let target_session = bootstrap.target_member.id.clone();
     let choices_pending_max = bootstrap.choices_pending_max;
 
     AcpDriverServices {
         mirror_state: {
-            let bundle_name = bundle_name.clone();
+            let namespace = namespace.clone();
             let runtime_directory = runtime_directory.clone();
             let target_session = target_session.clone();
             Arc::new(move |state| {
                 set_acp_worker_state(
-                    bundle_name.as_str(),
+                    namespace.as_str(),
                     runtime_directory.as_path(),
                     target_session.as_str(),
                     state,
@@ -427,12 +428,12 @@ fn build_acp_driver_services(
             })
         },
         publish_output: {
-            let bundle_name = bundle_name.clone();
+            let namespace = namespace.clone();
             let runtime_directory = runtime_directory.clone();
             let target_session = target_session.clone();
             Arc::new(move |output_view| {
                 install_acp_worker_output_view(
-                    bundle_name.as_str(),
+                    namespace.as_str(),
                     runtime_directory.as_path(),
                     target_session.as_str(),
                     output_view,
@@ -440,14 +441,14 @@ fn build_acp_driver_services(
             })
         },
         broadcast_ui: {
-            let bundle_name = bundle_name.clone();
+            let namespace = namespace.clone();
             let target_session = target_session.clone();
             Arc::new(move |event_type: &str, payload| {
                 broadcast_event_to_bundle_ui(
-                    bundle_name.as_str(),
+                    namespace.as_str(),
                     &acp_respawn_stream_event(
                         event_type,
-                        bundle_name.as_str(),
+                        namespace.as_str(),
                         target_session.as_str(),
                         payload,
                     ),
@@ -455,15 +456,15 @@ fn build_acp_driver_services(
             })
         },
         invalidate_choices: {
-            let bundle_name = bundle_name.clone();
+            let namespace = namespace.clone();
             let runtime_directory = runtime_directory.clone();
             let target_session = target_session.clone();
             Arc::new(move || {
                 let context = ChoiceEventContext {
                     runtime_directory: runtime_directory.clone(),
-                    bundle_name: bundle_name.clone(),
+                    namespace: namespace.clone(),
                     authorized_ui_sessions: list_registered_ui_sessions_for_bundle(
-                        bundle_name.as_str(),
+                        namespace.as_str(),
                     ),
                 };
                 if let Err(reason) =
@@ -472,7 +473,7 @@ fn build_acp_driver_services(
                     emit_inscription(
                         "relay.acp.respawn.choice_invalidate_failed",
                         &json!({
-                            "bundle_name": bundle_name,
+                            "namespace": namespace,
                             "target_session": target_session,
                             "reason": reason,
                         }),
@@ -480,21 +481,21 @@ fn build_acp_driver_services(
                 }
             })
         },
-        chooser: build_acp_chooser(bundle_name, runtime_directory, choices_pending_max),
+        chooser: build_acp_chooser(namespace, runtime_directory, choices_pending_max),
     }
 }
 
 /// Builds the UI broadcast touchpoints the `UiTransport` invokes. Each closure
-/// closes over this target's `(bundle_name, target_session)` and the relay's own
+/// closes over this target's `(namespace, target_session)` and the relay's own
 /// stream registry; the transport holds them as opaque `Arc<dyn Fn>`s, so
 /// `src/transports` imports nothing from `crate::relay` (mirrors
 /// `build_acp_driver_services`).
 fn build_ui_transport_services(key: &AsyncWorkerKey) -> UiTransportServices {
-    let bundle_name = key.bundle_name.clone();
+    let namespace = key.namespace.clone();
     let target_session = key.target_session.clone();
     UiTransportServices {
         broadcast_incoming: {
-            let bundle_name = bundle_name.clone();
+            let namespace = namespace.clone();
             let target_session = target_session.clone();
             Arc::new(move |incoming: &UiIncomingMessage| {
                 let mut payload = json!({
@@ -515,20 +516,20 @@ fn build_ui_transport_services(key: &AsyncWorkerKey) -> UiTransportServices {
                     event_type: "incoming_message".to_string(),
                     target_session: canonical_session_id(
                         target_session.as_str(),
-                        bundle_name.as_str(),
+                        namespace.as_str(),
                     ),
                     created_at: now_rfc3339(),
                     payload,
                 };
                 stream_send_to_broadcast_status(send_event_to_registered_ui(
-                    bundle_name.as_str(),
+                    namespace.as_str(),
                     target_session.as_str(),
                     &event,
                 ))
             })
         },
         emit_phase: {
-            let bundle_name = bundle_name.clone();
+            let namespace = namespace.clone();
             let target_session = target_session.clone();
             Arc::new(move |phase: UiOutcomePhase| {
                 let mut payload = serde_json::Map::new();
@@ -551,13 +552,13 @@ fn build_ui_transport_services(key: &AsyncWorkerKey) -> UiTransportServices {
                     event_type: "delivery_outcome".to_string(),
                     target_session: canonical_session_id(
                         target_session.as_str(),
-                        bundle_name.as_str(),
+                        namespace.as_str(),
                     ),
                     created_at: now_rfc3339(),
                     payload: Value::Object(payload),
                 };
                 stream_send_to_broadcast_status(send_event_to_registered_ui(
-                    bundle_name.as_str(),
+                    namespace.as_str(),
                     target_session.as_str(),
                     &event,
                 ))
@@ -644,13 +645,13 @@ fn now_rfc3339() -> String {
 
 fn acp_respawn_stream_event(
     event_type: &str,
-    bundle_name: &str,
+    namespace: &str,
     target_session: &str,
     payload: serde_json::Value,
 ) -> RelayStreamEvent {
     RelayStreamEvent {
         event_type: event_type.to_string(),
-        target_session: canonical_session_id(target_session, bundle_name),
+        target_session: canonical_session_id(target_session, namespace),
         created_at: time::OffsetDateTime::now_utc()
             .format(&Rfc3339)
             .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string()),

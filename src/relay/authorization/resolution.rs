@@ -120,11 +120,11 @@ pub(super) fn resolve_relay_principal_controls(
             })
         }
         PrincipalType::Session => {
-            let Some((session_id, bundle_name)) = split_principal_id(requester_principal_id) else {
+            let Some((session_id, namespace)) = split_principal_id(requester_principal_id) else {
                 return Ok(conservative_default);
             };
             let bundle =
-                load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
+                load_bundle_configuration(configuration_root, namespace).map_err(map_config)?;
             let Some(member) = bundle.members.iter().find(|member| member.id == session_id) else {
                 return Ok(conservative_default);
             };
@@ -173,7 +173,7 @@ pub(super) fn controls_for_requester<'a>(
                 "requester_session has no resolved policy controls",
                 Some(json!({
                     "requester_session": requester_session,
-                    "bundle_name": dispatch_namespace,
+                    "namespace": dispatch_namespace,
                 })),
             )
         })?;

@@ -470,7 +470,7 @@ async fn serve_connection_frames(
                         "stream binding has been replaced by a newer hello registration",
                         Some(json!({
                             "principal_id": active_registration.requester_session_id(),
-                            "bundle_name": active_registration.bundle_name(),
+                            "namespace": active_registration.namespace(),
                         })),
                     );
                     write_stream_frame_to_writer(
@@ -826,8 +826,8 @@ async fn read_next_line(
 /// bound bundle is re-applied; relay-wide principals already carry their full
 /// `principal_id`.
 fn full_requester_principal_id(registration: &StreamRegistration) -> String {
-    match registration.bundle_name() {
-        Some(bundle_name) => canonical_session_id(registration.requester_session_id(), bundle_name),
+    match registration.namespace() {
+        Some(namespace) => canonical_session_id(registration.requester_session_id(), namespace),
         None => registration.requester_session_id().to_string(),
     }
 }
@@ -917,12 +917,12 @@ fn emit_registration_choices_snapshots(
     match &binding.key {
         RegistryKey::Session {
             session_id,
-            bundle_name,
+            namespace,
         } => {
             if let Some(bundle_paths) = binding.bound_bundle.as_ref() {
                 handlers::emit_choices_snapshot_for_ui_registration(
                     configuration_root,
-                    bundle_name,
+                    namespace,
                     &bundle_paths.runtime_directory,
                     session_id,
                 )?;
@@ -986,7 +986,7 @@ fn resolve_hello_binding(
     } = verified;
     match principal_type {
         PrincipalType::Session => {
-            let (session_id, bundle_name) = split_principal_id(hello.principal_id.as_str())
+            let (session_id, namespace) = split_principal_id(hello.principal_id.as_str())
                 .ok_or_else(|| {
                     relay_error(
                         "validation_invalid_principal_id",
@@ -995,14 +995,14 @@ fn resolve_hello_binding(
                     )
                 })?;
             let bundle_paths = bundle_catalog
-                .lookup(bundle_name)
-                .ok_or_else(|| unknown_bundle_error(bundle_name))?;
+                .lookup(namespace)
+                .ok_or_else(|| unknown_bundle_error(namespace))?;
             let session_type =
-                resolve_bundle_member_session_type(configuration_root, bundle_name, session_id)?;
+                resolve_bundle_member_session_type(configuration_root, namespace, session_id)?;
             Ok(HelloBinding {
                 session_type,
                 key: RegistryKey::Session {
-                    bundle_name: bundle_name.to_string(),
+                    namespace: namespace.to_string(),
                     session_id: session_id.to_string(),
                 },
                 bound_bundle: Some(bundle_paths),

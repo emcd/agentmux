@@ -147,7 +147,7 @@ fn prepare_raww(
     bundle_catalog: &BundleCatalog,
 ) -> Result<RawwPrepared, RelayError> {
     let target_route = &route.targets[0];
-    let target_bundle_name = target_route.bundle_name.as_str();
+    let target_namespace = target_route.namespace.as_str();
     let target_session_id = target_route
         .session_id
         .as_deref()
@@ -174,7 +174,7 @@ fn prepare_raww(
         home_namespace,
         home_bundle,
         home_runtime_directory,
-        target_bundle_name,
+        target_namespace,
         configuration_root,
         bundle_catalog,
     )?;
@@ -187,14 +187,14 @@ fn prepare_raww(
             "validation_unknown_target",
             "target_session is not a canonical configured target identifier",
             Some(json!({
-                "target_session": canonical_session_id(target_session_id, target_bundle_name),
+                "target_session": canonical_session_id(target_session_id, target_namespace),
             })),
         ));
     };
     let session_type = member.target.session_type();
     if !session_type.can_be_written() {
         return Err(unsupported_operation(
-            canonical_session_id(target_session_id, target_bundle_name).as_str(),
+            canonical_session_id(target_session_id, target_namespace).as_str(),
             session_type,
             "can_be_written",
         ));
@@ -252,7 +252,7 @@ fn execute_raww(
         choose_authorized_ui_sessions(&target_authorization, &raww_bundle);
     let task = AsyncDeliveryTask {
         bundle: raww_bundle.clone(),
-        sender_bundle_name: home_namespace.to_string(),
+        sender_namespace: home_namespace.to_string(),
         sender: sender_member,
         // Raw input does not carry verified sender attribution, and its targets
         // are never UI streams.

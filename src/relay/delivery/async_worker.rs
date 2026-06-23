@@ -32,7 +32,7 @@ const ACP_PENDING_MAX: usize = 64;
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(super) struct AsyncWorkerKey {
     pub runtime_directory: PathBuf,
-    pub bundle_name: String,
+    pub namespace: String,
     pub target_session: String,
 }
 
@@ -50,13 +50,13 @@ pub(super) struct AsyncWorkerEntry {
 }
 
 pub(super) fn build_worker_key(
-    bundle_name: &str,
+    namespace: &str,
     runtime_directory: &Path,
     target_session: &str,
 ) -> AsyncWorkerKey {
     AsyncWorkerKey {
         runtime_directory: runtime_directory.to_path_buf(),
-        bundle_name: bundle_name.to_string(),
+        namespace: namespace.to_string(),
         target_session: target_session.to_string(),
     }
 }
@@ -188,12 +188,12 @@ pub(super) fn register_worker_if_absent(
 }
 
 pub(in crate::relay) fn set_acp_worker_state(
-    bundle_name: &str,
+    namespace: &str,
     runtime_directory: &Path,
     target_session: &str,
     state: AcpWorkerReadinessState,
 ) {
-    let key = build_worker_key(bundle_name, runtime_directory, target_session);
+    let key = build_worker_key(namespace, runtime_directory, target_session);
     if let Ok(mut workers) = async_delivery_registry().workers.lock()
         && let Some(entry) = workers.get_mut(&key)
     {
@@ -207,11 +207,11 @@ pub(in crate::relay) fn set_acp_worker_state(
 }
 
 pub(in crate::relay) fn get_acp_worker_state(
-    bundle_name: &str,
+    namespace: &str,
     runtime_directory: &Path,
     target_session: &str,
 ) -> Option<AcpWorkerReadinessState> {
-    let key = build_worker_key(bundle_name, runtime_directory, target_session);
+    let key = build_worker_key(namespace, runtime_directory, target_session);
     async_delivery_registry()
         .workers
         .lock()
@@ -221,12 +221,12 @@ pub(in crate::relay) fn get_acp_worker_state(
 }
 
 pub(in crate::relay) fn install_acp_worker_output_view(
-    bundle_name: &str,
+    namespace: &str,
     runtime_directory: &Path,
     target_session: &str,
     output_view: Option<Arc<dyn OutputView>>,
 ) {
-    let key = build_worker_key(bundle_name, runtime_directory, target_session);
+    let key = build_worker_key(namespace, runtime_directory, target_session);
     if let Ok(mut workers) = async_delivery_registry().workers.lock()
         && let Some(entry) = workers.get_mut(&key)
     {
@@ -235,11 +235,11 @@ pub(in crate::relay) fn install_acp_worker_output_view(
 }
 
 pub(in crate::relay) fn get_acp_worker_output_view(
-    bundle_name: &str,
+    namespace: &str,
     runtime_directory: &Path,
     target_session: &str,
 ) -> Option<Arc<dyn OutputView>> {
-    let key = build_worker_key(bundle_name, runtime_directory, target_session);
+    let key = build_worker_key(namespace, runtime_directory, target_session);
     async_delivery_registry()
         .workers
         .lock()
@@ -259,13 +259,13 @@ pub(in crate::relay) fn get_acp_worker_output_view(
 /// failed bootstrap, or mid-respawn); the look handler maps that `None` to an
 /// empty stale/unavailable snapshot.
 pub(in crate::relay) fn get_output_view(
-    bundle_name: &str,
+    namespace: &str,
     runtime_directory: &Path,
     member: &BundleMember,
 ) -> Option<Arc<dyn OutputView>> {
     match &member.target {
         TargetConfiguration::Acp(_) => {
-            get_acp_worker_output_view(bundle_name, runtime_directory, member.id.as_str())
+            get_acp_worker_output_view(namespace, runtime_directory, member.id.as_str())
         }
         TargetConfiguration::Tmux(_) => {
             let socket_path = tmux_socket_path_for_runtime_directory(runtime_directory);
@@ -279,12 +279,12 @@ pub(in crate::relay) fn get_output_view(
 }
 
 pub(in crate::relay) fn acp_session_ready_for_startup(
-    bundle_name: &str,
+    namespace: &str,
     runtime_directory: &Path,
     target_session: &str,
 ) -> bool {
     matches!(
-        get_acp_worker_state(bundle_name, runtime_directory, target_session),
+        get_acp_worker_state(namespace, runtime_directory, target_session),
         Some(AcpWorkerReadinessState::Available)
     )
 }
@@ -369,7 +369,7 @@ pub(super) fn complete_task_outcome(
         Ok(result) => {
             emit_sender_delivery_outcome_event(
                 task.bundle.bundle_name.as_str(),
-                task.sender_bundle_name.as_str(),
+                task.sender_namespace.as_str(),
                 task.sender.id.as_str(),
                 result.target_session.as_str(),
                 result.message_id.as_str(),
@@ -380,7 +380,7 @@ pub(super) fn complete_task_outcome(
             emit_inscription(
                 "relay.send.async.completed",
                 &json!({
-                    "bundle_name": task.bundle.bundle_name,
+                    "namespace": task.bundle.bundle_name,
                     "sender_session": task.sender.id,
                     "target_session": result.target_session,
                     "message_id": result.message_id,
@@ -394,7 +394,7 @@ pub(super) fn complete_task_outcome(
         Err(error) => {
             emit_sender_delivery_outcome_event(
                 task.bundle.bundle_name.as_str(),
-                task.sender_bundle_name.as_str(),
+                task.sender_namespace.as_str(),
                 task.sender.id.as_str(),
                 task.target_session.as_str(),
                 task.message_id.as_str(),
@@ -405,7 +405,7 @@ pub(super) fn complete_task_outcome(
             emit_inscription(
                 "relay.send.async.completed",
                 &json!({
-                    "bundle_name": task.bundle.bundle_name,
+                    "namespace": task.bundle.bundle_name,
                     "sender_session": task.sender.id,
                     "target_session": task.target_session,
                     "message_id": task.message_id,
@@ -425,8 +425,8 @@ pub(super) fn complete_task_outcome(
 /// outcomes once the agent turn finishes.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn emit_sender_delivery_outcome_event(
-    target_bundle_name: &str,
-    sender_bundle_name: &str,
+    target_namespace: &str,
+    sender_namespace: &str,
     sender_session: &str,
     target_session: &str,
     message_id: &str,
@@ -474,7 +474,7 @@ pub(super) fn emit_sender_delivery_outcome_event(
         // Describes the target in the TARGET's bundle even though the event
         // routes to the sender's bundle; cross-bundle sends would otherwise
         // misattribute the target to the sender's namespace.
-        target_session: canonical_session_id(target_session, target_bundle_name),
+        target_session: canonical_session_id(target_session, target_namespace),
         created_at: time::OffsetDateTime::now_utc()
             .format(&Rfc3339)
             .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string()),
@@ -482,5 +482,5 @@ pub(super) fn emit_sender_delivery_outcome_event(
     };
     // Route the sender's delivery-outcome event back to the sender within its
     // home bundle, which differs from the target's bundle for cross-bundle sends.
-    let _ = send_event_to_registered_ui(sender_bundle_name, sender_session, &event);
+    let _ = send_event_to_registered_ui(sender_namespace, sender_session, &event);
 }

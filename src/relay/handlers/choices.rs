@@ -20,11 +20,11 @@ use super::super::{
 
 pub(super) fn emit_choices_snapshot_for_ui_registration(
     configuration_root: &Path,
-    bundle_name: &str,
+    namespace: &str,
     runtime_directory: &Path,
     ui_session_id: &str,
 ) -> Result<(), RelayError> {
-    let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
+    let bundle = load_bundle_configuration(configuration_root, namespace).map_err(map_config)?;
     let authorization = load_authorization_context(configuration_root, Some(&bundle))?;
     let authorized_sessions = choose_authorized_ui_sessions(&authorization, &bundle);
     if !authorized_sessions
@@ -35,7 +35,7 @@ pub(super) fn emit_choices_snapshot_for_ui_registration(
     }
     let context = ChoiceEventContext {
         runtime_directory: runtime_directory.to_path_buf(),
-        bundle_name: bundle.bundle_name.clone(),
+        namespace: bundle.bundle_name.clone(),
         authorized_ui_sessions: authorized_sessions,
     };
     emit_choices_snapshot_then_replay(&context, ui_session_id).map_err(|cause| {
@@ -43,7 +43,7 @@ pub(super) fn emit_choices_snapshot_for_ui_registration(
             "internal_unexpected_failure",
             "failed to replay choices snapshot for ui session",
             Some(json!({
-                "bundle_name": bundle.bundle_name,
+                "namespace": bundle.bundle_name,
                 "session_id": ui_session_id,
                 "cause": cause,
             })),
@@ -80,7 +80,7 @@ pub(super) fn handle_choices_pick(
     )?;
     let context = ChoiceEventContext {
         runtime_directory: runtime_directory.to_path_buf(),
-        bundle_name: bundle.bundle_name.clone(),
+        namespace: bundle.bundle_name.clone(),
         authorized_ui_sessions: choose_authorized_ui_sessions(authorization, bundle),
     };
     let outcome = resolve_choice_request(

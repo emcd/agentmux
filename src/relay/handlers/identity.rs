@@ -307,8 +307,8 @@ fn build_config_snippet(
 ) -> String {
     match principal_type {
         PrincipalType::Session => match split_principal_id(principal_id) {
-            Some((session_id, bundle_name)) => {
-                let path = session_identity_psk_path(state_root, bundle_name, session_id);
+            Some((session_id, namespace)) => {
+                let path = session_identity_psk_path(state_root, namespace, session_id);
                 format!(
                     "Write the PSK to {} (mode 0600); the session presents it as identity_token at Hello.",
                     path.display()
