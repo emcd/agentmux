@@ -27,6 +27,7 @@ After=default.target
 
 [Service]
 Type=simple
+WorkingDirectory=%h/.local/share/agentmux
 ExecStart=/usr/bin/env agentmux host relay
 Restart=on-failure
 RestartSec=2
