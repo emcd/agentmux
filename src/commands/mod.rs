@@ -189,6 +189,10 @@ pub async fn run_agentmux(arguments: Vec<String>) -> Result<(), RuntimeError> {
             print_agentmux_help();
             Ok(())
         }
+        "--version" | "-V" => {
+            print_agentmux_version();
+            Ok(())
+        }
         "host" => host::run_agentmux_host(&arguments[1..]).await,
         "up" => up::run_agentmux_up(&arguments[1..]),
         "down" => down::run_agentmux_down(&arguments[1..]),
@@ -204,6 +208,14 @@ pub async fn run_agentmux(arguments: Vec<String>) -> Result<(), RuntimeError> {
             message: "unknown subcommand".to_string(),
         }),
     }
+}
+
+fn print_agentmux_version() {
+    println!(concat!(
+        env!("CARGO_PKG_NAME"),
+        " ",
+        env!("CARGO_PKG_VERSION")
+    ));
 }
 
 fn print_agentmux_help() {
@@ -252,6 +264,10 @@ fn print_agentmux_help() {
         "[--request-id ID] [--bundle NAME] ",
         "[--as-session NAME] [--json] [--config-directory PATH] ",
         "[--state-directory PATH] [--inscriptions-directory PATH|",
-        "--logs-directory PATH] [--repository-root PATH]"
+        "--logs-directory PATH] [--repository-root PATH]\n",
+        "\n",
+        "Global flags:\n",
+        "  -h, --help     Print this help and exit\n",
+        "  -V, --version  Print the agentmux version and exit"
     ));
 }

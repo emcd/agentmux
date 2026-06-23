@@ -61,6 +61,10 @@ This directory owns the unified CLI surface for `agentmux`.
 ## Operational Notes
 
 - Bare `agentmux` dispatches to TUI only in interactive TTY mode.
+- The top-level router handles two global flags before subcommand dispatch:
+  `-h`/`--help` prints the command usage and `-V`/`--version` prints
+  `agentmux <crate-version>` (sourced from `CARGO_PKG_VERSION`); both exit
+  successfully.
 - `host relay --no-autostart` is process-only mode and must not report
   autostart failures for bundles.
 - `host relay` watches the bundles configuration directory by default and
