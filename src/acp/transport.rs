@@ -411,24 +411,21 @@ impl Transport for AcpTransport {
     fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
         let (outcome_tx, outcome_rx) = tokio::sync::oneshot::channel();
         if let Some(tx) = self.write_tx.as_ref() {
-            if let Err(e) = tx.try_send(WriteItem::Envelope {
+            if let Err(error) = tx.try_send(WriteItem::Envelope {
                 envelope: Box::new(envelope),
                 outcome_tx,
             }) {
-                // Channel full or closed — resolve with terminal outcome,
-                // preserving the envelope's message_id and target_session.
-                match e.into_inner() {
-                    WriteItem::Envelope {
-                        outcome_tx,
-                        envelope,
-                    } => {
-                        let _ =
-                            outcome_tx.send(self.unavailable_outcome_with_id(&envelope.message_id));
-                    }
-                    WriteItem::Raw { outcome_tx, .. } => {
-                        let _ = outcome_tx.send(self.unavailable_outcome_with_id(""));
-                    }
-                }
+                // Channel full or closed — resolve with a terminal outcome,
+                // preserving the envelope's message_id. The rejected item is the
+                // Envelope we just submitted; mailw never enqueues a Raw.
+                let WriteItem::Envelope {
+                    outcome_tx,
+                    envelope,
+                } = error.into_inner()
+                else {
+                    unreachable!("mailw only enqueues Envelope write items");
+                };
+                let _ = outcome_tx.send(self.unavailable_outcome_with_id(&envelope.message_id));
             }
         } else {
             self.resignal_respawn_if_dead();
@@ -440,23 +437,17 @@ impl Transport for AcpTransport {
     fn raww(&mut self, content: String, append_enter: bool) -> OutcomeFuture {
         let (outcome_tx, outcome_rx) = tokio::sync::oneshot::channel();
         if let Some(tx) = self.write_tx.as_ref() {
-            if let Err(e) = tx.try_send(WriteItem::Raw {
+            if let Err(error) = tx.try_send(WriteItem::Raw {
                 content,
                 append_enter,
                 outcome_tx,
             }) {
-                match e.into_inner() {
-                    WriteItem::Envelope {
-                        outcome_tx,
-                        envelope,
-                    } => {
-                        let _ =
-                            outcome_tx.send(self.unavailable_outcome_with_id(&envelope.message_id));
-                    }
-                    WriteItem::Raw { outcome_tx, .. } => {
-                        let _ = outcome_tx.send(self.unavailable_outcome_with_id(""));
-                    }
-                }
+                // The rejected item is the Raw we just submitted; raww never
+                // enqueues an Envelope.
+                let WriteItem::Raw { outcome_tx, .. } = error.into_inner() else {
+                    unreachable!("raww only enqueues Raw write items");
+                };
+                let _ = outcome_tx.send(self.unavailable_outcome_with_id(""));
             }
         } else {
             self.resignal_respawn_if_dead();
@@ -620,12 +611,6 @@ fn acp_delivery_task(
         target_session: &target_session,
     };
 
-    let TurnContext {
-        session_id: _,
-        shared: _,
-        chooser: _,
-        target_session: _,
-    } = ctx;
     let mut rx = channels.rx;
     let mut shutdown_rx = channels.shutdown_rx;
     let respawn_needed_tx = channels.respawn_needed_tx;
