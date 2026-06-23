@@ -2,10 +2,11 @@
 //!
 //! `AcpTransport` owns the per-target `PersistentAcpWorkerRuntime` (moved here
 //! from the relay delivery worker, which previously threaded it through
-//! `spawn_blocking`). [`Transport::deliver`] submits one ACP prompt and BLOCKS
-//! until the turn reaches a terminal state, folding in what used to be the
-//! reader thread's `on_completion` body; the relay worker fans the single
-//! terminal outcome out to the coalesced tasks.
+//! `spawn_blocking`). [`Transport::mailw`] enqueues a rendered envelope on the
+//! transport's internal channel and returns an outcome future; the internal
+//! delivery task combines a contiguous envelope group into one ACP turn, drives
+//! it to a terminal state (folding in what used to be the reader thread's
+//! `on_completion` body), and resolves the future for each contributing task.
 //!
 //! Choices (tool-call permissions) resolve through the relay-injected
 //! [`Chooser`] (see [`crate::acp::permission`]); the transport never calls the
@@ -47,10 +48,8 @@ use crate::runtime::signals::shutdown_requested;
 use crate::transports::contract::OutcomeFuture;
 use crate::transports::{AcpWorkerReadinessState, SendOutcome};
 use crate::transports::{
-    ChoiceMade, DeliveryContext, DeliveryEnvelope, DeliveryPreparation, DeliveryResult,
-    DeliveryWaitError, LookMode, LookSnapshotPayload, OutputView, RawWriteResult,
-    SingleDeliveryOutcome, StartupContext, Transport, TransportError, TransportReadiness,
-    TransportStatus,
+    ChoiceMade, DeliveryEnvelope, LookMode, LookSnapshotPayload, OutputView, SingleDeliveryOutcome,
+    StartupContext, Transport, TransportError, TransportReadiness, TransportStatus,
 };
 
 // ACP delivery failure taxonomy (see the relay delivery README for the full
@@ -68,7 +67,6 @@ pub const ACP_ERROR_CODE_CONNECTION_CLOSED: &str = "runtime_acp_connection_close
 /// Transport-unavailable failure; surfaced to the worker's respawn classifier.
 pub const ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE: &str = "acp_child_unavailable";
 const ACP_ERROR_CODE_MISSING_CAPABILITY: &str = "validation_missing_acp_capability";
-const ACP_ERROR_CODE_WORKER_UNAVAILABLE: &str = "runtime_acp_worker_unavailable";
 
 const DROPPED_ON_SHUTDOWN_REASON_CODE: &str = "dropped_on_shutdown";
 const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delivery";
@@ -407,17 +405,6 @@ impl Transport for AcpTransport {
         }
     }
 
-    fn prepare_delivery(
-        &self,
-        context: &DeliveryContext,
-    ) -> Result<DeliveryPreparation, DeliveryWaitError> {
-        // ACP has no pre-delivery wait — the internal delivery task handles
-        // quiescence internally. Echo any pre-resolved target back unchanged.
-        Ok(DeliveryPreparation {
-            pre_resolved_target: context.pre_resolved_target.clone(),
-        })
-    }
-
     fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
         let (outcome_tx, outcome_rx) = tokio::sync::oneshot::channel();
         if let Some(tx) = self.write_tx.as_ref() {
@@ -475,76 +462,11 @@ impl Transport for AcpTransport {
         outcome_rx
     }
 
-    fn deliver(
-        &mut self,
-        envelopes: Vec<DeliveryEnvelope>,
-        context: &DeliveryContext,
-    ) -> DeliveryResult {
-        // Legacy synchronous path: delegate to the write channel and block on
-        // the outcome. This preserves backward compatibility during the
-        // write-interface transition; it will be removed once all relay callsites
-        // move to mailw/raww.
-        let Some(envelope) = envelopes.into_iter().next() else {
-            return single(failed_outcome(
-                context.target_session.clone(),
-                String::new(),
-                "ACP delivery received no envelope",
-            ));
-        };
-        let target_session = context.target_session.clone();
-        let message_id = envelope.message_id.clone();
-        if self.write_tx.is_none() {
-            // No live runtime: re-attempt recovery (recoverable workers recover;
-            // permanently-dead ones re-publish their Unavailable transition).
-            self.resignal_respawn_if_dead();
-            return single(worker_unavailable_outcome(
-                target_session,
-                message_id,
-                context.target_member.id.as_str(),
-            ));
-        }
-        let rx = self.mailw(envelope);
-        match rx.blocking_recv() {
-            Ok(outcome) => single(outcome),
-            Err(_) => single(failed_outcome_with_code(
-                target_session,
-                message_id,
-                ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE,
-                "ACP delivery task dropped outcome sender",
-                None,
-            )),
-        }
-    }
-
     fn is_ready(&self) -> bool {
         matches!(
             self.readiness(),
             AcpWorkerReadinessState::Available | AcpWorkerReadinessState::Busy
         )
-    }
-
-    fn raw_write(
-        &mut self,
-        text: &str,
-        _append_enter: bool,
-        _context: &DeliveryContext,
-    ) -> RawWriteResult {
-        // Legacy synchronous path: delegate to the write channel and block.
-        // This preserves backward compatibility during the transition.
-        let rx = self.raww(text.to_string(), _append_enter);
-        match rx.blocking_recv() {
-            Ok(outcome) if matches!(outcome.outcome, SendOutcome::Delivered) => {
-                RawWriteResult::Written
-            }
-            Ok(outcome) => RawWriteResult::Failed {
-                reason: outcome
-                    .reason
-                    .unwrap_or_else(|| "ACP raw write failed".to_string()),
-            },
-            Err(_) => RawWriteResult::Failed {
-                reason: "ACP delivery task dropped outcome sender".to_string(),
-            },
-        }
     }
 
     fn shutdown(&mut self) {
@@ -832,95 +754,56 @@ fn drain_and_resolve_shutdown(rx: &mut mpsc::Receiver<WriteItem>) {
     }
 }
 
-/// A DroppedOnShutdown outcome for items resolved during shutdown/respawn.
+/// A DroppedOnShutdown outcome for writes resolved during relay shutdown. Mirrors
+/// the tmux transport's shutdown-drop outcome so the relay shutdown taxonomy
+/// reports `dropped_on_shutdown` (not a generic failure) uniformly across
+/// transports. (Respawn invalidation is a distinct path: it closes the channel,
+/// and the worker maps the dropped future to its own outcome.)
 fn dropped_on_shutdown_outcome() -> SingleDeliveryOutcome {
     SingleDeliveryOutcome {
         target_session: String::new(),
         message_id: String::new(),
-        outcome: SendOutcome::Failed,
+        outcome: SendOutcome::DroppedOnShutdown,
         reason_code: Some(DROPPED_ON_SHUTDOWN_REASON_CODE.to_string()),
         reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
         details: None,
     }
 }
 
-/// Combines a group of rendered envelopes into one turn prompt respecting the
-/// token budget, submits each batch as a turn, and fans the outcome to the
-/// senders for that batch. Each sender receives its own message_id in the
-/// outcome, even when multiple envelopes are combined into one turn.
-#[allow(clippy::type_complexity)]
+/// Combines a contiguous batch of rendered envelopes into token-budget-bounded
+/// turn prompts via [`crate::envelope::batch_envelope_groups`], submits each
+/// group as one turn, and fans that turn's outcome to the contributing senders.
+/// Each sender receives its own message_id in the outcome, even when multiple
+/// envelopes are combined into one turn. The group's head message_id and decider
+/// sessions correlate any choice raised mid-turn.
 fn flush_envelope_group(
     client: &mut AcpStdioClient,
     ctx: &TurnContext,
     batch_settings: &PromptBatchSettings,
     batch: &mut EnvelopeBatch,
 ) {
-    let budget = batch_settings.max_prompt_tokens.max(1);
-    // Each group: (combined prompt, head message_id, head decider_sessions,
-    //               per-sender message_ids, per-sender outcome senders)
-    let mut groups: Vec<(
-        String,
-        String,
-        Vec<String>,
-        Vec<String>,
-        Vec<tokio::sync::oneshot::Sender<SingleDeliveryOutcome>>,
-    )> = Vec::new();
-    let mut cur_prompt = String::new();
-    let mut cur_head_msg_id = String::new();
-    let mut cur_head_deciders: Vec<String> = Vec::new();
-    let mut cur_msg_ids: Vec<String> = Vec::new();
-    let mut cur_senders: Vec<tokio::sync::oneshot::Sender<SingleDeliveryOutcome>> = Vec::new();
+    let groups = crate::envelope::batch_envelope_groups(&batch.rendered, *batch_settings);
+    batch.rendered.clear();
+    let mut message_ids = batch.message_ids.drain(..);
+    let mut decider_sessions = batch.decider_sessions.drain(..);
+    let mut outcome_senders = batch.outcome_senders.drain(..);
 
-    for (((rendered, msg_id), deciders), sender) in batch
-        .rendered
-        .drain(..)
-        .zip(batch.message_ids.drain(..))
-        .zip(batch.decider_sessions.drain(..))
-        .zip(batch.outcome_senders.drain(..))
-    {
-        if cur_prompt.is_empty() {
-            cur_prompt = rendered;
-            cur_head_msg_id = msg_id.clone();
-            cur_head_deciders = deciders;
-            cur_msg_ids.push(msg_id);
-            cur_senders.push(sender);
-            continue;
-        }
-        let candidate = format!("{cur_prompt}\n\n{rendered}");
-        let est =
-            crate::envelope::estimate_prompt_tokens(&candidate, batch_settings.tokenizer_profile);
-        if est <= budget {
-            cur_prompt = candidate;
-            cur_msg_ids.push(msg_id);
-            cur_senders.push(sender);
-        } else {
-            groups.push((
-                cur_prompt,
-                cur_head_msg_id,
-                cur_head_deciders,
-                cur_msg_ids,
-                cur_senders,
-            ));
-            cur_prompt = rendered;
-            cur_head_msg_id = msg_id.clone();
-            cur_head_deciders = deciders;
-            cur_msg_ids = vec![msg_id];
-            cur_senders = vec![sender];
-        }
-    }
-    if !cur_prompt.is_empty() {
-        groups.push((
-            cur_prompt,
-            cur_head_msg_id,
-            cur_head_deciders,
-            cur_msg_ids,
-            cur_senders,
-        ));
-    }
-
-    for (prompt, msg_id, deciders, msg_ids, senders) in groups {
-        let outcome = submit_envelope_turn(client, ctx, &prompt, &msg_id, &deciders);
-        for (sender_msg_id, tx) in msg_ids.into_iter().zip(senders) {
+    for group in groups {
+        let group_msg_ids: Vec<String> = message_ids.by_ref().take(group.member_count).collect();
+        let group_deciders: Vec<Vec<String>> =
+            decider_sessions.by_ref().take(group.member_count).collect();
+        let group_senders: Vec<tokio::sync::oneshot::Sender<SingleDeliveryOutcome>> =
+            outcome_senders.by_ref().take(group.member_count).collect();
+        let head_msg_id = group_msg_ids.first().cloned().unwrap_or_default();
+        let head_deciders = group_deciders.into_iter().next().unwrap_or_default();
+        let outcome = submit_envelope_turn(
+            client,
+            ctx,
+            &group.combined_prompt,
+            &head_msg_id,
+            &head_deciders,
+        );
+        for (sender_msg_id, tx) in group_msg_ids.into_iter().zip(group_senders) {
             let mut sender_outcome = outcome.clone();
             sender_outcome.message_id = sender_msg_id;
             let _ = tx.send(sender_outcome);
@@ -1055,12 +938,6 @@ pub fn bootstrap_acp_worker_runtime(
     )
 }
 
-fn single(outcome: SingleDeliveryOutcome) -> DeliveryResult {
-    DeliveryResult {
-        outcomes: vec![outcome],
-    }
-}
-
 fn delivered_outcome(target_session: String, message_id: String) -> SingleDeliveryOutcome {
     SingleDeliveryOutcome {
         target_session,
@@ -1104,20 +981,6 @@ fn failed_outcome_with_code(
     }
 }
 
-fn worker_unavailable_outcome(
-    target_session: String,
-    message_id: String,
-    target_member_id: &str,
-) -> SingleDeliveryOutcome {
-    failed_outcome_with_code(
-        target_session,
-        message_id,
-        ACP_ERROR_CODE_WORKER_UNAVAILABLE,
-        "ACP worker is unavailable for target session",
-        Some(json!({ "target_session": target_member_id })),
-    )
-}
-
 fn build_acp_completion_result(
     completion: Option<PromptCompletion>,
     pending_choice_outcome: Option<ChoiceMade>,
@@ -1144,16 +1007,19 @@ fn build_acp_completion_result(
     }
 
     let Some(completion) = completion else {
-        // No completion observed before the wait was abandoned: shutdown.
+        // No completion observed before the wait was abandoned: shutdown. Report
+        // the dropped-on-shutdown outcome (not a generic failure), matching the
+        // queued-write drop path and the tmux transport.
         return (
             AcpWorkerReadinessState::Available,
-            failed_outcome_with_code(
+            SingleDeliveryOutcome {
                 target_session,
                 message_id,
-                DROPPED_ON_SHUTDOWN_REASON_CODE,
-                DROPPED_ON_SHUTDOWN_REASON,
-                None,
-            ),
+                outcome: SendOutcome::DroppedOnShutdown,
+                reason_code: Some(DROPPED_ON_SHUTDOWN_REASON_CODE.to_string()),
+                reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
+                details: None,
+            },
         );
     };
 

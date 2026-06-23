@@ -33,8 +33,7 @@ use tokio::sync::oneshot;
 use crate::runtime::signals::shutdown_requested;
 use crate::transports::contract::OutcomeFuture;
 use crate::transports::{
-    DeliveryContext, DeliveryEnvelope, DeliveryPreparation, DeliveryResult, DeliveryWaitError,
-    OutputView, RawWriteResult, SendOutcome, SingleDeliveryOutcome, StartupContext, Transport,
+    DeliveryEnvelope, OutputView, SendOutcome, SingleDeliveryOutcome, StartupContext, Transport,
     TransportError, TransportReadiness, TransportStatus,
 };
 
@@ -116,8 +115,8 @@ impl std::fmt::Debug for UiTransportServices {
 /// Held by `TransportImpl::Ui`. [`mailw`](Transport::mailw) broadcasts the
 /// message as a stream event on its own thread (so the write stays non-blocking),
 /// runs the bounded UI-reconnect wait, and resolves the [`OutcomeFuture`]. The UI
-/// is not raw-writable ([`raww`](Transport::raww)/[`raw_write`](Transport::raw_write)
-/// fail) and not lookable ([`give_output`](Transport::give_output) is `None`).
+/// is not raw-writable ([`raww`](Transport::raww) resolves an unsupported
+/// outcome) and not lookable ([`give_output`](Transport::give_output) is `None`).
 #[derive(Debug)]
 pub struct UiTransport {
     services: UiTransportServices,
@@ -137,22 +136,6 @@ impl Transport for UiTransport {
         Ok(TransportStatus {
             readiness: TransportReadiness::Ready,
         })
-    }
-
-    fn prepare_delivery(
-        &self,
-        _context: &DeliveryContext,
-    ) -> Result<DeliveryPreparation, DeliveryWaitError> {
-        // UI delivery has no pre-delivery barrier; it flows through `mailw`.
-        Ok(DeliveryPreparation::default())
-    }
-
-    fn deliver(
-        &mut self,
-        _envelopes: Vec<DeliveryEnvelope>,
-        _context: &DeliveryContext,
-    ) -> DeliveryResult {
-        unimplemented!("UiTransport delivers via mailw, not the legacy deliver seam")
     }
 
     fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
@@ -194,17 +177,6 @@ impl Transport for UiTransport {
 
     fn is_ready(&self) -> bool {
         true
-    }
-
-    fn raw_write(
-        &mut self,
-        _text: &str,
-        _append_enter: bool,
-        _context: &DeliveryContext,
-    ) -> RawWriteResult {
-        RawWriteResult::Failed {
-            reason: "UI transport does not support raw input".to_string(),
-        }
     }
 
     fn shutdown(&mut self) {}

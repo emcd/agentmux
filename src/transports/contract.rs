@@ -20,9 +20,9 @@
 //!
 //! This retires the earlier "the sync core never crosses `.await`; the worker
 //! owns `spawn_blocking`" invariant: ownership of the blocking delivery moves
-//! into each transport. The legacy synchronous [`Transport::deliver`] and
-//! [`Transport::prepare_delivery`] remain during the transition and are removed
-//! once their last relay callsites move onto the write methods.
+//! into each transport. The legacy synchronous `deliver`/`prepare_delivery`/
+//! `raw_write` seam has been removed now that every relay callsite delivers
+//! through the write methods.
 //!
 //! ## Transport <-> relay interactions
 //!
@@ -34,9 +34,10 @@
 //!   [`StartupContext`], which the transport invokes inline and blocks on until
 //!   the operator decides. No transport->relay back-edge: the transport holds an
 //!   opaque `Arc<dyn Fn>` typed here in `transports`.
-//! - **Completion** is folded into [`Transport::deliver`], which blocks to a
-//!   terminal state and returns the per-envelope outcome; the worker fans out
-//!   from the return value.
+//! - **Completion** resolves through the [`OutcomeFuture`] returned by
+//!   [`Transport::mailw`]/[`Transport::raww`]: the transport's internal delivery
+//!   task drives each write to a terminal [`SingleDeliveryOutcome`], and the
+//!   worker fans out from the resolved future.
 //! - **Output for `look`** is a concurrent read via [`Transport::give_output`],
 //!   which hands the relay an [`OutputView`] handle the look request path can
 //!   read without borrowing the worker-owned transport.
@@ -86,9 +87,9 @@ pub type OutcomeFuture = oneshot::Receiver<SingleDeliveryOutcome>;
 ///
 /// The non-blocking write methods ([`mailw`](Transport::mailw),
 /// [`raww`](Transport::raww)) return an [`OutcomeFuture`]; each transport owns
-/// its own internal delivery task and `spawn_blocking`. The legacy synchronous
-/// [`deliver`](Transport::deliver)/[`prepare_delivery`](Transport::prepare_delivery)
-/// seam remains during the write-interface transition.
+/// its own internal delivery task and `spawn_blocking`. They are the relay's
+/// only delivery seam — the legacy synchronous `deliver`/`prepare_delivery`/
+/// `raw_write` methods have been removed.
 pub trait Transport {
     /// Establishes (or re-establishes, on respawn) the transport runtime for a
     /// target. On respawn the transport may publish a fresh [`OutputView`]; the
@@ -97,50 +98,6 @@ pub trait Transport {
     /// [`give_output`]: Transport::give_output
     fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError>;
 
-    /// Gates delivery on the target being ready to receive a batch, returning a
-    /// resolved target handle. A transport whose readiness is observable (tmux
-    /// pane quiescence; pty fd idle, later) performs the wait here; a transport
-    /// with no pre-delivery wait (ACP today) returns ready immediately, echoing
-    /// any [`DeliveryContext::pre_resolved_target`] back unchanged.
-    ///
-    /// The relay worker calls this as a distinct step BEFORE [`deliver`], so it
-    /// can drain task arrivals into the batch during the wait
-    /// (coalesce-during-wait); the barrier is deliberately NOT folded into
-    /// [`deliver`]. On timeout, shutdown, or target unavailability it returns a
-    /// [`DeliveryWaitError`] the worker fans across the coalesced batch.
-    ///
-    /// [`deliver`]: Transport::deliver
-    fn prepare_delivery(
-        &self,
-        context: &DeliveryContext,
-    ) -> Result<DeliveryPreparation, DeliveryWaitError>;
-
-    /// Delivers a coalesced batch of envelopes in a single call, BLOCKING until
-    /// each envelope reaches a terminal state, and returning one terminal
-    /// outcome per envelope aligned with the input order. Completion is owned
-    /// here (no separate relay completion callback): the worker fans out from
-    /// the returned [`DeliveryResult`]. Choices raised mid-delivery are serviced
-    /// inline via the [`StartupContext::choose`] resolver, on the transport's own
-    /// thread, without worker involvement.
-    ///
-    /// The relay decides how envelopes are grouped before this call; a transport
-    /// must honor whatever batch it receives. A transport that accepts at most one
-    /// prompt batch per dispatch declares so via
-    /// [`TransportImpl::can_take_batches`] returning `false`, and the relay peels
-    /// the rendered envelopes to a single batch before calling `deliver`. The ACP
-    /// worker pre-combines a coalesced turn into a single envelope and replicates
-    /// the lone outcome across the contributing tasks, so ACP's `deliver` observes
-    /// one envelope in practice.
-    ///
-    /// INVARIANT: an implementation MUST observe relay shutdown and return a
-    /// terminal/dropped outcome promptly rather than parking the blocking thread
-    /// indefinitely on a wedged turn.
-    fn deliver(
-        &mut self,
-        envelopes: Vec<DeliveryEnvelope>,
-        context: &DeliveryContext,
-    ) -> DeliveryResult;
-
     /// Submits one relay-framed envelope for delivery WITHOUT blocking, returning
     /// an [`OutcomeFuture`] that resolves when the transport's internal delivery
     /// task drives this envelope to a terminal [`SingleDeliveryOutcome`]. The
@@ -148,10 +105,9 @@ pub trait Transport {
     /// with contiguous envelopes during its quiescence wait, and resolves the
     /// future once the combined turn settles.
     ///
-    /// Replaces the blocking [`deliver`](Transport::deliver) seam; see the
-    /// module-level "Write boundary" note. Default body is an additions-only stub;
-    /// each transport overrides it when its internal delivery task lands
-    /// (write-interface refactor sections 2-3).
+    /// The relay's sole envelope-delivery seam; see the module-level "Write
+    /// boundary" note. Default body is an additions-only stub; each transport
+    /// overrides it with its internal delivery task.
     fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
         let _ = envelope;
         unimplemented!("mailw lands with the per-transport internal delivery task")
@@ -163,8 +119,8 @@ pub trait Transport {
     /// item flushes any buffered envelope group first, then delivers as its own
     /// write, acting as a batch barrier.
     ///
-    /// Replaces the blocking [`raw_write`](Transport::raw_write) seam. Default body
-    /// is an additions-only stub overridden when the internal delivery task lands.
+    /// The relay's sole raw-input delivery seam. Default body is an
+    /// additions-only stub overridden when the internal delivery task lands.
     fn raww(&mut self, content: String, append_enter: bool) -> OutcomeFuture {
         let _ = (content, append_enter);
         unimplemented!("raww lands with the per-transport internal delivery task")
@@ -172,14 +128,6 @@ pub trait Transport {
 
     /// Reports whether the transport is ready to accept delivery.
     fn is_ready(&self) -> bool;
-
-    /// Injects raw input (no envelope framing) for `raww`.
-    fn raw_write(
-        &mut self,
-        text: &str,
-        append_enter: bool,
-        context: &DeliveryContext,
-    ) -> RawWriteResult;
 
     /// Tears down the transport runtime, releasing its resources.
     fn shutdown(&mut self);
@@ -319,54 +267,12 @@ impl TransportImpl {
         }
     }
 
-    /// The target's transport accepts the full coalesced batch in a single
-    /// [`deliver`](Transport::deliver) call (Tmux/Pty). ACP accepts at most one
-    /// prompt batch per turn and returns `false`, so the relay peels the rendered
-    /// envelopes to a single batch and re-queues the remainder to the worker
-    /// carry buffer.
-    #[must_use]
-    pub fn can_take_batches(&self) -> bool {
-        match self {
-            Self::Tmux(_) | Self::Pty => true,
-            Self::Acp(_) | Self::Ui(_) | Self::Pubsub => false,
-        }
-    }
-
     /// Establishes the transport runtime; see [`Transport::startup`].
     pub fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError> {
         match self {
             Self::Acp(transport) => transport.startup(context),
             Self::Tmux(transport) => transport.startup(context),
             Self::Ui(transport) => transport.startup(context),
-            Self::Pubsub => unimplemented!("Pubsub transport not yet implemented"),
-            Self::Pty => unimplemented!("PTY transport not yet implemented"),
-        }
-    }
-
-    /// Runs the pre-delivery readiness barrier; see [`Transport::prepare_delivery`].
-    pub fn prepare_delivery(
-        &self,
-        context: &DeliveryContext,
-    ) -> Result<DeliveryPreparation, DeliveryWaitError> {
-        match self {
-            Self::Acp(transport) => transport.prepare_delivery(context),
-            Self::Tmux(transport) => transport.prepare_delivery(context),
-            Self::Ui(transport) => transport.prepare_delivery(context),
-            Self::Pubsub => unimplemented!("Pubsub transport not yet implemented"),
-            Self::Pty => unimplemented!("PTY transport not yet implemented"),
-        }
-    }
-
-    /// Delivers a batch; see [`Transport::deliver`].
-    pub fn deliver(
-        &mut self,
-        envelopes: Vec<DeliveryEnvelope>,
-        context: &DeliveryContext,
-    ) -> DeliveryResult {
-        match self {
-            Self::Acp(transport) => transport.deliver(envelopes, context),
-            Self::Tmux(transport) => transport.deliver(envelopes, context),
-            Self::Ui(transport) => transport.deliver(envelopes, context),
             Self::Pubsub => unimplemented!("Pubsub transport not yet implemented"),
             Self::Pty => unimplemented!("PTY transport not yet implemented"),
         }
@@ -403,23 +309,11 @@ impl TransportImpl {
             Self::Acp(transport) => transport.is_ready(),
             Self::Tmux(transport) => transport.is_ready(),
             Self::Ui(transport) => transport.is_ready(),
-            Self::Pubsub => unimplemented!("Pubsub transport not yet implemented"),
-            Self::Pty => unimplemented!("PTY transport not yet implemented"),
-        }
-    }
-
-    /// Injects raw input; see [`Transport::raw_write`].
-    pub fn raw_write(
-        &mut self,
-        text: &str,
-        append_enter: bool,
-        context: &DeliveryContext,
-    ) -> RawWriteResult {
-        match self {
-            Self::Acp(transport) => transport.raw_write(text, append_enter, context),
-            Self::Tmux(transport) => transport.raw_write(text, append_enter, context),
-            Self::Ui(transport) => transport.raw_write(text, append_enter, context),
-            Self::Pubsub => unimplemented!("Pubsub transport not yet implemented"),
+            // The delivery worker latches a `Pubsub` stub for a configured Pubsub
+            // target (delivery is guarded and answered with a not-implemented
+            // outcome), so its query/lifecycle delegates must not panic. It is
+            // never ready to deliver.
+            Self::Pubsub => false,
             Self::Pty => unimplemented!("PTY transport not yet implemented"),
         }
     }
@@ -430,7 +324,12 @@ impl TransportImpl {
             Self::Acp(transport) => transport.shutdown(),
             Self::Tmux(transport) => transport.shutdown(),
             Self::Ui(transport) => transport.shutdown(),
-            Self::Pubsub => unimplemented!("Pubsub transport not yet implemented"),
+            // The `Pubsub` stub owns no runtime, so teardown is a no-op — and it
+            // MUST NOT panic: the delivery worker latches this stub for a
+            // configured Pubsub target and calls `shutdown()` on it during relay
+            // shutdown (`shutdown_drain`). `Pty` is not yet constructible, so it
+            // can never be a latched shutdown target and stays loudly unimplemented.
+            Self::Pubsub => {}
             Self::Pty => unimplemented!("PTY transport not yet implemented"),
         }
     }
@@ -441,7 +340,8 @@ impl TransportImpl {
             Self::Acp(transport) => transport.give_output(),
             Self::Tmux(transport) => transport.give_output(),
             Self::Ui(transport) => transport.give_output(),
-            Self::Pubsub => unimplemented!("Pubsub transport not yet implemented"),
+            // The latched `Pubsub` stub is not lookable; it publishes no handle.
+            Self::Pubsub => None,
             Self::Pty => unimplemented!("PTY transport not yet implemented"),
         }
     }
@@ -470,10 +370,10 @@ pub type Chooser = Arc<dyn Fn(ChoiceToMake) -> ChoiceMade + Send + Sync>;
 
 /// A pending choice handed to the [`Chooser`]. The per-delivery correlation
 /// fields (`message_id`, `target_session`, `decider_sessions`) are sourced from
-/// the [`DeliveryContext`] and head envelope when the transport raises a choice
-/// mid-`deliver`, since the startup-time chooser cannot close over them. The
-/// queue bound (`choices_pending_max`) is a per-bundle constant the chooser
-/// captures at construction, so it is not carried here.
+/// the [`DeliveryEnvelope`] the transport's internal delivery task is submitting
+/// when it raises a choice, since the startup-time chooser cannot close over
+/// them. The queue bound (`choices_pending_max`) is a per-bundle constant the
+/// chooser captures at construction, so it is not carried here.
 #[derive(Clone, Debug)]
 pub struct ChoiceToMake {
     /// Transport-native request id used to correlate the operator's response.
@@ -503,8 +403,8 @@ pub struct ThingToChoose {
 }
 
 /// The resolution of a [`ChoiceToMake`], returned by the [`Chooser`]. Mirrors
-/// the relay's choice-resolution taxonomy so [`Transport::deliver`] can build
-/// the same terminal outcome.
+/// the relay's choice-resolution taxonomy so the transport's internal delivery
+/// task can build the same terminal outcome.
 #[derive(Clone, Debug)]
 pub enum ChoiceMade {
     /// An option was chosen; carries the option id and who decided.
@@ -580,45 +480,11 @@ pub struct DeliveryEnvelope {
     pub authenticated_identity: Option<String>,
 }
 
-/// Per-batch context shared by every envelope in a [`Transport::deliver`] call.
-#[derive(Clone, Debug)]
-pub struct DeliveryContext {
-    pub target_session: String,
-    pub runtime_directory: PathBuf,
-    pub target_member: BundleMember,
-    /// A pre-resolved target handle (for example, a hoisted tmux pane) when the
-    /// worker has already proven readiness; `None` means the transport resolves
-    /// it. Slice 3 finalizes the tmux quiescence parameters carried here.
-    pub pre_resolved_target: Option<String>,
-    /// Tmux pane quiescence poll window. The relay unpacks its `QuiescenceOptions`
-    /// scheduling config into these primitives so [`Transport::prepare_delivery`]
-    /// can run the pane wait without the transport depending on relay. Ignored by
-    /// transports with no pre-delivery wait (ACP today).
-    pub quiet_window: Duration,
-    /// Deadline for the quiescence wait; `None` means unbounded (async delivery,
-    /// bounded only by relay shutdown).
-    pub quiescence_timeout: Option<Duration>,
-    /// Sessions authorized to decide choices raised during this delivery, used
-    /// to populate [`ChoiceToMake::decider_sessions`].
-    pub choice_decider_sessions: Vec<String>,
-}
-
-/// The resolved outcome of a [`Transport::prepare_delivery`] barrier. Carries a
-/// pre-resolved target handle (today a tmux pane string) the worker threads back
-/// into [`DeliveryContext::pre_resolved_target`] for the subsequent
-/// [`Transport::deliver`] call. A transport whose handle is not a string MAY
-/// leave this `None` and re-resolve in its own `deliver` (an opaque per-transport
-/// `DeliveryTarget` handle is a deferred generalization; see the design).
-#[derive(Clone, Debug, Default)]
-pub struct DeliveryPreparation {
-    pub pre_resolved_target: Option<String>,
-}
-
-/// A pre-delivery readiness-barrier failure surfaced by
-/// [`Transport::prepare_delivery`]. The relay maps it to a per-task `SendResult`
-/// template fanned across the coalesced batch. Its canonical home is the
-/// transport contract (the barrier's return type), so neither the tmux loop that
-/// raises it nor the relay that maps it forms a transport<->relay back-edge.
+/// A quiescence-barrier failure surfaced by the tmux transport's internal
+/// delivery task when it waits for its target pane to fall quiet before a flush
+/// group. The task maps it to a [`SingleDeliveryOutcome`] for the buffered
+/// group. Its canonical home is the transport contract, so the tmux loop that
+/// raises it forms no transport<->relay back-edge.
 #[derive(Debug)]
 pub enum DeliveryWaitError {
     Timeout {
@@ -630,12 +496,6 @@ pub enum DeliveryWaitError {
         reason: String,
     },
     Shutdown,
-}
-
-/// Outcomes for one [`Transport::deliver`] call, aligned with the input order.
-#[derive(Clone, Debug)]
-pub struct DeliveryResult {
-    pub outcomes: Vec<SingleDeliveryOutcome>,
 }
 
 /// The transport-level outcome for one delivered envelope. Structurally mirrors
@@ -666,15 +526,6 @@ pub enum TransportReadiness {
     Pending,
     /// Could not be established; carries the failure taxonomy.
     Unavailable { code: String, reason: String },
-}
-
-/// The result of a [`Transport::raw_write`] call.
-#[derive(Clone, Debug)]
-pub enum RawWriteResult {
-    /// Input written successfully.
-    Written,
-    /// Write failed; carries the transport-level reason.
-    Failed { reason: String },
 }
 
 /// A structured transport failure surfaced to the relay worker.

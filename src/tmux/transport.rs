@@ -35,10 +35,9 @@ use crate::configuration::{PromptReadinessTemplate, TargetConfiguration};
 use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 use crate::runtime::signals::shutdown_requested;
 use crate::transports::{
-    DeliveryContext, DeliveryEnvelope, DeliveryPreparation, DeliveryResult, DeliveryWaitError,
-    LookMode, LookSnapshotPayload, OutcomeFuture, OutputView, RawWriteResult, SendOutcome,
-    SingleDeliveryOutcome, StartupContext, Transport, TransportError, TransportReadiness,
-    TransportStatus,
+    DeliveryEnvelope, DeliveryWaitError, LookMode, LookSnapshotPayload, OutcomeFuture, OutputView,
+    SendOutcome, SingleDeliveryOutcome, StartupContext, Transport, TransportError,
+    TransportReadiness, TransportStatus,
 };
 
 /// Default tmux look window applied when the caller omits a window size.
@@ -210,26 +209,6 @@ impl Transport for TmuxTransport {
         true
     }
 
-    fn raw_write(
-        &mut self,
-        text: &str,
-        append_enter: bool,
-        context: &DeliveryContext,
-    ) -> RawWriteResult {
-        let tmux_socket_path =
-            tmux_socket_path_for_runtime_directory(context.runtime_directory.as_path());
-        let tmux_socket = tmux_socket_path.as_path();
-        let pane_target =
-            match resolve_active_pane_target(tmux_socket, context.target_session.as_str()) {
-                Ok(pane_target) => pane_target,
-                Err(reason) => return RawWriteResult::Failed { reason },
-            };
-        match inject_literal_text(tmux_socket, &pane_target, text, append_enter) {
-            Ok(()) => RawWriteResult::Written,
-            Err(reason) => RawWriteResult::Failed { reason },
-        }
-    }
-
     fn shutdown(&mut self) {
         self.shutdown_flag.store(true, Ordering::Release);
         self.sender = None;
@@ -237,93 +216,6 @@ impl Transport for TmuxTransport {
 
     fn give_output(&self) -> Option<Arc<dyn OutputView>> {
         None
-    }
-
-    fn prepare_delivery(
-        &self,
-        context: &DeliveryContext,
-    ) -> Result<DeliveryPreparation, DeliveryWaitError> {
-        let tmux_socket_path =
-            tmux_socket_path_for_runtime_directory(context.runtime_directory.as_path());
-        let prompt_readiness = match &context.target_member.target {
-            TargetConfiguration::Tmux(tmux_target) => tmux_target.prompt_readiness.as_ref(),
-            _ => None,
-        };
-        let pane = wait_for_quiescent_pane(
-            tmux_socket_path.as_path(),
-            context.target_session.as_str(),
-            context.quiet_window,
-            context.quiescence_timeout,
-            prompt_readiness,
-        )?;
-        Ok(DeliveryPreparation {
-            pre_resolved_target: Some(pane),
-        })
-    }
-
-    fn deliver(
-        &mut self,
-        envelopes: Vec<DeliveryEnvelope>,
-        context: &DeliveryContext,
-    ) -> DeliveryResult {
-        let target_session = context.target_session.clone();
-        let message_id = envelopes
-            .first()
-            .map(|envelope| envelope.message_id.clone())
-            .unwrap_or_default();
-        let tmux_socket_path =
-            tmux_socket_path_for_runtime_directory(context.runtime_directory.as_path());
-        let tmux_socket = tmux_socket_path.as_path();
-
-        let pane_target = match context.pre_resolved_target.clone() {
-            Some(pane_target) => pane_target,
-            None => match resolve_active_pane_target(tmux_socket, target_session.as_str()) {
-                Ok(pane_target) => pane_target,
-                Err(reason) => {
-                    return single_result(SingleDeliveryOutcome {
-                        target_session,
-                        message_id,
-                        outcome: SendOutcome::Failed,
-                        reason_code: Some(TMUX_TARGET_UNAVAILABLE_CODE.to_string()),
-                        reason: Some(reason),
-                        details: None,
-                    });
-                }
-            },
-        };
-
-        let mut failed_reason = None::<String>;
-        for envelope in &envelopes {
-            if let Err(reason) = inject_literal_text(
-                tmux_socket,
-                &pane_target,
-                envelope.rendered.as_str(),
-                envelope.append_enter,
-            ) {
-                failed_reason = Some(reason);
-                break;
-            }
-        }
-
-        let outcome = match failed_reason {
-            None => SingleDeliveryOutcome {
-                target_session,
-                message_id,
-                outcome: SendOutcome::Delivered,
-                reason_code: None,
-                reason: None,
-                details: None,
-            },
-            Some(reason) => SingleDeliveryOutcome {
-                target_session,
-                message_id,
-                outcome: SendOutcome::Failed,
-                reason_code: None,
-                reason: Some(reason),
-                details: None,
-            },
-        };
-        single_result(outcome)
     }
 }
 
@@ -863,14 +755,6 @@ impl OutputView for TmuxOutputView {
 // ---------------------------------------------------------------------------
 // Quiescence poll loop
 // ---------------------------------------------------------------------------
-
-/// Wraps a single combined outcome as a [`DeliveryResult`]; tmux produces one
-/// outcome per `deliver` call which the relay fans out across the batch.
-fn single_result(outcome: SingleDeliveryOutcome) -> DeliveryResult {
-    DeliveryResult {
-        outcomes: vec![outcome],
-    }
-}
 
 #[derive(Debug)]
 struct PromptReadinessMatcher {

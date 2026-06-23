@@ -18,8 +18,8 @@ use crate::acp::{PermissionHandler, PermissionRequest};
 use crate::transports::{ChoiceMade, ChoiceToMake, Chooser, ThingToChoose};
 
 /// Per-delivery correlation the startup-time [`Chooser`] cannot close over. The
-/// transport sources these from the active `DeliveryContext` (and the head
-/// envelope's `message_id`) when it builds the [`ChoiceToMake`].
+/// transport sources these from the `DeliveryEnvelope` it is submitting when it
+/// builds the [`ChoiceToMake`].
 #[derive(Clone, Debug)]
 pub(crate) struct ChoiceCorrelation {
     /// The originating send's message id (choice event correlation).

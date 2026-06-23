@@ -23,13 +23,13 @@ pub enum SessionType {
 /// Capabilities are pure functions of the transport type — never stored bool
 /// fields — derived at check time from the configuration enum discriminant:
 ///
-/// | Transport | `can_be_looked` | `can_be_written` | `can_stream_output` | `gives_choices` | `can_take_batches` |
-/// |-----------|-----------------|------------------|---------------------|-----------------|--------------------|
-/// | `Tmux`    | true            | true             | false               | false           | true               |
-/// | `Acp`     | true            | true             | true                | true            | false              |
-/// | `Pty`     | true            | true             | true                | false           | true               |
-/// | `Ui`      | false           | false            | false               | false           | true               |
-/// | `Pubsub`  | false           | false            | false               | false           | true               |
+/// | Transport | `can_be_looked` | `can_be_written` | `can_stream_output` | `gives_choices` |
+/// |-----------|-----------------|------------------|---------------------|-----------------|
+/// | `Tmux`    | true            | true             | false               | false           |
+/// | `Acp`     | true            | true             | true                | true            |
+/// | `Pty`     | true            | true             | true                | false           |
+/// | `Ui`      | false           | false            | false               | false           |
+/// | `Pubsub`  | false           | false            | false               | false           |
 ///
 /// The `Pty` row is normative and forward-looking: no `Pty` variant exists
 /// yet. It is the long-term replacement for `Tmux` with identical
@@ -77,20 +77,6 @@ impl SessionType {
         match self {
             Self::Acp => true,
             Self::Tmux | Self::Ui | Self::Pubsub => false,
-        }
-    }
-
-    /// The session's transport accepts the full coalesced batch in a single
-    /// dispatch (Tmux pastes every rendered envelope in order; Pty will too).
-    /// `Acp` accepts at most one prompt batch per turn, so the relay peels the
-    /// rendered envelopes to a single batch and re-queues the remainder.
-    /// `Ui`/`Pubsub` never reach the batched transport path; they answer `true`
-    /// as the inert default.
-    #[must_use]
-    pub fn can_take_batches(self) -> bool {
-        match self {
-            Self::Acp => false,
-            Self::Tmux | Self::Ui | Self::Pubsub => true,
         }
     }
 }

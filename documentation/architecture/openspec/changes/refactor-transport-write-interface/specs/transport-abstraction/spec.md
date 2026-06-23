@@ -26,6 +26,15 @@ enum that delegates without dynamic allocation, and SHALL submit `mailw`/`raww`
 uniformly for every target with no transport-type routing fork in the delivery
 loop.
 
+`mailw` and `raww` SHALL be the relay's only delivery seam. The legacy
+synchronous methods they replace — `deliver`, `prepare_delivery`, and
+`raw_write` — and the types that existed solely to serve them (`DeliveryContext`,
+`DeliveryResult`, `DeliveryPreparation`, `RawWriteResult`) SHALL be removed from
+the trait and the contract module; no dead synchronous seam is retained. The
+`DeliveryWaitError` type is retained — the Tmux transport's internal quiescence
+wait raises it — and `DeliveryEnvelope`/`SingleDeliveryOutcome` remain the
+write/outcome vocabulary.
+
 The trait methods SHALL be non-blocking at the relay boundary. The relay
 delivery worker runs a concurrent produce-and-collect loop that simultaneously
 submits new writes via `mailw`/`raww` and collects resolved outcome futures.
@@ -187,8 +196,11 @@ internally, absorbing any `mailw` calls that arrive during the wait into its
 buffer before flushing.
 
 **Migration**: Remove all `prepare_delivery` call sites and implementations.
-Remove `quiet_window`, `quiescence_timeout`, and `n_target` from
-`DeliveryContext`; move quiescence hints into `DeliveryEnvelope`. Remove
+Move quiescence hints (`quiet_window`, `quiescence_timeout`) into
+`DeliveryEnvelope`. With `prepare_delivery`, `deliver`, and `raw_write` all
+removed, `DeliveryContext` is constructed nowhere, so remove the struct entirely
+(rather than only stripping its quiescence/`n_target` fields) along with
+`DeliveryResult`, `DeliveryPreparation`, and `RawWriteResult`. Remove
 `classify_tmux_quiescence_hoist` and the post-quiescence `extend_batch_with_drain`
 call from the worker loop.
 
@@ -201,6 +213,9 @@ internally; any excess is held in the transport's buffer for the next turn
 without relay involvement. The relay worker dispatches one write per task and
 does not pre-combine.
 
-**Migration**: Delete `batch_envelopes`, the `can_take_batches` flag, and the
-relay-side peel/carry loop. The ACP transport acquires its own combining step.
-The relay worker loop no longer calls `deliver_non_ui_target_batch`.
+**Migration**: Delete the relay-side `batch_envelopes` (`Vec<String>`)
+projection, the `can_take_batches` flag, and the relay-side peel/carry loop. The
+ACP transport acquires its own combining step: its internal delivery task calls
+the single pure `envelope::batch_envelope_groups` (combined prompt + member
+count) and slices the per-group outcome senders from the boundaries. The relay
+worker loop no longer calls `deliver_non_ui_target_batch`.
