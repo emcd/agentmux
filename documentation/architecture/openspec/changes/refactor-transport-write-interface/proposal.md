@@ -24,9 +24,14 @@ fully encapsulated in each transport.
     the relay `SendResult`: the transport contract never depends on
     `crate::relay`, so the relay worker maps the resolved outcome onto its own
     `SendResult` at the collect site.
-- Remove quiescence fields (`quiet_window`, `quiescence_timeout`, `n_target`)
-  from `DeliveryContext`; quiescence parameters move into the write envelope.
-- Remove `Transport::prepare_delivery` from the trait entirely.
+- Move quiescence parameters (`quiet_window`, `quiescence_timeout`) into the
+  write envelope. Once `deliver`/`prepare_delivery`/`raw_write` are gone,
+  `DeliveryContext` is constructed nowhere, so remove it entirely (along with
+  `DeliveryResult`, `DeliveryPreparation`, and `RawWriteResult`).
+- Remove `Transport::prepare_delivery`, `Transport::deliver`, and
+  `Transport::raw_write` from the trait entirely — `raw_write` is fully replaced
+  by `raww` and retaining it would leave dead code, so `mailw`/`raww` are the
+  only delivery seam.
 - Remove relay-side batch-combining logic: `batch_envelopes` relay-side call,
   `can_take_batches`, the coalesce-hoist-drain pattern, and ACP prompt-peeling
   are all deleted. Max-prompt-tokens budget moves to transport construction config.

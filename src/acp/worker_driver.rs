@@ -29,8 +29,7 @@ use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::signals::shutdown_requested;
 use crate::transports::contract::OutcomeFuture;
 use crate::transports::{
-    AcpWorkerReadinessState, Chooser, DeliveryContext, DeliveryEnvelope, DeliveryPreparation,
-    DeliveryResult, DeliveryWaitError, OutputView, RawWriteResult, StartupContext, Transport,
+    AcpWorkerReadinessState, Chooser, DeliveryEnvelope, OutputView, StartupContext, Transport,
     TransportError, TransportStatus,
 };
 
@@ -228,21 +227,6 @@ impl Transport for AcpWorkerDriver {
         self.lock_transport().startup(context)
     }
 
-    fn prepare_delivery(
-        &self,
-        context: &DeliveryContext,
-    ) -> Result<DeliveryPreparation, DeliveryWaitError> {
-        self.lock_transport().prepare_delivery(context)
-    }
-
-    fn deliver(
-        &mut self,
-        envelopes: Vec<DeliveryEnvelope>,
-        context: &DeliveryContext,
-    ) -> DeliveryResult {
-        self.lock_transport().deliver(envelopes, context)
-    }
-
     fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
         self.lock_transport().mailw(envelope)
     }
@@ -253,15 +237,6 @@ impl Transport for AcpWorkerDriver {
 
     fn is_ready(&self) -> bool {
         self.lock_transport().is_ready()
-    }
-
-    fn raw_write(
-        &mut self,
-        text: &str,
-        append_enter: bool,
-        context: &DeliveryContext,
-    ) -> RawWriteResult {
-        self.lock_transport().raw_write(text, append_enter, context)
     }
 
     fn shutdown(&mut self) {

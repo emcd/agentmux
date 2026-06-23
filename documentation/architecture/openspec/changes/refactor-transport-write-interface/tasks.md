@@ -4,11 +4,19 @@
       `raww(content: String, append_enter: bool) -> OutcomeFuture` to the
       `Transport` trait in `src/transports/contract.rs` (additions-only: default
       `unimplemented!` stub bodies; each transport overrides in sections 2-4)
-- [ ] 1.2 Add quiescence fields (`quiet_window`, `quiescence_timeout`) to
-      `DeliveryEnvelope`; remove them from `DeliveryContext`; remove `n_target`
-      from `DeliveryContext` (deferred: removals land with sections 5-6)
-- [ ] 1.3 Remove `Transport::prepare_delivery` from the trait (deferred: lands
-      with the last callsite removal in sections 5-6)
+- [x] 1.2 Added quiescence fields (`quiet_window`, `quiescence_timeout`) to
+      `DeliveryEnvelope` (sections 2-4) and removed them from `DeliveryContext`.
+      With the legacy `deliver`/`prepare_delivery`/`raw_write` seam removed,
+      `DeliveryContext` was constructed nowhere, so the whole struct was deleted
+      (not merely its quiescence/`n_target` fields). `DeliveryResult`,
+      `DeliveryPreparation`, and `RawWriteResult` — types that served only the
+      removed seam — were deleted with it.
+- [x] 1.3 Removed `Transport::prepare_delivery` from the trait, the
+      `TransportImpl` delegate, and every implementation. Also removed the
+      `Transport::deliver` and `Transport::raw_write` methods: spec correction —
+      `raw_write` was fully replaced by `raww` and had zero callers, so retaining
+      it (the original spec was silent on its removal) would have left dead code.
+      The contract module's sole delivery seam is now `mailw`/`raww`.
 - [x] 1.4 Define `OutcomeFuture` type alias in `src/transports/contract.rs`
       (`oneshot::Receiver<SingleDeliveryOutcome>` — the transport-side outcome,
       not the relay `SendResult`, to preserve transports' no-relay-dependency
@@ -45,12 +53,10 @@
       equivalent (`dropped_on_shutdown_outcome`, task 3.6) still emits
       `SendOutcome::Failed`; latent, not exercised by a test — flagged for the ACP
       lane.)
-- [ ] 2.7 Remove `TmuxTransport::prepare_delivery` implementation (deferred:
-      still present; lands when Section 5 removes the last relay `deliver`/
-      `prepare_delivery` callsite — was checked prematurely)
-- [ ] 2.8 Remove `TmuxTransport::deliver` implementation (deferred: still
-      present; lands with the Section 5/6 callsite removal — was checked
-      prematurely)
+- [x] 2.7 Removed `TmuxTransport::prepare_delivery` (and its `single_result`
+      helper). The internal delivery task owns the quiescence wait;
+      `wait_for_quiescent_pane` is retained for it.
+- [x] 2.8 Removed `TmuxTransport::deliver` and `TmuxTransport::raw_write`.
 
 ## 3. ACP transport
 
@@ -82,12 +88,14 @@
       `release_runtime()` is called
 - [x] 3.6 On relay shutdown, drain channel and resolve all outcome senders with
       `DroppedOnShutdown`
-- [ ] 3.7 Remove `AcpTransport::prepare_delivery` stub (deferred: still present;
-      lands with the Section 5/6 callsite removal — was checked prematurely)
-- [ ] 3.8 Remove `AcpTransport::deliver` implementation; `batch_envelopes`
-      relay-side call and `can_take_batches` are deleted (deferred: `deliver`
-      still present and `batch_envelopes`/`can_take_batches` still used by the
-      relay batch path; lands with Section 5/6 — was checked prematurely)
+- [x] 3.7 Removed `AcpTransport::prepare_delivery` stub (and the
+      `AcpWorkerDriver` forward).
+- [x] 3.8 Removed `AcpTransport::deliver` and `AcpTransport::raw_write` (plus the
+      now-dead `single`/`worker_unavailable_outcome` helpers and the
+      `runtime_acp_worker_unavailable` code). `can_take_batches` is deleted (6.5).
+      `batch_envelopes` is RETAINED — the relay-side batch path was already gone
+      in Section 5, and the ACP internal delivery task consumes it to combine a
+      contiguous envelope group into one turn (see 6.4).
 
 ## 4. Ui / Pubsub transports
 
@@ -179,10 +187,14 @@ it would otherwise require).
 Section 5 stranded most of these as dead `pub(super)` helpers (clippy `-D
 warnings`), so the forced subset (6.1-6.4, 6.7) landed with Section 5. The
 remainder (6.5, 6.6, plus the legacy `deliver`/`prepare_delivery` trait-method
-removals deferred under 1.2/1.3/2.7/2.8/3.7/3.8) is a pure-removal follow-up: the
-trait/enum methods are `pub` so they raise no dead-code warning, and `tmux`'s
-internal delivery task still shares `wait_for_quiescent_pane` with the legacy
-`deliver`, so deleting the seam is a coherent separate commit.
+removals deferred under 1.2/1.3/2.7/2.8/3.7/3.8) was a pure-removal follow-up:
+the trait/enum methods are `pub` so they raised no dead-code warning. Removing
+the seam also stranded `raw_write` (zero callers, fully replaced by `raww`),
+which the original spec did not call out for removal; on operator direction the
+removal was widened to drop `raw_write`, `DeliveryContext`, `DeliveryResult`,
+`DeliveryPreparation`, and `RawWriteResult` — no dead synchronous seam is
+retained — leaving `mailw`/`raww` as the only delivery seam. Net: ~493 lines
+deleted; `cargo check`/`clippy -D warnings`/`fmt` clean.
 
 - [x] 6.1 Deleted `deliver_non_ui_target_batch` and `deliver_non_ui_target`
       (the whole `dispatch/transport.rs` was deleted).
@@ -198,12 +210,14 @@ internal delivery task still shares `wait_for_quiescent_pane` with the legacy
       transport construction time per 1.6). NOTE: the `batch_envelopes` function
       itself is retained — it is now consumed by the ACP transport's internal
       delivery task to combine a contiguous envelope group into one turn.
-- [ ] 6.5 Delete `can_take_batches()` from `SessionType` / `TargetConfiguration`
-      (still present; `pub`, no dead-code warning — folds into the seam-removal
-      commit).
-- [ ] 6.6 Remove `DeliveryContext` quiescence and `n_target` fields from all
-      construction sites (deferred with the `deliver`/`prepare_delivery` removal —
-      `DeliveryContext` is still the legacy seam's parameter).
+- [x] 6.5 Deleted `can_take_batches()` from `SessionType` (the only definition;
+      `TargetConfiguration` has none) and the `TransportImpl::can_take_batches`
+      mirror, plus the `can_take_batches` column from the capability-table
+      doc-comment in `configuration/types.rs`.
+- [x] 6.6 `DeliveryContext` removed entirely (constructed nowhere once the
+      `deliver`/`prepare_delivery`/`raw_write` seam was deleted), superseding the
+      original "remove quiescence/`n_target` fields" plan — spec corrected to
+      match.
 - [x] 6.7 `deliver_one_target_ui` and `should_route_to_ui` were already removed in
       Section 4 (UI delivery flows through `UiTransport::mailw`); only doc-comment
       references remain. No `Ui`/`Pubsub` short-circuit remains in the dispatch path.

@@ -26,6 +26,15 @@ enum that delegates without dynamic allocation, and SHALL submit `mailw`/`raww`
 uniformly for every target with no transport-type routing fork in the delivery
 loop.
 
+`mailw` and `raww` SHALL be the relay's only delivery seam. The legacy
+synchronous methods they replace — `deliver`, `prepare_delivery`, and
+`raw_write` — and the types that existed solely to serve them (`DeliveryContext`,
+`DeliveryResult`, `DeliveryPreparation`, `RawWriteResult`) SHALL be removed from
+the trait and the contract module; no dead synchronous seam is retained. The
+`DeliveryWaitError` type is retained — the Tmux transport's internal quiescence
+wait raises it — and `DeliveryEnvelope`/`SingleDeliveryOutcome` remain the
+write/outcome vocabulary.
+
 The trait methods SHALL be non-blocking at the relay boundary. The relay
 delivery worker runs a concurrent produce-and-collect loop that simultaneously
 submits new writes via `mailw`/`raww` and collects resolved outcome futures.
@@ -187,8 +196,11 @@ internally, absorbing any `mailw` calls that arrive during the wait into its
 buffer before flushing.
 
 **Migration**: Remove all `prepare_delivery` call sites and implementations.
-Remove `quiet_window`, `quiescence_timeout`, and `n_target` from
-`DeliveryContext`; move quiescence hints into `DeliveryEnvelope`. Remove
+Move quiescence hints (`quiet_window`, `quiescence_timeout`) into
+`DeliveryEnvelope`. With `prepare_delivery`, `deliver`, and `raw_write` all
+removed, `DeliveryContext` is constructed nowhere, so remove the struct entirely
+(rather than only stripping its quiescence/`n_target` fields) along with
+`DeliveryResult`, `DeliveryPreparation`, and `RawWriteResult`. Remove
 `classify_tmux_quiescence_hoist` and the post-quiescence `extend_batch_with_drain`
 call from the worker loop.
 

@@ -2,10 +2,11 @@
 //!
 //! `AcpTransport` owns the per-target `PersistentAcpWorkerRuntime` (moved here
 //! from the relay delivery worker, which previously threaded it through
-//! `spawn_blocking`). [`Transport::deliver`] submits one ACP prompt and BLOCKS
-//! until the turn reaches a terminal state, folding in what used to be the
-//! reader thread's `on_completion` body; the relay worker fans the single
-//! terminal outcome out to the coalesced tasks.
+//! `spawn_blocking`). [`Transport::mailw`] enqueues a rendered envelope on the
+//! transport's internal channel and returns an outcome future; the internal
+//! delivery task combines a contiguous envelope group into one ACP turn, drives
+//! it to a terminal state (folding in what used to be the reader thread's
+//! `on_completion` body), and resolves the future for each contributing task.
 //!
 //! Choices (tool-call permissions) resolve through the relay-injected
 //! [`Chooser`] (see [`crate::acp::permission`]); the transport never calls the
@@ -47,10 +48,8 @@ use crate::runtime::signals::shutdown_requested;
 use crate::transports::contract::OutcomeFuture;
 use crate::transports::{AcpWorkerReadinessState, SendOutcome};
 use crate::transports::{
-    ChoiceMade, DeliveryContext, DeliveryEnvelope, DeliveryPreparation, DeliveryResult,
-    DeliveryWaitError, LookMode, LookSnapshotPayload, OutputView, RawWriteResult,
-    SingleDeliveryOutcome, StartupContext, Transport, TransportError, TransportReadiness,
-    TransportStatus,
+    ChoiceMade, DeliveryEnvelope, LookMode, LookSnapshotPayload, OutputView, SingleDeliveryOutcome,
+    StartupContext, Transport, TransportError, TransportReadiness, TransportStatus,
 };
 
 // ACP delivery failure taxonomy (see the relay delivery README for the full
@@ -68,7 +67,6 @@ pub const ACP_ERROR_CODE_CONNECTION_CLOSED: &str = "runtime_acp_connection_close
 /// Transport-unavailable failure; surfaced to the worker's respawn classifier.
 pub const ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE: &str = "acp_child_unavailable";
 const ACP_ERROR_CODE_MISSING_CAPABILITY: &str = "validation_missing_acp_capability";
-const ACP_ERROR_CODE_WORKER_UNAVAILABLE: &str = "runtime_acp_worker_unavailable";
 
 const DROPPED_ON_SHUTDOWN_REASON_CODE: &str = "dropped_on_shutdown";
 const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delivery";
@@ -407,17 +405,6 @@ impl Transport for AcpTransport {
         }
     }
 
-    fn prepare_delivery(
-        &self,
-        context: &DeliveryContext,
-    ) -> Result<DeliveryPreparation, DeliveryWaitError> {
-        // ACP has no pre-delivery wait — the internal delivery task handles
-        // quiescence internally. Echo any pre-resolved target back unchanged.
-        Ok(DeliveryPreparation {
-            pre_resolved_target: context.pre_resolved_target.clone(),
-        })
-    }
-
     fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
         let (outcome_tx, outcome_rx) = tokio::sync::oneshot::channel();
         if let Some(tx) = self.write_tx.as_ref() {
@@ -475,76 +462,11 @@ impl Transport for AcpTransport {
         outcome_rx
     }
 
-    fn deliver(
-        &mut self,
-        envelopes: Vec<DeliveryEnvelope>,
-        context: &DeliveryContext,
-    ) -> DeliveryResult {
-        // Legacy synchronous path: delegate to the write channel and block on
-        // the outcome. This preserves backward compatibility during the
-        // write-interface transition; it will be removed once all relay callsites
-        // move to mailw/raww.
-        let Some(envelope) = envelopes.into_iter().next() else {
-            return single(failed_outcome(
-                context.target_session.clone(),
-                String::new(),
-                "ACP delivery received no envelope",
-            ));
-        };
-        let target_session = context.target_session.clone();
-        let message_id = envelope.message_id.clone();
-        if self.write_tx.is_none() {
-            // No live runtime: re-attempt recovery (recoverable workers recover;
-            // permanently-dead ones re-publish their Unavailable transition).
-            self.resignal_respawn_if_dead();
-            return single(worker_unavailable_outcome(
-                target_session,
-                message_id,
-                context.target_member.id.as_str(),
-            ));
-        }
-        let rx = self.mailw(envelope);
-        match rx.blocking_recv() {
-            Ok(outcome) => single(outcome),
-            Err(_) => single(failed_outcome_with_code(
-                target_session,
-                message_id,
-                ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE,
-                "ACP delivery task dropped outcome sender",
-                None,
-            )),
-        }
-    }
-
     fn is_ready(&self) -> bool {
         matches!(
             self.readiness(),
             AcpWorkerReadinessState::Available | AcpWorkerReadinessState::Busy
         )
-    }
-
-    fn raw_write(
-        &mut self,
-        text: &str,
-        _append_enter: bool,
-        _context: &DeliveryContext,
-    ) -> RawWriteResult {
-        // Legacy synchronous path: delegate to the write channel and block.
-        // This preserves backward compatibility during the transition.
-        let rx = self.raww(text.to_string(), _append_enter);
-        match rx.blocking_recv() {
-            Ok(outcome) if matches!(outcome.outcome, SendOutcome::Delivered) => {
-                RawWriteResult::Written
-            }
-            Ok(outcome) => RawWriteResult::Failed {
-                reason: outcome
-                    .reason
-                    .unwrap_or_else(|| "ACP raw write failed".to_string()),
-            },
-            Err(_) => RawWriteResult::Failed {
-                reason: "ACP delivery task dropped outcome sender".to_string(),
-            },
-        }
     }
 
     fn shutdown(&mut self) {
@@ -1055,12 +977,6 @@ pub fn bootstrap_acp_worker_runtime(
     )
 }
 
-fn single(outcome: SingleDeliveryOutcome) -> DeliveryResult {
-    DeliveryResult {
-        outcomes: vec![outcome],
-    }
-}
-
 fn delivered_outcome(target_session: String, message_id: String) -> SingleDeliveryOutcome {
     SingleDeliveryOutcome {
         target_session,
@@ -1102,20 +1018,6 @@ fn failed_outcome_with_code(
         reason: Some(reason.into()),
         details,
     }
-}
-
-fn worker_unavailable_outcome(
-    target_session: String,
-    message_id: String,
-    target_member_id: &str,
-) -> SingleDeliveryOutcome {
-    failed_outcome_with_code(
-        target_session,
-        message_id,
-        ACP_ERROR_CODE_WORKER_UNAVAILABLE,
-        "ACP worker is unavailable for target session",
-        Some(json!({ "target_session": target_member_id })),
-    )
 }
 
 fn build_acp_completion_result(

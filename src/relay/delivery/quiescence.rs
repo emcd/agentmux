@@ -1,12 +1,13 @@
 //! Relay-side tmux delivery scheduling config.
 //!
 //! The pane quiescence poll loop is pure tmux behavior and lives in
-//! [`crate::tmux::transport`], reached through the transport's
-//! `prepare_delivery` readiness barrier; this module keeps the relay-owned
-//! scheduling config the delivery handlers populate. [`QuiescenceOptions`] rides
-//! on the async delivery task (constructed by the `send`/`raww` handlers) and is
-//! unpacked into primitives onto the `DeliveryContext` at the hoist boundary, so
-//! the barrier runs without the tmux loop depending on relay.
+//! [`crate::tmux::transport`], run by the transport's internal delivery task
+//! before each flush group; this module keeps the relay-owned scheduling config
+//! the delivery handlers populate. [`QuiescenceOptions`] rides on the async
+//! delivery task (constructed by the `send`/`raww` handlers) and is unpacked
+//! into primitives onto the `DeliveryEnvelope` (`quiet_window`/
+//! `quiescence_timeout`) at the worker, so the wait runs without the tmux loop
+//! depending on relay.
 
 use std::time::Duration;
 
