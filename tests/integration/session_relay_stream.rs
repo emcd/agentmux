@@ -620,11 +620,13 @@ fn relay_configured_ui_target_recovers_after_late_stream_registration() {
         display_target.as_str(),
         Duration::from_secs(3),
     );
-    let incoming = events
+    events
         .iter()
-        .find(|value| value["event"]["event_type"] == "incoming_message")
-        .expect("incoming message after late registration (worker recovered to UI)");
-    assert_eq!(incoming["event"]["payload"]["body"], "after registration");
+        .find(|value| {
+            value["event"]["event_type"] == "incoming_message"
+                && value["event"]["payload"]["body"] == "after registration"
+        })
+        .expect("'after registration' incoming_message after late UI stream registration");
     let delivered = events
         .iter()
         .find(|value| {
