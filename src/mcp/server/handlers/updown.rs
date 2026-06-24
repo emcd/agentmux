@@ -70,7 +70,7 @@ impl McpServer {
         emit_inscription(
             request_event.as_str(),
             &json!({
-                "bundle_name": self.associated_bundle_name(),
+                "namespace": self.associated_namespace(),
                 "command": command,
             }),
         );
@@ -96,7 +96,7 @@ impl McpServer {
                 emit_inscription(
                     success_event.as_str(),
                     &json!({
-                        "bundle_name": self.associated_bundle_name(),
+                        "namespace": self.associated_namespace(),
                         "action": response["action"],
                         "changed_bundle_count": response["changed_bundle_count"],
                         "skipped_bundle_count": response["skipped_bundle_count"],

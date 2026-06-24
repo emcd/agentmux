@@ -47,7 +47,7 @@ impl McpServer {
         emit_inscription(
             "mcp.tool.choose.request",
             &json!({
-                "bundle_name": self.associated_bundle_name(),
+                "namespace": self.associated_namespace(),
                 "choice_request_id": choice_request_id,
                 "outcome": outcome,
                 "has_option_id": option_id.is_some(),
@@ -80,7 +80,7 @@ impl McpServer {
                 emit_inscription(
                     "mcp.tool.choose.success",
                     &json!({
-                        "bundle_name": self.associated_bundle_name(),
+                        "namespace": self.associated_namespace(),
                         "choice_request_id": response["choice_request_id"],
                         "status": response["status"],
                         "outcome": response["outcome"],

@@ -149,7 +149,7 @@ impl McpServer {
         emit_inscription(
             "mcp.tool.list.decisions.request",
             &json!({
-                "bundle_name": self.associated_bundle_name(),
+                "namespace": self.associated_namespace(),
             }),
         );
         let request = RelayRequest::ChoicesList;

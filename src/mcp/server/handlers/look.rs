@@ -30,7 +30,7 @@ impl McpServer {
         emit_inscription(
             "mcp.tool.look.request",
             &json!({
-                "bundle_name": self.associated_bundle_name(),
+                "namespace": self.associated_namespace(),
                 "requester_session": self.state.configuration.sender_session.clone(),
                 "target_session": params.target_session.clone(),
                 "lines": params.lines,

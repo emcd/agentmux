@@ -28,7 +28,7 @@ creating a cycle through the server module.
     look, raww, choose, updown, new, change.
   - Shared relay helpers: `request_relay`,
     `request_relay_with_namespace`, `map_relay_stream_failure`,
-    `associated_bundle_name`.
+    `associated_namespace`.
   - `#[tool_handler(router = self.tool_router)] impl
     rmcp::ServerHandler for McpServer` — provides the MCP `get_info`
     capability advertisement and tool dispatch.

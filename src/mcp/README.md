@@ -232,7 +232,7 @@ This module implements the MCP stdio server for `agentmux`.
 - `server/service.rs`
   - `McpConfiguration`, `McpState`, `McpServer`, the shared relay
     helpers (`request_relay`, `request_relay_with_namespace`,
-    `map_relay_stream_failure`, `associated_bundle_name`), the
+    `map_relay_stream_failure`, `associated_namespace`), the
     `#[tool_handler(router = self.tool_router)] impl
     rmcp::ServerHandler for McpServer` block (provides the MCP
     `get_info` capability advertisement and tool dispatch), and

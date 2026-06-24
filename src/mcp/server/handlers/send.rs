@@ -30,7 +30,7 @@ impl McpServer {
         emit_inscription(
             "mcp.tool.send.request",
             &json!({
-                "bundle_name": self.associated_bundle_name(),
+                "namespace": self.associated_namespace(),
                 "request_id": params.request_id.clone(),
                 "targets": params.targets.clone(),
                 "broadcast": params.broadcast,
@@ -53,7 +53,7 @@ impl McpServer {
         // Fill in the namespace the relay now requires on every target. Done
         // after sender resolution so an unidentified sender fails as
         // `validation_unknown_sender` regardless of target shape.
-        let targets = qualify_send_targets(&params.targets, self.associated_bundle_name())?;
+        let targets = qualify_send_targets(&params.targets, self.associated_namespace())?;
 
         let request = RelayRequest::Send {
             request_id: params.request_id.clone(),

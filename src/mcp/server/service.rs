@@ -105,7 +105,7 @@ impl McpServer {
             emit_inscription(
                 "mcp.tool.stream.events_ignored",
                 &json!({
-                    "bundle_name": self.associated_bundle_name(),
+                    "namespace": self.associated_namespace(),
                     "count": events.len(),
                 }),
             );
@@ -132,7 +132,7 @@ impl McpServer {
         )
     }
 
-    pub(super) fn associated_bundle_name(&self) -> Option<&str> {
+    pub(super) fn associated_namespace(&self) -> Option<&str> {
         self.state
             .configuration
             .associated_bundle_paths

@@ -74,7 +74,7 @@ impl McpServer {
         emit_inscription(
             "mcp.tool.change.psk.request",
             &json!({
-                "bundle_name": self.associated_bundle_name(),
+                "namespace": self.associated_namespace(),
                 "principal_id": principal_id,
             }),
         );
