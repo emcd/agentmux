@@ -89,7 +89,7 @@ pub fn parse_tui_target_identifier(
     }
     match bundle {
         None => match bound_bundle {
-            Some(bundle_name) => Ok(format!("{session}@{bundle_name}")),
+            Some(namespace) => Ok(format!("{session}@{namespace}")),
             None => Err(RuntimeError::validation(
                 "validation_unqualified_target",
                 format!(
@@ -104,11 +104,11 @@ pub fn parse_tui_target_identifier(
                 "bundle qualifier must be non-empty in 'session@bundle' (got '{after_prefix}')"
             ),
         )),
-        Some(bundle_name) if bundle_name.contains('@') => Err(RuntimeError::validation(
+        Some(namespace) if namespace.contains('@') => Err(RuntimeError::validation(
             "validation_unknown_target",
             format!("target identifier '{after_prefix}' may contain at most one '@' separator"),
         )),
-        Some(bundle_name) => Ok(format!("{session}@{bundle_name}")),
+        Some(namespace) => Ok(format!("{session}@{namespace}")),
     }
 }
 

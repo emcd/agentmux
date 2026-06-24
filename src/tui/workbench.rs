@@ -171,8 +171,8 @@ impl Workbench {
         self.state.picker_bundle_state.selected()
     }
 
-    pub fn bundle_name(&self) -> &str {
-        self.state.bundle_name.as_str()
+    pub fn namespace(&self) -> &str {
+        self.state.namespace.as_str()
     }
 
     pub fn available_bundles(&self) -> Vec<&str> {

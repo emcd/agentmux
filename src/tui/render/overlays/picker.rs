@@ -62,7 +62,7 @@ fn render_bundle_column(frame: &mut Frame, area: ratatui::layout::Rect, state: &
             .into_iter()
             .filter_map(|index| state.available_bundles.get(index))
             .map(|name| {
-                let is_active = name == &state.bundle_name;
+                let is_active = name == &state.namespace;
                 let label = if is_active {
                     format!("{name} [active]")
                 } else {
