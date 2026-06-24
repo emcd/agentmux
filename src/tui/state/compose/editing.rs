@@ -271,6 +271,27 @@ impl AppState {
         self.clear_to_completion();
     }
 
+    /// Builds the To-field completion pool: the active bundle's recipients
+    /// (already canonical `session@bundle` ids) followed by the relay-wide
+    /// cross-bundle candidates, de-duplicated while preserving that ordering.
+    /// `matching_recipient_candidates` re-sorts the matches, so the merge order
+    /// only governs which duplicate wins (the active-bundle entry).
+    fn recipient_completion_candidates(&self) -> Vec<String> {
+        let mut seen = std::collections::HashSet::new();
+        let mut candidates = Vec::new();
+        for candidate in self
+            .recipients
+            .iter()
+            .map(|recipient| recipient.session_name.as_str())
+            .chain(self.cross_bundle_candidates.iter().map(String::as_str))
+        {
+            if seen.insert(candidate) {
+                candidates.push(candidate.to_string());
+            }
+        }
+        candidates
+    }
+
     fn start_to_completion(&mut self) -> bool {
         let context = current_recipient_token_context(&self.to_field);
         let Some(context) = context else {
@@ -280,11 +301,7 @@ impl AppState {
             return false;
         }
 
-        let candidates = self
-            .recipients
-            .iter()
-            .map(|recipient| recipient.session_name.clone())
-            .collect::<Vec<_>>();
+        let candidates = self.recipient_completion_candidates();
         let matched = matching_recipient_candidates(&context.query, &candidates);
         if matched.is_empty() {
             return false;
@@ -316,11 +333,7 @@ impl AppState {
             return;
         }
 
-        let candidates = self
-            .recipients
-            .iter()
-            .map(|recipient| recipient.session_name.clone())
-            .collect::<Vec<_>>();
+        let candidates = self.recipient_completion_candidates();
         let matched = matching_recipient_candidates(&context.query, &candidates);
         if matched.is_empty() {
             return;

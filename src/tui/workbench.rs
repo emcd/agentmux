@@ -93,6 +93,13 @@ impl Workbench {
         self.state.apply_recipient_list_update();
     }
 
+    pub fn set_cross_bundle_candidates(&mut self, candidates: &[&str]) {
+        self.state.cross_bundle_candidates = candidates
+            .iter()
+            .map(|candidate| (*candidate).to_string())
+            .collect();
+    }
+
     pub fn last_selected_recipient(&self) -> Option<&str> {
         self.state.last_selected_recipient.as_deref()
     }
