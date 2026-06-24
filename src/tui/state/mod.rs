@@ -49,7 +49,7 @@ pub(crate) enum LookSnapshotFormat {
 
 #[derive(Clone, Debug)]
 pub struct TuiLaunchOptions {
-    pub bundle_name: String,
+    pub namespace: String,
     pub sender_session: String,
     pub relay_socket: PathBuf,
     pub look_lines: Option<u64>,
@@ -177,7 +177,7 @@ pub(crate) struct AppState {
 impl AppState {
     pub fn new(options: TuiLaunchOptions) -> Self {
         let TuiLaunchOptions {
-            bundle_name,
+            namespace,
             sender_session,
             relay_socket,
             look_lines,
@@ -185,11 +185,11 @@ impl AppState {
         } = options;
         let relay_stream = RelayStreamSession::new(
             relay_socket.clone(),
-            bundle_name.clone(),
+            namespace.clone(),
             sender_session.clone(),
         );
         Self {
-            namespace: bundle_name,
+            namespace,
             sender_session,
             relay_socket,
             relay_stream,
@@ -338,7 +338,7 @@ mod tests {
 
     fn make_state() -> AppState {
         AppState::new(TuiLaunchOptions {
-            bundle_name: "agentmux".to_string(),
+            namespace: "agentmux".to_string(),
             sender_session: "tui".to_string(),
             relay_socket: PathBuf::from("/tmp/agentmux-test-relay.sock"),
             look_lines: None,

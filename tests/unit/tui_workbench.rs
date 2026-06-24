@@ -12,7 +12,7 @@ use agentmux::{
 
 fn make_state() -> Workbench {
     Workbench::new(TuiLaunchOptions {
-        bundle_name: "agentmux".to_string(),
+        namespace: "agentmux".to_string(),
         sender_session: "tui".to_string(),
         relay_socket: PathBuf::from("/tmp/agentmux-test-relay.sock"),
         look_lines: None,
@@ -812,7 +812,7 @@ fn bundle_picker_enter_on_different_bundle_switches_and_resets_bundle_scoped_sta
 #[test]
 fn bundle_picker_enter_with_no_available_bundles_returns_validation_error() {
     let mut state = Workbench::new(TuiLaunchOptions {
-        bundle_name: "agentmux".to_string(),
+        namespace: "agentmux".to_string(),
         sender_session: "tui".to_string(),
         relay_socket: PathBuf::from("/tmp/agentmux-test-relay.sock"),
         look_lines: None,
