@@ -4,16 +4,18 @@
       `src/relay/stream.rs`.
 - [ ] 1.2 Add a unified registry entry shape carrying namespace, bare session id,
       principal class, registration source, transport/runtime binding,
-      readiness state, authenticated identity, revoke signal, writer, and
-      transport capability flags.
+      authenticated identity, revoke signal, writer, and transport capability
+      flags. The entry is a routing/capabilities record and SHALL NOT carry
+      delivery-layer readiness state (owned by `AsyncWorkerEntry`).
 - [ ] 1.3 Add canonical-principal helper functions that fail fast for unqualified
       or non-canonical registry keys.
 
 ## 2. Registration And Lifecycle
 
 - [ ] 2.1 Register static bundle-runtime coder entries during startup/reconcile,
-      including runtime directory, transport binding, session type, readiness
-      state, and capability flags.
+      including runtime directory, transport binding, session type, and
+      capability flags. Do not store readiness state on the entry; readiness is
+      resolved from `AsyncWorkerEntry` at read time when needed.
 - [ ] 2.2 Update stream hello registration to create or attach dynamic stream
       state for bundle sessions and relay-wide sessions.
 - [ ] 2.3 Update bundle unload/reload eviction to filter entries by namespace
@@ -28,7 +30,9 @@
 - [ ] 3.1 Replace `handle_global_list` in
       `src/relay/handlers/dispatch.rs` and
       `list_registered_relay_wide_sessions` in `src/relay/stream.rs` with
-      namespace-filtered list handling over the unified registry.
+      namespace-filtered list handling over the unified registry. Any per-session
+      ready flag in the `list` response is computed at list-generation time from
+      the delivery worker registry (`AsyncWorkerEntry`), not stored on the entry.
 - [ ] 3.2 Update send delivery assembly to resolve target registry entries by
       canonical `principal_id` and derive coder-vs-stream delivery from each
       entry's transport binding instead of carrying relay-wide target flags.
