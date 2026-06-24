@@ -2,6 +2,7 @@
 
 use crossterm::event::Event;
 
+use crate::relay::RelayStreamEvent;
 use crate::runtime::error::RuntimeError;
 
 use super::{
@@ -208,5 +209,41 @@ impl Workbench {
             enqueued_at: None,
             options: Vec::new(),
         });
+    }
+
+    /// Feeds a `choices.requested` stream event through the real ingestion path
+    /// (`record_stream_events` -> `upsert_pending_choice`) so the pending-choice
+    /// ordering contract can be exercised end-to-end, including the
+    /// `enqueued_at` sort that `inject_pending_choice` deliberately bypasses.
+    pub fn inject_choice_request(
+        &mut self,
+        choice_request_id: &str,
+        target_session: &str,
+        enqueued_at: Option<&str>,
+    ) {
+        let mut payload = serde_json::json!({
+            "choice_request_id": choice_request_id,
+            "target_session": target_session,
+            "requested_kind": "approval",
+        });
+        if let Some(enqueued_at) = enqueued_at {
+            payload["enqueued_at"] = serde_json::Value::String(enqueued_at.to_string());
+        }
+        self.state.record_stream_events(&[RelayStreamEvent {
+            event_type: "choices.requested".to_string(),
+            target_session: target_session.to_string(),
+            created_at: String::new(),
+            payload,
+        }]);
+    }
+
+    /// Ordered `choice_request_id`s in the pending-choices list, as the
+    /// Interaction pane would present them.
+    pub fn pending_choice_request_ids(&self) -> Vec<&str> {
+        self.state
+            .pending_choices
+            .iter()
+            .map(|entry| entry.choice_request_id.as_str())
+            .collect()
     }
 }

@@ -567,6 +567,39 @@ fn interaction_region_swaps_between_raww_and_choice_pane() {
 }
 
 #[test]
+fn same_session_pending_choices_order_fifo_by_enqueued_at() {
+    let mut state = make_state();
+    // Requests arrive for one session out of enqueued_at order (the relay may
+    // replay or reorder on the wire); the pending list must present them FIFO by
+    // enqueued_at regardless of arrival order.
+    state.inject_choice_request("req-c", "acp@agentmux", Some("2026-06-24T00:00:03Z"));
+    state.inject_choice_request("req-a", "acp@agentmux", Some("2026-06-24T00:00:01Z"));
+    state.inject_choice_request("req-b", "acp@agentmux", Some("2026-06-24T00:00:02Z"));
+
+    assert_eq!(
+        state.pending_choice_request_ids(),
+        vec!["req-a", "req-b", "req-c"],
+        "pending choices must be ordered FIFO by enqueued_at"
+    );
+}
+
+#[test]
+fn pending_choices_tie_break_by_request_id_and_sink_missing_enqueued_at() {
+    let mut state = make_state();
+    // Two requests share an enqueued_at: ties break deterministically by
+    // choice_request_id. A request with no enqueued_at sorts last.
+    state.inject_choice_request("req-z", "acp@agentmux", Some("2026-06-24T00:00:01Z"));
+    state.inject_choice_request("req-a", "acp@agentmux", Some("2026-06-24T00:00:01Z"));
+    state.inject_choice_request("req-m", "acp@agentmux", None);
+
+    assert_eq!(
+        state.pending_choice_request_ids(),
+        vec!["req-a", "req-z", "req-m"],
+        "equal enqueued_at ties break by choice_request_id; missing enqueued_at sorts last"
+    );
+}
+
+#[test]
 fn ctrl_c_quits_even_when_picker_overlay_is_open() {
     let mut state = make_state();
     state

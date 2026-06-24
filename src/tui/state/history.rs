@@ -217,7 +217,7 @@ impl AppState {
         }
     }
 
-    pub(super) fn record_stream_events(&mut self, events: &[RelayStreamEvent]) {
+    pub(in crate::tui) fn record_stream_events(&mut self, events: &[RelayStreamEvent]) {
         for event in events {
             match event.event_type.as_str() {
                 "incoming_message" => {
@@ -466,15 +466,7 @@ impl AppState {
                 enqueued_at: None,
             });
         }
-        pending.sort_by(|left, right| {
-            match (&left.enqueued_at, &right.enqueued_at) {
-                (Some(left_time), Some(right_time)) => left_time.cmp(right_time),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => std::cmp::Ordering::Equal,
-            }
-            .then(left.choice_request_id.cmp(&right.choice_request_id))
-        });
+        pending.sort_by(compare_pending_choice_order);
         self.pending_choices = pending;
         self.ensure_pending_choice_selection();
     }
@@ -490,15 +482,7 @@ impl AppState {
         } else {
             self.pending_choices.push(entry);
         }
-        self.pending_choices.sort_by(|left, right| {
-            match (&left.enqueued_at, &right.enqueued_at) {
-                (Some(left_time), Some(right_time)) => left_time.cmp(right_time),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => std::cmp::Ordering::Equal,
-            }
-            .then(left.choice_request_id.cmp(&right.choice_request_id))
-        });
+        self.pending_choices.sort_by(compare_pending_choice_order);
         self.ensure_pending_choice_selection();
         existed
     }
@@ -515,6 +499,25 @@ impl AppState {
         self.ensure_pending_choice_selection();
         true
     }
+}
+
+/// Ordering contract for the Interaction-mode pending-choices list: FIFO by
+/// `enqueued_at` (earliest first; ISO-8601 timestamps compare chronologically),
+/// entries lacking an `enqueued_at` sorted last, and ties broken deterministically
+/// by `choice_request_id`. Both the snapshot rebuild (`apply_choices_snapshot`)
+/// and the incremental `upsert_pending_choice` sort through this single
+/// comparator so the two ingestion paths cannot silently diverge.
+fn compare_pending_choice_order(
+    left: &PendingChoiceEntry,
+    right: &PendingChoiceEntry,
+) -> std::cmp::Ordering {
+    match (&left.enqueued_at, &right.enqueued_at) {
+        (Some(left_time), Some(right_time)) => left_time.cmp(right_time),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    }
+    .then(left.choice_request_id.cmp(&right.choice_request_id))
 }
 
 fn map_chat_result_outcome(outcome: &SendOutcome) -> (&'static str, Option<&'static str>) {
