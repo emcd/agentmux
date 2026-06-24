@@ -302,10 +302,17 @@ Each registry entry SHALL include:
 - principal class
 - registration source
 - session type / transport binding
-- runtime directory and readiness state for coder-backed entries
+- runtime directory for coder-backed entries
 - transport capability flags
 - stream writer and revoke signal when connected
 - authenticated identity when present
+
+The entry is a routing/capabilities record only. It SHALL NOT store
+delivery-layer readiness state: readiness is owned exclusively by
+`AsyncWorkerEntry` in the delivery layer. Surfaces that need to report readiness
+(e.g. a per-session ready flag in a `list` response) SHALL resolve it from
+`AsyncWorkerEntry` at read time rather than storing a copy on the registry
+entry, so there is a single authoritative source for that fact.
 
 Bundle lifecycle, credential revocation, listing, event fan-out, and delivery
 lookup SHALL operate by filtering or looking up entries in this unified registry.
@@ -317,7 +324,8 @@ lookup SHALL operate by filtering or looking up entries in this unified registry
 - **THEN** the registry entry key is `agent@bundle-a`
 - **AND** the entry namespace is `bundle-a`
 - **AND** the entry carries its runtime directory, transport binding, session
-  type, readiness state, and capability flags
+  type, and capability flags
+- **AND** the entry does not store readiness state
 
 #### Scenario: Register GLOBAL session by canonical principal id
 
@@ -345,6 +353,13 @@ lookup SHALL operate by filtering or looking up entries in this unified registry
 - **THEN** target lookup does not return `validation_unknown_target`
 - **AND** send, look, and raww preserve their existing unavailable, stale, queued,
   or transport-specific behavior for that readiness state
+
+#### Scenario: Resolve per-session readiness from the delivery layer
+
+- **WHEN** a `list` response needs to report whether a coder session is ready
+- **THEN** the ready state is computed at list-generation time from the delivery
+  worker registry (`AsyncWorkerEntry`)
+- **AND** no readiness value is read from or stored on the unified registry entry
 
 ## REMOVED Requirements
 
