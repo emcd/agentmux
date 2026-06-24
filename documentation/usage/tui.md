@@ -191,6 +191,10 @@ Delivery outcomes:
   `choices.requested`, and `choices.resolved` events.
 - Replay is at-least-once; the TUI deduplicates pending choice rows by
   `choice_request_id`.
+- Pending choice rows are ordered FIFO by `enqueued_at` (rows without one sort
+  last), with ties broken deterministically by `choice_request_id`, so
+  `Left`/`Right` navigation visits a session's requests oldest-first regardless
+  of the order events arrive or replay.
 - Choice decisions are ACP-native and explicit: selected option ids are
   forwarded verbatim via `choices.pick`; cancelled decisions omit
   `option_id`.

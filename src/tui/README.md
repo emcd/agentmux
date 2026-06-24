@@ -201,6 +201,9 @@ auto-opens it.
 - choice lifecycle handling:
   - pending queue visibility from relay stream events,
   - replay-safe dedupe keyed by `choice_request_id`,
+  - FIFO ordering by `enqueued_at` (tie-broken by `choice_request_id`),
+    single-sourced through `compare_pending_choice_order` so the snapshot and
+    upsert ingestion paths cannot diverge,
   - session-scoped Interaction-mode resolution using ACP-native
     `choices.pick` (`selected` with explicit `option_id` or `cancelled`),
 - startup relay auto-spawn fallback when relay socket is unavailable, using the
