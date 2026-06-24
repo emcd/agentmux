@@ -113,7 +113,7 @@ pub(crate) struct PendingChoiceOption {
 
 #[derive(Debug)]
 pub(crate) struct AppState {
-    pub bundle_name: String,
+    pub namespace: String,
     pub sender_session: String,
     relay_socket: PathBuf,
     relay_stream: RelayStreamSession,
@@ -182,7 +182,7 @@ impl AppState {
             sender_session.clone(),
         );
         Self {
-            bundle_name,
+            namespace: bundle_name,
             sender_session,
             relay_socket,
             relay_stream,

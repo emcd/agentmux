@@ -675,7 +675,7 @@ fn bundle_picker_highlights_active_bundle_on_open() {
     let active_index = state
         .available_bundles()
         .iter()
-        .position(|name| *name == state.bundle_name())
+        .position(|name| *name == state.namespace())
         .expect("active bundle should appear in available_bundles");
     assert_eq!(state.bundle_picker_selected_index(), Some(active_index));
 }
@@ -687,7 +687,7 @@ fn bundle_picker_enter_on_active_bundle_hands_focus_to_sessions() {
     state
         .dispatch_event(key_event(KeyCode::F(5), KeyModifiers::NONE))
         .expect("f5 should open bundle picker");
-    let original_bundle = state.bundle_name().to_string();
+    let original_bundle = state.namespace().to_string();
     let original_recipients = state.recipients();
     let original_recipients_owned = original_recipients
         .into_iter()
@@ -700,7 +700,7 @@ fn bundle_picker_enter_on_active_bundle_hands_focus_to_sessions() {
     // open and hands focus to the session column in the same window.
     assert!(state.picker_open());
     assert_eq!(state.picker_column(), WorkbenchPickerColumn::Sessions);
-    assert_eq!(state.bundle_name(), original_bundle.as_str());
+    assert_eq!(state.namespace(), original_bundle.as_str());
     assert_eq!(
         state
             .recipients()
@@ -732,9 +732,9 @@ fn bundle_picker_enter_on_different_bundle_switches_and_resets_bundle_scoped_sta
         .bundle_picker_selected_index()
         .expect("bundle picker should have a selection");
     let target_bundle = state.available_bundles()[target_index].to_string();
-    assert_ne!(target_bundle, state.bundle_name());
+    assert_ne!(target_bundle, state.namespace());
     let result = state.dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE));
-    assert_eq!(state.bundle_name(), target_bundle.as_str());
+    assert_eq!(state.namespace(), target_bundle.as_str());
     assert!(state.recipients().is_empty());
     assert_eq!(state.last_selected_recipient(), None);
     // The switch keeps the picker open and hands focus to the (re-enumerated)

@@ -31,7 +31,7 @@ impl AppState {
                     format!(
                         "Loaded {} recipients for bundle {}.",
                         self.recipients.len(),
-                        self.bundle_name
+                        self.namespace
                     ),
                 );
                 self.relay_stream_poll_error_reported = false;
@@ -74,25 +74,25 @@ impl AppState {
     /// its sessions, and keeps the picker open focused on those sessions so the
     /// operator can pick one in the same window.
     pub fn commit_selected_picker_bundle(&mut self) -> Result<(), RuntimeError> {
-        let Some(target_bundle) = self.selected_picker_bundle() else {
+        let Some(target_namespace) = self.selected_picker_bundle() else {
             return Err(RuntimeError::validation(
                 "validation_unknown_target",
                 "bundle switch requires a selected bundle in picker",
             ));
         };
-        if target_bundle == self.bundle_name {
+        if target_namespace == self.namespace {
             self.focus_picker_session_column();
             return Ok(());
         }
-        self.bundle_name = target_bundle.clone();
+        self.namespace = target_namespace.clone();
         self.relay_stream = RelayStreamSession::new(
             self.relay_socket.clone(),
-            target_bundle.clone(),
+            target_namespace.clone(),
             self.sender_session.clone(),
         );
         self.reset_bundle_scoped_state();
         self.focus_picker_session_column();
-        self.push_status(None, format!("Switched to bundle {target_bundle}."));
+        self.push_status(None, format!("Switched to bundle {target_namespace}."));
         self.refresh_recipients()
     }
 

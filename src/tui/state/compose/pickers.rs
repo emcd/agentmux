@@ -207,7 +207,7 @@ impl AppState {
         let active_index = self
             .available_bundles
             .iter()
-            .position(|name| name == &self.bundle_name)
+            .position(|name| name == &self.namespace)
             .unwrap_or(0);
         self.picker_bundle_state.select(Some(active_index));
     }

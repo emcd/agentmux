@@ -16,7 +16,7 @@ impl AppState {
                 "message body is required",
             ));
         }
-        let bound_bundle = sender_bound_bundle(&self.sender_session, &self.bundle_name);
+        let bound_bundle = sender_bound_bundle(&self.sender_session, &self.namespace);
         let targets = merge_tui_targets(&self.to_field, bound_bundle)?;
         let message_body = self.message_field.clone();
         let response = self.request_relay(&RelayRequest::Send {

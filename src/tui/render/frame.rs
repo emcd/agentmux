@@ -55,10 +55,10 @@ fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
     // field is meaningless — the principal id already encodes the namespace. The
     // browsing bundle survives only as the `List` enumeration target, not as a
     // sender binding, so it is not surfaced in the header for these principals.
-    if sender_bound_bundle(&state.sender_session, &state.bundle_name).is_some() {
+    if sender_bound_bundle(&state.sender_session, &state.namespace).is_some() {
         spans.push(Span::raw("  Bundle: "));
         spans.push(Span::styled(
-            state.bundle_name.clone(),
+            state.namespace.clone(),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
