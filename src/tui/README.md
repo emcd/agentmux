@@ -119,6 +119,10 @@ auto-opens it.
   - `accepted`, `success`, `timeout`, `failed`,
 - recipient completion via `@` token triggers plus explicit manual trigger,
 - `@`-prefixed tokens trigger immediate completion proposals after one suffix character,
+- completion candidates span every bundle visible to the operator: the active
+  bundle's recipients plus relay-wide cross-bundle `session@bundle` ids, fanned
+  out eagerly on the same cadence as the recipient refresh; bundles the operator
+  cannot enumerate (`authorization_forbidden`) degrade out silently,
 - overlays:
   - help,
   - unified picker (`F2`/`F5`): a single window with two side-by-side columns —

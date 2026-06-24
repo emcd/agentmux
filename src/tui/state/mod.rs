@@ -119,6 +119,13 @@ pub(crate) struct AppState {
     relay_stream: RelayStreamSession,
     look_lines: Option<u64>,
     pub recipients: Vec<Recipient>,
+    /// Relay-wide To-field completion candidates as full `session@bundle`
+    /// principal ids, spanning every available bundle other than the active
+    /// `namespace` (whose sessions are already offered via `recipients`, which
+    /// the relay returns as canonical `session@bundle` ids too). Refreshed
+    /// eagerly on the same cadence as `recipients`; kept separate so the
+    /// recipient picker stays scoped to the active bundle.
+    pub cross_bundle_candidates: Vec<String>,
     pub bundle_status: Option<BundleStatusDisplay>,
     pub last_selected_recipient: Option<String>,
     pub available_bundles: Vec<String>,
@@ -188,6 +195,7 @@ impl AppState {
             relay_stream,
             look_lines,
             recipients: Vec::new(),
+            cross_bundle_candidates: Vec::new(),
             bundle_status: None,
             last_selected_recipient: None,
             available_bundles,

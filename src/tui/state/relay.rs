@@ -1,4 +1,4 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::{BTreeSet, HashSet, VecDeque};
 
 use crate::{
     relay::{RelayRequest, RelayResponse, RelayStreamSession},
@@ -34,6 +34,7 @@ impl AppState {
                         self.namespace
                     ),
                 );
+                self.refresh_cross_bundle_candidates();
                 self.relay_stream_poll_error_reported = false;
                 Ok(())
             }
@@ -122,6 +123,46 @@ impl AppState {
         self.seen_delivery_outcome_order = VecDeque::new();
         self.clear_raww_draft();
         self.relay_stream_poll_error_reported = false;
+    }
+
+    /// Fans out a `List` over every available bundle other than the active
+    /// `namespace` to assemble relay-wide To-field completion candidates as
+    /// canonical `session@bundle` principal ids. Runs eagerly on the same
+    /// cadence as [`refresh_recipients`] so cross-bundle candidates stay fresh.
+    ///
+    /// The active bundle is skipped because its canonical ids already arrive via
+    /// `self.recipients`. Per-bundle failures degrade silently: a bundle the
+    /// operator cannot enumerate (relay answers `authorization_forbidden` for
+    /// insufficient `all` scope) or a transient transport error simply drops out
+    /// of the candidate pool rather than failing the whole refresh — the home
+    /// recipients are already loaded and authoritative.
+    fn refresh_cross_bundle_candidates(&mut self) {
+        let other_bundles = self
+            .available_bundles
+            .iter()
+            .filter(|bundle| bundle.as_str() != self.namespace.as_str())
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut candidates = BTreeSet::<String>::new();
+        for bundle in other_bundles {
+            let request = RelayRequest::List {
+                requester_session: Some(self.sender_session.clone()),
+            };
+            let (response, events) = match self
+                .relay_stream
+                .request_with_namespace_and_events(&request, Some(bundle.as_str()))
+            {
+                Ok(pair) => pair,
+                Err(_) => continue,
+            };
+            self.record_stream_events(&events);
+            if let RelayResponse::List { bundle: listed, .. } = response {
+                for principal in listed.principals {
+                    candidates.insert(principal.id);
+                }
+            }
+        }
+        self.cross_bundle_candidates = candidates.into_iter().collect();
     }
 
     pub(super) fn request_relay(

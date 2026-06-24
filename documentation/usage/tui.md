@@ -172,6 +172,11 @@ Delivery outcomes:
 - Successful send clears `To` and `Message`.
 - Recipient completion supports both `@`-triggered suggestions and manual
   trigger (`Ctrl+Space`).
+- Completion candidates span every bundle visible to the operator, not just the
+  active one: the active bundle's recipients are offered alongside relay-wide
+  `session@bundle` candidates from the other available bundles. These are
+  refreshed on the same cycle as the recipient list; bundles the operator lacks
+  scope to enumerate are simply omitted from the suggestions.
 - Look snapshot rendering is transport-aware:
   - tmux look snapshots render line payloads directly.
   - ACP look snapshots render structured entries by kind:

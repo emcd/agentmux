@@ -132,6 +132,32 @@ fn completion_navigation_in_to_field_uses_up_and_down() {
 }
 
 #[test]
+fn to_completion_merges_active_and_cross_bundle_candidates() {
+    let mut state = make_state();
+    state.set_recipients(&["alpha@agentmux"]);
+    state.set_cross_bundle_candidates(&["alto@secondary", "bravo@secondary"]);
+    // `@a` matches one active-bundle and one cross-bundle candidate; the merged,
+    // sorted pool offers both and Down cycles from the first to the second.
+    state.insert_text("@a");
+    assert_eq!(state.to_field(), "alpha@agentmux");
+    state
+        .dispatch_event(key_event(KeyCode::Down, KeyModifiers::NONE))
+        .expect("down should cycle to the cross-bundle candidate");
+    assert_eq!(state.to_field(), "alto@secondary");
+}
+
+#[test]
+fn to_completion_offers_cross_bundle_only_prefix() {
+    let mut state = make_state();
+    state.set_recipients(&["alpha@agentmux"]);
+    state.set_cross_bundle_candidates(&["bravo@secondary"]);
+    // A prefix no active-bundle recipient can satisfy still completes from the
+    // relay-wide cross-bundle source to the full session@bundle principal id.
+    state.insert_text("@b");
+    assert_eq!(state.to_field(), "bravo@secondary");
+}
+
+#[test]
 fn completion_navigation_stops_after_accept_until_retriggered() {
     let mut state = make_state();
     state.set_recipients(&["master", "mcp"]);
