@@ -30,7 +30,7 @@ impl McpServer {
         emit_inscription(
             "mcp.tool.raww.request",
             &json!({
-                "bundle_name": self.associated_bundle_name(),
+                "namespace": self.associated_namespace(),
                 "request_id": params.request_id.clone(),
                 "target_session": params.target_session.clone(),
                 "text_length": params.text.len(),
@@ -78,7 +78,7 @@ impl McpServer {
                 emit_inscription(
                     "mcp.tool.raww.success",
                     &json!({
-                        "bundle_name": self.associated_bundle_name(),
+                        "namespace": self.associated_namespace(),
                         "status": response["status"],
                         "target_session": response["target_session"],
                         "transport": response["transport"],

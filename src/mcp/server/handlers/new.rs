@@ -81,7 +81,7 @@ impl McpServer {
         emit_inscription(
             "mcp.tool.new.peer.request",
             &json!({
-                "bundle_name": self.associated_bundle_name(),
+                "namespace": self.associated_namespace(),
                 "principal_id": principal_id,
                 "has_output": output_path.is_some(),
             }),

@@ -24,7 +24,7 @@ const HELLO_CONFLICT_RETRY_TIMEOUT_MS: u64 = 1_000;
 #[derive(Debug)]
 pub struct RelayStreamSession {
     socket_path: PathBuf,
-    bundle_name: String,
+    namespace: String,
     session_id: String,
     connection: Option<RelayStreamConnection>,
 }
@@ -70,10 +70,10 @@ enum StreamServerFrame {
 impl RelayStreamSession {
     /// Creates a persistent relay stream session descriptor.
     #[must_use]
-    pub fn new(socket_path: PathBuf, bundle_name: String, session_id: String) -> Self {
+    pub fn new(socket_path: PathBuf, namespace: String, session_id: String) -> Self {
         Self {
             socket_path,
-            bundle_name,
+            namespace,
             session_id,
             connection: None,
         }
@@ -130,7 +130,7 @@ impl RelayStreamSession {
     ) -> Result<(RelayResponse, Vec<RelayStreamEvent>), io::Error> {
         self.ensure_connected()?;
         let request_id = uuid::Uuid::new_v4().to_string();
-        let bound = self.bundle_name.clone();
+        let bound = self.namespace.clone();
         let wire_namespace = match request {
             RelayRequest::Send { .. } | RelayRequest::Raww { .. } => None,
             _ => Some(namespace.unwrap_or(bound.as_str())),
@@ -234,7 +234,7 @@ impl RelayStreamSession {
                     emit_inscription(
                         "mcp.relay.reconnecting",
                         &json!({
-                            "bundle_name": self.bundle_name,
+                            "namespace": self.namespace,
                             "session_id": self.session_id,
                             "reason": reason,
                         }),
@@ -283,7 +283,7 @@ impl RelayStreamSession {
         };
         let psk_path = session_identity_psk_path(
             state_root,
-            self.bundle_name.as_str(),
+            self.namespace.as_str(),
             self.session_id.as_str(),
         );
         match fs::read_to_string(&psk_path) {
@@ -300,8 +300,7 @@ impl RelayStreamSession {
     }
 
     fn try_connect_once(&self) -> Result<RelayStreamConnection, ConnectAttemptError> {
-        let principal_id =
-            canonical_session_id(self.session_id.as_str(), self.bundle_name.as_str());
+        let principal_id = canonical_session_id(self.session_id.as_str(), self.namespace.as_str());
         let identity_token = self.read_identity_token();
         let mut stream = UnixStream::connect(&self.socket_path).map_err(ConnectAttemptError::Io)?;
         send_stream_client_frame(
@@ -554,13 +553,13 @@ fn is_ignorable_socket_option_error(error: &io::Error) -> bool {
 /// Returns IO errors when the relay transport or Hello/Request exchange fails.
 pub fn request_relay(
     socket_path: &Path,
-    bundle_name: &str,
+    namespace: &str,
     session_id: &str,
     request: &RelayRequest,
 ) -> Result<RelayResponse, io::Error> {
     let mut session = RelayStreamSession::new(
         socket_path.to_path_buf(),
-        bundle_name.to_string(),
+        namespace.to_string(),
         session_id.to_string(),
     );
     session.request(request)
