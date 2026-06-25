@@ -24,8 +24,9 @@ worker-lifecycle concept rather than an ACP detail.
 - **BREAKING (relay crate API):** Rename the readiness enum
   `AcpWorkerReadinessState` to `WorkerReadinessState` in
   `src/transports/vocabulary.rs`; the variants are already transport-neutral and
-  are unchanged. The enum is re-exported as `crate::transports::AcpWorkerReadinessState`,
-  so the rename breaks that public path.
+  are unchanged. Before this change the enum was re-exported as
+  `crate::transports::AcpWorkerReadinessState`, so the rename breaks that public
+  path.
 - Rename the registry field `AsyncWorkerEntry.acp_state` to
   `AsyncWorkerEntry.readiness` and the relay-internal mutator/reader
   `set_acp_worker_state` / `get_acp_worker_state` to `set_worker_readiness` /

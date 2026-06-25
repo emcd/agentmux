@@ -1,4 +1,4 @@
-//! In-process observability surface for ACP worker state and choices queue
+//! In-process observability surface for worker readiness and choices queue
 //! mutations.
 //!
 //! These channels publish the same transitions that the relay already emits as
@@ -8,7 +8,7 @@
 //!
 //! Publishers are owned by global registries that are independent of the
 //! per-worker registration HashMap. A subscriber can therefore call
-//! [`subscribe_acp_worker_state`] before the worker exists, and continue to
+//! [`subscribe_worker_readiness`] before the worker exists, and continue to
 //! receive transitions after the worker entry is unregistered during shutdown.
 
 use std::{
@@ -20,7 +20,7 @@ use std::{
 use tokio::sync::{broadcast, watch};
 
 use super::async_worker::{AsyncWorkerKey, build_worker_key};
-use crate::transports::AcpWorkerReadinessState;
+use crate::transports::WorkerReadinessState;
 
 const CHOICES_QUEUE_BROADCAST_CAPACITY: usize = 64;
 
@@ -48,8 +48,8 @@ pub enum ChoicesQueueEvent {
     },
 }
 
-static WORKER_STATE_PUBLISHERS: OnceLock<
-    Mutex<HashMap<AsyncWorkerKey, watch::Sender<Option<AcpWorkerReadinessState>>>>,
+static WORKER_READINESS_PUBLISHERS: OnceLock<
+    Mutex<HashMap<AsyncWorkerKey, watch::Sender<Option<WorkerReadinessState>>>>,
 > = OnceLock::new();
 
 static CHOICES_QUEUE_PUBLISHERS: OnceLock<
@@ -57,8 +57,8 @@ static CHOICES_QUEUE_PUBLISHERS: OnceLock<
 > = OnceLock::new();
 
 fn worker_state_publishers()
--> &'static Mutex<HashMap<AsyncWorkerKey, watch::Sender<Option<AcpWorkerReadinessState>>>> {
-    WORKER_STATE_PUBLISHERS.get_or_init(|| Mutex::new(HashMap::new()))
+-> &'static Mutex<HashMap<AsyncWorkerKey, watch::Sender<Option<WorkerReadinessState>>>> {
+    WORKER_READINESS_PUBLISHERS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn choices_queue_publishers()
@@ -66,17 +66,18 @@ fn choices_queue_publishers()
     CHOICES_QUEUE_PUBLISHERS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Subscribes to readiness-state transitions for a persistent ACP worker.
+/// Subscribes to readiness-state transitions for a persistent worker (ACP today,
+/// Pty next).
 ///
 /// The returned receiver yields the current value immediately (None if no
 /// transition has been published yet) and then every subsequent transition.
 /// Callers typically pair this with [`tokio::sync::watch::Receiver::changed`]
 /// and read [`tokio::sync::watch::Receiver::borrow`].
-pub fn subscribe_acp_worker_state(
+pub fn subscribe_worker_readiness(
     namespace: &str,
     runtime_directory: &Path,
     target_session: &str,
-) -> watch::Receiver<Option<AcpWorkerReadinessState>> {
+) -> watch::Receiver<Option<WorkerReadinessState>> {
     let key = build_worker_key(namespace, runtime_directory, target_session);
     let mut publishers = worker_state_publishers()
         .lock()
@@ -106,7 +107,7 @@ pub fn subscribe_choices_queue_events(
         .subscribe()
 }
 
-pub(super) fn publish_acp_worker_state(key: &AsyncWorkerKey, state: AcpWorkerReadinessState) {
+pub(super) fn publish_worker_readiness(key: &AsyncWorkerKey, state: WorkerReadinessState) {
     let mut publishers = worker_state_publishers()
         .lock()
         .expect("worker state publishers mutex poisoned");
@@ -133,7 +134,7 @@ pub(super) fn publish_choices_queue_event(runtime_directory: &Path, event: Choic
 // must not become part of the relay's public surface, so exercising them
 // directly from an external test crate would require a doc(hidden) escape
 // hatch that would itself become unintended API. The end-to-end paths through
-// `set_acp_worker_state` / `enqueue_choice_request` are covered by the
+// `set_worker_readiness` / `enqueue_choice_request` are covered by the
 // ACP integration tests; this inline test only proves the publish/subscribe
 // primitive itself wires watch and broadcast correctly when the publishers
 // are invoked. One `#[test]` covers both channels because their setup is
@@ -152,17 +153,17 @@ mod tests {
         // Worker-state watch: subscribe first, then publish, then await the
         // change notification and read the borrowed value.
         let mut state_receiver =
-            subscribe_acp_worker_state(namespace, runtime_directory.as_path(), target_session);
+            subscribe_worker_readiness(namespace, runtime_directory.as_path(), target_session);
         assert_eq!(*state_receiver.borrow_and_update(), None);
         let key = build_worker_key(namespace, runtime_directory.as_path(), target_session);
-        publish_acp_worker_state(&key, AcpWorkerReadinessState::Unavailable);
+        publish_worker_readiness(&key, WorkerReadinessState::Unavailable);
         state_receiver
             .changed()
             .await
             .expect("watch sender outlives subscriber");
         assert_eq!(
             *state_receiver.borrow(),
-            Some(AcpWorkerReadinessState::Unavailable)
+            Some(WorkerReadinessState::Unavailable)
         );
 
         // Choices-queue broadcast: subscribe first, publish two events,

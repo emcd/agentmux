@@ -51,17 +51,20 @@ pub enum LookSnapshotSource {
     None,
 }
 
-/// Readiness state for a persistent ACP worker.
+/// Readiness state for a persistent worker serving a delivery target.
+///
+/// Transport-agnostic: any worker-driven transport populates this state. ACP is
+/// the only populator today; Pty is the next expected one.
 ///
 /// The relay's per-target delivery workers mutate this state in an in-process
 /// registry. Out-of-crate observers read it via
-/// [`crate::relay::subscribe_acp_worker_state`] — today only the ACP integration
+/// [`crate::relay::subscribe_worker_readiness`] — today only the ACP integration
 /// tests; the relay's own respawn/startup gating reads it internally. The TUI
 /// does **not** consume this enum: it observes worker transitions as relay wire
 /// stream events instead. The state is stringified by the relay rather than
 /// serialized directly, so it carries no `serde` derive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AcpWorkerReadinessState {
+pub enum WorkerReadinessState {
     Initializing,
     Available,
     Busy,

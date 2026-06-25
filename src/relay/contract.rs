@@ -10,7 +10,7 @@ use crate::{configuration::SessionType, transports::StructuredEntry};
 // re-exported as the convenience path for relay's own delivery dispatch, which
 // branches on it across the worker/handler surface. Relay-internal code that merely
 // consumes a transport-vocabulary type without embedding it (e.g. the
-// `read_acp_worker_state` stringify over `AcpWorkerReadinessState`) imports it from
+// `read_worker_readiness` stringify over `WorkerReadinessState`) imports it from
 // `crate::transports` directly rather than through this re-export.
 pub use crate::transports::vocabulary::{
     DeliveryPayloadMode, LookFreshness, LookSnapshotSource, SendOutcome,

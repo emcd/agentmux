@@ -30,8 +30,8 @@ use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::signals::shutdown_requested;
 use crate::transports::contract::OutcomeFuture;
 use crate::transports::{
-    AcpWorkerReadinessState, Chooser, DeliveryEnvelope, OutputView, StartupContext, Transport,
-    TransportError, TransportStatus,
+    Chooser, DeliveryEnvelope, OutputView, StartupContext, Transport, TransportError,
+    TransportStatus, WorkerReadinessState,
 };
 
 use super::{
@@ -51,7 +51,7 @@ const RESPAWN_MONITOR_POLL_MS: u64 = 100;
 const RESPAWN_TRIGGER_REASON: &str = "worker_unavailable";
 
 /// Mirrors the worker readiness state into the relay's global registry.
-pub type MirrorStateFn = Arc<dyn Fn(AcpWorkerReadinessState) + Send + Sync>;
+pub type MirrorStateFn = Arc<dyn Fn(WorkerReadinessState) + Send + Sync>;
 /// Publishes the transport's `look` [`OutputView`] handle into the relay registry.
 pub type PublishOutputFn = Arc<dyn Fn(Option<Arc<dyn OutputView>>) + Send + Sync>;
 /// Broadcasts an ACP respawn stream event (`event_type`, `payload`) to the bundle UI.
@@ -148,7 +148,7 @@ impl AcpWorkerDriver {
     /// brief lock. On initial-bootstrap failure the transport is signalled for
     /// respawn so the monitor retries with backoff.
     pub async fn bootstrap(&mut self) {
-        (self.services.mirror_state)(AcpWorkerReadinessState::Initializing);
+        (self.services.mirror_state)(WorkerReadinessState::Initializing);
         let handle = self.lock_transport().give_output();
         (self.services.publish_output)(handle);
 
@@ -168,11 +168,11 @@ impl AcpWorkerDriver {
         match bootstrap_result {
             Ok(runtime) => {
                 self.lock_transport().install_runtime(runtime);
-                (self.services.mirror_state)(AcpWorkerReadinessState::Available);
+                (self.services.mirror_state)(WorkerReadinessState::Available);
             }
             Err(error) => {
                 self.lock_transport().mark_runtime_unavailable();
-                (self.services.mirror_state)(AcpWorkerReadinessState::Unavailable);
+                (self.services.mirror_state)(WorkerReadinessState::Unavailable);
                 emit_inscription(
                     "relay.acp.worker.bootstrap_failed",
                     &json!({
@@ -317,7 +317,7 @@ async fn run_acp_respawn(
             return;
         }
         let backoff = respawn_state.advance();
-        (services.mirror_state)(AcpWorkerReadinessState::Recovering);
+        (services.mirror_state)(WorkerReadinessState::Recovering);
         emit_inscription(
             "relay.acp.respawn.triggered",
             &json!({
@@ -367,7 +367,7 @@ async fn run_acp_respawn(
                     .lock()
                     .expect("acp transport mutex poisoned")
                     .install_runtime(runtime);
-                (services.mirror_state)(AcpWorkerReadinessState::Available);
+                (services.mirror_state)(WorkerReadinessState::Available);
                 emit_inscription(
                     "relay.acp.respawn.succeeded",
                     &json!({
@@ -403,7 +403,7 @@ async fn run_acp_respawn(
                         .lock()
                         .expect("acp transport mutex poisoned")
                         .mark_runtime_unavailable();
-                    (services.mirror_state)(AcpWorkerReadinessState::Unavailable);
+                    (services.mirror_state)(WorkerReadinessState::Unavailable);
                     emit_inscription(
                         "relay.acp.respawn.permanent_failure",
                         &json!({
