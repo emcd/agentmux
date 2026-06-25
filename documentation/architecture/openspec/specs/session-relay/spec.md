@@ -1484,7 +1484,12 @@ Mapping SHALL include:
 ### Requirement: ACP Terminal Readiness Tracking
 
 Relay SHALL use ACP terminal completion signals from the background reader to
-maintain internal worker readiness state for scheduling.
+maintain worker readiness state for scheduling. The readiness state ACP
+maintains SHALL be the shared transport-neutral `WorkerReadinessState` recorded
+in the relay's transport-agnostic worker-readiness registry (see the
+transport-abstraction "Worker Readiness Interface" requirement); ACP is one
+populator of that registry, not the owner of a private readiness type. The
+transition triggers below remain ACP-specific.
 
 State model:
 
@@ -1524,6 +1529,14 @@ Sender-surface contract:
 - **WHEN** the ACP background reader thread exits (EOF, I/O error, or panic)
 - **THEN** relay marks worker state as `unavailable`
 - **AND** pending requests are drained with an error
+
+#### Scenario: ACP populates the shared worker-readiness registry
+
+- **WHEN** ACP records any readiness transition
+- **THEN** it writes a `WorkerReadinessState` value into the transport-agnostic
+  worker-readiness registry via `set_worker_readiness`
+- **AND** observers of `subscribe_worker_readiness` / `read_worker_readiness` see
+  the transition without any ACP-specific observer name
 
 ### Requirement: ACP Persistent Worker Lifecycle
 
