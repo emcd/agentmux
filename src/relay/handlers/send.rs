@@ -201,7 +201,6 @@ fn resolve_send_route_or_broadcast(
         .map(|member| RouteTarget {
             namespace: home_namespace.to_string(),
             session_id: Some(member.id.clone()),
-            relay_wide: false,
         })
         .collect();
     Ok(ResolvedRoute {
@@ -271,7 +270,6 @@ fn execute_send(
                 authenticated_identity: authenticated_identity.clone(),
                 all_target_sessions: all_recipient_sessions.clone(),
                 target_session: target.session_id.clone(),
-                relay_wide_target: target.relay_wide,
                 message: message.to_string(),
                 message_id: message_id.clone(),
                 quiescence,
@@ -344,12 +342,11 @@ struct DeliveryGroup {
     targets: Vec<ResolvedTarget>,
 }
 
-/// One validated target within a delivery group. `relay_wide` marks relay-wide
-/// (`@GLOBAL`) targets, whose registry key is re-derived from the suffix rather
-/// than from the group's bundle members.
+/// One validated target within a delivery group. Relay-wide (`@GLOBAL`) targets
+/// land in the synthetic `GLOBAL` group; the delivery layer re-derives their
+/// stream-vs-coder binding from the unified registry by canonical principal id.
 struct ResolvedTarget {
     session_id: String,
-    relay_wide: bool,
 }
 
 /// Reason a `@<bundle>` target could not be resolved to a delivery group.
@@ -380,7 +377,7 @@ fn assemble_delivery_groups(
 
     for target in route_targets {
         let session_id = target.session_id.as_deref().unwrap_or_default();
-        if target.relay_wide {
+        if target.is_relay_wide() {
             // Relay-wide `@GLOBAL` target: existence is a registered UI session,
             // resolved from the sender's (operator) authorization context.
             if has_ui_session(home_authorization, session_id) {
@@ -390,7 +387,6 @@ fn assemble_delivery_groups(
                     group_key.as_str(),
                     ResolvedTarget {
                         session_id: session_id.to_string(),
-                        relay_wide: true,
                     },
                 );
             } else {
@@ -420,7 +416,6 @@ fn assemble_delivery_groups(
                         namespace,
                         ResolvedTarget {
                             session_id: session_id.to_string(),
-                            relay_wide: false,
                         },
                     );
                 } else {

@@ -150,6 +150,38 @@ pub fn startup_bundle(
     lifecycle::startup_bundle(configuration_root, bundle_name, runtime_directory)
 }
 
+/// Registers the relay-wide principals declared in `users.toml` as static
+/// (offline) unified-registry entries at relay startup, so look/raww resolve
+/// their capabilities from the registry and a declared-but-disconnected principal
+/// is a known target rather than an unknown one.
+pub fn register_configured_relay_wide_principals(
+    configuration_root: &Path,
+) -> Result<(), RelayError> {
+    lifecycle::register_configured_relay_wide_principals(configuration_root)
+}
+
+/// Registers a bundle's configured members as static (offline) unified-registry
+/// shells without starting transports, for the process-only / `--no-autostart`
+/// host path where no startup or reconcile runs. Keeps the registry holding every
+/// configured principal before the relay serves requests.
+pub fn register_configured_bundle(
+    configuration_root: &Path,
+    bundle_name: &str,
+) -> Result<(), RelayError> {
+    lifecycle::register_configured_bundle(configuration_root, bundle_name)
+}
+
+/// Returns the canonical `principal_id`s currently registered in `namespace`,
+/// connected or not. Exposes the unified registry's membership so host startup
+/// paths (and embedders) can confirm that every configured principal is known —
+/// offline is a state, not absence — independent of transport readiness.
+pub fn registered_principal_ids(namespace: &str) -> Vec<String> {
+    stream::list_namespace_sessions(namespace)
+        .into_iter()
+        .map(|(principal_id, _session_type, _ready)| principal_id)
+        .collect()
+}
+
 /// Prunes managed sessions and reaps tmux server when safe during shutdown.
 ///
 /// # Errors

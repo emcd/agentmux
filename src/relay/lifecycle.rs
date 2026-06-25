@@ -4,13 +4,17 @@ use serde_json::json;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use crate::configuration::{BundleConfiguration, TargetConfiguration, load_bundle_configuration};
+use crate::configuration::{
+    BundleConfiguration, TargetConfiguration, load_bundle_configuration, load_tui_configuration,
+};
 use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 
+use super::identity::canonical_session_id;
 use super::startup_state::note_session_served_successfully;
+use super::stream::register_configured_session;
 use super::{
     BundleStartupReport, ListedSessionTransport, ReconciliationReport, RelayError, ShutdownReport,
-    StartupFailureRecord, map_config, relay_error,
+    StartupFailureRecord, map_config, map_tui_config, relay_error,
 };
 use crate::relay::authorization::{choices_pending_max, load_authorization_context};
 use crate::relay::delivery::initialize_acp_target_for_startup;
@@ -74,10 +78,85 @@ pub(super) fn startup_bundle(
     )
 }
 
+/// Registers the relay-wide principals declared in `users.toml` as static
+/// (offline) unified-registry entries at relay startup.
+///
+/// A declared relay-wide principal (e.g. an operator `@GLOBAL` UI session) is a
+/// known target whether or not it is connected: offline is a state, not absence.
+/// Registering it here lets look/raww resolve its capability from the registry —
+/// a declared-but-disconnected principal sorts as `validation_unsupported_operation`
+/// (capability gate) rather than `validation_unknown_target` — and a Hello later
+/// flips the same entry online. Absent `users.toml` is not an error.
+pub(super) fn register_configured_relay_wide_principals(
+    configuration_root: &Path,
+) -> Result<(), RelayError> {
+    let Some(users) = load_tui_configuration(configuration_root).map_err(map_tui_config)? else {
+        return Ok(());
+    };
+    for session in &users.sessions {
+        register_configured_session(session.id.as_str(), session.session_type).map_err(
+            |error| {
+                relay_error(
+                    "internal_unexpected_failure",
+                    "failed to register configured relay-wide principal in the unified registry",
+                    Some(json!({ "session_id": session.id, "cause": error.to_string() })),
+                )
+            },
+        )?;
+    }
+    Ok(())
+}
+
+/// Registers every configured member of `bundle` as a static (routing/capability)
+/// unified-registry entry, without starting any transport.
+///
+/// The registry must hold every known principal — offline is a state, not absence
+/// — so look/raww/list resolve a declared-but-not-yet-ready member from its entry
+/// rather than treating it as an unknown target. Re-registration is idempotent: it
+/// refreshes the static shell and preserves any stream state already attached by a
+/// live connection.
+pub(super) fn register_configured_bundle_principals(
+    bundle: &BundleConfiguration,
+) -> Result<(), RelayError> {
+    for member in &bundle.members {
+        register_configured_session(
+            canonical_session_id(member.id.as_str(), bundle.bundle_name.as_str()).as_str(),
+            member.target.session_type(),
+        )
+        .map_err(|error| {
+            relay_error(
+                "internal_unexpected_failure",
+                "failed to register configured session in the unified registry",
+                Some(json!({ "session_id": member.id, "cause": error.to_string() })),
+            )
+        })?;
+    }
+    Ok(())
+}
+
+/// Loads `bundle_name` and registers its configured members as static registry
+/// shells without starting transports.
+///
+/// Used by the process-only / `--no-autostart` host path, where no `startup` or
+/// `reconcile` runs: the registry still holds every configured principal before
+/// the relay begins serving, so a declared-but-offline member is a known target
+/// rather than an unknown one.
+pub(super) fn register_configured_bundle(
+    configuration_root: &Path,
+    bundle_name: &str,
+) -> Result<(), RelayError> {
+    let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
+    register_configured_bundle_principals(&bundle)
+}
+
 pub(super) fn reconcile_loaded_bundle(
     bundle: &BundleConfiguration,
     tmux_socket: &Path,
 ) -> Result<ReconciliationReport, RelayError> {
+    // Refresh the static registry shells for every configured member so the
+    // reconcile/`up` path keeps the unified registry complete (offline members
+    // included), independent of transport readiness.
+    register_configured_bundle_principals(bundle)?;
     let configured_sessions = bundle
         .members
         .iter()
@@ -167,6 +246,13 @@ fn startup_loaded_bundle(
     for session_name in stale_owned {
         prune_owned_session(tmux_socket, &session_name)?;
     }
+
+    // Register a static unified-registry entry for every configured member
+    // before attempting startup, so look/raww resolve the target's capabilities
+    // from the registry and an offline-but-declared principal is a known target
+    // (not an unknown one). The entries persist independently of transport
+    // readiness; a Hello later flips a member online.
+    register_configured_bundle_principals(bundle)?;
 
     let mut ready_session_count = 0usize;
     let mut failed_startups = Vec::<StartupFailureRecord>::new();

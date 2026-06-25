@@ -22,7 +22,9 @@ use uuid::Uuid;
 use crate::configuration::SessionType;
 use crate::runtime::inscriptions::emit_inscription;
 
-use super::identity::{PrincipalType, canonical_session_id, classify_principal_id, scope_permits};
+use super::identity::{
+    PrincipalType, canonical_session_id, classify_principal_id, scope_permits, split_principal_id,
+};
 use super::{RelayRequest, RelayResponse};
 
 // Bounded write timeout for relay-to-client writes. A stalled client whose
@@ -41,27 +43,38 @@ pub(super) struct HelloFrame {
     pub(super) identity_token: String,
 }
 
-/// Registry key for a live stream connection.
+/// How a unified registry entry came to exist.
 ///
-/// Session principals are keyed by `(namespace, session_id)` because their
-/// identity is bundle-local. Non-session principals (`@GLOBAL`, `@EXTERNAL`,
-/// `@RELAY`) are relay-wide and keyed by `principal_id` alone; a single relay
-/// socket serves every bundle, so these connections are not bundle-bound.
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub(super) enum RegistryKey {
-    Session {
-        namespace: String,
-        session_id: String,
-    },
-    RelayWide {
-        principal_id: String,
-    },
+/// Every entry — bundle coder session, UI session, or relay-wide principal — is
+/// keyed by canonical `principal_id`; the source records its lifecycle so
+/// eviction can decide whether to keep the entry's static shell after a stream
+/// disconnects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RegistrationSource {
+    /// Static entry for a configured principal — a bundle session, or a relay-wide
+    /// principal declared in `users.toml` — created at startup/reconcile. It
+    /// persists across stream (dis)connects (offline is a state, not absence) and
+    /// is removed only when its bundle is unloaded/reloaded (bundle sessions) or
+    /// the relay restarts.
+    Configured,
+    /// Dynamic entry created at stream Hello for a principal with no static
+    /// declaration (e.g. an application/relay principal, or a dynamically-created
+    /// principal). It is removed entirely when its connection drops, since it has
+    /// no static configuration to fall back on.
+    Stream,
 }
 
 /// Live registration handle returned to the connection worker.
 #[derive(Clone, Debug)]
 pub(super) struct StreamRegistration {
-    pub(super) key: RegistryKey,
+    /// Canonical `principal_id` key of the registry entry.
+    pub(super) principal_id: String,
+    /// Bound bundle namespace for session principals; `None` for relay-wide
+    /// principals, which carry no connection bundle binding.
+    bound_namespace: Option<String>,
+    /// Identity to attribute requests to: the bundle-local `session_id` for
+    /// session principals, or the full `principal_id` for relay-wide principals.
+    requester_session: String,
     pub(super) stream_id: String,
 }
 
@@ -70,19 +83,13 @@ impl StreamRegistration {
     /// `session_id` for session principals, or the full `principal_id` for
     /// relay-wide principals.
     pub(super) fn requester_session_id(&self) -> &str {
-        match &self.key {
-            RegistryKey::Session { session_id, .. } => session_id.as_str(),
-            RegistryKey::RelayWide { principal_id } => principal_id.as_str(),
-        }
+        self.requester_session.as_str()
     }
 
     /// Returns the bound bundle name for session principals; `None` for
     /// relay-wide principals, which carry no connection bundle binding.
     pub(super) fn namespace(&self) -> Option<&str> {
-        match &self.key {
-            RegistryKey::Session { namespace, .. } => Some(namespace.as_str()),
-            RegistryKey::RelayWide { .. } => None,
-        }
+        self.bound_namespace.as_deref()
     }
 }
 
@@ -155,10 +162,29 @@ pub(super) struct RelayStreamEvent {
     pub(super) payload: Value,
 }
 
+/// One entry in the unified namespace-keyed session registry.
+///
+/// The registry holds one entry per canonical `principal_id` regardless of
+/// whether the principal is a bundle coder session, a UI session, or a relay-wide
+/// principal. An entry is a routing/capabilities record: it carries the parsed
+/// identity attributes, the transport binding (from which capabilities are
+/// derived), and the runtime directory for coder-backed entries, plus the
+/// dynamic stream state (writer, revoke signal, verified identity) while a
+/// connection is attached. It deliberately stores no delivery-layer readiness
+/// state — readiness is owned by the delivery worker registry and resolved at
+/// read time.
 #[derive(Clone, Debug)]
 struct RegistryEntry {
-    stream_id: Option<String>,
+    principal_id: String,
+    session_id: String,
+    namespace: String,
+    principal_class: PrincipalType,
+    source: RegistrationSource,
+    /// Transport binding. Capability flags (`can_be_looked`, `can_be_written`,
+    /// `can_stream_output`, `can_give_choices`) are pure functions of this type
+    /// and are derived at check time rather than stored as duplicate bools.
     session_type: SessionType,
+    stream_id: Option<String>,
     writer: Option<SharedStreamWriter>,
     /// Verified `principal_id` of the connection, set only for store-backed
     /// credentials; `None` for socket-trust connections. Indexes the registry
@@ -173,30 +199,41 @@ struct RegistryEntry {
     scope: Option<String>,
 }
 
+impl RegistryEntry {
+    /// Whether a live stream connection is currently attached.
+    fn is_connected(&self) -> bool {
+        self.stream_id.is_some()
+            && self
+                .writer
+                .as_ref()
+                .is_some_and(|writer| !writer.is_closed())
+    }
+
+    /// Clears the dynamic stream state, leaving the static routing/capability
+    /// shell intact for a bundle-runtime entry to be reattached on reconnect.
+    fn clear_dynamic_state(&mut self) {
+        self.stream_id = None;
+        self.writer = None;
+        self.revoke = None;
+        self.authenticated_identity = None;
+        self.scope = None;
+    }
+}
+
 #[derive(Default)]
 struct StreamRegistry {
-    entries: Mutex<HashMap<RegistryKey, RegistryEntry>>,
+    entries: Mutex<HashMap<String, RegistryEntry>>,
 }
 
 static STREAM_REGISTRY: OnceLock<StreamRegistry> = OnceLock::new();
 
-/// Builds the registry key for a delivery target.
-///
-/// Non-session principals (`@GLOBAL`/`@EXTERNAL`/`@RELAY`) resolve to a
-/// relay-wide key; bare member ids and bundle-local sessions resolve to a
-/// `(namespace, session_id)` key.
-fn registry_key_for_target(namespace: &str, session_id: &str) -> RegistryKey {
-    match classify_principal_id(session_id) {
-        Some(PrincipalType::User | PrincipalType::Application | PrincipalType::Relay) => {
-            RegistryKey::RelayWide {
-                principal_id: session_id.to_string(),
-            }
-        }
-        _ => RegistryKey::Session {
-            namespace: namespace.to_string(),
-            session_id: session_id.to_string(),
-        },
-    }
+/// Parses a qualified `principal_id` into `(session_id, namespace, class)`.
+/// Returns `None` for an unqualified id, which the unified registry rejects:
+/// every live entry is keyed by a canonical, fully-qualified principal id.
+fn parse_principal_parts(principal_id: &str) -> Option<(String, String, PrincipalType)> {
+    let class = classify_principal_id(principal_id)?;
+    let (session_id, namespace) = split_principal_id(principal_id)?;
+    Some((session_id.to_string(), namespace.to_string(), class))
 }
 
 pub(super) fn parse_incoming_frame(line: &str) -> Result<IncomingFrame, io::Error> {
@@ -281,23 +318,81 @@ fn relay_connection_write_timeout() -> Duration {
         .unwrap_or(RELAY_CONNECTION_WRITE_TIMEOUT)
 }
 
+/// Registers (or refreshes) a static entry for a configured principal — a bundle
+/// session or a `users.toml`-declared relay-wide principal — keyed by canonical
+/// `principal_id`.
+///
+/// Called during startup/reconcile so a configured target has a registry entry
+/// before any client connects: look/raww resolve its capabilities from the entry,
+/// an offline-but-declared principal is a known target (not an unknown one), and
+/// a not-yet-ready coder target is not mistaken for an unknown one. The call is
+/// idempotent — a reconcile refreshes the static attributes while preserving any
+/// attached dynamic stream state. The `principal_id` must be fully qualified.
+pub(super) fn register_configured_session(
+    principal_id: &str,
+    session_type: SessionType,
+) -> Result<(), io::Error> {
+    let (session_id, namespace, principal_class) = parse_principal_parts(principal_id)
+        .ok_or_else(|| io::Error::other("configured principal_id is not qualified"))?;
+    let registry = stream_registry();
+    let mut entries = registry
+        .entries
+        .lock()
+        .map_err(|_| io::Error::other("failed to lock stream registry"))?;
+    match entries.get_mut(principal_id) {
+        Some(entry) => {
+            entry.source = RegistrationSource::Configured;
+            entry.session_type = session_type;
+            entry.namespace = namespace;
+            entry.session_id = session_id;
+            entry.principal_class = principal_class;
+        }
+        None => {
+            entries.insert(
+                principal_id.to_string(),
+                RegistryEntry {
+                    principal_id: principal_id.to_string(),
+                    session_id,
+                    namespace,
+                    principal_class,
+                    source: RegistrationSource::Configured,
+                    session_type,
+                    stream_id: None,
+                    writer: None,
+                    authenticated_identity: None,
+                    revoke: None,
+                    scope: None,
+                },
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Attaches dynamic stream state for a connecting principal to the unified
+/// registry, keyed by canonical `principal_id`.
+///
+/// A bundle coder session reuses its static entry (created at startup) and has
+/// its writer/revoke/identity attached; a relay-wide or UI principal that has no
+/// static entry gets a fresh dynamic entry. A second connection for an already
+/// live principal id surfaces the standard identity-claim conflict.
 pub(super) fn register_stream(
-    key: RegistryKey,
+    principal_id: &str,
     session_type: SessionType,
     writer: SharedStreamWriter,
     authenticated_identity: Option<String>,
     revoke: StreamRevokeSignal,
     scope: Option<String>,
 ) -> Result<RegisterStreamOutcome, io::Error> {
+    let (session_id, namespace, principal_class) = parse_principal_parts(principal_id)
+        .ok_or_else(|| io::Error::other("hello principal_id is not a qualified principal"))?;
     let registry = stream_registry();
     let mut entries = registry
         .entries
         .lock()
         .map_err(|_| io::Error::other("failed to lock stream registry"))?;
-    if let Some(entry) = entries.get(&key)
-        && entry.stream_id.is_some()
-        && let Some(existing_writer) = entry.writer.as_ref()
-        && !existing_writer.is_closed()
+    if let Some(entry) = entries.get(principal_id)
+        && entry.is_connected()
     {
         // A registry entry can briefly outlive its connection: when a client
         // drops and immediately reconnects, the owning connection task may not
@@ -310,19 +405,44 @@ pub(super) fn register_stream(
         });
     }
     let stream_id = Uuid::new_v4().to_string();
-    entries.insert(
-        key.clone(),
-        RegistryEntry {
-            stream_id: Some(stream_id.clone()),
-            session_type,
-            writer: Some(writer),
-            authenticated_identity,
-            revoke: Some(revoke),
-            scope,
-        },
-    );
+    match entries.get_mut(principal_id) {
+        Some(entry) => {
+            entry.stream_id = Some(stream_id.clone());
+            entry.session_type = session_type;
+            entry.writer = Some(writer);
+            entry.authenticated_identity = authenticated_identity;
+            entry.revoke = Some(revoke);
+            entry.scope = scope;
+        }
+        None => {
+            entries.insert(
+                principal_id.to_string(),
+                RegistryEntry {
+                    principal_id: principal_id.to_string(),
+                    session_id: session_id.clone(),
+                    namespace: namespace.clone(),
+                    principal_class,
+                    source: RegistrationSource::Stream,
+                    session_type,
+                    stream_id: Some(stream_id.clone()),
+                    writer: Some(writer),
+                    authenticated_identity,
+                    revoke: Some(revoke),
+                    scope,
+                },
+            );
+        }
+    }
+    let bound_namespace = (principal_class == PrincipalType::Session).then(|| namespace.clone());
+    let requester_session = if principal_class == PrincipalType::Session {
+        session_id
+    } else {
+        principal_id.to_string()
+    };
     Ok(RegisterStreamOutcome::Registered(StreamRegistration {
-        key,
+        principal_id: principal_id.to_string(),
+        bound_namespace,
+        requester_session,
         stream_id,
     }))
 }
@@ -344,45 +464,63 @@ pub(super) fn registration_is_current(
         .lock()
         .map_err(|_| io::Error::other("failed to lock stream registry"))?;
     Ok(entries
-        .get(&registration.key)
+        .get(registration.principal_id.as_str())
         .is_some_and(|entry| entry.stream_id.as_deref() == Some(registration.stream_id.as_str())))
 }
 
+/// Detaches the dynamic stream state for a dropped connection. A bundle-runtime
+/// entry keeps its static shell so a reconnect reattaches; a purely dynamic
+/// (relay-wide / UI) entry is removed entirely.
 pub(super) fn unregister_stream(registration: &StreamRegistration) -> Result<(), io::Error> {
     let registry = stream_registry();
     let mut entries = registry
         .entries
         .lock()
         .map_err(|_| io::Error::other("failed to lock stream registry"))?;
-    if let Some(entry) = entries.get_mut(&registration.key)
+    if let Some(entry) = entries.get_mut(registration.principal_id.as_str())
         && entry
             .stream_id
             .as_deref()
             .is_some_and(|stream_id| stream_id == registration.stream_id.as_str())
     {
-        entry.stream_id = None;
-        entry.writer = None;
-        entry.revoke = None;
+        if entry.source == RegistrationSource::Stream {
+            entries.remove(registration.principal_id.as_str());
+        } else {
+            entry.clear_dynamic_state();
+        }
     }
     Ok(())
 }
 
-/// Tears down every live stream entry the `selector` matches, writing
-/// `response` to each before signalling its read loop to close.
+/// Whether to remove a matched entry entirely during eviction, or only detach
+/// its dynamic stream state and keep any static bundle-runtime shell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EvictionScope {
+    /// Remove only purely dynamic (`Stream`-source) entries; keep bundle-runtime
+    /// shells so the configured session can reconnect. Used by credential
+    /// revocation.
+    DropStreamSourceOnly,
+    /// Remove every matched entry, static or dynamic. Used by bundle
+    /// unload/reload, where the configuration itself is gone.
+    DropEntry,
+}
+
+/// Tears down every live stream entry the `selector` matches, writing `response`
+/// to each before signalling its read loop to close, then applies `removal` to
+/// decide whether the entry is removed or only detached.
 ///
 /// This is the single session-eviction mechanism shared by credential
 /// revocation (matched by verified `authenticated_identity`) and bundle
-/// unload/reload (matched by bound bundle name). The registry entry is evicted
+/// unload/reload (matched by namespace). The dynamic stream state is detached
 /// before the teardown signal fires so a reconnect is not wedged into an
 /// identity-claim conflict against the dying connection. The connection's writer
 /// task drains its queue (flushing the `response` frame) before exiting, so the
 /// client observes the typed error frame ahead of EOF. Writers and teardown
 /// signals are collected under the registry lock and acted on after it is
-/// released. Returns the number of connections torn down. An entry without a
-/// live writer/teardown signal is already disconnected and is never matched.
-fn evict_streams<F>(selector: F, response: &RelayResponse) -> usize
+/// released. Returns the number of connections torn down.
+fn evict_streams<F>(selector: F, response: &RelayResponse, removal: EvictionScope) -> usize
 where
-    F: Fn(&RegistryKey, &RegistryEntry) -> bool,
+    F: Fn(&RegistryEntry) -> bool,
 {
     let registry = stream_registry();
     let targets = {
@@ -390,17 +528,25 @@ where
             return 0;
         };
         let mut targets = Vec::new();
+        let mut to_remove = Vec::new();
         for (key, entry) in entries.iter_mut() {
-            if !selector(key, entry) {
+            if !selector(entry) {
                 continue;
             }
-            let (Some(writer), Some(revoke)) = (entry.writer.clone(), entry.revoke.clone()) else {
-                continue;
+            if let (Some(writer), Some(revoke)) = (entry.writer.clone(), entry.revoke.clone()) {
+                entry.clear_dynamic_state();
+                targets.push((writer, revoke));
+            }
+            let remove = match removal {
+                EvictionScope::DropEntry => true,
+                EvictionScope::DropStreamSourceOnly => entry.source == RegistrationSource::Stream,
             };
-            entry.stream_id = None;
-            entry.writer = None;
-            entry.revoke = None;
-            targets.push((writer, revoke));
+            if remove {
+                to_remove.push(key.clone());
+            }
+        }
+        for key in to_remove {
+            entries.remove(&key);
         }
         targets
     };
@@ -422,29 +568,30 @@ where
 /// `principal_id`. Used by `change psk` to revoke a rotated credential: a
 /// connection that authenticated with the old credential is force-disconnected.
 /// Socket-trust connections carry no `authenticated_identity` and are never
-/// matched: they hold no credential to revoke. Returns the number torn down.
+/// matched: they hold no credential to revoke. A bundle-runtime entry keeps its
+/// static shell for a reconnect with the new credential; a relay-wide entry is
+/// removed. Returns the number torn down.
 pub(super) fn revoke_streams_for_identity(principal_id: &str, response: &RelayResponse) -> usize {
     evict_streams(
-        |_key, entry| entry.authenticated_identity.as_deref() == Some(principal_id),
+        |entry| entry.authenticated_identity.as_deref() == Some(principal_id),
         response,
+        EvictionScope::DropStreamSourceOnly,
     )
 }
 
-/// Tears down every live session connection bound to `namespace`. Used by the
-/// bundle file watcher when a bundle is unloaded (file removed) or reloaded
-/// (file modified): each affected session receives the supplied typed error
-/// frame (`runtime_bundle_unloaded` / `runtime_bundle_reloaded`) ahead of EOF.
-/// Relay-wide principals (`@GLOBAL`/`@EXTERNAL`/`@RELAY`) are never bundle-bound
-/// and are left untouched. Returns the number of connections torn down.
+/// Evicts every registry entry in `namespace`. Used by the bundle file watcher
+/// when a bundle is unloaded (file removed) or reloaded (file modified): each
+/// connected session receives the supplied typed error frame
+/// (`runtime_bundle_unloaded` / `runtime_bundle_reloaded`) ahead of EOF, and
+/// both static and dynamic entries for the namespace are removed so a reload
+/// recreates them from the current configuration. Relay-wide principals
+/// (`@GLOBAL`/`@EXTERNAL`/`@RELAY`) live in their own reserved namespaces and are
+/// never matched. Returns the number of connections torn down.
 pub(super) fn evict_streams_for_bundle(namespace: &str, response: &RelayResponse) -> usize {
     evict_streams(
-        |key, _entry| {
-            matches!(
-                key,
-                RegistryKey::Session { namespace: bound, .. } if bound == namespace
-            )
-        },
+        |entry| entry.namespace == namespace,
         response,
+        EvictionScope::DropEntry,
     )
 }
 
@@ -471,17 +618,17 @@ pub(super) fn notify_trusted_hosts_of_revocation(
             return 0;
         };
         let mut targets = Vec::new();
-        for (key, entry) in entries.iter() {
+        for entry in entries.values() {
             let Some(writer) = entry.writer.clone() else {
                 continue;
             };
             if !scope_permits(entry.scope.as_deref(), revoked_principal_id) {
                 continue;
             }
-            let RegistryKey::RelayWide { principal_id } = key else {
+            if !is_relay_wide(entry.principal_class) {
                 continue;
-            };
-            targets.push((writer, principal_id.clone()));
+            }
+            targets.push((writer, entry.principal_id.clone()));
         }
         targets
     };
@@ -501,6 +648,39 @@ pub(super) enum StreamEventSendOutcome {
     Disconnected,
 }
 
+/// Whether a principal class is relay-wide (not bundle-bound): a `User`,
+/// `Application`, or `Relay` principal in a reserved namespace.
+fn is_relay_wide(principal_class: PrincipalType) -> bool {
+    matches!(
+        principal_class,
+        PrincipalType::User | PrincipalType::Application | PrincipalType::Relay
+    )
+}
+
+/// Reports whether the registry entry for `principal_id` is a relay-wide
+/// principal, or `None` when no entry exists yet (e.g. a relay-wide target that
+/// has not sent a Hello). The delivery layer uses this to decide stream-vs-coder
+/// delivery from the unified registry rather than a carried flag, falling back to
+/// namespace classification when the entry is absent.
+pub(in crate::relay) fn registry_target_is_relay_wide(principal_id: &str) -> Option<bool> {
+    let registry = stream_registry();
+    let entries = registry.entries.lock().ok()?;
+    entries
+        .get(principal_id)
+        .map(|entry| is_relay_wide(entry.principal_class))
+}
+
+/// Returns the transport binding (`SessionType`) of the registry entry for
+/// `principal_id`, or `None` when no entry exists. The target operations use this
+/// to resolve a target's advertised capabilities from the unified registry: a
+/// registered target gates on its `SessionType` capabilities, an unregistered one
+/// is an unknown target.
+pub(super) fn lookup_registry_session_type(principal_id: &str) -> Option<SessionType> {
+    let registry = stream_registry();
+    let entries = registry.entries.lock().ok()?;
+    entries.get(principal_id).map(|entry| entry.session_type)
+}
+
 // Returns the ids of UI-class subscribers that should receive events for the
 // bundle: bundle-local UI sessions plus every relay-wide UI principal (which
 // receives events across all bundles). Session ids are returned for
@@ -512,45 +692,44 @@ pub(super) fn list_registered_ui_sessions_for_bundle(namespace: &str) -> Vec<Str
         return Vec::new();
     };
     entries
-        .iter()
-        .filter_map(|(key, entry)| {
+        .values()
+        .filter_map(|entry| {
             if entry.session_type != SessionType::Ui {
                 return None;
             }
             entry.writer.as_ref()?;
-            match key {
-                RegistryKey::Session {
-                    namespace: entry_bundle,
-                    session_id,
-                } if entry_bundle == namespace => Some(session_id.clone()),
-                RegistryKey::RelayWide { principal_id } => Some(principal_id.clone()),
-                RegistryKey::Session { .. } => None,
+            if is_relay_wide(entry.principal_class) {
+                Some(entry.principal_id.clone())
+            } else if entry.namespace == namespace {
+                Some(entry.session_id.clone())
+            } else {
+                None
             }
         })
         .collect()
 }
 
-// Returns the `(principal_id, session_type)` of every currently registered
-// relay-wide session (`RegistryKey::RelayWide`). Used by the `GLOBAL` namespace
-// list to enumerate relay-wide principals (`@GLOBAL` operators, and any other
-// non-session principals) regardless of bundle. Only live entries (those whose
-// connection still holds a writer) are returned; an entry whose connection has
-// dropped is left out.
-pub(super) fn list_registered_relay_wide_sessions() -> Vec<(String, SessionType)> {
+// Returns the `(principal_id, session_type, ready)` of every registered principal
+// in `namespace`, connected or not. Used by the namespace `list` path (notably
+// `GLOBAL`) to enumerate every known principal over the unified registry —
+// including declared-but-offline entries — rather than a dedicated relay-wide
+// listing. `ready` reflects whether the entry currently holds a live stream
+// connection: a relay-wide principal is ready iff online, and a declared-but-
+// offline principal is listed with `ready = false` rather than omitted.
+pub(super) fn list_namespace_sessions(namespace: &str) -> Vec<(String, SessionType, bool)> {
     let registry = stream_registry();
     let Ok(entries) = registry.entries.lock() else {
         return Vec::new();
     };
     entries
-        .iter()
-        .filter_map(|(key, entry)| {
-            entry.writer.as_ref()?;
-            match key {
-                RegistryKey::RelayWide { principal_id } => {
-                    Some((principal_id.clone(), entry.session_type))
-                }
-                RegistryKey::Session { .. } => None,
-            }
+        .values()
+        .filter(|entry| entry.namespace == namespace)
+        .map(|entry| {
+            (
+                entry.principal_id.clone(),
+                entry.session_type,
+                entry.is_connected(),
+            )
         })
         .collect()
 }
@@ -585,13 +764,13 @@ pub(super) fn send_event_to_registered_ui(
     event: &RelayStreamEvent,
 ) -> Result<StreamEventSendOutcome, io::Error> {
     let registry = stream_registry();
-    let key = registry_key_for_target(namespace, session_id);
+    let principal_id = canonical_session_id(session_id, namespace);
     let (session_type, writer) = {
         let entries = registry
             .entries
             .lock()
             .map_err(|_| io::Error::other("failed to lock stream registry"))?;
-        let Some(entry) = entries.get(&key) else {
+        let Some(entry) = entries.get(principal_id.as_str()) else {
             return Ok(StreamEventSendOutcome::NoUiEndpoint);
         };
         (entry.session_type, entry.writer.clone())
@@ -609,10 +788,8 @@ pub(super) fn send_event_to_registered_ui(
         .entries
         .lock()
         .map_err(|_| io::Error::other("failed to lock stream registry"))?;
-    if let Some(entry) = entries.get_mut(&key) {
-        entry.stream_id = None;
-        entry.writer = None;
-        entry.revoke = None;
+    if let Some(entry) = entries.get_mut(principal_id.as_str()) {
+        entry.clear_dynamic_state();
     }
     Ok(StreamEventSendOutcome::Disconnected)
 }

@@ -28,6 +28,7 @@ use super::super::choice_state::{
 use super::super::quiescence::QUIESCENCE_TIMEOUT_MS_DEFAULT;
 use super::payload::{
     build_delivery_message, emit_envelope_metadata_inscription, resolve_target_member,
+    target_is_relay_wide,
 };
 use crate::transports::{
     AcpDriverServices, ChoiceMade, ChoiceToMake, Chooser, DeliveryEnvelope, DeliveryMessage,
@@ -274,7 +275,7 @@ fn build_worker_transport(
     key: &AsyncWorkerKey,
     batch_settings: PromptBatchSettings,
 ) -> Result<TransportImpl, RelayError> {
-    if task.relay_wide_target {
+    if target_is_relay_wide(task) {
         return Ok(TransportImpl::ui(build_ui_transport_services(key)));
     }
     let target_member =

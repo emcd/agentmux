@@ -6,7 +6,7 @@ use std::{
 };
 
 use agentmux::{
-    relay::reconcile_bundle,
+    relay::{reconcile_bundle, registered_principal_ids},
     runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory},
 };
 use tempfile::TempDir;
@@ -298,4 +298,58 @@ fn reconciliation_prunes_stale_owned_sessions_without_killing_non_owned_sessions
     );
     let sessions = String::from_utf8_lossy(&list.stdout);
     assert!(sessions.lines().any(|line| line.trim() == "alpha"));
+}
+
+#[test]
+fn reconciliation_registers_configured_members_in_unified_registry() {
+    if !tmux_available() {
+        eprintln!("skipping reconciliation test because tmux is unavailable");
+        return;
+    }
+
+    let temporary = TempDir::new().expect("temporary");
+    // Unique bundle namespace keeps the assertion stable under the process-wide
+    // registry shared across parallel integration tests.
+    let bundle_name = "reconcile_registry_party";
+    let config_root = write_bundle_configuration(
+        temporary.path(),
+        bundle_name,
+        &[CoderSpec {
+            id: "default".to_string(),
+            initial_command: "sh -lc 'exec sleep 45'".to_string(),
+            resume_command: "sh -lc 'exec sleep 45'".to_string(),
+        }],
+        &[
+            SessionSpec {
+                id: "alpha".to_string(),
+                name: "alpha".to_string(),
+                directory: temporary.path().to_path_buf(),
+                coder: "default".to_string(),
+            },
+            SessionSpec {
+                id: "bravo".to_string(),
+                name: "bravo".to_string(),
+                directory: temporary.path().to_path_buf(),
+                coder: "default".to_string(),
+            },
+        ],
+    );
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
+    let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
+
+    reconcile_bundle(&config_root, bundle_name, &paths.tmux_socket).expect("bundle reconciliation");
+
+    // The reconcile/`up` path registers every configured member as a static
+    // registry shell, so the unified registry holds them regardless of transport
+    // readiness.
+    let ids = registered_principal_ids(bundle_name);
+    assert!(
+        ids.iter().any(|id| id == &format!("alpha@{bundle_name}")),
+        "reconcile registers configured member alpha in the unified registry"
+    );
+    assert!(
+        ids.iter().any(|id| id == &format!("bravo@{bundle_name}")),
+        "reconcile registers configured member bravo in the unified registry"
+    );
 }

@@ -676,13 +676,16 @@ fn look_allows_zero_offset_for_tmux_target() {
 
 #[test]
 fn look_rejects_relay_wide_target_as_unsupported_operation() {
-    // A relay-wide (`@GLOBAL`) target resolves through routing; the rejection
-    // is the capability gate on its configured session type (`ui` carries
-    // `can_be_looked = false`), reported with the target id and the failed
-    // capability flag so the diagnostic is actionable.
+    // A declared relay-wide (`@GLOBAL`) principal is registered offline in the
+    // unified registry at startup; look resolves its capability from that entry
+    // (`ui` carries `can_be_looked = false`) whether or not it is connected,
+    // reported with the target id and the failed capability flag so the
+    // diagnostic is actionable.
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     write_tui_configuration(&config_root, "default");
+    agentmux::relay::register_configured_relay_wide_principals(&config_root)
+        .expect("register declared relay-wide principals");
     let tmux_socket = temporary.path().join("tmux.sock");
 
     let response = dispatch_request(

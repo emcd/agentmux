@@ -18,14 +18,12 @@ use super::super::routing::{
     Addressing, Capability, OperationProfile, ResolvedRoute, requester_home_namespace,
     resolve_look_route,
 };
+use super::super::stream::lookup_registry_session_type;
 use super::super::{
     RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION, bare_session_id,
     canonical_session_id, relay_error, unsupported_operation,
 };
-use super::routed::{
-    load_home_context, relay_wide_operation_unimplemented, resolve_relay_wide_target_session_type,
-    resolve_target_bundle, run_target_operation,
-};
+use super::routed::{load_home_context, resolve_target_bundle, run_target_operation};
 use super::sender::resolve_sender_in_namespace;
 
 /// Shared upper bound on the caller-supplied look window, validated before
@@ -154,22 +152,24 @@ fn prepare_look(
         .session_id
         .as_deref()
         .expect("look target carries a session id");
-    if target_route.relay_wide {
-        // A relay-wide target has no bundle membership; its capability derives
-        // from the declared session type in the global users configuration.
-        let session_type =
-            resolve_relay_wide_target_session_type(configuration_root, target_session_id)?;
-        if !session_type.can_be_looked() {
-            return Err(unsupported_operation(
-                target_session_id,
-                session_type,
-                "can_be_looked",
+    if target_route.is_relay_wide() {
+        // A relay-wide principal is delivered as a stream, not a coder session, so
+        // it is never a look target. Capability comes from its unified registry
+        // entry (declared `users.toml` principals are registered offline at
+        // startup): a registered principal sorts as `unsupported_operation` (its
+        // transport carries `can_be_looked = false`), an unregistered one as
+        // `unknown_target`.
+        let Some(session_type) = lookup_registry_session_type(target_session_id) else {
+            return Err(relay_error(
+                "validation_unknown_target",
+                "target_session is not a registered principal",
+                Some(json!({ "target_session": target_session_id })),
             ));
-        }
-        return Err(relay_wide_operation_unimplemented(
-            "look",
+        };
+        return Err(unsupported_operation(
             target_session_id,
             session_type,
+            "can_be_looked",
         ));
     }
     let (bundle, runtime_directory) = resolve_target_bundle(
@@ -193,10 +193,15 @@ fn prepare_look(
             })),
         ));
     };
-    let session_type = member.target.session_type();
+    // Capability comes from the target's unified registry entry (a configured
+    // session is registered statically at startup); a not-yet-registered member
+    // falls back to its configured transport, which derives the same flags.
+    let target_principal = canonical_session_id(target_session_id, target_namespace);
+    let session_type = lookup_registry_session_type(target_principal.as_str())
+        .unwrap_or_else(|| member.target.session_type());
     if !session_type.can_be_looked() {
         return Err(unsupported_operation(
-            canonical_session_id(target_session_id, target_namespace).as_str(),
+            target_principal.as_str(),
             session_type,
             "can_be_looked",
         ));

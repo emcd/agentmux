@@ -31,10 +31,9 @@ use super::identity::{
     verify_hello_credential,
 };
 use super::stream::{
-    HelloFrame, IncomingFrame, OutgoingFrame, RegisterStreamOutcome, RegistryKey,
-    SharedStreamWriter, StreamRegistration, StreamRevokeSignal, parse_incoming_frame,
-    register_stream, registration_is_current, spawn_stream_writer, unregister_stream,
-    write_stream_frame_to_writer,
+    HelloFrame, IncomingFrame, OutgoingFrame, RegisterStreamOutcome, SharedStreamWriter,
+    StreamRegistration, StreamRevokeSignal, parse_incoming_frame, register_stream,
+    registration_is_current, spawn_stream_writer, unregister_stream, write_stream_frame_to_writer,
 };
 use super::{
     RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
@@ -236,7 +235,8 @@ impl Drop for RegistrationGuard {
 /// Connection-level binding established from a verified Hello identity.
 struct HelloBinding {
     session_type: SessionType,
-    key: RegistryKey,
+    /// Canonical `principal_id` of the connecting principal; the registry key.
+    principal_id: String,
     /// Bound bundle for session principals; `None` for relay-wide principals,
     /// whose requests must carry an explicit target bundle.
     bound_bundle: Option<BundleRuntimePaths>,
@@ -366,7 +366,7 @@ async fn serve_connection_frames(
                     .as_ref()
                     .and_then(|rights| rights.scope.clone());
                 match register_stream(
-                    binding.key.clone(),
+                    binding.principal_id.as_str(),
                     binding.session_type,
                     writer.clone(),
                     connection_identity.clone(),
@@ -914,12 +914,11 @@ fn emit_registration_choices_snapshots(
     bundle_catalog: &BundleCatalog,
     binding: &HelloBinding,
 ) -> Result<(), RelayError> {
-    match &binding.key {
-        RegistryKey::Session {
-            session_id,
-            namespace,
-        } => {
-            if let Some(bundle_paths) = binding.bound_bundle.as_ref() {
+    match binding.bound_bundle.as_ref() {
+        // Session principal: emit the snapshot for its bound bundle.
+        Some(bundle_paths) => {
+            if let Some((session_id, namespace)) = split_principal_id(binding.principal_id.as_str())
+            {
                 handlers::emit_choices_snapshot_for_ui_registration(
                     configuration_root,
                     namespace,
@@ -928,13 +927,16 @@ fn emit_registration_choices_snapshots(
                 )?;
             }
         }
-        RegistryKey::RelayWide { principal_id } => {
+        // Relay-wide principal: not bundle-bound, so replay every configured
+        // bundle's snapshot — a global operator sees pending requests across the
+        // whole relay on (re)connect.
+        None => {
             for bundle_paths in bundle_catalog.snapshot() {
                 handlers::emit_choices_snapshot_for_ui_registration(
                     configuration_root,
                     &bundle_paths.bundle_name,
                     &bundle_paths.runtime_directory,
-                    principal_id,
+                    binding.principal_id.as_str(),
                 )?;
             }
         }
@@ -1001,10 +1003,7 @@ fn resolve_hello_binding(
                 resolve_bundle_member_session_type(configuration_root, namespace, session_id)?;
             Ok(HelloBinding {
                 session_type,
-                key: RegistryKey::Session {
-                    namespace: namespace.to_string(),
-                    session_id: session_id.to_string(),
-                },
+                principal_id: hello.principal_id.clone(),
                 bound_bundle: Some(bundle_paths),
                 store_backed,
                 introspect_rights,
@@ -1015,9 +1014,7 @@ fn resolve_hello_binding(
                 resolve_global_user_session_type(configuration_root, hello.principal_id.as_str())?;
             Ok(HelloBinding {
                 session_type,
-                key: RegistryKey::RelayWide {
-                    principal_id: hello.principal_id.clone(),
-                },
+                principal_id: hello.principal_id.clone(),
                 bound_bundle: None,
                 store_backed,
                 introspect_rights,
@@ -1025,9 +1022,7 @@ fn resolve_hello_binding(
         }
         PrincipalType::Application | PrincipalType::Relay => Ok(HelloBinding {
             session_type: SessionType::Pubsub,
-            key: RegistryKey::RelayWide {
-                principal_id: hello.principal_id.clone(),
-            },
+            principal_id: hello.principal_id.clone(),
             bound_bundle: None,
             store_backed,
             introspect_rights,
