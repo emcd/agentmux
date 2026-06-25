@@ -22,7 +22,7 @@ pub(super) fn resolve_target_member(
         .members
         .iter()
         .find(|member| member.id == task.target_session);
-    if target_member.is_none() && !task.relay_wide_target {
+    if target_member.is_none() && !target_is_relay_wide(task) {
         return Err(super::super::super::relay_error(
             "internal_unexpected_failure",
             "resolved target member is missing from bundle configuration",
@@ -30,6 +30,21 @@ pub(super) fn resolve_target_member(
         ));
     }
     Ok(target_member)
+}
+
+/// Whether a delivery task targets a relay-wide principal (delivered via the UI
+/// stream by principal id) rather than a bundle coder. Derived from the unified
+/// registry's binding for the target, falling back to namespace classification
+/// when the relay-wide principal has no entry yet (not yet connected). This
+/// replaces the `relay_wide_target` flag that the route used to carry through the
+/// delivery task.
+pub(super) fn target_is_relay_wide(task: &AsyncDeliveryTask) -> bool {
+    let principal = canonical_session_id(
+        task.target_session.as_str(),
+        task.bundle.bundle_name.as_str(),
+    );
+    super::super::super::stream::registry_target_is_relay_wide(principal.as_str())
+        .unwrap_or_else(|| task.bundle.bundle_name == super::super::super::GLOBAL_NAMESPACE)
 }
 
 /// Builds the structured, transport-neutral [`DeliveryMessage`] for one task from

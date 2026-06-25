@@ -84,27 +84,30 @@ pub(in crate::relay) fn handle_request(
     }
 }
 
-/// Returns the set of currently registered sessions in namespace `GLOBAL` for a
-/// `List` request issued with `namespace = "GLOBAL"`.
+/// Returns every principal registered in namespace `GLOBAL` for a `List` request
+/// issued with `namespace = "GLOBAL"`.
 ///
 /// `GLOBAL` is a namespace in the unified registry like any bundle namespace, so
-/// this filters the registry for entries whose namespace is `GLOBAL` rather than
-/// reading a dedicated relay-wide path. The result is shaped as a
-/// `RelayResponse::List` over a synthetic `GLOBAL` bundle view so clients reuse
-/// the existing list payload. An empty result yields an empty session set (a
-/// `down` bundle), not an error.
+/// this enumerates every entry whose namespace is `GLOBAL` — including declared-
+/// but-offline principals — rather than reading a dedicated relay-wide path. Each
+/// principal's `ready` flag is computed at read time from the entry's connection
+/// state, so an offline declared principal is listed with `ready = false` instead
+/// of being omitted. The result is shaped as a `RelayResponse::List` over a
+/// synthetic `GLOBAL` bundle view so clients reuse the existing list payload; the
+/// bundle is `hosted`/`up` iff at least one principal is ready. An empty registry
+/// yields an empty session set (a `down` bundle), not an error.
 pub(in crate::relay) fn handle_global_list() -> RelayResponse {
     let mut sessions = list_namespace_sessions(GLOBAL_NAMESPACE)
         .into_iter()
-        .map(|(principal_id, session_type)| ListedSession {
+        .map(|(principal_id, session_type, ready)| ListedSession {
             id: principal_id,
             name: None,
             transport: session_type.into(),
-            ready: true,
+            ready,
         })
         .collect::<Vec<_>>();
     sessions.sort_by(|left, right| left.id.cmp(&right.id));
-    let hosted = !sessions.is_empty();
+    let hosted = sessions.iter().any(|session| session.ready);
     let state = if hosted {
         ListedBundleState::Up
     } else {

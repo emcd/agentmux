@@ -1,73 +1,81 @@
 ## 1. Registry Model
 
-- [ ] 1.1 Replace `RegistryKey` with canonical `principal_id` string keys in
+- [x] 1.1 Replace `RegistryKey` with canonical `principal_id` string keys in
       `src/relay/stream.rs`.
-- [ ] 1.2 Add a unified registry entry shape carrying namespace, bare session id,
+- [x] 1.2 Add a unified registry entry shape carrying namespace, bare session id,
       principal class, registration source, transport/runtime binding,
       authenticated identity, revoke signal, writer, and transport capability
       flags. The entry is a routing/capabilities record and SHALL NOT carry
-      delivery-layer readiness state (owned by `AsyncWorkerEntry`).
-- [ ] 1.3 Add canonical-principal helper functions that fail fast for unqualified
+      delivery-layer readiness state (owned by `AsyncWorkerEntry`). (Capabilities
+      are derived from the `SessionType` binding at check time, not stored as
+      duplicate fields; the coder runtime directory is carried on the delivery
+      route, not the entry.)
+- [x] 1.3 Add canonical-principal helper functions that fail fast for unqualified
       or non-canonical registry keys.
 
 ## 2. Registration And Lifecycle
 
-- [ ] 2.1 Register static bundle-runtime coder entries during startup/reconcile,
+- [x] 2.1 Register static bundle-runtime coder entries during startup/reconcile,
       including runtime directory, transport binding, session type, and
       capability flags. Do not store readiness state on the entry; readiness is
-      resolved from `AsyncWorkerEntry` at read time when needed.
-- [ ] 2.2 Update stream hello registration to create or attach dynamic stream
+      resolved from `AsyncWorkerEntry` at read time when needed. (Extended to
+      register every configured member, and `users.toml`-declared relay-wide
+      principals at startup, as offline entries — offline is a state, not
+      absence.)
+- [x] 2.2 Update stream hello registration to create or attach dynamic stream
       state for bundle sessions and relay-wide sessions.
-- [ ] 2.3 Update bundle unload/reload eviction to filter entries by namespace
+- [x] 2.3 Update bundle unload/reload eviction to filter entries by namespace
       rather than by `RegistryKey::Session`.
-- [ ] 2.4 Update credential revocation and identity-event fan-out to scan unified
+- [x] 2.4 Update credential revocation and identity-event fan-out to scan unified
       entries by authenticated identity and principal class.
-- [ ] 2.5 Preserve identity-claim collision behavior for reconnects to the same
+- [x] 2.5 Preserve identity-claim collision behavior for reconnects to the same
       canonical `principal_id`.
 
 ## 3. Operation Integration
 
-- [ ] 3.1 Replace `handle_global_list` in
+- [x] 3.1 Replace `handle_global_list` in
       `src/relay/handlers/dispatch.rs` and
       `list_registered_relay_wide_sessions` in `src/relay/stream.rs` with
       namespace-filtered list handling over the unified registry. Any per-session
       ready flag in the `list` response is computed at list-generation time from
       the delivery worker registry (`AsyncWorkerEntry`), not stored on the entry.
-- [ ] 3.2 Update send delivery assembly to resolve target registry entries by
+- [x] 3.2 Update send delivery assembly to resolve target registry entries by
       canonical `principal_id` and derive coder-vs-stream delivery from each
       entry's transport binding instead of carrying relay-wide target flags.
-- [ ] 3.3 Update look and raww preparation to read target capabilities from the
+- [x] 3.3 Update look and raww preparation to read target capabilities from the
       unified entry while preserving capability-before-authorization precedence
       and current unavailable/stale behavior for configured-but-not-ready coder
       targets.
-- [ ] 3.4 Remove `resolve_relay_wide_target_session_type` and
+- [x] 3.4 Remove `resolve_relay_wide_target_session_type` and
       `relay_wide_operation_unimplemented` from `src/relay/handlers/routed.rs`
       once operation support is determined from entry capabilities.
-- [ ] 3.5 Update `src/relay/delivery/async_worker.rs`,
+- [x] 3.5 Update `src/relay/delivery/async_worker.rs`,
       `src/relay/delivery/dispatch/worker.rs`, and
       `src/relay/delivery/dispatch/payload.rs` to consume registry-provided
       transport/runtime binding for coder and stream-delivered targets.
 
 ## 4. Cleanup
 
-- [ ] 4.1 Remove `RegistryKey::RelayWide`, `RegistryKey::Session`, and helpers
+- [x] 4.1 Remove `RegistryKey::RelayWide`, `RegistryKey::Session`, and helpers
       that exist only to translate between the two key shapes.
-- [ ] 4.2 Remove `relay_wide_target` and `ResolvedTarget.relay_wide` fields after
+- [x] 4.2 Remove `relay_wide_target` and `ResolvedTarget.relay_wide` fields after
       delivery and payload paths derive stream-delivered versus coder-delivered
       behavior from registry entry transport binding.
-- [ ] 4.3 Update `src/relay/README.md` and relevant module comments to describe
+- [x] 4.3 Update `src/relay/README.md` and relevant module comments to describe
       the unified namespace-keyed registry.
 
 ## 5. Tests And Validation
 
-- [ ] 5.1 Add/update registry unit tests for canonical keying, duplicate
+- [x] 5.1 Add/update registry unit tests for canonical keying, duplicate
       registration rejection, namespace-filtered enumeration, and lifecycle
-      eviction.
-- [ ] 5.2 Add/update integration tests for `GLOBAL` list, bundle list, send to
+      eviction. (The registry primitives are crate-internal; coverage is via
+      public-interface tests — identity-claim collision, GLOBAL list, bundle
+      watcher eviction — plus the updated relay-wide capability tests.)
+- [x] 5.2 Add/update integration tests for `GLOBAL` list, bundle list, send to
       `@GLOBAL`, send to bundle sessions, look capability rejection, and raww
       capability rejection.
-- [ ] 5.3 Run `openspec validate refactor-unified-namespace-registry --strict`.
-- [ ] 5.4 Run `cargo fmt --check`.
-- [ ] 5.5 Run `cargo clippy -- -D warnings`.
-- [ ] 5.6 Run targeted relay registry/routing tests and `cargo test` if targeted
+- [x] 5.3 Run `openspec validate refactor-unified-namespace-registry --strict`.
+- [x] 5.4 Run `cargo fmt --check`.
+- [x] 5.5 Run `cargo clippy -- -D warnings`.
+- [x] 5.6 Run targeted relay registry/routing tests and `cargo test` if targeted
       validation does not cover changed paths.

@@ -9,7 +9,9 @@ exported from `src/relay/mod.rs`.
 - Enforce authorization policy for list/send/look operations.
 - Execute lifecycle transitions (`up`, `down`) per bundle.
 - Route delivery across tmux and ACP transports.
-- Maintain stream endpoint registration keyed by `(bundle_name, session_id)`.
+- Maintain one unified session registry keyed by canonical `principal_id`
+  (`session@namespace`), holding every known principal — bundle sessions,
+  `users.toml`-declared relay-wide principals, and dynamic stream connections.
 
 ## File Map
 
@@ -83,14 +85,26 @@ exported from `src/relay/mod.rs`.
 - `lifecycle.rs`
   - runtime reconcile/shutdown helpers for managed sessions.
 - `stream.rs`
-  - hello-frame parser, stream registry, identity collision handling, and event
-    writer routing. Hosts the shared session-eviction core (`evict_streams`):
-    a selector matches live registry entries, each is evicted (entry nulled,
-    typed error frame written, teardown signal fired). `revoke_streams_for_identity`
-    (matched by verified `authenticated_identity`, used by `change psk`) and
-    `evict_streams_for_bundle` (matched by bound bundle name, used by the bundle
-    watcher) are thin wrappers over it — there is no independent per-feature
-    eviction path.
+  - hello-frame parser, the unified session registry, identity collision
+    handling, and event writer routing. The registry is one
+    `HashMap<principal_id, RegistryEntry>` keyed by canonical `principal_id`; an
+    entry records the parsed identity, transport binding (`SessionType`, from
+    which look/raww capabilities are derived at check time), a
+    `RegistrationSource` (`Configured` for static bundle/`users.toml` principals,
+    `Stream` for dynamic-only connections), and the dynamic stream state
+    (writer/revoke/authenticated identity) while connected. **Offline is a state,
+    not absence**: a `Configured` entry persists across (dis)connects so look/raww
+    resolve its capability whether or not it is connected, and a Hello attaches
+    dynamic state to the static shell (flipping it online). Readiness is *not*
+    stored on the entry (it is owned by `AsyncWorkerEntry` and resolved at read
+    time). Hosts the shared session-eviction core (`evict_streams`): a selector
+    matches entries, each connected one is torn down (dynamic state detached,
+    typed error frame written, teardown signal fired), then removed or kept as a
+    static shell per the eviction scope. `revoke_streams_for_identity` (matched by
+    verified `authenticated_identity`, used by `change psk`; keeps static shells)
+    and `evict_streams_for_bundle` (matched by namespace, used by the bundle
+    watcher; removes entries) are thin wrappers over it — there is no independent
+    per-feature eviction path.
 - `watcher.rs`
   - runtime bundle file watcher. Watches the bundles configuration directory
     (debounced ~200ms via `notify`) and reconciles the loaded `BundleCatalog`
@@ -148,8 +162,9 @@ exported from `src/relay/mod.rs`.
   (credential-to-identity binding). The `"socket-trust"` sentinel is accepted for
   session and user principals only when enforcement is off; application and relay
   principals always require a recognized credential. Relay-wide principals
-  (`@GLOBAL`/`@EXTERNAL`/`@RELAY`) receive events from every bundle and are keyed
-  in the stream registry by `principal_id` alone.
+  (`@GLOBAL`/`@EXTERNAL`/`@RELAY`) receive events from every bundle; like every
+  other principal they are keyed in the unified registry by canonical
+  `principal_id`.
 - PSK files (`<state-root>/bundles/<b>/sessions/<s>/identity.psk` for sessions,
   `<state-root>/peers/<peer_alias>.psk` for peers) and the principal store
   itself are written with mode 0600 (owner read/write only).
@@ -247,7 +262,7 @@ exported from `src/relay/mod.rs`.
   prior defect where a cross-bundle list was rejected as an unknown sender
   because the requester was looked up in the enumerated bundle's members). A
   relay-wide principal's home is `GLOBAL`: it lists the `GLOBAL` namespace under
-  `home` (via the relay-wide registry path) but needs `all` to enumerate
+  `home` (via the unified registry's namespace filter) but needs `all` to enumerate
   any bundle. Its controls resolve from the enumerated bundle's authorization
   context (where the TUI-config controls are replicated), but its *home* for the
   tier check is `GLOBAL`, not that bundle.

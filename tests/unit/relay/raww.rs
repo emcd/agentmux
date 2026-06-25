@@ -25,13 +25,16 @@ fn raww_rejects_unknown_target() {
 
 #[test]
 fn raww_rejects_relay_wide_target_as_unsupported_operation() {
-    // A relay-wide (`@GLOBAL`) target resolves through routing; the rejection
-    // is the capability gate on its configured session type (`ui` carries
-    // `can_be_written = false`), reported with the target id and the failed
-    // capability flag so the diagnostic is actionable.
+    // A declared relay-wide (`@GLOBAL`) principal is registered offline in the
+    // unified registry at startup; raww resolves its capability from that entry
+    // (`ui` carries `can_be_written = false`) whether or not it is connected,
+    // reported with the target id and the failed capability flag so the
+    // diagnostic is actionable.
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     write_tui_configuration_with_session_id(&config_root, "default", "ui@GLOBAL");
+    agentmux::relay::register_configured_relay_wide_principals(&config_root)
+        .expect("register declared relay-wide principals");
     let tmux_socket = temporary.path().join("tmux.sock");
 
     let response = dispatch_request(

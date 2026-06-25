@@ -72,12 +72,13 @@ pub(super) struct OperationProfile {
 /// (`@GLOBAL`) target rides the dispatch bundle and is delivered via the registry
 /// rather than by crossing into a peer bundle, so it never raises the bar to the
 /// cross-bundle tier. A bundle-level entry (a `List` enumeration) names a bundle
-/// with no session id.
+/// with no session id. Relay-wide-ness is not a stored flag: it is derived from
+/// the target's principal-id classification (`is_relay_wide`), since a relay-wide
+/// target carries its full reserved-namespace principal id in `session_id`.
 #[derive(Clone, Debug)]
 pub(super) struct ResolvedTarget {
     pub namespace: String,
     pub session_id: Option<String>,
-    pub relay_wide: bool,
 }
 
 /// The resolved, about-to-be-authorized shape of a request: the dispatch (home)
@@ -117,6 +118,24 @@ impl ScopeTier {
 }
 
 impl ResolvedTarget {
+    /// Whether this is a relay-wide (`@GLOBAL`/reserved-namespace) target.
+    ///
+    /// Derived from the principal-id classification of `session_id` rather than a
+    /// stored flag: a relay-wide target carries its full reserved-namespace
+    /// principal id (e.g. `ui@GLOBAL`) in `session_id`, while a bundle target
+    /// carries a bare member id and a `List` enumeration carries none.
+    pub(super) fn is_relay_wide(&self) -> bool {
+        self.session_id
+            .as_deref()
+            .and_then(classify_principal_id)
+            .is_some_and(|class| {
+                matches!(
+                    class,
+                    PrincipalType::User | PrincipalType::Application | PrincipalType::Relay
+                )
+            })
+    }
+
     /// Whether this target is reachable at the requester's *home* tier — without
     /// crossing a namespace boundary.
     ///
@@ -134,7 +153,7 @@ impl ResolvedTarget {
     /// The asymmetry is intentional; the integration tests exercise both
     /// directions.
     fn reachable_at_home_tier(&self, dispatch_namespace: &str) -> bool {
-        self.relay_wide || self.namespace == dispatch_namespace
+        self.is_relay_wide() || self.namespace == dispatch_namespace
     }
 
     /// Classifies this target's relationship to the requester within the
@@ -146,7 +165,7 @@ impl ResolvedTarget {
         // A relay-wide target is never `Own`: self-action via the relay-wide
         // registry path is not modeled, so it floors at `Home`.
         match self.session_id.as_deref() {
-            Some(session_id) if session_id == requester_session && !self.relay_wide => {
+            Some(session_id) if session_id == requester_session && !self.is_relay_wide() => {
                 ScopeTier::Own
             }
             _ => ScopeTier::Home,
@@ -202,7 +221,6 @@ fn resolve_target(dispatch_namespace: &str, target: &str) -> Result<ResolvedTarg
         Some(PrincipalType::User) => Ok(ResolvedTarget {
             namespace: dispatch_namespace.to_string(),
             session_id: Some(requested.to_string()),
-            relay_wide: true,
         }),
         Some(PrincipalType::Session) => {
             let (session_id, namespace) = split_principal_id(requested)
@@ -210,7 +228,6 @@ fn resolve_target(dispatch_namespace: &str, target: &str) -> Result<ResolvedTarg
             Ok(ResolvedTarget {
                 namespace: namespace.to_string(),
                 session_id: Some(session_id.to_string()),
-                relay_wide: false,
             })
         }
         Some(PrincipalType::Application | PrincipalType::Relay) => {
@@ -323,7 +340,6 @@ pub(super) fn resolve_list_route(
         targets: vec![ResolvedTarget {
             namespace: enumerate_bundle.to_string(),
             session_id: None,
-            relay_wide: false,
         }],
     }
 }

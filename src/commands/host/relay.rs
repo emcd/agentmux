@@ -309,6 +309,12 @@ fn prepare_relay_host(
         }
     }
 
+    // Register `users.toml`-declared relay-wide principals as static (offline)
+    // registry entries so look/raww resolve their capabilities from the unified
+    // registry and a declared-but-disconnected principal is a known target.
+    crate::relay::register_configured_relay_wide_principals(&roots.configuration_root)
+        .map_err(shared::map_relay_error)?;
+
     // A restart-first operator diagnoses from the journal and inscriptions, so
     // every failed bundle must leave a per-bundle reason on both before any
     // aggregate error can exit the process.
@@ -822,6 +828,20 @@ fn host_selected_bundle(
     );
     if let Err(source) = ensure_bundle_runtime_directory(&paths) {
         return (failed_startup_bundle(bundle_name, source), None);
+    }
+    // Process-only hosting skips `startup_bundle`, so register the configured
+    // members as static registry shells here; otherwise the unified registry would
+    // omit every configured principal until its first Hello, and look/raww/list
+    // would treat a declared-but-offline member as an unknown target. Autostart
+    // performs this registration inside `startup_bundle`.
+    if let RelayHostStartupMode::ProcessOnly = startup_mode
+        && let Err(source) =
+            crate::relay::register_configured_bundle(&roots.configuration_root, &paths.bundle_name)
+    {
+        return (
+            failed_startup_bundle_from_relay_error(bundle_name, source),
+            None,
+        );
     }
     let mut startup_report = None;
     if let RelayHostStartupMode::Autostart = startup_mode {

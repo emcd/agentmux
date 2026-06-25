@@ -88,12 +88,16 @@ uniform model classifies as cross-namespace and which therefore does require
 
 ### Requirement: GLOBAL Namespace List
 
-The relay SHALL return the set of currently registered sessions in namespace
-`GLOBAL` when `List` is requested with `namespace = "GLOBAL"`.
+The relay SHALL enumerate every principal registered in namespace `GLOBAL` when
+`List` is requested with `namespace = "GLOBAL"`, just like any bundle namespace —
+including declared-but-offline principals, not only connected ones.
 
 The result SHALL be derived by filtering the unified session registry for entries
 whose namespace is `GLOBAL`. The relay SHALL NOT use a separate relay-wide
-registry key or a dedicated relay-wide listing path.
+registry key or a dedicated relay-wide listing path. Each listed principal's
+readiness SHALL be computed at list-generation time from the entry's connection
+state (a relay-wide principal is ready iff online); a declared-but-offline
+principal SHALL be listed with `ready = false` rather than omitted.
 
 #### Scenario: List relay-wide sessions
 
@@ -101,10 +105,18 @@ registry key or a dedicated relay-wide listing path.
 - **AND** one or more sessions in namespace `GLOBAL` are currently registered
 - **THEN** relay returns `RelayResponse::List` containing those sessions
 
+#### Scenario: List includes declared-but-offline relay-wide principal
+
+- **WHEN** relay-wide principal `operator@GLOBAL` is declared in `users.toml` but
+  has not connected
+- **AND** a principal sends `List` with `namespace = "GLOBAL"`
+- **THEN** relay returns `RelayResponse::List` containing `operator@GLOBAL` with
+  `ready = false` (offline is a state, not absence), not an empty set
+
 #### Scenario: List with no relay-wide sessions registered
 
 - **WHEN** a principal sends `List` with `namespace = "GLOBAL"`
-- **AND** no sessions in namespace `GLOBAL` are currently registered
+- **AND** no principals are registered in namespace `GLOBAL`
 - **THEN** relay returns `RelayResponse::List` with an empty session set
 
 ### Requirement: Uniform Cross-Bundle Authorization Model
@@ -202,28 +214,30 @@ override involved.
 
 ### Requirement: Transport Capability Contract
 
-Every target reachable via look or raww SHALL expose transport capabilities on
-its unified registry entry:
+Every target reachable via look or raww SHALL have four transport capabilities,
+derived at check time from its unified registry entry's `SessionType` rather than
+stored as fields on the entry:
 
-- `can_be_looked: bool` — the session can be targeted by `look` (its transport
+- `can_be_looked` — the session can be targeted by `look` (its transport
   supports snapshot capture)
-- `can_be_written: bool` — the session can be targeted by `raww` (its transport
+- `can_be_written` — the session can be targeted by `raww` (its transport
   supports raw input injection)
-- `can_stream_output: bool` — the session's transport natively produces live
+- `can_stream_output` — the session's transport natively produces live
   output chunks (ACP and PTY stream output natively; Tmux requires periodic
   polling)
-- `can_give_choices: bool` — the session's transport can surface choice requests
+- `can_give_choices` — the session's transport can surface choice requests
   (the transport produces ACP-style option arrays for operator/UI resolution).
   Describes choice *production*, not resolution authority — any session with
   sufficient `choose` policy scope may resolve choices regardless of its own
   `can_give_choices` value.
 
-Capabilities SHALL be derived from the entry's `SessionType` when the registry
-entry is created. Bundle-runtime entries derive the type from bundle
-configuration at startup/reconcile; stream-delivered relay-wide entries derive it
-from stream/user configuration at hello registration. This makes the registry
-entry the operation-time source of truth for target capabilities instead of
-reloading different configuration sources for bundle and relay-wide targets.
+Capabilities SHALL be derived from the entry's `SessionType` (at check time).
+Bundle entries derive the type from bundle configuration at startup/reconcile;
+relay-wide entries derive it from `users.toml` at startup for declared principals
+(registered offline) or at Hello for dynamically-created principals. This makes
+the registry entry the operation-time source of truth for target capabilities
+instead of reloading different configuration sources for bundle and relay-wide
+targets.
 
 | Transport | `can_be_looked` | `can_be_written` | `can_stream_output` | `can_give_choices` |
 |-----------|----------------|-----------------|--------------------|--------------------|
@@ -240,46 +254,46 @@ for tmux-backed prompt injection.
 `can_stream_output` is advertised on registration; streaming look semantics that
 consume it are deferred to a follow-on proposal.
 
-When a look or raww operation resolves a target whose registry entry carries the
-relevant capability false, relay SHALL return `validation_unsupported_operation`.
+When a look or raww operation resolves a target whose entry-derived capability for
+that operation is false, relay SHALL return `validation_unsupported_operation`.
 This check precedes authorization policy checks and applies uniformly to bundle
 targets and relay-wide targets.
 
 #### Scenario: Reject look against session with can_be_looked false
 
-- **WHEN** a `look` request resolves to a target whose registry entry carries
+- **WHEN** a `look` request resolves to a target whose `SessionType` derives
   `can_be_looked = false`
 - **THEN** relay returns `validation_unsupported_operation`
 - **AND** relay does not evaluate authorization policy for that request
 
 #### Scenario: Reject raww against session with can_be_written false
 
-- **WHEN** a `raww` request resolves to a target whose registry entry carries
+- **WHEN** a `raww` request resolves to a target whose `SessionType` derives
   `can_be_written = false`
 - **THEN** relay returns `validation_unsupported_operation`
 - **AND** relay does not evaluate authorization policy for that request
 
 #### Scenario: Permit look against session with can_be_looked true
 
-- **WHEN** a `look` request resolves to a target whose registry entry carries
+- **WHEN** a `look` request resolves to a target whose `SessionType` derives
   `can_be_looked = true`
 - **THEN** relay proceeds to authorization policy evaluation
 
 #### Scenario: Permit raww against session with can_be_written true
 
-- **WHEN** a `raww` request resolves to a target whose registry entry carries
+- **WHEN** a `raww` request resolves to a target whose `SessionType` derives
   `can_be_written = true`
 - **THEN** relay proceeds to authorization policy evaluation
 
 #### Scenario: ACP session advertises can_give_choices true
 
 - **WHEN** an ACP-backed session registers with the relay
-- **THEN** its registry entry includes `can_give_choices = true`
+- **THEN** its entry's `SessionType` derives `can_give_choices = true`
 
 #### Scenario: Tmux session advertises can_give_choices false
 
 - **WHEN** a Tmux-backed session registers with the relay
-- **THEN** its registry entry includes `can_give_choices = false`
+- **THEN** its entry's `SessionType` derives `can_give_choices = false`
 
 ## ADDED Requirements
 
@@ -289,10 +303,19 @@ The relay SHALL maintain one session registry keyed by canonical `principal_id`
 (`session@namespace`). The registry SHALL NOT use separate key variants or maps
 for bundle sessions and relay-wide sessions.
 
-The registry SHALL include static entries for configured bundle-runtime sessions
-and dynamic stream state for connected stream sessions. A static coder entry MAY
-exist before its transport is ready or connected; that state SHALL NOT be treated
-as an unknown target.
+The registry SHALL hold **every known principal**: static entries for configured
+principals — bundle sessions AND `users.toml`-declared relay-wide principals — and
+dynamic stream state attached when a principal connects. Configured bundle members
+SHALL be registered as static entries whenever the bundle is hosted, independent
+of transport startup mode: autostart, process-only (`--no-autostart`), and
+reconcile/`up` SHALL all register the bundle's members, so a configured principal
+is present in the registry before any Hello regardless of whether its transport
+has been started. `users.toml`-declared relay-wide principals SHALL be registered
+at relay startup. **Offline is a state, not absence**: a configured (static) entry
+MAY exist before its principal is ready or connected, and that state SHALL NOT be
+treated as an unknown target. A principal with no static declaration (e.g. an
+application/relay principal, or a dynamically-created principal) registers a
+dynamic entry at Hello.
 
 Each registry entry SHALL include:
 
@@ -300,19 +323,21 @@ Each registry entry SHALL include:
 - bare session id
 - namespace
 - principal class
-- registration source
-- session type / transport binding
-- runtime directory for coder-backed entries
-- transport capability flags
+- registration source (`Configured` for static bundle/`users.toml` principals,
+  `Stream` for dynamic-only connections)
+- session type / transport binding — the source from which look/raww transport
+  capabilities are derived at check time (the relay does not store duplicate
+  capability-flag fields)
 - stream writer and revoke signal when connected
 - authenticated identity when present
 
 The entry is a routing/capabilities record only. It SHALL NOT store
 delivery-layer readiness state: readiness is owned exclusively by
-`AsyncWorkerEntry` in the delivery layer. Surfaces that need to report readiness
-(e.g. a per-session ready flag in a `list` response) SHALL resolve it from
-`AsyncWorkerEntry` at read time rather than storing a copy on the registry
-entry, so there is a single authoritative source for that fact.
+`AsyncWorkerEntry` in the delivery layer. Likewise the coder runtime directory is
+carried on the delivery route, not stored on the entry. Surfaces that need to
+report readiness (e.g. a per-session ready flag in a `list` response) SHALL
+resolve it from `AsyncWorkerEntry` at read time rather than storing a copy on the
+registry entry, so there is a single authoritative source for that fact.
 
 Bundle lifecycle, credential revocation, listing, event fan-out, and delivery
 lookup SHALL operate by filtering or looking up entries in this unified registry.
@@ -323,16 +348,37 @@ lookup SHALL operate by filtering or looking up entries in this unified registry
   runtime startup or reconcile
 - **THEN** the registry entry key is `agent@bundle-a`
 - **AND** the entry namespace is `bundle-a`
-- **AND** the entry carries its runtime directory, transport binding, session
-  type, and capability flags
+- **AND** the entry carries its transport binding and session type, from which
+  look/raww capabilities are derived
 - **AND** the entry does not store readiness state
+
+#### Scenario: Register configured member under process-only hosting
+
+- **WHEN** a bundle is hosted with `--no-autostart` (process-only), so no
+  transport startup runs for its members
+- **THEN** a static registry entry exists for each configured member keyed by its
+  canonical `principal_id`, before any Hello
+- **AND** a `look`/`raww`/`list` targeting such a member resolves it as a known
+  (offline) principal rather than `validation_unknown_target`
+
+#### Scenario: Register declared relay-wide principal offline at startup
+
+- **WHEN** relay-wide principal `operator@GLOBAL` is declared in `users.toml`
+- **THEN** a static registry entry keyed `operator@GLOBAL` exists at startup,
+  before any connection (offline is a state, not absence)
+- **AND** a `look`/`raww` targeting it resolves capability from that entry —
+  `validation_unsupported_operation` for a `Ui` principal, not
+  `validation_unknown_target`
+- **AND** an undeclared relay-wide target absent from the registry yields
+  `validation_unknown_target`
 
 #### Scenario: Register GLOBAL session by canonical principal id
 
-- **WHEN** relay-wide session `operator@GLOBAL` registers
+- **WHEN** relay-wide principal `operator@GLOBAL` sends a healthy Hello
 - **THEN** the registry entry key is `operator@GLOBAL`
 - **AND** the entry namespace is `GLOBAL`
-- **AND** the entry carries dynamic stream writer/revoke state while connected
+- **AND** the Hello attaches dynamic stream writer/revoke state to the entry
+  (flipping a declared principal from offline to online)
 
 #### Scenario: Reject duplicate canonical registration
 

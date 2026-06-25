@@ -51,13 +51,15 @@ pub(super) struct HelloFrame {
 /// disconnects.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RegistrationSource {
-    /// Static entry for a configured bundle-runtime coder session, created at
-    /// startup/reconcile. It persists across stream (dis)connects — carrying the
-    /// session's transport binding, runtime directory, and capability flags — and
-    /// is removed only when its bundle is unloaded or reloaded.
-    BundleRuntime,
-    /// Dynamic entry created at stream Hello (relay-wide principals, UI
-    /// sessions). It is removed entirely when its connection drops, since it has
+    /// Static entry for a configured principal — a bundle session, or a relay-wide
+    /// principal declared in `users.toml` — created at startup/reconcile. It
+    /// persists across stream (dis)connects (offline is a state, not absence) and
+    /// is removed only when its bundle is unloaded/reloaded (bundle sessions) or
+    /// the relay restarts.
+    Configured,
+    /// Dynamic entry created at stream Hello for a principal with no static
+    /// declaration (e.g. an application/relay principal, or a dynamically-created
+    /// principal). It is removed entirely when its connection drops, since it has
     /// no static configuration to fall back on.
     Stream,
 }
@@ -316,20 +318,22 @@ fn relay_connection_write_timeout() -> Duration {
         .unwrap_or(RELAY_CONNECTION_WRITE_TIMEOUT)
 }
 
-/// Registers (or refreshes) a static bundle-runtime entry for a configured coder
-/// session, keyed by canonical `principal_id`.
+/// Registers (or refreshes) a static entry for a configured principal — a bundle
+/// session or a `users.toml`-declared relay-wide principal — keyed by canonical
+/// `principal_id`.
 ///
-/// Called during bundle startup/reconcile so a configured coder target has a
-/// registry entry before any client connects: look/raww resolve its capabilities
-/// and a not-yet-ready coder target is not mistaken for an unknown one. The call
-/// is idempotent — a reconcile refreshes the static attributes while preserving
-/// any attached dynamic stream state.
-pub(super) fn register_bundle_runtime_session(
+/// Called during startup/reconcile so a configured target has a registry entry
+/// before any client connects: look/raww resolve its capabilities from the entry,
+/// an offline-but-declared principal is a known target (not an unknown one), and
+/// a not-yet-ready coder target is not mistaken for an unknown one. The call is
+/// idempotent — a reconcile refreshes the static attributes while preserving any
+/// attached dynamic stream state. The `principal_id` must be fully qualified.
+pub(super) fn register_configured_session(
     principal_id: &str,
-    namespace: &str,
-    session_id: &str,
     session_type: SessionType,
 ) -> Result<(), io::Error> {
+    let (session_id, namespace, principal_class) = parse_principal_parts(principal_id)
+        .ok_or_else(|| io::Error::other("configured principal_id is not qualified"))?;
     let registry = stream_registry();
     let mut entries = registry
         .entries
@@ -337,20 +341,21 @@ pub(super) fn register_bundle_runtime_session(
         .map_err(|_| io::Error::other("failed to lock stream registry"))?;
     match entries.get_mut(principal_id) {
         Some(entry) => {
-            entry.source = RegistrationSource::BundleRuntime;
+            entry.source = RegistrationSource::Configured;
             entry.session_type = session_type;
-            entry.namespace = namespace.to_string();
-            entry.session_id = session_id.to_string();
+            entry.namespace = namespace;
+            entry.session_id = session_id;
+            entry.principal_class = principal_class;
         }
         None => {
             entries.insert(
                 principal_id.to_string(),
                 RegistryEntry {
                     principal_id: principal_id.to_string(),
-                    session_id: session_id.to_string(),
-                    namespace: namespace.to_string(),
-                    principal_class: PrincipalType::Session,
-                    source: RegistrationSource::BundleRuntime,
+                    session_id,
+                    namespace,
+                    principal_class,
+                    source: RegistrationSource::Configured,
                     session_type,
                     stream_id: None,
                     writer: None,
@@ -652,6 +657,30 @@ fn is_relay_wide(principal_class: PrincipalType) -> bool {
     )
 }
 
+/// Reports whether the registry entry for `principal_id` is a relay-wide
+/// principal, or `None` when no entry exists yet (e.g. a relay-wide target that
+/// has not sent a Hello). The delivery layer uses this to decide stream-vs-coder
+/// delivery from the unified registry rather than a carried flag, falling back to
+/// namespace classification when the entry is absent.
+pub(in crate::relay) fn registry_target_is_relay_wide(principal_id: &str) -> Option<bool> {
+    let registry = stream_registry();
+    let entries = registry.entries.lock().ok()?;
+    entries
+        .get(principal_id)
+        .map(|entry| is_relay_wide(entry.principal_class))
+}
+
+/// Returns the transport binding (`SessionType`) of the registry entry for
+/// `principal_id`, or `None` when no entry exists. The target operations use this
+/// to resolve a target's advertised capabilities from the unified registry: a
+/// registered target gates on its `SessionType` capabilities, an unregistered one
+/// is an unknown target.
+pub(super) fn lookup_registry_session_type(principal_id: &str) -> Option<SessionType> {
+    let registry = stream_registry();
+    let entries = registry.entries.lock().ok()?;
+    entries.get(principal_id).map(|entry| entry.session_type)
+}
+
 // Returns the ids of UI-class subscribers that should receive events for the
 // bundle: bundle-local UI sessions plus every relay-wide UI principal (which
 // receives events across all bundles). Session ids are returned for
@@ -680,21 +709,28 @@ pub(super) fn list_registered_ui_sessions_for_bundle(namespace: &str) -> Vec<Str
         .collect()
 }
 
-// Returns the `(principal_id, session_type)` of every currently registered,
-// connected session in `namespace`. Used by the namespace `list` path (notably
-// `GLOBAL`) to enumerate sessions over the unified registry rather than a
-// dedicated relay-wide listing. Only live entries (those whose connection still
-// holds a writer) are returned; an entry whose connection has dropped is left
-// out.
-pub(super) fn list_namespace_sessions(namespace: &str) -> Vec<(String, SessionType)> {
+// Returns the `(principal_id, session_type, ready)` of every registered principal
+// in `namespace`, connected or not. Used by the namespace `list` path (notably
+// `GLOBAL`) to enumerate every known principal over the unified registry —
+// including declared-but-offline entries — rather than a dedicated relay-wide
+// listing. `ready` reflects whether the entry currently holds a live stream
+// connection: a relay-wide principal is ready iff online, and a declared-but-
+// offline principal is listed with `ready = false` rather than omitted.
+pub(super) fn list_namespace_sessions(namespace: &str) -> Vec<(String, SessionType, bool)> {
     let registry = stream_registry();
     let Ok(entries) = registry.entries.lock() else {
         return Vec::new();
     };
     entries
         .values()
-        .filter(|entry| entry.namespace == namespace && entry.is_connected())
-        .map(|entry| (entry.principal_id.clone(), entry.session_type))
+        .filter(|entry| entry.namespace == namespace)
+        .map(|entry| {
+            (
+                entry.principal_id.clone(),
+                entry.session_type,
+                entry.is_connected(),
+            )
+        })
         .collect()
 }
 
