@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     acp::{ReplayEntry, replay_entries_to_snapshot_entries},
     runtime::inscriptions::emit_inscription,
-    transports::{AcpWorkerReadinessState, LookFreshness, LookSnapshotSource},
+    transports::{LookFreshness, LookSnapshotSource, WorkerReadinessState},
 };
 
 const ACP_SESSION_STATE_SCHEMA_VERSION: u32 = 2;
@@ -82,7 +82,7 @@ pub(crate) fn persist_acp_session_id(
 }
 
 pub(crate) fn derive_acp_look_snapshot(
-    worker_state: Option<AcpWorkerReadinessState>,
+    worker_state: Option<WorkerReadinessState>,
     snapshot: Option<&[ReplayEntry]>,
     requested_entries: usize,
     offset: usize,
@@ -109,10 +109,7 @@ pub(crate) fn derive_acp_look_snapshot(
         LookSnapshotSource::None
     };
 
-    if matches!(
-        worker_state,
-        Some(AcpWorkerReadinessState::Unavailable) | None
-    ) {
+    if matches!(worker_state, Some(WorkerReadinessState::Unavailable) | None) {
         return AcpLookSnapshot {
             snapshot_entries,
             entries_total,
@@ -124,7 +121,7 @@ pub(crate) fn derive_acp_look_snapshot(
         };
     }
 
-    if matches!(worker_state, Some(AcpWorkerReadinessState::Recovering)) {
+    if matches!(worker_state, Some(WorkerReadinessState::Recovering)) {
         return AcpLookSnapshot {
             snapshot_entries,
             entries_total,
@@ -154,14 +151,14 @@ pub(crate) fn derive_acp_look_snapshot(
     }
 
     let stale_reason_code = match worker_state {
-        Some(AcpWorkerReadinessState::Busy) | Some(AcpWorkerReadinessState::Available) => None,
-        Some(AcpWorkerReadinessState::Initializing) => {
+        Some(WorkerReadinessState::Busy) | Some(WorkerReadinessState::Available) => None,
+        Some(WorkerReadinessState::Initializing) => {
             Some(ACP_STALE_REASON_WORKER_INITIALIZING.to_string())
         }
-        Some(AcpWorkerReadinessState::Recovering) => {
+        Some(WorkerReadinessState::Recovering) => {
             Some(ACP_STALE_REASON_WORKER_RECOVERING.to_string())
         }
-        Some(AcpWorkerReadinessState::Unavailable) | None => {
+        Some(WorkerReadinessState::Unavailable) | None => {
             Some(ACP_STALE_REASON_WORKER_UNAVAILABLE.to_string())
         }
     };

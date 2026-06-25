@@ -9,10 +9,10 @@ use std::{
 
 pub(super) use agentmux::relay::ChoicesQueueEvent;
 use agentmux::relay::{
-    RelayRequest, RelayResponse, handle_request, subscribe_acp_worker_state,
-    subscribe_choices_queue_events,
+    RelayRequest, RelayResponse, handle_request, subscribe_choices_queue_events,
+    subscribe_worker_readiness,
 };
-pub(super) use agentmux::transports::AcpWorkerReadinessState;
+pub(super) use agentmux::transports::WorkerReadinessState;
 use serde_json::Value;
 use tokio::sync::{broadcast, watch};
 
@@ -428,8 +428,8 @@ pub(super) fn wait_for_any_worker_state(
 /// current value on first borrow and every subsequent published transition.
 pub(super) fn subscribe_bravo_worker_state(
     root: &Path,
-) -> watch::Receiver<Option<AcpWorkerReadinessState>> {
-    subscribe_acp_worker_state("party", root, "bravo")
+) -> watch::Receiver<Option<WorkerReadinessState>> {
+    subscribe_worker_readiness("party", root, "bravo")
 }
 
 /// Subscribes to permission-queue mutation events for the runtime directory.
@@ -447,16 +447,16 @@ pub(super) fn subscribe_bravo_permission_queue(
 /// is updated in-process by the producer, so each poll is a cheap atomic
 /// read with no filesystem or RPC cost.
 pub(super) fn await_acp_worker_state(
-    receiver: &mut watch::Receiver<Option<AcpWorkerReadinessState>>,
-    expected: AcpWorkerReadinessState,
+    receiver: &mut watch::Receiver<Option<WorkerReadinessState>>,
+    expected: WorkerReadinessState,
     timeout: Duration,
 ) -> bool {
     await_acp_worker_any_state(receiver, &[expected], timeout)
 }
 
 pub(super) fn await_acp_worker_any_state(
-    receiver: &mut watch::Receiver<Option<AcpWorkerReadinessState>>,
-    expected: &[AcpWorkerReadinessState],
+    receiver: &mut watch::Receiver<Option<WorkerReadinessState>>,
+    expected: &[WorkerReadinessState],
     timeout: Duration,
 ) -> bool {
     let deadline = Instant::now() + timeout;
@@ -524,7 +524,7 @@ pub(super) fn assert_acp_delivery_unavailable(config_root: &Path, tmux_socket: &
             assert!(
                 await_acp_worker_state(
                     &mut receiver,
-                    AcpWorkerReadinessState::Unavailable,
+                    WorkerReadinessState::Unavailable,
                     Duration::from_secs(5),
                 ),
                 "ACP worker did not settle unavailable after a failed startup stage"
@@ -682,7 +682,7 @@ pub(super) fn persisted_state_path(root: &Path, target_session: &str) -> PathBuf
 }
 
 pub(super) fn read_worker_state(root: &Path, target_session: &str) -> Option<String> {
-    agentmux::relay::read_acp_worker_state("party", root, target_session).map(ToString::to_string)
+    agentmux::relay::read_worker_readiness("party", root, target_session).map(ToString::to_string)
 }
 
 pub(super) fn send_result(response: RelayResponse) -> agentmux::relay::SendResult {

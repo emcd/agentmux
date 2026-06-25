@@ -16,9 +16,9 @@
 //!
 //! ## Readiness
 //!
-//! The transport owns an [`AcpWorkerReadinessState`] signal for [`is_ready`] and
+//! The transport owns an [`WorkerReadinessState`] signal for [`is_ready`] and
 //! the [`OutputView`] prime-wait, because it cannot call relay's
-//! `set_acp_worker_state`. The `AcpWorkerDriver` mirrors transitions into the
+//! `set_worker_readiness`. The `AcpWorkerDriver` mirrors transitions into the
 //! global worker-state registry (which external observers and respawn/startup
 //! gating still read).
 //!
@@ -47,11 +47,11 @@ use crate::configuration::{AcpChannel, AcpTargetConfiguration, BundleMember, Tar
 use crate::envelope::PromptBatchSettings;
 use crate::runtime::signals::shutdown_requested;
 use crate::transports::contract::OutcomeFuture;
-use crate::transports::{AcpWorkerReadinessState, SendOutcome};
 use crate::transports::{
     ChoiceMade, DeliveryEnvelope, LookMode, LookSnapshotPayload, OutputView, SingleDeliveryOutcome,
     StartupContext, Transport, TransportError, TransportReadiness, TransportStatus,
 };
+use crate::transports::{SendOutcome, WorkerReadinessState};
 
 // ACP delivery failure taxonomy (see the relay delivery README for the full
 // catalogue). These mirror the codes the relay completion path used before the
@@ -128,7 +128,7 @@ struct AcpCapabilities {
 /// whichever buffer is current (or `None`) plus the readiness that drives its
 /// bounded prime-wait. This is what lets `look` actually wait through startup.
 struct AcpSharedState {
-    readiness: Mutex<AcpWorkerReadinessState>,
+    readiness: Mutex<WorkerReadinessState>,
     replay: Mutex<Option<SharedReplay>>,
     /// Mirrors per-turn readiness transitions into the relay global registry.
     /// Travels with the readiness it mirrors so both the internal delivery task
@@ -146,7 +146,7 @@ const ACP_WRITE_CHANNEL_CAPACITY: usize = 256;
 /// transitions and the relay worker no longer drives `mark_busy` /
 /// `mirror_settled_readiness`. `None` in tests that construct the transport
 /// without a relay registry.
-type ReadinessMirror = Arc<dyn Fn(AcpWorkerReadinessState) + Send + Sync>;
+type ReadinessMirror = Arc<dyn Fn(WorkerReadinessState) + Send + Sync>;
 
 /// Items enqueued onto the ACP transport's internal ordered write channel.
 ///
@@ -217,7 +217,7 @@ impl AcpTransport {
             runtime: None,
             chooser: None,
             shared: Arc::new(AcpSharedState {
-                readiness: Mutex::new(AcpWorkerReadinessState::Initializing),
+                readiness: Mutex::new(WorkerReadinessState::Initializing),
                 replay: Mutex::new(None),
                 mirror_state,
             }),
@@ -255,18 +255,18 @@ impl AcpTransport {
     /// Unavailable transition for observers. A transient respawn window
     /// (Recovering) is skipped so an in-flight respawn is not disturbed.
     fn resignal_respawn_if_dead(&self) {
-        if matches!(self.readiness(), AcpWorkerReadinessState::Unavailable) {
+        if matches!(self.readiness(), WorkerReadinessState::Unavailable) {
             self.signal_respawn();
         }
     }
 
     /// Current readiness, mirrored by the `AcpWorkerDriver` into the global registry.
     #[must_use]
-    pub fn readiness(&self) -> AcpWorkerReadinessState {
+    pub fn readiness(&self) -> WorkerReadinessState {
         *self.shared.readiness.lock().expect("readiness mutex")
     }
 
-    fn set_readiness(&self, state: AcpWorkerReadinessState) {
+    fn set_readiness(&self, state: WorkerReadinessState) {
         *self.shared.readiness.lock().expect("readiness mutex") = state;
     }
 
@@ -288,7 +288,7 @@ impl AcpTransport {
         self.write_tx = None;
         self.runtime = None;
         self.set_replay(None);
-        self.set_readiness(AcpWorkerReadinessState::Recovering);
+        self.set_readiness(WorkerReadinessState::Recovering);
     }
 
     /// Spawns the internal delivery task that drains the write channel, combines
@@ -362,7 +362,7 @@ impl AcpTransport {
         // (re-)establish returns the fresh buffer.
         self.set_replay(Some(runtime.client.replay_buffer_handle()));
         self.runtime = Some(runtime);
-        self.set_readiness(AcpWorkerReadinessState::Available);
+        self.set_readiness(WorkerReadinessState::Available);
         self.spawn_delivery_task();
     }
 
@@ -371,7 +371,7 @@ impl AcpTransport {
     pub(crate) fn mark_runtime_unavailable(&mut self) {
         self.runtime = None;
         self.set_replay(None);
-        self.set_readiness(AcpWorkerReadinessState::Unavailable);
+        self.set_readiness(WorkerReadinessState::Unavailable);
     }
 
     /// Creates an unavailable outcome preserving the caller's message_id and
@@ -390,7 +390,7 @@ impl AcpTransport {
 impl Transport for AcpTransport {
     fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError> {
         self.prepare_for_startup(context.choose, context.target_member.id.clone());
-        self.set_readiness(AcpWorkerReadinessState::Initializing);
+        self.set_readiness(WorkerReadinessState::Initializing);
         match bootstrap_acp_worker_runtime(&context.runtime_directory, &context.target_member) {
             Ok(runtime) => {
                 self.install_runtime(runtime);
@@ -460,7 +460,7 @@ impl Transport for AcpTransport {
     fn is_ready(&self) -> bool {
         matches!(
             self.readiness(),
-            AcpWorkerReadinessState::Available | AcpWorkerReadinessState::Busy
+            WorkerReadinessState::Available | WorkerReadinessState::Busy
         )
     }
 
@@ -470,7 +470,7 @@ impl Transport for AcpTransport {
         self.write_tx = None;
         self.runtime = None;
         self.set_replay(None);
-        self.set_readiness(AcpWorkerReadinessState::Unavailable);
+        self.set_readiness(WorkerReadinessState::Unavailable);
     }
 
     fn give_output(&self) -> Option<Arc<dyn OutputView>> {
@@ -499,7 +499,7 @@ impl OutputView for AcpOutputView {
         let deadline = Instant::now() + mode.prime_timeout;
         let prime_timed_out = loop {
             let state = *self.shared.readiness.lock().expect("readiness mutex");
-            if !matches!(state, AcpWorkerReadinessState::Initializing) {
+            if !matches!(state, WorkerReadinessState::Initializing) {
                 break false;
             }
             if Instant::now() >= deadline {
@@ -559,14 +559,14 @@ struct TurnContext<'a> {
 /// global registry when a mirror is installed. Centralizes the per-turn readiness
 /// transitions inside the delivery task so the relay worker no longer drives
 /// `mark_busy` / `mirror_settled_readiness`.
-fn set_turn_readiness(ctx: &TurnContext, state: AcpWorkerReadinessState) {
+fn set_turn_readiness(ctx: &TurnContext, state: WorkerReadinessState) {
     set_shared_readiness(ctx.shared, state);
 }
 
 /// Writes `state` to the shared readiness slot and mirrors it to the relay global
 /// registry when a mirror is installed. Shared by [`set_turn_readiness`] and the
 /// `on_dispatched` Busy transition (which holds the `Arc` directly).
-fn set_shared_readiness(shared: &AcpSharedState, state: AcpWorkerReadinessState) {
+fn set_shared_readiness(shared: &AcpSharedState, state: WorkerReadinessState) {
     *shared.readiness.lock().expect("readiness mutex") = state;
     if let Some(mirror) = shared.mirror_state.as_ref() {
         mirror(state);
@@ -724,7 +724,7 @@ fn signal_respawn_if_needed(
     respawn_needed_tx: &tokio::sync::watch::Sender<bool>,
 ) {
     let readiness = *shared.readiness.lock().expect("readiness mutex");
-    if matches!(readiness, AcpWorkerReadinessState::Unavailable) {
+    if matches!(readiness, WorkerReadinessState::Unavailable) {
         let _ = respawn_needed_tx.send(true);
     }
 }
@@ -811,7 +811,7 @@ fn submit_envelope_turn(
 
     let shared_for_dispatch = Arc::clone(ctx.shared);
     let on_dispatched: DispatchHandler = Box::new(move || {
-        set_shared_readiness(&shared_for_dispatch, AcpWorkerReadinessState::Busy);
+        set_shared_readiness(&shared_for_dispatch, WorkerReadinessState::Busy);
     });
 
     let on_permission = if let Some(chooser) = ctx.chooser {
@@ -866,7 +866,7 @@ fn submit_envelope_turn(
             outcome
         }
         PromptDispatchOutcome::TransportUnavailable { reason } => {
-            set_turn_readiness(ctx, AcpWorkerReadinessState::Unavailable);
+            set_turn_readiness(ctx, WorkerReadinessState::Unavailable);
             failed_outcome_with_code(
                 ctx.target_session.to_string(),
                 message_id.to_string(),
@@ -876,7 +876,7 @@ fn submit_envelope_turn(
             )
         }
         PromptDispatchOutcome::SerializationFailed(reason) => {
-            set_turn_readiness(ctx, AcpWorkerReadinessState::Unavailable);
+            set_turn_readiness(ctx, WorkerReadinessState::Unavailable);
             failed_outcome_with_code(
                 ctx.target_session.to_string(),
                 message_id.to_string(),
@@ -974,7 +974,7 @@ fn build_acp_completion_result(
     target_session: String,
     message_id: String,
     target_member_id: &str,
-) -> (AcpWorkerReadinessState, SingleDeliveryOutcome) {
+) -> (WorkerReadinessState, SingleDeliveryOutcome) {
     if let Some(ChoiceMade::Cancelled {
         reason_code,
         reason,
@@ -982,7 +982,7 @@ fn build_acp_completion_result(
     }) = pending_choice_outcome
     {
         return (
-            AcpWorkerReadinessState::Available,
+            WorkerReadinessState::Available,
             failed_outcome_with_code(
                 target_session,
                 message_id,
@@ -998,7 +998,7 @@ fn build_acp_completion_result(
         // the dropped-on-shutdown outcome (not a generic failure), matching the
         // queued-write drop path and the tmux transport.
         return (
-            AcpWorkerReadinessState::Available,
+            WorkerReadinessState::Available,
             SingleDeliveryOutcome {
                 target_session,
                 message_id,
@@ -1013,11 +1013,11 @@ fn build_acp_completion_result(
     match completion {
         PromptCompletion::Completed { stop_reason } => match stop_reason.as_str() {
             "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" => (
-                AcpWorkerReadinessState::Available,
+                WorkerReadinessState::Available,
                 delivered_outcome(target_session, message_id),
             ),
             "cancelled" => (
-                AcpWorkerReadinessState::Available,
+                WorkerReadinessState::Available,
                 failed_outcome_with_code(
                     target_session,
                     message_id,
@@ -1027,7 +1027,7 @@ fn build_acp_completion_result(
                 ),
             ),
             other => (
-                AcpWorkerReadinessState::Available,
+                WorkerReadinessState::Available,
                 failed_outcome(
                     target_session,
                     message_id,
@@ -1036,7 +1036,7 @@ fn build_acp_completion_result(
             ),
         },
         PromptCompletion::ProtocolError(reason) => (
-            AcpWorkerReadinessState::Available,
+            WorkerReadinessState::Available,
             failed_outcome_with_code(
                 target_session,
                 message_id,
@@ -1046,7 +1046,7 @@ fn build_acp_completion_result(
             ),
         ),
         PromptCompletion::ConnectionClosed { reason } => (
-            AcpWorkerReadinessState::Unavailable,
+            WorkerReadinessState::Unavailable,
             failed_outcome_with_code(
                 target_session,
                 message_id,

@@ -20,7 +20,7 @@ use super::super::super::{
     AsyncDeliveryTask, DeliveryPayloadMode, RelayError, SendOutcome, SendResult,
 };
 use super::super::async_worker::{
-    AsyncWorkerKey, install_acp_worker_output_view, set_acp_worker_state,
+    AsyncWorkerKey, install_acp_worker_output_view, set_worker_readiness,
 };
 use super::super::choice_state::{
     ChoiceEventContext, build_acp_chooser, invalidate_pending_for_respawn,
@@ -420,7 +420,7 @@ fn build_acp_driver_services(
             let runtime_directory = runtime_directory.clone();
             let target_session = target_session.clone();
             Arc::new(move |state| {
-                set_acp_worker_state(
+                set_worker_readiness(
                     namespace.as_str(),
                     runtime_directory.as_path(),
                     target_session.as_str(),

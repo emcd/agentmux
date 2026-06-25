@@ -12,9 +12,9 @@ use crate::configuration::{BundleMember, TargetConfiguration};
 use super::super::super::{AsyncDeliveryTask, RelayError};
 use crate::acp::state::ACP_STARTUP_PRIME_TIMEOUT_MS;
 
-use super::super::async_worker::get_acp_worker_state;
+use super::super::async_worker::get_worker_readiness;
 use super::worker::{AcpWorkerBootstrap, spawn_async_delivery_worker};
-use crate::transports::AcpWorkerReadinessState;
+use crate::transports::WorkerReadinessState;
 
 pub(in crate::relay) fn wait_for_async_delivery_shutdown(timeout: Duration) -> usize {
     super::super::async_worker::wait_for_async_delivery_shutdown(timeout)
@@ -82,12 +82,12 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
     let deadline = Instant::now() + Duration::from_millis(ACP_STARTUP_PRIME_TIMEOUT_MS);
     loop {
         let readiness =
-            get_acp_worker_state(namespace, runtime_directory, target_member.id.as_str());
+            get_worker_readiness(namespace, runtime_directory, target_member.id.as_str());
         match readiness {
-            Some(AcpWorkerReadinessState::Available | AcpWorkerReadinessState::Busy) => {
+            Some(WorkerReadinessState::Available | WorkerReadinessState::Busy) => {
                 return Ok(());
             }
-            Some(AcpWorkerReadinessState::Unavailable) => {
+            Some(WorkerReadinessState::Unavailable) => {
                 return Err((
                     "runtime_acp_worker_unavailable".to_string(),
                     "ACP worker is unavailable after startup".to_string(),
@@ -96,8 +96,7 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
                     })),
                 ));
             }
-            Some(AcpWorkerReadinessState::Initializing | AcpWorkerReadinessState::Recovering)
-            | None => {
+            Some(WorkerReadinessState::Initializing | WorkerReadinessState::Recovering) | None => {
                 if Instant::now() >= deadline {
                     return Err((
                         "runtime_startup_failed".to_string(),

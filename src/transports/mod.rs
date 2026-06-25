@@ -21,6 +21,6 @@ pub use ui::{
     UiTransportServices,
 };
 pub use vocabulary::{
-    AcpWorkerReadinessState, DeliveryPayloadMode, LookFreshness, LookSnapshotPayload,
-    LookSnapshotSource, SendOutcome, StructuredEntry, ToolCallStatus,
+    DeliveryPayloadMode, LookFreshness, LookSnapshotPayload, LookSnapshotSource, SendOutcome,
+    StructuredEntry, ToolCallStatus, WorkerReadinessState,
 };

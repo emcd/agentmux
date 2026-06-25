@@ -16,7 +16,7 @@ use crate::configuration::{BundleMember, TargetConfiguration};
 use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 use crate::runtime::{inscriptions::emit_inscription, signals::shutdown_requested};
 use crate::tmux::TmuxOutputView;
-use crate::transports::{AcpWorkerReadinessState, OutputView};
+use crate::transports::{OutputView, WorkerReadinessState};
 
 use super::super::stream::{RelayStreamEvent, send_event_to_registered_ui};
 use super::super::{AsyncDeliveryTask, RelayError, SendOutcome, SendResult, canonical_session_id};
@@ -45,7 +45,7 @@ pub(super) struct AsyncWorkerEntry {
     pub sender: UnboundedSender<AsyncDeliveryTask>,
     pub pending: std::sync::Arc<AtomicUsize>,
     pub bounded_acp_queue: bool,
-    pub acp_state: Option<AcpWorkerReadinessState>,
+    pub readiness: Option<WorkerReadinessState>,
     pub acp_output_view: Option<Arc<dyn OutputView>>,
 }
 
@@ -151,7 +151,7 @@ pub(super) fn register_worker(
                 sender,
                 pending,
                 bounded_acp_queue,
-                acp_state: None,
+                readiness: None,
                 acp_output_view: None,
             },
         );
@@ -180,44 +180,44 @@ pub(super) fn register_worker_if_absent(
             sender,
             pending,
             bounded_acp_queue,
-            acp_state: None,
+            readiness: None,
             acp_output_view: None,
         },
     );
     Ok(true)
 }
 
-pub(in crate::relay) fn set_acp_worker_state(
+pub(in crate::relay) fn set_worker_readiness(
     namespace: &str,
     runtime_directory: &Path,
     target_session: &str,
-    state: AcpWorkerReadinessState,
+    state: WorkerReadinessState,
 ) {
     let key = build_worker_key(namespace, runtime_directory, target_session);
     if let Ok(mut workers) = async_delivery_registry().workers.lock()
         && let Some(entry) = workers.get_mut(&key)
     {
-        entry.acp_state = Some(state);
+        entry.readiness = Some(state);
     }
     // Publish to any observers regardless of whether a worker entry was
     // present. Publishers are keyed identically and live independently of
     // worker registration so subscribers can observe pre-registration and
     // post-unregistration transitions.
-    super::observability::publish_acp_worker_state(&key, state);
+    super::observability::publish_worker_readiness(&key, state);
 }
 
-pub(in crate::relay) fn get_acp_worker_state(
+pub(in crate::relay) fn get_worker_readiness(
     namespace: &str,
     runtime_directory: &Path,
     target_session: &str,
-) -> Option<AcpWorkerReadinessState> {
+) -> Option<WorkerReadinessState> {
     let key = build_worker_key(namespace, runtime_directory, target_session);
     async_delivery_registry()
         .workers
         .lock()
         .ok()?
         .get(&key)
-        .and_then(|entry| entry.acp_state)
+        .and_then(|entry| entry.readiness)
 }
 
 pub(in crate::relay) fn install_acp_worker_output_view(
@@ -284,8 +284,8 @@ pub(in crate::relay) fn acp_session_ready_for_startup(
     target_session: &str,
 ) -> bool {
     matches!(
-        get_acp_worker_state(namespace, runtime_directory, target_session),
-        Some(AcpWorkerReadinessState::Available)
+        get_worker_readiness(namespace, runtime_directory, target_session),
+        Some(WorkerReadinessState::Available)
     )
 }
 

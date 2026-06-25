@@ -5,7 +5,7 @@ pub(in crate::relay) mod observability;
 mod quiescence;
 
 pub(in crate::relay) use self::async_worker::{
-    acp_session_ready_for_startup, get_acp_worker_state, get_output_view,
+    acp_session_ready_for_startup, get_output_view, get_worker_readiness,
 };
 pub use self::choice_state::install_pending_choice_request_for_testing;
 pub(in crate::relay) use self::choice_state::{

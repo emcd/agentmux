@@ -153,7 +153,7 @@ fn acp_respawn_recovers_when_agent_exits_during_pending_permission() {
     assert!(
         await_acp_worker_state(
             &mut worker_state_receiver,
-            AcpWorkerReadinessState::Available,
+            WorkerReadinessState::Available,
             Duration::from_secs(5),
         ),
         "worker did not auto-respawn back to available after permission-then-exit"

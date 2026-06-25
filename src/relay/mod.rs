@@ -7,7 +7,7 @@ use std::{
 
 use crate::configuration::load_bundle_configuration;
 use crate::runtime::paths::{BundleRuntimePaths, tmux_socket_path_for_runtime_directory};
-use crate::transports::AcpWorkerReadinessState;
+use crate::transports::WorkerReadinessState;
 
 mod authorization;
 mod client;
@@ -35,7 +35,7 @@ use self::context::*;
 pub use self::contract::*;
 pub use self::delivery::install_pending_choice_request_for_testing;
 pub use self::delivery::observability::{
-    ChoicesQueueEvent, subscribe_acp_worker_state, subscribe_choices_queue_events,
+    ChoicesQueueEvent, subscribe_choices_queue_events, subscribe_worker_readiness,
 };
 pub use self::drain::{ConnectionDrainCoordinator, ConnectionDrainReport, ConnectionWorkerSlot};
 use self::errors::*;
@@ -214,28 +214,29 @@ pub fn wait_for_async_delivery_shutdown(timeout: Duration) -> usize {
     delivery::wait_for_async_delivery_shutdown(timeout)
 }
 
-/// Reads the in-memory ACP worker readiness state for an observability check.
+/// Reads the in-memory worker readiness state for an observability check.
 ///
-/// Returns one of "initializing", "available", "busy", "recovering",
-/// "unavailable" when a worker is registered for the (namespace,
+/// Transport-agnostic: any worker-driven transport (ACP today, Pty next)
+/// populates the same state. Returns one of "initializing", "available", "busy",
+/// "recovering", "unavailable" when a worker is registered for the (namespace,
 /// runtime_directory, target_session) triple, or `None` when no worker is
 /// registered or no readiness state has been recorded yet. The "recovering"
-/// value indicates the worker observed a transport failure and is rebuilding
-/// the ACP child process; clients that do not recognize the value should
-/// treat it as non-ready.
+/// value indicates the worker observed a transport failure and is rebuilding its
+/// underlying worker process (the ACP child today); clients that do not recognize
+/// the value should treat it as non-ready.
 #[must_use]
-pub fn read_acp_worker_state(
+pub fn read_worker_readiness(
     namespace: &str,
     runtime_directory: &Path,
     target_session: &str,
 ) -> Option<&'static str> {
-    delivery::get_acp_worker_state(namespace, runtime_directory, target_session).map(|state| {
+    delivery::get_worker_readiness(namespace, runtime_directory, target_session).map(|state| {
         match state {
-            AcpWorkerReadinessState::Initializing => "initializing",
-            AcpWorkerReadinessState::Available => "available",
-            AcpWorkerReadinessState::Busy => "busy",
-            AcpWorkerReadinessState::Recovering => "recovering",
-            AcpWorkerReadinessState::Unavailable => "unavailable",
+            WorkerReadinessState::Initializing => "initializing",
+            WorkerReadinessState::Available => "available",
+            WorkerReadinessState::Busy => "busy",
+            WorkerReadinessState::Recovering => "recovering",
+            WorkerReadinessState::Unavailable => "unavailable",
         }
     })
 }
