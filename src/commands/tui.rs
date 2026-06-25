@@ -53,7 +53,7 @@ pub(super) fn run_agentmux_tui(arguments: &[String]) -> Result<(), RuntimeError>
     let relay_paths = RelayRuntimePaths::resolve(&roots.state_root);
     ensure_tui_relay_available(&roots, &relay_paths)?;
     crate::tui::run(crate::tui::TuiLaunchOptions {
-        namespace: resolved_session.bundle_name,
+        namespace: resolved_session.namespace,
         sender_session: resolved_session.session_id,
         relay_socket: relay_paths.relay_socket,
         look_lines: parsed.lines,

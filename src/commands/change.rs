@@ -37,7 +37,7 @@ pub(super) fn run_agentmux_change(arguments: &[String]) -> Result<(), RuntimeErr
 
     let response = request_relay(
         &relay_paths.relay_socket,
-        resolved_session.bundle_name.as_str(),
+        resolved_session.namespace.as_str(),
         resolved_session.session_id.as_str(),
         &RelayRequest::ChangePsk {
             principal_id: parsed.principal_id.clone(),

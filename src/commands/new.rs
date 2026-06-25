@@ -37,7 +37,7 @@ pub(super) fn run_agentmux_new(arguments: &[String]) -> Result<(), RuntimeError>
 
     let response = request_relay(
         &relay_paths.relay_socket,
-        resolved_session.bundle_name.as_str(),
+        resolved_session.namespace.as_str(),
         resolved_session.session_id.as_str(),
         &RelayRequest::NewPeer {
             principal_id: parsed.principal_id.clone(),

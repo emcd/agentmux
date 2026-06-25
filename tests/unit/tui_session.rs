@@ -51,7 +51,7 @@ policy = "default"
         Some("user@GLOBAL"),
     )
     .expect("resolve explicit session");
-    assert_eq!(resolved.bundle_name, "agentmux");
+    assert_eq!(resolved.namespace, "agentmux");
     assert_eq!(resolved.session_selector, "user@GLOBAL");
     assert_eq!(resolved.session_id, "user@GLOBAL");
     assert_eq!(resolved.policy, "default");
@@ -77,7 +77,7 @@ policy = "default"
 
     let resolved = resolve_tui_session_identity(temporary.path(), temporary.path(), None, None)
         .expect("resolve defaults");
-    assert_eq!(resolved.bundle_name, "agentmux");
+    assert_eq!(resolved.namespace, "agentmux");
     assert_eq!(resolved.session_selector, "user@GLOBAL");
 }
 
@@ -128,7 +128,7 @@ policy = "default"
         Some("first-available"),
     )
     .expect("launch without default bundle should succeed");
-    assert_eq!(resolved.bundle_name, "first-available");
+    assert_eq!(resolved.namespace, "first-available");
     assert_eq!(resolved.session_id, "user@GLOBAL");
     assert_eq!(resolved.policy, "default");
 }
@@ -153,7 +153,7 @@ policy = "default"
     let resolved =
         resolve_tui_launch_identity(temporary.path(), temporary.path(), None, None, None)
             .expect("launch with no bundle context should still succeed");
-    assert_eq!(resolved.bundle_name, "");
+    assert_eq!(resolved.namespace, "");
     assert_eq!(resolved.session_id, "user@GLOBAL");
 }
 
@@ -183,7 +183,7 @@ policy = "default"
         Some("first-available"),
     )
     .expect("configured default bundle should win");
-    assert_eq!(resolved.bundle_name, "configured");
+    assert_eq!(resolved.namespace, "configured");
 }
 
 #[test]

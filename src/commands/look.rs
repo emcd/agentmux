@@ -34,12 +34,12 @@ pub(super) fn run_agentmux_look(arguments: &[String]) -> Result<(), RuntimeError
         parsed.bundle_name.as_deref(),
         parsed.session_selector.as_deref(),
     )?;
-    load_bundle_configuration(&roots.configuration_root, &resolved_session.bundle_name)
+    load_bundle_configuration(&roots.configuration_root, &resolved_session.namespace)
         .map_err(shared::map_bundle_load_error)?;
     let relay_paths = RelayRuntimePaths::resolve(&roots.state_root);
     let response = request_relay(
         &relay_paths.relay_socket,
-        &resolved_session.bundle_name,
+        &resolved_session.namespace,
         &resolved_session.session_id,
         &RelayRequest::Look {
             requester_session: resolved_session.session_id.clone(),
