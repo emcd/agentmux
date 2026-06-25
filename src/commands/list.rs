@@ -54,7 +54,7 @@ pub(super) fn run_agentmux_list(arguments: &[String]) -> Result<(), RuntimeError
         bundle_hint,
         parsed.session_selector.as_deref(),
     )?;
-    let home_bundle_name = resolved_session.bundle_name.clone();
+    let home_bundle_name = resolved_session.namespace.clone();
     let requester_session = resolved_session.session_id.clone();
 
     let payload = match namespace {
@@ -95,7 +95,7 @@ pub(super) fn run_agentmux_list(arguments: &[String]) -> Result<(), RuntimeError
         _ => {
             let listed = request_listed_bundle(
                 &roots,
-                &resolved_session.bundle_name,
+                &resolved_session.namespace,
                 requester_session.as_str(),
                 home_bundle_name.as_str(),
             )?;

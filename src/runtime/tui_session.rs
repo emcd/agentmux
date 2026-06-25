@@ -15,7 +15,7 @@ const GLOBAL_SESSION_SUFFIX: &str = "@GLOBAL";
 /// Resolved TUI session identity for CLI/TUI operations.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedTuiSession {
-    pub bundle_name: String,
+    pub namespace: String,
     pub session_selector: String,
     pub session_id: String,
     pub session_name: Option<String>,
@@ -114,7 +114,7 @@ fn finish_tui_session(
     validate_sender_shape(selected.id.as_str())?;
     validate_selected_policy(configuration_root, selected.policy.as_str())?;
     Ok(ResolvedTuiSession {
-        bundle_name,
+        namespace: bundle_name,
         session_selector: selector,
         session_id: selected.id.clone(),
         session_name: selected.name.clone(),
