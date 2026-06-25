@@ -762,7 +762,6 @@ fn poll_hello_first_frame(
 // loads and starts the bundle without a restart, and a new connection to that
 // bundle succeeds where it was previously rejected as an unknown bundle.
 #[test]
-#[ignore = "watcher reload race; see issues/relay/30"]
 fn host_relay_watcher_loads_new_bundle_file_at_runtime() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = temporary.path().join("config");
@@ -838,7 +837,6 @@ fn host_relay_watcher_loads_new_bundle_file_at_runtime() {
 // receive a `runtime_bundle_unloaded` error frame before disconnect, and
 // subsequent connection attempts to that bundle are rejected as unknown.
 #[test]
-#[ignore = "watcher reload race; see issues/relay/32"]
 fn host_relay_watcher_unloads_removed_bundle_file_at_runtime() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = temporary.path().join("config");
@@ -913,7 +911,6 @@ fn host_relay_watcher_unloads_removed_bundle_file_at_runtime() {
 // reload: active sessions receive a `runtime_bundle_reloaded` error frame before
 // disconnect, and the relay reloads the bundle (a fresh connection succeeds).
 #[test]
-#[ignore = "watcher reload race; see issues/relay/31"]
 fn host_relay_watcher_reloads_modified_bundle_file_at_runtime() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = temporary.path().join("config");
