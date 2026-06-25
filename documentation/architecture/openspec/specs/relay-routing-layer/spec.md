@@ -5,40 +5,40 @@ The shared resolution and authorization stages that every target-addressed opera
 ## Requirements
 ### Requirement: Routing Resolution Stage
 
-The relay SHALL resolve all target-addressed operations (Send, Look, Raww,
-List) through a shared, operation-agnostic resolution stage before invoking any
-operation handler. The resolution stage SHALL operate **without consulting
-bundle configuration or the bundle catalog** — it classifies targets from their
+The relay SHALL resolve all target-addressed operations (Send, Look, Raww, List)
+through a shared, operation-agnostic resolution stage before invoking any
+operation handler. The resolution stage SHALL operate **without consulting bundle
+configuration or the bundle catalog** — it classifies targets from their
 principal-ID suffixes alone — and SHALL:
 
-- Parse each target's `@<namespace>` suffix into a `ResolvedTarget { namespace,
-  session_id, relay_wide }`: an `@GLOBAL` suffix marks a relay-wide target; any
-  other `@<namespace>` suffix names that namespace; the bare session id is the
-  portion before the suffix.
+- Parse each target's `@<namespace>` suffix into a `ResolvedTarget` containing
+  the target's canonical `principal_id`, namespace, and bare session id. An
+  `@GLOBAL` suffix names namespace `GLOBAL`; an `@<bundle>` suffix names that
+  bundle namespace; the bare session id is the portion before the suffix.
 - Reject a target that carries no suffix with `validation_unqualified_target`.
   The stage never resolves a bare id against bundle membership or the UI
   registry.
-- Identify the requester's dispatch (home) bundle: the sender's bound bundle
-  for session principals, or the bundle named by the first bundle-qualified
-  target for relay-wide principals.
-- Return a `ResolvedRoute { dispatch_namespace, requester_session, targets }`
-  to the authorization stage.
+- Identify the requester's dispatch (home) namespace: the sender's bound bundle
+  for session principals, or `GLOBAL` for relay-wide principals.
+- Return a `ResolvedRoute { dispatch_namespace, requester_session, targets }` to
+  the authorization stage.
 
-Target existence (membership), transport type, and runtime directory are NOT
-resolved here; they are bundle-configuration concerns handled by the operation
-body after authorization (see Operation Body Contract).
+Target existence, transport capabilities, readiness, and runtime/delivery
+binding are NOT resolved here; they are registry/configuration concerns handled
+by the operation body after route classification and before authorization (see
+Operation Body Contract).
 
 #### Scenario: Single target classified from its suffix
 
 - **WHEN** the relay receives a Look or Raww request targeting `agent@bundle-a`
-- **THEN** the resolution stage produces `ResolvedTarget { namespace:
-  bundle-a, session_id: agent, relay_wide: false }` without loading bundle
-  configuration
-- **AND** `dispatch_namespace` is the requester's home bundle
+- **THEN** the resolution stage produces a target with
+  `principal_id = agent@bundle-a`, `namespace = bundle-a`, and
+  `session_id = agent` without loading bundle configuration
+- **AND** `dispatch_namespace` is the requester's home namespace
 
 #### Scenario: Multi-target Send classified per target
 
-- **WHEN** the relay receives a Send request with targets in multiple bundles
+- **WHEN** the relay receives a Send request with targets in multiple namespaces
 - **THEN** the resolution stage produces one `ResolvedTarget` per target, each
   classified to its own namespace from its suffix
 
@@ -63,28 +63,28 @@ resolution stage. The authorization stage SHALL:
   never assigned a bundle namespace.
 - Classify each target's relationship to the requester into a uniform scope tier
   and require the maximum tier across the route: `self` for a self-target,
-  `home` for a same-bundle target, `all` for a target in a peer bundle.
-  A relay-wide (`@GLOBAL`) target is delivered through the session registry, not
-  by crossing into a peer bundle, so it classifies at the `home` tier rather
-  than raising the requirement to `all`.
+  `home` for a same-namespace target, `all` for a target in a peer namespace. A
+  relay-wide (`@GLOBAL`) target is delivered through the unified registry in its
+  own namespace, not by crossing into a peer bundle, so it classifies at the
+  `home` tier rather than raising the requirement to `all`.
 - Consider **every** target when computing the required tier; authorization is
   the maximum across the whole route, never a single representative target.
   Because the scope ladder is monotone, a requester whose configured scope
-  satisfies the maximum tier is thereby authorized for every target. The check
-  is **all-or-nothing**: if the requester's scope does not satisfy the maximum,
-  the entire operation is rejected with `authorization_forbidden` and no target
-  is delivered. (Per-target partial delivery is a deferred follow-up.)
+  satisfies the maximum tier is thereby authorized for every target. The check is
+  **all-or-nothing**: if the requester's scope does not satisfy the maximum, the
+  entire operation is rejected with `authorization_forbidden` and no target is
+  delivered. (Per-target partial delivery is a deferred follow-up.)
 - Check the required tier against the requester's configured scope for the
   operation's capability. Each operation contributes only an `OperationProfile`
-  (its capability and addressing mode); it carries no per-operation cross-bundle
-  policy.
+  (its capability and addressing mode); it carries no per-operation
+  cross-namespace policy.
 
-Whether a capability can ever be configured to reach the cross-bundle (`all`)
+Whether a capability can ever be configured to reach the cross-namespace (`all`)
 tier is governed solely by the policy schema's per-capability allowed-scope set
-(`parse_policy_controls`). The relay SHALL NOT apply
-per-operation cross-bundle logic in handler or routing code; this data-driven
-spine — uniform tier classification plus the schema allowed-scope set — SHALL be
-the single authority for cross-bundle reach.
+(`parse_policy_controls`). The relay SHALL NOT apply per-operation
+cross-namespace logic in handler or routing code; this data-driven spine —
+uniform tier classification plus the schema allowed-scope set — SHALL be the
+single authority for cross-namespace reach.
 
 #### Scenario: Requester authorized in home namespace for cross-bundle Raww
 
@@ -104,7 +104,7 @@ the single authority for cross-bundle reach.
 
 - **WHEN** a relay-wide (`GLOBAL`) sender issues a Send whose targets are all
   `@GLOBAL`
-- **THEN** relay routes each target through the session registry
+- **THEN** relay routes each target through the unified registry
 - **AND** does not return `validation_missing_routing_namespace`
 
 #### Scenario: Cross-bundle Raww denied under home
@@ -113,11 +113,11 @@ the single authority for cross-bundle reach.
 - **AND** the requester's configured `raww` scope is `home` or narrower
 - **THEN** relay returns `authorization_forbidden`
 
-Note: for a relay-wide (`@GLOBAL`) principal, `home` covers only the
-`GLOBAL` namespace, which is populated exclusively by UI sessions. UI sessions
-are rejected by `handle_raww` as an unsupported target class, so `home`
-confers zero effective raww reach. `all` is the only meaningful tier for
-cross-bundle raww from a relay-wide principal.
+Note: for a relay-wide (`@GLOBAL`) principal, `home` covers only the `GLOBAL`
+namespace, which is populated by relay-wide sessions. Sessions whose registry
+entry carries `can_be_written = false` are rejected by the raww capability gate,
+so `home` confers no effective raww reach to those targets. `all` remains the
+meaningful tier for cross-bundle raww from a relay-wide principal.
 
 #### Scenario: Cross-bundle Raww permitted under all
 
@@ -129,24 +129,24 @@ cross-bundle raww from a relay-wide principal.
 
 - **WHEN** a session in bundle A issues a List request enumerating bundle B
 - **THEN** relay evaluates the requester's `list` policy control from bundle A
-- **AND** does not return `validation_unknown_sender` because the requester is
-  not a member of bundle B
+- **AND** does not return `validation_unknown_sender` because the requester is not
+  a member of bundle B
 
 ### Requirement: Operation Body Contract
 
 Operation handler bodies SHALL receive a `ResolvedRoute` whose targets are
-already classified (located to a namespace in the unified live registry) and
-authorized. Handler bodies SHALL NOT:
+already classified by namespace and authorized. Handler bodies SHALL NOT:
 
 - Parse `@<namespace>` suffixes from principal IDs.
 - Evaluate requester policy controls or classify target scope tiers.
 
-Handler bodies MAY load the target bundles' configuration to validate target
-existence and to assemble delivery (member transport, choice deciders,
-runtime directory) — this is delivery work, distinct from routing and
+Handler bodies MAY look up target entries in the unified session registry and MAY
+load target bundle configuration to validate configured membership. Delivery and
+runtime binding SHALL come from the registry entry once it exists. This is
+existence, capability, readiness, and delivery work, distinct from routing and
 authorization. They SHALL implement only operation-specific work: existence
-validation, snapshot capture, delivery enqueueing, raw text injection, session
-enumeration, or lifecycle control.
+validation, capability checks, readiness handling, snapshot capture, delivery
+enqueueing, raw text injection, session enumeration, or lifecycle control.
 
 #### Scenario: Handler body free of routing and authorization logic
 
@@ -154,7 +154,7 @@ enumeration, or lifecycle control.
   `handle_look`, `handle_raww`, `handle_list`)
 - **THEN** no principal-ID suffix parsing and no requester-policy or scope-tier
   evaluation are present
-- **AND** routing classification and authorization are handled exclusively by
-  the dispatch layer, with only existence validation and delivery assembly
-  remaining in the body
+- **AND** routing classification and authorization are handled exclusively by the
+  dispatch layer, with only existence validation, capability checks, readiness
+  handling, and delivery assembly remaining in the body
 
