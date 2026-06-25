@@ -7,7 +7,9 @@ use time::format_description::well_known::Rfc3339;
 use crate::configuration::{BundleConfiguration, TargetConfiguration, load_bundle_configuration};
 use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 
+use super::identity::canonical_session_id;
 use super::startup_state::note_session_served_successfully;
+use super::stream::register_bundle_runtime_session;
 use super::{
     BundleStartupReport, ListedSessionTransport, ReconciliationReport, RelayError, ShutdownReport,
     StartupFailureRecord, map_config, relay_error,
@@ -174,6 +176,30 @@ fn startup_loaded_bundle(
     members.sort_by(|left, right| left.id.cmp(&right.id));
 
     for member in members {
+        // Register a static unified-registry entry for every configured coder
+        // session before attempting startup, so look/raww can resolve the
+        // target's capabilities and a not-yet-ready coder target is not mistaken
+        // for an unknown one (the entry persists independently of transport
+        // readiness). UI/Pubsub members have no managed runtime and register
+        // dynamically at stream Hello.
+        if matches!(
+            member.target,
+            TargetConfiguration::Tmux(_) | TargetConfiguration::Acp(_)
+        ) {
+            register_bundle_runtime_session(
+                canonical_session_id(member.id.as_str(), bundle.bundle_name.as_str()).as_str(),
+                bundle.bundle_name.as_str(),
+                member.id.as_str(),
+                member.target.session_type(),
+            )
+            .map_err(|error| {
+                relay_error(
+                    "internal_unexpected_failure",
+                    "failed to register bundle-runtime session in the unified registry",
+                    Some(json!({ "session_id": member.id, "cause": error.to_string() })),
+                )
+            })?;
+        }
         match &member.target {
             TargetConfiguration::Tmux(_) => match startup_tmux_member(tmux_socket, &member) {
                 Ok(()) => {

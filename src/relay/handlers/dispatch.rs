@@ -9,10 +9,11 @@ use crate::configuration::BundleConfiguration;
 
 use super::super::authorization::{AuthorizationContext, authorize_updown};
 use super::super::identity::IdentityIntrospectRights;
-use super::super::stream::{RelayStreamEvent, list_registered_relay_wide_sessions};
+use super::super::stream::{RelayStreamEvent, list_namespace_sessions};
 use super::super::{
-    ChoiceDecisionRequestContext, ListedBundle, ListedBundleState, ListedSession, RelayError,
-    RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION, bare_session_id, relay_error,
+    ChoiceDecisionRequestContext, GLOBAL_NAMESPACE, ListedBundle, ListedBundleState, ListedSession,
+    RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION, bare_session_id,
+    relay_error,
 };
 use super::{choices, identity, listing};
 
@@ -83,17 +84,17 @@ pub(in crate::relay) fn handle_request(
     }
 }
 
-/// Returns the set of currently registered relay-wide sessions for a `List`
-/// request issued with `namespace = "GLOBAL"`.
+/// Returns the set of currently registered sessions in namespace `GLOBAL` for a
+/// `List` request issued with `namespace = "GLOBAL"`.
 ///
-/// Relay-wide routing has no bundle context, so this bypasses the per-bundle
-/// `handle_request` path entirely: it reads the live stream registry and
-/// projects each `RegistryKey::RelayWide` entry into a `ListedSession`. The
-/// result is shaped as a `RelayResponse::List` over a synthetic `GLOBAL` bundle
-/// view so clients reuse the existing list payload. An empty registry yields an
-/// empty session set (a `down` bundle), not an error.
+/// `GLOBAL` is a namespace in the unified registry like any bundle namespace, so
+/// this filters the registry for entries whose namespace is `GLOBAL` rather than
+/// reading a dedicated relay-wide path. The result is shaped as a
+/// `RelayResponse::List` over a synthetic `GLOBAL` bundle view so clients reuse
+/// the existing list payload. An empty result yields an empty session set (a
+/// `down` bundle), not an error.
 pub(in crate::relay) fn handle_global_list() -> RelayResponse {
-    let mut sessions = list_registered_relay_wide_sessions()
+    let mut sessions = list_namespace_sessions(GLOBAL_NAMESPACE)
         .into_iter()
         .map(|(principal_id, session_type)| ListedSession {
             id: principal_id,
