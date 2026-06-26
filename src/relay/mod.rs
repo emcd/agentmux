@@ -40,6 +40,7 @@ pub use self::delivery::observability::{
 pub use self::drain::{ConnectionDrainCoordinator, ConnectionDrainReport, ConnectionWorkerSlot};
 use self::errors::*;
 use self::identity::*;
+pub use self::stream::second_claim_is_live_conflict_for_testing;
 pub use self::watcher::{BundleWatcher, spawn_bundle_watcher};
 
 /// Executes one relay request for a configured bundle.
