@@ -79,21 +79,40 @@ pub fn emit_inscription(event: &str, details: &Value) {
     let Some(path) = PROCESS_INSCRIPTIONS_PATH.get() else {
         return;
     };
+    append_inscription_record(path, event, details);
+}
+
+/// Appends one structured inscription record (timestamped JSON object plus a
+/// trailing newline) to `path` as a single atomic write under `O_APPEND`.
+///
+/// Separated from the process-global [`emit_inscription`] sink so the append
+/// behavior can be exercised directly against an explicit path; `emit_inscription`
+/// delegates here with the configured path.
+///
+/// Inscriptions are emitted concurrently from many tasks with no shared lock,
+/// relying on `O_APPEND` to append each write atomically. The record is built as a
+/// single string (content plus its trailing newline) and committed with one
+/// `write_all`: a `writeln!` would issue the content and the newline as two
+/// separate writes, letting concurrent emitters interleave one record's content
+/// with another's newline and corrupt both lines into non-JSON that downstream
+/// readers drop. One write of the complete record keeps each line intact.
+pub fn append_inscription_record(path: &Path, event: &str, details: &Value) {
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
     let timestamp = time::OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
-    let line = json!({
+    let mut record = json!({
         "timestamp": timestamp,
         "pid": process::id(),
         "event": event,
         "details": details,
     })
     .to_string();
+    record.push('\n');
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(file, "{line}");
+        let _ = file.write_all(record.as_bytes());
     }
 }
 
