@@ -29,7 +29,7 @@ mod watcher;
 use self::authorization::load_authorization_context;
 
 pub use self::client::{RelayStreamSession, request_relay};
-pub use self::connection::{BundleCatalog, serve_connection};
+pub use self::connection::{BundleCatalog, HostingIntent, serve_connection};
 use self::constants::*;
 use self::context::*;
 pub use self::contract::*;
@@ -124,6 +124,7 @@ fn handle_request_with_principal(
         &authorization,
         runtime_directory,
         principal,
+        bundle_catalog,
     )
 }
 
