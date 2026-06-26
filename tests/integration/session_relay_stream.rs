@@ -194,16 +194,24 @@ fn global_user_id(bundle_name: &str) -> String {
     format!("g{:016x}@GLOBAL", hasher.finish())
 }
 
-// Collects stream events addressed to `target_session` until the terminal
-// `delivered` outcome is seen or the deadline elapses. Relay-wide (`@GLOBAL`)
-// UI connections receive events from every bundle on the relay, and the stream
-// registry is process-wide, so a test must filter foreign events out by the
-// recipient id in the canonical `target_session` (unique per test) rather than
-// reading a fixed event count.
+// Collects stream events addressed to `target_session` until a terminal
+// `delivered` outcome is seen or the deadline elapses. `terminal_message_id`
+// selects which delivery ends collection: `Some(id)` stops only on the
+// `delivered` outcome of that specific message, while `None` stops on the first
+// `delivered` for any message. A specific id is required whenever an earlier
+// delivery's outcome can reach the stream first — e.g. a message held before the
+// UI stream existed is flushed (with its own `delivered` outcome) the moment a
+// late stream registers, ahead of a later send's events. Passing `None` there
+// would break collection on the held message and miss the later one. Relay-wide
+// (`@GLOBAL`) UI connections receive events from every bundle on the relay, and
+// the stream registry is process-wide, so a test must filter foreign events out
+// by the recipient id in the canonical `target_session` (unique per test) rather
+// than reading a fixed event count.
 fn collect_events_for_target(
     stream: &UnixStream,
     reader: &mut BufReader<UnixStream>,
     target_session: &str,
+    terminal_message_id: Option<&str>,
     deadline: Duration,
 ) -> Vec<Value> {
     stream
@@ -219,7 +227,9 @@ fn collect_events_for_target(
             continue;
         }
         let terminal = value["event"]["event_type"] == "delivery_outcome"
-            && value["event"]["payload"]["phase"] == "delivered";
+            && value["event"]["payload"]["phase"] == "delivered"
+            && terminal_message_id
+                .is_none_or(|id| value["event"]["payload"]["message_id"].as_str() == Some(id));
         events.push(value);
         if terminal {
             break;
@@ -288,6 +298,7 @@ fn relay_send_routes_to_connected_ui_stream_with_event_frames() {
         &ui_client,
         &mut reader,
         &global_user_id(&bundle_name),
+        None,
         Duration::from_secs(3),
     );
     let incoming_event = events
@@ -378,6 +389,7 @@ fn relay_send_waits_for_ui_reconnect_before_delivery() {
             &reconnect_client,
             &mut reconnect_reader,
             &global_user_id(&reconnect_bundle),
+            None,
             Duration::from_secs(3),
         );
         reconnect_client
@@ -540,7 +552,6 @@ directory = "/tmp"
 // for its lifetime), so the second send routes to UI even though the first bound
 // the worker before any UI stream existed.
 #[test]
-#[ignore = "collect_events_for_target exits on first delivery_outcome; misses second message; see issues/relay/42"]
 fn relay_configured_ui_target_recovers_after_late_stream_registration() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
@@ -615,10 +626,16 @@ fn relay_configured_ui_target_recovers_after_late_stream_registration() {
     assert_eq!(second_results.len(), 1);
     assert_eq!(second_results[0].outcome, SendOutcome::Queued);
 
+    // Collect until the SECOND message's terminal outcome. The first message was
+    // held before any UI stream existed; it flushes (with its own `delivered`
+    // outcome) the moment the stream registers, ahead of the second send's events.
+    // Keying the terminal on the second message id keeps collection going past the
+    // held message so the "after registration" `incoming_message` is observed.
     let events = collect_events_for_target(
         &ui_client,
         &mut reader,
         display_target.as_str(),
+        Some(second_results[0].message_id.as_str()),
         Duration::from_secs(3),
     );
     events
