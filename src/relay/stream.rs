@@ -391,18 +391,43 @@ pub(super) fn register_stream(
         .entries
         .lock()
         .map_err(|_| io::Error::other("failed to lock stream registry"))?;
-    if let Some(entry) = entries.get(principal_id)
-        && entry.is_connected()
-    {
-        // A registry entry can briefly outlive its connection: when a client
-        // drops and immediately reconnects, the owning connection task may not
-        // have observed EOF yet, so the stale entry still looks live. Async
-        // reads + a drop-guard unregister narrow the race window to scheduling
-        // jitter; the conflict surfaces through the standard client retry path
-        // (`runtime_identity_claim_conflict`) instead of a synchronous probe.
-        return Ok(RegisterStreamOutcome::IdentityClaimConflict {
-            existing_connection_id: entry.stream_id.clone(),
-        });
+    // Distinguish a *live* identity-claim conflict from a *stale* one before
+    // (re)registering. A registry entry's writer task closes its receiver when it
+    // exits -- on a relay-to-client write timeout/error or once every sender
+    // clone drops -- so `is_connected()` (an attached `stream_id` whose writer is
+    // not closed) is an authoritative live-connection signal:
+    //
+    //   * Live: the writer is still open, so a genuine second connection is
+    //     draining for this principal. Reject with an identity-claim conflict;
+    //     the client's bounded retry resolves a true reconnect race once the
+    //     prior owner's drop-guard clears the entry.
+    //   * Stale: the entry is attached (`stream_id` set) but its writer is
+    //     closed, so the prior connection is dead and its drop-guard has not run
+    //     yet. Reclaim the entry here rather than forcing the new client through
+    //     the conflict-retry path -- the stale takeover no longer depends on
+    //     `HELLO_CONFLICT_RETRY_TIMEOUT_MS`.
+    //
+    // The one case this cannot resolve synchronously is a writer that is still
+    // open behind a silently dropped socket (an idle dead connection that has not
+    // yet failed a write); it is indistinguishable from a live owner, so it stays
+    // a live conflict and is absorbed by the client retry.
+    if let Some(entry) = entries.get_mut(principal_id) {
+        if entry.is_connected() {
+            return Ok(RegisterStreamOutcome::IdentityClaimConflict {
+                existing_connection_id: entry.stream_id.clone(),
+            });
+        }
+        if entry.stream_id.is_some() {
+            let prior_stream_id = entry.stream_id.clone();
+            entry.clear_dynamic_state();
+            emit_inscription(
+                "relay.stream.stale_claim_reclaimed",
+                &serde_json::json!({
+                    "principal_id": principal_id,
+                    "prior_stream_id": prior_stream_id,
+                }),
+            );
+        }
     }
     let stream_id = Uuid::new_v4().to_string();
     match entries.get_mut(principal_id) {
@@ -831,4 +856,57 @@ fn note_write_timeout(error: &io::Error) {
 
 fn stream_registry() -> &'static StreamRegistry {
     STREAM_REGISTRY.get_or_init(StreamRegistry::default)
+}
+
+/// Test-only seam exercising the stale-vs-live identity-claim distinction in
+/// [`register_stream`] deterministically, without the connection layer's
+/// write-timeout teardown race. Registers a first connection for a unique
+/// principal, then either keeps its writer open (a live owner) or closes it (a
+/// stale attachment whose writer task has exited), and reports whether a second
+/// registration for the same principal is rejected as a live identity-claim
+/// conflict (`true`) or reclaims the stale entry and registers (`false`). The
+/// registry entry is removed before returning so no global state leaks into
+/// other tests.
+#[doc(hidden)]
+#[must_use]
+pub fn second_claim_is_live_conflict_for_testing(prior_writer_open: bool) -> bool {
+    let principal_id = format!("staleprobe{}@GLOBAL", Uuid::new_v4().simple());
+    let revoke: StreamRevokeSignal = Arc::new(Notify::new());
+
+    let (first_writer, first_receiver) = mpsc::unbounded_channel::<Vec<u8>>();
+    let _ = register_stream(
+        principal_id.as_str(),
+        SessionType::Ui,
+        first_writer,
+        None,
+        revoke.clone(),
+        None,
+    );
+    if !prior_writer_open {
+        // Drop the receiver so the prior writer reports closed: the entry is now
+        // a stale attachment to a dead connection.
+        drop(first_receiver);
+    }
+
+    // The second writer's receiver is held (`_second_receiver`) only so the
+    // sender stays open through registration; the live/stale decision keys on the
+    // *prior* writer, whose receiver is held to end of scope in the open case.
+    let (second_writer, _second_receiver) = mpsc::unbounded_channel::<Vec<u8>>();
+    let outcome = register_stream(
+        principal_id.as_str(),
+        SessionType::Ui,
+        second_writer,
+        None,
+        revoke,
+        None,
+    );
+
+    if let Ok(mut entries) = stream_registry().entries.lock() {
+        entries.remove(principal_id.as_str());
+    }
+
+    matches!(
+        outcome,
+        Ok(RegisterStreamOutcome::IdentityClaimConflict { .. })
+    )
 }

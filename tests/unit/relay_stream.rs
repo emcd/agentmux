@@ -10,7 +10,7 @@ use std::{
 use agentmux::{
     relay::{
         BundleCatalog, ConnectionDrainCoordinator, ConnectionDrainReport, ConnectionWorkerSlot,
-        serve_connection,
+        second_claim_is_live_conflict_for_testing, serve_connection,
     },
     runtime::paths::BundleRuntimePaths,
 };

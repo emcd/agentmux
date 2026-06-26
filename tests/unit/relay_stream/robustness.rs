@@ -306,6 +306,120 @@ fn idle_ui_stream_write_timeout_tears_down_connection() {
         .expect("join reconnect relay thread");
 }
 
+// The `user@GLOBAL` (TUI) variant of the idle-UI teardown above. The original
+// production regression was a relay-wide operator stream, not a bundle-local UI
+// member. The teardown mechanism is RegistryKey-independent, so this asserts the
+// same clean worker release and registry release for a relay-wide principal,
+// guarding the `@GLOBAL` UI permission and snapshot-delivery routing paths
+// against a future regression specific to relay-wide connections. See
+// todos/relay/65.
+#[test]
+fn idle_global_operator_stream_write_timeout_tears_down_connection() {
+    ensure_fast_write_timeout_for_tests();
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "party_idle_global_ui_timeout";
+    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    // Declare the relay-wide operator (`@GLOBAL`) whose idle UI stream the relay
+    // keeps pushing events to: the TUI connection shape from the regression.
+    write_tui_configuration(&configuration_root, "default", bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let operator_id = global_user_id(bundle_name);
+
+    // Operator UI client: register as a relay-wide stream, read the ack, shrink
+    // its receive buffer, then go idle -- it never sends another frame and never
+    // reads again. Captured so the worker's return is observable instead of
+    // pinning on a parked read loop behind a dead writer.
+    let (mut operator_client, operator_handle) =
+        spawn_relay_connection_capturing(&configuration_root, &bundle_paths);
+    let operator_read = operator_client.try_clone().expect("clone operator stream");
+    let mut operator_reader = BufReader::new(operator_read);
+    send_json(
+        &mut operator_client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "principal_id": operator_id,
+            "identity_token": "socket-trust",
+        }),
+    );
+    assert_eq!(read_json(&mut operator_reader)["frame"], "hello_ack");
+    let rcvbuf_bytes = minimize_receive_buffer(&operator_client);
+    // Stop draining: every event the relay now pushes accumulates unread.
+    drop(operator_reader);
+
+    // Size the message so a single pushed incoming_message event overruns the
+    // shrunk buffer, blocking the relay-to-client write past the 300 ms timeout.
+    let large_message = "x".repeat(rcvbuf_bytes.max(4096));
+
+    // Sender: a bundle-bound session floods chat messages at the idle operator by
+    // its `@GLOBAL` id, so the relay pushes one incoming_message event per send
+    // onto the relay-wide stream until the shrunk buffer fills and the write
+    // times out, the writer task exits, and the connection must tear down.
+    let (mut sender_client, sender_handle) =
+        spawn_relay_connection(&configuration_root, &bundle_paths);
+    let sender_read = sender_client.try_clone().expect("clone sender stream");
+    let mut sender_reader = BufReader::new(sender_read);
+    send_json(&mut sender_client, agent_hello_frame(bundle_name));
+    assert_eq!(read_json(&mut sender_reader)["frame"], "hello_ack");
+
+    for index in 0..64 {
+        if operator_handle.is_finished() {
+            break;
+        }
+        send_json(
+            &mut sender_client,
+            json!({
+                "frame": "request",
+                "request_id": format!("flood-{index}"),
+                "request": {
+                    "operation": "send",
+                    "requester_session": "alpha",
+                    "message": large_message,
+                    "targets": [operator_id],
+                    "broadcast": false,
+                },
+            }),
+        );
+        // Drain the send response so the sender's own buffer never backs up.
+        let _ = read_json(&mut sender_reader);
+    }
+
+    // Without the writer-arm teardown the parked operator read loop would never
+    // see the dead writer and `join_within` would panic on the pinned worker.
+    let outcome = join_within(operator_handle, Duration::from_secs(5));
+    assert!(
+        outcome.is_ok(),
+        "idle global operator write-timeout teardown should be a clean exit: {outcome:?}"
+    );
+
+    shutdown_stream(&sender_client, "shutdown sender client");
+    sender_handle.join().expect("join sender relay thread");
+
+    // The torn-down connection must have released its registry entry: the same
+    // `@GLOBAL` identity reconnects without an identity-claim conflict.
+    let (mut reconnect_client, reconnect_handle) =
+        spawn_relay_connection(&configuration_root, &bundle_paths);
+    let reconnect_read = reconnect_client
+        .try_clone()
+        .expect("clone reconnect stream");
+    let mut reconnect_reader = BufReader::new(reconnect_read);
+    send_json(
+        &mut reconnect_client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "principal_id": operator_id,
+            "identity_token": "socket-trust",
+        }),
+    );
+    assert_eq!(read_json(&mut reconnect_reader)["frame"], "hello_ack");
+    shutdown_stream(&reconnect_client, "shutdown reconnect client");
+    reconnect_handle
+        .join()
+        .expect("join reconnect relay thread");
+}
+
 // Drives a bounded drain wait on a private current-thread runtime so the
 // synchronous test can assert on the report.
 fn block_on_drain(
