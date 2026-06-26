@@ -25,13 +25,17 @@ use notify_debouncer_full::{
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use crate::configuration::{bundle_configuration_path, bundles_configuration_directory};
+use crate::configuration::{
+    bundle_configuration_path, bundles_configuration_directory, load_bundle_configuration,
+};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory};
 
-use super::connection::BundleCatalog;
-use super::lifecycle::{shutdown_bundle_runtime, startup_bundle};
+use super::connection::{BundleCatalog, HostingIntent};
+use super::lifecycle::{
+    register_configured_bundle_principals, shutdown_bundle_runtime, startup_bundle,
+};
 use super::stream::evict_streams_for_bundle;
 use super::{RelayError, RelayResponse};
 
@@ -80,6 +84,7 @@ pub fn spawn_bundle_watcher(
     configuration_root: impl AsRef<Path>,
     state_root: impl AsRef<Path>,
     catalog: BundleCatalog,
+    no_autostart: bool,
 ) -> Result<BundleWatcher, RuntimeError> {
     let configuration_root = configuration_root.as_ref().to_path_buf();
     let state_root = state_root.as_ref().to_path_buf();
@@ -117,7 +122,13 @@ pub fn spawn_bundle_watcher(
             for result in receiver {
                 match result {
                     Ok(_events) => {
-                        reconcile_bundles(&configuration_root, &state_root, &catalog, &mut state);
+                        reconcile_bundles(
+                            &configuration_root,
+                            &state_root,
+                            &catalog,
+                            &mut state,
+                            no_autostart,
+                        );
                     }
                     Err(errors) => {
                         emit_inscription(
@@ -158,6 +169,7 @@ fn reconcile_bundles(
     state_root: &Path,
     catalog: &BundleCatalog,
     state: &mut ReconcileState,
+    no_autostart: bool,
 ) {
     let bundles_directory = bundles_configuration_directory(configuration_root);
     let on_disk = match scan_bundle_names(&bundles_directory) {
@@ -193,6 +205,22 @@ fn reconcile_bundles(
             if state.fingerprints.get(bundle_name) == Some(&fingerprint) {
                 continue;
             }
+            if catalog.is_held(bundle_name) {
+                // The bundle is held — the operator took it down, or it does not
+                // autostart and was never brought up. Either way a configuration
+                // edit must not silently start it. Absorb the new content
+                // fingerprint so the edit is not re-detected on the next pass, but
+                // leave the runtime stopped until an explicit `up` sets the intent
+                // back to `Run`.
+                state
+                    .fingerprints
+                    .insert(bundle_name.to_string(), fingerprint);
+                emit_inscription(
+                    "relay.bundle.reload_suppressed_held",
+                    &json!({ "bundle_name": bundle_name }),
+                );
+                continue;
+            }
             reload_bundle(
                 configuration_root,
                 state_root,
@@ -212,14 +240,18 @@ fn reconcile_bundles(
                 bundle_name,
                 fingerprint,
                 state,
+                no_autostart,
             );
         }
     }
 }
 
-/// Loads and starts a newly detected bundle file. A validation or startup
-/// failure is recorded and the bundle is left unloaded; other bundles continue
-/// serving.
+/// Loads a newly detected bundle file. A bundle that autostarts (and the relay
+/// was not launched with `--no-autostart`) is started; one that does not is
+/// registered as `Hold` — known to the relay but not brought up, mirroring the
+/// boot-time process-only path — so a later edit does not silently start it. A
+/// validation or startup failure is recorded and the bundle is left unloaded;
+/// other bundles continue serving.
 fn load_new_bundle(
     configuration_root: &Path,
     state_root: &Path,
@@ -227,6 +259,7 @@ fn load_new_bundle(
     bundle_name: &str,
     fingerprint: [u8; 32],
     state: &mut ReconcileState,
+    no_autostart: bool,
 ) {
     let paths = match BundleRuntimePaths::resolve(state_root, bundle_name) {
         Ok(paths) => paths,
@@ -253,9 +286,56 @@ fn load_new_bundle(
         );
         return;
     }
+    // The same rule applied at boot: a per-bundle `autostart = false` or a
+    // relay-wide `--no-autostart` holds the bundle. A held bundle is registered
+    // (its members become offline registry shells) but not started.
+    let configuration = match load_bundle_configuration(configuration_root, bundle_name) {
+        Ok(configuration) => configuration,
+        Err(source) => {
+            record_load_failure(
+                bundle_name,
+                &source.to_string(),
+                None,
+                None,
+                state,
+                fingerprint,
+            );
+            return;
+        }
+    };
+    if no_autostart || !configuration.autostart {
+        if let Err(error) = register_configured_bundle_principals(&configuration) {
+            record_load_failure(
+                bundle_name,
+                &error.message,
+                Some(&error.code),
+                error.details.as_ref(),
+                state,
+                fingerprint,
+            );
+            return;
+        }
+        catalog.insert(paths, HostingIntent::Hold);
+        state
+            .fingerprints
+            .insert(bundle_name.to_string(), fingerprint);
+        state.failed.remove(bundle_name);
+        emit_inscription(
+            "relay.bundle.loaded_held",
+            &json!({
+                "bundle_name": bundle_name,
+                "reason": if no_autostart {
+                    "relay_no_autostart"
+                } else {
+                    "bundle_autostart_disabled"
+                },
+            }),
+        );
+        return;
+    }
     match startup_bundle(configuration_root, bundle_name, &paths.runtime_directory) {
         Ok(report) if report.ready_session_count > 0 => {
-            catalog.insert(paths);
+            catalog.insert(paths, HostingIntent::Run);
             state
                 .fingerprints
                 .insert(bundle_name.to_string(), fingerprint);
@@ -326,7 +406,9 @@ fn reload_bundle(
 
     match startup_bundle(configuration_root, bundle_name, &paths.runtime_directory) {
         Ok(report) if report.ready_session_count > 0 => {
-            catalog.insert(paths);
+            // Reload is reached only for a bundle whose intent is `Run` (held
+            // bundles are suppressed above), so the refreshed entry stays `Run`.
+            catalog.insert(paths, HostingIntent::Run);
             state
                 .fingerprints
                 .insert(bundle_name.to_string(), fingerprint);

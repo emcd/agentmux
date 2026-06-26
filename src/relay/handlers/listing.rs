@@ -14,9 +14,9 @@ use super::super::routing::{
     Addressing, Capability, OperationProfile, requester_home_namespace, resolve_list_route,
 };
 use super::super::{
-    BundleTransitionEntry, ListedBundle, ListedBundleStartupHealth, ListedBundleState,
-    ListedSession, RelayError, RelayResponse, SCHEMA_VERSION, canonical_session_id,
-    load_startup_failures, relay_error,
+    BundleCatalog, BundleTransitionEntry, HostingIntent, ListedBundle, ListedBundleStartupHealth,
+    ListedBundleState, ListedSession, RelayError, RelayResponse, SCHEMA_VERSION,
+    canonical_session_id, load_startup_failures, relay_error,
 };
 use super::routed::run_target_operation;
 use crate::tmux::pane::resolve_active_pane_target;
@@ -24,7 +24,14 @@ use crate::tmux::pane::resolve_active_pane_target;
 pub(super) fn handle_bundle_up(
     bundle: &BundleConfiguration,
     runtime_directory: &Path,
+    catalog: &BundleCatalog,
 ) -> Result<RelayResponse, RelayError> {
+    // Bringing the bundle up sets its hosting intent to `Run` so the watcher
+    // resumes reloading (and starting) it on configuration edits. Set
+    // unconditionally (even on an already-hosted no-op, and even for a bundle
+    // whose `autostart = false` seeded it `Hold`) because the operator's request
+    // to host it is the authoritative signal, regardless of current runtime state.
+    catalog.set_intent(bundle.bundle_name.as_str(), HostingIntent::Run);
     let tmux_socket = tmux_socket_path_for_runtime_directory(runtime_directory);
     let report = reconcile_loaded_bundle(bundle, tmux_socket.as_path())?;
     let changed = report.bootstrap_session.is_some()
@@ -59,7 +66,13 @@ pub(super) fn handle_bundle_up(
 pub(super) fn handle_bundle_down(
     bundle: &BundleConfiguration,
     runtime_directory: &Path,
+    catalog: &BundleCatalog,
 ) -> Result<RelayResponse, RelayError> {
+    // Set the hosting intent to `Hold` before tearing the runtime down so a
+    // subsequent configuration edit does not let the watcher silently restart
+    // the bundle. Set unconditionally (even on an already-unhosted no-op) because
+    // the operator's request to keep it down is the authoritative signal.
+    catalog.set_intent(bundle.bundle_name.as_str(), HostingIntent::Hold);
     let tmux_socket = tmux_socket_path_for_runtime_directory(runtime_directory);
     let report = shutdown_bundle_runtime(tmux_socket.as_path())?;
     let changed = !report.pruned_sessions.is_empty() || report.killed_tmux_server;

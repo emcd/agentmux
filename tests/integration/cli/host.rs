@@ -833,6 +833,91 @@ fn host_relay_watcher_loads_new_bundle_file_at_runtime() {
     assert_eq!(added["principal_id"], "b@bravo");
 }
 
+// A bundle TOML file added at runtime with `autostart = false` is loaded held:
+// the relay learns it (its members register as offline shells, so Hello is
+// accepted) but does not start it, mirroring the boot-time process-only path.
+#[test]
+fn host_relay_watcher_loads_non_autostart_bundle_held_without_starting() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        Some(&["dev"]),
+        &["a"],
+        Some(true),
+    );
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay");
+    wait_for_relay_ready(&state_root, "alpha");
+
+    // Add a non-autostart bravo bundle at runtime; the watcher should register it
+    // held rather than start it.
+    write_bundle_configuration_with_options(
+        &config_root,
+        "bravo",
+        Some(&["dev"]),
+        &["b"],
+        Some(false),
+    );
+    let loaded_held =
+        poll_inscription_event(&inscriptions_root, "relay.bundle.loaded_held", "bravo");
+    // The held bundle is nonetheless known: Hello to one of its members succeeds.
+    let known = poll_hello_first_frame(&state_root, "b@bravo", "socket-trust", |frame| {
+        frame["frame"] == "hello_ack"
+    });
+
+    shutdown_relay_if_present(&state_root, "alpha");
+    let output = child
+        .wait_with_output()
+        .expect("wait for agentmux host relay");
+    assert!(output.status.success(), "command should succeed");
+
+    assert!(
+        loaded_held,
+        "expected relay.bundle.loaded_held for the non-autostart runtime add"
+    );
+    assert_eq!(
+        known["frame"], "hello_ack",
+        "held bundle should still be known: {known:?}"
+    );
+    // It must not have been started: no `relay.bundle.loaded` for bravo.
+    let inscriptions = fs::read_to_string(inscriptions_root.join("relay.log"))
+        .expect("read relay inscriptions log");
+    let started = inscriptions
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .any(|entry| {
+            entry["event"] == "relay.bundle.loaded" && entry["details"]["bundle_name"] == "bravo"
+        });
+    assert!(
+        !started,
+        "non-autostart bundle must not be started on runtime add: {inscriptions}"
+    );
+}
+
 // A bundle TOML file removed at runtime unloads the bundle: active sessions
 // receive a `runtime_bundle_unloaded` error frame before disconnect, and
 // subsequent connection attempts to that bundle are rejected as unknown.
@@ -983,6 +1068,213 @@ fn host_relay_watcher_reloads_modified_bundle_file_at_runtime() {
         "expected hello_ack after reload: {after:?}"
     );
     assert_eq!(after["principal_id"], "a@alpha");
+}
+
+/// Polls the relay inscriptions log until an entry with `event` naming
+/// `bundle_name` appears, returning `true` on a match or `false` once the
+/// deadline passes. Used to observe a watcher outcome that emits no stream frame
+/// (so it cannot be awaited on a keepalive connection).
+fn poll_inscription_event(inscriptions_root: &Path, event: &str, bundle_name: &str) -> bool {
+    let log = inscriptions_root.join("relay.log");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Ok(contents) = fs::read_to_string(&log) {
+            let found = contents
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .any(|entry| {
+                    entry["event"] == event && entry["details"]["bundle_name"] == bundle_name
+                });
+            if found {
+                return true;
+            }
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+// A bundle the operator explicitly took down via `down` is not silently brought
+// back up when its configuration file is edited: the watcher absorbs the new
+// fingerprint and records `relay.bundle.reload_suppressed_downed` instead of
+// reloading (and restarting) the runtime.
+#[test]
+fn host_relay_watcher_preserves_down_intent_across_file_edit() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        Some(&["dev"]),
+        &["a"],
+        Some(true),
+    );
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay");
+    wait_for_relay_ready(&state_root, "alpha");
+
+    // Operator takes the bundle down. This flows over the live relay socket and
+    // records the down intent on the shared catalog the watcher observes.
+    let down = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "down",
+            "alpha",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .output()
+        .expect("run agentmux down alpha");
+    assert!(down.status.success(), "down should succeed: {down:?}");
+
+    // Edit the (downed) bundle file: the watcher must absorb the change without
+    // restarting the runtime.
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        Some(&["dev"]),
+        &["a", "c"],
+        Some(true),
+    );
+    let suppressed = poll_inscription_event(
+        &inscriptions_root,
+        "relay.bundle.reload_suppressed_held",
+        "alpha",
+    );
+
+    shutdown_relay_if_present(&state_root, "alpha");
+    let output = child
+        .wait_with_output()
+        .expect("wait for agentmux host relay");
+    assert!(output.status.success(), "command should succeed");
+
+    assert!(
+        suppressed,
+        "expected relay.bundle.reload_suppressed_held for the downed bundle"
+    );
+    // The suppressed edit must not have reloaded (and thereby restarted) the
+    // bundle the operator deliberately took down.
+    let inscriptions = fs::read_to_string(inscriptions_root.join("relay.log"))
+        .expect("read relay inscriptions log");
+    let reloaded = inscriptions
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .any(|entry| {
+            entry["event"] == "relay.bundle.reloaded" && entry["details"]["bundle_name"] == "alpha"
+        });
+    assert!(
+        !reloaded,
+        "downed bundle must not be reloaded on a file edit: {inscriptions}"
+    );
+}
+
+// A bundle configured `autostart = false` enters the catalog already held, so a
+// configuration edit must not start it: the watcher records
+// `relay.bundle.reload_suppressed_held` and does not reload. This is the static
+// (declared) counterpart to an explicit `down` — the same hold rule, sourced
+// from config rather than a runtime command, with no `down` issued.
+#[test]
+fn host_relay_watcher_holds_non_autostart_bundle_on_file_edit() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        Some(&["dev"]),
+        &["a"],
+        Some(false),
+    );
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay");
+    wait_for_relay_ready(&state_root, "alpha");
+
+    // Edit the never-started bundle file: the standing `autostart = false` hold
+    // must keep the watcher from bringing it up.
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        Some(&["dev"]),
+        &["a", "c"],
+        Some(false),
+    );
+    let suppressed = poll_inscription_event(
+        &inscriptions_root,
+        "relay.bundle.reload_suppressed_held",
+        "alpha",
+    );
+
+    shutdown_relay_if_present(&state_root, "alpha");
+    let output = child
+        .wait_with_output()
+        .expect("wait for agentmux host relay");
+    assert!(output.status.success(), "command should succeed");
+
+    assert!(
+        suppressed,
+        "expected relay.bundle.reload_suppressed_held for the non-autostart bundle"
+    );
+    let inscriptions = fs::read_to_string(inscriptions_root.join("relay.log"))
+        .expect("read relay inscriptions log");
+    let reloaded = inscriptions
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .any(|entry| {
+            entry["event"] == "relay.bundle.reloaded" && entry["details"]["bundle_name"] == "alpha"
+        });
+    assert!(
+        !reloaded,
+        "non-autostart bundle must not be reloaded on a file edit: {inscriptions}"
+    );
 }
 
 // With `--no-watch`, a bundle file added at runtime is not reconciled: the relay

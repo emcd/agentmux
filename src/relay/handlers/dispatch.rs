@@ -11,9 +11,9 @@ use super::super::authorization::{AuthorizationContext, authorize_updown};
 use super::super::identity::IdentityIntrospectRights;
 use super::super::stream::{RelayStreamEvent, list_namespace_sessions};
 use super::super::{
-    ChoiceDecisionRequestContext, GLOBAL_NAMESPACE, ListedBundle, ListedBundleState, ListedSession,
-    RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION, bare_session_id,
-    relay_error,
+    BundleCatalog, ChoiceDecisionRequestContext, GLOBAL_NAMESPACE, ListedBundle, ListedBundleState,
+    ListedSession, RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
+    bare_session_id, relay_error,
 };
 use super::{choices, identity, listing};
 
@@ -27,16 +27,17 @@ pub(in crate::relay) fn handle_request(
     authorization: &AuthorizationContext,
     runtime_directory: &Path,
     principal: Option<RequestPrincipal>,
+    bundle_catalog: &BundleCatalog,
 ) -> Result<RelayResponse, RelayError> {
     let request = normalize_request_identities(request, bundle.bundle_name.as_str());
     match request {
         RelayRequest::Up => {
             authorize_bundle_principal(bundle, authorization, principal.as_ref())?;
-            listing::handle_bundle_up(bundle, runtime_directory)
+            listing::handle_bundle_up(bundle, runtime_directory, bundle_catalog)
         }
         RelayRequest::Down => {
             authorize_bundle_principal(bundle, authorization, principal.as_ref())?;
-            listing::handle_bundle_down(bundle, runtime_directory)
+            listing::handle_bundle_down(bundle, runtime_directory, bundle_catalog)
         }
         RelayRequest::List { requester_session } => listing::handle_list_routed(
             bundle,

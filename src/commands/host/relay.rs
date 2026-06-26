@@ -19,8 +19,8 @@ use tokio::{
 use crate::{
     configuration::load_bundle_group_memberships,
     relay::{
-        BundleCatalog, ConnectionDrainCoordinator, append_startup_failure, serve_connection,
-        shutdown_bundle_runtime, spawn_bundle_watcher, startup_bundle,
+        BundleCatalog, ConnectionDrainCoordinator, HostingIntent, append_startup_failure,
+        serve_connection, shutdown_bundle_runtime, spawn_bundle_watcher, startup_bundle,
         wait_for_async_delivery_shutdown,
     },
     runtime::{
@@ -49,7 +49,7 @@ use super::summary::{
     hosted_startup_bundle, render_startup_summary, skipped_startup_bundle, startup_summary_payload,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 enum RelayHostStartupMode {
     Autostart,
     ProcessOnly,
@@ -58,6 +58,10 @@ enum RelayHostStartupMode {
 #[derive(Debug)]
 struct HostedBundle {
     paths: BundleRuntimePaths,
+    /// Initial hosting intent for the catalog entry: `Run` for an autostarted
+    /// bundle, `Hold` for a process-only one (per-bundle `autostart = false` or
+    /// relay-wide `--no-autostart`).
+    hosting_intent: HostingIntent,
 }
 
 /// Outcome of the synchronous relay-host startup phase.
@@ -128,6 +132,7 @@ pub(super) async fn run_relay_host(arguments: RelayHostArguments) -> Result<(), 
     // enforcement and watching apply in the async serve phase, not during startup.
     let require_session_credentials = arguments.require_session_credentials;
     let watch_bundles = arguments.watch_bundles;
+    let no_autostart = arguments.no_autostart;
 
     // Startup (config load, tmux autostart, lock acquisition, socket binding) is
     // blocking, so it runs on a blocking task. The async serve phase then drives
@@ -159,6 +164,7 @@ pub(super) async fn run_relay_host(arguments: RelayHostArguments) -> Result<(), 
                 runtime_lock,
                 require_session_credentials,
                 watch_bundles,
+                no_autostart,
             )
             .await
         }
@@ -395,6 +401,7 @@ async fn serve_relay_host(
     runtime_lock: RelayRuntimeLock,
     require_session_credentials: bool,
     watch_bundles: bool,
+    no_autostart: bool,
 ) -> Result<(), RuntimeError> {
     emit_inscription("relay.startup.summary", &startup_summary_payload(&summary));
     render_startup_summary(&summary);
@@ -409,7 +416,11 @@ async fn serve_relay_host(
     // The catalog is the live source of truth once the watcher can mutate it, so
     // the shutdown cleanup list is taken from it after the watcher is stopped
     // (below) rather than from this initial set.
-    let catalog = BundleCatalog::from_paths(hosted_bundles.into_iter().map(|hosted| hosted.paths));
+    let catalog = BundleCatalog::from_entries(
+        hosted_bundles
+            .into_iter()
+            .map(|hosted| (hosted.paths, hosted.hosting_intent)),
+    );
 
     // Remove any stale sentinel left by a crashed predecessor before we publish
     // ours. Otherwise a waiter could observe "stale sentinel + new socket
@@ -456,6 +467,7 @@ async fn serve_relay_host(
             &roots.configuration_root,
             &roots.state_root,
             catalog.clone(),
+            no_autostart,
         ) {
             Ok(watcher) => Some(watcher),
             Err(error) => {
@@ -914,5 +926,18 @@ fn host_selected_bundle(
             "relay started without bundle autostart".to_string(),
         ),
     };
-    (startup_bundle, Some(HostedBundle { paths }))
+    // The startup mode already encodes the effective-autostart rule
+    // (`no_autostart || !membership.autostart` => process-only), so the catalog's
+    // initial hosting intent falls straight out of it.
+    let hosting_intent = match startup_mode {
+        RelayHostStartupMode::Autostart => HostingIntent::Run,
+        RelayHostStartupMode::ProcessOnly => HostingIntent::Hold,
+    };
+    (
+        startup_bundle,
+        Some(HostedBundle {
+            paths,
+            hosting_intent,
+        }),
+    )
 }
