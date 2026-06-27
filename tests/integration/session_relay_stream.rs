@@ -650,8 +650,9 @@ fn relay_configured_ui_target_recovers_after_late_stream_registration() {
         .find(|value| {
             value["event"]["event_type"] == "delivery_outcome"
                 && value["event"]["payload"]["phase"] == "delivered"
+                && value["event"]["payload"]["message_id"] == second_results[0].message_id.as_str()
         })
-        .expect("delivered outcome after late registration");
+        .expect("delivered outcome for second send after late registration");
     assert_eq!(delivered["event"]["payload"]["outcome"], "success");
     assert_eq!(
         delivered["event"]["payload"]["message_id"],
