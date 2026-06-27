@@ -70,7 +70,7 @@ systemctl --user restart agentmux-relay.service
 
 ## Authorization Policies
 
-Authorization for relay operations (`list`, `look`, `send`, `raww`, `grant`,
+Authorization for relay operations (`list`, `look`, `send`, `raww`, `choose`,
 `updown`) is configured in `<config-root>/policies.toml`. Each policy preset
 sets a scope (`none`, `self`, `home`, `all`) per control; the
 configured scope must meet the operation's minimum.

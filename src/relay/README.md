@@ -44,7 +44,13 @@ exported from `src/relay/mod.rs`.
     skip the catalog and are not bundle-bound. A request frame's optional
     `namespace` selects the routing bundle (overriding any binding); absent
     that, the bound bundle is used, and a relay-wide principal with neither is
-    rejected.
+    rejected. The catalog holds `CatalogEntry { paths, hosting_intent }` per
+    loaded bundle: `HostingIntent::Run` is the default for an autostart bundle
+    and is set by `up` regardless of current runtime state (the operator's
+    request to host is the authoritative signal); `HostingIntent::Hold` is the
+    initial intent for bundles without autostart and is what `down` sets when
+    unhosting. `is_held()` is the single check the watcher uses to decide
+    whether a configuration edit reloads or is suppressed.
 - `drain.rs`
   - cooperative connection-worker shutdown. `ConnectionDrainCoordinator` is
     shared between the relay host and its connection workers: the host fires
@@ -95,16 +101,26 @@ exported from `src/relay/mod.rs`.
     (writer/revoke/authenticated identity) while connected. **Offline is a state,
     not absence**: a `Configured` entry persists across (dis)connects so look/raww
     resolve its capability whether or not it is connected, and a Hello attaches
-    dynamic state to the static shell (flipping it online). Readiness is *not*
-    stored on the entry (it is owned by `AsyncWorkerEntry` and resolved at read
-    time). Hosts the shared session-eviction core (`evict_streams`): a selector
-    matches entries, each connected one is torn down (dynamic state detached,
-    typed error frame written, teardown signal fired), then removed or kept as a
-    static shell per the eviction scope. `revoke_streams_for_identity` (matched by
-    verified `authenticated_identity`, used by `change psk`; keeps static shells)
-    and `evict_streams_for_bundle` (matched by namespace, used by the bundle
-    watcher; removes entries) are thin wrappers over it — there is no independent
-    per-feature eviction path.
+    dynamic state to the static shell (flipping it online). Worker readiness is
+    *not* stored on the registry entry; it lives on the per-target
+    `AsyncWorkerEntry` and is surfaced through the watch-channel map in
+    `delivery/observability.rs` (see the `delivery/` block below), so the
+    registry itself stays purely about presence, capability, and identity.
+    `register_stream` distinguishes a **live** identity-claim conflict
+    from a **stale** one before attaching: an existing entry whose writer is
+    still open is a live owner and yields `IdentityClaimConflict`; an entry
+    attached to a closed writer is a dead connection whose drop-guard has not
+    run yet, and is reclaimed in place (its dynamic state cleared, a
+    `relay.stream.stale_claim_reclaimed` inscription emitted with the prior
+    `stream_id`) so the new client does not depend on `HELLO_CONFLICT_RETRY_TIMEOUT_MS`
+    to take over. Hosts the shared session-eviction core (`evict_streams`): a
+    selector matches entries, each connected one is torn down (dynamic state
+    detached, typed error frame written, teardown signal fired), then removed or
+    kept as a static shell per the eviction scope. `revoke_streams_for_identity`
+    (matched by verified `authenticated_identity`, used by `change psk`; keeps
+    static shells) and `evict_streams_for_bundle` (matched by namespace, used by
+    the bundle watcher; removes entries) are thin wrappers over it — there is no
+    independent per-feature eviction path.
 - `watcher.rs`
   - runtime bundle file watcher. Watches the bundles configuration directory
     (debounced ~200ms via `notify`) and reconciles the loaded `BundleCatalog`
@@ -113,7 +129,15 @@ exported from `src/relay/mod.rs`.
     modified files are torn down and reloaded (evicting sessions with
     `runtime_bundle_reloaded`). Content fingerprints distinguish a real edit from
     filesystem noise. Runs on a dedicated thread (filesystem/tmux work is
-    blocking); the host disables it with `--no-watch`.
+    blocking); the host disables it with `--no-watch`. A bundle whose entry has
+    `HostingIntent::Hold` (no autostart, or held by a `down`) is **not** torn
+    down or restarted by an edit: the new content fingerprint is absorbed and a
+    `relay.bundle.reload_suppressed_held` inscription is emitted, so the
+    operator's hold intent survives configuration edits until an explicit `up`
+    sets intent back to `Run`. A bundle loaded by the watcher with no autostart
+    (or with `--no-autostart`) is seeded with `Hold` and emits
+    `relay.bundle.loaded_held` instead of starting sessions, so the operator
+    brings it up on demand.
 - `tmux.rs`
   - tmux/process adapters used by delivery and look paths.
 - `delivery/`
@@ -138,8 +162,18 @@ exported from `src/relay/mod.rs`.
     drain helpers.
   - `choice_state.rs`: process-local choices queue (in-memory only; no persisted
     state) and the ACP chooser closure that captures `choices_pending_max`.
-  - `observability.rs`: in-process pub/sub for ACP worker-state and
-    choices-queue mutations, exposed to tests and embedders.
+  - `observability.rs`: in-process pub/sub for the per-target worker-readiness
+    surface and the choices-queue mutation stream, exposed to tests and
+    embedders. Worker readiness is a transport-agnostic
+    `WorkerReadinessState` (`Initializing` / `Available` / `Busy` /
+    `Recovering` / `Unavailable`) keyed on `AsyncWorkerKey`
+    (`(namespace, runtime_directory, target_session)`); observers subscribe via
+    `subscribe_worker_readiness` (returns a `watch::Receiver<Option<WorkerReadinessState>>`,
+    late subscribers get a `None` until the worker first publishes) and the
+    transport-agnostic driver publishes via `publish_worker_readiness`. The
+    choices-queue side exposes `choices_pending_max` and the
+    `choose_authorized_ui_sessions` snapshot read used by the relay listing
+    path.
   - ACP lifecycle and prompt flow live in `src/acp/` (see `crate::acp`); the
     `delivery/` module is no longer the home of ACP internals.
   - UI delivery is a first-class transport (`crate::transports::ui::UiTransport`),

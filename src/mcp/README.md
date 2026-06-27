@@ -307,5 +307,5 @@ This module implements the MCP stdio server for `agentmux`.
 
 - Relay may return stream events alongside direct responses.
 - Current MCP behavior logs these events via the
-  `mcp.tool.stream.events_ignored` inscription (with `bundle_name`
+  `mcp.tool.stream.events_ignored` inscription (with `namespace`
   and `count`) and ignores them at tool-response level.
