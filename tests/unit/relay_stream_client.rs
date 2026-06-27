@@ -357,6 +357,80 @@ fn stream_client_reports_exhausted_hello_conflict_as_timeout() {
 }
 
 #[test]
+fn hello_conflict_retries_back_off_to_a_bounded_attempt_count() {
+    // A duplicate-principal Hello storm must not drive a relay accept/close
+    // storm: the client retries with jittered exponential backoff under its
+    // ~1s deadline, so it issues only a handful of hellos rather than the ~20
+    // a fixed 50ms loop would produce. Count accepted hellos and assert the
+    // total stays well below the old fixed-interval ceiling while still
+    // proving the client retried at all.
+    let (_temporary, socket_path) =
+        temporary_socket_path("relay-stream-client-hello-conflict-backoff");
+    let listener = UnixListener::bind(&socket_path).expect("bind unix listener");
+    let done = Arc::new(AtomicBool::new(false));
+    let server_done = Arc::clone(&done);
+    let hello_count = Arc::new(AtomicU64::new(0));
+    let server_hello_count = Arc::clone(&hello_count);
+
+    let server = thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            if server_done.load(Ordering::Relaxed) {
+                break;
+            }
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            let hello_payload = read_json_line(&mut reader);
+            assert_eq!(hello_payload["frame"], "hello");
+            server_hello_count.fetch_add(1, Ordering::Relaxed);
+            write_json_line(
+                &mut stream,
+                &json!({
+                    "frame": "response",
+                    "response": {
+                        "kind": "error",
+                        "error": {
+                            "code": "runtime_identity_claim_conflict",
+                            "message": "stream identity is already claimed by a live connection"
+                        }
+                    }
+                }),
+            );
+            shutdown_stream(&stream, "shutdown conflict stream");
+        }
+    });
+
+    let mut session = RelayStreamSession::new(
+        socket_path.clone(),
+        "party".to_string(),
+        "alpha".to_string(),
+    );
+    let error = session
+        .request_with_events(&agentmux::relay::RelayRequest::List {
+            requester_session: Some("alpha".to_string()),
+        })
+        .expect_err("persistent hello conflict should fail the request");
+    assert_eq!(
+        error.kind(),
+        std::io::ErrorKind::TimedOut,
+        "exhausted hello conflict must surface as a timeout: {error:?}"
+    );
+
+    done.store(true, Ordering::Relaxed);
+    let _ = UnixStream::connect(&socket_path);
+    server.join().expect("join server");
+
+    let attempts = hello_count.load(Ordering::Relaxed);
+    assert!(
+        attempts >= 2,
+        "client should retry the hello at least once before giving up, got {attempts}"
+    );
+    assert!(
+        attempts <= 15,
+        "jittered backoff must keep attempts well below the ~20 a fixed 50ms loop \
+         would issue within the 1s deadline, got {attempts}"
+    );
+}
+
+#[test]
 fn stream_client_detects_idle_disconnect_and_reconnects_on_next_request() {
     // Verifies the liveness check in `ensure_connected`: after the relay
     // closes the connection between requests, the next request must observe

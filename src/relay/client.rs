@@ -18,8 +18,41 @@ use super::{RelayRequest, RelayResponse, RelayStreamEvent, SCHEMA_VERSION, canon
 const RELAY_STREAM_HELLO_ACK_TIMEOUT: Duration = Duration::from_secs(2);
 const RELAY_STREAM_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 const RELAY_STREAM_READ_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const HELLO_CONFLICT_RETRY_INTERVAL_MS: u64 = 50;
 const HELLO_CONFLICT_RETRY_TIMEOUT_MS: u64 = 1_000;
+/// First nominal backoff interval for connection retries. Doubles each attempt
+/// up to `CONNECT_RETRY_BACKOFF_CAP_MS`.
+const CONNECT_RETRY_BACKOFF_BASE_MS: u64 = 50;
+/// Ceiling on a single nominal backoff interval so a long deadline still yields
+/// several attempts rather than one oversized sleep.
+const CONNECT_RETRY_BACKOFF_CAP_MS: u64 = 400;
+
+/// Exponential backoff with equal jitter for connection retries inside the
+/// hello-conflict deadline. A duplicate-principal Hello storm — many clients
+/// claiming the same identity at once — would otherwise hammer the relay with a
+/// fixed-interval accept/close storm; jittered backoff decorrelates the herd.
+/// The nominal interval doubles each attempt up to `CONNECT_RETRY_BACKOFF_CAP_MS`,
+/// and each sleep is drawn uniformly from `[nominal/2, nominal]` so retries
+/// always make forward progress and never collapse back into a tight loop.
+struct ConnectRetryBackoff {
+    nominal_ms: u64,
+}
+
+impl ConnectRetryBackoff {
+    fn new() -> Self {
+        Self {
+            nominal_ms: CONNECT_RETRY_BACKOFF_BASE_MS,
+        }
+    }
+
+    /// Returns the next jittered sleep and advances the backoff. The sleep is
+    /// clamped to `remaining` so the overall retry never overshoots the deadline.
+    fn next_sleep(&mut self, remaining: Duration) -> Duration {
+        let nominal = self.nominal_ms;
+        let jittered = rand::random_range((nominal / 2)..=nominal);
+        self.nominal_ms = nominal.saturating_mul(2).min(CONNECT_RETRY_BACKOFF_CAP_MS);
+        Duration::from_millis(jittered).min(remaining)
+    }
+}
 
 #[derive(Debug)]
 pub struct RelayStreamSession {
@@ -245,6 +278,7 @@ impl RelayStreamSession {
             }
         }
         let deadline = Instant::now() + Duration::from_millis(HELLO_CONFLICT_RETRY_TIMEOUT_MS);
+        let mut backoff = ConnectRetryBackoff::new();
         loop {
             match self.try_connect_once() {
                 Ok(connection) => {
@@ -252,7 +286,8 @@ impl RelayStreamSession {
                     return Ok(());
                 }
                 Err(ConnectAttemptError::IdentityClaimConflict { message }) => {
-                    if Instant::now() >= deadline {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
                         // Surface an exhausted conflict retry as a timeout so
                         // `map_relay_request_failure` reports `relay_timeout`
                         // with the conflict message, rather than the opaque
@@ -260,11 +295,12 @@ impl RelayStreamSession {
                         // falls through to.
                         return Err(io::Error::new(io::ErrorKind::TimedOut, message));
                     }
-                    thread::sleep(Duration::from_millis(HELLO_CONFLICT_RETRY_INTERVAL_MS));
+                    thread::sleep(backoff.next_sleep(remaining));
                 }
                 Err(ConnectAttemptError::Io(source)) => {
-                    if is_retriable_connect_error(&source) && Instant::now() < deadline {
-                        thread::sleep(Duration::from_millis(HELLO_CONFLICT_RETRY_INTERVAL_MS));
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if is_retriable_connect_error(&source) && !remaining.is_zero() {
+                        thread::sleep(backoff.next_sleep(remaining));
                         continue;
                     }
                     return Err(source);
