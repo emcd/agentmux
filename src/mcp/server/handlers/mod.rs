@@ -2,7 +2,7 @@
 //! tool: list, help, send, look, raww, choose, updown, new, change. Each file
 //! holds an `impl McpServer` block with a named `#[tool_router]` attribute
 //! that generates a router-builder function; the routers are composed in
-//! `McpServer::new()` (in `core.rs`).
+//! `McpServer::new()` (in `service.rs`).
 
 mod change;
 mod choose;

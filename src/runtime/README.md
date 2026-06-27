@@ -19,6 +19,14 @@ shared by relay and MCP hosts.
   - relay socket bind and runtime lock acquisition.
 - `inscriptions.rs`
   - process/bundle inscription path setup and event emission helpers.
+    `append_inscription_record` is the single public write seam: it builds the
+    record (timestamp + pid + event + details) and trailing newline as one
+    `String` and commits the full record with a single `write_all` against a
+    `File` opened with `O_APPEND` (`OpenOptions::create(true).append(true)`).
+    Concurrent emitters append independently — the kernel serializes the writes
+    on the open file description — so each record lands as one atomic line,
+    which is required for downstream JSON-per-line readers to drop nothing and
+    parse every line.
 - `starter.rs`
   - hydrates starter config files when missing:
     - `<config-root>/coders.toml`
