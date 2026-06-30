@@ -33,6 +33,18 @@ pub(super) struct RawTmuxTarget {
     pub(super) prompt_inspect_lines: Option<usize>,
     #[serde(default)]
     pub(super) prompt_idle_column: Option<usize>,
+    /// Per-coder bounded prime window for the tmux quiescence wait. When
+    /// `Some`, the tmux transport's internal delivery task resolves the
+    /// wait as `SendOutcome::Timeout` if no observable output AND no
+    /// operator interaction is active for the configured milliseconds.
+    /// `None` (absent) preserves the unbounded wait.
+    #[serde(default)]
+    pub(super) prime_timeout_ms: Option<u64>,
+    /// Per-coder wedge detection switch. Defaults to `true` (enabled) when
+    /// absent; operators MAY set `false` to opt out and preserve the prior
+    /// unbounded-wait behavior for a wedged pane.
+    #[serde(default)]
+    pub(super) wedge_detection: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -69,6 +81,8 @@ pub(super) struct TmuxTarget {
     pub(super) prompt_regex: Option<String>,
     pub(super) prompt_inspect_lines: Option<usize>,
     pub(super) prompt_idle_column: Option<usize>,
+    pub(super) prime_timeout_ms: Option<u64>,
+    pub(super) wedge_detection: Option<bool>,
 }
 
 #[derive(Clone, Debug)]

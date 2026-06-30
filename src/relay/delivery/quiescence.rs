@@ -5,27 +5,24 @@
 //! before each flush group; this module keeps the relay-owned scheduling config
 //! the delivery handlers populate. [`QuiescenceOptions`] rides on the async
 //! delivery task (constructed by the `send`/`raww` handlers) and is unpacked
-//! into primitives onto the `DeliveryEnvelope` (`quiet_window`/
-//! `quiescence_timeout`) at the worker, so the wait runs without the tmux loop
-//! depending on relay.
-
+//! into the `DeliveryEnvelope`'s `quiet_window` at the worker. The bounded
+//! prime window and wedge detection live on the per-coder tmux config and are
+//! threaded through by the dispatch worker via
+//! [`crate::transports::DeliveryEnvelope::prime_timeout_ms`].
 use std::time::Duration;
 
 const QUIET_WINDOW_MS_DEFAULT: u64 = 750;
-// Also caps the UI-reconnect delivery wait when the caller set no explicit
-// quiescence timeout; the worker resolves it into the UI envelope before
-// `UiTransport::mailw` (see `build_ui_envelope`).
-pub(super) const QUIESCENCE_TIMEOUT_MS_DEFAULT: u64 = 30_000;
 
 #[derive(Clone, Copy, Debug)]
 pub(in crate::relay) struct QuiescenceOptions {
     pub quiet_window: Duration,
-    pub quiescence_timeout: Option<Duration>,
 }
 
 impl QuiescenceOptions {
     /// Async delivery is unbounded by design — bounded only by the relay
-    /// lifetime via shutdown — so `quiescence_timeout` is always `None` here.
+    /// lifetime via shutdown — so the prime window lives on the per-coder
+    /// tmux config and is threaded onto the [`DeliveryEnvelope`](crate::transports::DeliveryEnvelope)
+    /// by the dispatch worker.
     pub(in crate::relay) fn for_async(quiet_window_ms: Option<u64>) -> Self {
         Self {
             quiet_window: Duration::from_millis(
@@ -33,7 +30,6 @@ impl QuiescenceOptions {
                     .filter(|value| *value > 0)
                     .unwrap_or(QUIET_WINDOW_MS_DEFAULT),
             ),
-            quiescence_timeout: None,
         }
     }
 }

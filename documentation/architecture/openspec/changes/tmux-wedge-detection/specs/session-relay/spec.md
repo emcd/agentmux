@@ -217,16 +217,33 @@ transport spec.
 - **AND** records a `delivery_prime_timeout` inscription in relay
   diagnostics
 
-#### Scenario: Tmux prime timeout does not bound post-quiescence wait
+#### Scenario: Tmux prime timeout does not bound post-quiescence wait (wedge enabled)
 
 - **WHEN** the target pane output becomes quiescent
 - **AND** the prompt-readiness template does not match
+- **AND** wedge detection is enabled (the default for the coder)
 - **THEN** the Tmux transport SHALL NOT classify the flush group as
   `Timeout` solely on the basis of `prime_timeout_ms` elapsing
 - **AND** the transport SHALL classify the flush group as `Failed`
-  with `reason_code = "pane_wedged"` only when wedge detection is
-  enabled (the default) and fires per the Tmux wedge detection
-  requirement
+  with `reason_code = "pane_wedged"` when the wedge detection
+  requirement fires (after `WEDGE_CONSECUTIVE_TICKS` identical
+  wedge-class evaluations or when the prime window has elapsed with
+  a wedge-class mismatch observed)
+
+#### Scenario: Tmux prime timeout bounds post-quiescence wait when wedge is disabled
+
+- **WHEN** the target pane output becomes quiescent
+- **AND** the prompt-readiness template does not match
+- **AND** wedge detection is disabled via
+  `[coders.<id>.tmux].wedge-detection = false`
+- **AND** `prime_timeout_ms` is set to a finite millisecond value
+- **THEN** the Tmux transport SHALL classify the flush group as
+  `Timeout` when `prime_timeout_ms` elapses
+- **BECAUSE** an operator who has explicitly disabled wedge detection
+  and opted in to a prime timeout has accepted the bounded-wait
+  semantics — the prime window is the only bounded-wait knob in
+  effect, and it covers every quiescent state (including wedge-class
+  content)
 
 #### Scenario: Map Tmux prime timeout to transport envelope field
 

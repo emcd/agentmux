@@ -472,10 +472,20 @@ pub struct DeliveryEnvelope {
     /// ready to receive a flush group. Ignored by transports with no
     /// quiescence wait (ACP).
     pub quiet_window: Duration,
-    /// Deadline for the quiescence wait; `None` means unbounded (bounded only
-    /// by relay shutdown). Ignored by transports with no quiescence wait. The UI
-    /// transport reuses this as the cap on its reconnect wait.
-    pub quiescence_timeout: Option<Duration>,
+    /// Generic bounded prime window for any prime-wait transport's internal
+    /// delivery task. The relay populates it from per-coder config
+    /// (`[coders.<id>.tmux].prime-timeout-ms` today; ACP follow-up will set
+    /// it for ACP targets) without knowing which transport will consume it,
+    /// so the envelope stays transport-neutral.
+    ///
+    /// `None` means unbounded (bounded only by relay shutdown). When the
+    /// prime window elapses during a transport's prime wait with no
+    /// observable output AND no operator-interaction signal active, the
+    /// transport MUST resolve its wait as `SendOutcome::Timeout` (existing
+    /// outcome variant). The transport's own wedge-detection machinery
+    /// governs the post-quiescence prompt-readiness wait; this field bounds
+    /// only the prime window.
+    pub prime_timeout_ms: Option<u64>,
 }
 
 /// Structured, transport-neutral message data sufficient for any transport to
@@ -534,10 +544,24 @@ impl DeliveryMessage {
 /// raises it forms no transport<->relay back-edge.
 #[derive(Debug)]
 pub enum DeliveryWaitError {
+    /// The prime window elapsed during the wait with no observable output
+    /// and no operator-interaction signal active. Maps to
+    /// `SendOutcome::Timeout` (existing variant); the
+    /// `readiness_mismatch`/`mismatch_reason` fields capture whether the
+    /// pane was already in a not-prompt-ready state at fire time.
     Timeout {
         timeout: Duration,
         readiness_mismatch: bool,
         mismatch_reason: Option<String>,
+    },
+    /// The pane became quiescent + not-prompt-ready + no operator
+    /// interaction active, and wedge detection is enabled. Maps to
+    /// `SendOutcome::Failed` with `reason_code = "pane_wedged"`. The
+    /// `reason` carries the last-observed prompt-readiness mismatch reason
+    /// (or a default placeholder when the probe did not record one) so
+    /// operators can diagnose the wedge from the inscribed diagnostic.
+    Wedged {
+        reason: String,
     },
     Failed {
         reason: String,

@@ -19,11 +19,12 @@
 //!
 //! The TUI is a passive subscriber: there is no per-recipient render ack. A UI
 //! delivery succeeds when the stream event reaches a registered, connected UI
-//! endpoint. If no UI is connected, the transport polls up to the envelope's
-//! `quiescence_timeout` for one to reconnect, then resolves `Timeout`. The
-//! transport builds its `incoming_message` event directly from the envelope's
-//! structured [`DeliveryMessage`](crate::transports::DeliveryMessage): it reads
-//! the relay-authored attribution as-is and never parses pane-envelope text.
+//! endpoint. If no UI is connected, the transport polls up to its internal
+//! [`UI_RECONNECT_TIMEOUT_MS_DEFAULT`] cap for one to reconnect, then resolves
+//! `Timeout`. The transport builds its `incoming_message` event directly from
+//! the envelope's structured [`DeliveryMessage`](crate::transports::DeliveryMessage):
+//! it reads the relay-authored attribution as-is and never parses pane-envelope
+//! text.
 
 use std::sync::Arc;
 use std::thread;
@@ -42,10 +43,10 @@ const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delive
 const DROPPED_ON_SHUTDOWN_REASON_CODE: &str = "dropped_on_shutdown";
 const UI_RAW_WRITE_UNSUPPORTED_CODE: &str = "ui_raw_write_unsupported";
 const UI_RECONNECT_POLL_INTERVAL_MS: u64 = 100;
-/// Defensive fallback for the reconnect wait when the envelope carries no
-/// `quiescence_timeout`. The relay worker always resolves the cap before
-/// `mailw` (mirroring the relay quiescence default), so this is only reached if
-/// a future caller omits it.
+/// Cap on the UI reconnect wait when no UI endpoint is registered or the
+/// registered one is disconnected. Owned entirely by the UI transport — the
+/// relay no longer threads an external knob through the envelope for it
+/// (`DeliveryEnvelope.quiescence_timeout` was removed in `tmux-wedge-detection`).
 const UI_RECONNECT_TIMEOUT_MS_DEFAULT: u64 = 30_000;
 
 /// Transport-side outcome of one UI stream-broadcast attempt. Keeps the relay's
@@ -142,9 +143,7 @@ impl Transport for UiTransport {
     fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
         let (sender, receiver) = oneshot::channel();
         let services = self.services.clone();
-        let timeout = envelope
-            .quiescence_timeout
-            .unwrap_or(Duration::from_millis(UI_RECONNECT_TIMEOUT_MS_DEFAULT));
+        let timeout = Duration::from_millis(UI_RECONNECT_TIMEOUT_MS_DEFAULT);
         let message_id = envelope.message_id.clone();
         let message = envelope.message;
         let incoming = UiIncomingMessage {

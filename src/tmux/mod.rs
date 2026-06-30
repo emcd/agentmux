@@ -19,4 +19,7 @@ pub mod lifecycle;
 pub mod pane;
 pub mod transport;
 
-pub use transport::{TmuxOutputView, TmuxTransport};
+pub use transport::{
+    PaneQuiescenceProbe, PromptReadinessEvaluation, TmuxOutputView, TmuxTransport,
+    wait_error_to_outcome_for_test, wait_for_quiescent_pane_three_state,
+};

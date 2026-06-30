@@ -60,6 +60,8 @@ fn bundle_with_sessions(sessions: &[&str]) -> BundleConfiguration {
                     agentmux::configuration::TmuxTargetConfiguration {
                         start_command: "sh -lc 'true'".to_string(),
                         prompt_readiness: None,
+                        prime_timeout_ms: None,
+                        wedge_detection: true,
                     },
                 ),
                 coder_session_id: None,
@@ -88,6 +90,8 @@ fn bundle_with_directories(
                         agentmux::configuration::TmuxTargetConfiguration {
                             start_command: "sh -lc 'true'".to_string(),
                             prompt_readiness: None,
+                            prime_timeout_ms: None,
+                            wedge_detection: true,
                         },
                     ),
                     coder_session_id: None,

@@ -17,7 +17,7 @@ use agentmux::transports::{
     UiIncomingMessage, UiTransport, UiTransportServices,
 };
 
-fn ui_envelope(quiescence_timeout: Option<Duration>) -> DeliveryEnvelope {
+fn ui_envelope() -> DeliveryEnvelope {
     DeliveryEnvelope {
         message_id: "m-1".to_string(),
         message: DeliveryMessage {
@@ -41,7 +41,7 @@ fn ui_envelope(quiescence_timeout: Option<Duration>) -> DeliveryEnvelope {
         append_enter: true,
         choice_decider_sessions: Vec::new(),
         quiet_window: Duration::from_millis(1),
-        quiescence_timeout,
+        prime_timeout_ms: None,
     }
 }
 
@@ -76,8 +76,7 @@ fn ui_mailw_broadcasts_incoming_and_resolves_delivered() {
     };
 
     let mut transport = UiTransport::new(services);
-    let outcome = block_on(transport.mailw(ui_envelope(Some(Duration::from_secs(5)))))
-        .expect("mailw outcome future resolves");
+    let outcome = block_on(transport.mailw(ui_envelope())).expect("mailw outcome future resolves");
 
     assert_eq!(outcome.outcome, SendOutcome::Delivered);
     assert_eq!(outcome.message_id, "m-1");
@@ -118,8 +117,7 @@ fn ui_mailw_times_out_when_no_ui_reconnects() {
     };
 
     let mut transport = UiTransport::new(services);
-    let outcome = block_on(transport.mailw(ui_envelope(Some(Duration::from_millis(50)))))
-        .expect("mailw outcome future resolves");
+    let outcome = block_on(transport.mailw(ui_envelope())).expect("mailw outcome future resolves");
 
     assert_eq!(outcome.outcome, SendOutcome::Timeout);
     assert!(
@@ -203,7 +201,7 @@ fn ui_incoming_message_emits_bare_canonical_identity_never_decorated() {
         append_enter: true,
         choice_decider_sessions: Vec::new(),
         quiet_window: Duration::from_millis(1),
-        quiescence_timeout: Some(Duration::from_secs(5)),
+        prime_timeout_ms: None,
     };
 
     let mut transport = UiTransport::new(services);
