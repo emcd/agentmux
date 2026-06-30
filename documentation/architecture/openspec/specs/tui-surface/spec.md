@@ -56,17 +56,17 @@ be submitted to relay as explicit send target tokens.
 The TUI SHALL provide recipient completion from known identities in associated
 bundle context.
 
-The TUI SHALL use context-sensitive `Tab` behavior in compose:
-- when active recipient token in `To` has completion candidates, `Tab` initiates
-  and cycles in-place completion proposals,
-- when completion does not apply, `Tab` follows focus navigation behavior.
+The TUI SHALL use `Ctrl+Space` for manual recipient completion in compose:
+- when active recipient token in `To` has completion candidates, `Ctrl+Space`
+  initiates in-place completion proposals,
+- `Tab` follows focus navigation behavior.
 
 The TUI SHALL support accepting an active recipient completion proposal from
 `To` via `Enter`.
 
 The TUI SHALL support `@`-prefixed completion trigger behavior in `To`:
 - once an `@` token has at least one character suffix, completion proposals
-  update immediately without requiring an initial `Tab`.
+  update immediately without requiring an initial `Ctrl+Space`.
 
 The TUI SHALL provide a keyboard-opened recipient picker overlay (default
 shortcut `F2`) that allows inserting recipients into `To`.
@@ -74,23 +74,23 @@ shortcut `F2`) that allows inserting recipients into `To`.
 Function keys are reserved for overlay windows. Completion behavior
 SHALL NOT depend on `F4`.
 
-#### Scenario: Use Tab for in-place recipient completion
+#### Scenario: Use Ctrl+Space for in-place recipient completion
 
 - **WHEN** focus is in `To` and current token has completion candidates
-- **AND** operator presses `Tab`
-- **THEN** the TUI inserts or cycles a completion proposal in-place.
+- **AND** operator presses `Ctrl+Space`
+- **THEN** the TUI inserts a completion proposal in-place.
 
-#### Scenario: Tab falls back to focus navigation when completion is inapplicable
+#### Scenario: Tab follows focus navigation
 
-- **WHEN** completion is inapplicable for active `To` token
-- **AND** operator presses `Tab`
+- **WHEN** operator presses `Tab` in compose
 - **THEN** compose focus moves according to navigation rules.
 
 #### Scenario: Trigger immediate proposals with @-prefixed token
 
 - **WHEN** focus is in `To`
 - **AND** active token starts with `@` and has one or more suffix characters
-- **THEN** completion proposals update immediately without requiring initial `Tab`.
+- **THEN** completion proposals update immediately without requiring initial
+  `Ctrl+Space`.
 
 #### Scenario: Accept active completion with Enter in To
 
@@ -130,24 +130,34 @@ surface status context.
 The TUI target identifier grammar SHALL support:
 
 - local identifiers: `<session-id>`
-- qualified identifiers: `<bundle-id>/<session-id>` (reserved for future use)
+- canonical identifiers: `<session-id>@<namespace>`
 
-Delivery/inspection behavior SHALL remain same-bundle-only.
+The TUI SHALL submit relay targets as canonical `session@namespace` principal
+identifiers. Bare local identifiers SHALL be qualified with the sender's bound
+bundle before dispatch. Relay-wide senders without a bound bundle SHALL reject
+bare identifiers with `validation_unqualified_target`.
 
-Qualified identifiers implying cross-bundle scope SHALL be rejected with
-unsupported-scope validation behavior.
+Cross-namespace delivery and inspection SHALL use canonical `session@namespace`
+targets and rely on relay authorization for the requested operation.
 
 #### Scenario: Accept local identifier
 
 - **WHEN** an operator targets `<session-id>` in associated bundle context
-- **THEN** the TUI treats that target as valid for send/look workflows
+- **THEN** the TUI qualifies it as `<session-id>@<bound-bundle>` for relay
+  dispatch
 
-#### Scenario: Reject cross-bundle-qualified identifier
+#### Scenario: Accept canonical cross-namespace identifier
 
-- **WHEN** an operator targets `<bundle-id>/<session-id>` outside associated
-  bundle context
-- **THEN** the TUI surfaces unsupported-scope validation feedback
-- **AND** does not dispatch cross-bundle delivery/inspection behavior
+- **WHEN** an operator targets `<session-id>@<namespace>`
+- **THEN** the TUI submits that canonical identifier to relay unchanged
+- **AND** relay authorization determines whether the operation may reach that
+  namespace
+
+#### Scenario: Reject bare target for relay-wide sender
+
+- **WHEN** a relay-wide sender targets bare `<session-id>`
+- **THEN** the TUI rejects the target with `validation_unqualified_target`
+- **AND** requires an explicit `<session-id>@<namespace>` identifier
 
 ### Requirement: Contract and Error Taxonomy Fidelity
 
@@ -173,7 +183,6 @@ operator-visible error rendering.
 
 The TUI SHALL exclude:
 
-- cross-bundle delivery/inspection implementation,
 - multi-relay host-fleet orchestration UI,
 - historical transcript/archive browsing,
 - authorization model redesign,
@@ -188,20 +197,21 @@ The TUI SHALL exclude:
 
 ### Requirement: TUI Sender Identity Precedence
 
-`agentmux tui` SHALL resolve identity and bundle from global `users.toml`
+`agentmux tui` SHALL resolve identity and the browsing bundle from TUI
 configuration with deterministic precedence:
 
 Sender/session resolution:
 
-1. CLI `--session` when provided
-2. `default-session` from global `users.toml`
+1. CLI `--as-session` when provided
+2. `default-session` from active TUI configuration
 3. fail-fast `validation_unknown_session`
 
-Bundle resolution:
+Browsing bundle resolution:
 
 1. CLI `--bundle` when provided
-2. `default-bundle` from global `users.toml`
-3. fail-fast `validation_unknown_bundle`
+2. `default-bundle` from active TUI configuration
+3. first available configured bundle
+4. empty browsing context when no bundle is available
 
 `agentmux tui --sender` SHALL NOT be supported.
 
@@ -212,16 +222,18 @@ relay-backed operations in that process.
 If selected session references unknown policy, startup SHALL fail fast with
 `validation_unknown_policy`.
 
-#### Scenario: Resolve TUI startup from explicit session/bundle selectors
+#### Scenario: Resolve TUI startup from explicit selectors
 
-- **WHEN** operator starts TUI with `--bundle agentmux --session user@GLOBAL`
-- **AND** session `user@GLOBAL` is configured in global users
-- **THEN** TUI resolves bundle `agentmux` and sender identity `user@GLOBAL`
+- **WHEN** operator starts TUI with `--bundle agentmux --as-session user@GLOBAL`
+- **AND** session `user@GLOBAL` is configured in active TUI configuration
+- **THEN** TUI resolves browsing bundle `agentmux` and sender identity
+  `user@GLOBAL`
 
 #### Scenario: Resolve TUI startup from global defaults
 
-- **WHEN** operator starts TUI without `--bundle`/`--session`
-- **AND** global `users.toml` defines `default-bundle` and `default-session`
+- **WHEN** operator starts TUI without explicit selectors
+- **AND** active TUI configuration defines `default-bundle` and
+  `default-session`
 - **THEN** TUI resolves startup identity from those defaults
 
 #### Scenario: Reject sender flag at startup
@@ -229,11 +241,19 @@ If selected session references unknown policy, startup SHALL fail fast with
 - **WHEN** operator starts TUI with `--sender relay`
 - **THEN** startup fails with a stable validation error
 
-#### Scenario: Fail when required defaults absent
+#### Scenario: Allow startup without bundle default
 
-- **WHEN** operator starts TUI without selectors
-- **AND** required default keys are absent in global `users.toml`
-- **THEN** startup fails with stable validation code
+- **WHEN** operator starts TUI without `--bundle`
+- **AND** active TUI configuration does not define `default-bundle`
+- **THEN** TUI resolves the browsing bundle from the first available configured
+  bundle
+- **AND** if no bundle is available, TUI starts with an empty browsing context
+
+#### Scenario: Fail when required session selector is absent
+
+- **WHEN** operator starts TUI without `--as-session`
+- **AND** active TUI configuration does not define `default-session`
+- **THEN** startup fails with `validation_unknown_session`
 
 #### Scenario: Reject default session with unknown policy
 
@@ -646,4 +666,3 @@ the active mode.
 
 - **WHEN** operator presses `F3` in either mode
 - **THEN** the events overlay opens over the active mode surface
-
