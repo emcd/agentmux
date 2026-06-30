@@ -6,10 +6,10 @@ The system SHALL expose a read-only MCP tool named `about`.
 
 `about` request parameters SHALL be:
 
-- `session_id` (optional)
+- `namespace` (optional)
+- `principal` (optional)
 
-Bundle scope is derived from the associated connection context; no
-`bundle_name` selector is accepted.
+Bundle scope defaults to the associated connection context when `namespace` is omitted.
 
 `about` authorization SHALL map to capability `list.read`.
 
@@ -44,7 +44,7 @@ Optional fields SHALL serialize as explicit null values and SHALL NOT be omitted
 
 #### Scenario: Return one session when session selector is provided
 
-- **WHEN** caller invokes `about` with `session_id`
+- **WHEN** caller invokes `about` with `principal`
 - **THEN** response contains exactly one matching session entry in `sessions[]`
 
 #### Scenario: Preserve null optional fields in MCP response
@@ -69,7 +69,7 @@ If request is valid/resolved but denied by policy, MCP SHALL return
 
 #### Scenario: Reject unknown session id
 
-- **WHEN** caller invokes `about` with `session_id` not in bundle
+- **WHEN** caller invokes `about` with `principal` not in bundle
 - **THEN** MCP returns `validation_unknown_session`
 
 #### Scenario: Return canonical authorization denial for about
