@@ -155,11 +155,16 @@ pub(super) fn map_bundle_load_error(source: ConfigurationError) -> RuntimeError 
 }
 
 pub(super) fn map_relay_error(error: RelayError) -> RuntimeError {
+    // Fold any config-diagnostic detail (file path + offending field) the relay
+    // attached into the surfaced message so a config parse / unknown-field
+    // failure reaching `agentmux up` names the file and field, not just a bare
+    // summary. Other errors keep their plain message.
+    let message = error.operator_message();
     if error.code.starts_with("validation_") || error.code == "authorization_forbidden" {
-        return RuntimeError::validation(error.code, error.message);
+        return RuntimeError::validation(error.code, message);
     }
     RuntimeError::io(
-        error.message,
+        message,
         std::io::Error::other("relay returned internal error"),
     )
 }

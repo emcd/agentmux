@@ -4,6 +4,8 @@ use agentmux::relay::{
 };
 use tempfile::TempDir;
 
+#[path = "relay/error.rs"]
+mod error;
 #[path = "relay/principal_store.rs"]
 mod principal_store;
 #[path = "relay/raww.rs"]
