@@ -6,29 +6,29 @@
 //! public transport + envelope APIs (render then parse) so they assert the
 //! mapping without reaching into transport internals.
 
-use agentmux::envelope::parse_envelope;
-use agentmux::transports::{DeliveryMessage, DeliveryParty};
+use agentmux::envelope::{AddressIdentity, parse_envelope};
+use agentmux::transports::DeliveryMessage;
 
 fn sample_message() -> DeliveryMessage {
     DeliveryMessage {
         body: "ship it".to_string(),
         created_at: "2026-06-18T12:00:00Z".to_string(),
         namespace: "party".to_string(),
-        sender: DeliveryParty {
-            session: "alice@party".to_string(),
+        sender: AddressIdentity {
+            session_name: "alice@party".to_string(),
             display_name: Some("Alice".to_string()),
         },
-        target: DeliveryParty {
-            session: "bob@party".to_string(),
+        target: AddressIdentity {
+            session_name: "bob@party".to_string(),
             display_name: Some("Bob".to_string()),
         },
         cc: vec![
-            DeliveryParty {
-                session: "carol@other".to_string(),
+            AddressIdentity {
+                session_name: "carol@other".to_string(),
                 display_name: None,
             },
-            DeliveryParty {
-                session: "dave@party".to_string(),
+            AddressIdentity {
+                session_name: "dave@party".to_string(),
                 display_name: Some("Dave".to_string()),
             },
         ],

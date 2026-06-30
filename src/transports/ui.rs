@@ -149,9 +149,16 @@ impl Transport for UiTransport {
         let message = envelope.message;
         let incoming = UiIncomingMessage {
             message_id: envelope.message_id,
-            sender_session: message.sender.session,
+            // Machine-consumed event fields carry the bare canonical id via the
+            // non-decorating accessor — never render_address (which decorates to
+            // "Display Name <session:session_name>" for the pane header).
+            sender_session: message.sender.canonical_session_id().to_string(),
             body: message.body,
-            cc_sessions: message.cc.into_iter().map(|party| party.session).collect(),
+            cc_sessions: message
+                .cc
+                .iter()
+                .map(|party| party.canonical_session_id().to_string())
+                .collect(),
             authenticated_identity: message.authenticated_identity,
         };
         // Run the bounded reconnect wait off the async worker thread so `mailw`
