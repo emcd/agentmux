@@ -143,6 +143,21 @@ pub fn reconcile_bundle(
     lifecycle::reconcile_bundle(configuration_root, bundle_name, tmux_socket)
 }
 
+/// Validates a bundle's configuration the way startup would (bundle + coders
+/// schema and authorization-policy resolution) without starting tmux or relay
+/// runtime. Backs the `agentmux check configuration` pre-flight CLI command.
+///
+/// # Errors
+///
+/// Returns the same structured validation/configuration errors as startup when
+/// any configuration artifact fails to parse or resolve.
+pub fn preflight_bundle_configuration(
+    configuration_root: &Path,
+    bundle_name: &str,
+) -> Result<(), RelayError> {
+    lifecycle::preflight_bundle_configuration(configuration_root, bundle_name)
+}
+
 /// Attempts startup for all configured bundle sessions and reports outcomes.
 pub fn startup_bundle(
     configuration_root: &Path,

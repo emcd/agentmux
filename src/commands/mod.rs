@@ -6,6 +6,7 @@ use crate::runtime::error::RuntimeError;
 
 mod bundle;
 mod change;
+mod check;
 mod down;
 mod host;
 mod list;
@@ -118,6 +119,14 @@ pub(super) struct ChangePskArguments {
     pub(super) runtime: RuntimeArguments,
 }
 
+#[derive(Clone, Debug, Default)]
+pub(super) struct CheckArguments {
+    /// Optional single bundle to validate; `None` validates every discoverable
+    /// bundle.
+    pub(super) bundle_id: Option<String>,
+    pub(super) runtime: RuntimeArguments,
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct RawwArguments {
     pub(super) bundle_name: Option<String>,
@@ -201,6 +210,7 @@ pub async fn run_agentmux(arguments: Vec<String>) -> Result<(), RuntimeError> {
         "raww" => raww::run_agentmux_raww(&arguments[1..]),
         "new" => new::run_agentmux_new(&arguments[1..]),
         "change" => change::run_agentmux_change(&arguments[1..]),
+        "check" => check::run_agentmux_check(&arguments[1..]),
         "tui" => tui::run_agentmux_tui(&arguments[1..]),
         "send" => send::run_agentmux_send(&arguments[1..]),
         unknown => Err(RuntimeError::InvalidArgument {
@@ -256,6 +266,9 @@ fn print_agentmux_help() {
         "[--config-directory PATH] [--state-directory PATH] ",
         "[--inscriptions-directory PATH|--logs-directory PATH] ",
         "[--repository-root PATH]\n",
+        "  check configuration [<bundle-id>] [--config-directory PATH] ",
+        "[--state-directory PATH] [--inscriptions-directory PATH|",
+        "--logs-directory PATH] [--repository-root PATH]\n",
         "  tui [--bundle NAME] [--as-session NAME] [--lines N] ",
         "[--config-directory PATH] [--state-directory PATH] ",
         "[--inscriptions-directory PATH|--logs-directory PATH] ",

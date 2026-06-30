@@ -45,6 +45,26 @@ pub(super) fn reconcile_bundle(
     reconcile_loaded_bundle(&bundle, tmux_socket)
 }
 
+/// Validates a bundle's configuration exactly as startup does — bundle and
+/// coders schema plus authorization-policy resolution (`policies.toml`,
+/// `relay.toml`, and `users.toml` policy mappings) — without touching tmux or
+/// relay runtime state. Backs the `agentmux check configuration` pre-flight
+/// command: it shares the `load_bundle_configuration` + `load_authorization_context`
+/// path so a pre-flight catches exactly what a live startup would reject.
+///
+/// # Errors
+///
+/// Returns the same structured validation/configuration errors as startup when
+/// any artifact fails to parse or resolve.
+pub(super) fn preflight_bundle_configuration(
+    configuration_root: &Path,
+    bundle_name: &str,
+) -> Result<(), RelayError> {
+    let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
+    let _authorization = load_authorization_context(configuration_root, Some(&bundle))?;
+    Ok(())
+}
+
 /// Prunes managed sessions and reaps tmux server when safe during shutdown.
 ///
 /// # Errors

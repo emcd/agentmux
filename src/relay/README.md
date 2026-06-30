@@ -89,7 +89,11 @@ exported from `src/relay/mod.rs`.
     bundle context; dispatched via `dispatch_identity_admin` before the
     per-bundle routing path in `connection.rs`.
 - `lifecycle.rs`
-  - runtime reconcile/shutdown helpers for managed sessions.
+  - runtime reconcile/shutdown helpers for managed sessions, plus
+    `preflight_bundle_configuration` — a read-only validation of a bundle's
+    configuration through the same `load_bundle_configuration` +
+    `load_authorization_context` path startup uses, with no tmux or runtime
+    side effects (backs `agentmux check configuration`).
 - `stream.rs`
   - hello-frame parser, the unified session registry, identity collision
     handling, and event writer routing. The registry is one
