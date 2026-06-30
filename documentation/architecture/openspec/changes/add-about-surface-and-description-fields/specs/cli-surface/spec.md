@@ -18,7 +18,7 @@ The CLI SHALL expose read-only runtime introspection commands:
 #### Scenario: Show one session about information
 
 - **WHEN** operator runs `agentmux about --session relay`
-- **THEN** CLI requests bundle about payload filtered to `session_id=relay`
+- **THEN** CLI requests bundle about payload filtered to `principal_id=relay`
 
 #### Scenario: Show bundle about via explicit bundle selector
 
