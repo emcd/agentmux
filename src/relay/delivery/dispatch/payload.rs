@@ -2,9 +2,9 @@ use serde_json::json;
 
 use crate::{
     configuration::BundleMember,
-    envelope::{ManifestPreamble, PromptBatchSettings, parse_tokenizer_profile},
+    envelope::{AddressIdentity, ManifestPreamble, PromptBatchSettings, parse_tokenizer_profile},
     runtime::inscriptions::emit_inscription,
-    transports::{DeliveryMessage, DeliveryParty},
+    transports::DeliveryMessage,
 };
 
 use super::super::super::{
@@ -62,12 +62,15 @@ pub(super) fn build_delivery_message(
         body: task.message.clone(),
         created_at: created_at.to_string(),
         namespace: task.bundle.bundle_name.clone(),
-        sender: DeliveryParty {
-            session: canonical_session_id(task.sender.id.as_str(), task.sender_namespace.as_str()),
+        sender: AddressIdentity {
+            session_name: canonical_session_id(
+                task.sender.id.as_str(),
+                task.sender_namespace.as_str(),
+            ),
             display_name: task.sender.name.clone(),
         },
-        target: DeliveryParty {
-            session: canonical_target_session(task),
+        target: AddressIdentity {
+            session_name: canonical_target_session(task),
             display_name: target_member.and_then(|member| member.name.clone()),
         },
         cc: co_recipient_parties(task),
@@ -83,14 +86,14 @@ pub(super) fn emit_envelope_metadata_inscription(message: &DeliveryMessage, mess
     let cc_sessions: Vec<String> = message
         .cc
         .iter()
-        .map(|party| party.session.clone())
+        .map(|party| party.session_name.clone())
         .collect();
     let manifest = ManifestPreamble {
         schema_version: SCHEMA_VERSION.to_string(),
         message_id: message_id.to_string(),
         namespace: message.namespace.clone(),
-        sender_session: message.sender.session.clone(),
-        target_sessions: vec![message.target.session.clone()],
+        sender_session: message.sender.session_name.clone(),
+        target_sessions: vec![message.target.session_name.clone()],
         cc_sessions: if cc_sessions.is_empty() {
             None
         } else {
@@ -135,7 +138,7 @@ pub(super) fn co_recipient_sessions(task: &AsyncDeliveryTask) -> Vec<String> {
 /// bundle contribute their configured display name; co-recipients in other
 /// namespaces are absent from this bundle's configuration and carry the
 /// canonical id alone.
-fn co_recipient_parties(task: &AsyncDeliveryTask) -> Vec<DeliveryParty> {
+fn co_recipient_parties(task: &AsyncDeliveryTask) -> Vec<AddressIdentity> {
     co_recipient_sessions(task)
         .into_iter()
         .map(|session| {
@@ -146,8 +149,8 @@ fn co_recipient_parties(task: &AsyncDeliveryTask) -> Vec<DeliveryParty> {
                 .iter()
                 .find(|member| member.id == local_id)
                 .and_then(|member| member.name.clone());
-            DeliveryParty {
-                session,
+            AddressIdentity {
+                session_name: session,
                 display_name,
             }
         })

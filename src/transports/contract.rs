@@ -478,22 +478,15 @@ pub struct DeliveryEnvelope {
     pub quiescence_timeout: Option<Duration>,
 }
 
-/// One party (sender, target, or co-recipient) of a structured delivery message.
-/// Transport-neutral so the UI transport does not depend on pane-envelope
-/// addressing vocabulary; coder transports convert it into an
-/// [`AddressIdentity`] when rendering.
-#[derive(Clone, Debug)]
-pub struct DeliveryParty {
-    /// Canonical `session@namespace` id.
-    pub session: String,
-    /// Configured display name, when known.
-    pub display_name: Option<String>,
-}
-
 /// Structured, transport-neutral message data sufficient for any transport to
 /// render its own representation without importing `crate::relay` or parsing
 /// already-rendered text. The relay authors every field; transports treat them
 /// as read-only input.
+///
+/// Each party is carried as an [`AddressIdentity`] directly: coder transports
+/// render the decorating pane-header form via `render_address`, while
+/// machine-consumed event fields use the bare
+/// [`AddressIdentity::canonical_session_id`] form.
 #[derive(Clone, Debug)]
 pub struct DeliveryMessage {
     /// The message body text.
@@ -504,24 +497,15 @@ pub struct DeliveryMessage {
     /// (a session bundle, or a relay-wide namespace such as `GLOBAL`).
     pub namespace: String,
     /// Canonical sender identity.
-    pub sender: DeliveryParty,
+    pub sender: AddressIdentity,
     /// Canonical target identity.
-    pub target: DeliveryParty,
+    pub target: AddressIdentity,
     /// Canonical co-recipient identities (the full target set minus this
     /// envelope's own recipient), including co-recipients in other namespaces.
-    pub cc: Vec<DeliveryParty>,
+    pub cc: Vec<AddressIdentity>,
     /// The sender's verified `principal_id`, when present; `None` for
     /// socket-trust senders.
     pub authenticated_identity: Option<String>,
-}
-
-impl DeliveryParty {
-    fn to_address(&self) -> AddressIdentity {
-        AddressIdentity {
-            session_name: self.session.clone(),
-            display_name: self.display_name.clone(),
-        }
-    }
 }
 
 impl DeliveryMessage {
@@ -534,9 +518,9 @@ impl DeliveryMessage {
         render_envelope(&EnvelopeRenderInput {
             message_id: message_id.to_string(),
             created_at: self.created_at.clone(),
-            from: self.sender.to_address(),
-            to: vec![self.target.to_address()],
-            cc: self.cc.iter().map(DeliveryParty::to_address).collect(),
+            from: self.sender.clone(),
+            to: vec![self.target.clone()],
+            cc: self.cc.clone(),
             subject: None,
             body: self.body.clone(),
         })

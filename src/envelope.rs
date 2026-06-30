@@ -49,6 +49,21 @@ pub struct AddressIdentity {
     pub display_name: Option<String>,
 }
 
+impl AddressIdentity {
+    /// The bare canonical `session@namespace` id, without decoration.
+    ///
+    /// This is the form machine-consumed delivery-event fields MUST use — for
+    /// example the relay `incoming_message` event's `sender_session` /
+    /// `cc_sessions`. It is deliberately distinct from [`render_address`], which
+    /// decorates the id as `Display Name <session:session_name>` for the
+    /// pane-envelope header. Never route delivery-event identity fields through
+    /// `render_address`.
+    #[must_use]
+    pub fn canonical_session_id(&self) -> &str {
+        &self.session_name
+    }
+}
+
 /// Input shape for rendering one RFC 822/MIME pane envelope. Carries only the
 /// fields that appear in the rendered pane text; canonical routing/audit metadata
 /// (schema version, namespace, session lists) lives out-of-band in

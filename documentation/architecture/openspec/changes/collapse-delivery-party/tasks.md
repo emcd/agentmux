@@ -1,22 +1,22 @@
 ## 1. Payload reshape
 
-- [ ] 1.1 Add `AddressIdentity::canonical_session_id(&self) -> &str` in
+- [x] 1.1 Add `AddressIdentity::canonical_session_id(&self) -> &str` in
   `src/envelope.rs` with a doc comment stating it is the bare canonical form for
   machine-consumed delivery-event fields, never `render_address`.
-- [ ] 1.2 Replace `DeliveryParty` with `AddressIdentity` on
+- [x] 1.2 Replace `DeliveryParty` with `AddressIdentity` on
   `DeliveryMessage.sender/target/cc` in `src/transports/contract.rs`; delete
   `DeliveryParty` and `DeliveryParty::to_address`.
-- [ ] 1.3 Repoint `render_pane_envelope` to use the carried `AddressIdentity`
+- [x] 1.3 Repoint `render_pane_envelope` to use the carried `AddressIdentity`
   values directly (drop the `to_address()` calls).
-- [ ] 1.4 Repoint relay delivery-task payload construction to populate
+- [x] 1.4 Repoint relay delivery-task payload construction to populate
   `AddressIdentity` directly.
 
 ## 2. Delivery-event parity
 
-- [ ] 2.1 Update `src/transports/ui.rs` incoming_message build to emit
+- [x] 2.1 Update `src/transports/ui.rs` incoming_message build to emit
   `sender_session` / `cc_sessions` via `canonical_session_id()` (bare canonical),
   not `render_address`.
-- [ ] 2.2 (FE, co-landed in the same commit) Add the invariant test: with a
+- [x] 2.2 (FE, co-landed in the same commit) Add the invariant test: with a
   fixture whose `display_name` differs from `session_name`
   (`session_name = "alice@bundle"`, `display_name = Some("Alice Cooper")`),
   assert the `incoming_message` event `sender_session == "alice@bundle"` (NOT
@@ -29,17 +29,17 @@
 
 ## 3. Specs
 
-- [ ] 3.1 MODIFIED `transport-abstraction` "Structured Delivery Message Payload":
+- [x] 3.1 MODIFIED `transport-abstraction` "Structured Delivery Message Payload":
   payload carries structured `AddressIdentity` per party.
-- [ ] 3.2 MODIFIED `session-relay` "Relay Stream Event Contract":
+- [x] 3.2 MODIFIED `session-relay` "Relay Stream Event Contract":
   `incoming_message` `sender_session`/`cc_sessions` MUST be bare canonical via
   the non-decorating accessor, never the decorating header form.
-- [ ] 3.3 MODIFIED `pane-envelope` "Address Identity Format": explicit EXEMPT
+- [x] 3.3 MODIFIED `pane-envelope` "Address Identity Format": explicit EXEMPT
   scenario — the pane header keeps the decorating `Display Name <session:...>`
   form.
 
 ## 4. Gates
 
-- [ ] 4.1 `cargo fmt --check`
-- [ ] 4.2 `cargo clippy -- -D warnings`
-- [ ] 4.3 `timeout 300 cargo test`
+- [x] 4.1 `cargo fmt --check`
+- [x] 4.2 `cargo clippy -- -D warnings`
+- [x] 4.3 `timeout 300 cargo test`

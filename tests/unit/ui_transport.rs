@@ -11,8 +11,9 @@ use std::sync::{
 };
 use std::time::Duration;
 
+use agentmux::envelope::AddressIdentity;
 use agentmux::transports::{
-    DeliveryEnvelope, DeliveryMessage, DeliveryParty, SendOutcome, Transport, UiBroadcastStatus,
+    DeliveryEnvelope, DeliveryMessage, SendOutcome, Transport, UiBroadcastStatus,
     UiIncomingMessage, UiTransport, UiTransportServices,
 };
 
@@ -23,16 +24,16 @@ fn ui_envelope(quiescence_timeout: Option<Duration>) -> DeliveryEnvelope {
             body: "hello ui".to_string(),
             created_at: "2026-03-05T00:00:00Z".to_string(),
             namespace: "party".to_string(),
-            sender: DeliveryParty {
-                session: "alice@party".to_string(),
+            sender: AddressIdentity {
+                session_name: "alice@party".to_string(),
                 display_name: Some("Alice".to_string()),
             },
-            target: DeliveryParty {
-                session: "bob@party".to_string(),
+            target: AddressIdentity {
+                session_name: "bob@party".to_string(),
                 display_name: Some("Bob".to_string()),
             },
-            cc: vec![DeliveryParty {
-                session: "carol@party".to_string(),
+            cc: vec![AddressIdentity {
+                session_name: "carol@party".to_string(),
                 display_name: None,
             }],
             authenticated_identity: Some("principal-alice".to_string()),
@@ -152,4 +153,78 @@ fn ui_transport_is_ready_and_not_lookable() {
     let transport = UiTransport::new(services);
     assert!(transport.is_ready());
     assert!(transport.give_output().is_none());
+}
+
+/// Parity guard for the relay/97 delivery-event contract: the `incoming_message`
+/// event MUST carry the bare canonical `session@namespace` id for
+/// `sender_session`/`cc_sessions` via the non-decorating
+/// `AddressIdentity::canonical_session_id()` accessor — never the decorating
+/// `render_address` pane-header form (`Display Name <session:session_name>`).
+///
+/// The fixture deliberately sets `display_name` distinct from `session_name` on
+/// BOTH the sender and the cc party, so this test bites if anyone later
+/// "upgrades" the event-build path to `render_address`: the decorated form would
+/// differ from the asserted bare id and fail here.
+#[test]
+fn ui_incoming_message_emits_bare_canonical_identity_never_decorated() {
+    let captured: Arc<Mutex<Option<UiIncomingMessage>>> = Arc::new(Mutex::new(None));
+
+    let services = UiTransportServices {
+        broadcast_incoming: {
+            let captured = captured.clone();
+            Arc::new(move |incoming: &UiIncomingMessage| {
+                *captured.lock().unwrap() = Some(incoming.clone());
+                UiBroadcastStatus::Delivered
+            })
+        },
+        emit_phase: Arc::new(|_phase| UiBroadcastStatus::Delivered),
+    };
+
+    let envelope = DeliveryEnvelope {
+        message_id: "m-parity".to_string(),
+        message: DeliveryMessage {
+            body: "parity body".to_string(),
+            created_at: "2026-03-05T00:00:00Z".to_string(),
+            namespace: "bundle".to_string(),
+            sender: AddressIdentity {
+                session_name: "alice@bundle".to_string(),
+                display_name: Some("Alice Cooper".to_string()),
+            },
+            target: AddressIdentity {
+                session_name: "bob@bundle".to_string(),
+                display_name: Some("Bob Dylan".to_string()),
+            },
+            cc: vec![AddressIdentity {
+                session_name: "carol@bundle".to_string(),
+                display_name: Some("Carol King".to_string()),
+            }],
+            authenticated_identity: Some("principal-alice".to_string()),
+        },
+        append_enter: true,
+        choice_decider_sessions: Vec::new(),
+        quiet_window: Duration::from_millis(1),
+        quiescence_timeout: Some(Duration::from_secs(5)),
+    };
+
+    let mut transport = UiTransport::new(services);
+    block_on(transport.mailw(envelope)).expect("mailw outcome future resolves");
+
+    let incoming = captured.lock().unwrap().clone().expect("incoming captured");
+
+    // Sender: bare canonical, never the decorating pane-header form.
+    assert_eq!(incoming.sender_session, "alice@bundle");
+    assert_ne!(
+        incoming.sender_session, "Alice Cooper <session:alice@bundle>",
+        "sender_session must stay bare canonical, never the render_address form",
+    );
+
+    // Cc: bare canonical, never the decorating pane-header form.
+    assert_eq!(incoming.cc_sessions, vec!["carol@bundle".to_string()]);
+    assert!(
+        !incoming
+            .cc_sessions
+            .iter()
+            .any(|cc| cc.contains("<session:")),
+        "cc_sessions must stay bare canonical, never the render_address form",
+    );
 }
