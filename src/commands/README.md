@@ -50,6 +50,12 @@ This directory owns the unified CLI surface for `agentmux`.
 - `change.rs`
   - `agentmux change psk <principal_id>` credential rotation; relays a
     `ChangePsk` request and renders the new PSK.
+- `check.rs`
+  - `agentmux check configuration [<bundle-id>]` read-only configuration
+    pre-flight; validates one or all bundles through the relay's startup loading
+    path (`relay::preflight_bundle_configuration`) and exits non-zero on the
+    first invalid bundle with file path + field-level detail. Never scaffolds or
+    mutates configuration.
 - `send.rs`
   - `agentmux send`, including stdin/message precedence and timeout fields.
 - `tui.rs`

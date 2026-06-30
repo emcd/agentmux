@@ -1,4 +1,5 @@
 mod bundle;
+mod check;
 mod help;
 pub(crate) mod helpers;
 mod host;
