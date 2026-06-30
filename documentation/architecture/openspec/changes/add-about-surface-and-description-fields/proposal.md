@@ -16,7 +16,7 @@ can drift from active configuration.
   - `agentmux about --session <session-id>`
   - optional `--bundle <bundle-id>` selector with same-bundle lock
 - Add MCP read surface:
-  - tool `about` with optional `session_id` and `bundle_name`
+  - tool `about` with optional `namespace` and `principal`
 - Add relay `about` operation contract with deterministic response schema,
   selector semantics, and error taxonomy.
 - Reuse authorization capability `list.read` for `about`.
