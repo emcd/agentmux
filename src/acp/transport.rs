@@ -1079,6 +1079,7 @@ fn initialize_persistent_acp_worker_runtime(
                     .iter()
                     .map(|entry| (entry.name.clone(), entry.value.clone()))
                     .collect::<Vec<_>>(),
+                true,
             )
             .map_err(|reason| AcpBootstrapError {
                 code: "runtime_startup_failed".to_string(),

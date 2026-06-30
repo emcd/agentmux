@@ -159,10 +159,62 @@ fn write_line_to_stdin(stdin: &SharedStdin, payload: &str) -> io::Result<()> {
     guard.flush()
 }
 
+// Kernel returns ETXTBSY (os error 26) when a `Command::spawn` targets an
+// executable the kernel has marked in-use by another process (e.g. a parallel
+// cargo build rewriting `target/debug/agentmux` while a test holds it exec'd).
+// We retry only when explicitly opted in via `retry_on_text_busy`; the relay
+// worker path opts in because it runs under `cargo test` and is the path that
+// flakes, while the interactive TUI spawn keeps single-shot semantics so real
+// spawn failures surface immediately.
+const ACP_SPAWN_TEXT_BUSY_RETRIES_MAXIMUM: u8 = 2;
+const ACP_SPAWN_TEXT_BUSY_RETRY_DELAY: Duration = Duration::from_millis(50);
+
+fn is_text_busy_error(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(26)
+}
+
+fn spawn_command(
+    parts: &[&str],
+    working_directory: &Path,
+    environment: &[(String, String)],
+    retry_on_text_busy: bool,
+    retries_remaining: u8,
+) -> Result<Child, String> {
+    let mut command = Command::new(parts[0]);
+    command
+        .args(&parts[1..])
+        .current_dir(working_directory)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, value) in environment {
+        command.env(key, value);
+    }
+    match command.spawn() {
+        Ok(child) => Ok(child),
+        Err(error) if retry_on_text_busy && retries_remaining > 0 && is_text_busy_error(&error) => {
+            thread::sleep(ACP_SPAWN_TEXT_BUSY_RETRY_DELAY);
+            spawn_command(
+                parts,
+                working_directory,
+                environment,
+                retry_on_text_busy,
+                retries_remaining - 1,
+            )
+        }
+        Err(source) => Err(format!("spawn ACP stdio command failed: {source}")),
+    }
+}
+
 impl AcpStdioClient {
     // Spawn the ACP agent directly (no shell middleman). The command
     // template is split on whitespace. Environment variables are passed
     // explicitly via the `environment` parameter.
+    //
+    // `retry_on_text_busy` re-attempts the spawn up to
+    // `ACP_SPAWN_TEXT_BUSY_RETRIES_MAXIMUM` times if the kernel returns
+    // ETXTBSY. The retry window is short; sustained failures surface as a
+    // normal spawn error so callers can decide whether to fall back.
     //
     // TODO: Consider shell-word parsing (e.g. shell-words crate) for
     //       templates containing metacharacters ($, |, &&, backticks).
@@ -170,24 +222,19 @@ impl AcpStdioClient {
         command_template: &str,
         working_directory: &Path,
         environment: &[(String, String)],
+        retry_on_text_busy: bool,
     ) -> Result<Self, String> {
         let parts: Vec<&str> = command_template.split_whitespace().collect();
         if parts.is_empty() {
             return Err("ACP command template is empty".to_string());
         }
-        let mut command = Command::new(parts[0]);
-        command
-            .args(&parts[1..])
-            .current_dir(working_directory)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        for (key, value) in environment {
-            command.env(key, value);
-        }
-        let mut child = command
-            .spawn()
-            .map_err(|source| format!("spawn ACP stdio command failed: {source}"))?;
+        let mut child = spawn_command(
+            &parts,
+            working_directory,
+            environment,
+            retry_on_text_busy,
+            ACP_SPAWN_TEXT_BUSY_RETRIES_MAXIMUM,
+        )?;
         let stdin = child
             .stdin
             .take()

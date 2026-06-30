@@ -24,6 +24,7 @@ fn spawn_stub_client(stub_environment: &[(String, String)]) -> (TempDir, AcpStdi
         stub_path.display().to_string().as_str(),
         temporary.path(),
         &environment,
+        false,
     )
     .expect("spawn stub ACP client");
     (temporary, client)
