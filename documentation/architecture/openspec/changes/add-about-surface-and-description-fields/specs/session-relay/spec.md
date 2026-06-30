@@ -45,7 +45,7 @@ Relay SHALL provide a read-only operation named `about`.
 `about` request fields SHALL include:
 
 - `requester_session` (required)
-- `session_id` (optional)
+- `principal_id` (optional)
 
 `about` scope SHALL remain same-bundle only. Bundle scope is derived
 from the request's routing namespace (frame-level namespace, defaulting to
@@ -75,7 +75,7 @@ Each `sessions` entry SHALL include exactly:
 
 Optional fields SHALL serialize as explicit null values and SHALL NOT be omitted.
 
-If request provides `session_id`, response SHALL contain exactly one matching
+If request provides `principal_id`, response SHALL contain exactly one matching
 entry in `sessions[]`.
 
 Unknown session selectors SHALL return `validation_unknown_session` and SHALL
@@ -83,17 +83,17 @@ NOT return successful empty `sessions[]` payloads.
 
 #### Scenario: Return bundle-level about payload
 
-- **WHEN** request omits `session_id`
+- **WHEN** request omits `principal_id`
 - **THEN** relay returns all configured sessions in declaration order
 
 #### Scenario: Return one session for valid session selector
 
-- **WHEN** request includes known `session_id`
+- **WHEN** request includes known `principal_id`
 - **THEN** relay returns exactly one entry in `sessions[]`
 
 #### Scenario: Reject unknown session selector
 
-- **WHEN** request includes unknown `session_id`
+- **WHEN** request includes unknown `principal_id`
 - **THEN** relay returns `validation_unknown_session`
 - **AND** does not return successful payload with `sessions=[]`
 
@@ -112,7 +112,7 @@ If request is valid/resolved but denied by policy, relay SHALL return
 
 #### Scenario: Validate before authorization for unknown session
 
-- **WHEN** request includes unknown `session_id`
+- **WHEN** request includes unknown `principal_id`
 - **THEN** relay returns `validation_unknown_session`
 - **AND** does not return `authorization_forbidden` for that request
 
