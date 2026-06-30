@@ -510,10 +510,9 @@ where
 ///
 /// Subscribes to the worker readiness channel BEFORE dispatching so the
 /// terminal `Unavailable` transition cannot be missed if it fires before the
-/// test code reaches the await. Uses a 5 s budget (vs. 3 s under the old
-/// filesystem-poll path) to absorb macOS scheduling latency; with channel
-/// observation the test thread is not burning CPU on poll loops while it
-/// waits, so a generous deadline is cheap.
+/// test code reaches the await. Uses a 10 s budget to absorb slow stub spawns
+/// under heavy concurrent pre-commit load (the test thread is parked on the
+/// in-process watch channel, so a wider deadline costs nothing).
 pub(super) fn assert_acp_delivery_unavailable(config_root: &Path, tmux_socket: &Path) {
     let root = tmux_socket.parent().unwrap_or_else(|| Path::new("."));
     let mut receiver = subscribe_bravo_worker_state(root);
@@ -525,7 +524,7 @@ pub(super) fn assert_acp_delivery_unavailable(config_root: &Path, tmux_socket: &
                 await_acp_worker_state(
                     &mut receiver,
                     WorkerReadinessState::Unavailable,
-                    Duration::from_secs(5),
+                    Duration::from_secs(10),
                 ),
                 "ACP worker did not settle unavailable after a failed startup stage"
             );
