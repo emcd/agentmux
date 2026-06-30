@@ -104,7 +104,6 @@ confuse a future reader, do not write it.
   "not part of the current contract", or any phrasing that implies
   temporary state without explaining the actual constraint.
 - Explain what the code does — well-named identifiers already do that.
-- Span multiple lines. One short line maximum.
 
 A future reader will not have access to the external documents these
 references point to. Every comment must be self-contained.
