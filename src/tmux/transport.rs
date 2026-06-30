@@ -236,9 +236,12 @@ fn run_delivery_task(
 ) {
     let tmux_socket_path = tmux_socket_path_for_runtime_directory(ctx.runtime_directory.as_path());
 
-    let prompt_readiness = match &ctx.target_member.target {
-        TargetConfiguration::Tmux(tmux_target) => tmux_target.prompt_readiness.clone(),
-        _ => None,
+    let (prompt_readiness, wedge_detection) = match &ctx.target_member.target {
+        TargetConfiguration::Tmux(tmux_target) => (
+            tmux_target.prompt_readiness.clone(),
+            tmux_target.wedge_detection,
+        ),
+        _ => (None, true),
     };
 
     // Current envelope group. Accumulates contiguous envelopes; flushed
@@ -264,6 +267,7 @@ fn run_delivery_task(
                         &tmux_socket_path,
                         &ctx.target_session,
                         prompt_readiness.as_ref(),
+                        wedge_detection,
                         &mut receiver,
                         &shutdown_flag,
                         batch_settings,
@@ -287,6 +291,7 @@ fn run_delivery_task(
                         &tmux_socket_path,
                         &ctx.target_session,
                         prompt_readiness.as_ref(),
+                        wedge_detection,
                         &mut receiver,
                         &shutdown_flag,
                         batch_settings,
@@ -317,6 +322,7 @@ fn run_delivery_task(
                             &tmux_socket_path,
                             &ctx.target_session,
                             prompt_readiness.as_ref(),
+                            wedge_detection,
                             &mut receiver,
                             &shutdown_flag,
                             batch_settings,
@@ -338,6 +344,7 @@ fn run_delivery_task(
                             &tmux_socket_path,
                             &ctx.target_session,
                             prompt_readiness.as_ref(),
+                            wedge_detection,
                             &mut receiver,
                             &shutdown_flag,
                             batch_settings,
@@ -353,6 +360,7 @@ fn run_delivery_task(
                             &tmux_socket_path,
                             &ctx.target_session,
                             prompt_readiness.as_ref(),
+                            wedge_detection,
                             &mut receiver,
                             &shutdown_flag,
                             batch_settings,
@@ -416,11 +424,13 @@ fn drain_group_as_dropped(
 /// 4. Paste all envelopes and resolve each sender with its own message_id.
 ///
 /// On shutdown at any point, resolves the group as DroppedOnShutdown and returns.
+#[allow(clippy::too_many_arguments)]
 fn flush_and_resolve(
     group: &mut Vec<(DeliveryEnvelope, OutcomeSender)>,
     tmux_socket_path: &Path,
     target_session: &str,
     prompt_readiness: Option<&PromptReadinessTemplate>,
+    wedge_detection: bool,
     receiver: &mut mpsc::Receiver<WriteItem>,
     shutdown_flag: &AtomicBool,
     batch_settings: PromptBatchSettings,
@@ -430,8 +440,21 @@ fn flush_and_resolve(
     }
 
     // Use the head envelope's quiescence hints for the entire group.
+    // `prime_timeout_ms` is the per-coder bounded prime window the tmux
+    // transport consumes from the envelope; `wedge_detection` is the
+    // per-coder switch (default-on) for firing `pane_wedged` on
+    // quiescent + non-prompt + no operator interaction.
+    //
+    // The prime timer is anchored to the START OF THIS FLUSH GROUP and
+    // is NOT reset across coalesce iterations (the spec requires the
+    // prime timer to be anchored to "delivery-task perspective (when
+    // flush begins, not enqueue time)" and "does NOT reset on
+    // coalesce-during-wait"). The deadline is computed once here and
+    // threaded into every wait call below.
     let quiet_window = group[0].0.quiet_window;
-    let quiescence_timeout = group[0].0.quiescence_timeout;
+    let prime_timeout_ms = group[0].0.prime_timeout_ms;
+    let prime_started_at = Instant::now();
+    let prime_deadline = prime_timeout_ms.map(|ms| prime_started_at + Duration::from_millis(ms));
 
     // Deferred raw item from the post-quiescence drain. Carries across
     // coalesce loop iterations so the re-check happens before paste.
@@ -449,13 +472,39 @@ fn flush_and_resolve(
             return;
         }
 
-        // Wait for quiescence (blocks).
-        match wait_for_quiescent_pane(
+        // Build a fresh probe for each wait iteration. The probe wraps
+        // the same tmux queries the legacy wait loop called directly;
+        // wrapping them in a trait object lets us inject scripted probes
+        // from tests.
+        let mut probe = match RealPaneQuiescenceProbe::new(
             tmux_socket_path,
             target_session,
-            quiet_window,
-            quiescence_timeout,
             prompt_readiness,
+        ) {
+            Ok(probe) => probe,
+            Err(error) => {
+                for (envelope, sender) in group.drain(..) {
+                    let _ = sender.send(wait_error_to_outcome(
+                        target_session,
+                        &error,
+                        &envelope.message_id,
+                    ));
+                }
+                return;
+            }
+        };
+
+        // Wait for quiescence (blocks). The same `prime_deadline` is
+        // passed on every coalesce iteration, so absorbed envelopes do
+        // not extend the prime window.
+        match wait_for_quiescent_pane_three_state(
+            &mut probe,
+            target_session,
+            quiet_window,
+            prime_deadline,
+            prime_started_at,
+            prime_timeout_ms,
+            wedge_detection,
         ) {
             Ok(_) => {}
             Err(DeliveryWaitError::Shutdown) => {
@@ -662,7 +711,19 @@ fn deliver_raw(
 }
 
 /// Convert a [`DeliveryWaitError`] into a [`SingleDeliveryOutcome`] with the
-/// caller's message_id.
+/// caller's message_id. Exposed under a `_for_test` name and `#[doc(hidden)]`
+/// so the separate `tests/unit` crate can exercise the Wedged / Timeout
+/// outcome mapping without expanding the public runtime API. Not intended
+/// for use outside the crate's own test surface.
+#[doc(hidden)]
+pub fn wait_error_to_outcome_for_test(
+    target_session: &str,
+    error: &DeliveryWaitError,
+    message_id: &str,
+) -> SingleDeliveryOutcome {
+    wait_error_to_outcome(target_session, error, message_id)
+}
+
 fn wait_error_to_outcome(
     target_session: &str,
     error: &DeliveryWaitError,
@@ -676,13 +737,23 @@ fn wait_error_to_outcome(
         } => SingleDeliveryOutcome {
             target_session: target_session.to_string(),
             message_id: message_id.to_string(),
-            outcome: SendOutcome::Failed,
-            reason_code: Some("quiescence_timeout".to_string()),
+            outcome: SendOutcome::Timeout,
+            reason_code: Some("delivery_prime_timeout".to_string()),
             reason: Some(format!(
-                "quiescence timeout after {}ms (readiness_mismatch={}, reason={:?})",
+                "prime wait timed out after {}ms (readiness_mismatch={}, reason={:?})",
                 timeout.as_millis(),
                 readiness_mismatch,
                 mismatch_reason
+            )),
+            details: None,
+        },
+        DeliveryWaitError::Wedged { reason } => SingleDeliveryOutcome {
+            target_session: target_session.to_string(),
+            message_id: message_id.to_string(),
+            outcome: SendOutcome::Failed,
+            reason_code: Some("pane_wedged".to_string()),
+            reason: Some(format!(
+                "tmux pane wedged (pane settled at non-prompt state with no operator interaction): {reason}"
             )),
             details: None,
         },
@@ -781,14 +852,14 @@ struct PromptReadinessMatcher {
     input_idle_cursor_column: Option<usize>,
 }
 
-#[derive(Debug, Default)]
-struct PromptReadinessEvaluation {
-    ready: bool,
-    mismatch_reason: Option<String>,
-    inspected_block: Option<String>,
-    regex_matched: Option<bool>,
-    expected_cursor_column: Option<usize>,
-    observed_cursor_column: Option<usize>,
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PromptReadinessEvaluation {
+    pub ready: bool,
+    pub mismatch_reason: Option<String>,
+    pub inspected_block: Option<String>,
+    pub regex_matched: Option<bool>,
+    pub expected_cursor_column: Option<usize>,
+    pub observed_cursor_column: Option<usize>,
 }
 
 /// Signature of a non-ready evaluation used to dedup `delivery_prompt_mismatch`
@@ -835,30 +906,233 @@ fn should_emit_prompt_mismatch(
     }
 }
 
-/// Blocks until the target's active pane is quiescent (and, if configured,
-/// matches the prompt-readiness template), returning the resolved pane.
-fn wait_for_quiescent_pane(
-    tmux_socket: &Path,
+/// Transport-internal seam for the tmux quiescence wait.
+///
+/// The real implementation ([`RealPaneQuiescenceProbe`]) wraps tmux queries
+/// against the active pane. Tests inject scripted probes that drive the
+/// three-state classifier deterministically — see the unit tests in
+/// `tests/unit/tmux_transport.rs` for the five probe classes
+/// (unresponsive, wedged, pending-choice, slow-prompt, normal).
+///
+/// `pub` to support the external test surface; the trait is not part of
+/// the public runtime API (no other code outside `src/tmux` consumes it).
+pub trait PaneQuiescenceProbe: Send {
+    /// Resolves the current prompt-readiness evaluation for the target pane.
+    /// The wait loop calls this twice per quiescence check (with a
+    /// `quiet_window` sleep between) and compares results.
+    fn next_evaluation(&mut self) -> Result<PromptReadinessEvaluation, String>;
+
+    /// Reports whether operator interaction (copy-mode or active key-table)
+    /// is currently active for the target session. `Some(reason)` when
+    /// active (e.g. `"pane_in_mode"` or `"client_key_table=copy-mode-vi"`),
+    /// `None` otherwise.
+    fn operator_interaction_active(&mut self) -> Result<Option<String>, String>;
+
+    /// Resolves the active pane target for the target session (e.g. `%0`).
+    /// Used by the wait loop to record the pane on terminal outcomes and to
+    /// thread through to the wedge inscription event.
+    fn resolve_active_pane(&mut self) -> Result<String, String>;
+
+    /// Blocks until the pane shows a change (the next observation differs
+    /// from the previous one) or the supplied `deadline` elapses. Returns
+    /// `Ok(())` on observed change; `Err(DeliveryWaitError::Timeout)` on
+    /// deadline elapsed with no change; `Err(DeliveryWaitError::Failed)`
+    /// on probe errors. The wait loop passes a deadline derived from the
+    /// per-coder `prime_timeout_ms` so the probe bounds its wait by the
+    /// same prime window the loop tracks.
+    fn wait_for_change(&mut self, deadline: Instant) -> Result<(), DeliveryWaitError>;
+}
+
+/// Real [`PaneQuiescenceProbe`] backed by tmux queries. Holds the socket path
+/// and target session id used by every observation; the underlying tmux
+/// queries are the same primitives the legacy wait loop called directly.
+pub(crate) struct RealPaneQuiescenceProbe<'a> {
+    tmux_socket: &'a Path,
+    target_session: &'a str,
+    matcher: Option<PromptReadinessMatcher>,
+}
+
+impl<'a> RealPaneQuiescenceProbe<'a> {
+    fn new(
+        tmux_socket: &'a Path,
+        target_session: &'a str,
+        prompt_readiness: Option<&PromptReadinessTemplate>,
+    ) -> Result<Self, DeliveryWaitError> {
+        let matcher = build_prompt_readiness_matcher(prompt_readiness)
+            .map_err(|reason| DeliveryWaitError::Failed { reason })?;
+        Ok(Self {
+            tmux_socket,
+            target_session,
+            matcher,
+        })
+    }
+}
+
+impl PaneQuiescenceProbe for RealPaneQuiescenceProbe<'_> {
+    fn next_evaluation(&mut self) -> Result<PromptReadinessEvaluation, String> {
+        let pane_target = resolve_active_pane_target(self.tmux_socket, self.target_session)?;
+        let snapshot = capture_pane_snapshot(self.tmux_socket, &pane_target)?;
+        prompt_readiness_matches(
+            self.tmux_socket,
+            pane_target.as_str(),
+            snapshot.as_str(),
+            self.matcher.as_ref(),
+        )
+    }
+
+    fn operator_interaction_active(&mut self) -> Result<Option<String>, String> {
+        let pane_target = resolve_active_pane_target(self.tmux_socket, self.target_session)?;
+        operator_interaction_active(self.tmux_socket, self.target_session, pane_target.as_str())
+    }
+
+    fn resolve_active_pane(&mut self) -> Result<String, String> {
+        resolve_active_pane_target(self.tmux_socket, self.target_session)
+    }
+
+    fn wait_for_change(&mut self, deadline: Instant) -> Result<(), DeliveryWaitError> {
+        // Sleep in short slices, polling the activity marker and pane
+        // target. Returns as soon as either changes (or the deadline
+        // elapses).
+        let pane_target = resolve_active_pane_target(self.tmux_socket, self.target_session)
+            .map_err(|reason| DeliveryWaitError::Failed { reason })?;
+        let mut last_activity = resolve_window_activity_marker(self.tmux_socket, &pane_target)
+            .map_err(|reason| DeliveryWaitError::Failed { reason })?;
+        let mut last_snapshot = capture_pane_snapshot(self.tmux_socket, &pane_target)
+            .map_err(|reason| DeliveryWaitError::Failed { reason })?;
+        loop {
+            if shutdown_requested() {
+                return Err(DeliveryWaitError::Shutdown);
+            }
+            if Instant::now() >= deadline {
+                return Err(DeliveryWaitError::Timeout {
+                    timeout: deadline.saturating_duration_since(Instant::now()),
+                    readiness_mismatch: false,
+                    mismatch_reason: None,
+                });
+            }
+            // Keep the slice short so shutdown_requested is observed promptly.
+            thread::sleep(Duration::from_millis(50));
+            let pane_target_now = resolve_active_pane_target(self.tmux_socket, self.target_session)
+                .map_err(|reason| DeliveryWaitError::Failed { reason })?;
+            if pane_target_now != pane_target {
+                return Ok(());
+            }
+            let activity_now = resolve_window_activity_marker(self.tmux_socket, &pane_target_now)
+                .map_err(|reason| DeliveryWaitError::Failed { reason })?;
+            if activity_now != last_activity {
+                return Ok(());
+            }
+            let snapshot_now = capture_pane_snapshot(self.tmux_socket, &pane_target_now)
+                .map_err(|reason| DeliveryWaitError::Failed { reason })?;
+            if snapshot_now != last_snapshot {
+                return Ok(());
+            }
+            last_activity = activity_now;
+            last_snapshot = snapshot_now;
+        }
+    }
+}
+
+/// Blocks until the target's active pane is quiescent and prompt-ready, or
+/// fires one of the three-state classifier outcomes: prime timeout (the
+/// pane has shown no observable change for the entire `prime_timeout_ms`
+/// window), wedge (the pane is quiescent + not prompt-ready + no operator
+/// interaction), or shutdown.
+///
+/// Three-state classifier:
+/// - `running` — output flowing or settled at prompt. Returns `Ok(pane)`.
+/// - `unresponsive` — prime window elapsed with no observable change AND
+///   no operator interaction. Returns `Err(DeliveryWaitError::Timeout)`.
+/// - `wedged` — pane quiesced + not prompt-ready + no operator interaction.
+///   Returns `Err(DeliveryWaitError::Wedged)` when `wedge_detection` is
+///   enabled; otherwise the loop continues waiting (the prime window is
+///   the only bounded-wait path).
+///
+/// Operator interaction (copy-mode or active key-table) indefinitely
+/// suppresses BOTH the unresponsive and the wedged classification, on
+/// both the prime window and the post-quiescence wait. Prime timeout
+/// does NOT fire while operator interaction is active.
+/// Number of consecutive observation iterations showing the SAME
+/// wedge-class non-prompt evaluation before wedge detection fires. Bounded
+/// by design: a single quiescent tick is not enough to classify a pane as
+/// wedged because agents routinely pass through transient non-prompt
+/// states (boot, tool-call prep, idle-screen variations) before settling
+/// at a prompt. Counting identical wedge-class mismatch signatures lets
+/// the agent transition through these states without firing a
+/// false-positive wedge, while still firing on a genuinely stuck state
+/// within a few quiet_window intervals.
+const WEDGE_CONSECUTIVE_TICKS: usize = 3;
+
+/// Default mismatch reason for the "no observable content" case. A pane
+/// whose trimmed snapshot is empty (or contains only blank lines) shows
+/// this reason; it is NOT wedge-class — a silent/dead pane fires
+/// `Timeout`, not `Wedged`. The classifier in
+/// [`mismatch_is_wedge_class`] keeps the prefix stable for unit tests.
+const EMPTY_PANE_MISMATCH_PREFIX: &str = "inspected pane tail was empty";
+
+/// Returns whether the mismatch reason indicates a wedge-class state
+/// (the pane has settled at some specific non-prompt content) versus a
+/// dead-pane state (no observable content).
+///
+/// Wedge-class mismatches carry a non-empty inspection result that did
+/// not match the prompt regex (e.g. stuck on a permission dialog) or a
+/// cursor-column mismatch — both indicate the pane has observable
+/// non-prompt content the agent is stuck on. The empty-pane mismatch
+/// (`EMPTY_PANE_MISMATCH_PREFIX` and any `None` reason) indicates the
+/// pane has NO observable content and is treated as Unresponsive, not
+/// Wedged.
+fn mismatch_is_wedge_class(mismatch_reason: &Option<String>) -> bool {
+    mismatch_reason
+        .as_deref()
+        .is_some_and(|reason| !reason.starts_with(EMPTY_PANE_MISMATCH_PREFIX))
+}
+
+/// Drives the three-state delivery classifier (running / unresponsive /
+/// wedged) over a [`PaneQuiescenceProbe`]. `pub` to support the external
+/// test surface in `tests/unit/tmux_transport.rs`; the function is not part
+/// of the runtime API (callers reach it via `flush_and_resolve`).
+///
+/// `prime_deadline` is the OVERALL bound for the flush group's wait —
+/// passed in by `flush_and_resolve` and NOT reset across coalesce
+/// iterations (the spec requires the prime timer to be anchored to
+/// "delivery-task perspective (when flush begins, not enqueue time)").
+/// `prime_started_at` is the corresponding anchor instant used for
+/// diagnostic `prime_wait_elapsed_ms` values. `prime_timeout_ms` is the
+/// configured timeout value used only for diagnostic inscriptions (the
+/// wait function does not use it for timing decisions). `None` for both
+/// means unbounded.
+///
+/// Precedence: a pane that has settled into a non-prompt state with no
+/// operator interaction (quiescent + not-ready + no op) is wedge
+/// territory — prime_timeout MUST NOT fire in this case. Prime timeout
+/// only fires while the pane is still active (changing between
+/// observation ticks) or when wedge detection is disabled and the pane
+/// never settles.
+pub fn wait_for_quiescent_pane_three_state<P: PaneQuiescenceProbe>(
+    probe: &mut P,
     target_session: &str,
     quiet_window: Duration,
-    quiescence_timeout: Option<Duration>,
-    prompt_readiness: Option<&PromptReadinessTemplate>,
+    prime_deadline: Option<Instant>,
+    prime_started_at: Instant,
+    prime_timeout_ms: Option<u64>,
+    wedge_detection: bool,
 ) -> Result<String, DeliveryWaitError> {
-    let readiness = build_prompt_readiness_matcher(prompt_readiness)
-        .map_err(|reason| DeliveryWaitError::Failed { reason })?;
-    let deadline = quiescence_timeout.map(|timeout| Instant::now() + timeout);
-    let mut readiness_mismatch = false;
-    let mut mismatch_reason = None::<String>;
     let mut last_mismatch_signature: Option<PromptMismatchSignature> = None;
+    let mut consecutive_quiescent_mismatches: usize = 0;
+
     loop {
         if shutdown_requested() {
             return Err(DeliveryWaitError::Shutdown);
         }
-        let pane_before = resolve_active_pane_target(tmux_socket, target_session)
+
+        let evaluation = probe
+            .next_evaluation()
             .map_err(|reason| DeliveryWaitError::Failed { reason })?;
-        let snapshot_before = capture_pane_snapshot(tmux_socket, &pane_before)
+        let pane_target = probe
+            .resolve_active_pane()
             .map_err(|reason| DeliveryWaitError::Failed { reason })?;
-        let activity_before = resolve_window_activity_marker(tmux_socket, &pane_before)
+        let op_interaction = probe
+            .operator_interaction_active()
             .map_err(|reason| DeliveryWaitError::Failed { reason })?;
 
         thread::sleep(quiet_window);
@@ -866,77 +1140,142 @@ fn wait_for_quiescent_pane(
             return Err(DeliveryWaitError::Shutdown);
         }
 
-        let pane_after = resolve_active_pane_target(tmux_socket, target_session)
+        let evaluation_after = probe
+            .next_evaluation()
             .map_err(|reason| DeliveryWaitError::Failed { reason })?;
-        let snapshot_after = capture_pane_snapshot(tmux_socket, &pane_after)
+        let op_interaction_after = probe
+            .operator_interaction_active()
             .map_err(|reason| DeliveryWaitError::Failed { reason })?;
-        let activity_after = resolve_window_activity_marker(tmux_socket, &pane_after)
+        let pane_target_after = probe
+            .resolve_active_pane()
             .map_err(|reason| DeliveryWaitError::Failed { reason })?;
-        let pane_is_quiescent = pane_before == pane_after
-            && snapshot_before == snapshot_after
-            && match (activity_before.as_ref(), activity_after.as_ref()) {
-                (Some(before), Some(after)) => before == after,
-                _ => true,
-            };
-        if pane_is_quiescent {
-            if let Some(reason) =
-                operator_interaction_active(tmux_socket, target_session, pane_after.as_str())
-                    .map_err(|reason| DeliveryWaitError::Failed { reason })?
-            {
-                emit_delivery_diagnostic(
-                    "delivery_operator_interaction",
-                    &json!({
-                        "target_session": target_session,
-                        "pane_target": pane_after,
-                        "reason": reason,
-                    }),
-                );
-                continue;
+
+        let quiescent = evaluation == evaluation_after
+            && op_interaction == op_interaction_after
+            && pane_target == pane_target_after;
+
+        // `running` — pane is ready.
+        if evaluation_after.ready && op_interaction_after.is_none() {
+            emit_delivery_diagnostic(
+                "delivery_ready",
+                &json!({
+                    "target_session": target_session,
+                    "pane_target": pane_target_after,
+                }),
+            );
+            return Ok(pane_target_after);
+        }
+
+        // Operator interaction indefinitely suppresses both the unresponsive
+        // (prime-timeout) and the wedged classification. The transport
+        // continues to wait; the prime timer does NOT fire while op is active.
+        // Reset the wedge counter — an active operator interaction is the
+        // legitimate "in progress" signal and should not accumulate wedge
+        // ticks across re-entry.
+        if let Some(reason) = op_interaction_after.as_ref() {
+            emit_delivery_diagnostic(
+                "delivery_operator_interaction",
+                &json!({
+                    "target_session": target_session,
+                    "pane_target": pane_target_after,
+                    "reason": reason,
+                }),
+            );
+            consecutive_quiescent_mismatches = 0;
+            let unbounded_deadline = Instant::now() + Duration::from_secs(60 * 60 * 24 * 365);
+            let _ = probe.wait_for_change(unbounded_deadline);
+            continue;
+        }
+
+        // Track consecutive identical wedge-class non-prompt evaluations for
+        // wedge detection. The counter increments ONLY for wedge-class
+        // mismatches (real stuck-on-content); empty-pane mismatches (no
+        // observable content) reset the counter because they are
+        // Unresponsive territory, not wedge. The counter also resets
+        // whenever the wedge-class signature changes (the pane
+        // transitioned through a different stuck state), so transient
+        // non-prompt states (e.g. boot output before the prompt
+        // appears) do not accumulate wedge ticks.
+        let wedge_class = mismatch_is_wedge_class(&evaluation_after.mismatch_reason);
+        if !evaluation_after.ready && quiescent && wedge_class {
+            let signature = PromptMismatchSignature::from_evaluation(&evaluation_after);
+            match last_mismatch_signature.as_ref() {
+                Some(previous) if previous == &signature => {
+                    consecutive_quiescent_mismatches =
+                        consecutive_quiescent_mismatches.saturating_add(1);
+                }
+                _ => {
+                    consecutive_quiescent_mismatches = 1;
+                }
             }
-            let evaluation = match prompt_readiness_matches(
-                tmux_socket,
-                pane_after.as_str(),
-                snapshot_after.as_str(),
-                readiness.as_ref(),
-            ) {
-                Ok(evaluation) => evaluation,
-                Err(reason) => return Err(DeliveryWaitError::Failed { reason }),
-            };
-            if evaluation.ready {
+            last_mismatch_signature = Some(signature);
+        } else {
+            // Quiescence broken (pane changed), eval became ready, or
+            // mismatch is empty/non-wedge-class — reset the wedge
+            // counter so a fresh wedge-class stretch starts counting
+            // from 1.
+            consecutive_quiescent_mismatches = 0;
+        }
+
+        // Wedge check: fires immediately on prime-timeout elapse when
+        // the pane is showing wedge-class content (skip counter to avoid
+        // making the operator wait for WEDGE_CONSECUTIVE_TICKS when the
+        // prime window has already passed), OR after the counter
+        // threshold for any wedge-class mismatch even if the prime
+        // window has not elapsed.
+        //
+        // Precedence: spec scenario "Tmux prime timeout does not bound
+        // post-quiescence wait" requires the transport SHALL NOT
+        // classify a quiescent + wedge-class + no-op pane as Timeout
+        // solely on prime_timeout elapsing — that state is
+        // wedge-governed (-> Failed + pane_wedged).
+        if wedge_detection && quiescent && !evaluation_after.ready && wedge_class {
+            let counter_fires = consecutive_quiescent_mismatches >= WEDGE_CONSECUTIVE_TICKS;
+            let prime_elapsed = prime_deadline.is_some_and(|deadline| Instant::now() >= deadline);
+            if counter_fires || prime_elapsed {
+                let mismatch_reason = evaluation_after.mismatch_reason.clone();
                 emit_delivery_diagnostic(
-                    "delivery_ready",
+                    "delivery_pane_wedged",
                     &json!({
                         "target_session": target_session,
-                        "pane_target": pane_after,
+                        "pane_target": pane_target_after,
+                        "mismatch_reason": mismatch_reason,
+                        "consecutive_quiescent_ticks": consecutive_quiescent_mismatches,
+                        "fired_via_prime_timeout": prime_elapsed && !counter_fires,
                     }),
                 );
-                return Ok(pane_after);
-            }
-            readiness_mismatch = true;
-            mismatch_reason = evaluation.mismatch_reason.clone();
-            if should_emit_prompt_mismatch(&mut last_mismatch_signature, &evaluation) {
-                emit_delivery_diagnostic(
-                    "delivery_prompt_mismatch",
-                    &json!({
-                        "target_session": target_session,
-                        "pane_target": pane_after,
-                        "mismatch_reason": evaluation.mismatch_reason,
-                        "regex_matched": evaluation.regex_matched,
-                        "inspected_block": evaluation.inspected_block,
-                        "expected_cursor_column": evaluation.expected_cursor_column,
-                        "observed_cursor_column": evaluation.observed_cursor_column,
+                return Err(DeliveryWaitError::Wedged {
+                    reason: mismatch_reason.unwrap_or_else(|| {
+                        "pane wedged at non-prompt state with no recorded mismatch reason"
+                            .to_string()
                     }),
-                );
+                });
             }
         }
 
-        if deadline.is_some_and(|value| Instant::now() >= value) {
-            let timeout = quiescence_timeout.unwrap_or_default();
+        // Prime timeout check: hard bound on the total wait. Fires
+        // `Timeout` when the prime window has elapsed AND the pane is
+        // NOT showing wedge-class content. Wedge-class content takes
+        // the wedge branch above; the pane is stuck, not unresponsive.
+        // Operator interaction (handled earlier) indefinitely suppresses
+        // both classifiers.
+        if let Some(deadline) = prime_deadline
+            && Instant::now() >= deadline
+        {
+            let timeout_ms = prime_timeout_ms.unwrap_or(0);
+            let timeout = Duration::from_millis(timeout_ms);
+            let elapsed_ms = Instant::now()
+                .saturating_duration_since(prime_started_at)
+                .as_millis();
+            let mismatch_reason = evaluation_after.mismatch_reason.clone();
+            let readiness_mismatch = !evaluation_after.ready;
             emit_delivery_diagnostic(
-                "quiescence_timeout",
+                "delivery_prime_timeout",
                 &json!({
                     "target_session": target_session,
-                    "quiescence_timeout_ms": timeout.as_millis(),
+                    "pane_target": pane_target_after,
+                    "timeout_ms": timeout_ms,
+                    "prime_wait_elapsed_ms": elapsed_ms,
                     "readiness_mismatch": readiness_mismatch,
                     "mismatch_reason": mismatch_reason,
                 }),
@@ -946,6 +1285,49 @@ fn wait_for_quiescent_pane(
                 readiness_mismatch,
                 mismatch_reason,
             });
+        }
+
+        // Non-quiesced or wedge not yet at threshold: emit the dedup'd
+        // prompt-mismatch diagnostic if applicable, then wait for the
+        // next change. The deadline passed to `wait_for_change` is the
+        // prime deadline when configured, so the probe honors the same
+        // prime window the loop tracks.
+        if !evaluation_after.ready
+            && should_emit_prompt_mismatch(&mut last_mismatch_signature, &evaluation_after)
+        {
+            emit_delivery_diagnostic(
+                "delivery_prompt_mismatch",
+                &json!({
+                    "target_session": target_session,
+                    "pane_target": pane_target_after,
+                    "mismatch_reason": evaluation_after.mismatch_reason,
+                    "regex_matched": evaluation_after.regex_matched,
+                    "inspected_block": evaluation_after.inspected_block,
+                    "expected_cursor_column": evaluation_after.expected_cursor_column,
+                    "observed_cursor_column": evaluation_after.observed_cursor_column,
+                }),
+            );
+        }
+
+        if let Some(deadline) = prime_deadline {
+            match probe.wait_for_change(deadline) {
+                Ok(()) => continue,
+                Err(DeliveryWaitError::Timeout { .. }) => {
+                    // `wait_for_change` honored the prime deadline with
+                    // no change observed. The prime-timeout branch above
+                    // fires on the next loop iteration if the deadline
+                    // has elapsed.
+                    continue;
+                }
+                Err(other) => return Err(other),
+            }
+        } else {
+            // No prime timeout bound. Wait indefinitely for change (the
+            // legacy unbounded-wait behavior preserved for ops that do not
+            // configure `prime-timeout-ms`).
+            let unbounded_deadline = Instant::now() + Duration::from_secs(60 * 60 * 24 * 365);
+            let _ = probe.wait_for_change(unbounded_deadline);
+            continue;
         }
     }
 }

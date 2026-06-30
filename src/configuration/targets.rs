@@ -59,6 +59,8 @@ pub(super) fn build_session_target(
                         TargetConfiguration::Tmux(TmuxTargetConfiguration {
                             start_command,
                             prompt_readiness,
+                            prime_timeout_ms: tmux_target.prime_timeout_ms,
+                            wedge_detection: tmux_target.wedge_detection.unwrap_or(true),
                         }),
                         coder_session_id,
                     ))
@@ -231,12 +233,21 @@ pub(super) fn validate_tmux_target(
         ));
     }
 
+    if matches!(target.prime_timeout_ms, Some(0)) {
+        return Err(ConfigurationError::invalid(
+            coders_path,
+            format!("coder '{coder_id}' tmux prime-timeout-ms must be greater than zero"),
+        ));
+    }
+
     Ok(TmuxTarget {
         initial_command: target.initial_command,
         resume_command: target.resume_command,
         prompt_regex: target.prompt_regex,
         prompt_inspect_lines: target.prompt_inspect_lines,
         prompt_idle_column: target.prompt_idle_column,
+        prime_timeout_ms: target.prime_timeout_ms,
+        wedge_detection: target.wedge_detection,
     })
 }
 

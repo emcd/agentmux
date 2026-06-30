@@ -115,7 +115,7 @@ agentmux list sessions [--bundle NAME|--all] [--as-session NAME] [--json]
 agentmux look <target-session> [--bundle NAME] [--as-session NAME] [--lines N]
 agentmux raww <target-session> --text TEXT [--no-enter] [--bundle NAME] [--as-session NAME] [--json]
 agentmux tui [--bundle NAME] [--as-session NAME] [--lines N]
-agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--quiescence-timeout-ms MS] [--acp-turn-timeout-ms MS] [--request-id ID] [--bundle NAME] [--as-session NAME] [--json]
+agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--acp-turn-timeout-ms MS] [--request-id ID] [--bundle NAME] [--as-session NAME] [--json]
 ```
 
 Use `--help` on each command for the full flag list.
@@ -143,11 +143,13 @@ Delivery behavior:
 - `delivery_mode=async` (default): accept immediately and queue background
   delivery.
 - `delivery_mode=sync`: block until per-target sync outcomes are known.
-- `quiescence_timeout_ms` optionally bounds tmux prompt-readiness waiting.
 - `acp_turn_timeout_ms` optionally bounds ACP turn-wait behavior.
 - For ACP sync sends, success is declared at first observed ACP activity
   (`details.delivery_phase = accepted_in_progress`); relay does not wait for
   terminal turn completion before returning sync success.
+- Tmux delivery bounds are configured per-coder under
+  `[coders.<id>.tmux]` (`prime-timeout-ms`, `wedge-detection`); v1 has no
+  per-call operator override.
 - Terminal completion is correlated out-of-band by `message_id`.
 
 ## Multi-Worktree Workflow

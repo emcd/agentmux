@@ -35,6 +35,8 @@ impl SenderIdentity {
             target: TargetConfiguration::Tmux(TmuxTargetConfiguration {
                 start_command: "ui-session".to_string(),
                 prompt_readiness: None,
+                prime_timeout_ms: None,
+                wedge_detection: true,
             }),
             coder_session_id: None,
             policy_id: None,

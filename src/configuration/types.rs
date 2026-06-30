@@ -144,6 +144,37 @@ pub struct TmuxTargetConfiguration {
     pub start_command: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_readiness: Option<PromptReadinessTemplate>,
+    /// Per-coder bounded prime window for the quiescence wait. When `Some`,
+    /// the tmux transport's internal delivery task resolves the wait as
+    /// `SendOutcome::Timeout` if no observable output AND no operator
+    /// interaction is active for the configured milliseconds. `None` (or
+    /// absent) preserves the unbounded wait. The key lives under
+    /// `[coders.<id>.tmux]` and is called `prime-timeout-ms` in TOML; this
+    /// field carries the integer-millisecond form.
+    ///
+    /// Mirrored onto [`crate::transports::DeliveryEnvelope::prime_timeout_ms`]
+    /// by the relay dispatch worker for tmux targets; the ACP follow-up
+    /// consumes the same envelope field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prime_timeout_ms: Option<u64>,
+    /// Per-coder wedge detection switch. When `true` (default), the tmux
+    /// transport resolves a quiescent + not-prompt-ready + no-operator-
+    /// interaction state as `SendOutcome::Failed` with
+    /// `reason_code = "pane_wedged"`. Operators MAY set this to `false` to
+    /// preserve the prior unbounded-wait behavior. The key lives under
+    /// `[coders.<id>.tmux]` and is called `wedge-detection` in TOML.
+    ///
+    /// Default-true is intentional: the cost of a silently-wedged pane
+    /// (delivery queue growth) is higher than the cost of a recoverable
+    /// false-positive wedge (operator restart). See
+    /// `tmux-wedge-detection` design.md Decision 2.
+    #[serde(default = "wedge_detection_default_true")]
+    pub wedge_detection: bool,
+}
+
+/// Returns the default value for [`TmuxTargetConfiguration::wedge_detection`].
+fn wedge_detection_default_true() -> bool {
+    true
 }
 
 /// ACP transport configuration for one bundle member.

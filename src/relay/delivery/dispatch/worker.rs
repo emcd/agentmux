@@ -25,11 +25,11 @@ use super::super::async_worker::{
 use super::super::choice_state::{
     ChoiceEventContext, build_acp_chooser, invalidate_pending_for_respawn,
 };
-use super::super::quiescence::QUIESCENCE_TIMEOUT_MS_DEFAULT;
 use super::payload::{
     build_delivery_message, emit_envelope_metadata_inscription, resolve_target_member,
     target_is_relay_wide,
 };
+use crate::configuration::TargetConfiguration;
 use crate::transports::{
     AcpDriverServices, ChoiceMade, ChoiceToMake, Chooser, DeliveryEnvelope, DeliveryMessage,
     OutcomeFuture, SingleDeliveryOutcome, StartupContext, TransportImpl, UiBroadcastStatus,
@@ -390,14 +390,26 @@ fn noop_tmux_chooser() -> Chooser {
 /// Builds the [`DeliveryEnvelope`] for a coder (ACP/tmux) task from its structured
 /// message. Envelope-mode writes always submit with Enter; the transport renders
 /// the pane envelope from `message` before paste/turn submission.
+///
+/// The envelope's generic [`DeliveryEnvelope::prime_timeout_ms`] field is
+/// populated from the per-coder tmux config when the target is a tmux session
+/// (`[coders.<id>.tmux].prime-timeout-ms`); ACP targets leave it `None`
+/// because the ACP follow-up proposal populates it from `[coders.<id>.acp]`.
 fn build_coder_envelope(task: &AsyncDeliveryTask, message: DeliveryMessage) -> DeliveryEnvelope {
+    let prime_timeout_ms = match resolve_target_member(task) {
+        Ok(Some(member)) => match &member.target {
+            TargetConfiguration::Tmux(tmux_target) => tmux_target.prime_timeout_ms,
+            _ => None,
+        },
+        _ => None,
+    };
     DeliveryEnvelope {
         message_id: task.message_id.clone(),
         message,
         append_enter: true,
         choice_decider_sessions: task.choice_decider_sessions.clone(),
         quiet_window: task.quiescence.quiet_window,
-        quiescence_timeout: task.quiescence.quiescence_timeout,
+        prime_timeout_ms,
     }
 }
 
@@ -587,8 +599,9 @@ fn stream_send_to_broadcast_status(
 /// Builds the [`DeliveryEnvelope`] for a UI-routed task from the same structured
 /// [`DeliveryMessage`] coder transports receive; the UI transport reads its
 /// attribution fields to build the `incoming_message` stream event instead of
-/// rendering pane text. `quiescence_timeout` is resolved here so the transport's
-/// reconnect cap matches the relay quiescence default.
+/// rendering pane text. The UI transport owns its own reconnect cap
+/// ([`UI_RECONNECT_TIMEOUT_MS_DEFAULT`](crate::transports::ui::UI_RECONNECT_TIMEOUT_MS_DEFAULT));
+/// the relay no longer threads an external knob through the envelope.
 fn build_ui_envelope(task: &AsyncDeliveryTask) -> DeliveryEnvelope {
     let target_member = task
         .bundle
@@ -602,11 +615,7 @@ fn build_ui_envelope(task: &AsyncDeliveryTask) -> DeliveryEnvelope {
         append_enter: task.append_enter,
         choice_decider_sessions: task.choice_decider_sessions.clone(),
         quiet_window: task.quiescence.quiet_window,
-        quiescence_timeout: Some(
-            task.quiescence
-                .quiescence_timeout
-                .unwrap_or(Duration::from_millis(QUIESCENCE_TIMEOUT_MS_DEFAULT)),
-        ),
+        prime_timeout_ms: None,
     }
 }
 
