@@ -17,7 +17,7 @@ use crate::relay::{ListedBundle, ListedBundleStartupHealth, ListedBundleState};
 /// Snapshot of bundle-level status fields used by the TUI list view.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BundleStatusDisplay {
-    pub bundle_name: String,
+    pub namespace: String,
     pub hosted: bool,
     pub state: ListedBundleState,
     pub startup_health: Option<ListedBundleStartupHealth>,
@@ -28,7 +28,7 @@ pub struct BundleStatusDisplay {
 impl BundleStatusDisplay {
     pub fn from_listed_bundle(bundle: &ListedBundle) -> Self {
         Self {
-            bundle_name: bundle.id.clone(),
+            namespace: bundle.id.clone(),
             hosted: bundle.hosted,
             state: bundle.state.clone(),
             startup_health: bundle.startup_health.clone(),
@@ -47,7 +47,7 @@ pub fn format_bundle_status_line(status: &BundleStatusDisplay) -> String {
     let hosted_token = if status.hosted { "yes" } else { "no" };
     let state_token = listed_bundle_state_token(&status.state);
     let mut parts = vec![
-        format!("bundle={}", status.bundle_name),
+        format!("bundle={}", status.namespace),
         format!("hosted={hosted_token}"),
         format!("state={state_token}"),
     ];
