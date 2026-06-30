@@ -20,13 +20,19 @@ one of three terminal states:
   on the same `Failed` variant (for the Tmux transport,
   `reason_code = "pane_wedged"`).
 
-The `unresponsive` and `wedged` classifiers SHALL be config-surfaced and
-opt-in per the per-transport spec (see `session-relay` Tmux Prime Timeout
-and Tmux Wedged State Detection requirements for the Tmux surface). A
-`None` value on either config key preserves unbounded behavior on that
-classifier independently of the other. The classifiers SHALL NOT depend
-on each other — operators MAY enable prime timeout without wedge
-detection, and vice versa.
+The `unresponsive` and `wedged` classifiers SHALL each be config-surfaced
+per the per-transport spec (see `session-relay` Tmux Prime Timeout and
+Tmux Wedged State Detection requirements for the Tmux surface).
+
+- The Tmux `unresponsive` classifier SHALL be **opt-in**: absent or
+  `None` on `[coders.<id>.tmux].prime-timeout-ms` preserves today's
+  unbounded behavior.
+- The Tmux `wedged` classifier SHALL be **opt-out**: it defaults to
+  enabled (`wedge-detection` is `true` when absent or `true`),
+  because the cost of a silently-wedged pane is higher than the cost
+  of a false-positive wedge. Operators MAY set
+  `[coders.<id>.tmux].wedge-detection = false` to preserve the prior
+  unbounded-wait behavior.
 
 Active operator-interaction signals (such as tmux copy-mode or active
 key-table for the Tmux transport) SHALL indefinitely suppress both
@@ -49,28 +55,37 @@ flush group SHALL NOT resolve as `Timeout AND Failed`).
   output state during the wait for a flush group
 - **THEN** it routes the flush group to exactly one of `Delivered`,
   `Timeout`, or `Failed` with `reason_code = "pane_wedged"`
-- **AND** the relay worker treats the resulting `SingleDeliveryOutcome` as
-  terminal regardless of which classifier fired
+- **AND** the relay worker treats the resulting `SingleDeliveryOutcome`
+  as terminal regardless of which classifier fired
 
-#### Scenario: Wedge detection is opt-in via config
+#### Scenario: Tmux wedge detection defaults to enabled
 
-- **WHEN** the bundle/session config does not enable wedge detection for
-  the target transport
+- **WHEN** the bundle config does not set
+  `[coders.<id>.tmux].wedge-detection` (or sets it to `true`)
+- **THEN** the Tmux transport classifies a settled, non-prompt-ready,
+  no-operator-interaction pane as `wedged`
+- **AND** resolves the flush group as `Failed` with
+  `reason_code = "pane_wedged"`
+
+#### Scenario: Tmux wedge detection opt-out preserves prior behavior
+
+- **WHEN** the bundle config sets
+  `[coders.<id>.tmux].wedge-detection = false`
 - **THEN** the Tmux transport continues to wait past quiescence until
   the pane becomes prompt-ready or the relay shuts down
 - **AND** the only terminal failure modes for the flush group are
   `Timeout` (if prime timeout is enabled and fires) and `Shutdown`
   (if relay shutdown is requested)
 
-#### Scenario: Prime timeout is opt-in via config
+#### Scenario: Tmux prime timeout defaults preserve unbounded behavior
 
-- **WHEN** the bundle/session config does not enable prime timeout for
-  the target transport
+- **WHEN** the bundle config does not set
+  `[coders.<id>.tmux].prime-timeout-ms` (or sets it to `None`)
 - **THEN** the Tmux transport does not fire `Timeout` for unresponsive
   targets regardless of how long output remains absent
 - **AND** the only terminal failure modes for the flush group are
-  `Failed` + `reason_code = "pane_wedged"` (if wedge detection is
-  enabled and fires) and `Shutdown`
+  `Failed` + `reason_code = "pane_wedged"` (when wedge detection is
+  enabled, which is the default) and `Shutdown`
 
 #### Scenario: Wedge classification requires no pending operator interaction
 
@@ -104,6 +119,51 @@ flush group SHALL NOT resolve as `Timeout AND Failed`).
 - **AND** the transport does NOT classify individual envelopes
   independently within the same flush group
 
+### Requirement: Prime Timeout Envelope Field
+
+The relay SHALL communicate a per-write prime-timeout bound to transports
+via a generic `DeliveryEnvelope.prime_timeout_ms: Option<u64>` field.
+The field SHALL be transport-neutral — the relay populates it from
+per-coder config without knowing which transport will consume it, and
+each transport that performs a prime wait MAY read it or ignore it.
+
+For Tmux-backed sessions, the relay populates
+`DeliveryEnvelope.prime_timeout_ms` from
+`[coders.<id>.tmux].prime-timeout-ms`. The ACP delivery-side timeout
+follow-up will populate the same field for ACP sessions from
+`[coders.<id>.acp].prime-timeout-ms` (or a parallel per-coder key under
+the ACP table).
+
+The field SHALL replace any prior transport-specific prime-timeout
+field shape. The relay SHALL NOT add per-transport timeout fields to
+`DeliveryEnvelope` — keeping the envelope transport-neutral preserves
+the decoupling arc.
+
+#### Scenario: Tmux prime timeout rides on the generic envelope field
+
+- **WHEN** a Tmux-backed session has
+  `[coders.<id>.tmux].prime-timeout-ms` set to a finite millisecond
+  value
+- **THEN** the relay populates `DeliveryEnvelope.prime_timeout_ms`
+  with that value at envelope construction time
+- **AND** the Tmux transport reads `prime_timeout_ms` to bound the
+  prime window
+
+#### Scenario: ACP follow-up consumes the same generic field
+
+- **WHEN** the ACP delivery-side timeout follow-up lands
+- **THEN** it populates `DeliveryEnvelope.prime_timeout_ms` from its
+  own per-coder config key for ACP sessions
+- **AND** does NOT introduce a transport-prefixed envelope field
+  (e.g. `acp_prime_timeout_ms`)
+
+#### Scenario: Transports ignore the field when not relevant
+
+- **WHEN** a transport does not perform a prime wait (e.g. UI today)
+- **THEN** it ignores `DeliveryEnvelope.prime_timeout_ms`
+- **AND** the relay still populates the field with the configured
+  value (the relay does not gate the population on transport type)
+
 ### Requirement: Transport-Internal Probe Seam for Testability
 
 Each promptable transport that owns a quiescence wait SHALL expose an
@@ -132,9 +192,18 @@ pending-choice, slow-prompt, and normal-flow.
 - **THEN** it asserts the five canonical probe sequences produce the
   expected terminal outcomes:
   - `AlwaysUnresponsiveProbe` → `SendOutcome::Timeout`
-  - `AlwaysWedgeProbe` → `SendOutcome::Failed` + `reason_code = "pane_wedged"`
+  - `AlwaysWedgeProbe` → `SendOutcome::Failed` +
+    `reason_code = "pane_wedged"`
   - `PendingChoiceProbe` → neither timeout nor wedge; the transport
     continues to wait indefinitely while operator interaction is
     active and the prime timer does NOT fire
   - `SlowPromptProbe` → `Delivered` after several quiescence ticks
   - `NormalFlowProbe` → `Delivered` without prime or wedge firing
+
+#### Scenario: Tmux unit tests cover wedge default-on and opt-out
+
+- **WHEN** `cargo test --test tmux_transport` runs
+- **THEN** a test asserts the wedge classifier fires by default when
+  `[coders.<id>.tmux].wedge-detection` is absent
+- **AND** a test asserts the wedge classifier does NOT fire when
+  `[coders.<id>.tmux].wedge-detection = false`
