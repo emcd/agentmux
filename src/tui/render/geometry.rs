@@ -55,9 +55,11 @@ pub(super) fn compute_compose_height(
     .lines
     .len()
     .max(1) as u16;
+    let to_row = 1;
+    let borders = 2;
     let desired = message_line_count
-        .saturating_add(1) // To row
-        .saturating_add(2); // top + bottom borders
+        .saturating_add(to_row)
+        .saturating_add(borders);
     let max_compose = available_height.saturating_sub(WORKBENCH_MIN_CHAT_HEIGHT);
     let min_compose = WORKBENCH_MIN_COMPOSE_HEIGHT.min(max_compose.max(1));
     desired.clamp(min_compose, max_compose.max(min_compose))
