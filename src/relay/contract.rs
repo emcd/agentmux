@@ -162,6 +162,32 @@ pub struct RelayError {
     pub details: Option<Value>,
 }
 
+impl RelayError {
+    /// Renders an operator-facing message that folds the configuration
+    /// diagnostic detail (`path` + `cause`) a config parse / unknown-field
+    /// failure carries into the summary, so a CLI surface such as `agentmux up`
+    /// names the offending file and the serde-reported field instead of a bare
+    /// summary like "bundle configuration is invalid".
+    ///
+    /// Only errors whose `details` carry both string `path` and `cause` keys —
+    /// the shape every configuration load failure emits — are augmented; any
+    /// other error returns its plain `message`. The full structured `details`
+    /// payload is left untouched for the inscription stream regardless.
+    #[must_use]
+    pub fn operator_message(&self) -> String {
+        let Some(details) = self.details.as_ref() else {
+            return self.message.clone();
+        };
+        match (
+            details.get("path").and_then(Value::as_str),
+            details.get("cause").and_then(Value::as_str),
+        ) {
+            (Some(path), Some(cause)) => format!("{} ({path}: {cause})", self.message),
+            _ => self.message.clone(),
+        }
+    }
+}
+
 /// Relay-pushed stream event payload. The addressee's bundle is carried in the
 /// canonical `target_session` suffix (`session@bundle`).
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
