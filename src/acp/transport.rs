@@ -587,13 +587,52 @@ fn set_shared_readiness(shared: &AcpSharedState, state: WorkerReadinessState) {
 /// The batch carries a single `prime_timeout_ms` taken from the head envelope;
 /// the entire flush group's per-turn prime wait is governed by the head
 /// envelope's deadline. Coalesce-during-wait does NOT extend or restart the
-/// prime window — absorbed envelopes inherit the head envelope's anchor.
-struct EnvelopeBatch {
+/// prime window — absorbed envelopes inherit the head envelope's anchor. The
+/// invariance is enforced by [`EnvelopeBatch::absorb_envelope`], which never
+/// touches `prime_timeout_ms` regardless of the incoming envelope's value.
+pub(super) struct EnvelopeBatch {
     rendered: Vec<String>,
     message_ids: Vec<String>,
     decider_sessions: Vec<Vec<String>>,
     outcome_senders: Vec<tokio::sync::oneshot::Sender<SingleDeliveryOutcome>>,
     prime_timeout_ms: Option<u64>,
+}
+
+impl EnvelopeBatch {
+    /// Builds a single-envelope batch from the head envelope's submitted
+    /// write item. The prime anchor is taken from the head envelope; absorbed
+    /// envelopes do not re-set it.
+    fn from_head(
+        envelope: &DeliveryEnvelope,
+        outcome_tx: tokio::sync::oneshot::Sender<SingleDeliveryOutcome>,
+    ) -> Self {
+        Self {
+            rendered: vec![envelope.message.render_pane_envelope(&envelope.message_id)],
+            message_ids: vec![envelope.message_id.clone()],
+            decider_sessions: vec![envelope.choice_decider_sessions.clone()],
+            outcome_senders: vec![outcome_tx],
+            prime_timeout_ms: envelope.prime_timeout_ms,
+        }
+    }
+
+    /// Absorbs an additional envelope into this batch during the outer
+    /// coalesce loop. Pushes rendered output, message id, decider
+    /// sessions, and outcome sender. Deliberately does NOT touch
+    /// `prime_timeout_ms`: absorbed envelopes inherit the head envelope's
+    /// prime anchor (Decision 3). The absorbed envelope's own
+    /// `prime_timeout_ms` is ignored for the flush group's prime timer.
+    fn absorb_envelope(
+        &mut self,
+        envelope: &DeliveryEnvelope,
+        outcome_tx: tokio::sync::oneshot::Sender<SingleDeliveryOutcome>,
+    ) {
+        self.rendered
+            .push(envelope.message.render_pane_envelope(&envelope.message_id));
+        self.message_ids.push(envelope.message_id.clone());
+        self.decider_sessions
+            .push(envelope.choice_decider_sessions.clone());
+        self.outcome_senders.push(outcome_tx);
+    }
 }
 
 /// Channels connecting the transport to its internal delivery task.
@@ -658,13 +697,7 @@ fn acp_delivery_task(
                     drain_and_resolve_shutdown(&mut rx);
                     break;
                 }
-                let mut batch = EnvelopeBatch {
-                    rendered: vec![envelope.message.render_pane_envelope(&envelope.message_id)],
-                    message_ids: vec![envelope.message_id.clone()],
-                    decider_sessions: vec![envelope.choice_decider_sessions.clone()],
-                    outcome_senders: vec![outcome_tx],
-                    prime_timeout_ms: envelope.prime_timeout_ms,
-                };
+                let mut batch = EnvelopeBatch::from_head(&envelope, outcome_tx);
 
                 loop {
                     match rx.try_recv() {
@@ -672,14 +705,7 @@ fn acp_delivery_task(
                             envelope: next_env,
                             outcome_tx: next_tx,
                         }) => {
-                            batch
-                                .rendered
-                                .push(next_env.message.render_pane_envelope(&next_env.message_id));
-                            batch.message_ids.push(next_env.message_id.clone());
-                            batch
-                                .decider_sessions
-                                .push(next_env.choice_decider_sessions.clone());
-                            batch.outcome_senders.push(next_tx);
+                            batch.absorb_envelope(&next_env, next_tx);
                         }
                         Ok(WriteItem::Raw {
                             content,
@@ -1358,4 +1384,68 @@ fn initialize_persistent_acp_worker_runtime(
     }
 
     Ok(PersistentAcpWorkerRuntime { client, session_id })
+}
+
+#[cfg(test)]
+mod envelope_batch_prime_anchor_tests {
+    //! Inline coverage for the `EnvelopeBatch` prime-anchor invariant under
+    //! outer-coalesce absorb. Crate-private by design (the batch is an
+    //! internal of `acp_delivery_task`); the public surface (`Transport`)
+    //! does not exercise this path end-to-end (it would require two
+    //! `mailw` calls racing the delivery task's inner coalesce loop,
+    //! which is non-deterministic from the harness). One test function
+    //! per AGENTS.md convention.
+    use super::*;
+    use crate::envelope::AddressIdentity;
+    use crate::transports::{DeliveryEnvelope, DeliveryMessage};
+
+    fn head_envelope(message: &str, message_id: &str, prime: Option<u64>) -> DeliveryEnvelope {
+        let party = AddressIdentity {
+            session_name: "alpha".to_string(),
+            display_name: None,
+        };
+        DeliveryEnvelope {
+            message_id: message_id.to_string(),
+            message: DeliveryMessage {
+                body: message.to_string(),
+                created_at: "1970-01-01T00:00:00Z".to_string(),
+                namespace: "party".to_string(),
+                sender: party.clone(),
+                target: party.clone(),
+                cc: vec![],
+                authenticated_identity: None,
+            },
+            append_enter: true,
+            choice_decider_sessions: vec!["alpha".to_string()],
+            quiet_window: Duration::ZERO,
+            prime_timeout_ms: prime,
+        }
+    }
+
+    #[test]
+    fn absorbed_envelope_inherits_head_prime_anchor() {
+        // Head envelope anchors the flush group's prime at 100 ms. The
+        // absorbed envelope carries a deliberately larger 99_999 ms
+        // value; per Decision 3 the absorbed envelope MUST NOT extend
+        // or restart the prime window. Constructing two envelopes with
+        // distinct prime values, absorbing the second, then asserting the
+        // batch's `prime_timeout_ms` is the head's value is the
+        // deterministic test of that invariant.
+        let head = head_envelope("hello", "msg-head", Some(100));
+        let (head_tx, _head_rx) = tokio::sync::oneshot::channel();
+        let mut batch = EnvelopeBatch::from_head(&head, head_tx);
+        assert_eq!(batch.prime_timeout_ms, Some(100));
+        assert_eq!(batch.rendered.len(), 1);
+        assert_eq!(batch.message_ids, vec!["msg-head".to_string()]);
+
+        let absorbed = head_envelope("world", "msg-absorbed", Some(99_999));
+        let (absorbed_tx, _absorbed_rx) = tokio::sync::oneshot::channel();
+        batch.absorb_envelope(&absorbed, absorbed_tx);
+
+        // Prime anchor stays at the head envelope's value; the absorbed
+        // envelope's own `prime_timeout_ms` is ignored.
+        assert_eq!(batch.prime_timeout_ms, Some(100));
+        assert_eq!(batch.message_ids, vec!["msg-head", "msg-absorbed"]);
+        assert_eq!(batch.outcome_senders.len(), 2);
+    }
 }
