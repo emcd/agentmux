@@ -54,6 +54,29 @@ effect only on the next relay restart):
 agentmux host relay --no-watch
 ```
 
+Relay-wide controls have a durable home in `<config-root>/relay.toml`, whose keys
+live at the file root (kebab-case):
+
+```toml
+watch-bundles = true               # default true; disable to freeze the bundle set
+require-session-credentials = false # default false; true rejects socket-trust Hellos
+
+[choices]
+pending-max = 256                  # bounded choices queue depth
+
+# Schema-only placeholders for future outbound peer routing. Validated at
+# startup, but the relay opens no outbound connection and adds no routing target.
+[[peers]]
+address = "relay.example:9000"
+```
+
+`watch-bundles` and `require-session-credentials` resolve by precedence: CLI
+override (`--no-watch`, `--require-credentials`) > environment override
+(`AGENTMUX_RELAY_WATCH_BUNDLES`, `AGENTMUX_RELAY_REQUIRE_SESSION_CREDENTIALS`,
+each exactly `true` or `false`) > `relay.toml` > defaults. A malformed
+`relay.toml`, unknown field, wrong type, or invalid peer entry fails relay
+startup and `agentmux check configuration` with a structured error.
+
 2. Start MCP host:
 
 ```bash

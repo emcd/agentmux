@@ -698,6 +698,64 @@ fn host_relay_without_require_credentials_accepts_socket_trust() {
     assert_eq!(frame["principal_id"], "a@alpha");
 }
 
+// relay.toml `require-session-credentials = true` drives enforcement without the
+// CLI flag: the resolved configuration threads from `relay.toml` through startup
+// into Hello verification, so a `socket-trust` session is rejected.
+#[test]
+fn host_relay_require_credentials_from_relay_toml_rejects_socket_trust() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(true));
+    fs::write(
+        config_root.join("relay.toml"),
+        "require-session-credentials = true\n",
+    )
+    .expect("write relay.toml");
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "--no-autostart",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay with relay.toml require-session-credentials");
+    wait_for_relay_ready(&state_root, "alpha");
+
+    let frame = relay_hello_first_frame(&state_root, "a@alpha", "socket-trust");
+
+    shutdown_relay_if_present(&state_root, "alpha");
+    let output = child
+        .wait_with_output()
+        .expect("wait for agentmux host relay");
+    assert!(output.status.success(), "command should succeed");
+
+    assert_eq!(
+        frame["frame"], "response",
+        "expected error frame: {frame:?}"
+    );
+    assert_eq!(
+        frame["response"]["error"]["code"],
+        "validation_credential_required"
+    );
+}
+
 /// Opens a persistent stream connection, sends one Hello, and returns the live
 /// stream, a buffered reader (with a read timeout so a missing frame fails the
 /// test rather than hanging), and the first server frame. Held open so a
@@ -1315,6 +1373,75 @@ fn host_relay_no_watch_flag_disables_runtime_reconcile() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn agentmux host relay --no-watch");
+    wait_for_relay_ready(&state_root, "alpha");
+
+    write_bundle_configuration_with_options(
+        &config_root,
+        "bravo",
+        Some(&["dev"]),
+        &["b"],
+        Some(true),
+    );
+    // Give a watcher (if one existed) ample time to reconcile, then confirm the
+    // bundle is still unknown: no reconciliation happened.
+    thread::sleep(Duration::from_secs(1));
+    let frame = relay_hello_first_frame(&state_root, "b@bravo", "socket-trust");
+
+    shutdown_relay_if_present(&state_root, "alpha");
+    let output = child
+        .wait_with_output()
+        .expect("wait for agentmux host relay");
+    assert!(output.status.success(), "command should succeed");
+
+    assert_eq!(
+        frame["frame"], "response",
+        "expected error frame: {frame:?}"
+    );
+    assert_eq!(
+        frame["response"]["error"]["code"],
+        "validation_unknown_bundle"
+    );
+}
+
+// relay.toml `watch-bundles = false` disables the watcher without the `--no-watch`
+// CLI flag: a bundle added at runtime is not reconciled, mirroring the CLI-flag
+// behavior but sourced from configuration.
+#[test]
+fn host_relay_watch_bundles_false_from_relay_toml_disables_reconcile() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        Some(&["dev"]),
+        &["a"],
+        Some(true),
+    );
+    fs::write(config_root.join("relay.toml"), "watch-bundles = false\n").expect("write relay.toml");
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay with relay.toml watch-bundles=false");
     wait_for_relay_ready(&state_root, "alpha");
 
     write_bundle_configuration_with_options(

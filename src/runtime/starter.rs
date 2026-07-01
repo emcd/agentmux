@@ -12,6 +12,7 @@ const BUNDLES_DIRECTORY: &str = "bundles";
 const CODERS_FILE: &str = "coders.toml";
 const POLICIES_FILE: &str = "policies.toml";
 const USERS_FILE: &str = "users.toml";
+const RELAY_FILE: &str = "relay.toml";
 const EXAMPLE_BUNDLE_FILE: &str = "example.toml";
 
 const CODERS_TEMPLATE: &str = include_str!(concat!(
@@ -31,6 +32,10 @@ const USERS_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/data/configuration/users.toml"
 ));
+const RELAY_TEMPLATE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/data/configuration/relay.toml"
+));
 
 /// Ensures starter configuration files exist without overwriting user config.
 ///
@@ -44,6 +49,10 @@ pub fn ensure_starter_configuration_layout(configuration_root: &Path) -> Result<
     ensure_template_file(&configuration_root.join(CODERS_FILE), CODERS_TEMPLATE)?;
     ensure_template_file(&configuration_root.join(POLICIES_FILE), POLICIES_TEMPLATE)?;
     ensure_template_file(&configuration_root.join(USERS_FILE), USERS_TEMPLATE)?;
+    // The relay.toml template is fully commented, so it scaffolds as an
+    // all-defaults (effectively empty) file: it documents the schema without
+    // activating any control, and the relay loads it as the documented defaults.
+    ensure_template_file(&configuration_root.join(RELAY_FILE), RELAY_TEMPLATE)?;
     if !bundles_directory_has_toml(&bundles_directory)? {
         ensure_template_file(
             &bundles_directory.join(EXAMPLE_BUNDLE_FILE),

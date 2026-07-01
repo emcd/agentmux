@@ -82,6 +82,11 @@ struct RelayHostServePlan {
     relay_paths: RelayRuntimePaths,
     listener: UnixListener,
     runtime_lock: RelayRuntimeLock,
+    // Resolved relay-wide controls (CLI > env > relay.toml > defaults), computed
+    // once in the blocking startup phase and carried to the async serve phase so
+    // it never re-reads or re-resolves relay.toml.
+    watch_bundles: bool,
+    require_session_credentials: bool,
 }
 
 #[derive(Debug)]
@@ -129,9 +134,9 @@ pub(super) async fn run_relay_host(arguments: RelayHostArguments) -> Result<(), 
     spawn_shutdown_watchdog()?;
 
     // Captured before `arguments` is moved into the blocking startup closure;
-    // enforcement and watching apply in the async serve phase, not during startup.
-    let require_session_credentials = arguments.require_session_credentials;
-    let watch_bundles = arguments.watch_bundles;
+    // `no_autostart` also selects the serve-phase watcher behavior. The resolved
+    // `watch_bundles` / `require_session_credentials` are computed from
+    // `relay.toml` during startup and carried out on the serve plan.
     let no_autostart = arguments.no_autostart;
 
     // Startup (config load, tmux autostart, lock acquisition, socket binding) is
@@ -139,7 +144,12 @@ pub(super) async fn run_relay_host(arguments: RelayHostArguments) -> Result<(), 
     // the per-bundle accept loops on the runtime (tokio::net + tokio::spawn).
     let (roots, preparation) = tokio::task::spawn_blocking(move || {
         let roots = resolve_runtime_roots(arguments.runtime)?;
-        let preparation = prepare_relay_host(&roots, arguments.no_autostart)?;
+        let preparation = prepare_relay_host(
+            &roots,
+            arguments.no_autostart,
+            arguments.watch_bundles,
+            arguments.require_session_credentials,
+        )?;
         Ok::<_, RuntimeError>((roots, preparation))
     })
     .await
@@ -154,6 +164,8 @@ pub(super) async fn run_relay_host(arguments: RelayHostArguments) -> Result<(), 
                 relay_paths,
                 listener,
                 runtime_lock,
+                watch_bundles,
+                require_session_credentials,
             } = *plan;
             serve_relay_host(
                 roots,
@@ -242,7 +254,20 @@ fn resolve_runtime_roots(runtime: RuntimeArguments) -> Result<RuntimeRoots, Runt
 fn prepare_relay_host(
     roots: &RuntimeRoots,
     no_autostart: bool,
+    cli_watch_bundles: Option<bool>,
+    cli_require_session_credentials: Option<bool>,
 ) -> Result<RelayHostPreparation, RuntimeError> {
+    // Resolve relay-wide controls before any bundle work so a malformed
+    // `relay.toml` (bad type, unknown field, nested `[relay]` table, invalid peer
+    // entry, or invalid environment override) fails startup up front, regardless
+    // of how many bundles are configured.
+    let relay_configuration = crate::relay::load_relay_runtime_configuration(
+        &roots.configuration_root,
+        cli_watch_bundles,
+        cli_require_session_credentials,
+    )
+    .map_err(shared::map_relay_error)?;
+
     let memberships = load_bundle_group_memberships(&roots.configuration_root)
         .map_err(shared::map_bundle_load_error)?;
     configure_process_inscriptions(&relay_inscriptions_path(&roots.inscriptions_root))?;
@@ -386,6 +411,8 @@ fn prepare_relay_host(
         relay_paths,
         listener,
         runtime_lock,
+        watch_bundles: relay_configuration.watch_bundles,
+        require_session_credentials: relay_configuration.require_session_credentials,
     })))
 }
 
@@ -435,8 +462,9 @@ async fn serve_relay_host(
         let connection_permits = Arc::clone(&connection_permits);
         let catalog = catalog.clone();
         let drain_coordinator = Arc::clone(&drain_coordinator);
-        // `require_session_credentials` is the relay-wide enforcement flag set by
-        // the `--require-credentials` CLI flag (default: disabled).
+        // `require_session_credentials` is the resolved relay-wide enforcement
+        // control (CLI override > environment override > relay.toml > default
+        // disabled).
         tokio::spawn(run_relay_accept_loop(
             configuration_root,
             state_root,
@@ -457,7 +485,8 @@ async fn serve_relay_host(
     write_relay_ready_sentinel(&relay_paths)?;
 
     // Start watching the bundles configuration directory for runtime
-    // add/remove/modify unless `--no-watch` was given. The guard is held for the
+    // add/remove/modify unless resolved `watch-bundles` is false (CLI override,
+    // environment override, or relay.toml). The guard is held for the
     // serving lifetime and dropped (stopping the watch) before cleanup tears the
     // hosted bundles down. A watcher that cannot be created (e.g. the platform
     // lacks filesystem notifications) is non-fatal: the relay keeps serving

@@ -13,10 +13,12 @@ fn creates_starter_configuration_files_when_missing() {
     let coders = configuration_root.join("coders.toml");
     let policies = configuration_root.join("policies.toml");
     let users = configuration_root.join("users.toml");
+    let relay = configuration_root.join("relay.toml");
     let example_bundle = configuration_root.join("bundles/example.toml");
     assert!(coders.exists(), "expected coders.toml to exist");
     assert!(policies.exists(), "expected policies.toml to exist");
     assert!(users.exists(), "expected users.toml to exist");
+    assert!(relay.exists(), "expected relay.toml to exist");
     assert!(example_bundle.exists(), "expected example bundle to exist");
 
     let coders_text = fs::read_to_string(coders).expect("read coders.toml");
@@ -28,6 +30,18 @@ fn creates_starter_configuration_files_when_missing() {
     let users_text = fs::read_to_string(users).expect("read users.toml");
     assert!(users_text.contains("default-bundle"));
     assert!(users_text.contains("[[sessions]]"));
+    // The relay.toml template is fully commented (all-defaults), so it must
+    // contain no active key that could change relay behavior — only documentation.
+    let relay_text = fs::read_to_string(relay).expect("read relay.toml");
+    assert!(relay_text.contains("watch-bundles"));
+    assert!(relay_text.contains("[[peers]]"));
+    assert!(
+        relay_text
+            .lines()
+            .filter(|line| !line.trim_start().starts_with('#'))
+            .all(|line| line.trim().is_empty()),
+        "relay.toml template must have no active (uncommented) keys",
+    );
 
     let bundle_text = fs::read_to_string(example_bundle).expect("read example bundle");
     assert!(bundle_text.contains("format-version = 1"));
@@ -42,10 +56,12 @@ fn preserves_existing_configuration_files() {
     let coders = configuration_root.join("coders.toml");
     let policies = configuration_root.join("policies.toml");
     let users = configuration_root.join("users.toml");
+    let relay = configuration_root.join("relay.toml");
     let example_bundle = configuration_root.join("bundles/example.toml");
     fs::write(&coders, "format-version = 1\n# custom coders\n").expect("write coders");
     fs::write(&policies, "format-version = 1\n# custom policies\n").expect("write policies");
     fs::write(&users, "default-bundle = \"custom\"\n# custom users\n").expect("write users");
+    fs::write(&relay, "watch-bundles = false\n# custom relay\n").expect("write relay");
     fs::write(&example_bundle, "format-version = 1\n# custom bundle\n").expect("write bundle");
 
     ensure_starter_configuration_layout(&configuration_root).expect("starter layout");
@@ -56,6 +72,8 @@ fn preserves_existing_configuration_files() {
     assert_eq!(policies_text, "format-version = 1\n# custom policies\n");
     let users_text = fs::read_to_string(users).expect("read users.toml");
     assert_eq!(users_text, "default-bundle = \"custom\"\n# custom users\n");
+    let relay_text = fs::read_to_string(relay).expect("read relay.toml");
+    assert_eq!(relay_text, "watch-bundles = false\n# custom relay\n");
     let bundle_text = fs::read_to_string(example_bundle).expect("read example bundle");
     assert_eq!(bundle_text, "format-version = 1\n# custom bundle\n");
 }

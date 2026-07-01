@@ -18,6 +18,10 @@ const RELAY_FILE: &str = "relay.toml";
 const DEFAULT_CHOICES_PENDING_MAX: usize = 256;
 const MIN_CHOICES_PENDING_MAX: usize = 1;
 const MAX_CHOICES_PENDING_MAX: usize = 4096;
+const DEFAULT_WATCH_BUNDLES: bool = true;
+const DEFAULT_REQUIRE_SESSION_CREDENTIALS: bool = false;
+const ENV_WATCH_BUNDLES: &str = "AGENTMUX_RELAY_WATCH_BUNDLES";
+const ENV_REQUIRE_SESSION_CREDENTIALS: &str = "AGENTMUX_RELAY_REQUIRE_SESSION_CREDENTIALS";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -38,18 +42,21 @@ struct RawPolicyPreset {
     controls: RawPolicyControls,
 }
 
+/// Raw `relay.toml` shape. Relay-wide keys live at the file root — the file is
+/// itself the relay configuration table, so a nested `[relay]` table is rejected
+/// as an unknown field. `deny_unknown_fields` makes every typo or stale key a
+/// fail-fast structured error rather than a silent default.
 #[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 struct RawRelayFile {
     #[serde(default)]
-    relay: Option<RawRelaySection>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-struct RawRelaySection {
+    watch_bundles: Option<bool>,
+    #[serde(default)]
+    require_session_credentials: Option<bool>,
     #[serde(default)]
     choices: Option<RawRelayChoicesSection>,
+    #[serde(default)]
+    peers: Vec<RawPeerEntry>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -57,6 +64,16 @@ struct RawRelaySection {
 struct RawRelayChoicesSection {
     #[serde(default)]
     pending_max: Option<usize>,
+}
+
+/// Raw `[[peers]]` entry: a schema-only placeholder for future outbound peer
+/// routing. `address` is required and unknown peer fields are rejected. The
+/// relay validates and stores these entries but opens no outbound connections
+/// and adds no routing targets for them; outbound routing is future work.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct RawPeerEntry {
+    address: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -185,7 +202,8 @@ pub(in crate::relay) fn load_authorization_context(
     let policies_path = configuration_root.join(POLICIES_FILE);
     let (presets, default_policy_id) = load_policy_presets(configuration_root)?;
 
-    let choices_pending_max = load_choices_pending_max(configuration_root)?;
+    let choices_pending_max =
+        load_relay_file_configuration(configuration_root)?.choices_pending_max;
 
     // A relay-wide (`GLOBAL`) home namespace has no bundle members; its
     // requester controls come entirely from the operator policy loaded below
@@ -263,10 +281,135 @@ pub(in crate::relay) fn load_authorization_context(
     })
 }
 
-fn load_choices_pending_max(configuration_root: &Path) -> Result<usize, RelayError> {
+/// Fully-resolved relay-wide runtime configuration, after applying the
+/// precedence ladder (CLI override > environment override > `relay.toml` >
+/// documented defaults). This is the single normalized object relay startup and
+/// `agentmux check configuration` read; consumers MUST NOT re-parse `relay.toml`
+/// or re-apply defaulting/precedence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RelayRuntimeConfiguration {
+    pub watch_bundles: bool,
+    pub require_session_credentials: bool,
+    pub choices_pending_max: usize,
+    pub peers: Vec<PeerConfiguration>,
+}
+
+/// A validated `[[peers]]` placeholder entry carrying the operator-facing peer
+/// relay `address`. Routing behavior is intentionally absent until the outbound
+/// peer routing change consumes it; the relay opens no connection for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PeerConfiguration {
+    pub address: String,
+}
+
+/// File-derived relay settings before override resolution. `watch_bundles` and
+/// `require_session_credentials` stay `Option` so the precedence ladder can tell
+/// "absent in file" apart from an explicit value; `choices_pending_max` and
+/// `peers` have no override layer and are resolved (and validated) here.
+struct RelayFileConfiguration {
+    watch_bundles: Option<bool>,
+    require_session_credentials: Option<bool>,
+    choices_pending_max: usize,
+    peers: Vec<PeerConfiguration>,
+}
+
+/// Loads and resolves the relay-wide runtime configuration from
+/// `<config-root>/relay.toml`, applying the precedence ladder
+/// (CLI override > environment override > `relay.toml` > documented defaults)
+/// for the boolean controls. A missing file yields the documented defaults; a
+/// malformed file, unknown field, wrong field type, out-of-range choices bound,
+/// invalid environment override, or invalid peer entry fails fast with a
+/// structured [`RelayError`].
+pub fn load_relay_runtime_configuration(
+    configuration_root: &Path,
+    cli_watch_bundles: Option<bool>,
+    cli_require_session_credentials: Option<bool>,
+) -> Result<RelayRuntimeConfiguration, RelayError> {
+    let file = load_relay_file_configuration(configuration_root)?;
+    let environment_watch_bundles = relay_bool_env_override(ENV_WATCH_BUNDLES)?;
+    let environment_require_session_credentials =
+        relay_bool_env_override(ENV_REQUIRE_SESSION_CREDENTIALS)?;
+    Ok(RelayRuntimeConfiguration {
+        watch_bundles: resolve_relay_bool_setting(
+            cli_watch_bundles,
+            environment_watch_bundles,
+            file.watch_bundles,
+            DEFAULT_WATCH_BUNDLES,
+        ),
+        require_session_credentials: resolve_relay_bool_setting(
+            cli_require_session_credentials,
+            environment_require_session_credentials,
+            file.require_session_credentials,
+            DEFAULT_REQUIRE_SESSION_CREDENTIALS,
+        ),
+        choices_pending_max: file.choices_pending_max,
+        peers: file.peers,
+    })
+}
+
+/// Resolves one boolean relay setting through the precedence ladder: a CLI
+/// override wins, then an environment override, then the `relay.toml` value,
+/// then the documented default. Pure so the precedence is unit-testable without
+/// touching process state.
+#[must_use]
+pub fn resolve_relay_bool_setting(
+    cli_override: Option<bool>,
+    environment_override: Option<bool>,
+    file_value: Option<bool>,
+    default: bool,
+) -> bool {
+    cli_override
+        .or(environment_override)
+        .or(file_value)
+        .unwrap_or(default)
+}
+
+/// Parses a canonical boolean override value (`true`/`false` only) for the named
+/// environment variable, surfacing a structured error for anything else. Split
+/// from process-env reading so the validation is unit-testable without mutating
+/// process state.
+pub fn parse_relay_bool_env_value(variable: &str, value: &str) -> Result<bool, RelayError> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(relay_error(
+            "validation_invalid_arguments",
+            "relay environment override must be exactly 'true' or 'false'",
+            Some(json!({
+                "variable": variable,
+                "value": value,
+                "expected": ["true", "false"],
+            })),
+        )),
+    }
+}
+
+/// Reads a canonical boolean environment override. Returns `Ok(None)` when the
+/// variable is absent (or holds non-UTF-8, treated as absent), `Ok(Some(_))` for
+/// exactly `true`/`false`, and a structured error for any other value.
+fn relay_bool_env_override(variable: &str) -> Result<Option<bool>, RelayError> {
+    match std::env::var(variable).ok() {
+        None => Ok(None),
+        Some(value) => parse_relay_bool_env_value(variable, value.as_str()).map(Some),
+    }
+}
+
+/// Parses and validates `relay.toml` into file-derived settings without applying
+/// overrides. A missing file yields documented defaults with no configured
+/// peers. Choices range and peer-entry validation happen here so both relay
+/// startup and `agentmux check configuration` (which loads through this path)
+/// report the same structured errors.
+fn load_relay_file_configuration(
+    configuration_root: &Path,
+) -> Result<RelayFileConfiguration, RelayError> {
     let path = configuration_root.join(RELAY_FILE);
     if !path.exists() {
-        return Ok(DEFAULT_CHOICES_PENDING_MAX);
+        return Ok(RelayFileConfiguration {
+            watch_bundles: None,
+            require_session_credentials: None,
+            choices_pending_max: DEFAULT_CHOICES_PENDING_MAX,
+            peers: Vec::new(),
+        });
     }
     let raw = fs::read_to_string(&path).map_err(|source| {
         relay_error(
@@ -288,25 +431,46 @@ fn load_choices_pending_max(configuration_root: &Path) -> Result<usize, RelayErr
             })),
         )
     })?;
-    let configured = parsed
-        .relay
-        .and_then(|relay| relay.choices)
+    let choices_pending_max = parsed
+        .choices
         .and_then(|choices| choices.pending_max)
         .unwrap_or(DEFAULT_CHOICES_PENDING_MAX);
-    if (MIN_CHOICES_PENDING_MAX..=MAX_CHOICES_PENDING_MAX).contains(&configured) {
-        return Ok(configured);
+    if !(MIN_CHOICES_PENDING_MAX..=MAX_CHOICES_PENDING_MAX).contains(&choices_pending_max) {
+        return Err(relay_error(
+            "validation_invalid_arguments",
+            "relay choices pending-max is out of supported range",
+            Some(json!({
+                "path": path.display().to_string(),
+                "field": "choices.pending-max",
+                "value": choices_pending_max,
+                "minimum": MIN_CHOICES_PENDING_MAX,
+                "maximum": MAX_CHOICES_PENDING_MAX,
+            })),
+        ));
     }
-    Err(relay_error(
-        "validation_invalid_arguments",
-        "relay choices pending-max is out of supported range",
-        Some(json!({
-            "path": path.display().to_string(),
-            "field": "relay.choices.pending-max",
-            "value": configured,
-            "minimum": MIN_CHOICES_PENDING_MAX,
-            "maximum": MAX_CHOICES_PENDING_MAX,
-        })),
-    ))
+    let mut peers = Vec::with_capacity(parsed.peers.len());
+    for (index, peer) in parsed.peers.into_iter().enumerate() {
+        if peer.address.trim().is_empty() {
+            return Err(relay_error(
+                "validation_invalid_arguments",
+                "relay peer address must be a non-empty string",
+                Some(json!({
+                    "path": path.display().to_string(),
+                    "field": "peers.address",
+                    "peer_index": index,
+                })),
+            ));
+        }
+        peers.push(PeerConfiguration {
+            address: peer.address,
+        });
+    }
+    Ok(RelayFileConfiguration {
+        watch_bundles: parsed.watch_bundles,
+        require_session_credentials: parsed.require_session_credentials,
+        choices_pending_max,
+        peers,
+    })
 }
 
 fn parse_policy_controls(

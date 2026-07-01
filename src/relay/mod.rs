@@ -27,6 +27,10 @@ mod stream;
 mod watcher;
 
 use self::authorization::load_authorization_context;
+pub use self::authorization::{
+    PeerConfiguration, RelayRuntimeConfiguration, load_relay_runtime_configuration,
+    parse_relay_bool_env_value, resolve_relay_bool_setting,
+};
 
 pub use self::client::{RelayStreamSession, request_relay};
 pub use self::connection::{BundleCatalog, HostingIntent, serve_connection};
