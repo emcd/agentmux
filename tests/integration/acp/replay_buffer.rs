@@ -1,8 +1,15 @@
-use agentmux::acp::{REPLAY_BUFFER_MAX_ENTRIES, ReplayEntry, append_replay_entries_for_test};
+use agentmux::acp::{
+    REPLAY_BUFFER_MAX_ENTRIES, ReplayEntry, UserSource, append_replay_entries_for_test,
+};
 
 fn user_entry(label: &str) -> ReplayEntry {
+    user_entry_with_source(label, UserSource::ReaderThread)
+}
+
+fn user_entry_with_source(label: &str, source: UserSource) -> ReplayEntry {
     ReplayEntry::User {
         lines: vec![label.to_string()],
+        source,
     }
 }
 
@@ -10,7 +17,7 @@ fn buffer_labels(buffer: &[ReplayEntry]) -> Vec<String> {
     buffer
         .iter()
         .map(|entry| match entry {
-            ReplayEntry::User { lines } => lines.join(""),
+            ReplayEntry::User { lines, .. } => lines.join(""),
             _ => panic!("unexpected entry kind in test buffer"),
         })
         .collect()

@@ -67,7 +67,7 @@ fn acp_look_returns_oldest_to_newest_session_update_lines() {
         |lines| lines.len() >= 3 && lines.last().map(String::as_str) == Some("ACP-LINE-3"),
     );
     let snapshot = expect_acp_snapshot(look);
-    // The aggregate-acp-streaming-chunks coalescence rule collapses the 3
+    // The reader-thread same-kind adjacency coalescence rule collapses the 3
     // streaming agent_message_chunk notifications into a single Agent
     // entry; the buffer additionally holds the User prompt entry from
     // `AcpStdioClient::prompt`.
@@ -103,7 +103,7 @@ fn acp_look_returns_oldest_to_newest_session_update_lines() {
 fn acp_look_coalesces_long_streaming_response_into_single_entry() {
     // 1105 streaming chunks would have produced 1105 fragment Agent entries
     // before coalescence, exercising the buffer cap at 1000. With
-    // aggregate-acp-streaming-chunks in place, the same input coalesces
+    // reader-thread same-kind adjacency coalescence in place, the same input coalesces
     // into a single Agent entry whose `lines` carry all 1105 lines; the
     // entry-count cap is never reached (the cap-with-coalescence invariant
     // is exercised at the unit-test layer in tests/unit/acp/replay_coalescence.rs).
@@ -158,7 +158,7 @@ fn acp_look_coalesces_long_streaming_response_into_single_entry() {
 
 #[test]
 fn acp_look_offset_walks_backward_through_replay_buffer_with_metadata() {
-    // Post-aggregate-acp-streaming-chunks, a 10-chunk Agent stream
+    // Under reader-thread same-kind adjacency coalescence, a 10-chunk Agent stream
     // coalesces into a single Agent entry; the buffer additionally holds
     // the User prompt entry, so `entries_total == 2`. The offset-walking
     // math still holds on this smaller buffer; the semantics of
@@ -288,7 +288,7 @@ fn acp_look_reflects_outgoing_user_prompt_before_session_updates_arrive() {
 fn acp_look_captures_updates_emitted_after_prompt_response() {
     // The stub agent emits 3 chunks before the response and 3 more after a
     // 20ms delay; both batches coalesce against the buffer tail under the
-    // aggregate-acp-streaming-chunks rule. The buffer ends with a User
+    // reader-thread same-kind adjacency coalescence rule. The buffer ends with a User
     // prompt entry and a single Agent entry whose `lines` carry all 6
     // streamed chunks.
     let temporary = TempDir::new().expect("temporary");

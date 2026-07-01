@@ -1,23 +1,27 @@
 //! Unit coverage for `coalesce_replay_entries_on_append` (the
-//! aggregate-acp-streaming-chunks reader-thread helper) and the
-//! prompt-path non-coalescing `append_replay_entries`.
+//! reader-thread helper) and the prompt-path non-coalescing
+//! `append_replay_entries`.
 //!
 //! The helper walks `new_entries` and merges same-kind adjacency with the
 //! buffer tail, preserving all line content in receive order. Rules:
 //!
 //! - `User`, `Agent`, `Cognition`: adjacent same-kind entries merge by
-//!   `lines` extension.
+//!   `lines` extension. `User` merges only when both entries share the
+//!   same `UserSource` (cross-source adjacency never merges).
 //! - `Update`: adjacent entries merge only when `update_kind` matches.
 //! - `Invocation`: never merges (per-call boundary must be preserved).
 //! - Different-kind adjacency: never merges.
 //! - The 1000-entry cap is enforced AFTER coalescence.
 //!
 //! The prompt-path helper `append_replay_entries` does NOT coalesce: each
-//! user prompt appends a distinct `User` entry regardless of any preceding
-//! `User` tail.
+//! user prompt appends a distinct `User` entry (marked
+//! `UserSource::PromptPath`) regardless of any preceding `User` tail, and
+//! the helper refuses to merge a `UserSource::ReaderThread` arrival
+//! against a `PromptPath` tail or vice versa.
 
 use agentmux::acp::{
-    ReplayEntry, append_replay_entries_for_test, coalesce_replay_entries_on_append_for_test,
+    ReplayEntry, UserSource, append_replay_entries_for_test,
+    coalesce_replay_entries_on_append_for_test,
 };
 use agentmux::transports::ToolCallStatus;
 use serde_json::{Value, json};
@@ -61,11 +65,13 @@ fn within_batch_same_kind_agent_entries_collapse_into_one() {
 fn tail_of_buffer_same_kind_user_entry_extends_in_place() {
     let mut buffer: Vec<ReplayEntry> = vec![ReplayEntry::User {
         lines: vec!["existing-prompt".to_string()],
+        source: UserSource::ReaderThread,
     }];
     coalesce_replay_entries_on_append_for_test(
         &mut buffer,
         vec![ReplayEntry::User {
             lines: vec!["streaming-delta-1".to_string(), "delta-2".to_string()],
+            source: UserSource::ReaderThread,
         }],
     );
     assert_eq!(
@@ -73,7 +79,7 @@ fn tail_of_buffer_same_kind_user_entry_extends_in_place() {
         1,
         "tail User should be extended, not appended-to"
     );
-    let ReplayEntry::User { lines } = &buffer[0] else {
+    let ReplayEntry::User { lines, .. } = &buffer[0] else {
         panic!("expected User entry");
     };
     assert_eq!(
@@ -290,6 +296,7 @@ fn coalescence_reduces_entry_count_before_cap_check() {
         vec![
             ReplayEntry::User {
                 lines: vec!["u".to_string()],
+                source: UserSource::ReaderThread,
             },
             ReplayEntry::Cognition {
                 lines: vec!["c".to_string()],
@@ -318,18 +325,101 @@ fn coalescence_reduces_entry_count_before_cap_check() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn reader_thread_user_does_not_merge_into_prompt_origin_user_tail() {
+    // Regression: the buffer tail is a prompt-path User entry
+    // (added by AcpStdioClient::prompt before the agent responds).
+    // If the upstream ACP server then echoes a user_message_chunk
+    // (or session/load replays user content), the parsed User entry
+    // is reader-thread. The two must remain separate entries to
+    // preserve the per-submission boundary. Pre-fix this would have
+    // merged both User lines into one entry because the helper only
+    // checked the kind, not the source.
+    let mut buffer: Vec<ReplayEntry> = vec![ReplayEntry::User {
+        lines: vec!["operator-prompt".to_string()],
+        source: UserSource::PromptPath,
+    }];
+    coalesce_replay_entries_on_append_for_test(
+        &mut buffer,
+        vec![ReplayEntry::User {
+            lines: vec!["echoed-from-server".to_string()],
+            source: UserSource::ReaderThread,
+        }],
+    );
+    assert_eq!(
+        buffer.len(),
+        2,
+        "cross-source User adjacency must produce two distinct entries"
+    );
+    match (&buffer[0], &buffer[1]) {
+        (
+            ReplayEntry::User {
+                lines: lines_0,
+                source: source_0,
+            },
+            ReplayEntry::User {
+                lines: lines_1,
+                source: source_1,
+            },
+        ) => {
+            assert_eq!(lines_0, &vec!["operator-prompt".to_string()]);
+            assert_eq!(*source_0, UserSource::PromptPath);
+            assert_eq!(lines_1, &vec!["echoed-from-server".to_string()]);
+            assert_eq!(*source_1, UserSource::ReaderThread);
+        }
+        _ => panic!("expected two distinct User entries with sources preserved"),
+    }
+}
+
+#[test]
+fn prompt_path_user_after_reader_thread_user_tail_does_not_merge() {
+    // Symmetric case: the buffer tail is a reader-thread User entry
+    // (a server emission). A local prompt submission arrives. The
+    // prompt-path append helper does not coalesce, so the new entry
+    // is pushed regardless of source. This pins the symmetric
+    // contract.
+    let mut buffer: Vec<ReplayEntry> = vec![ReplayEntry::User {
+        lines: vec!["server-user".to_string()],
+        source: UserSource::ReaderThread,
+    }];
+    append_replay_entries_for_test(
+        &mut buffer,
+        vec![ReplayEntry::User {
+            lines: vec!["operator-prompt".to_string()],
+            source: UserSource::PromptPath,
+        }],
+    );
+    assert_eq!(buffer.len(), 2);
+    assert!(matches!(
+        buffer[0],
+        ReplayEntry::User {
+            source: UserSource::ReaderThread,
+            ..
+        }
+    ));
+    assert!(matches!(
+        buffer[1],
+        ReplayEntry::User {
+            source: UserSource::PromptPath,
+            ..
+        }
+    ));
+}
+
+#[test]
 fn prompt_path_append_preserves_user_boundary_on_consecutive_submissions() {
     let mut buffer: Vec<ReplayEntry> = Vec::new();
     append_replay_entries_for_test(
         &mut buffer,
         vec![ReplayEntry::User {
             lines: vec!["first-prompt".to_string()],
+            source: UserSource::PromptPath,
         }],
     );
     append_replay_entries_for_test(
         &mut buffer,
         vec![ReplayEntry::User {
             lines: vec!["second-prompt".to_string()],
+            source: UserSource::PromptPath,
         }],
     );
     assert_eq!(
@@ -338,7 +428,7 @@ fn prompt_path_append_preserves_user_boundary_on_consecutive_submissions() {
         "two back-to-back prompts through the non-coalescing append remain two entries"
     );
     match (&buffer[0], &buffer[1]) {
-        (ReplayEntry::User { lines: lines_0 }, ReplayEntry::User { lines: lines_1 }) => {
+        (ReplayEntry::User { lines: lines_0, .. }, ReplayEntry::User { lines: lines_1, .. }) => {
             assert_eq!(lines_0, &vec!["first-prompt".to_string()]);
             assert_eq!(lines_1, &vec!["second-prompt".to_string()]);
         }
@@ -368,6 +458,7 @@ fn build_session_load_history_vec() -> Vec<ReplayEntry> {
         vec![
             ReplayEntry::User {
                 lines: vec!["user-prompt".to_string()],
+                source: UserSource::ReaderThread,
             },
             ReplayEntry::Agent {
                 lines: vec!["agent-part-1-line-1".to_string()],

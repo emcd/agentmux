@@ -23,10 +23,32 @@ use crate::transports::ToolCallStatus;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 
+/// Provenance marker for `ReplayEntry::User` entries. The replay buffer
+/// carries user-authored content from two distinct sources:
+///
+/// - `PromptPath` — the operator's local submission, added synchronously
+///   by `AcpStdioClient::prompt` before the agent response arrives.
+/// - `ReaderThread` — chunks parsed from `session/update` or `session/load`
+///   notifications (a `user_message_chunk` emitted by the upstream ACP
+///   server as part of the session history).
+///
+/// These two sources MUST NOT coalesce: a prompt-origin `User` tail and a
+/// reader-origin `User` arrival represent two distinct operator
+/// submissions and must remain two buffer entries. Coalescence within a
+/// source (e.g., multiple back-to-back `user_message_chunk`s from the
+/// server) is allowed and applied by `try_merge_adjacent`; coalescence
+/// across sources is not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserSource {
+    PromptPath,
+    ReaderThread,
+}
+
 #[derive(Debug, Clone)]
 pub enum ReplayEntry {
     User {
         lines: Vec<String>,
+        source: UserSource,
     },
     Agent {
         lines: Vec<String>,

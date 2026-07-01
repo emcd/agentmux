@@ -14,7 +14,7 @@ use std::{
 
 use serde_json::{Value, json};
 
-use super::{PROTOCOL_VERSION, PermissionOption, PermissionRequest, ReplayEntry};
+use super::{PROTOCOL_VERSION, PermissionOption, PermissionRequest, ReplayEntry, UserSource};
 use crate::runtime::inscriptions::emit_inscription;
 
 const ACP_CLIENT_NAME: &str = "agentmux-relay";
@@ -60,9 +60,12 @@ pub(in crate::acp) fn append_replay_entries(
 /// line content in receive order and enforcing the 1000-entry cap after
 /// coalescence.
 ///
-/// Coalescence rules (per `aggregate-acp-streaming-chunks`):
+/// Coalescence rules:
 /// - `User`, `Agent`, `Cognition`: adjacent same-kind entries merge into one
-///   entry by `lines: Vec<String>` extension.
+///   entry by `lines: Vec<String>` extension. `User` merges only when both
+///   entries share the same `UserSource`; cross-source adjacency
+///   (prompt-path tail + reader-thread arrival, or vice versa) does not
+///   merge.
 /// - `Update`: adjacent entries merge only when their `update_kind` is
 ///   identical; the merge extends `lines` and preserves the shared
 ///   `update_kind`.
@@ -106,7 +109,16 @@ fn try_merge_adjacent(tail: &mut ReplayEntry, new_entry: &ReplayEntry) -> bool {
         Agent as AgentEntry, Cognition as CognitionEntry, Update as UpdateEntry, User as UserEntry,
     };
     match (tail, new_entry) {
-        (UserEntry { lines: tail_lines }, UserEntry { lines: new_lines }) => {
+        (
+            UserEntry {
+                lines: tail_lines,
+                source: tail_source,
+            },
+            UserEntry {
+                lines: new_lines,
+                source: new_source,
+            },
+        ) if tail_source == new_source => {
             tail_lines.extend(new_lines.iter().cloned());
             true
         }
@@ -519,7 +531,13 @@ impl AcpStdioClient {
         append_text_lines(prompt, &mut user_lines);
         if !user_lines.is_empty() {
             let mut buffer = self.replay_buffer.lock().expect("replay_buffer mutex");
-            append_replay_entries(&mut buffer, vec![ReplayEntry::User { lines: user_lines }]);
+            append_replay_entries(
+                &mut buffer,
+                vec![ReplayEntry::User {
+                    lines: user_lines,
+                    source: UserSource::PromptPath,
+                }],
+            );
         }
 
         if let Some(callback) = on_dispatched {
@@ -1007,7 +1025,10 @@ pub(super) fn parse_replay_entries_from_params(
             "user_message_chunk" => {
                 let lines = collect_text_lines_from_value(update);
                 if !lines.is_empty() {
-                    entries.push(ReplayEntry::User { lines });
+                    entries.push(ReplayEntry::User {
+                        lines,
+                        source: UserSource::ReaderThread,
+                    });
                 }
             }
             "agent_message_chunk" => {

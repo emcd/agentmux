@@ -5,7 +5,7 @@ pub fn replay_entries_to_snapshot_entries(entries: &[ReplayEntry]) -> Vec<Struct
     entries
         .iter()
         .map(|entry| match entry {
-            ReplayEntry::User { lines } => StructuredEntry::User {
+            ReplayEntry::User { lines, .. } => StructuredEntry::User {
                 lines: lines.clone(),
             },
             ReplayEntry::Agent { lines } => StructuredEntry::Agent {

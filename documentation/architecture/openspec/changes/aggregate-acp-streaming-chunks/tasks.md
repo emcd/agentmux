@@ -71,3 +71,23 @@
       `tool_call` + `tool_call_update` merge is currently documented.
 - [x] 3.2 No changes to CLI/MCP/TUI/README files; their consumers are
       coalescence-agnostic.
+
+## 4. Follow-up commits (post-initial-implementation, in response to RG review of the implementation)
+
+- [x] 4.1 **UserSource provenance field** on `ReplayEntry::User` to
+      block cross-source coalescence (RG post-merge review of the
+      implementation). The initial implementation merged `User`-tail
+      + `User`-arrival regardless of origin, which would have
+      silently combined a prompt-origin tail with a reader-thread
+      arrival. The fix adds a `UserSource` enum
+      (`PromptPath` / `ReaderThread`); the parser sets
+      `ReaderThread` for `session/update`/`session/load`, the prompt
+      path sets `PromptPath`; `try_merge_adjacent` checks source
+      equality on the `User` case and refuses cross-source merges.
+      Two regression tests pin the contract.
+- [x] 4.2 **Source / external-label references in source comments**
+      reworded per project development-practices guidance (RG
+      non-blocking). Doc comments and test comments reference
+      generic behaviour descriptions now (e.g., "reader-thread same-
+      kind adjacency coalescence") instead of referencing the
+      change-ID.
