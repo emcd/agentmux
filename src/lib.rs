@@ -11,6 +11,9 @@ pub mod tmux;
 pub mod transports;
 pub mod tui;
 
+#[cfg(feature = "pty")]
+pub mod pty;
+
 /// Returns a human-readable startup line for a binary.
 pub fn startup_line(binary: &str) -> String {
     format!(
