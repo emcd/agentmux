@@ -24,6 +24,29 @@ fn raww_rejects_unknown_target() {
 }
 
 #[test]
+fn raww_rejects_unrouted_cross_relay_target() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    let response = dispatch_request(
+        RelayRequest::Raww {
+            request_id: None,
+            requester_session: "alpha".to_string(),
+            target_session: "bravo@other!peer-relay".to_string(),
+            text: "hello".to_string(),
+            no_enter: false,
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect_err("cross-relay raww should fail until forwarding lands");
+
+    assert_eq!(response.code, "runtime_cross_relay_unavailable");
+}
+
+#[test]
 fn raww_rejects_relay_wide_target_as_unsupported_operation() {
     // A declared relay-wide (`@GLOBAL`) principal is registered offline in the
     // unified registry at startup; raww resolves its capability from that entry

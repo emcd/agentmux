@@ -25,12 +25,12 @@
 
 ## 2. Cross-relay target classification (relay-routing-layer)
 
-- [ ] 2.1 Parse the `!<relay_id>` bang-path suffix in `routing.rs` before the
+- [x] 2.1 Parse the `!<relay_id>` bang-path suffix in `routing.rs` before the
       `@<namespace>` split; add a cross-relay variant to `ResolvedTarget`
       carrying `relay_id` + foreign `session@bundle`.
-- [ ] 2.2 Classify a cross-relay target at the `all` tier (cross-namespace by
+- [x] 2.2 Classify a cross-relay target at the `all` tier (cross-namespace by
       construction); confirm origin-side `authorize_route` is unchanged.
-- [ ] 2.3 Keep classification config-free (no `[[peers]]` lookup in the
+- [x] 2.3 Keep classification config-free (no `[[peers]]` lookup in the
       resolver); unknown peer surfaces at delivery time, not resolution.
 
 ## 3. Outbound connection management (cross-relay-routing)

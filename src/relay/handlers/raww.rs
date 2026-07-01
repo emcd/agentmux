@@ -11,8 +11,8 @@ use super::super::authorization::{
 use super::super::connection::BundleCatalog;
 use super::super::delivery::{QuiescenceOptions, enqueue_async_delivery};
 use super::super::routing::{
-    Addressing, Capability, OperationProfile, ResolvedRoute, requester_home_namespace,
-    resolve_raww_route,
+    Addressing, Capability, OperationProfile, ResolvedRoute, reject_unrouted_cross_relay,
+    requester_home_namespace, resolve_raww_route,
 };
 use super::super::stream::lookup_registry_session_type;
 use super::super::{
@@ -101,11 +101,13 @@ pub(in crate::relay) fn handle_raww_routed(
             addressing: Addressing::SingleTarget,
         },
         || {
-            resolve_raww_route(
+            let route = resolve_raww_route(
                 requester_home_namespace(sender.session_id.as_str(), home_namespace),
                 sender.session_id.as_str(),
                 target_session.as_str(),
-            )
+            )?;
+            reject_unrouted_cross_relay(&route)?;
+            Ok(route)
         },
         |route| {
             prepare_raww(

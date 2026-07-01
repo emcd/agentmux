@@ -16,7 +16,7 @@ use super::super::connection::BundleCatalog;
 use super::super::delivery::{QuiescenceOptions, enqueue_async_delivery};
 use super::super::routing::{
     Addressing, Capability, OperationProfile, ResolvedRoute, ResolvedTarget as RouteTarget,
-    resolve_send_route,
+    reject_unrouted_cross_relay, resolve_send_route,
 };
 use super::super::{
     AsyncDeliveryTask, DeliveryPayloadMode, GLOBAL_NAMESPACE, RelayError, RelayRequest,
@@ -150,13 +150,15 @@ fn handle_send(
             addressing: Addressing::MultiTarget,
         },
         || {
-            resolve_send_route_or_broadcast(
+            let route = resolve_send_route_or_broadcast(
                 broadcast,
                 home_namespace,
                 &sender,
                 home_bundle.as_ref(),
                 &targets,
-            )
+            )?;
+            reject_unrouted_cross_relay(&route)?;
+            Ok(route)
         },
         |route| prepare_send(route, &authorization, configuration_root, bundle_catalog),
         |route, groups| {
@@ -201,6 +203,7 @@ fn resolve_send_route_or_broadcast(
         .map(|member| RouteTarget {
             namespace: home_namespace.to_string(),
             session_id: Some(member.id.clone()),
+            relay_id: None,
         })
         .collect();
     Ok(ResolvedRoute {

@@ -590,6 +590,82 @@ fn send_broadcast_with_only_sender_returns_empty_results() {
 }
 
 #[test]
+fn send_rejects_unrouted_cross_relay_target() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    // A bang-path target is classified as cross-relay from the address alone
+    // (config-free). Until the outbound peer connection module lands it is
+    // rejected with a typed, honest outcome rather than a misleading
+    // unknown-bundle error.
+    let response = dispatch_request(
+        RelayRequest::Send {
+            request_id: None,
+            requester_session: "alpha".to_string(),
+            message: "hello".to_string(),
+            targets: vec!["bravo@other!peer-relay".to_string()],
+            broadcast: false,
+            quiet_window_ms: Some(1),
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect_err("cross-relay send should fail until forwarding lands");
+    assert_eq!(response.code, "runtime_cross_relay_unavailable");
+}
+
+#[test]
+fn send_rejects_malformed_cross_relay_target() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    for target in ["bravo@other!", "bravo!peer-relay"] {
+        let response = dispatch_request(
+            RelayRequest::Send {
+                request_id: None,
+                requester_session: "alpha".to_string(),
+                message: "hello".to_string(),
+                targets: vec![target.to_string()],
+                broadcast: false,
+                quiet_window_ms: Some(1),
+            },
+            &config_root,
+            "party",
+            &tmux_socket,
+        )
+        .expect_err("malformed cross-relay target should fail at resolution");
+        assert_eq!(
+            response.code, "validation_malformed_cross_relay_target",
+            "target {target} should be rejected as malformed",
+        );
+    }
+}
+
+#[test]
+fn look_rejects_cross_relay_target() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    let response = dispatch_request(
+        RelayRequest::Look {
+            requester_session: "alpha".to_string(),
+            target_session: "bravo@other!peer-relay".to_string(),
+            lines: Some(3),
+            offset: None,
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect_err("cross-relay look should fail");
+    assert_eq!(response.code, "runtime_cross_relay_unavailable");
+}
+
+#[test]
 fn look_rejects_unknown_peer_bundle() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
