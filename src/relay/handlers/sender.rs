@@ -27,6 +27,18 @@ impl SenderIdentity {
         }
     }
 
+    /// Builds the sender identity for a cross-relay ingress request: the peer
+    /// relay principal itself (`<id>@RELAY`), carried as-is so the delivered
+    /// envelope attributes the message to the forwarding relay. Keyed on the
+    /// authenticated principal id, never a wire-supplied requester field.
+    /// Original-session attribution (`on_behalf_of`) is a deferred follow-on.
+    pub(super) fn relay_principal(principal_id: &str) -> Self {
+        Self {
+            session_id: principal_id.to_string(),
+            display_name: None,
+        }
+    }
+
     pub(super) fn to_bundle_member(&self) -> BundleMember {
         BundleMember {
             id: self.session_id.clone(),

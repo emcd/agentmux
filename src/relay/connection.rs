@@ -361,6 +361,10 @@ struct HelloBinding {
     /// other principal type. Recorded on the connection context so request
     /// dispatch can gate `IdentityIntrospect` (task 2.5).
     introspect_rights: Option<IdentityIntrospectRights>,
+    /// Cross-relay ingress scope for a peer relay (`<id>@RELAY`) principal;
+    /// `None` for every other principal type. Recorded on the connection context
+    /// so a forwarded `Send`/`Raww` from this peer is gated to its scope.
+    ingress_scope: Option<String>,
 }
 
 async fn serve_connection_frames(
@@ -389,6 +393,11 @@ async fn serve_connection_frames(
     // attached to each dispatched request so dispatch can gate
     // `IdentityIntrospect` (task 2.5); stays `None` for every other connection.
     let mut introspect_rights: Option<IdentityIntrospectRights> = None;
+    // Cross-relay ingress scope for a peer relay (`<id>@RELAY`) connection,
+    // recorded at Hello and attached to each dispatched request so a forwarded
+    // Send/Raww is gated to the peer's scope; stays `None` for every other
+    // connection.
+    let mut ingress_scope: Option<String> = None;
     let mut line = String::new();
     loop {
         line.clear();
@@ -527,6 +536,7 @@ async fn serve_connection_frames(
                 }
                 authenticated_identity = connection_identity;
                 introspect_rights = binding.introspect_rights;
+                ingress_scope = binding.ingress_scope;
                 bound_bundle = binding.bound_bundle;
                 // A trusted-host (application principal) receives an
                 // `identity.snapshot` of the active principals within its scope
@@ -633,6 +643,7 @@ async fn serve_connection_frames(
                         session_id: active_registration.requester_session_id().to_string(),
                         authenticated_identity: authenticated_identity.clone(),
                         introspect_rights: introspect_rights.clone(),
+                        ingress_scope: ingress_scope.clone(),
                     };
                     let response = {
                         let state_root = Arc::clone(&state_root);
@@ -728,6 +739,7 @@ async fn serve_connection_frames(
                         session_id: active_registration.requester_session_id().to_string(),
                         authenticated_identity: authenticated_identity.clone(),
                         introspect_rights: introspect_rights.clone(),
+                        ingress_scope: ingress_scope.clone(),
                     };
                     let response = {
                         let configuration_root = Arc::clone(&configuration_root);
@@ -760,6 +772,7 @@ async fn serve_connection_frames(
                         session_id: active_registration.requester_session_id().to_string(),
                         authenticated_identity: authenticated_identity.clone(),
                         introspect_rights: introspect_rights.clone(),
+                        ingress_scope: ingress_scope.clone(),
                     };
                     let response = {
                         let configuration_root = Arc::clone(&configuration_root);
@@ -786,6 +799,12 @@ async fn serve_connection_frames(
                     continue;
                 }
                 if matches!(request, RelayRequest::Raww { .. }) {
+                    let principal = RequestPrincipal {
+                        session_id: active_registration.requester_session_id().to_string(),
+                        authenticated_identity: authenticated_identity.clone(),
+                        introspect_rights: introspect_rights.clone(),
+                        ingress_scope: ingress_scope.clone(),
+                    };
                     let response = {
                         let configuration_root = Arc::clone(&configuration_root);
                         let bound_bundle = bound_bundle.clone();
@@ -796,6 +815,7 @@ async fn serve_connection_frames(
                                 request,
                                 &configuration_root,
                                 bound_bundle.as_ref(),
+                                Some(principal),
                                 &bundle_catalog,
                                 peer_connection_manager.as_ref(),
                             )
@@ -836,6 +856,7 @@ async fn serve_connection_frames(
                     session_id: active_registration.requester_session_id().to_string(),
                     authenticated_identity: authenticated_identity.clone(),
                     introspect_rights: introspect_rights.clone(),
+                    ingress_scope: ingress_scope.clone(),
                 };
                 let response = {
                     let configuration_root = Arc::clone(&configuration_root);
@@ -1101,6 +1122,7 @@ fn resolve_hello_binding(
         principal_type,
         store_backed,
         introspect_rights,
+        ingress_scope,
     } = verified;
     match principal_type {
         PrincipalType::Session => {
@@ -1123,6 +1145,7 @@ fn resolve_hello_binding(
                 bound_bundle: Some(bundle_paths),
                 store_backed,
                 introspect_rights,
+                ingress_scope,
             })
         }
         PrincipalType::User => {
@@ -1134,6 +1157,7 @@ fn resolve_hello_binding(
                 bound_bundle: None,
                 store_backed,
                 introspect_rights,
+                ingress_scope,
             })
         }
         PrincipalType::Application | PrincipalType::Relay => Ok(HelloBinding {
@@ -1142,6 +1166,7 @@ fn resolve_hello_binding(
             bound_bundle: None,
             store_backed,
             introspect_rights,
+            ingress_scope,
         }),
     }
 }

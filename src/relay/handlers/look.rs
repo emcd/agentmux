@@ -12,6 +12,7 @@ use crate::{
     transports::{LookMode, LookSnapshotPayload as TransportLookSnapshotPayload, TransportError},
 };
 
+use super::super::authorization::RouteAuthorization;
 use super::super::connection::BundleCatalog;
 use super::super::delivery::get_output_view;
 use super::super::routing::{
@@ -97,7 +98,7 @@ pub(in crate::relay) fn handle_look_routed(
     // existence and loads the target bundle, `execute_look` captures the snapshot.
     run_target_operation(
         home_namespace,
-        &authorization,
+        RouteAuthorization::Policy(&authorization),
         OperationProfile {
             capability: Capability::Look,
             addressing: Addressing::SingleTarget,

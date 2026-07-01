@@ -7,7 +7,7 @@ use crate::{
     runtime::{inscriptions::emit_inscription, paths::tmux_socket_path_for_runtime_directory},
 };
 
-use super::super::authorization::AuthorizationContext;
+use super::super::authorization::{AuthorizationContext, RouteAuthorization};
 use super::super::delivery::acp_session_ready_for_startup;
 use super::super::lifecycle::{reconcile_loaded_bundle, shutdown_bundle_runtime};
 use super::super::routing::{
@@ -141,7 +141,7 @@ pub(in crate::relay) fn handle_list_routed(
     // route's home namespace drives the cross-namespace tier.
     run_target_operation(
         dispatch_bundle.bundle_name.as_str(),
-        dispatch_authorization,
+        RouteAuthorization::Policy(dispatch_authorization),
         OperationProfile {
             capability: Capability::List,
             addressing: Addressing::BundleEnumerate,

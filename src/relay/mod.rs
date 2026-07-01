@@ -128,6 +128,7 @@ fn handle_request_with_principal(
                 request,
                 configuration_root,
                 bundle_catalog,
+                principal.as_ref(),
                 None,
             );
         }
@@ -419,6 +420,7 @@ pub(in crate::relay) fn dispatch_raww(
     request: RelayRequest,
     configuration_root: &Path,
     bound_bundle: Option<&crate::runtime::paths::BundleRuntimePaths>,
+    principal: Option<RequestPrincipal>,
     bundle_catalog: &BundleCatalog,
     peer_connection_manager: &PeerConnectionManager,
 ) -> RelayResponse {
@@ -435,6 +437,7 @@ pub(in crate::relay) fn dispatch_raww(
         request,
         configuration_root,
         bundle_catalog,
+        principal.as_ref(),
         Some(peer_connection_manager),
     ) {
         Ok(value) => value,

@@ -14,11 +14,44 @@ use crate::{
 };
 
 use super::super::canonical_session_id;
+use super::super::identity::scope_permits;
 use super::super::routing::{
-    Addressing, Capability, OperationProfile, ResolvedRoute, ScopeTier, required_tier,
+    Addressing, Capability, OperationProfile, ResolvedRoute, ResolvedTarget, ScopeTier,
+    required_tier,
 };
 use super::context::{AuthorizationContext, PolicyControls, PolicyScope};
 use super::resolution::{controls_for_requester, resolve_relay_principal_controls};
+
+/// How the dispatch spine authorizes a request's requester against a route.
+///
+/// The two modes are mutually exclusive by requester kind: a bundle/relay-wide
+/// requester with a policy preset is authorized by [`RouteAuthorization::Policy`]
+/// (tier check), while a peer relay (`<id>@RELAY`) forwarding a cross-relay
+/// `Send`/`Raww` — which carries no bundle policy — is authorized by
+/// [`RouteAuthorization::Ingress`] (per-target scope check).
+pub(in crate::relay) enum RouteAuthorization<'a> {
+    /// Normal path: resolve the requester's policy controls in its home bundle
+    /// and check the route's required scope tier.
+    Policy(&'a AuthorizationContext),
+    /// Cross-relay ingress: each target must be covered by the peer principal's
+    /// registered ingress `scope`; deny-by-default when the scope is absent.
+    Ingress { scope: Option<&'a str> },
+}
+
+impl RouteAuthorization<'_> {
+    /// Applies the authorization for this mode to `route`.
+    pub(in crate::relay) fn authorize(
+        &self,
+        dispatch_namespace: &str,
+        profile: OperationProfile,
+        route: &ResolvedRoute,
+    ) -> Result<(), RelayError> {
+        match self {
+            Self::Policy(context) => authorize_route(dispatch_namespace, context, profile, route),
+            Self::Ingress { scope } => authorize_ingress(*scope, route),
+        }
+    }
+}
 
 struct AuthorizationDecisionContext<'a> {
     capability: &'a str,
@@ -125,6 +158,69 @@ pub(in crate::relay) fn authorize_route(
             targets,
         },
     )
+}
+
+/// Deny-by-default ingress gate for a cross-relay (peer relay) requester.
+///
+/// A forwarded `Send`/`Raww` from a peer relay carries no bundle policy, so the
+/// tier-based [`authorize_route`] does not apply. Instead, each session target
+/// must be covered by the peer principal's registered `scope` — an exact
+/// `session@bundle` identity or a bare `bundle` namespace — checked via
+/// [`scope_permits`]. An absent scope covers nothing (fail-closed). A target
+/// outside the scope is rejected with `authorization_forbidden` carrying an
+/// ingress-denied reason. Target *existence* is validated earlier by the spine's
+/// prepare stage, so an unknown target still sorts before this
+/// (`validation_unknown_target` before `authorization_forbidden`).
+/// Rejects a cross-relay (bang-path) target presented by an authenticated peer
+/// relay ingress requester.
+///
+/// A peer relay may address only plain local targets on the receiving relay.
+/// Forwarding its bang-path target onward would chain through this relay to this
+/// relay's own outbound peers — under this relay's `<relay-id>@RELAY` identity —
+/// escaping the ingress trust boundary and expanding the peer's effective reach.
+/// The rejection is applied before any forwarding and independent of whether an
+/// onward peer is configured, so a peer can never use the receiving relay as a
+/// hop in this slice. Multi-hop cross-relay routing (relay chaining) is out of
+/// scope for this slice and would need its own trust-propagation design.
+pub(in crate::relay) fn reject_cross_relay_ingress(target: &ResolvedTarget) -> RelayError {
+    let target_label = match (target.session_id.as_deref(), target.relay_id.as_deref()) {
+        (Some(session_id), Some(relay_id)) => format!(
+            "{}!{relay_id}",
+            canonical_session_id(session_id, target.namespace.as_str())
+        ),
+        _ => target.namespace.clone(),
+    };
+    relay_error(
+        "authorization_forbidden",
+        "a peer relay ingress requester may not address a cross-relay target",
+        Some(json!({
+            "capability": "ingress",
+            "reason": "cross-relay chaining is not permitted for a peer relay ingress requester",
+            "target_session": target_label,
+        })),
+    )
+}
+
+fn authorize_ingress(scope: Option<&str>, route: &ResolvedRoute) -> Result<(), RelayError> {
+    for target in &route.targets {
+        let Some(session_id) = target.session_id.as_deref() else {
+            continue;
+        };
+        let canonical = canonical_session_id(session_id, target.namespace.as_str());
+        if !scope_permits(scope, canonical.as_str()) {
+            return Err(relay_error(
+                "authorization_forbidden",
+                "request denied by cross-relay ingress policy",
+                Some(json!({
+                    "capability": "ingress",
+                    "target_session": canonical,
+                    "reason": "peer relay scope does not cover this target",
+                    "scope": scope,
+                })),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn scope_for_capability(controls: &PolicyControls, capability: Capability) -> PolicyScope {

@@ -363,11 +363,17 @@ exported from `src/relay/mod.rs`.
   "global/relay-principal exempt tier": a relay-wide principal's home is its own
   namespace (`GLOBAL` / `RELAY`), so it reaches bundles through the same uniform
   `all` threshold as anyone else, just configured on a privileged operator
-  preset. The natural insertion point for a future target-side filter now exists
-  as a single seam: the `authorize_route` stage is the one place every target
-  operation passes through, so an ingress hook is a localized addition there
-  rather than N per-operation edits. See `ideas/relay` (inter-relay target
-  filtering) for the open design thread.
+  preset. The **cross-relay** ingress filter now occupies that single seam: the
+  shared authorization stage (`RouteAuthorization`) is the one place every target
+  operation passes through, so a peer relay's forwarded `Send`/`Raww` is gated
+  there — `RouteAuthorization::Ingress` deny-by-default against the peer
+  principal's registered `scope`, distinct from the tier-based
+  `RouteAuthorization::Policy` — rather than through N per-operation edits.
+  Existence still sorts before it (`validation_unknown_target` before
+  `authorization_forbidden`), since the spine validates targets in its prepare
+  stage before authorization. The **intra-relay** target-side filter remains
+  deliberately deferred; see `ideas/relay` (inter-relay target filtering) for that
+  open design thread.
 
 ### Delivery
 

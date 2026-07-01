@@ -10,18 +10,21 @@ use crate::{
 };
 
 use super::super::authorization::{
-    AuthorizationContext, choose_authorized_ui_sessions, has_ui_session, load_authorization_context,
+    AuthorizationContext, RouteAuthorization, choose_authorized_ui_sessions, has_ui_session,
+    load_authorization_context, reject_cross_relay_ingress,
 };
 use super::super::connection::BundleCatalog;
 use super::super::delivery::{QuiescenceOptions, enqueue_async_delivery};
+use super::super::identity::{PrincipalType, classify_principal_id};
 use super::super::routing::{
     Addressing, Capability, OperationProfile, ResolvedRoute, ResolvedTarget as RouteTarget,
     resolve_send_route,
 };
 use super::super::{
-    AsyncDeliveryTask, DeliveryPayloadMode, GLOBAL_NAMESPACE, PeerConnectionManager, RelayError,
-    RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION, SendOutcome, SendRequestContext,
-    SendResult, bare_session_id, canonical_session_id, map_config, relay_error,
+    AsyncDeliveryTask, DeliveryPayloadMode, GLOBAL_NAMESPACE, PeerConnectionManager,
+    RELAY_NAMESPACE, RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
+    SendOutcome, SendRequestContext, SendResult, bare_session_id, canonical_session_id, map_config,
+    relay_error,
 };
 use super::routed::{load_home_context, run_target_operation};
 use super::sender::{SenderIdentity, resolve_sender_in_namespace};
@@ -79,10 +82,23 @@ fn handle_send(
     principal: Option<&RequestPrincipal>,
     peer_connection_manager: Option<&PeerConnectionManager>,
 ) -> Result<RelayResponse, RelayError> {
-    // The sender is identified by its home namespace alone: a `GLOBAL` sender is
-    // relay-wide and has no bundle, any other namespace names the home bundle. The
-    // home authorization context (operator policy for `GLOBAL`, or the bundle's
-    // policy) is derived from it.
+    // A cross-relay ingress request arrives from an authenticated peer relay
+    // principal (`<id>@RELAY`): it carries no bundle policy, its home namespace is
+    // `RELAY`, and it is authorized by the peer's registered ingress scope rather
+    // than a policy tier. Detected from the AUTHENTICATED principal, never the
+    // (spoofable) wire `requester_session`.
+    let relay_ingress = principal.is_some_and(|principal| {
+        classify_principal_id(principal.session_id.as_str()) == Some(PrincipalType::Relay)
+    });
+    let home_namespace = if relay_ingress {
+        RELAY_NAMESPACE
+    } else {
+        home_namespace
+    };
+    // The sender is identified by its home namespace: a bundle namespace names the
+    // home bundle; `GLOBAL`/`RELAY` are relay-wide and carry no bundle. The home
+    // authorization context (operator policy, or the bundle's policy) is derived
+    // from it.
     let (home_bundle, authorization) = load_home_context(home_namespace, configuration_root)?;
     let SendRequestContext {
         request_id,
@@ -114,16 +130,32 @@ fn handle_send(
             None,
         ));
     }
-    // The requester is authorized in its home namespace (its bundle, or
-    // `GLOBAL`); strip any `@<home>` qualifier so internal lookups match. A
-    // relay-wide (`@GLOBAL`) requester keeps its suffix.
-    let requester_session = bare_session_id(requester_session.as_str(), home_namespace);
-    let sender = resolve_sender_in_namespace(
-        home_bundle.as_ref(),
-        &authorization,
-        requester_session.as_str(),
-        "requester_session",
-    )?;
+    // A peer relay's own principal is the sender for an ingress request (keyed on
+    // the authenticated identity); otherwise resolve the requester in its home
+    // namespace, stripping any `@<home>` qualifier so internal lookups match.
+    let sender = if relay_ingress {
+        let principal =
+            principal.expect("relay ingress is detected from an authenticated principal");
+        SenderIdentity::relay_principal(principal.session_id.as_str())
+    } else {
+        let requester_session = bare_session_id(requester_session.as_str(), home_namespace);
+        resolve_sender_in_namespace(
+            home_bundle.as_ref(),
+            &authorization,
+            requester_session.as_str(),
+            "requester_session",
+        )?
+    };
+    // The route authorization mode: a peer relay is gated per-target by its
+    // registered ingress scope (deny-by-default); every other requester by its
+    // policy tier resolved in the home bundle.
+    let route_authorization = if relay_ingress {
+        RouteAuthorization::Ingress {
+            scope: principal.and_then(|principal| principal.ingress_scope.as_deref()),
+        }
+    } else {
+        RouteAuthorization::Policy(&authorization)
+    };
     // Verified principal_id of the sender, carried both on the Send response
     // and into each recipient's delivered envelope; `None` for socket-trust.
     let authenticated_identity =
@@ -150,7 +182,7 @@ fn handle_send(
     // target demands — a cross-relay (bang-path) target always floors at `all`.
     run_target_operation(
         home_namespace,
-        &authorization,
+        route_authorization,
         OperationProfile {
             capability: Capability::Send,
             addressing: Addressing::MultiTarget,
@@ -163,6 +195,15 @@ fn handle_send(
                 home_bundle.as_ref(),
                 &targets,
             )?;
+            // A peer relay ingress requester may address only plain local targets:
+            // reject any cross-relay (bang-path) target before the
+            // manager-availability check, so the rejection is deterministic and a
+            // peer can never chain onward through this relay to its own peers.
+            if relay_ingress
+                && let Some(target) = route.targets.iter().find(|target| target.is_cross_relay())
+            {
+                return Err(reject_cross_relay_ingress(target));
+            }
             // Cross-relay forwarding needs the peer connection manager. The
             // non-stream single-bundle entry point supplies none, so a cross-relay
             // target there is reported as unavailable rather than silently dropped

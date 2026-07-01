@@ -54,13 +54,13 @@
 
 ## 5. Target-side ingress filter (relay-routing-layer)
 
-- [ ] 5.1 In `authorize_route` (`src/relay/authorization/checks.rs`), add the
+- [x] 5.1 In `authorize_route` (`src/relay/authorization/checks.rs`), add the
       ingress gate for a requester that is a relay principal (`<id>@RELAY`):
       each target must be covered by the peer principal's registered `scope`
       (set via `new peer <id>@RELAY --scope`), reusing `scope_permits`.
-- [ ] 5.2 Deny-by-default: empty/absent scope covers nothing; out-of-scope
+- [x] 5.2 Deny-by-default: empty/absent scope covers nothing; out-of-scope
       target → `authorization_forbidden` with an ingress-denied detail.
-- [ ] 5.3 Preserve existence-before-authorization ordering
+- [x] 5.3 Preserve existence-before-authorization ordering
       (`validation_unknown_target` before `authorization_forbidden`).
 
 ## 6. Tests
@@ -71,9 +71,9 @@
       `relay-id` required when peers present and rejected when absent; `relay-id`
       rejected when qualified/malformed (e.g. `foo@RELAY`, contains `!`, or
       whitespace); `relay-id` optional without peers).
-- [ ] 6.2 Unit: bang-path classification (cross-relay target → `all` tier,
+- [x] 6.2 Unit: bang-path classification (cross-relay target → `all` tier,
       correct `relay_id` + foreign `session@bundle`; malformed bang-path).
-- [ ] 6.3 Unit/integration: ingress filter — in-scope target accepted,
+- [x] 6.3 Unit/integration: ingress filter — in-scope target accepted,
       out-of-scope denied, absent-scope denied (deny-by-default).
 - [x] 6.4 Integration: outbound delivery outcome propagation (delivered,
       ingress-denied, peer-unavailable) against a stub peer relay.
@@ -82,5 +82,5 @@
 
 ## 7. Validation
 
-- [ ] 7.1 `openspec validate add-outbound-peer-relay-routing --strict`.
-- [ ] 7.2 `cargo fmt --check`, `cargo clippy`, and the wrapped test suite green.
+- [x] 7.1 `openspec validate add-outbound-peer-relay-routing --strict`.
+- [x] 7.2 `cargo fmt --check`, `cargo clippy`, and the wrapped test suite green.
