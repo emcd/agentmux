@@ -164,7 +164,8 @@ Use `openspec/AGENTS.md` to learn:
 - Use `git status` to ensure all relevant changes are in the changeset.
 - Do **not** commit without explicit user approval. Unless the user has requested the commit, **ask first** for a review of your work.
 - Do **not** bypass commit safety checks (e.g., `--no-verify`, `--no-gpg-sign`) unless the user explicitly approves doing so.
-- If a commit hook rejects a commit, fix the issue, restage the intended files, and rerun `git commit` with the same message. Do **not** amend a previous commit unless the user explicitly asked for an amend.
+- If a commit hook rejects a commit, fix the issue, restage the intended files, and rerun `git commit` with the same message. Do **not** amend a *different, already-existing* commit as a workaround for a rejected attempt — that risks destroying the boundary of unrelated prior work.
+- When addressing review feedback on a commit that is unmerged, unpushed, and solely yours, amend it in place (`git commit --amend`) and re-share the new hash — do not stack a separate "address review feedback" commit. Use separate commits only when the feedback spans a stack of multiple commits that were reviewed independently. Name what changed in the re-review message (and offer `git range-diff <old> <new>`) so reviewers can see the delta without re-reading the whole diff. **Never** amend a commit that is merged or pushed/shared.
 - Use present tense, imperative mood verbs (e.g., "Fix" not "Fixed").
 - Write sentences with proper punctuation.
 - Include a `Co-Authored-By:` field as the final line. Should include the model name and a no-reply address.
