@@ -14,6 +14,7 @@ pub const RESERVED_GROUP_ALL: &str = "ALL";
 pub enum SessionType {
     Tmux,
     Acp,
+    Pty,
     Ui,
     Pubsub,
 }
@@ -43,7 +44,7 @@ impl SessionType {
     #[must_use]
     pub fn can_be_looked(self) -> bool {
         match self {
-            Self::Tmux | Self::Acp => true,
+            Self::Tmux | Self::Acp | Self::Pty => true,
             Self::Ui | Self::Pubsub => false,
         }
     }
@@ -53,7 +54,7 @@ impl SessionType {
     #[must_use]
     pub fn can_be_written(self) -> bool {
         match self {
-            Self::Tmux | Self::Acp => true,
+            Self::Tmux | Self::Acp | Self::Pty => true,
             Self::Ui | Self::Pubsub => false,
         }
     }
@@ -63,7 +64,7 @@ impl SessionType {
     #[must_use]
     pub fn can_stream_output(self) -> bool {
         match self {
-            Self::Acp => true,
+            Self::Acp | Self::Pty => true,
             Self::Tmux | Self::Ui | Self::Pubsub => false,
         }
     }
@@ -76,7 +77,7 @@ impl SessionType {
     pub fn can_give_choices(self) -> bool {
         match self {
             Self::Acp => true,
-            Self::Tmux | Self::Ui | Self::Pubsub => false,
+            Self::Tmux | Self::Pty | Self::Ui | Self::Pubsub => false,
         }
     }
 }
@@ -114,13 +115,15 @@ pub struct PromptReadinessTemplate {
 
 /// Validated session type and delivery target configuration for one member.
 ///
-/// `Tmux` and `Acp` carry transport configuration; `Ui` is first-class
-/// (`src/transports/ui.rs`); only `Pubsub` remains unimplemented.
+/// `Tmux`, `Acp`, and `Pty` carry transport configuration; `Ui` is
+/// first-class (`src/transports/ui.rs`); only `Pubsub` remains
+/// unimplemented.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "transport", content = "config")]
 pub enum TargetConfiguration {
     Tmux(TmuxTargetConfiguration),
     Acp(AcpTargetConfiguration),
+    Pty(PtyTargetConfiguration),
     Ui,
     Pubsub,
 }
@@ -132,6 +135,7 @@ impl TargetConfiguration {
         match self {
             Self::Tmux(_) => SessionType::Tmux,
             Self::Acp(_) => SessionType::Acp,
+            Self::Pty(_) => SessionType::Pty,
             Self::Ui => SessionType::Ui,
             Self::Pubsub => SessionType::Pubsub,
         }
@@ -175,6 +179,54 @@ pub struct TmuxTargetConfiguration {
 /// Returns the default value for [`TmuxTargetConfiguration::wedge_detection`].
 fn wedge_detection_default_true() -> bool {
     true
+}
+
+/// Pty transport configuration for one bundle member.
+///
+/// Pty spawns the child process under a portable-pty PTY and feeds
+/// terminal output through libghostty-vt. Per-coder config keys live
+/// under `[coders.<id>.pty]`. The validator rejects `cols = 0`,
+/// `rows = 0`, `prime-timeout-ms = 0`, and the mutual-exclusion rule
+/// between `[coders.<id>.pty]` and `[coders.<id>.tmux]` /
+/// `[coders.<id>.acp]` (exactly one must be set, never both, never
+/// neither).
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PtyTargetConfiguration {
+    /// Per-coder initial command. `{{coder-session-id}}` placeholder is
+    /// replaced when the bundle member carries a `coder-session-id`.
+    pub initial_command: String,
+    /// Per-coder resume command. Selected when the bundle member
+    /// carries a `coder-session-id` (i.e. the operator is resuming
+    /// a previous agent session rather than starting fresh).
+    pub resume_command: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_readiness: Option<PromptReadinessTemplate>,
+    /// Per-coder bounded prime window for the Pty quiescence wait.
+    /// Same semantics as the Tmux / ACP `prime_timeout_ms` field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prime_timeout_ms: Option<u64>,
+    /// Per-coder wedge detection switch (default true). Pty does NOT
+    /// have an operator-interaction concept, so this only gates the
+    /// wedge classifier (not prime-timeout, which fires on empty-
+    /// pane mismatch regardless of operator state).
+    #[serde(default = "wedge_detection_default_true")]
+    pub wedge_detection: bool,
+    /// Per-coder grid columns. Default 120.
+    #[serde(default = "pty_cols_default")]
+    pub cols: u16,
+    /// Per-coder grid rows. Default 40.
+    #[serde(default = "pty_rows_default")]
+    pub rows: u16,
+}
+
+/// Default cols value for `PtyTargetConfiguration::cols`.
+fn pty_cols_default() -> u16 {
+    120
+}
+
+/// Default rows value for `PtyTargetConfiguration::rows`.
+fn pty_rows_default() -> u16 {
+    40
 }
 
 /// ACP transport configuration for one bundle member.

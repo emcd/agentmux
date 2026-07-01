@@ -247,6 +247,7 @@ fn execute_raww(
     let transport = match &target_member.target {
         TargetConfiguration::Tmux(_) => ListedSessionTransport::Tmux,
         TargetConfiguration::Acp(_) => ListedSessionTransport::Acp,
+        TargetConfiguration::Pty(_) => ListedSessionTransport::Pty,
         TargetConfiguration::Ui | TargetConfiguration::Pubsub => {
             unreachable!("capability gate in prepare_raww rejects can_be_written = false targets")
         }
@@ -282,7 +283,9 @@ fn execute_raww(
     // branches on transport internally (ACP requires a pre-existing bounded worker;
     // tmux lazily spawns a generic worker). Only enqueue-time failures surface here.
     match &target_member.target {
-        TargetConfiguration::Acp(_) | TargetConfiguration::Tmux(_) => {
+        TargetConfiguration::Acp(_)
+        | TargetConfiguration::Tmux(_)
+        | TargetConfiguration::Pty(_) => {
             enqueue_async_delivery(task)?;
         }
         TargetConfiguration::Ui | TargetConfiguration::Pubsub => {

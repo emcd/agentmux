@@ -256,6 +256,14 @@ fn session_ready_for_list(
             runtime_directory,
             member.id.as_str(),
         ),
+        // Pty readiness mirrors the transport's `is_ready` signal; the
+        // bootstrap path (per-coder config parser) is responsible for
+        // constructing the Pty transport. For v1 the relay treats Pty
+        // readiness as a worker-side signal that the dispatcher reads
+        // via the PtyOutputView handle; until that lands, we treat
+        // configured Pty members as ready once the dispatcher has a
+        // Pty transport wired up.
+        TargetConfiguration::Pty(_) => true,
         // `ui`/`pubsub` members have no implemented startup path; they are
         // never counted ready and surface a startup failure on bundle up.
         TargetConfiguration::Ui | TargetConfiguration::Pubsub => false,

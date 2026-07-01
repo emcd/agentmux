@@ -121,8 +121,8 @@ pub(crate) fn create_member_with_retry(
 fn create_member_once(tmux_socket: &Path, member: &BundleMember) -> Result<(), String> {
     let start_command = match &member.target {
         TargetConfiguration::Tmux(target) => target.start_command.as_str(),
-        TargetConfiguration::Acp(_) => {
-            return Err("cannot create tmux session for ACP target".to_string());
+        TargetConfiguration::Acp(_) | TargetConfiguration::Pty(_) => {
+            return Err("cannot create tmux session for non-Tmux target".to_string());
         }
         TargetConfiguration::Ui | TargetConfiguration::Pubsub => {
             return Err("cannot create tmux session for ui/pubsub target".to_string());

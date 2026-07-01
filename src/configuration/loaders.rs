@@ -19,7 +19,8 @@ use super::{
         RawUsersSession,
     },
     targets::{
-        build_session_target, select_marker_session_type, validate_acp_target, validate_tmux_target,
+        build_session_target, select_marker_session_type, validate_acp_target, validate_pty_target,
+        validate_tmux_target,
     },
     types::{
         BundleConfiguration, BundleGroupMembership, BundleMember, TuiConfiguration, TuiSession,
@@ -429,20 +430,25 @@ fn validate_coders(
             ));
         }
 
-        let target = match (coder.tmux, coder.acp) {
-            (Some(tmux), None) => {
+        let target = match (coder.tmux, coder.acp, coder.pty) {
+            (Some(tmux), None, None) => {
                 CoderTarget::Tmux(validate_tmux_target(tmux, coders_path, coder_id)?)
             }
-            (None, Some(acp)) => CoderTarget::Acp(validate_acp_target(acp, coders_path, coder_id)?),
-            (None, None) => {
+            (None, Some(acp), None) => {
+                CoderTarget::Acp(validate_acp_target(acp, coders_path, coder_id)?)
+            }
+            (None, None, Some(pty)) => {
+                CoderTarget::Pty(validate_pty_target(pty, coders_path, coder_id)?)
+            }
+            (None, None, None) => {
                 return Err(ConfigurationError::invalid(
                     coders_path,
                     format!(
-                        "coder '{coder_id}' must define exactly one target table ([coders.tmux] or [coders.acp])"
+                        "coder '{coder_id}' must define exactly one target table ([coders.tmux], [coders.acp], or [coders.pty])"
                     ),
                 ));
             }
-            (Some(_), Some(_)) => {
+            _ => {
                 return Err(ConfigurationError::invalid(
                     coders_path,
                     format!(

@@ -5,10 +5,13 @@ use regex::Regex;
 use super::{
     ConfigurationError,
     fields::{normalize_field, normalize_optional},
-    raw::{AcpTarget, Coder, CoderTarget, RawAcpTarget, RawSession, RawTmuxTarget, TmuxTarget},
+    raw::{
+        AcpTarget, Coder, CoderTarget, PtyTarget, RawAcpTarget, RawPtyTarget, RawSession,
+        RawTmuxTarget, TmuxTarget,
+    },
     types::{
-        AcpChannel, AcpTargetConfiguration, NameValueEntry, PromptReadinessTemplate, SessionType,
-        TargetConfiguration, TmuxTargetConfiguration,
+        AcpChannel, AcpTargetConfiguration, NameValueEntry, PromptReadinessTemplate,
+        PtyTargetConfiguration, SessionType, TargetConfiguration, TmuxTargetConfiguration,
     },
 };
 
@@ -76,6 +79,33 @@ pub(super) fn build_session_target(
                     }),
                     coder_session_id,
                 )),
+                CoderTarget::Pty(pty_target) => {
+                    let command_template = if coder_session_id.is_some() {
+                        pty_target.resume_command.as_str()
+                    } else {
+                        pty_target.initial_command.as_str()
+                    };
+                    let start_command = render_command_template(
+                        command_template,
+                        coder_session_id.as_deref(),
+                        bundle_path,
+                        session_id,
+                    )?;
+                    let prompt_readiness =
+                        prompt_readiness_from_pty_target(pty_target, coders_path, session_id)?;
+                    Ok((
+                        TargetConfiguration::Pty(PtyTargetConfiguration {
+                            initial_command: start_command.clone(),
+                            resume_command: start_command,
+                            prompt_readiness,
+                            prime_timeout_ms: pty_target.prime_timeout_ms,
+                            wedge_detection: pty_target.wedge_detection.unwrap_or(true),
+                            cols: pty_target.cols.unwrap_or(120),
+                            rows: pty_target.rows.unwrap_or(40),
+                        }),
+                        coder_session_id,
+                    ))
+                }
             }
         }
         SessionKind::Ui => {
@@ -405,6 +435,85 @@ fn prompt_readiness_from_tmux_target(
         inspect_lines: target.prompt_inspect_lines,
         input_idle_cursor_column: target.prompt_idle_column,
     }))
+}
+
+fn prompt_readiness_from_pty_target(
+    target: &PtyTarget,
+    path: &Path,
+    session_id: &str,
+) -> Result<Option<PromptReadinessTemplate>, ConfigurationError> {
+    let Some(prompt_regex) = target.prompt_regex.as_deref() else {
+        return Ok(None);
+    };
+    compile_prompt_regex(prompt_regex, path, session_id, "pty prompt-regex")?;
+    Ok(Some(PromptReadinessTemplate {
+        prompt_regex: prompt_regex.to_string(),
+        inspect_lines: target.prompt_inspect_lines,
+        input_idle_cursor_column: target.prompt_idle_column,
+    }))
+}
+
+pub(super) fn validate_pty_target(
+    target: RawPtyTarget,
+    coders_path: &Path,
+    coder_id: &str,
+) -> Result<PtyTarget, ConfigurationError> {
+    if normalize_field(target.initial_command.as_str()).is_empty() {
+        return Err(ConfigurationError::invalid(
+            coders_path,
+            format!("coder '{coder_id}' pty initial-command must be non-empty"),
+        ));
+    }
+    if normalize_field(target.resume_command.as_str()).is_empty() {
+        return Err(ConfigurationError::invalid(
+            coders_path,
+            format!("coder '{coder_id}' pty resume-command must be non-empty"),
+        ));
+    }
+    if let Some(prompt_regex) = target.prompt_regex.as_deref() {
+        if normalize_field(prompt_regex).is_empty() {
+            return Err(ConfigurationError::invalid(
+                coders_path,
+                format!("coder '{coder_id}' pty prompt-regex must be non-empty when set"),
+            ));
+        }
+        compile_prompt_regex(prompt_regex, coders_path, coder_id, "pty prompt-regex")?;
+    }
+    if matches!(target.prompt_inspect_lines, Some(0)) {
+        return Err(ConfigurationError::invalid(
+            coders_path,
+            format!("coder '{coder_id}' pty prompt-inspect-lines must be greater than zero"),
+        ));
+    }
+    if matches!(target.prime_timeout_ms, Some(0)) {
+        return Err(ConfigurationError::invalid(
+            coders_path,
+            format!("coder '{coder_id}' pty prime-timeout-ms must be greater than zero"),
+        ));
+    }
+    if matches!(target.cols, Some(0)) {
+        return Err(ConfigurationError::invalid(
+            coders_path,
+            format!("coder '{coder_id}' pty cols must be greater than zero"),
+        ));
+    }
+    if matches!(target.rows, Some(0)) {
+        return Err(ConfigurationError::invalid(
+            coders_path,
+            format!("coder '{coder_id}' pty rows must be greater than zero"),
+        ));
+    }
+    Ok(PtyTarget {
+        initial_command: target.initial_command,
+        resume_command: target.resume_command,
+        prompt_regex: target.prompt_regex,
+        prompt_inspect_lines: target.prompt_inspect_lines,
+        prompt_idle_column: target.prompt_idle_column,
+        prime_timeout_ms: target.prime_timeout_ms,
+        wedge_detection: target.wedge_detection,
+        cols: target.cols,
+        rows: target.rows,
+    })
 }
 
 fn compile_prompt_regex(
