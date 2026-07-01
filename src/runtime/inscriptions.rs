@@ -130,3 +130,35 @@ fn safe_segment(value: &str) -> String {
     }
     normalized
 }
+
+/// Environment variable that enables transport-side delivery diagnostic
+/// inscriptions (e.g. `delivery_prime_timeout`). Without this gate set to a
+/// truthy value, [`emit_delivery_diagnostic`] is a no-op so production runs
+/// do not write per-flush diagnostics by default. Originally surfaced on
+/// the tmux side as `AGENTMUX_RELAY_DELIVERY_DIAGNOSTICS`; the canonical
+/// name is the same string whether the caller sets it from a tmux-driven
+/// or ACP-driven test (no `*_acp_*` / `*_tmux_*` split — the env var is
+/// transport-neutral).
+pub const DELIVERY_DIAGNOSTICS_ENVVAR: &str = "AGENTMUX_RELAY_DELIVERY_DIAGNOSTICS";
+
+/// Emits one transport-side delivery diagnostic inscription line under the
+/// `relay.<event>` namespace. Gated by [`DELIVERY_DIAGNOSTICS_ENVVAR`]; when
+/// the env var is unset or not a truthy value, the call is a no-op. Used by
+/// the Tmux and ACP transports' prime-timeout / wedge-classifier paths.
+pub fn emit_delivery_diagnostic(event: &str, details: &serde_json::Value) {
+    if !delivery_diagnostics_enabled() {
+        return;
+    }
+    emit_inscription(format!("relay.{event}").as_str(), details);
+}
+
+fn delivery_diagnostics_enabled() -> bool {
+    std::env::var(DELIVERY_DIAGNOSTICS_ENVVAR)
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+}

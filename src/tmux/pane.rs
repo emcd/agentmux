@@ -6,11 +6,6 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use serde_json::Value;
-
-use crate::runtime::inscriptions::emit_inscription;
-
-const DELIVERY_DIAGNOSTICS_ENVVAR: &str = "AGENTMUX_RELAY_DELIVERY_DIAGNOSTICS";
 const PASTE_BUFFER_NAME_PREFIX: &str = "agentmux-relay";
 const LOOK_LINES_MAX: usize = 1000;
 
@@ -315,22 +310,4 @@ pub(crate) fn sanitize_diagnostic_text(text: &str) -> String {
         clipped.push_str("...");
     }
     clipped
-}
-
-pub(crate) fn emit_delivery_diagnostic(event: &str, details: &Value) {
-    if !delivery_diagnostics_enabled() {
-        return;
-    }
-    emit_inscription(format!("relay.{event}").as_str(), details);
-}
-
-fn delivery_diagnostics_enabled() -> bool {
-    std::env::var(DELIVERY_DIAGNOSTICS_ENVVAR)
-        .ok()
-        .is_some_and(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
 }

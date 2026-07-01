@@ -55,8 +55,18 @@ pub(super) struct RawAcpTarget {
     pub(super) command: Option<String>,
     #[serde(default)]
     pub(super) url: Option<String>,
+    /// Per-coder bounded prime window for the ACP per-turn prompt
+    /// completion wait. When `Some`, the ACP delivery task resolves
+    /// the wait as `SendOutcome::Timeout` with
+    /// `reason_code = "acp_turn_timeout"` if no terminal
+    /// `PromptCompletion` is observed within the configured
+    /// milliseconds. `None` (absent) preserves the unbounded wait.
+    /// TOML key under `[coders.<id>.acp]` is `prime-timeout-ms`.
+    /// Renamed from the legacy `turn-timeout-ms` (pre-existing field
+    /// that was declared but never consumed by the runtime; the new
+    /// name makes the field load-bearing on the ACP delivery task).
     #[serde(default)]
-    pub(super) turn_timeout_ms: Option<u64>,
+    pub(super) prime_timeout_ms: Option<u64>,
     #[serde(default)]
     pub(super) headers: Vec<NameValueEntry>,
     #[serde(default)]
@@ -90,7 +100,7 @@ pub(super) struct AcpTarget {
     pub(super) channel: AcpChannel,
     pub(super) command: Option<String>,
     pub(super) url: Option<String>,
-    pub(super) turn_timeout_ms: Option<u64>,
+    pub(super) prime_timeout_ms: Option<u64>,
     pub(super) headers: Vec<NameValueEntry>,
     pub(super) environment: Vec<NameValueEntry>,
 }

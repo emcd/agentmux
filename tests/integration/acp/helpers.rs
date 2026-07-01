@@ -45,7 +45,7 @@ pub(super) struct AcpStubOptions {
     pub(super) request_permission_on_prompt: bool,
     pub(super) disconnect_on_prompt: Option<String>,
     pub(super) configured_session_id: Option<String>,
-    pub(super) coder_turn_timeout_ms: Option<u64>,
+    pub(super) coder_prime_timeout_ms: Option<u64>,
 }
 
 impl Default for AcpStubOptions {
@@ -68,7 +68,7 @@ impl Default for AcpStubOptions {
             request_permission_on_prompt: false,
             disconnect_on_prompt: None,
             configured_session_id: None,
-            coder_turn_timeout_ms: None,
+            coder_prime_timeout_ms: None,
         }
     }
 }
@@ -271,8 +271,8 @@ pub(super) fn write_configuration(root: &Path, options: &AcpStubOptions) -> (Pat
 
     let command = script_path.display().to_string();
     let coder_timeout_line = options
-        .coder_turn_timeout_ms
-        .map(|value| format!("turn-timeout-ms = {value}\n"))
+        .coder_prime_timeout_ms
+        .map(|value| format!("prime-timeout-ms = {value}\n"))
         .unwrap_or_default();
     let coders = format!(
         r#"format-version = 1

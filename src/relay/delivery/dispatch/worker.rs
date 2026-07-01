@@ -392,14 +392,17 @@ fn noop_tmux_chooser() -> Chooser {
 /// the pane envelope from `message` before paste/turn submission.
 ///
 /// The envelope's generic [`DeliveryEnvelope::prime_timeout_ms`] field is
-/// populated from the per-coder tmux config when the target is a tmux session
-/// (`[coders.<id>.tmux].prime-timeout-ms`); ACP targets leave it `None`
-/// because the ACP follow-up proposal populates it from `[coders.<id>.acp]`.
+/// populated from the per-coder config: `TmuxTargetConfiguration.prime_timeout_ms`
+/// for tmux sessions (`[coders.<id>.tmux].prime-timeout-ms`) and
+/// `AcpTargetConfiguration.prime_timeout_ms` for ACP sessions
+/// (`[coders.<id>.acp].prime-timeout-ms`). Each transport consumes the same
+/// generic envelope field; no transport-prefixed envelope field is introduced.
 fn build_coder_envelope(task: &AsyncDeliveryTask, message: DeliveryMessage) -> DeliveryEnvelope {
     let prime_timeout_ms = match resolve_target_member(task) {
         Ok(Some(member)) => match &member.target {
             TargetConfiguration::Tmux(tmux_target) => tmux_target.prime_timeout_ms,
-            _ => None,
+            TargetConfiguration::Acp(acp_target) => acp_target.prime_timeout_ms,
+            TargetConfiguration::Ui | TargetConfiguration::Pubsub => None,
         },
         _ => None,
     };

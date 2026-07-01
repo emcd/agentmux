@@ -70,7 +70,7 @@ pub(super) fn build_session_target(
                         channel: acp_target.channel,
                         command: acp_target.command.clone(),
                         url: acp_target.url.clone(),
-                        turn_timeout_ms: acp_target.turn_timeout_ms,
+                        prime_timeout_ms: acp_target.prime_timeout_ms,
                         headers: acp_target.headers.clone(),
                         environment: acp_target.environment.clone(),
                     }),
@@ -256,10 +256,10 @@ pub(super) fn validate_acp_target(
     coders_path: &Path,
     coder_id: &str,
 ) -> Result<AcpTarget, ConfigurationError> {
-    if matches!(target.turn_timeout_ms, Some(0)) {
+    if matches!(target.prime_timeout_ms, Some(0)) {
         return Err(ConfigurationError::invalid(
             coders_path,
-            format!("coder '{coder_id}' ACP turn-timeout-ms must be greater than zero"),
+            format!("coder '{coder_id}' ACP prime-timeout-ms must be greater than zero"),
         ));
     }
 
@@ -319,7 +319,7 @@ pub(super) fn validate_acp_target(
         channel: target.channel,
         command: target.command,
         url: target.url,
-        turn_timeout_ms: target.turn_timeout_ms,
+        prime_timeout_ms: target.prime_timeout_ms,
         headers: target.headers,
         environment: target.environment,
     })
