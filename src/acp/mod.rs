@@ -1,15 +1,18 @@
 pub mod client;
 pub mod permission;
 pub mod render;
+pub mod replay;
 pub mod state;
+pub mod text;
 pub mod transport;
 pub mod worker_driver;
 
 pub use client::{
     AcpRequestError, AcpStdioClient, DispatchHandler, PermissionHandler, PermissionResponder,
-    PromptCompletion, PromptCompletionHandler, PromptDispatchOutcome, REPLAY_BUFFER_MAX_ENTRIES,
+    PromptCompletion, PromptCompletionHandler, PromptDispatchOutcome,
 };
 pub use render::{replay_entries_to_snapshot_entries, snapshot_entries_to_plain_lines};
+pub use replay::REPLAY_BUFFER_MAX_ENTRIES;
 pub use transport::{
     ACP_ERROR_CODE_CONNECTION_CLOSED, ACP_ERROR_CODE_INITIALIZE_FAILED,
     ACP_ERROR_CODE_PROMPT_FAILED, ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE, AcpBootstrapError,
@@ -17,9 +20,8 @@ pub use transport::{
 };
 pub use worker_driver::{AcpDriverServices, AcpWorkerDriver};
 
-use serde_json::Value;
-
 use crate::transports::ToolCallStatus;
+use serde_json::Value;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 
@@ -68,8 +70,6 @@ pub enum ReplayEntry {
     },
 }
 
-use std::collections::HashMap;
-
 /// Buffer-aware pending-tool-call record. The reader thread holds one of these
 /// per in-flight `tool_call` notification so a later `tool_call_update` can
 /// mutate the original buffer entry in place rather than appending a second
@@ -78,45 +78,15 @@ use std::collections::HashMap;
 /// `enforce_replay_buffer_cap_and_maintain_positions` helper keeps it valid
 /// across cap-driven drain.
 ///
-/// Visibility is `pub` because the parser test re-exports in this module
-/// carry `PendingToolCall` in their signatures. Internal production code
-/// outside `crate::acp` should not depend on the fields; treat the type as
-/// crate-private to `crate::acp` and rely on the test re-exports for any
-/// cross-crate use.
+/// Visibility is `pub` because the `replay` submodule's helpers carry
+/// `PendingToolCall` in their signatures. Internal production code outside
+/// `crate::acp` should not depend on the fields; treat the type as
+/// crate-private to `crate::acp` and use the `replay` submodule for any
+/// cross-crate access.
 #[derive(Debug, Clone)]
 pub struct PendingToolCall {
     pub entry: ReplayEntry,
     pub buffer_position: usize,
-}
-
-pub fn parse_replay_entries_for_test(
-    params: &Value,
-    pending_calls: &mut HashMap<String, PendingToolCall>,
-    buffer: &mut Vec<ReplayEntry>,
-) {
-    client::parse_replay_entries_from_params(params, pending_calls, buffer);
-}
-
-pub fn append_replay_entries_for_test(
-    buffer: &mut Vec<ReplayEntry>,
-    pending_calls: &mut HashMap<String, PendingToolCall>,
-    entries: Vec<ReplayEntry>,
-) {
-    client::append_replay_entries(buffer, pending_calls, entries);
-}
-
-pub fn coalesce_replay_entries_on_append_for_test(
-    buffer: &mut Vec<ReplayEntry>,
-    entries: Vec<ReplayEntry>,
-) {
-    client::coalesce_replay_entries_on_append(buffer, entries);
-}
-
-pub fn enforce_replay_buffer_cap_and_maintain_positions_for_test(
-    buffer: &mut Vec<ReplayEntry>,
-    pending_calls: &mut HashMap<String, PendingToolCall>,
-) {
-    client::enforce_replay_buffer_cap_and_maintain_positions(buffer, pending_calls);
 }
 
 #[derive(Debug, Clone)]
