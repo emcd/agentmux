@@ -12,6 +12,9 @@ mod config;
 mod delivery_message;
 #[path = "unit/envelope.rs"]
 mod envelope;
+#[cfg(feature = "pty")]
+#[path = "unit/pty_transport.rs"]
+mod pty_transport;
 #[path = "unit/relay.rs"]
 mod relay;
 #[path = "unit/relay_stream.rs"]

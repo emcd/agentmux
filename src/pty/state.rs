@@ -252,26 +252,48 @@ impl WedgeProbe for PtyQuiescenceProbe {
         };
         let is_prompt_ready = regex_matches && cursor_idle_at_expected;
 
+        // Empty-pane detection: a tail that is empty or whitespace-only
+        // signals that the child produced no observable content. The
+        // probe distinguishes this from regex-mismatch (non-empty tail
+        // that does not match the prompt regex) and cursor-mismatch
+        // (regex matches but cursor not idle). The empty-pane reason is
+        // classified as Timeout territory (Unresponsive); the
+        // regex-mismatch and cursor-mismatch reasons are classified as
+        // wedge-class (Wedged territory).
+        let tail_empty = response.tail.trim().is_empty();
+
         let mismatch = if is_prompt_ready {
             None
-        } else {
-            let reason = if !regex_matches && self.shared.config.prompt_regex.is_some() {
-                "prompt regex did not match inspected pane tail".to_string()
-            } else if !cursor_idle_at_expected {
-                format!(
-                    "cursor column {} did not match required {}",
-                    response.cursor_x,
-                    self.shared.config.prompt_idle_column.map_or(0, |c| c)
-                )
-            } else {
-                String::new()
-            };
+        } else if tail_empty && self.shared.config.prompt_regex.is_some() {
             Some(ReadinessMismatch {
-                reason,
+                reason: format!(
+                    "{} (no observable content)",
+                    crate::transports::EMPTY_PANE_MISMATCH_PREFIX
+                ),
                 regex_matched: Some(regex_matches),
                 expected_cursor_column: self.shared.config.prompt_idle_column,
                 observed_cursor_column: Some(response.cursor_x),
             })
+        } else if !cursor_idle_at_expected {
+            Some(ReadinessMismatch {
+                reason: format!(
+                    "cursor column {} did not match required {}",
+                    response.cursor_x,
+                    self.shared.config.prompt_idle_column.map_or(0, |c| c)
+                ),
+                regex_matched: Some(regex_matches),
+                expected_cursor_column: self.shared.config.prompt_idle_column,
+                observed_cursor_column: Some(response.cursor_x),
+            })
+        } else if !regex_matches {
+            Some(ReadinessMismatch {
+                reason: "prompt regex did not match inspected pane tail".to_string(),
+                regex_matched: Some(regex_matches),
+                expected_cursor_column: self.shared.config.prompt_idle_column,
+                observed_cursor_column: Some(response.cursor_x),
+            })
+        } else {
+            None
         };
 
         Ok(WedgeObservation {
