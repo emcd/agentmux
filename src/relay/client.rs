@@ -118,23 +118,23 @@ impl RelayStreamSession {
         }
     }
 
-    /// Creates an outbound peer relay session that presents `<relay_id>@RELAY`
+    /// Creates an outbound peer relay session that presents `<connect_as>@RELAY`
     /// with an explicit peer PSK.
     ///
     /// Unlike [`RelayStreamSession::new`], the identity token is supplied
     /// directly (read from the peer credential path by the caller) rather than
     /// resolved from a session credential path, since a peer relay authenticates
-    /// as this relay's own `@RELAY` principal, not a bundle session.
+    /// as the `@RELAY` principal the peer issued this relay, not a bundle session.
     #[must_use]
     pub(crate) fn for_peer_relay(
         socket_path: PathBuf,
-        relay_id: String,
+        connect_as: String,
         identity_token: String,
     ) -> Self {
         Self {
             socket_path,
             namespace: super::RELAY_NAMESPACE.to_string(),
-            session_id: relay_id,
+            session_id: connect_as,
             identity_token_override: Some(identity_token),
             connection: None,
         }

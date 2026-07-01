@@ -411,11 +411,11 @@ fn prepare_relay_host(
 
     let listener = bind_relay_listener(&relay_paths)?;
 
-    // Build the outbound peer connection manager once from the resolved peers +
-    // relay-id, before those fields are consumed below. It is empty (and never
-    // dials) on a relay with no configured peers.
+    // Build the outbound peer connection manager once from the resolved peers,
+    // before that field is consumed below. Each peer carries its own presented
+    // identity (`connect-as`); the manager is empty (and never dials) on a relay
+    // with no configured peers.
     let peer_connection_manager = Arc::new(PeerConnectionManager::from_configuration(
-        relay_configuration.relay_id.clone(),
         &roots.state_root,
         &relay_configuration.peers,
     ));

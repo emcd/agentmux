@@ -5,10 +5,10 @@
 The routing resolution stage SHALL recognize the cross-relay bang-path target
 notation `<session_id>@<bundle_name>!<relay_id>` for the delivery operations
 `Send` and `Raww`. The `!<relay_id>` suffix SHALL be parsed before the
-`@<namespace>` split; `<relay_id>` is the bare id portion of a configured
-`[[peers]]` entry (no `@RELAY` suffix). A target carrying a `!<relay_id>` suffix
-SHALL be classified as a **cross-relay target** carrying the peer `relay_id` and
-the foreign `session_id@bundle_name`.
+`@<namespace>` split; `<relay_id>` is the local `alias` of a configured
+`[[peers]]` entry (this relay's own name for the peer, no `@RELAY` suffix). A
+target carrying a `!<relay_id>` suffix SHALL be classified as a **cross-relay
+target** carrying the peer `relay_id` and the foreign `session_id@bundle_name`.
 
 Classification SHALL remain configuration-free: the resolution stage SHALL NOT
 consult `[[peers]]` or any catalog to classify a cross-relay target. The

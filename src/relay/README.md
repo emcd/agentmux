@@ -206,7 +206,7 @@ exported from `src/relay/mod.rs`.
   other principal they are keyed in the unified registry by canonical
   `principal_id`.
 - PSK files (`<state-root>/bundles/<b>/sessions/<s>/identity.psk` for sessions,
-  `<state-root>/peers/<peer_alias>.psk` for peers) and the principal store
+  `<state-root>/peers/<alias>.psk` for peers) and the principal store
   itself are written with mode 0600 (owner read/write only).
 - **Bootstrap lockout warning**: `require-session-credentials` is a relay-level
   setting (a single socket serves every bundle, so per-bundle enforcement is not
@@ -217,18 +217,19 @@ exported from `src/relay/mod.rs`.
   via `agentmux new peer <session_id>@<bundle>` (or run with the default) before
   flipping enforcement on, otherwise no client can connect to drive recovery.
 - **Outbound peer relays**: `relay.toml` `[[peers]]` entries are active
-  outbound-only endpoints — each carries the peer's canonical `id`
-  (`<id>@RELAY`) and an absolute Unix-socket `address` (TCP host:port is future
-  work) and is validated at startup. A `Send`/`Raww` addressed with the bang-path
-  `<session>@<bundle>!<id>` is forwarded to the matching peer. The top-level
-  `relay-id` key names this relay's own `<relay-id>@RELAY` identity, presented
-  when dialing a peer; it is required whenever any `[[peers]]` entry exists.
-  `[[peers]]` is outbound-only and takes no `scope`: **inbound** cross-relay
-  authorization is the scope granted to the peer's principal via
-  `new peer <id>@RELAY --scope`, enforced by the target-side ingress filter
-  (deny-by-default). Raw peer PSKs stay owner-only at
-  `<state-root>/peers/<peer_alias>.psk` (alias = the bare id); the principal
-  store holds only hashes.
+  outbound-only endpoints — each carries the local `alias`, an absolute
+  Unix-socket `address` (TCP host:port is future work), and the `connect-as`
+  identity, and is validated at startup. A `Send`/`Raww` addressed with the
+  bang-path `<session>@<bundle>!<alias>` is forwarded to the peer this relay
+  locally calls `<alias>`. The presented identity is **per-peer**: `connect-as`
+  is the identity that peer issued this relay (via its own `new peer`), presented
+  as `<connect-as>@RELAY` when dialing it — there is no single relay-wide
+  identity, because the *receiver* determines it (two peers can issue different or
+  colliding identities to this relay). `[[peers]]` is outbound-only and takes no
+  `scope`: **inbound** cross-relay authorization is the scope this relay grants a
+  connecting peer's principal via `new peer <id>@RELAY --scope`, enforced by the
+  target-side ingress filter (deny-by-default). Raw peer PSKs stay owner-only at
+  `<state-root>/peers/<alias>.psk`; the principal store holds only hashes.
 - **Expiry pruning**: records with an RFC 3339 `expires_at` in the past (and,
   fail-closed, any with an unparseable `expires_at`) are pruned. The store is
   pruned-and-persisted once at relay startup and pruned before each

@@ -484,14 +484,14 @@ fn cross_relay_target_label(target: &RouteTarget) -> String {
 /// Forwards one cross-relay `Send` target to its peer relay and maps the outcome
 /// to a single [`SendResult`] keyed by the origin-facing bang-path label.
 ///
-/// The forwarded request presents this relay's `<relay-id>@RELAY` identity as the
-/// requester and the peer's *local* `session@bundle` as the sole target (the peer
-/// receives a plain local target, not the bang-path). A peer that answers with a
-/// `Send` response contributes its own per-target result verbatim (re-labelled to
-/// the bang-path); a peer error response or a transport/handshake failure folds
-/// into a `failed` result carrying the peer's or manager's reason, so one
-/// unreachable peer never fails the requester's other (local or cross-relay)
-/// deliveries.
+/// The forwarded request presents this relay's per-peer `<connect_as>@RELAY`
+/// identity as the requester and the peer's *local* `session@bundle` as the sole
+/// target (the peer receives a plain local target, not the bang-path). A peer
+/// that answers with a `Send` response contributes its own per-target result
+/// verbatim (re-labelled to the bang-path); a peer error response or a
+/// transport/handshake failure folds into a `failed` result carrying the peer's
+/// or manager's reason, so one unreachable peer never fails the requester's other
+/// (local or cross-relay) deliveries.
 fn forward_send_cross_relay(
     manager: &PeerConnectionManager,
     target: &RouteTarget,
@@ -511,11 +511,11 @@ fn forward_send_cross_relay(
             .expect("cross-relay send target carries a session id"),
         target.namespace.as_str(),
     );
-    let Some(requester_session) = manager.own_relay_principal_id() else {
+    let Some(requester_session) = manager.presented_principal_id(relay_id) else {
         return failed_cross_relay_result(
             label,
-            "internal_peer_identity_missing",
-            "relay-id is not configured; cannot present an outbound peer identity",
+            "validation_unknown_peer",
+            "no configured peer relay matches the target alias",
             None,
         );
     };

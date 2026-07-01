@@ -145,7 +145,7 @@ fn run_serve_connection(
         let stream = tokio::net::UnixStream::from_std(server_stream)?;
         // No peers configured for these tests: an empty manager never dials.
         let peer_connection_manager = std::sync::Arc::new(
-            agentmux::relay::PeerConnectionManager::from_configuration(None, &state_root, &[]),
+            agentmux::relay::PeerConnectionManager::from_configuration(&state_root, &[]),
         );
         let serve_context = agentmux::relay::ConnectionServeContext::new(
             configuration_root,
@@ -924,27 +924,28 @@ fn write_peer_credential(state_root: &Path, alias: &str, psk: &str) {
 }
 
 // Serves one origin relay connection whose peer connection manager is configured
-// with a single peer relay (this relay's `relay_id`, the peer's `<id>@RELAY`, and
-// its Unix socket `address`), so a cross-relay Send is really dialed and
-// forwarded rather than reported unavailable.
+// with a single peer relay: `alias` is the bang-path `!<alias>` selector,
+// `connect_as` is the identity this relay presents to the peer (`<connect_as>@RELAY`),
+// and `peer_socket` is the peer's Unix socket. So a cross-relay Send is really
+// dialed and forwarded rather than reported unavailable.
 fn spawn_relay_stream_with_peer(
     configuration_root: &Path,
     bundle_paths: &BundleRuntimePaths,
-    relay_id: &str,
-    peer_id: &str,
+    alias: &str,
+    connect_as: &str,
     peer_socket: &Path,
 ) -> (UnixStream, thread::JoinHandle<()>) {
     let (server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
     let root = configuration_root.to_path_buf();
     let state_root = bundle_paths.state_root.clone();
     let catalog = BundleCatalog::from_paths([bundle_paths.clone()]);
-    let relay_id = relay_id.to_string();
     let peers = vec![agentmux::relay::PeerConfiguration {
-        id: peer_id.to_string(),
+        alias: alias.to_string(),
         address: peer_socket.to_string_lossy().into_owned(),
+        connect_as: connect_as.to_string(),
     }];
     let handle = thread::spawn(move || {
-        run_serve_connection_with_peers(server_stream, root, state_root, catalog, relay_id, peers)
+        run_serve_connection_with_peers(server_stream, root, state_root, catalog, peers)
             .expect("serve connection");
     });
     (client_stream, handle)
@@ -955,7 +956,6 @@ fn run_serve_connection_with_peers(
     configuration_root: PathBuf,
     state_root: PathBuf,
     bundle_catalog: BundleCatalog,
-    relay_id: String,
     peers: Vec<agentmux::relay::PeerConfiguration>,
 ) -> Result<(), std::io::Error> {
     server_stream
@@ -967,12 +967,9 @@ fn run_serve_connection_with_peers(
         .expect("build current-thread runtime");
     runtime.block_on(async move {
         let stream = tokio::net::UnixStream::from_std(server_stream)?;
-        let peer_connection_manager =
-            std::sync::Arc::new(agentmux::relay::PeerConnectionManager::from_configuration(
-                Some(relay_id),
-                &state_root,
-                &peers,
-            ));
+        let peer_connection_manager = std::sync::Arc::new(
+            agentmux::relay::PeerConnectionManager::from_configuration(&state_root, &peers),
+        );
         let serve_context = agentmux::relay::ConnectionServeContext::new(
             configuration_root,
             state_root,
@@ -1048,8 +1045,8 @@ fn forward_cross_relay_send(
     let (mut client, handle) = spawn_relay_stream_with_peer(
         configuration_root,
         bundle_paths,
+        "peer",
         "origin-relay",
-        "peer@RELAY",
         peer_socket,
     );
     let reader_stream = client.try_clone().expect("clone stream");
@@ -1187,8 +1184,8 @@ fn cross_relay_send_reports_peer_unavailable_when_unreachable() {
     let (mut client, handle) = spawn_relay_stream_with_peer(
         &configuration_root,
         &bundle_paths,
+        "peer",
         "origin-relay",
-        "peer@RELAY",
         &peer_socket,
     );
     let reader_stream = client.try_clone().expect("clone stream");
@@ -1243,8 +1240,8 @@ fn cross_relay_send_requires_all_tier() {
     let (mut client, handle) = spawn_relay_stream_with_peer(
         &configuration_root,
         &bundle_paths,
+        "peer",
         "origin-relay",
-        "peer@RELAY",
         &peer_socket,
     );
     let reader_stream = client.try_clone().expect("clone stream");

@@ -102,10 +102,11 @@ fn write_peer_credential(state_root: &std::path::Path, alias: &str, psk: &str) {
     std::fs::write(peers_dir.join(format!("{alias}.psk")), psk).expect("write peer psk");
 }
 
-fn peer(id: &str, address: &std::path::Path) -> PeerConfiguration {
+fn peer(alias: &str, connect_as: &str, address: &std::path::Path) -> PeerConfiguration {
     PeerConfiguration {
-        id: id.to_string(),
+        alias: alias.to_string(),
         address: address.to_string_lossy().into_owned(),
+        connect_as: connect_as.to_string(),
     }
 }
 
@@ -118,9 +119,8 @@ fn connect_completes_psk_hello_handshake_as_relay_principal() {
     let observed = spawn_stub_peer(&socket_path);
 
     let manager = PeerConnectionManager::from_configuration(
-        Some("this-relay".to_string()),
         &state_root,
-        &[peer("peer@RELAY", &socket_path)],
+        &[peer("peer", "this-relay", &socket_path)],
     );
     assert!(manager.is_configured());
     manager.connect("peer").expect("connect to stub peer");
@@ -141,9 +141,8 @@ fn connect_reports_missing_peer_credential() {
     let socket_path = temporary.path().join("peer.sock");
 
     let manager = PeerConnectionManager::from_configuration(
-        Some("this-relay".to_string()),
         &state_root,
-        &[peer("peer@RELAY", &socket_path)],
+        &[peer("peer", "this-relay", &socket_path)],
     );
     let error = manager
         .connect("peer")
@@ -158,9 +157,8 @@ fn connect_rejects_unknown_peer() {
     let socket_path = temporary.path().join("peer.sock");
 
     let manager = PeerConnectionManager::from_configuration(
-        Some("this-relay".to_string()),
         &state_root,
-        &[peer("peer@RELAY", &socket_path)],
+        &[peer("peer", "this-relay", &socket_path)],
     );
     let error = manager
         .connect("absent")
@@ -177,9 +175,8 @@ fn connect_reports_peer_unavailable_when_unreachable() {
     let socket_path = temporary.path().join("nonexistent.sock");
 
     let manager = PeerConnectionManager::from_configuration(
-        Some("this-relay".to_string()),
         &state_root,
-        &[peer("peer@RELAY", &socket_path)],
+        &[peer("peer", "this-relay", &socket_path)],
     );
     let error = manager
         .connect("peer")
@@ -197,9 +194,8 @@ fn forward_reports_peer_unavailable_when_unreachable() {
     let socket_path = temporary.path().join("nonexistent.sock");
 
     let manager = PeerConnectionManager::from_configuration(
-        Some("this-relay".to_string()),
         &state_root,
-        &[peer("peer@RELAY", &socket_path)],
+        &[peer("peer", "this-relay", &socket_path)],
     );
     let request = agentmux::relay::RelayRequest::Send {
         request_id: Some("origin-1".to_string()),
@@ -233,9 +229,8 @@ fn forward_returns_the_peer_response() {
     let observed = spawn_answering_stub_peer(&socket_path, peer_response);
 
     let manager = PeerConnectionManager::from_configuration(
-        Some("this-relay".to_string()),
         &state_root,
-        &[peer("peer@RELAY", &socket_path)],
+        &[peer("peer", "this-relay", &socket_path)],
     );
     let request = agentmux::relay::RelayRequest::Raww {
         request_id: Some("origin-1".to_string()),
@@ -271,25 +266,25 @@ fn forward_returns_the_peer_response() {
 }
 
 #[test]
-fn own_relay_principal_id_qualifies_configured_relay_id() {
+fn presented_principal_id_qualifies_configured_connect_as() {
     let temporary = TempDir::new().expect("temporary");
+    let socket = temporary.path().join("peer.sock");
+    // The presented identity is per-peer: the alias `west` maps to the identity
+    // `east` the peer issued this relay, qualified to `east@RELAY`.
     let manager = PeerConnectionManager::from_configuration(
-        Some("this-relay".to_string()),
         temporary.path(),
-        &[],
+        &[peer("west", "east", &socket)],
     );
     assert_eq!(
-        manager.own_relay_principal_id().as_deref(),
-        Some("this-relay@RELAY"),
+        manager.presented_principal_id("west").as_deref(),
+        Some("east@RELAY"),
     );
-
-    let without = PeerConnectionManager::from_configuration(None, temporary.path(), &[]);
-    assert!(without.own_relay_principal_id().is_none());
+    assert!(manager.presented_principal_id("unknown-alias").is_none());
 }
 
 #[test]
 fn manager_without_peers_is_not_configured() {
     let temporary = TempDir::new().expect("temporary");
-    let manager = PeerConnectionManager::from_configuration(None, temporary.path(), &[]);
+    let manager = PeerConnectionManager::from_configuration(temporary.path(), &[]);
     assert!(!manager.is_configured());
 }

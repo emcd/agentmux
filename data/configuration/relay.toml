@@ -31,24 +31,26 @@
 # [choices]
 # pending-max = 256
 
-# This relay's own outbound identity, presented as `<relay-id>@RELAY` when dialing
-# a configured peer. It is REQUIRED once any [[peers]] entry exists and unused
-# otherwise. Grammar: a bare id (non-empty; no '@', '!', or path separator). The
-# peer you dial must have registered this identity via
-# `agentmux new peer <relay-id>@RELAY --scope <scope>`.
-# relay-id = 'this-relay'
-
 # Outbound peer relay endpoints. Each entry activates cross-relay routing: a
-# `Send`/`Raww` addressed with the bang-path `<session>@<bundle>!<id>` is forwarded
-# to the peer whose bare id matches `<id>`. `[[peers]]` is OUTBOUND-ONLY and takes
-# no `scope`: inbound cross-relay authorization is the scope you grant the peer's
-# principal with `new peer <id>@RELAY --scope`, enforced by the target-side ingress
-# filter. Raw peer PSKs are NOT stored here — they remain owner-only under
-# <state-root>/peers/<peer-alias>.psk (alias = the bare id) while the principal
-# store keeps only hashes.
-#   id      — the peer's canonical <id>@RELAY principal (required)
-#   address — the peer's absolute Unix socket path (required). TCP host:port
-#             endpoints are not yet supported (remote peering is future work).
+# `Send`/`Raww` addressed with the bang-path `<session>@<bundle>!<alias>` is
+# forwarded to the peer you locally call `<alias>`. `[[peers]]` is OUTBOUND-ONLY
+# and takes no `scope`: inbound cross-relay authorization is the scope you grant a
+# connecting peer's principal with `new peer <id>@RELAY --scope`, enforced by the
+# target-side ingress filter. Raw peer PSKs are NOT stored here — they remain
+# owner-only under <state-root>/peers/<alias>.psk while the principal store keeps
+# only hashes.
+#   alias      — this relay's LOCAL name for the peer (required): the bang-path
+#                `!<alias>` routing selector and the credential filename stem.
+#                Internal to this relay; the peer never sees it. Grammar: a bare id
+#                (non-empty; no '@', '!', or path separator).
+#   address    — the peer's absolute Unix socket path (required). TCP host:port
+#                endpoints are not yet supported (remote peering is future work).
+#   connect-as — the identity THIS peer issued this relay, presented as
+#                `<connect-as>@RELAY` in Hello when dialing it (required). The peer
+#                registered it via `agentmux new peer <connect-as>@RELAY --scope
+#                <scope>`; it is per-peer because the receiver determines it. Same
+#                bare-id grammar as `alias`.
 # [[peers]]
-# id = 'peer-relay@RELAY'
-# address = '/run/agentmux/peer-relay.sock'
+# alias = 'west'
+# address = '/run/agentmux/west.sock'
+# connect-as = 'east'

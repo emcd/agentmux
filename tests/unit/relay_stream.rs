@@ -433,7 +433,7 @@ fn run_serve_connection_with_slot(
         let stream = tokio::net::UnixStream::from_std(server_stream)?;
         // No peers configured for these tests: an empty manager never dials.
         let peer_connection_manager = std::sync::Arc::new(
-            agentmux::relay::PeerConnectionManager::from_configuration(None, &state_root, &[]),
+            agentmux::relay::PeerConnectionManager::from_configuration(&state_root, &[]),
         );
         let serve_context = agentmux::relay::ConnectionServeContext::new(
             configuration_root,

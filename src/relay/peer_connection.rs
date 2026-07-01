@@ -7,12 +7,14 @@
 //! delivery outcome on the affected request.
 //!
 //! To dial a peer the manager reads the outbound PSK from the well-known peer
-//! credential path `<state-root>/peers/<peer_alias>.psk`, dials the peer's
-//! configured Unix socket `address`, and presents a Hello as this relay's own
-//! `<relay-id>@RELAY` principal (see [`RelayStreamSession::for_peer_relay`]) with
-//! that PSK. The reachability/authentication handshake and its jittered backoff
-//! are reused from the shared stream client; this module adds only the
-//! per-peer identity, credential lookup, and typed failure classification.
+//! credential path `<state-root>/peers/<alias>.psk`, dials the peer's configured
+//! Unix socket `address`, and presents a Hello as the `<connect_as>@RELAY`
+//! principal that peer issued this relay (see [`RelayStreamSession::for_peer_relay`])
+//! with that PSK. The presented identity is per-peer because the receiving relay
+//! determines it via its own `new peer`. The reachability/authentication
+//! handshake and its jittered backoff are reused from the shared stream client;
+//! this module adds only the per-peer identity, credential lookup, and typed
+//! failure classification.
 
 use std::{
     collections::HashMap,
@@ -32,11 +34,14 @@ use super::{RELAY_NAMESPACE, RelayError, RelayRequest, RelayResponse, relay_erro
 /// One configured outbound peer endpoint.
 #[derive(Clone, Debug)]
 struct PeerEndpoint {
-    /// The peer's bare id — the bang-path `!<relay_id>` selector and the
-    /// `<peer_alias>` credential filename stem.
+    /// This relay's local name for the peer — the bang-path `!<alias>` selector
+    /// and the `<peer_alias>` credential filename stem.
     alias: String,
     /// The peer's listening Unix domain socket path.
     address: PathBuf,
+    /// The identity the peer issued this relay, presented as `<connect_as>@RELAY`
+    /// in Hello when dialing it. Per-peer because the receiver determines it.
+    connect_as: String,
 }
 
 /// Manages this relay's outbound connections to its configured peer relays.
@@ -46,10 +51,6 @@ struct PeerEndpoint {
 /// mutex serializes dials to one peer without blocking deliveries to others.
 #[derive(Debug)]
 pub struct PeerConnectionManager {
-    /// This relay's own bare id, presented as `<relay-id>@RELAY` when dialing a
-    /// peer. Present iff any peer is configured (guaranteed by relay.toml
-    /// validation); `None` on a relay with no peers.
-    relay_id: Option<String>,
     state_root: PathBuf,
     endpoints: HashMap<String, PeerEndpoint>,
     sessions: HashMap<String, Mutex<Option<RelayStreamSession>>>,
@@ -57,29 +58,24 @@ pub struct PeerConnectionManager {
 
 impl PeerConnectionManager {
     /// Builds the manager from the resolved relay runtime configuration. Peer
-    /// entries are keyed by their bare id (alias); the address is validated as an
+    /// entries are keyed by their local `alias`; the address is validated as an
     /// absolute Unix socket path at configuration load, so it is trusted here.
     #[must_use]
-    pub fn from_configuration(
-        relay_id: Option<String>,
-        state_root: &Path,
-        peers: &[PeerConfiguration],
-    ) -> Self {
+    pub fn from_configuration(state_root: &Path, peers: &[PeerConfiguration]) -> Self {
         let mut endpoints = HashMap::with_capacity(peers.len());
         let mut sessions = HashMap::with_capacity(peers.len());
         for peer in peers {
-            let alias = peer.alias().to_string();
             endpoints.insert(
-                alias.clone(),
+                peer.alias.clone(),
                 PeerEndpoint {
-                    alias: alias.clone(),
+                    alias: peer.alias.clone(),
                     address: PathBuf::from(peer.address.as_str()),
+                    connect_as: peer.connect_as.clone(),
                 },
             );
-            sessions.insert(alias, Mutex::new(None));
+            sessions.insert(peer.alias.clone(), Mutex::new(None));
         }
         Self {
-            relay_id,
             state_root: state_root.to_path_buf(),
             endpoints,
             sessions,
@@ -93,32 +89,33 @@ impl PeerConnectionManager {
         !self.endpoints.is_empty()
     }
 
-    /// This relay's own outbound identity local part, presented as
-    /// `<relay-id>@RELAY` to a peer. The forwarding handler uses it to set the
-    /// forwarded request's `requester_session` to this relay's authenticated
-    /// principal (the peer sees this relay as the sender; original-sender
-    /// attribution via `on_behalf_of` is deferred). `None` when no peers are
-    /// configured.
+    /// The identity this relay presents to the peer named by `alias`, as its
+    /// full `<connect_as>@RELAY` principal. The forwarding handler uses it to set
+    /// the forwarded request's `requester_session` to the identity that peer
+    /// issued this relay (the peer sees this relay as the sender; original-sender
+    /// attribution via `on_behalf_of` is deferred). `None` when `alias` names no
+    /// configured peer.
     #[must_use]
-    pub fn own_relay_principal_id(&self) -> Option<String> {
-        self.relay_id
-            .as_deref()
-            .map(|relay_id| format!("{relay_id}@{RELAY_NAMESPACE}"))
+    pub fn presented_principal_id(&self, alias: &str) -> Option<String> {
+        self.endpoints
+            .get(alias)
+            .map(|endpoint| format!("{}@{RELAY_NAMESPACE}", endpoint.connect_as))
     }
 
-    /// Forwards a fully-formed request to the peer named by `relay_id` and
-    /// returns its response, establishing the connection lazily. Transport and
-    /// handshake failures map to the same typed errors as [`connect`]; a peer
-    /// that answers (including with an error response) returns that response for
-    /// the caller to propagate as the delivery outcome.
+    /// Forwards a fully-formed request to the peer named by the local `alias`
+    /// (the bang-path `!<alias>` selector) and returns its response, establishing
+    /// the connection lazily. Transport and handshake failures map to the same
+    /// typed errors as [`connect`]; a peer that answers (including with an error
+    /// response) returns that response for the caller to propagate as the delivery
+    /// outcome.
     ///
     /// [`connect`]: PeerConnectionManager::connect
     pub fn forward(
         &self,
-        relay_id: &str,
+        alias: &str,
         request: &RelayRequest,
     ) -> Result<RelayResponse, RelayError> {
-        let prepared = self.prepare(relay_id)?;
+        let prepared = self.prepare(alias)?;
         let mut slot = prepared
             .session
             .lock()
@@ -129,11 +126,11 @@ impl PeerConnectionManager {
     }
 
     /// Establishes (or reuses) the outbound connection to the peer named by the
-    /// bang-path `relay_id`, presenting this relay's `<relay-id>@RELAY` identity
-    /// with the peer PSK. Returns a typed [`RelayError`] the caller maps to a
-    /// delivery outcome:
+    /// local `alias` (the bang-path `!<alias>` selector), presenting this relay's
+    /// per-peer `<connect_as>@RELAY` identity with the peer PSK. Returns a typed
+    /// [`RelayError`] the caller maps to a delivery outcome:
     ///
-    /// - `validation_unknown_peer` — no `[[peers]]` entry matches `relay_id`;
+    /// - `validation_unknown_peer` — no `[[peers]]` entry matches `alias`;
     /// - `runtime_peer_credential_missing` — the peer PSK file is absent, empty,
     ///   or unreadable;
     /// - `runtime_peer_unavailable` — the endpoint could not be dialed or the
@@ -141,8 +138,8 @@ impl PeerConnectionManager {
     ///
     /// None of these fail relay startup — the connection is lazy, so every
     /// failure is scoped to the affected delivery.
-    pub fn connect(&self, relay_id: &str) -> Result<(), RelayError> {
-        let prepared = self.prepare(relay_id)?;
+    pub fn connect(&self, alias: &str) -> Result<(), RelayError> {
+        let prepared = self.prepare(alias)?;
         let mut slot = prepared
             .session
             .lock()
@@ -159,36 +156,29 @@ impl PeerConnectionManager {
     ///
     /// [`connect`]: PeerConnectionManager::connect
     /// [`forward`]: PeerConnectionManager::forward
-    fn prepare(&self, relay_id: &str) -> Result<PreparedDial<'_>, RelayError> {
-        let endpoint = self.endpoints.get(relay_id).ok_or_else(|| {
+    fn prepare(&self, alias: &str) -> Result<PreparedDial<'_>, RelayError> {
+        let endpoint = self.endpoints.get(alias).ok_or_else(|| {
             relay_error(
                 "validation_unknown_peer",
-                "no configured peer relay matches the target relay id",
-                Some(json!({ "relay_id": relay_id })),
-            )
-        })?;
-        let own_relay_id = self.relay_id.as_deref().ok_or_else(|| {
-            relay_error(
-                "internal_peer_identity_missing",
-                "relay-id is not configured; cannot present an outbound peer identity",
-                Some(json!({ "relay_id": relay_id })),
+                "no configured peer relay matches the target alias",
+                Some(json!({ "relay_id": alias })),
             )
         })?;
         let token = self.read_peer_credential(endpoint.alias.as_str())?;
         let session = self
             .sessions
-            .get(relay_id)
+            .get(alias)
             .expect("session slot exists for every configured peer");
         Ok(PreparedDial {
-            relay_id: relay_id.to_string(),
+            alias: alias.to_string(),
             endpoint,
-            own_relay_id: own_relay_id.to_string(),
             token,
             session,
         })
     }
 
-    /// Returns the peer's session, initializing it lazily on first use.
+    /// Returns the peer's session, initializing it lazily on first use. The dial
+    /// presents this relay's per-peer `<connect_as>@RELAY` identity.
     fn session_mut<'slot>(
         slot: &'slot mut Option<RelayStreamSession>,
         prepared: &PreparedDial<'_>,
@@ -196,7 +186,7 @@ impl PeerConnectionManager {
         slot.get_or_insert_with(|| {
             RelayStreamSession::for_peer_relay(
                 prepared.endpoint.address.clone(),
-                prepared.own_relay_id.clone(),
+                prepared.endpoint.connect_as.clone(),
                 prepared.token.clone(),
             )
         })
@@ -234,9 +224,8 @@ impl PeerConnectionManager {
 /// duration of one [`PeerConnectionManager::connect`] or
 /// [`PeerConnectionManager::forward`] call.
 struct PreparedDial<'a> {
-    relay_id: String,
+    alias: String,
     endpoint: &'a PeerEndpoint,
-    own_relay_id: String,
     token: String,
     session: &'a Mutex<Option<RelayStreamSession>>,
 }
@@ -247,7 +236,7 @@ impl PreparedDial<'_> {
             "runtime_peer_unavailable",
             "outbound peer relay connection could not be established",
             Some(json!({
-                "relay_id": self.relay_id,
+                "relay_id": self.alias,
                 "address": self.endpoint.address.display().to_string(),
                 "cause": source.to_string(),
             })),

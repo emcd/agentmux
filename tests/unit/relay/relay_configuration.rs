@@ -28,7 +28,6 @@ fn defaults_when_relay_toml_absent() {
     assert!(configuration.watch_bundles);
     assert!(!configuration.require_session_credentials);
     assert_eq!(configuration.choices_pending_max, 256);
-    assert!(configuration.relay_id.is_none());
     assert!(configuration.peers.is_empty());
 }
 
@@ -99,53 +98,53 @@ fn peer_field(error: &agentmux::relay::RelayError) -> Option<&str> {
         .and_then(|field| field.as_str())
 }
 
+const VALID_PEER: &str =
+    "[[peers]]\nalias = \"west\"\naddress = \"/run/agentmux/west.sock\"\nconnect-as = \"east\"\n";
+
 #[test]
 fn accepts_valid_outbound_peer() {
     let temporary = TempDir::new().expect("temporary directory");
-    write_relay_toml(
-        temporary.path(),
-        "relay-id = \"this-relay\"\n[[peers]]\nid = \"peer-relay@RELAY\"\naddress = \"/run/agentmux/peer-relay.sock\"\n",
-    );
+    write_relay_toml(temporary.path(), VALID_PEER);
 
     let configuration = load_relay_runtime_configuration(temporary.path(), None, None)
         .expect("load relay configuration");
 
-    assert_eq!(configuration.relay_id.as_deref(), Some("this-relay"));
     assert_eq!(
         configuration.peers,
         vec![PeerConfiguration {
-            id: "peer-relay@RELAY".to_string(),
-            address: "/run/agentmux/peer-relay.sock".to_string(),
+            alias: "west".to_string(),
+            address: "/run/agentmux/west.sock".to_string(),
+            connect_as: "east".to_string(),
         }],
     );
-    assert_eq!(configuration.peers[0].alias(), "peer-relay");
+    assert_eq!(configuration.peers[0].alias, "west");
+    assert_eq!(configuration.peers[0].connect_as, "east");
 }
 
 #[test]
-fn rejects_peer_without_id() {
+fn rejects_peer_without_alias() {
     let temporary = TempDir::new().expect("temporary directory");
     write_relay_toml(
         temporary.path(),
-        "relay-id = \"this-relay\"\n[[peers]]\naddress = \"/run/agentmux/peer.sock\"\n",
+        "[[peers]]\naddress = \"/run/agentmux/west.sock\"\nconnect-as = \"east\"\n",
     );
 
     let error = load_relay_runtime_configuration(temporary.path(), None, None)
-        .expect_err("reject missing id");
+        .expect_err("reject missing alias");
     assert_eq!(error.code, "validation_invalid_arguments");
 }
 
 #[test]
-fn rejects_peer_id_outside_relay_namespace() {
+fn rejects_peer_without_connect_as() {
     let temporary = TempDir::new().expect("temporary directory");
     write_relay_toml(
         temporary.path(),
-        "relay-id = \"this-relay\"\n[[peers]]\nid = \"peer-relay@GLOBAL\"\naddress = \"/run/agentmux/peer.sock\"\n",
+        "[[peers]]\nalias = \"west\"\naddress = \"/run/agentmux/west.sock\"\n",
     );
 
     let error = load_relay_runtime_configuration(temporary.path(), None, None)
-        .expect_err("reject non-RELAY id");
+        .expect_err("reject missing connect-as");
     assert_eq!(error.code, "validation_invalid_arguments");
-    assert_eq!(peer_field(&error), Some("peers.id"));
 }
 
 #[test]
@@ -153,7 +152,7 @@ fn rejects_peer_without_address() {
     let temporary = TempDir::new().expect("temporary directory");
     write_relay_toml(
         temporary.path(),
-        "relay-id = \"this-relay\"\n[[peers]]\nid = \"peer-relay@RELAY\"\n",
+        "[[peers]]\nalias = \"west\"\nconnect-as = \"east\"\n",
     );
 
     let error = load_relay_runtime_configuration(temporary.path(), None, None)
@@ -166,7 +165,7 @@ fn rejects_empty_peer_address() {
     let temporary = TempDir::new().expect("temporary directory");
     write_relay_toml(
         temporary.path(),
-        "relay-id = \"this-relay\"\n[[peers]]\nid = \"peer-relay@RELAY\"\naddress = \"\"\n",
+        "[[peers]]\nalias = \"west\"\naddress = \"\"\nconnect-as = \"east\"\n",
     );
 
     let error = load_relay_runtime_configuration(temporary.path(), None, None)
@@ -180,7 +179,7 @@ fn rejects_non_absolute_peer_address() {
     let temporary = TempDir::new().expect("temporary directory");
     write_relay_toml(
         temporary.path(),
-        "relay-id = \"this-relay\"\n[[peers]]\nid = \"peer-relay@RELAY\"\naddress = \"relay.example:9000\"\n",
+        "[[peers]]\nalias = \"west\"\naddress = \"relay.example:9000\"\nconnect-as = \"east\"\n",
     );
 
     let error = load_relay_runtime_configuration(temporary.path(), None, None)
@@ -190,11 +189,84 @@ fn rejects_non_absolute_peer_address() {
 }
 
 #[test]
+fn rejects_qualified_connect_as() {
+    let temporary = TempDir::new().expect("temporary directory");
+    write_relay_toml(
+        temporary.path(),
+        "[[peers]]\nalias = \"west\"\naddress = \"/run/agentmux/west.sock\"\nconnect-as = \"east@RELAY\"\n",
+    );
+
+    let error = load_relay_runtime_configuration(temporary.path(), None, None)
+        .expect_err("reject qualified connect-as");
+    assert_eq!(error.code, "validation_invalid_arguments");
+    assert_eq!(peer_field(&error), Some("peers.connect-as"));
+}
+
+#[test]
+fn rejects_alias_with_bang() {
+    let temporary = TempDir::new().expect("temporary directory");
+    write_relay_toml(
+        temporary.path(),
+        "[[peers]]\nalias = \"we!st\"\naddress = \"/run/agentmux/west.sock\"\nconnect-as = \"east\"\n",
+    );
+
+    let error = load_relay_runtime_configuration(temporary.path(), None, None)
+        .expect_err("reject alias with bang");
+    assert_eq!(error.code, "validation_invalid_arguments");
+    assert_eq!(peer_field(&error), Some("peers.alias"));
+}
+
+#[test]
+fn rejects_blank_alias() {
+    let temporary = TempDir::new().expect("temporary directory");
+    write_relay_toml(
+        temporary.path(),
+        "[[peers]]\nalias = \"   \"\naddress = \"/run/agentmux/west.sock\"\nconnect-as = \"east\"\n",
+    );
+
+    let error = load_relay_runtime_configuration(temporary.path(), None, None)
+        .expect_err("reject blank alias");
+    assert_eq!(error.code, "validation_invalid_arguments");
+    assert_eq!(peer_field(&error), Some("peers.alias"));
+}
+
+#[test]
+fn rejects_duplicate_peer_alias() {
+    let temporary = TempDir::new().expect("temporary directory");
+    write_relay_toml(
+        temporary.path(),
+        "[[peers]]\nalias = \"west\"\naddress = \"/run/agentmux/west-a.sock\"\nconnect-as = \"east\"\n\
+         [[peers]]\nalias = \"west\"\naddress = \"/run/agentmux/west-b.sock\"\nconnect-as = \"north\"\n",
+    );
+
+    let error = load_relay_runtime_configuration(temporary.path(), None, None)
+        .expect_err("reject duplicate alias");
+    assert_eq!(error.code, "validation_invalid_arguments");
+    assert_eq!(peer_field(&error), Some("peers.alias"));
+}
+
+#[test]
+fn accepts_duplicate_connect_as_across_peers() {
+    let temporary = TempDir::new().expect("temporary directory");
+    write_relay_toml(
+        temporary.path(),
+        "[[peers]]\nalias = \"west\"\naddress = \"/run/agentmux/west.sock\"\nconnect-as = \"east\"\n\
+         [[peers]]\nalias = \"north\"\naddress = \"/run/agentmux/north.sock\"\nconnect-as = \"east\"\n",
+    );
+
+    let configuration = load_relay_runtime_configuration(temporary.path(), None, None)
+        .expect("distinct aliases with a shared receiver-issued connect-as are valid");
+    assert_eq!(configuration.peers.len(), 2);
+    assert_eq!(configuration.peers[0].connect_as, "east");
+    assert_eq!(configuration.peers[1].connect_as, "east");
+}
+
+#[test]
 fn rejects_scope_on_peer_entry() {
     let temporary = TempDir::new().expect("temporary directory");
     write_relay_toml(
         temporary.path(),
-        "relay-id = \"this-relay\"\n[[peers]]\nid = \"peer-relay@RELAY\"\naddress = \"/run/agentmux/peer.sock\"\nscope = \"myapp\"\n",
+        "[[peers]]\nalias = \"west\"\naddress = \"/run/agentmux/west.sock\"\nconnect-as = \"east\"\nscope = \"myapp\"\n",
     );
 
     let error = load_relay_runtime_configuration(temporary.path(), None, None)
@@ -207,7 +279,7 @@ fn rejects_unknown_peer_field() {
     let temporary = TempDir::new().expect("temporary directory");
     write_relay_toml(
         temporary.path(),
-        "relay-id = \"this-relay\"\n[[peers]]\nid = \"peer-relay@RELAY\"\naddress = \"/run/agentmux/peer.sock\"\nbogus = true\n",
+        "[[peers]]\nalias = \"west\"\naddress = \"/run/agentmux/west.sock\"\nconnect-as = \"east\"\nbogus = true\n",
     );
 
     let error = load_relay_runtime_configuration(temporary.path(), None, None)
@@ -216,59 +288,13 @@ fn rejects_unknown_peer_field() {
 }
 
 #[test]
-fn rejects_missing_relay_id_when_peers_present() {
+fn accepts_relay_without_peers() {
     let temporary = TempDir::new().expect("temporary directory");
-    write_relay_toml(
-        temporary.path(),
-        "[[peers]]\nid = \"peer-relay@RELAY\"\naddress = \"/run/agentmux/peer.sock\"\n",
-    );
-
-    let error = load_relay_runtime_configuration(temporary.path(), None, None)
-        .expect_err("reject peers without relay-id");
-    assert_eq!(error.code, "validation_invalid_arguments");
-    assert_eq!(peer_field(&error), Some("relay-id"));
-}
-
-#[test]
-fn rejects_qualified_relay_id() {
-    let temporary = TempDir::new().expect("temporary directory");
-    write_relay_toml(temporary.path(), "relay-id = \"this-relay@RELAY\"\n");
-
-    let error = load_relay_runtime_configuration(temporary.path(), None, None)
-        .expect_err("reject qualified relay-id");
-    assert_eq!(error.code, "validation_invalid_arguments");
-    assert_eq!(peer_field(&error), Some("relay-id"));
-}
-
-#[test]
-fn rejects_relay_id_with_bang() {
-    let temporary = TempDir::new().expect("temporary directory");
-    write_relay_toml(temporary.path(), "relay-id = \"this!relay\"\n");
-
-    let error = load_relay_runtime_configuration(temporary.path(), None, None)
-        .expect_err("reject relay-id with bang");
-    assert_eq!(error.code, "validation_invalid_arguments");
-}
-
-#[test]
-fn rejects_blank_relay_id() {
-    let temporary = TempDir::new().expect("temporary directory");
-    write_relay_toml(temporary.path(), "relay-id = \"   \"\n");
-
-    let error = load_relay_runtime_configuration(temporary.path(), None, None)
-        .expect_err("reject blank relay-id");
-    assert_eq!(error.code, "validation_invalid_arguments");
-}
-
-#[test]
-fn accepts_relay_id_without_peers() {
-    let temporary = TempDir::new().expect("temporary directory");
-    write_relay_toml(temporary.path(), "relay-id = \"this-relay\"\n");
+    write_relay_toml(temporary.path(), "watch-bundles = true\n");
 
     let configuration = load_relay_runtime_configuration(temporary.path(), None, None)
         .expect("load relay configuration");
 
-    assert_eq!(configuration.relay_id.as_deref(), Some("this-relay"));
     assert!(configuration.peers.is_empty());
 }
 

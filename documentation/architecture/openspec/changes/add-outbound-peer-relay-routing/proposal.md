@@ -22,25 +22,30 @@ identifies as load-bearing at exactly this boundary.
 ## What Changes
 
 - **Activate `[[peers]]` config** (**BREAKING** for the placeholder contract):
-  peer entries gain `id` (the peer relay's canonical `<id>@RELAY` principal),
-  keeping the required `address` — which in this slice is a same-host Unix domain
-  socket path (the relay serves only a Unix socket today; TCP is future). A new
-  top-level `relay-id` key names this relay's own `<relay-id>@RELAY` identity
-  presented outbound (required when any peer is configured). `[[peers]]` stays
-  outbound-only and carries no scope: inbound cross-relay authorization is the
-  scope set by the existing `new peer <id>@RELAY --scope`, read by the ingress
-  filter. The relay reads the outbound PSK from the well-known peer credential
-  path and opens/maintains an outbound connection per configured peer. A peer
-  entry now changes routing behavior.
+  peer entries gain `alias` (this relay's local name for the peer — the
+  bang-path selector and credential filename stem) and `connect-as` (the identity
+  this relay presents to that peer, composed as `<connect-as>@RELAY`), keeping the
+  required `address` — which in this slice is a same-host Unix domain socket path
+  (the relay serves only a Unix socket today; TCP is future). The presented
+  identity is configured **per peer**, not relay-wide: the receiving relay
+  determines the identity it expects (via its own `new peer`), so two peers may
+  issue this relay different — or colliding — identities and no single relay-wide
+  identity exists. `[[peers]]` stays outbound-only and carries no scope: inbound
+  cross-relay authorization is the scope set by the existing
+  `new peer <id>@RELAY --scope`, read by the ingress filter. The relay reads the
+  outbound PSK from the well-known peer credential path and opens/maintains an
+  outbound connection per configured peer. A peer entry now changes routing
+  behavior.
 - **Cross-relay target addressing**: the routing resolution stage recognizes the
   bang-path notation `<session>@<bundle>!<relay_id>` (pre-defined in
   `add-identity-federation` D6) and classifies such a target as *cross-relay*,
   routing it to the named peer's outbound connection instead of the local bundle
   catalog. Applies to `Send` and `Raww`.
 - **Outbound connection management**: dial the peer `address`, present Hello as
-  this relay's own `<id>@RELAY` principal with the peer PSK, and maintain the
-  connection with reconnect/backoff. Unreachable or unauthenticated peers fail
-  the affected delivery with a typed outcome; they do not fail relay startup.
+  the per-peer `<connect-as>@RELAY` principal that peer issued this relay, with
+  the peer PSK, and maintain the connection with reconnect/backoff. Unreachable or
+  unauthenticated peers fail the affected delivery with a typed outcome; they do
+  not fail relay startup.
 - **Delivery-outcome propagation**: a cross-relay `Send`/`Raww` returns a
   delivery outcome derived from the peer relay's response (delivered / rejected /
   peer-unavailable), surfaced to the originating requester through the same
@@ -57,9 +62,10 @@ identifies as load-bearing at exactly this boundary.
 
 - Affected specs:
   - `runtime-bootstrap` — MODIFIED `[[peers]]` from placeholder to active
-    outbound-only peer config (`id`, `address`; Unix socket path), MODIFIED Relay
-    Configuration File + Precedence to admit `relay-id`, and ADDED a Relay
-    Outbound Self Identity requirement (top-level `relay-id`).
+    outbound-only peer config (`alias`, `address` Unix socket path, `connect-as`),
+    MODIFIED Relay Configuration File + Precedence to admit the expanded peer
+    fields, and ADDED a Relay Cross-Relay Presented Identity requirement (per-peer
+    `connect-as`).
   - `relay-routing-layer` — ADDED: cross-relay target classification (bang-path)
     and the target-side ingress filter at the authorization stage.
   - `cross-relay-routing` — ADDED (new capability): outbound connection

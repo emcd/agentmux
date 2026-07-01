@@ -195,10 +195,10 @@ pub(in crate::relay) fn handle_raww_routed(
 ///
 /// The origin-side authorization runs first: a cross-relay target classifies at
 /// the `all` tier, so the requester's `raww` scope must reach `all`. The peer is
-/// then dialed lazily and presented this relay's `<relay-id>@RELAY` identity; the
-/// forwarded request carries the origin `request_id` and the foreign
-/// `session@bundle` target (the peer receives a plain local target, not the
-/// bang-path). The peer's response — a queued acknowledgement or a typed
+/// then dialed lazily and presented this relay's per-peer `<connect_as>@RELAY`
+/// identity; the forwarded request carries the origin `request_id` and the
+/// foreign `session@bundle` target (the peer receives a plain local target, not
+/// the bang-path). The peer's response — a queued acknowledgement or a typed
 /// rejection — is returned verbatim (it already echoes the origin `request_id`);
 /// a transport or handshake failure surfaces as the manager's typed error
 /// (`runtime_peer_unavailable` and friends), distinct from a local
@@ -240,10 +240,10 @@ fn forward_raww_cross_relay(
             .expect("cross-relay raww target carries a session id"),
         target.namespace.as_str(),
     );
-    let requester_session = manager.own_relay_principal_id().ok_or_else(|| {
+    let requester_session = manager.presented_principal_id(relay_id).ok_or_else(|| {
         relay_error(
-            "internal_peer_identity_missing",
-            "relay-id is not configured; cannot present an outbound peer identity",
+            "validation_unknown_peer",
+            "no configured peer relay matches the target alias",
             None,
         )
     })?;

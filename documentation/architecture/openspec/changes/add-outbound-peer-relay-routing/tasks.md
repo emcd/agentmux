@@ -3,25 +3,28 @@
 ## 1. Peer configuration (runtime-bootstrap)
 
 - [x] 1.1 Extend `RawPeerEntry` / `PeerConfiguration` in
-      `src/relay/authorization/loading.rs` with `id` (required, canonical
-      `<id>@RELAY`), keeping `address` required non-empty. `[[peers]]` stays
-      outbound-only (no `scope` field). Keep `deny_unknown_fields`.
-- [x] 1.2 Validate peer entries at load: non-empty `id` parsing to a `@RELAY`
-      principal; `address` an absolute Unix socket path — reject non-absolute or
-      `host:port` TCP-style forms (naming `peers.address`). Fail startup and
-      pre-flight with structured errors (extend the existing `peers.*`
-      field-label diagnostics).
-- [x] 1.3 Add a top-level `relay-id` key to `relay.toml` and the loader; require
-      it non-empty when any `[[peers]]` entry is configured (fail startup and
-      pre-flight otherwise), unused when no peers are configured. Validate it as a
-      bare relay id (non-empty after trim; no `@`/`!`/path separators), reusing
-      the existing bare-local-part grammar; reject qualified/malformed values.
+      `src/relay/authorization/loading.rs` with `alias` (required, this relay's
+      local name for the peer) and `connect-as` (required, the bare relay id this
+      relay presents as `<connect-as>@RELAY`), keeping `address` required
+      non-empty. `[[peers]]` stays outbound-only (no `scope` field). Keep
+      `deny_unknown_fields`.
+- [x] 1.2 Validate peer entries at load: non-empty bare-id `alias` and
+      `connect-as` (no `@`/`!`/path separators, reusing the bare-local-part
+      grammar; reject qualified/malformed values naming the offending field);
+      `address` an absolute Unix socket path — reject non-absolute or `host:port`
+      TCP-style forms (naming `peers.address`). Fail startup and pre-flight with
+      structured errors (extend the existing `peers.*` field-label diagnostics).
+- [x] 1.3 Reject duplicate `peers.alias` across `[[peers]]` entries (the alias is
+      the bang-path selector and credential filename stem, so it MUST be unique)
+      with a structured error naming `peers.alias`; fail startup and pre-flight.
+      Duplicate `connect-as` stays allowed (the presented identity is
+      receiver-issued and may legitimately collide across peers).
 - [x] 1.4 Update `data/configuration/relay.toml` template with documented
-      `relay-id` + `id`/`address` peer fields (kept commented / all-defaults),
+      `alias`/`address`/`connect-as` peer fields (kept commented / all-defaults),
       `address` shown as a Unix socket path with the TCP form as a future example.
 - [x] 1.5 Update `src/relay/README.md` peer-placeholder note → active
-      outbound-only peer config, plus `relay-id`, the inbound-scope-via-new-peer
-      model, and credential-path notes.
+      outbound-only peer config, plus the per-peer `connect-as` presented
+      identity, the inbound-scope-via-new-peer model, and credential-path notes.
 
 ## 2. Cross-relay target classification (relay-routing-layer)
 
@@ -38,9 +41,9 @@
 - [x] 3.1 New module under `src/relay/` for a per-peer outbound connection
       manager: lazy establishment on first delivery, jittered exponential
       backoff reconnect (reuse `ensure_connected` backoff shape).
-- [x] 3.2 Read `<state-root>/peers/<peer_alias>.psk` (fail the delivery, not
-      startup, on absence/unreadable); dial `address` (Unix socket); Hello as this
-      relay's configured `<relay-id>@RELAY` with the peer PSK.
+- [x] 3.2 Read `<state-root>/peers/<alias>.psk` (fail the delivery, not
+      startup, on absence/unreadable); dial `address` (Unix socket); Hello as the
+      peer entry's configured `<connect-as>@RELAY` with the peer PSK.
 - [x] 3.3 Route resolved cross-relay `Send`/`Raww` through the peer connection.
 
 ## 4. Delivery-outcome propagation (cross-relay-routing)
@@ -65,12 +68,14 @@
 
 ## 6. Tests
 
-- [x] 6.1 Unit: peer config load (valid `id`/absolute-socket `address`; missing
-      `id`; empty `address`; non-absolute/`host:port` `address` rejected naming
+- [x] 6.1 Unit: peer config load (valid `alias`/absolute-socket
+      `address`/`connect-as`; missing `alias`; missing `connect-as`; empty
+      `address`; non-absolute/`host:port` `address` rejected naming
       `peers.address`; unknown field incl. a rejected `scope` on `[[peers]]`;
-      `relay-id` required when peers present and rejected when absent; `relay-id`
-      rejected when qualified/malformed (e.g. `foo@RELAY`, contains `!`, or
-      whitespace); `relay-id` optional without peers).
+      `alias`/`connect-as` rejected when qualified/malformed (e.g. `foo@RELAY`,
+      contains `!`, or whitespace) naming the offending field; duplicate `alias`
+      rejected naming `peers.alias`; duplicate `connect-as` across distinct
+      aliases accepted).
 - [x] 6.2 Unit: bang-path classification (cross-relay target → `all` tier,
       correct `relay_id` + foreign `session@bundle`; malformed bang-path).
 - [x] 6.3 Unit/integration: ingress filter — in-scope target accepted,

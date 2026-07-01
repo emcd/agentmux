@@ -1,7 +1,11 @@
 //! Policy loading: parse `policies.toml` / `relay.toml` into validated presets
 //! and build the [`AuthorizationContext`] a request is authorized against.
 
-use std::{collections::HashMap, fs, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::Path,
+};
 
 use serde::Deserialize;
 use serde_json::json;
@@ -13,9 +17,6 @@ use crate::{
 
 use super::context::{AuthorizationContext, PolicyControls, PolicyScope, UiSessionAuthorization};
 use super::resolution::{normalize_policy_id, resolve_session_policy_controls};
-use crate::relay::identity::split_principal_id;
-
-const RELAY_PRINCIPAL_NAMESPACE: &str = "RELAY";
 
 const RELAY_FILE: &str = "relay.toml";
 const DEFAULT_CHOICES_PENDING_MAX: usize = 256;
@@ -58,11 +59,6 @@ struct RawRelayFile {
     require_session_credentials: Option<bool>,
     #[serde(default)]
     choices: Option<RawRelayChoicesSection>,
-    /// This relay's own outbound identity, presented as `<relay-id>@RELAY` when
-    /// dialing a configured peer. Required once any `[[peers]]` entry exists;
-    /// validated as a bare relay id (see [`validate_bare_relay_id`]).
-    #[serde(default)]
-    relay_id: Option<String>,
     #[serde(default)]
     peers: Vec<RawPeerEntry>,
 }
@@ -74,17 +70,25 @@ struct RawRelayChoicesSection {
     pending_max: Option<usize>,
 }
 
-/// Raw `[[peers]]` entry: an active outbound peer relay endpoint. `id` is the
-/// peer's canonical `<id>@RELAY` principal and `address` its listening endpoint —
-/// in this slice an absolute Unix domain socket path (TCP is future). The table
-/// is outbound-only and carries no `scope`: inbound cross-relay authorization is
-/// the scope set by `new peer <id>@RELAY --scope` and read by the ingress filter,
-/// so `deny_unknown_fields` rejects a stray `scope` key here.
+/// Raw `[[peers]]` entry: an active outbound peer relay endpoint.
+///
+/// `alias` is this relay's *local* name for the peer — the bang-path `!<alias>`
+/// routing selector and the peer credential filename stem, internal to us and
+/// never seen by the peer. `connect-as` is the identity the peer issued us via its
+/// `new peer <connect-as>@RELAY` — presented in Hello when we dial it, since each
+/// peer determines the identity it expects from us (two peers can issue different
+/// or even colliding identities to this relay). `address` is the peer's listening
+/// endpoint — in this slice an absolute Unix domain socket path (TCP is future).
+/// The table is outbound-only and carries no `scope`: inbound cross-relay
+/// authorization is the scope this relay sets via `new peer <id>@RELAY --scope`
+/// and reads through the ingress filter, so `deny_unknown_fields` rejects a stray
+/// `scope` key here.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 struct RawPeerEntry {
-    id: String,
+    alias: String,
     address: String,
+    connect_as: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -302,34 +306,22 @@ pub struct RelayRuntimeConfiguration {
     pub watch_bundles: bool,
     pub require_session_credentials: bool,
     pub choices_pending_max: usize,
-    /// This relay's own outbound identity (`<relay-id>@RELAY`), present iff
-    /// `relay-id` is configured. Required whenever `peers` is non-empty.
-    pub relay_id: Option<String>,
     pub peers: Vec<PeerConfiguration>,
 }
 
-/// A validated `[[peers]]` entry naming an outbound peer relay. `id` is the
-/// peer's canonical `<id>@RELAY` principal and `address` an absolute Unix domain
-/// socket path. The bare id portion (see [`PeerConfiguration::alias`]) is both
-/// the bang-path `!<relay_id>` selector and the peer credential filename stem.
+/// A validated `[[peers]]` entry naming an outbound peer relay.
+///
+/// `alias` is this relay's local name for the peer: the bang-path `!<alias>`
+/// routing selector and the `<peer_alias>` credential filename stem. `connect_as`
+/// is the identity the peer issued us, presented as `<connect_as>@RELAY` in Hello
+/// when we dial it. `address` is an absolute Unix domain socket path. The
+/// presented identity is per-peer because the *receiver* determines it (via its
+/// `new peer`), so no single relay-wide identity exists.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PeerConfiguration {
-    pub id: String,
+    pub alias: String,
     pub address: String,
-}
-
-impl PeerConfiguration {
-    /// Returns the bare id portion of the peer's canonical `<id>@RELAY`
-    /// principal — the value matched against the bang-path `!<relay_id>` suffix
-    /// and used as the `<peer_alias>` in the credential path. Falls back to the
-    /// whole id if it is somehow unqualified; load-time validation guarantees the
-    /// `@RELAY` form, so this is defensive.
-    #[must_use]
-    pub fn alias(&self) -> &str {
-        split_principal_id(self.id.as_str())
-            .map(|(local, _)| local)
-            .unwrap_or(self.id.as_str())
-    }
+    pub connect_as: String,
 }
 
 /// File-derived relay settings before override resolution. `watch_bundles` and
@@ -340,7 +332,6 @@ struct RelayFileConfiguration {
     watch_bundles: Option<bool>,
     require_session_credentials: Option<bool>,
     choices_pending_max: usize,
-    relay_id: Option<String>,
     peers: Vec<PeerConfiguration>,
 }
 
@@ -374,7 +365,6 @@ pub fn load_relay_runtime_configuration(
             DEFAULT_REQUIRE_SESSION_CREDENTIALS,
         ),
         choices_pending_max: file.choices_pending_max,
-        relay_id: file.relay_id,
         peers: file.peers,
     })
 }
@@ -440,7 +430,6 @@ fn load_relay_file_configuration(
             watch_bundles: None,
             require_session_credentials: None,
             choices_pending_max: DEFAULT_CHOICES_PENDING_MAX,
-            relay_id: None,
             peers: Vec::new(),
         });
     }
@@ -482,8 +471,37 @@ fn load_relay_file_configuration(
         ));
     }
     let mut peers = Vec::with_capacity(parsed.peers.len());
+    // The alias is this relay's local name for the peer: it is the bang-path
+    // selector (`!<alias>`) and the credential filename stem
+    // (`<state-root>/peers/<alias>.psk`), so it MUST be unique. Two entries
+    // sharing an alias would silently collapse to one routable endpoint (the
+    // connection manager keys on alias), with the surviving one decided by
+    // insertion order rather than operator intent — so reject the collision
+    // fail-fast at load. Duplicate `connect-as` stays allowed: the presented
+    // identity is receiver-issued and two peers may legitimately issue this
+    // relay the same one.
+    let mut seen_aliases: HashSet<String> = HashSet::with_capacity(peers.capacity());
     for (index, peer) in parsed.peers.into_iter().enumerate() {
-        let alias = validate_peer_id(peer.id.as_str(), index, path.as_path())?;
+        let alias =
+            validate_peer_id_token(peer.alias.as_str(), "peers.alias", index, path.as_path())?;
+        if !seen_aliases.insert(alias.clone()) {
+            return Err(relay_error(
+                "validation_invalid_arguments",
+                "relay peer alias must be unique across all [[peers]] entries",
+                Some(json!({
+                    "path": path.display().to_string(),
+                    "field": "peers.alias",
+                    "peer_index": index,
+                    "value": alias,
+                })),
+            ));
+        }
+        let connect_as = validate_peer_id_token(
+            peer.connect_as.as_str(),
+            "peers.connect-as",
+            index,
+            path.as_path(),
+        )?;
         let address = peer.address.trim();
         if address.is_empty() {
             return Err(relay_error(
@@ -513,98 +531,52 @@ fn load_relay_file_configuration(
             ));
         }
         peers.push(PeerConfiguration {
-            id: format!("{alias}@{RELAY_PRINCIPAL_NAMESPACE}"),
+            alias,
             address: address.to_string(),
+            connect_as,
         });
-    }
-    // `relay-id` names this relay's outbound identity. It is required once any
-    // peer is configured (the relay could not present an identity to dial one
-    // otherwise) and grammar-checked whenever present so a malformed value fails
-    // fast rather than surfacing only on the first outbound delivery.
-    let relay_id = match parsed.relay_id {
-        Some(raw) => Some(validate_bare_relay_id(
-            raw.as_str(),
-            "relay-id",
-            path.as_path(),
-        )?),
-        None => None,
-    };
-    if relay_id.is_none() && !peers.is_empty() {
-        return Err(relay_error(
-            "validation_invalid_arguments",
-            "relay-id is required when [[peers]] are configured",
-            Some(json!({
-                "path": path.display().to_string(),
-                "field": "relay-id",
-            })),
-        ));
     }
     Ok(RelayFileConfiguration {
         watch_bundles: parsed.watch_bundles,
         require_session_credentials: parsed.require_session_credentials,
         choices_pending_max,
-        relay_id,
         peers,
     })
 }
 
-/// Validates a peer entry's `id` as a canonical `<id>@RELAY` principal and
-/// returns its bare id portion. The namespace partition must be `RELAY` and the
-/// bare local part must satisfy the relay-id grammar.
-fn validate_peer_id(raw: &str, peer_index: usize, path: &Path) -> Result<String, RelayError> {
-    let trimmed = raw.trim();
-    let Some((local, namespace)) = split_principal_id(trimmed) else {
-        return Err(relay_error(
-            "validation_invalid_arguments",
-            "relay peer id must be a canonical <id>@RELAY principal",
-            Some(json!({
-                "path": path.display().to_string(),
-                "field": "peers.id",
-                "peer_index": peer_index,
-                "value": raw,
-            })),
-        ));
-    };
-    if namespace != RELAY_PRINCIPAL_NAMESPACE {
-        return Err(relay_error(
-            "validation_invalid_arguments",
-            "relay peer id must be in the RELAY namespace (<id>@RELAY)",
-            Some(json!({
-                "path": path.display().to_string(),
-                "field": "peers.id",
-                "peer_index": peer_index,
-                "value": raw,
-            })),
-        ));
-    }
-    validate_bare_relay_id(local, "peers.id", path)
-}
-
-/// Validates a bare relay id — the local part of a `<id>@RELAY` principal and the
-/// value of the top-level `relay-id` key. The grammar is deliberately strict: the
-/// id becomes a peer credential filename stem (`<id>.psk`) and is matched against
-/// the bang-path `!<relay_id>` suffix, so it must be non-empty after trimming and
-/// free of the `@` namespace qualifier, the `!` bang-path separator, and any path
-/// separator. Returns the trimmed id.
-fn validate_bare_relay_id(raw: &str, field: &str, path: &Path) -> Result<String, RelayError> {
+/// Validates a peer id token — a bang-path `!<alias>` selector or a `connect-as`
+/// identity local part. The grammar is deliberately strict: the `alias` becomes a
+/// credential filename stem (`<alias>.psk`) and the bang-path selector, and the
+/// `connect-as` is qualified to `<connect-as>@RELAY` when presented, so both must
+/// be non-empty after trimming and free of the `@` namespace qualifier, the `!`
+/// bang-path separator, and any path separator. `field` names the offending key
+/// for the error. Returns the trimmed token.
+fn validate_peer_id_token(
+    raw: &str,
+    field: &str,
+    peer_index: usize,
+    path: &Path,
+) -> Result<String, RelayError> {
     let value = raw.trim();
     if value.is_empty() {
         return Err(relay_error(
             "validation_invalid_arguments",
-            "relay id must be non-empty",
+            "relay peer id token must be non-empty",
             Some(json!({
                 "path": path.display().to_string(),
                 "field": field,
+                "peer_index": peer_index,
             })),
         ));
     }
     if value.contains('@') || value.contains('!') || value.contains('/') {
         return Err(relay_error(
             "validation_invalid_arguments",
-            "relay id must not contain '@', '!', or a path separator",
+            "relay peer id token must not contain '@', '!', or a path separator",
             Some(json!({
                 "path": path.display().to_string(),
                 "field": field,
+                "peer_index": peer_index,
                 "value": value,
             })),
         ));

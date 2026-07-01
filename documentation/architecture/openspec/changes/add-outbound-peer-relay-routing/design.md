@@ -21,7 +21,7 @@ one relies on:
   the existing check that gates access against it (used today for trusted-host
   introspection). The ingress filter reuses both.
 - **Peer credential path** (D11): the outbound PSK Relay B uses to reach Relay A
-  lives at `<state-root>/peers/<peer_alias>.psk`, mode 0600, base64 (no-pad)
+  lives at `<state-root>/peers/<alias>.psk`, mode 0600, base64 (no-pad)
   32-byte CSPRNG output. The store keeps only hashes; TOML never carries secrets.
 
 The trust-boundary framing driving the ingress filter is `ideas/relay/2` and
@@ -78,28 +78,33 @@ origin enforced anything and must apply its own ingress decision, deny-by-defaul
 
 ## Decisions
 
-### D1 — `[[peers]]` is outbound-only: `id` + `address`
+### D1 — `[[peers]]` is outbound-only: `alias` + `address` + `connect-as`
 
 A peer entry is:
 
 ```toml
-relay-id = "this-relay"           # this relay's own <relay-id>@RELAY identity
-
 [[peers]]
-id = "peer-relay@RELAY"           # canonical peer relay principal id
+alias = "peer-relay"              # this relay's LOCAL name for the peer
 address = "/run/agentmux/peer-relay.sock"   # same-host Unix socket path
 # address = "10.0.0.7:7420"       # future shape (needs a TCP listener; not yet)
+connect-as = "west"               # identity this relay presents: <connect-as>@RELAY
 ```
 
-`id` is the peer's canonical `<id>@RELAY` principal; the bare `<id>` portion is
-the `<relay_id>` used in bang-path targets and the `<peer_alias>` for the
-credential file. `address` is required and non-empty; in this slice it is a Unix
-domain socket path (same-host), because the relay serves only a `UnixStream`
-today — a `host:port` TCP endpoint is the documented future shape. To keep the
-same-host-only contract honest, config validation requires an **absolute** socket
-path and rejects non-absolute / `host:port` forms up front (fail-fast), rather
-than letting a TCP-looking value slip through to an unreachable-socket delivery.
-Unknown fields still fail startup/pre-flight (`deny_unknown_fields`).
+`alias` is this relay's **local** name for the peer: it is the `<relay_id>` used
+in bang-path targets (`<session>@<bundle>!<alias>`) and the `<alias>` stem of the
+credential file (`<state-root>/peers/<alias>.psk`). It is internal to this relay
+and never presented to the peer, and — because it is both the routable selector
+and the credential path — it MUST be unique across `[[peers]]` entries; a
+duplicate is rejected fail-fast at load. `connect-as` is the identity this relay
+presents to that peer (composed as `<connect-as>@RELAY` in the outbound Hello),
+determined by the peer; see D3. `address` is required and non-empty; in this
+slice it is a Unix domain socket path (same-host), because the relay serves only a
+`UnixStream` today — a `host:port` TCP endpoint is the documented future shape. To
+keep the same-host-only contract honest, config validation requires an
+**absolute** socket path and rejects non-absolute / `host:port` forms up front
+(fail-fast), rather than letting a TCP-looking value slip through to an
+unreachable-socket delivery. Unknown fields still fail startup/pre-flight
+(`deny_unknown_fields`).
 
 `[[peers]]` carries **no `scope`** (resolved with the operator, was Q1). Scope is
 an *inbound* concept and `[[peers]]` is the *outbound* routing table; putting
@@ -133,29 +138,34 @@ delivery to that peer (not eagerly at startup — an unreachable peer must not
 block boot, matching D9's placeholder posture that a peer entry alone opens
 nothing). The manager:
 
-- reads `<state-root>/peers/<peer_alias>.psk` (fail the *delivery*, not startup,
+- reads `<state-root>/peers/<alias>.psk` (fail the *delivery*, not startup,
   if absent/unreadable),
-- dials `address` (a same-host Unix socket path), sends Hello as this relay's own
-  configured `<relay-id>@RELAY` principal — an identity the peer must have
-  registered via `new peer <relay-id>@RELAY`,
+- dials `address` (a same-host Unix socket path), sends Hello as the peer entry's
+  configured `<connect-as>@RELAY` principal — an identity the peer must have
+  registered via `new peer <connect-as>@RELAY`,
 - reconnects with jittered exponential backoff (reusing the client-side backoff
   shape from `todos/relay/67`),
 - surfaces a typed `peer-unavailable` outcome while down rather than blocking.
 
-This relay's *own* outbound identity (resolved, was Q2): a top-level `relay-id`
-string in `relay.toml` names this relay's bare id; the connector presents
-`<relay-id>@RELAY` in the outbound Hello. `relay-id` is required and non-empty
-when any `[[peers]]` entry is configured (fail startup/pre-flight otherwise), and
-unused when no peers are configured. It is validated as a **bare** relay id (no
-`@` suffix — the relay composes `@RELAY` itself, so `foo@RELAY` is rejected rather
-than becoming `foo@RELAY@RELAY` — no `!`, no path separators), reusing the
-existing bare-local-part grammar. The PSK it presents to a given peer is the
-one that peer issued to this relay, read from `<state-root>/peers/<peer_alias>.psk`
-(D11) — so the identity is config-driven and the secret stays out of TOML.
-`relay-id` resolves from `relay.toml` only (no CLI or environment override), like
-`[choices].pending-max` and `[[peers]]`; the delta modifies the existing Relay
-Configuration File and Relay Configuration Precedence requirements accordingly so
-`relay-id` is a known key rather than an unknown-field rejection.
+The identity this relay presents is configured **per peer**, not relay-wide
+(resolved, was Q2): the *receiving* relay determines the identity it expects (via
+its own `new peer`), so two peers may issue this relay different — or colliding —
+identities and no single relay-wide identity exists. Each `[[peers]]` entry
+therefore carries a `connect-as` string naming the bare relay id that peer issued
+this relay; the connector composes `<connect-as>@RELAY` and presents it in the
+outbound Hello to that peer. `connect-as` is required and non-empty per peer, and
+validated as a **bare** relay id (no `@` suffix — the relay composes `@RELAY`
+itself, so `foo@RELAY` is rejected rather than becoming `foo@RELAY@RELAY` — no
+`!`, no path separators), reusing the existing bare-local-part grammar. The PSK it
+presents to a given peer is the one that peer issued to this relay, read from
+`<state-root>/peers/<alias>.psk` (D11, keyed on the local `alias` since
+`connect-as` need not be unique) — so the identity is config-driven and the secret
+stays out of TOML. A relay that only *receives* from a peer needs no `[[peers]]`
+entry for it and presents no identity to it. `[[peers]]` resolves from
+`relay.toml` only (no CLI or environment override), like `[choices].pending-max`;
+the delta modifies the existing Relay Configuration File and Relay Configuration
+Precedence requirements accordingly so the expanded peer fields are known keys
+rather than unknown-field rejections.
 
 ### D4 — Delivery-outcome propagation
 
@@ -220,10 +230,13 @@ left for implementation:
   one table. A declarative infra-as-code inbound-scope source is a deferred
   decision (`todos/relay/101`). See D1; reflected in the `runtime-bootstrap` and
   `relay-routing-layer` deltas.
-- **Q2 — Outbound self-identity → RESOLVED.** A top-level `relay-id` in
-  `relay.toml` (required when `[[peers]]` is non-empty) names the
-  `<relay-id>@RELAY` principal presented outbound. See D3; reflected in the
-  `runtime-bootstrap` (new Relay Outbound Self Identity requirement) and
+- **Q2 — Outbound self-identity → RESOLVED (operator review of the reshape).**
+  The presented identity is receiver-issued, so it is configured **per peer**:
+  each `[[peers]]` entry carries a `connect-as` bare relay id and the connector
+  presents `<connect-as>@RELAY` to that peer. There is no relay-wide identity — an
+  earlier draft's top-level `relay-id` was a modeling error, since two peers may
+  issue this relay different or colliding identities. See D3; reflected in the
+  `runtime-bootstrap` (Relay Cross-Relay Presented Identity requirement) and
   `cross-relay-routing` deltas.
 - **Q3 — New capability vs `session-relay` → RESOLVED (keep separate).** The
   `cross-relay-routing` capability stays separate rather than folding into the
