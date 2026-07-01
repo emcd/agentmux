@@ -19,6 +19,15 @@ in any way.
 ## Requirements
 
 - `tmux` on `PATH`
+- `Zig 0.15.x` on `PATH` (only required for the `pty` Cargo feature;
+  default `cargo build` does not invoke Zig)
+- For libghostty-vt's vendored ghostty clone (only when building
+  with `--features pty` without a local override): outbound network
+  access to `github.com/ghostty-org/ghostty.git`. To bypass the network
+  clone, set `GHOSTTY_SOURCE_DIR` to a pre-checked-out ghostty source
+  tree that contains `build.zig`; to bypass Zig's package fetch, set
+  `GHOSTTY_ZIG_SYSTEM_DIR` to a directory containing the Zig package
+  cache.
 
 ## Install
 
@@ -173,6 +182,10 @@ Delivery behavior:
 - Tmux delivery bounds are configured per-coder under
   `[coders.<id>.tmux]` (`prime-timeout-ms`, `wedge-detection`); v1 has no
   per-call operator override.
+- Pty sessions use the same look bounds as Tmux (the relay truncates
+  to `mode.lines` rows). Pty delivery bounds are configured per-coder
+  under `[coders.<id>.pty]` (`prime-timeout-ms`, `wedge-detection`,
+  `cols`, `rows`); v1 has no per-call operator override.
 - Terminal completion is correlated out-of-band by `message_id`.
 
 ## Multi-Worktree Workflow
@@ -264,6 +277,24 @@ id = "opencode"
 [coders.acp]
 channel = "stdio"
 command = "opencode acp"
+
+# Pty transport (libghostty-vt-backed delivery with portable-pty child
+# process management). Opt-in per-coder; the pty Cargo feature must be
+# enabled at build time (`cargo build --features pty`). Each coder
+# entry declares exactly one of `tmux`, `acp`, or `pty`; the validator
+# rejects both or neither.
+[[coders]]
+id = "codex-pty"
+
+[coders.pty]
+initial-command = "codex"
+resume-command = "codex resume {coder-session-id}"
+prompt-regex = "(?m)^READY_MARKER"
+prompt-inspect-lines = 3
+cols = 120
+rows = 40
+prime-timeout-ms = 30000
+wedge-detection = true
 ```
 
 ### Example `bundles/myproject.toml`

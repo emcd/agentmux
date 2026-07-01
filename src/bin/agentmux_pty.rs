@@ -1,26 +1,29 @@
 //! `agentmux-pty` — operator smoke-test entry point for the libghostty-vt binding.
 //!
 //! This binary exercises the libghostty-vt Rust binding surface used by the
-//! Pty transport. It exists so operators can smoke-test Pty sessions end-to-end
-//! before configuring a bundle: spawn a
-//! child under a portable-pty PTY, pump the child's terminal output through
-//! a libghostty-vt `Terminal` on the main thread, render via ratatui, and
-//! round-trip keystrokes back through the PTY via `key::Encoder`. Pattern
-//! mirrors `agentmux-acp`.
+//! Pty transport. It exists so operators can smoke-test Pty sessions
+//! end-to-end before configuring a bundle: spawn a child under a
+//! portable-pty PTY, pump the child's terminal output through a
+//! libghostty-vt `Terminal` on the main thread, render via ratatui, and
+//! round-trip keystrokes back through the PTY via `key::Encoder`.
+//! Pattern mirrors `agentmux-acp`.
 //!
-//! Status: kept as an operator tool. NOT wired into the relay or the
-//! `Transport` trait. NOT registered as a `TransportImpl` variant. Gated
-//! behind the default-off `pty` Cargo feature so default builds do not
-//! pull in libghostty-vt / portable-pty and do not invoke Zig. To run:
+//! Status: operator smoke-test entry point. The relay does not use this
+//! binary; the relay constructs its own `PtyTransport` per target via
+//! `TransportImpl::pty`. Gated behind the default-off `pty` Cargo
+//! feature so default builds do not pull in libghostty-vt /
+//! portable-pty and do not invoke Zig. The bin target name uses a
+//! hyphen; the Cargo binary is named `agentmux-pty`:
 //!
 //! ```bash
 //! cargo build --features pty --bin agentmux-pty
 //! cargo run --features pty --bin agentmux-pty -- /bin/bash
 //! ```
 //!
-//! Thread-safety note: libghostty-vt types are `!Send + !Sync`. The terminal
-//! must live on a single thread — here, the main thread. The PTY reader runs
-//! on its own thread and forwards raw bytes to the main thread via a channel.
+//! Thread-safety note: libghostty-vt types are `!Send + !Sync`. The
+//! terminal must live on a single thread — here, the main thread. The
+//! PTY reader runs on its own thread and forwards raw bytes to the main
+//! thread via a channel.
 
 #![forbid(unsafe_code)]
 
