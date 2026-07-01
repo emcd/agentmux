@@ -59,6 +59,13 @@ pub fn append_replay_entries_for_test(buffer: &mut Vec<ReplayEntry>, entries: Ve
     client::append_replay_entries(buffer, entries);
 }
 
+pub fn coalesce_replay_entries_on_append_for_test(
+    buffer: &mut Vec<ReplayEntry>,
+    entries: Vec<ReplayEntry>,
+) {
+    client::coalesce_replay_entries_on_append(buffer, entries);
+}
+
 #[derive(Debug, Clone)]
 pub struct PermissionRequest {
     pub request_id: u64,
