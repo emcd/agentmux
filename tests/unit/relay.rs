@@ -12,6 +12,8 @@ mod preflight;
 mod principal_store;
 #[path = "relay/raww.rs"]
 mod raww;
+#[path = "relay/relay_configuration.rs"]
+mod relay_configuration;
 #[path = "relay/request_validation.rs"]
 mod request_validation;
 

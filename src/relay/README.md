@@ -133,7 +133,9 @@ exported from `src/relay/mod.rs`.
     modified files are torn down and reloaded (evicting sessions with
     `runtime_bundle_reloaded`). Content fingerprints distinguish a real edit from
     filesystem noise. Runs on a dedicated thread (filesystem/tmux work is
-    blocking); the host disables it with `--no-watch`. A bundle whose entry has
+    blocking); the host disables it when resolved `watch-bundles` is `false`
+    (`relay.toml` key, `--no-watch` CLI override, or the
+    `AGENTMUX_RELAY_WATCH_BUNDLES` environment override). A bundle whose entry has
     `HostingIntent::Hold` (no autostart, or held by a `down`) is **not** torn
     down or restarted by an edit: the new content fingerprint is absorbed and a
     `relay.bundle.reload_suppressed_held` inscription is emitted, so the
@@ -206,14 +208,19 @@ exported from `src/relay/mod.rs`.
 - PSK files (`<state-root>/bundles/<b>/sessions/<s>/identity.psk` for sessions,
   `<state-root>/peers/<peer_alias>.psk` for peers) and the principal store
   itself are written with mode 0600 (owner read/write only).
-- **Bootstrap lockout warning**: `require_session_credentials` is a relay-level
+- **Bootstrap lockout warning**: `require-session-credentials` is a relay-level
   setting (a single socket serves every bundle, so per-bundle enforcement is not
-  a real boundary), wired by the `--require-credentials` flag on
-  `agentmux host relay` (default disabled). When enabled, sessions without a
-  provisioned PSK file are rejected at Hello. Operators must register at least
-  one principal via `agentmux new peer <session_id>@<bundle>` (or run with the
-  default) before flipping enforcement on, otherwise no client can connect to
-  drive recovery.
+  a real boundary), resolved by precedence — `--require-credentials` CLI override
+  > `AGENTMUX_RELAY_REQUIRE_SESSION_CREDENTIALS` environment override >
+  `relay.toml` > default (disabled). When enabled, sessions without a provisioned
+  PSK file are rejected at Hello. Operators must register at least one principal
+  via `agentmux new peer <session_id>@<bundle>` (or run with the default) before
+  flipping enforcement on, otherwise no client can connect to drive recovery.
+- **Peer placeholders**: `relay.toml` `[[peers]]` entries (required non-empty
+  `address`) are validated at startup as schema-only placeholders for future
+  outbound peer routing; the relay opens no outbound connection and advertises no
+  peer target for them. Raw peer PSKs stay owner-only at
+  `<state-root>/peers/<peer_alias>.psk`; the principal store holds only hashes.
 - **Expiry pruning**: records with an RFC 3339 `expires_at` in the past (and,
   fail-closed, any with an unparseable `expires_at`) are pruned. The store is
   pruned-and-persisted once at relay startup and pruned before each

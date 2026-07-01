@@ -29,10 +29,15 @@ pub(super) struct RuntimeArguments {
 #[derive(Clone, Debug)]
 pub(super) struct RelayHostArguments {
     pub(super) no_autostart: bool,
-    pub(super) require_session_credentials: bool,
-    /// Whether the relay watches the bundles configuration directory for runtime
-    /// add/remove/modify. Enabled by default; disabled by `--no-watch`.
-    pub(super) watch_bundles: bool,
+    /// CLI override for `require-session-credentials`. `Some(true)` from
+    /// `--require-credentials`; `None` when the flag is absent, leaving the value
+    /// to the environment override, `relay.toml`, then the default. Not itself a
+    /// default — precedence resolution lives in the relay configuration loader.
+    pub(super) require_session_credentials: Option<bool>,
+    /// CLI override for `watch-bundles`. `Some(false)` from `--no-watch`; `None`
+    /// when the flag is absent, deferring to environment, `relay.toml`, then the
+    /// default-on behavior.
+    pub(super) watch_bundles: Option<bool>,
     pub(super) runtime: RuntimeArguments,
 }
 

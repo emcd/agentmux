@@ -12,7 +12,7 @@ use std::{env, fs};
 
 use crate::{
     configuration::bundles_configuration_directory,
-    relay::{RelayError, preflight_bundle_configuration},
+    relay::{RelayError, load_relay_runtime_configuration, preflight_bundle_configuration},
     runtime::{association::WorkspaceContext, error::RuntimeError},
 };
 
@@ -34,6 +34,13 @@ pub(super) fn run_agentmux_check(arguments: &[String]) -> Result<(), RuntimeErro
         .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
     let workspace = WorkspaceContext::discover(&current_directory)?;
     let roots = shared::resolve_roots(&parsed.runtime, &workspace, None)?;
+
+    // Validate relay-level configuration before bundle discovery, so a malformed,
+    // unknown-field, wrong-type, or invalid-peer relay.toml is reported even when
+    // the config root has no bundles — matching relay startup, which rejects the
+    // same artifact up front. The shared loader keeps check and startup in step.
+    load_relay_runtime_configuration(&roots.configuration_root, None, None)
+        .map_err(preflight_error_to_runtime)?;
 
     let bundle_names = match parsed.bundle_id.as_deref() {
         Some(bundle_id) => vec![bundle_id.to_string()],

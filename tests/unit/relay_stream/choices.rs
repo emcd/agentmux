@@ -554,7 +554,7 @@ fn choices_pending_max_out_of_range_is_rejected() {
     std::fs::write(
         configuration_root.join("relay.toml"),
         r#"
-[relay.choices]
+[choices]
 pending-max = 10000
 "#,
     )
@@ -587,7 +587,7 @@ pending-max = 10000
     );
     assert_eq!(
         response["response"]["error"]["details"]["field"],
-        "relay.choices.pending-max"
+        "choices.pending-max"
     );
     assert_eq!(response["response"]["error"]["details"]["value"], 10000);
     assert_eq!(response["response"]["error"]["details"]["maximum"], 4096);

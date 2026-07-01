@@ -29,6 +29,32 @@ fn preflight_rejects_unknown_bundle() {
 }
 
 #[test]
+fn preflight_reports_invalid_relay_toml_peer() {
+    // `agentmux check configuration` validates the expanded `relay.toml` schema
+    // through the same load path as relay startup: an invalid `[[peers]]` entry
+    // (empty address) surfaces here, not only at startup.
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    std::fs::write(
+        config_root.join("relay.toml"),
+        "[[peers]]\naddress = \"\"\n",
+    )
+    .expect("write relay.toml");
+
+    let error = preflight_bundle_configuration(&config_root, "party")
+        .expect_err("invalid relay.toml peer should fail pre-flight");
+    assert_eq!(error.code, "validation_invalid_arguments");
+    assert_eq!(
+        error
+            .details
+            .as_ref()
+            .and_then(|details| details.get("field"))
+            .and_then(|field| field.as_str()),
+        Some("peers.address"),
+    );
+}
+
+#[test]
 fn preflight_reports_unknown_field_with_path_detail() {
     // The headline incident class: a misspelled session key (`codex-session-id`
     // for `coder`). `deny_unknown_fields` rejects it at parse time, and the
