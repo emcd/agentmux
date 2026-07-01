@@ -41,7 +41,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
@@ -51,12 +51,12 @@ use tokio::sync::{mpsc, oneshot};
 use crate::configuration::BundleMember;
 use crate::transports::{
     DeliveryEnvelope, OutcomeFuture, OutputView, SingleDeliveryOutcome, StartupContext, Transport,
-    TransportError, TransportReadiness, TransportStatus, wait_for_quiescent_three_state,
+    TransportError, TransportReadiness, TransportStatus,
 };
 
+use super::command::program_and_args;
 use super::state::{
     PtyConfigSnapshot, PtyOutputView, PtyShared, SnapshotRequest, SnapshotResponse,
-    WorkerTerminalProbe,
 };
 
 /// Default pty cols when the per-coder config does not set them.
@@ -71,8 +71,6 @@ const WORKER_IDLE_POLL: Duration = Duration::from_millis(10);
 /// Poll interval for the reader thread when the master returns
 /// `WouldBlock`.
 const READER_IDLE_POLL: Duration = Duration::from_millis(5);
-/// Default quiet window for the wedge / prime quiescence wait.
-const QUIET_WINDOW: Duration = Duration::from_millis(50);
 /// Agentmux-pty version string returned by the `on_xtversion`
 /// callback. The relay-tui can display it for the operator.
 const PTY_VERSION_STRING: &str = concat!("agentmux-pty ", env!("CARGO_PKG_VERSION"));
@@ -282,7 +280,21 @@ impl Transport for PtyTransport {
                 details: None,
             })?;
 
-        let mut cmd = CommandBuilder::new(&initial_command);
+        // Tokenize the rendered command into program + args.
+        // `CommandBuilder::new` takes a program path; passing the WHOLE
+        // rendered string (e.g. "codex resume abc-123") would try to
+        // exec a literal binary named "codex resume abc-123" and fail.
+        // Shell-style tokenization handles quoting: "sh -lc 'exec
+        // sleep 45'" tokenizes to ["sh", "-lc", "exec sleep 45"].
+        let (program, args) = program_and_args(&initial_command).map_err(|e| TransportError {
+            code: "pty_command_parse_failed".to_string(),
+            reason: format!("tokenize initial_command {initial_command:?}: {e}"),
+            details: None,
+        })?;
+        let mut cmd = CommandBuilder::new(&program);
+        for arg in &args {
+            cmd.arg(arg);
+        }
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         // Prefer the per-coder `working_directory` (from
@@ -501,37 +513,122 @@ fn run_worker(
 
     install_handlers(&mut terminal, writer.clone(), cols, rows);
 
+    // Event loop. Each iteration services snapshot_rx (user-facing
+    // look requests) and the active delivery. When idle, it drains
+    // bytes_rx (PTY output → terminal) and starts a new delivery
+    // from write_rx.
+    //
+    // Critically, the worker does NOT block inside a delivery wait
+    // — `DeliveryRun::step` and `deliver_raw` advance the state
+    // machine by ONE classify-or-wait step per call. Between steps
+    // the worker services other channels. The wait step itself
+    // drains bytes_rx + absorbs write_rx envelopes (Findings 1+3
+    // fix), so the terminal reflects the latest child output before
+    // the next observation.
+    let mut delivery: Option<super::delivery::DeliveryRun> = None;
+    let mut pending_raw: Option<super::delivery::PendingRaw> = None;
+
     while !shutdown_flag.load(Ordering::Acquire) {
-        // Priority: snapshot > write > bytes. Snapshots are
-        // user-facing and should be quick; writes advance delivery;
-        // bytes are continuous terminal output. Coalesce-during-wait
-        // semantics (§4.4): absorb all available envelopes from the
-        // write channel before quiescing; raw items are batch barriers
-        // (the group is flushed and pasted before the raw write).
-        if let Ok(request) = snapshot_rx.try_recv() {
+        // 1. Always drain snapshot_rx. User-facing look requests
+        // take priority over deliveries so the operator gets a
+        // responsive view.
+        while let Ok(request) = snapshot_rx.try_recv() {
             handle_snapshot(&mut terminal, request);
-            continue;
         }
-        if let Ok(first_cmd) = write_rx.try_recv() {
-            flush_delivery_group(
+
+        // 2. If a `Raw` is pending (from a prior delivery's batch
+        // barrier, or a fresh raw from write_rx), process it as a
+        // raw-only delivery. `deliver_raw` runs its own state-
+        // machine loop with the same wait-time byte-drain and
+        // write_rx absorption semantics.
+        if let Some(raw) = pending_raw.take() {
+            super::delivery::deliver_raw(
+                raw,
                 &mut terminal,
-                first_cmd,
+                &mut bytes_rx,
                 &mut write_rx,
                 &writer,
                 &shared,
                 &target_session,
+                &mut pending_raw,
             );
             continue;
         }
-        if let Ok(bytes) = bytes_rx.try_recv() {
-            terminal.vt_write(&bytes);
-            // Advance the change atomic AFTER vt_write so the
-            // quiescence probe sees a generation advance only when
-            // the terminal has actually consumed the bytes.
-            shared.last_change_atomic.fetch_add(1, Ordering::AcqRel);
-            continue;
+
+        // 3. If a delivery is in progress, drive the state machine
+        // one step. The step may resolve (Done), in which case we
+        // drop the run and return to idle. A batch barrier during
+        // the wait stashes the raw in `pending_raw` for the next
+        // iteration.
+        if let Some(run) = delivery.as_mut() {
+            match run.step(
+                &mut terminal,
+                &mut bytes_rx,
+                &mut write_rx,
+                &shared,
+                &target_session,
+                &mut pending_raw,
+            ) {
+                super::delivery::DeliveryStep::Continue => continue,
+                super::delivery::DeliveryStep::Done => {
+                    delivery = None;
+                    continue;
+                }
+            }
         }
-        thread::sleep(WORKER_IDLE_POLL);
+
+        // 4. Idle: drain bytes_rx so the terminal reflects the
+        // latest child output. This ensures look requests see fresh
+        // data even when no delivery is in progress.
+        while let Ok(bytes) = bytes_rx.try_recv() {
+            terminal.vt_write(&bytes);
+            shared.last_change_atomic.fetch_add(1, Ordering::AcqRel);
+        }
+
+        // 5. Try to start a new delivery from write_rx. A `Raw`
+        // with no prior group is stashed in `pending_raw` and
+        // processed by step (2) on the next iteration. An
+        // `Envelope` starts a group delivery.
+        match write_rx.try_recv() {
+            Ok(DeliveryCommand::Envelope {
+                envelope,
+                outcome_tx,
+            }) => match super::delivery::DeliveryRun::start_envelope_group(
+                envelope,
+                outcome_tx,
+                &mut write_rx,
+                &writer,
+                &shared,
+                &target_session,
+            ) {
+                Ok(run) => {
+                    delivery = Some(run);
+                    continue;
+                }
+                Err(failure) => {
+                    // Failure outcomes were already sent inside
+                    // start_envelope_group; the worker just needs
+                    // to honor the pending raw (if any).
+                    pending_raw = failure.pending_raw;
+                    continue;
+                }
+            },
+            Ok(DeliveryCommand::Raw {
+                content,
+                append_enter,
+                outcome_tx,
+            }) => {
+                pending_raw = Some(super::delivery::PendingRaw {
+                    content,
+                    append_enter,
+                    outcome_tx,
+                });
+                continue;
+            }
+            Err(_) => {
+                thread::sleep(WORKER_IDLE_POLL);
+            }
+        }
     }
 
     drain_remaining(&mut write_rx, &target_session);
@@ -657,340 +754,6 @@ fn render_snapshot(
         cursor_y,
         cursor_visible,
     }
-}
-
-#[allow(dead_code)]
-#[allow(clippy::too_many_arguments)]
-fn handle_delivery_command(
-    terminal: &mut libghostty_vt::Terminal<'static, 'static>,
-    cmd: DeliveryCommand,
-    writer: &Arc<std::sync::Mutex<Box<dyn Write + Send>>>,
-    shared: &PtyShared,
-    target_session: &str,
-    write_rx: &mut mpsc::Receiver<DeliveryCommand>,
-) {
-    // Delegates to `flush_delivery_group` which absorbs further envelopes
-    // into the same group. The single-cmd noop shims `handle_envelope` /
-    // `handle_raw` are kept for callers that might submit a lone command.
-    flush_delivery_group(terminal, cmd, write_rx, writer, shared, target_session);
-}
-
-/// Coalesce-during-wait delivery for one initial `DeliveryCommand`.
-///
-/// Absorbs additional envelopes that arrive during the quiescence wait
-/// into the current group (matching the Tmux flush_and_resolve
-/// semantics). A `Raw` command acts as a batch barrier: the
-/// accumulated envelope group is flushed first, then the raw bytes
-/// are written. The quiescence wait uses [`WorkerTerminalProbe`]
-/// so the worker observes the terminal directly (routing through the
-/// snapshot channel would self-deadlock the worker, since the same
-/// worker thread is both the receiver and the caller).
-#[allow(clippy::too_many_arguments)]
-fn flush_delivery_group(
-    terminal: &mut libghostty_vt::Terminal<'static, 'static>,
-    first_cmd: DeliveryCommand,
-    write_rx: &mut mpsc::Receiver<DeliveryCommand>,
-    writer: &Arc<std::sync::Mutex<Box<dyn Write + Send>>>,
-    shared: &PtyShared,
-    target_session: &str,
-) {
-    let mut group: Vec<(
-        Box<DeliveryEnvelope>,
-        oneshot::Sender<SingleDeliveryOutcome>,
-    )> = Vec::new();
-    match first_cmd {
-        DeliveryCommand::Envelope {
-            envelope,
-            outcome_tx,
-        } => group.push((envelope, outcome_tx)),
-        DeliveryCommand::Raw {
-            content,
-            append_enter,
-            outcome_tx,
-        } => {
-            handle_raw(
-                terminal,
-                content,
-                append_enter,
-                writer,
-                shared,
-                target_session,
-                outcome_tx,
-            );
-            return;
-        }
-    }
-    loop {
-        match write_rx.try_recv() {
-            Ok(DeliveryCommand::Envelope {
-                envelope,
-                outcome_tx,
-            }) => group.push((envelope, outcome_tx)),
-            Ok(DeliveryCommand::Raw {
-                content,
-                append_enter,
-                outcome_tx,
-            }) => {
-                if !group.is_empty() {
-                    paste_envelope_group(terminal, &mut group, writer, shared, target_session);
-                }
-                handle_raw(
-                    terminal,
-                    content,
-                    append_enter,
-                    writer,
-                    shared,
-                    target_session,
-                    outcome_tx,
-                );
-                return;
-            }
-            Err(_) => break,
-        }
-    }
-    paste_envelope_group(terminal, &mut group, writer, shared, target_session);
-}
-
-fn envelope_outcome_from_wait_result(
-    wait_result: Result<String, crate::transports::DeliveryWaitError>,
-    target_session: &str,
-) -> SingleDeliveryOutcome {
-    match wait_result {
-        Ok(_pane_target) => SingleDeliveryOutcome {
-            target_session: target_session.to_string(),
-            message_id: String::new(),
-            outcome: crate::transports::SendOutcome::Delivered,
-            reason_code: None,
-            reason: None,
-            details: None,
-        },
-        Err(crate::transports::DeliveryWaitError::Timeout {
-            timeout,
-            readiness_mismatch,
-            mismatch_reason,
-        }) => SingleDeliveryOutcome {
-            target_session: target_session.to_string(),
-            message_id: String::new(),
-            outcome: crate::transports::SendOutcome::Timeout,
-            reason_code: Some("delivery_prime_timeout".to_string()),
-            reason: Some(format!(
-                "prime wait timed out after {}ms (readiness_mismatch={}, reason={:?})",
-                timeout.as_millis(),
-                readiness_mismatch,
-                mismatch_reason
-            )),
-            details: None,
-        },
-        Err(crate::transports::DeliveryWaitError::Wedged { reason }) => SingleDeliveryOutcome {
-            target_session: target_session.to_string(),
-            message_id: String::new(),
-            outcome: crate::transports::SendOutcome::Failed,
-            reason_code: Some("pane_wedged".to_string()),
-            reason: Some(format!("pty pane wedged: {reason}")),
-            details: None,
-        },
-        Err(crate::transports::DeliveryWaitError::Failed { reason }) => SingleDeliveryOutcome {
-            target_session: target_session.to_string(),
-            message_id: String::new(),
-            outcome: crate::transports::SendOutcome::Failed,
-            reason_code: Some("pty_probe_failed".to_string()),
-            reason: Some(reason),
-            details: None,
-        },
-        Err(crate::transports::DeliveryWaitError::Shutdown) => SingleDeliveryOutcome {
-            target_session: target_session.to_string(),
-            message_id: String::new(),
-            outcome: crate::transports::SendOutcome::DroppedOnShutdown,
-            reason_code: Some("dropped_on_shutdown".to_string()),
-            reason: Some("delivery dropped due to relay shutdown".to_string()),
-            details: None,
-        },
-    }
-}
-
-fn paste_envelope_group(
-    terminal: &mut libghostty_vt::Terminal<'static, 'static>,
-    group: &mut Vec<(
-        Box<DeliveryEnvelope>,
-        oneshot::Sender<SingleDeliveryOutcome>,
-    )>,
-    writer: &Arc<std::sync::Mutex<Box<dyn Write + Send>>>,
-    shared: &PtyShared,
-    target_session: &str,
-) {
-    if group.is_empty() {
-        return;
-    }
-    for (envelope, _) in group.iter() {
-        let text = envelope.message.render_pane_envelope(&envelope.message_id);
-        if let Err(e) = (|| -> std::io::Result<()> {
-            let mut g = writer
-                .lock()
-                .map_err(|_| std::io::Error::other("pty writer mutex poisoned"))?;
-            g.write_all(text.as_bytes())?;
-            g.write_all(b"\n")?;
-            Ok(())
-        })() {
-            let reason = format!("pty master write: {e}");
-            for (env, sender) in group.drain(..) {
-                let _ = sender.send(SingleDeliveryOutcome {
-                    target_session: target_session.to_string(),
-                    message_id: env.message_id,
-                    outcome: crate::transports::SendOutcome::Failed,
-                    reason_code: Some("pty_write_failed".to_string()),
-                    reason: Some(reason.clone()),
-                    details: None,
-                });
-            }
-            return;
-        }
-    }
-    let probe = WorkerTerminalProbe::new(
-        terminal,
-        shared.config.clone(),
-        shared.last_change_atomic.clone(),
-    );
-    let prime_started_at = Instant::now();
-    let prime_timeout_ms = shared.config.prime_timeout_ms;
-    let prime_deadline = prime_timeout_ms.map(|ms| prime_started_at + Duration::from_millis(ms));
-    let wedge_detection = shared.config.wedge_detection;
-    let wait_result = wait_for_quiescent_three_state(
-        &mut { probe },
-        target_session,
-        QUIET_WINDOW,
-        prime_deadline,
-        prime_started_at,
-        prime_timeout_ms,
-        wedge_detection,
-    );
-    let base_outcome = envelope_outcome_from_wait_result(wait_result, target_session);
-    for (env, sender) in group.drain(..) {
-        let mut env_outcome = base_outcome.clone();
-        env_outcome.message_id = env.message_id;
-        let _ = sender.send(env_outcome);
-    }
-}
-
-#[allow(dead_code)]
-#[allow(clippy::too_many_arguments)]
-fn handle_envelope(
-    terminal: &mut libghostty_vt::Terminal<'static, 'static>,
-    envelope: Box<DeliveryEnvelope>,
-    writer: &Arc<std::sync::Mutex<Box<dyn Write + Send>>>,
-    shared: &PtyShared,
-    target_session: &str,
-    outcome_tx: oneshot::Sender<SingleDeliveryOutcome>,
-) {
-    // Single-envelope delivery shim. The production path coalesces
-    // envelopes via `flush_delivery_group`, which calls
-    // `paste_envelope_group` directly. This shim is kept for callers
-    // that might submit a single-envelope command and is also the test
-    // seam for the unit tests.
-    let mut group = vec![(envelope, outcome_tx)];
-    paste_envelope_group(terminal, &mut group, writer, shared, target_session);
-}
-
-#[allow(clippy::too_many_arguments)]
-fn handle_raw(
-    terminal: &mut libghostty_vt::Terminal<'static, 'static>,
-    content: String,
-    append_enter: bool,
-    writer: &Arc<std::sync::Mutex<Box<dyn Write + Send>>>,
-    shared: &PtyShared,
-    target_session: &str,
-    outcome_tx: oneshot::Sender<SingleDeliveryOutcome>,
-) {
-    let write_result = (|| -> std::io::Result<()> {
-        let mut g = writer
-            .lock()
-            .map_err(|_| std::io::Error::other("pty writer mutex poisoned"))?;
-        g.write_all(content.as_bytes())?;
-        if append_enter {
-            g.write_all(b"\n")?;
-        }
-        Ok(())
-    })();
-    if let Err(e) = write_result {
-        let _ = outcome_tx.send(SingleDeliveryOutcome {
-            target_session: target_session.to_string(),
-            message_id: String::new(),
-            outcome: crate::transports::SendOutcome::Failed,
-            reason_code: Some("pty_write_failed".to_string()),
-            reason: Some(format!("pty master write: {e}")),
-            details: None,
-        });
-        return;
-    }
-    let probe = WorkerTerminalProbe::new(
-        terminal,
-        shared.config.clone(),
-        shared.last_change_atomic.clone(),
-    );
-    let prime_started_at = Instant::now();
-    let prime_timeout_ms = shared.config.prime_timeout_ms;
-    let prime_deadline = prime_timeout_ms.map(|ms| prime_started_at + Duration::from_millis(ms));
-    let wedge_detection = shared.config.wedge_detection;
-    let wait_result = wait_for_quiescent_three_state(
-        &mut { probe },
-        target_session,
-        QUIET_WINDOW,
-        prime_deadline,
-        prime_started_at,
-        prime_timeout_ms,
-        wedge_detection,
-    );
-    let outcome = match wait_result {
-        Ok(_pane_target) => SingleDeliveryOutcome {
-            target_session: target_session.to_string(),
-            message_id: String::new(),
-            outcome: crate::transports::SendOutcome::Delivered,
-            reason_code: None,
-            reason: None,
-            details: None,
-        },
-        Err(crate::transports::DeliveryWaitError::Timeout {
-            timeout,
-            readiness_mismatch,
-            mismatch_reason,
-        }) => SingleDeliveryOutcome {
-            target_session: target_session.to_string(),
-            message_id: String::new(),
-            outcome: crate::transports::SendOutcome::Timeout,
-            reason_code: Some("delivery_prime_timeout".to_string()),
-            reason: Some(format!(
-                "prime wait timed out after {}ms (readiness_mismatch={}, reason={:?})",
-                timeout.as_millis(),
-                readiness_mismatch,
-                mismatch_reason
-            )),
-            details: None,
-        },
-        Err(crate::transports::DeliveryWaitError::Wedged { reason }) => SingleDeliveryOutcome {
-            target_session: target_session.to_string(),
-            message_id: String::new(),
-            outcome: crate::transports::SendOutcome::Failed,
-            reason_code: Some("pane_wedged".to_string()),
-            reason: Some(format!("pty pane wedged: {reason}")),
-            details: None,
-        },
-        Err(crate::transports::DeliveryWaitError::Failed { reason }) => SingleDeliveryOutcome {
-            target_session: target_session.to_string(),
-            message_id: String::new(),
-            outcome: crate::transports::SendOutcome::Failed,
-            reason_code: Some("pty_probe_failed".to_string()),
-            reason: Some(reason),
-            details: None,
-        },
-        Err(crate::transports::DeliveryWaitError::Shutdown) => SingleDeliveryOutcome {
-            target_session: target_session.to_string(),
-            message_id: String::new(),
-            outcome: crate::transports::SendOutcome::DroppedOnShutdown,
-            reason_code: Some("dropped_on_shutdown".to_string()),
-            reason: Some("delivery dropped due to relay shutdown".to_string()),
-            details: None,
-        },
-    };
-    let _ = outcome_tx.send(outcome);
 }
 
 fn drain_remaining(write_rx: &mut mpsc::Receiver<DeliveryCommand>, _target_session: &str) {

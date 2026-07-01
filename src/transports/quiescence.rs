@@ -267,8 +267,243 @@ fn resolve_mismatch_reason(snapshot: &WedgeObservation) -> Option<String> {
     }
 }
 
+/// Per-delivery state carried across [`quiescence_classify_step`]
+/// invocations. Tracks the consecutive-quiescent-mismatch counter and
+/// the last emitted mismatch signature for diagnostic deduplication.
+///
+/// Public so the Pty worker (which drives the state machine one step
+/// at a time between channel-service iterations) can construct a
+/// fresh state per delivery and pass `&mut` to each step.
+#[derive(Default)]
+pub struct QuiescenceState {
+    last_mismatch_signature: Option<MismatchSignature>,
+    consecutive_quiescent_mismatches: usize,
+}
+
+impl QuiescenceState {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+/// Outcome of a single [`quiescence_classify_step`] call. The state
+/// machine either resolves (Done) or needs the caller to wait for a
+/// change before the next step.
+pub enum QuiescenceAction {
+    /// The wait has resolved. The caller should propagate the result.
+    Done(Result<String, DeliveryWaitError>),
+    /// The state machine needs to wait for a change before continuing.
+    /// `deadline` is the prime-timeout deadline the wait must honor
+    /// (capped at `prime_deadline` when set; otherwise a 1-year
+    /// unbounded deadline).
+    NeedsWait(Instant),
+}
+
+/// One step of the three-state delivery classifier (running /
+/// unresponsive / wedged) over a [`WedgeProbe`].
+///
+/// Splits the body of the previous `wait_for_quiescent_three_state`
+/// loop into a steppable form: each call performs one
+/// observe-sleep-observe-classify cycle. The caller drives the
+/// `wait_for_change` step between calls. This lets the Pty worker
+/// thread service other channels (PTY byte drain, snapshot requests,
+/// write_rx absorption) BETWEEN steps, instead of blocking the worker
+/// inside a long wait.
+///
+/// See [`wait_for_quiescent_three_state`] for the timing contract
+/// (prime_deadline anchored to "delivery-task perspective", operator
+/// interaction indefinitely suppressing both classifiers, etc.).
+#[allow(clippy::too_many_arguments)]
+pub fn quiescence_classify_step<W: WedgeProbe>(
+    probe: &mut W,
+    state: &mut QuiescenceState,
+    target_session: &str,
+    quiet_window: Duration,
+    prime_deadline: Option<Instant>,
+    prime_started_at: Instant,
+    prime_timeout_ms: Option<u64>,
+    wedge_detection: bool,
+) -> QuiescenceAction {
+    if shutdown_requested() {
+        return QuiescenceAction::Done(Err(DeliveryWaitError::Shutdown));
+    }
+
+    // --- Observation 1 (before sleep) ---------------------------------
+    let snapshot_before = match probe.observe() {
+        Ok(s) => s,
+        Err(reason) => return QuiescenceAction::Done(Err(DeliveryWaitError::Failed { reason })),
+    };
+
+    thread::sleep(quiet_window);
+    if shutdown_requested() {
+        return QuiescenceAction::Done(Err(DeliveryWaitError::Shutdown));
+    }
+
+    // --- Observation 2 (after sleep) ----------------------------------
+    let snapshot_after = match probe.observe() {
+        Ok(s) => s,
+        Err(reason) => return QuiescenceAction::Done(Err(DeliveryWaitError::Failed { reason })),
+    };
+
+    // Quiescence: both observations agree across all signals
+    // (including pane target and mismatch metadata).
+    let quiescent = snapshot_before == snapshot_after;
+
+    // `running` — pane is ready.
+    if snapshot_after.is_prompt_ready && !snapshot_after.operator_interaction_active {
+        emit_delivery_diagnostic(
+            "delivery_ready",
+            &json!({
+                "target_session": target_session,
+                "pane_target": snapshot_after.pane_target,
+            }),
+        );
+        return QuiescenceAction::Done(Ok(snapshot_after.pane_target.unwrap_or_default()));
+    }
+
+    // Operator interaction indefinitely suppresses both the unresponsive
+    // (prime-timeout) and the wedged classification. Reset the wedge
+    // counter so re-entry does not accumulate ticks.
+    if snapshot_after.operator_interaction_active {
+        emit_delivery_diagnostic(
+            "delivery_operator_interaction",
+            &json!({
+                "target_session": target_session,
+                "pane_target": snapshot_after.pane_target,
+                "reason": "operator_interaction_active",
+            }),
+        );
+        state.consecutive_quiescent_mismatches = 0;
+        return QuiescenceAction::NeedsWait(prime_deadline.unwrap_or_else(unbounded_deadline));
+    }
+
+    let mismatch_reason = resolve_mismatch_reason(&snapshot_after);
+    let wedge_class = mismatch_is_wedge_class(&mismatch_reason);
+
+    // Track consecutive identical wedge-class non-prompt evaluations.
+    // The counter increments ONLY for wedge-class mismatches; empty-pane
+    // mismatches do not increment (they are Unresponsive territory,
+    // not Wedged). The counter also resets whenever the wedge-class
+    // signature changes (the pane transitioned through a different
+    // stuck state), so transient non-prompt states (e.g. boot output
+    // before the prompt appears) do not accumulate wedge ticks.
+    if !snapshot_after.is_prompt_ready && quiescent && wedge_class {
+        let signature = MismatchSignature::from_observation(&snapshot_after);
+        match state.last_mismatch_signature.as_ref() {
+            Some(previous) if previous == &signature => {
+                state.consecutive_quiescent_mismatches =
+                    state.consecutive_quiescent_mismatches.saturating_add(1);
+            }
+            _ => {
+                state.consecutive_quiescent_mismatches = 1;
+            }
+        }
+        state.last_mismatch_signature = Some(signature);
+    } else {
+        state.consecutive_quiescent_mismatches = 0;
+    }
+
+    // Wedge check: fires immediately on prime-timeout elapse when
+    // the pane is showing wedge-class content, OR after the counter
+    // threshold for any wedge-class mismatch even if the prime
+    // window has not elapsed.
+    if wedge_detection && quiescent && !snapshot_after.is_prompt_ready && wedge_class {
+        let counter_fires = state.consecutive_quiescent_mismatches >= WEDGE_CONSECUTIVE_TICKS;
+        let prime_elapsed = prime_deadline.is_some_and(|deadline| Instant::now() >= deadline);
+        if counter_fires || prime_elapsed {
+            emit_delivery_diagnostic(
+                "delivery_pane_wedged",
+                &json!({
+                    "target_session": target_session,
+                    "pane_target": snapshot_after.pane_target,
+                    "mismatch_reason": mismatch_reason,
+                    "consecutive_quiescent_ticks": state.consecutive_quiescent_mismatches,
+                    "fired_via_prime_timeout": prime_elapsed && !counter_fires,
+                }),
+            );
+            return QuiescenceAction::Done(Err(DeliveryWaitError::Wedged {
+                reason: mismatch_reason.unwrap_or_else(|| {
+                    "pane wedged at non-prompt state with no recorded mismatch reason".to_string()
+                }),
+            }));
+        }
+    }
+
+    // Prime timeout check: hard bound on the total wait. Fires
+    // `Timeout` when the prime window has elapsed AND the pane is
+    // NOT showing wedge-class content. Wedge-class content takes
+    // the wedge branch above; the pane is stuck, not unresponsive.
+    // Operator interaction (handled earlier) indefinitely suppresses
+    // both classifiers.
+    if let Some(deadline) = prime_deadline
+        && Instant::now() >= deadline
+    {
+        let timeout_ms = prime_timeout_ms.unwrap_or(0);
+        let timeout = Duration::from_millis(timeout_ms);
+        let elapsed_ms = Instant::now()
+            .saturating_duration_since(prime_started_at)
+            .as_millis();
+        let readiness_mismatch = !snapshot_after.is_prompt_ready;
+        emit_delivery_diagnostic(
+            "delivery_prime_timeout",
+            &json!({
+                "target_session": target_session,
+                "pane_target": snapshot_after.pane_target,
+                "timeout_ms": timeout_ms,
+                "prime_wait_elapsed_ms": elapsed_ms,
+                "readiness_mismatch": readiness_mismatch,
+                "mismatch_reason": mismatch_reason,
+            }),
+        );
+        return QuiescenceAction::Done(Err(DeliveryWaitError::Timeout {
+            timeout,
+            readiness_mismatch,
+            mismatch_reason,
+        }));
+    }
+
+    // Non-quiesced or wedge not yet at threshold: emit the dedup'd
+    // prompt-mismatch diagnostic if applicable.
+    if !snapshot_after.is_prompt_ready {
+        let signature = MismatchSignature::from_observation(&snapshot_after);
+        if should_emit_prompt_mismatch(&mut state.last_mismatch_signature, &signature) {
+            emit_delivery_diagnostic(
+                "delivery_prompt_mismatch",
+                &json!({
+                    "target_session": target_session,
+                    "pane_target": snapshot_after.pane_target,
+                    "mismatch_reason": signature.mismatch_reason,
+                    "regex_matched": signature.regex_matched,
+                    "inspected_block": signature.inspected_block,
+                    "expected_cursor_column": signature.expected_cursor_column,
+                    "observed_cursor_column": signature.observed_cursor_column,
+                }),
+            );
+        }
+    }
+
+    QuiescenceAction::NeedsWait(prime_deadline.unwrap_or_else(unbounded_deadline))
+}
+
+/// Returns a one-year deadline used when the caller passes `None` for
+/// the prime timeout (i.e. unbounded wait). Bounded so the
+/// `wait_for_change` polling loop terminates on a sane horizon even
+/// if the probe never reports a change.
+fn unbounded_deadline() -> Instant {
+    Instant::now() + Duration::from_secs(60 * 60 * 24 * 365)
+}
+
 /// Drives the three-state delivery classifier (running / unresponsive /
 /// wedged) over a [`WedgeProbe`].
+///
+/// Thin wrapper over [`quiescence_classify_step`]: performs one
+/// observe-sleep-observe-classify cycle, then calls
+/// `probe.wait_for_change(deadline)` before the next cycle. The
+/// generic cross-transport callers (Tmux, Pty cross-thread probe)
+/// can use this entry point directly; transports that need to service
+/// other channels between steps (the Pty worker, see
+/// `pty::delivery`) drive [`quiescence_classify_step`] directly.
 ///
 /// `prime_deadline` is the OVERALL bound for the wait — passed in by the
 /// caller and NOT reset across iterations (the spec requires the prime
@@ -301,188 +536,38 @@ pub fn wait_for_quiescent_three_state<W: WedgeProbe>(
     prime_timeout_ms: Option<u64>,
     wedge_detection: bool,
 ) -> Result<String, DeliveryWaitError> {
-    let _ = quiet_window;
-    let mut last_mismatch_signature: Option<MismatchSignature> = None;
-    let mut consecutive_quiescent_mismatches: usize = 0;
-
+    let mut state = QuiescenceState::new();
     loop {
-        if shutdown_requested() {
-            return Err(DeliveryWaitError::Shutdown);
-        }
-
-        // --- Observation 1 (before sleep) ---------------------------------
-        let snapshot_before = probe
-            .observe()
-            .map_err(|reason| DeliveryWaitError::Failed { reason })?;
-
-        thread::sleep(quiet_window);
-        if shutdown_requested() {
-            return Err(DeliveryWaitError::Shutdown);
-        }
-
-        // --- Observation 2 (after sleep) ----------------------------------
-        let snapshot_after = probe
-            .observe()
-            .map_err(|reason| DeliveryWaitError::Failed { reason })?;
-
-        // Quiescence: both observations agree across all signals
-        // (including pane target and mismatch metadata).
-        let quiescent = snapshot_before == snapshot_after;
-
-        // `running` — pane is ready.
-        if snapshot_after.is_prompt_ready && !snapshot_after.operator_interaction_active {
-            emit_delivery_diagnostic(
-                "delivery_ready",
-                &json!({
-                    "target_session": target_session,
-                    "pane_target": snapshot_after.pane_target,
-                }),
-            );
-            return Ok(snapshot_after.pane_target.unwrap_or_default());
-        }
-
-        // Operator interaction indefinitely suppresses both the unresponsive
-        // (prime-timeout) and the wedged classification. Reset the wedge
-        // counter so re-entry does not accumulate ticks.
-        if snapshot_after.operator_interaction_active {
-            emit_delivery_diagnostic(
-                "delivery_operator_interaction",
-                &json!({
-                    "target_session": target_session,
-                    "pane_target": snapshot_after.pane_target,
-                    "reason": "operator_interaction_active",
-                }),
-            );
-            consecutive_quiescent_mismatches = 0;
-            continue;
-        }
-
-        let mismatch_reason = resolve_mismatch_reason(&snapshot_after);
-        let wedge_class = mismatch_is_wedge_class(&mismatch_reason);
-
-        // Track consecutive identical wedge-class non-prompt evaluations.
-        // The counter increments ONLY for wedge-class mismatches; empty-pane
-        // mismatches do not increment (they are Unresponsive territory,
-        // not Wedged). The counter also resets whenever the wedge-class
-        // signature changes (the pane transitioned through a different
-        // stuck state), so transient non-prompt states (e.g. boot output
-        // before the prompt appears) do not accumulate wedge ticks.
-        if !snapshot_after.is_prompt_ready && quiescent && wedge_class {
-            let signature = MismatchSignature::from_observation(&snapshot_after);
-            match last_mismatch_signature.as_ref() {
-                Some(previous) if previous == &signature => {
-                    consecutive_quiescent_mismatches =
-                        consecutive_quiescent_mismatches.saturating_add(1);
-                }
-                _ => {
-                    consecutive_quiescent_mismatches = 1;
+        match quiescence_classify_step(
+            probe,
+            &mut state,
+            target_session,
+            quiet_window,
+            prime_deadline,
+            prime_started_at,
+            prime_timeout_ms,
+            wedge_detection,
+        ) {
+            QuiescenceAction::Done(result) => return result,
+            QuiescenceAction::NeedsWait(deadline) => {
+                // Block until the probe reports a change or the prime
+                // deadline elapses. This advances the probe's state
+                // for the NEXT iteration (Tmux: wait_for_change polls
+                // tmux IPC for activity; Pty: bytes arriving on the
+                // master). When the probe has nothing to advance
+                // (test probe sequence exhausted, or no bytes
+                // arriving), wait_for_change blocks until the
+                // deadline.
+                match probe.wait_for_change(deadline) {
+                    Ok(()) => {}
+                    Err(DeliveryWaitError::Timeout { .. }) => {
+                        // No change observed before the prime deadline.
+                        // The prime-timeout branch above fires on the
+                        // next iteration if the deadline has elapsed.
+                    }
+                    Err(other) => return Err(other),
                 }
             }
-            last_mismatch_signature = Some(signature);
-        } else {
-            consecutive_quiescent_mismatches = 0;
-        }
-
-        // Wedge check: fires immediately on prime-timeout elapse when
-        // the pane is showing wedge-class content, OR after the counter
-        // threshold for any wedge-class mismatch even if the prime
-        // window has not elapsed.
-        if wedge_detection && quiescent && !snapshot_after.is_prompt_ready && wedge_class {
-            let counter_fires = consecutive_quiescent_mismatches >= WEDGE_CONSECUTIVE_TICKS;
-            let prime_elapsed = prime_deadline.is_some_and(|deadline| Instant::now() >= deadline);
-            if counter_fires || prime_elapsed {
-                emit_delivery_diagnostic(
-                    "delivery_pane_wedged",
-                    &json!({
-                        "target_session": target_session,
-                        "pane_target": snapshot_after.pane_target,
-                        "mismatch_reason": mismatch_reason,
-                        "consecutive_quiescent_ticks": consecutive_quiescent_mismatches,
-                        "fired_via_prime_timeout": prime_elapsed && !counter_fires,
-                    }),
-                );
-                return Err(DeliveryWaitError::Wedged {
-                    reason: mismatch_reason.unwrap_or_else(|| {
-                        "pane wedged at non-prompt state with no recorded mismatch reason"
-                            .to_string()
-                    }),
-                });
-            }
-        }
-
-        // Prime timeout check: hard bound on the total wait. Fires
-        // `Timeout` when the prime window has elapsed AND the pane is
-        // NOT showing wedge-class content. Wedge-class content takes
-        // the wedge branch above; the pane is stuck, not unresponsive.
-        // Operator interaction (handled earlier) indefinitely suppresses
-        // both classifiers.
-        if let Some(deadline) = prime_deadline
-            && Instant::now() >= deadline
-        {
-            let timeout_ms = prime_timeout_ms.unwrap_or(0);
-            let timeout = Duration::from_millis(timeout_ms);
-            let elapsed_ms = Instant::now()
-                .saturating_duration_since(prime_started_at)
-                .as_millis();
-            let readiness_mismatch = !snapshot_after.is_prompt_ready;
-            emit_delivery_diagnostic(
-                "delivery_prime_timeout",
-                &json!({
-                    "target_session": target_session,
-                    "pane_target": snapshot_after.pane_target,
-                    "timeout_ms": timeout_ms,
-                    "prime_wait_elapsed_ms": elapsed_ms,
-                    "readiness_mismatch": readiness_mismatch,
-                    "mismatch_reason": mismatch_reason,
-                }),
-            );
-            return Err(DeliveryWaitError::Timeout {
-                timeout,
-                readiness_mismatch,
-                mismatch_reason,
-            });
-        }
-
-        // Non-quiesced or wedge not yet at threshold: emit the dedup'd
-        // prompt-mismatch diagnostic if applicable.
-        if !snapshot_after.is_prompt_ready {
-            let signature = MismatchSignature::from_observation(&snapshot_after);
-            if should_emit_prompt_mismatch(&mut last_mismatch_signature, &signature) {
-                emit_delivery_diagnostic(
-                    "delivery_prompt_mismatch",
-                    &json!({
-                        "target_session": target_session,
-                        "pane_target": snapshot_after.pane_target,
-                        "mismatch_reason": signature.mismatch_reason,
-                        "regex_matched": signature.regex_matched,
-                        "inspected_block": signature.inspected_block,
-                        "expected_cursor_column": signature.expected_cursor_column,
-                        "observed_cursor_column": signature.observed_cursor_column,
-                    }),
-                );
-            }
-        }
-
-        // Block until the probe reports a change or the prime deadline
-        // elapses. This advances the probe's state for the NEXT
-        // iteration (Tmux: `wait_for_change` polls tmux IPC for activity;
-        // Pty: bytes arriving on the master). When the probe has nothing
-        // to advance (test probe sequence exhausted, or no bytes
-        // arriving), `wait_for_change` blocks until the deadline.
-        if let Some(deadline) = prime_deadline {
-            match probe.wait_for_change(deadline) {
-                Ok(()) => {}
-                Err(DeliveryWaitError::Timeout { .. }) => {
-                    // No change observed before the prime deadline. The
-                    // prime-timeout branch above fires on the next
-                    // iteration if the deadline has elapsed.
-                }
-                Err(other) => return Err(other),
-            }
-        } else {
-            // No prime timeout bound. Wait indefinitely for change.
-            let unbounded_deadline = Instant::now() + Duration::from_secs(60 * 60 * 24 * 365);
-            let _ = probe.wait_for_change(unbounded_deadline);
         }
     }
 }

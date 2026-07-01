@@ -372,6 +372,20 @@ impl<'a> WorkerTerminalProbe<'a> {
             last_change_atomic,
         }
     }
+
+    /// Accessor for the change atomic so the wait helper can poll
+    /// generation advance after each byte drain. Returns a clone of
+    /// the `Arc` so the caller can hold it across `&mut self` calls.
+    #[must_use]
+    pub fn change_atomic(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.last_change_atomic)
+    }
+
+    /// Accessor for the terminal so the wait helper can apply bytes
+    /// via `vt_write` while the wait borrows the probe.
+    pub fn terminal_mut(&mut self) -> &mut libghostty_vt::Terminal<'static, 'static> {
+        &mut *self.terminal
+    }
 }
 
 impl<'a> WedgeProbe for WorkerTerminalProbe<'a> {

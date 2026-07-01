@@ -23,8 +23,9 @@ pub use contract::{
     TransportStatus,
 };
 pub use quiescence::{
-    EMPTY_PANE_MISMATCH_PREFIX, ReadinessMismatch, WEDGE_CONSECUTIVE_TICKS, WedgeObservation,
-    WedgeProbe, mismatch_is_wedge_class, wait_for_quiescent_three_state,
+    EMPTY_PANE_MISMATCH_PREFIX, QuiescenceAction, QuiescenceState, ReadinessMismatch,
+    WEDGE_CONSECUTIVE_TICKS, WedgeObservation, WedgeProbe, mismatch_is_wedge_class,
+    quiescence_classify_step, wait_for_quiescent_three_state,
 };
 pub use ui::{
     UiBroadcastFn, UiBroadcastStatus, UiIncomingMessage, UiOutcomePhase, UiPhaseFn, UiTransport,

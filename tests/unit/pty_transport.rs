@@ -661,20 +661,58 @@ fn look_returns_empty_when_snapshot_is_empty() {
 // Integration test (tasks.md §9.9) — requires Zig + libghostty-vt build
 // ---------------------------------------------------------------------------
 
-/// Round-trip test: spawn `/bin/cat` under portable-pty, write a line
-/// via the PtyTransport's raww channel, capture the line via
-/// give_output().look(), assert the line appears in `snapshot_lines`.
+/// Bounded blocking receive for a `oneshot::Receiver`. Polls with
+/// `try_recv` until the outcome arrives, the channel closes, or the
+/// deadline elapses. The previous version used `blocking_recv()` with
+/// no timeout, so a hang in the worker would deadlock the test
+/// forever; this helper gives the test a bounded window to assert
+/// the wait path actually returns.
+fn recv_bounded<T>(
+    mut rx: tokio::sync::oneshot::Receiver<T>,
+    timeout: Duration,
+) -> Result<T, String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match rx.try_recv() {
+            Ok(value) => return Ok(value),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
+                if Instant::now() >= deadline {
+                    return Err(format!("oneshot receive timed out after {:?}", timeout));
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                return Err("oneshot channel closed before delivery".to_string());
+            }
+        }
+    }
+}
+
+/// Round-trip test (Finding 4 fix): exercises the production wait
+/// path by writing a line via `raww` and asserting the quiescence
+/// probe observes the echoed line in the terminal snapshot before
+/// the bounded prime-timeout fires.
+///
+/// Without the production wait path correctly draining PTY bytes
+/// during the delivery wait (Finding 1), the echo never reaches the
+/// terminal's snapshot, the prompt regex never matches, the wait
+/// fires Timeout, and this test fails.
 ///
 /// Run with `cargo test --test unit pty_transport -- --ignored` once
 /// Zig 0.15.x is on PATH and `cargo check --features pty` succeeds.
 /// Skipped by default because the underlying PtyTransport spawns
-/// threads that consume the snapshot channel for the full lifetime of
-/// the test; without libghostty-vt built, startup() fails.
+/// threads that consume the snapshot channel for the full lifetime
+/// of the test; without libghostty-vt built, startup() fails.
 #[test]
 #[ignore = "requires Zig 0.15.x + libghostty-vt built; run with --ignored"]
-fn pty_transport_round_trips_cat_line() {
-    use agentmux::configuration::{BundleMember, PtyTargetConfiguration as PtyConfig};
+fn pty_transport_round_trips_raww_with_prompt_readiness() {
+    use agentmux::configuration::{
+        BundleMember, PromptReadinessTemplate, PtyTargetConfiguration as PtyConfig,
+    };
     use agentmux::pty::PtyTargetConfiguration;
+    use agentmux::transports::{
+        LookMode, LookSnapshotPayload, SendOutcome, StartupContext, Transport,
+    };
 
     let target = BundleMember {
         id: "cat-test".to_string(),
@@ -683,8 +721,12 @@ fn pty_transport_round_trips_cat_line() {
         target: agentmux::configuration::TargetConfiguration::Pty(PtyConfig {
             initial_command: "/bin/cat".to_string(),
             resume_command: "/bin/cat".to_string(),
-            prompt_readiness: None,
-            prime_timeout_ms: None,
+            prompt_readiness: Some(PromptReadinessTemplate {
+                prompt_regex: r"hello".to_string(),
+                inspect_lines: None,
+                input_idle_cursor_column: None,
+            }),
+            prime_timeout_ms: Some(2000),
             wedge_detection: true,
             cols: 80,
             rows: 24,
@@ -697,21 +739,18 @@ fn pty_transport_round_trips_cat_line() {
         PtyTargetConfiguration {
             initial_command: "/bin/cat".to_string(),
             resume_command: "/bin/cat".to_string(),
-            prompt_readiness: None,
+            prompt_readiness: Some(PromptReadinessTemplate {
+                prompt_regex: r"hello".to_string(),
+                inspect_lines: None,
+                input_idle_cursor_column: None,
+            }),
             cols: 80,
             rows: 24,
-            prime_timeout_ms: None,
+            prime_timeout_ms: Some(2000),
             wedge_detection: true,
             working_directory: None,
         },
     );
-    // `startup` spawns the child + builds the terminal. If libghostty-
-    // vt is not built or Zig 0.15.x is not on PATH, the terminal
-    // construction fails; the test then skips with a clear message so
-    // --ignored runs are meaningful when Zig is available but do not
-    // panic when it is not.
-    use agentmux::transports::{LookMode, LookSnapshotPayload, StartupContext, Transport};
-    use std::time::Duration;
     let context = StartupContext {
         namespace: "agentmux".to_string(),
         runtime_directory: std::env::temp_dir(),
@@ -722,8 +761,12 @@ fn pty_transport_round_trips_cat_line() {
             target: agentmux::configuration::TargetConfiguration::Pty(PtyConfig {
                 initial_command: "/bin/cat".to_string(),
                 resume_command: "/bin/cat".to_string(),
-                prompt_readiness: None,
-                prime_timeout_ms: None,
+                prompt_readiness: Some(PromptReadinessTemplate {
+                    prompt_regex: r"hello".to_string(),
+                    inspect_lines: None,
+                    input_idle_cursor_column: None,
+                }),
+                prime_timeout_ms: Some(2000),
                 wedge_detection: true,
                 cols: 80,
                 rows: 24,
@@ -741,8 +784,9 @@ fn pty_transport_round_trips_cat_line() {
         Ok(s) => s,
         Err(e) => {
             eprintln!(
-                "pty_transport_round_trips_cat_line: skipped (startup failed: {e:?}); \
-                 requires Zig 0.15.x + libghostty-vt built via --features pty"
+                "pty_transport_round_trips_raww_with_prompt_readiness: \
+                 skipped (startup failed: {e:?}); requires Zig 0.15.x + \
+                 libghostty-vt built via --features pty"
             );
             return;
         }
@@ -756,19 +800,17 @@ fn pty_transport_round_trips_cat_line() {
         status.readiness,
     );
 
-    // Write "hello\n" via raww, await the outcome with a bounded wait.
+    // Write "hello\n" via raww. With Finding 1 fixed, the worker
+    // applies the echoed "hello\n" to the terminal during the
+    // quiescence wait, the prompt regex matches, and the outcome
+    // resolves to Delivered. Without Finding 1 fixed, the echo
+    // never reaches the snapshot and the wait fires Timeout.
     let outcome_rx = transport.raww("hello".to_string(), true);
-    let outcome = outcome_rx
-        .blocking_recv()
-        .expect("raww outcome channel dropped before resolution");
+    let outcome = recv_bounded(outcome_rx, Duration::from_secs(5)).expect("raww outcome receive");
     assert!(
-        matches!(
-            outcome.outcome,
-            agentmux::transports::SendOutcome::Delivered
-                | agentmux::transports::SendOutcome::Failed
-                | agentmux::transports::SendOutcome::Timeout
-        ),
-        "unexpected outcome: {outcome:?}",
+        matches!(outcome.outcome, SendOutcome::Delivered),
+        "expected Delivered (echo 'hello' should match prompt regex), got {:?}",
+        outcome.outcome,
     );
 
     // Read back via give_output + look. The snapshot should contain
@@ -791,4 +833,138 @@ fn pty_transport_round_trips_cat_line() {
         snapshot_lines.iter().any(|line| line.contains("hello")),
         "snapshot did not contain the echoed input: {snapshot_lines:?}",
     );
+}
+
+/// Multi-arg command startup test (Finding 2 fix): configures
+/// `initial-command = "/bin/echo arg1 arg2"`, starts the transport,
+/// and asserts the child's stdout ("arg1 arg2") appears in the
+/// snapshot. Without the command tokenization fix,
+/// `CommandBuilder::new("/bin/echo arg1 arg2")` tries to exec a
+/// literal binary named "/bin/echo arg1 arg2" and fails to spawn.
+#[test]
+#[ignore = "requires Zig 0.15.x + libghostty-vt built; run with --ignored"]
+fn pty_transport_spawns_multi_arg_initial_command() {
+    use agentmux::configuration::{
+        BundleMember, PromptReadinessTemplate, PtyTargetConfiguration as PtyConfig,
+    };
+    use agentmux::pty::PtyTargetConfiguration;
+    use agentmux::transports::{LookMode, LookSnapshotPayload, StartupContext, Transport};
+
+    let target = BundleMember {
+        id: "echo-test".to_string(),
+        name: None,
+        working_directory: None,
+        target: agentmux::configuration::TargetConfiguration::Pty(PtyConfig {
+            initial_command: "/bin/echo arg1 arg2".to_string(),
+            resume_command: "/bin/echo arg1 arg2".to_string(),
+            prompt_readiness: Some(PromptReadinessTemplate {
+                prompt_regex: r"arg1".to_string(),
+                inspect_lines: None,
+                input_idle_cursor_column: None,
+            }),
+            prime_timeout_ms: Some(2000),
+            wedge_detection: true,
+            cols: 80,
+            rows: 24,
+        }),
+        coder_session_id: None,
+        policy_id: None,
+    };
+    let mut transport = agentmux::pty::PtyTransport::new(
+        target,
+        PtyTargetConfiguration {
+            initial_command: "/bin/echo arg1 arg2".to_string(),
+            resume_command: "/bin/echo arg1 arg2".to_string(),
+            prompt_readiness: Some(PromptReadinessTemplate {
+                prompt_regex: r"arg1".to_string(),
+                inspect_lines: None,
+                input_idle_cursor_column: None,
+            }),
+            cols: 80,
+            rows: 24,
+            prime_timeout_ms: Some(2000),
+            wedge_detection: true,
+            working_directory: None,
+        },
+    );
+    let context = StartupContext {
+        namespace: "agentmux".to_string(),
+        runtime_directory: std::env::temp_dir(),
+        target_member: BundleMember {
+            id: "echo-test".to_string(),
+            name: None,
+            working_directory: None,
+            target: agentmux::configuration::TargetConfiguration::Pty(PtyConfig {
+                initial_command: "/bin/echo arg1 arg2".to_string(),
+                resume_command: "/bin/echo arg1 arg2".to_string(),
+                prompt_readiness: Some(PromptReadinessTemplate {
+                    prompt_regex: r"arg1".to_string(),
+                    inspect_lines: None,
+                    input_idle_cursor_column: None,
+                }),
+                prime_timeout_ms: Some(2000),
+                wedge_detection: true,
+                cols: 80,
+                rows: 24,
+            }),
+            coder_session_id: None,
+            policy_id: None,
+        },
+        choose: Arc::new(|_| agentmux::transports::ChoiceMade::Cancelled {
+            decided_by: "test".to_string(),
+            reason_code: "test_cancel".to_string(),
+            reason: None,
+        }),
+    };
+    let status = match transport.startup(context) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "pty_transport_spawns_multi_arg_initial_command: \
+                 skipped (startup failed: {e:?}); requires Zig 0.15.x + \
+                 libghostty-vt built via --features pty"
+            );
+            return;
+        }
+    };
+    assert!(
+        matches!(
+            status.readiness,
+            agentmux::transports::TransportReadiness::Ready
+        ),
+        "startup should report Ready, got {:?}",
+        status.readiness,
+    );
+
+    // The child writes "arg1 arg2\n" to the PTY master and exits.
+    // The reader thread feeds those bytes to the worker, the worker
+    // applies them to the terminal, and the look snapshot should
+    // contain "arg1 arg2".
+    let output = transport
+        .give_output()
+        .expect("give_output returns Some after startup");
+    // Loop briefly to give the worker time to apply the echo bytes
+    // to the terminal; the bounded wait is a safety net if the
+    // delivery path takes a tick to apply.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let snapshot = output
+            .look(LookMode {
+                lines: Some(40),
+                offset: None,
+                prime_timeout: Duration::from_millis(100),
+            })
+            .expect("look should succeed");
+        let current_lines = match snapshot {
+            LookSnapshotPayload::Lines { snapshot_lines } => snapshot_lines,
+            _ => panic!("expected Lines payload"),
+        };
+        if current_lines.iter().any(|line| line.contains("arg1 arg2")) {
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!("snapshot did not contain 'arg1 arg2' within 2s: {current_lines:?}");
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
 }

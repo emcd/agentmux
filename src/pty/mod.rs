@@ -13,9 +13,12 @@
 //!   worker thread, delivery task, and reader thread) plus
 //!   [`PtyTargetConfiguration`] (the per-coder config bundle).
 
+pub mod command;
+pub mod delivery;
 pub mod state;
 pub mod transport;
 
+pub use command::{CommandParseError, program_and_args, tokenize_command};
 pub use state::{
     LOOK_LINES_DEFAULT, PtyConfigSnapshot, PtyOutputView, PtyQuiescenceProbe, PtyShared, PtyState,
     SnapshotRequest, SnapshotResponse,
