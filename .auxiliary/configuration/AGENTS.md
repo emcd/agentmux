@@ -21,6 +21,23 @@ and coordinate work across multiple worktrees with clear contracts.
 - OpenSpec for contract-first design and change tracking
 - MCP-based tooling for coordination and documentation workflows
 
+## Prerequisites
+
+- Rust (stable; pinned via `rust-toolchain.toml`).
+- tmux (only required when working on the Tmux transport — `cargo test`
+  exercises the Tmux commands directly).
+- **Zig 0.15.x** (only required when working on the Pty transport or
+  running the `pty` Cargo feature; installed via `mise` or
+  `setup-zig` for CI). Default `cargo build` / `cargo test` do NOT
+  invoke Zig and do NOT require it on `PATH`.
+- For libghostty-vt's vendored ghostty clone (only when building with
+  `--features pty` without a local override): outbound network access
+  to `github.com/ghostty-org/ghostty.git`. To bypass the network clone,
+  set `GHOSTTY_SOURCE_DIR` to a pre-checked-out ghostty source tree
+  that contains `build.zig`; to bypass Zig's package fetch, set
+  `GHOSTTY_ZIG_SYSTEM_DIR` to a directory containing the Zig package
+  cache.
+
 # Development Standards
 
 Before implementing code changes, consult `documentation/development-practices.md` for
