@@ -25,7 +25,9 @@ anyhow = "1.0.97"
 base64 = "0.22.1"
 crossterm = "0.28.1"
 libc = "0.2.171"
+libghostty-vt = { version = "=0.2.0", default-features = false, optional = true }
 notify-debouncer-full = "0.7.0"
+portable-pty = { version = "0.9.0", optional = true }
 rand = { version = "0.9.2", features = ["os_rng"] }
 ratatui = "0.29.0"
 rmcp = { version = "1.7.0", features = ["transport-io"] }
@@ -48,9 +50,24 @@ tokio = { version = "1.44.1", features = [
 toml = "0.8.23"
 uuid = { version = "1.18.1", features = ["v4"] }
 
+[features]
+# Default-off feature gating the Pty transport and its bindings.
+# `cargo build` does not pull libghostty-vt / portable-pty and does not
+# invoke Zig. `cargo build --features pty` enables the Pty transport,
+# its bin target, and its vendored libghostty-vt build chain (which
+# requires Zig 0.15.x on PATH and a network clone of ghostty at build
+# time, or `GHOSTTY_SOURCE_DIR` / `GHOSTTY_ZIG_SYSTEM_DIR` overrides).
+default = []
+pty = ["dep:libghostty-vt", "dep:portable-pty"]
+
 [[bin]]
 name = "agentmux-acp"
 path = "src/bin/agentmux_acp.rs"
+
+[[bin]]
+name = "agentmux-pty"
+path = "src/bin/agentmux_pty.rs"
+required-features = ["pty"]
 
 [dev-dependencies]
 tempfile = "3.18.0"
