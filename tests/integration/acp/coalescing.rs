@@ -1,4 +1,5 @@
-use agentmux::acp::{ReplayEntry, parse_replay_entries_for_test};
+use agentmux::acp::ReplayEntry;
+use agentmux::acp::replay::parse_replay_entries_from_params;
 use agentmux::transports::ToolCallStatus;
 use std::collections::HashMap;
 
@@ -14,7 +15,7 @@ fn invocation_coalescing_pending_to_completed() {
         "args": {"q": "test"}
     });
     let params = serde_json::json!({"sessionId": "sess_1", "update": [tool_call]});
-    parse_replay_entries_for_test(&params, &mut pending, &mut buffer);
+    parse_replay_entries_from_params(&params, &mut pending, &mut buffer);
 
     assert_eq!(buffer.len(), 1);
     let entry = &buffer[0];
@@ -37,7 +38,7 @@ fn invocation_coalescing_pending_to_completed() {
         "result": {"ok": true}
     });
     let params = serde_json::json!({"sessionId": "sess_1", "update": [tool_result]});
-    parse_replay_entries_for_test(&params, &mut pending, &mut buffer);
+    parse_replay_entries_from_params(&params, &mut pending, &mut buffer);
 
     assert_eq!(buffer.len(), 1);
     let entry = &buffer[0];
@@ -70,7 +71,7 @@ fn invocation_orphan_result_creates_standalone_entry() {
         "result": {"ok": false}
     });
     let params = serde_json::json!({"sessionId": "sess_1", "update": [tool_result]});
-    parse_replay_entries_for_test(&params, &mut pending, &mut buffer);
+    parse_replay_entries_from_params(&params, &mut pending, &mut buffer);
 
     assert_eq!(buffer.len(), 1);
     let entry = &buffer[0];
@@ -98,7 +99,7 @@ fn tool_call_without_tool_call_id_is_dropped() {
         "tool": "search",
     });
     let params = serde_json::json!({"sessionId": "sess_1", "update": [tool_call]});
-    parse_replay_entries_for_test(&params, &mut pending, &mut buffer);
+    parse_replay_entries_from_params(&params, &mut pending, &mut buffer);
     assert!(buffer.is_empty());
     assert!(pending.is_empty());
 
@@ -107,6 +108,6 @@ fn tool_call_without_tool_call_id_is_dropped() {
         "result": {"ok": false},
     });
     let params = serde_json::json!({"sessionId": "sess_1", "update": [tool_update]});
-    parse_replay_entries_for_test(&params, &mut pending, &mut buffer);
+    parse_replay_entries_from_params(&params, &mut pending, &mut buffer);
     assert!(buffer.is_empty());
 }

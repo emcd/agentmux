@@ -21,11 +21,11 @@
 
 use std::collections::HashMap;
 
-use agentmux::acp::{
-    PendingToolCall, ReplayEntry, UserSource, append_replay_entries_for_test,
-    coalesce_replay_entries_on_append_for_test,
-    enforce_replay_buffer_cap_and_maintain_positions_for_test,
+use agentmux::acp::replay::{
+    append_replay_entries, coalesce_replay_entries_on_append,
+    enforce_replay_buffer_cap_and_maintain_positions,
 };
+use agentmux::acp::{PendingToolCall, ReplayEntry, UserSource};
 use agentmux::transports::ToolCallStatus;
 use serde_json::{Value, json};
 
@@ -36,7 +36,7 @@ use serde_json::{Value, json};
 #[test]
 fn within_batch_same_kind_agent_entries_collapse_into_one() {
     let mut buffer: Vec<ReplayEntry> = Vec::new();
-    coalesce_replay_entries_on_append_for_test(
+    coalesce_replay_entries_on_append(
         &mut buffer,
         vec![
             ReplayEntry::Agent {
@@ -70,7 +70,7 @@ fn tail_of_buffer_same_kind_user_entry_extends_in_place() {
         lines: vec!["existing-prompt".to_string()],
         source: UserSource::ReaderThread,
     }];
-    coalesce_replay_entries_on_append_for_test(
+    coalesce_replay_entries_on_append(
         &mut buffer,
         vec![ReplayEntry::User {
             lines: vec!["streaming-delta-1".to_string(), "delta-2".to_string()],
@@ -100,7 +100,7 @@ fn different_kind_adjacency_does_not_merge() {
     let mut buffer: Vec<ReplayEntry> = vec![ReplayEntry::Agent {
         lines: vec!["agent-1".to_string()],
     }];
-    coalesce_replay_entries_on_append_for_test(
+    coalesce_replay_entries_on_append(
         &mut buffer,
         vec![
             ReplayEntry::Cognition {
@@ -125,7 +125,7 @@ fn invocation_entries_never_merge_across_adjacency() {
         invocation: json!({"name": "tool-A"}),
         result: None,
     }];
-    coalesce_replay_entries_on_append_for_test(
+    coalesce_replay_entries_on_append(
         &mut buffer,
         vec![ReplayEntry::Invocation {
             call_id: "call-B".to_string(),
@@ -156,7 +156,7 @@ fn update_merging_is_update_kind_aware() {
         lines: vec!["alpha".to_string()],
     }];
     // Same update_kind -> merges
-    coalesce_replay_entries_on_append_for_test(
+    coalesce_replay_entries_on_append(
         &mut buffer,
         vec![ReplayEntry::Update {
             update_kind: "permission_requested".to_string(),
@@ -171,7 +171,7 @@ fn update_merging_is_update_kind_aware() {
     assert_eq!(lines, &vec!["alpha".to_string(), "beta".to_string()]);
 
     // Different update_kind -> does not merge; new entry pushed
-    coalesce_replay_entries_on_append_for_test(
+    coalesce_replay_entries_on_append(
         &mut buffer,
         vec![ReplayEntry::Update {
             update_kind: "plan_execution".to_string(),
@@ -212,7 +212,7 @@ fn cap_is_enforced_after_coalescence() {
         .collect();
     assert_eq!(buffer.len(), 999);
 
-    coalesce_replay_entries_on_append_for_test(
+    coalesce_replay_entries_on_append(
         &mut buffer,
         vec![
             ReplayEntry::Agent {
@@ -230,7 +230,7 @@ fn cap_is_enforced_after_coalescence() {
 
     let mut pending_calls: std::collections::HashMap<String, PendingToolCall> =
         std::collections::HashMap::new();
-    enforce_replay_buffer_cap_and_maintain_positions_for_test(&mut buffer, &mut pending_calls);
+    enforce_replay_buffer_cap_and_maintain_positions(&mut buffer, &mut pending_calls);
 
     assert_eq!(
         buffer.len(),
@@ -276,7 +276,7 @@ fn coalescence_reduces_entry_count_before_cap_check() {
     });
     assert_eq!(buffer.len(), 997);
 
-    coalesce_replay_entries_on_append_for_test(
+    coalesce_replay_entries_on_append(
         &mut buffer,
         vec![
             ReplayEntry::Agent {
@@ -299,7 +299,7 @@ fn coalescence_reduces_entry_count_before_cap_check() {
         "four same-kind Agents coalesce into the tail -> buffer holds at 997"
     );
 
-    coalesce_replay_entries_on_append_for_test(
+    coalesce_replay_entries_on_append(
         &mut buffer,
         vec![
             ReplayEntry::User {
@@ -323,7 +323,7 @@ fn coalescence_reduces_entry_count_before_cap_check() {
     );
     let mut pending_calls: std::collections::HashMap<String, PendingToolCall> =
         std::collections::HashMap::new();
-    enforce_replay_buffer_cap_and_maintain_positions_for_test(&mut buffer, &mut pending_calls);
+    enforce_replay_buffer_cap_and_maintain_positions(&mut buffer, &mut pending_calls);
     assert_eq!(
         buffer.len(),
         1000,
@@ -349,7 +349,7 @@ fn reader_thread_user_does_not_merge_into_prompt_origin_user_tail() {
         lines: vec!["operator-prompt".to_string()],
         source: UserSource::PromptPath,
     }];
-    coalesce_replay_entries_on_append_for_test(
+    coalesce_replay_entries_on_append(
         &mut buffer,
         vec![ReplayEntry::User {
             lines: vec!["echoed-from-server".to_string()],
@@ -393,7 +393,7 @@ fn prompt_path_user_after_reader_thread_user_tail_does_not_merge() {
         source: UserSource::ReaderThread,
     }];
     let mut pending_calls: HashMap<String, PendingToolCall> = HashMap::new();
-    append_replay_entries_for_test(
+    append_replay_entries(
         &mut buffer,
         &mut pending_calls,
         vec![ReplayEntry::User {
@@ -422,7 +422,7 @@ fn prompt_path_user_after_reader_thread_user_tail_does_not_merge() {
 fn prompt_path_append_preserves_user_boundary_on_consecutive_submissions() {
     let mut buffer: Vec<ReplayEntry> = Vec::new();
     let mut pending_calls: HashMap<String, PendingToolCall> = HashMap::new();
-    append_replay_entries_for_test(
+    append_replay_entries(
         &mut buffer,
         &mut pending_calls,
         vec![ReplayEntry::User {
@@ -430,7 +430,7 @@ fn prompt_path_append_preserves_user_boundary_on_consecutive_submissions() {
             source: UserSource::PromptPath,
         }],
     );
-    append_replay_entries_for_test(
+    append_replay_entries(
         &mut buffer,
         &mut pending_calls,
         vec![ReplayEntry::User {
@@ -506,7 +506,7 @@ fn session_load_shaped_history_vec_coalesces_per_turn() {
     let mut buffer: Vec<ReplayEntry> = Vec::new();
     let history = build_session_load_history_vec();
     assert_eq!(history.len(), 14, "two turns of raw streaming chunks");
-    coalesce_replay_entries_on_append_for_test(&mut buffer, history);
+    coalesce_replay_entries_on_append(&mut buffer, history);
 
     // Per turn, [User, Agent(2x), Cognition, Agent(2x), Cognition] merges
     // to [User, Agent-merged, Cognition, Agent-merged, Cognition] = 5

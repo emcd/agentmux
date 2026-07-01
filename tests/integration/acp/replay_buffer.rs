@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 
-use agentmux::acp::{
-    PendingToolCall, REPLAY_BUFFER_MAX_ENTRIES, ReplayEntry, UserSource,
-    append_replay_entries_for_test,
-};
+use agentmux::acp::replay::append_replay_entries;
+use agentmux::acp::{PendingToolCall, REPLAY_BUFFER_MAX_ENTRIES, ReplayEntry, UserSource};
 
 fn user_entry(label: &str) -> ReplayEntry {
     user_entry_with_source(label, UserSource::ReaderThread)
@@ -31,7 +29,7 @@ fn append_below_cap_preserves_order() {
     let mut buffer: Vec<ReplayEntry> = Vec::new();
     let mut pending_calls: HashMap<String, PendingToolCall> = HashMap::new();
     let incoming = (0..5).map(|i| user_entry(&format!("e{i}"))).collect();
-    append_replay_entries_for_test(&mut buffer, &mut pending_calls, incoming);
+    append_replay_entries(&mut buffer, &mut pending_calls, incoming);
     assert_eq!(
         buffer_labels(&buffer),
         vec!["e0", "e1", "e2", "e3", "e4"]
@@ -47,7 +45,7 @@ fn append_at_cap_evicts_oldest_on_overflow() {
         .map(|i| user_entry(&format!("e{i}")))
         .collect();
     let mut pending_calls: HashMap<String, PendingToolCall> = HashMap::new();
-    append_replay_entries_for_test(
+    append_replay_entries(
         &mut buffer,
         &mut pending_calls,
         vec![user_entry("e_overflow")],
@@ -65,7 +63,7 @@ fn append_batch_exceeding_cap_evicts_proportionally() {
         .collect();
     let mut pending_calls: HashMap<String, PendingToolCall> = HashMap::new();
     let incoming = (0..5).map(|i| user_entry(&format!("new{i}"))).collect();
-    append_replay_entries_for_test(&mut buffer, &mut pending_calls, incoming);
+    append_replay_entries(&mut buffer, &mut pending_calls, incoming);
     assert_eq!(buffer.len(), REPLAY_BUFFER_MAX_ENTRIES);
     let labels = buffer_labels(&buffer);
     assert_eq!(labels.first().map(String::as_str), Some("e5"));
