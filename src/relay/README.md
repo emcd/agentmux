@@ -216,11 +216,19 @@ exported from `src/relay/mod.rs`.
   PSK file are rejected at Hello. Operators must register at least one principal
   via `agentmux new peer <session_id>@<bundle>` (or run with the default) before
   flipping enforcement on, otherwise no client can connect to drive recovery.
-- **Peer placeholders**: `relay.toml` `[[peers]]` entries (required non-empty
-  `address`) are validated at startup as schema-only placeholders for future
-  outbound peer routing; the relay opens no outbound connection and advertises no
-  peer target for them. Raw peer PSKs stay owner-only at
-  `<state-root>/peers/<peer_alias>.psk`; the principal store holds only hashes.
+- **Outbound peer relays**: `relay.toml` `[[peers]]` entries are active
+  outbound-only endpoints — each carries the peer's canonical `id`
+  (`<id>@RELAY`) and an absolute Unix-socket `address` (TCP host:port is future
+  work) and is validated at startup. A `Send`/`Raww` addressed with the bang-path
+  `<session>@<bundle>!<id>` is forwarded to the matching peer. The top-level
+  `relay-id` key names this relay's own `<relay-id>@RELAY` identity, presented
+  when dialing a peer; it is required whenever any `[[peers]]` entry exists.
+  `[[peers]]` is outbound-only and takes no `scope`: **inbound** cross-relay
+  authorization is the scope granted to the peer's principal via
+  `new peer <id>@RELAY --scope`, enforced by the target-side ingress filter
+  (deny-by-default). Raw peer PSKs stay owner-only at
+  `<state-root>/peers/<peer_alias>.psk` (alias = the bare id); the principal
+  store holds only hashes.
 - **Expiry pruning**: records with an RFC 3339 `expires_at` in the past (and,
   fail-closed, any with an unparseable `expires_at`) are pruned. The store is
   pruned-and-persisted once at relay startup and pruned before each

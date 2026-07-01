@@ -154,7 +154,7 @@ fn check_configuration_reports_invalid_relay_toml_without_bundles() {
     let (config_root, state_root) = config_and_state(&temporary);
     fs::write(
         config_root.join("relay.toml"),
-        "[[peers]]\naddress = \"\"\n",
+        "relay-id = \"this-relay\"\n[[peers]]\nid = \"peer-relay@RELAY\"\naddress = \"\"\n",
     )
     .expect("write relay.toml");
 

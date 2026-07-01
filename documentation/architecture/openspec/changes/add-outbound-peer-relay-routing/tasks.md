@@ -2,24 +2,24 @@
 
 ## 1. Peer configuration (runtime-bootstrap)
 
-- [ ] 1.1 Extend `RawPeerEntry` / `PeerConfiguration` in
+- [x] 1.1 Extend `RawPeerEntry` / `PeerConfiguration` in
       `src/relay/authorization/loading.rs` with `id` (required, canonical
       `<id>@RELAY`), keeping `address` required non-empty. `[[peers]]` stays
       outbound-only (no `scope` field). Keep `deny_unknown_fields`.
-- [ ] 1.2 Validate peer entries at load: non-empty `id` parsing to a `@RELAY`
+- [x] 1.2 Validate peer entries at load: non-empty `id` parsing to a `@RELAY`
       principal; `address` an absolute Unix socket path — reject non-absolute or
       `host:port` TCP-style forms (naming `peers.address`). Fail startup and
       pre-flight with structured errors (extend the existing `peers.*`
       field-label diagnostics).
-- [ ] 1.3 Add a top-level `relay-id` key to `relay.toml` and the loader; require
+- [x] 1.3 Add a top-level `relay-id` key to `relay.toml` and the loader; require
       it non-empty when any `[[peers]]` entry is configured (fail startup and
       pre-flight otherwise), unused when no peers are configured. Validate it as a
       bare relay id (non-empty after trim; no `@`/`!`/path separators), reusing
       the existing bare-local-part grammar; reject qualified/malformed values.
-- [ ] 1.4 Update `data/configuration/relay.toml` template with documented
+- [x] 1.4 Update `data/configuration/relay.toml` template with documented
       `relay-id` + `id`/`address` peer fields (kept commented / all-defaults),
       `address` shown as a Unix socket path with the TCP form as a future example.
-- [ ] 1.5 Update `src/relay/README.md` peer-placeholder note → active
+- [x] 1.5 Update `src/relay/README.md` peer-placeholder note → active
       outbound-only peer config, plus `relay-id`, the inbound-scope-via-new-peer
       model, and credential-path notes.
 
@@ -65,7 +65,7 @@
 
 ## 6. Tests
 
-- [ ] 6.1 Unit: peer config load (valid `id`/absolute-socket `address`; missing
+- [x] 6.1 Unit: peer config load (valid `id`/absolute-socket `address`; missing
       `id`; empty `address`; non-absolute/`host:port` `address` rejected naming
       `peers.address`; unknown field incl. a rejected `scope` on `[[peers]]`;
       `relay-id` required when peers present and rejected when absent; `relay-id`
