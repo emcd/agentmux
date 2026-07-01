@@ -19,9 +19,12 @@
 //! the helper refuses to merge a `UserSource::ReaderThread` arrival
 //! against a `PromptPath` tail or vice versa.
 
+use std::collections::HashMap;
+
 use agentmux::acp::{
-    ReplayEntry, UserSource, append_replay_entries_for_test,
+    PendingToolCall, ReplayEntry, UserSource, append_replay_entries_for_test,
     coalesce_replay_entries_on_append_for_test,
+    enforce_replay_buffer_cap_and_maintain_positions_for_test,
 };
 use agentmux::transports::ToolCallStatus;
 use serde_json::{Value, json};
@@ -199,7 +202,8 @@ fn cap_is_enforced_after_coalescence() {
     // on entry count, not on update_kind-uniqueness). Push three entries
     // that all fail to merge with the Update tail (different kinds):
     // [Agent, Cognition, Update-new-kind]. None merge; 999 + 3 = 1002,
-    // cap drains 2 -> 1000.
+    // cap drains 2 -> 1000. The coalesce helper is now cap-free; the
+    // cap-maintain helper owns the drain.
     let mut buffer: Vec<ReplayEntry> = (0..999)
         .map(|i| ReplayEntry::Update {
             update_kind: format!("fill-{i:03}"),
@@ -223,6 +227,10 @@ fn cap_is_enforced_after_coalescence() {
             },
         ],
     );
+
+    let mut pending_calls: std::collections::HashMap<String, PendingToolCall> =
+        std::collections::HashMap::new();
+    enforce_replay_buffer_cap_and_maintain_positions_for_test(&mut buffer, &mut pending_calls);
 
     assert_eq!(
         buffer.len(),
@@ -256,7 +264,7 @@ fn coalescence_reduces_entry_count_before_cap_check() {
     // Pre-fill 996 Updates + 1 Agent tail = 997. Push 4 same-kind Agents:
     // tail extension absorbs all four -> 0 new entries -> buffer holds at
     // 997 (cap not reached). Then push 4 distinct-kind entries: 997 + 4 =
-    // 1001 -> cap drains 1 -> 1000.
+    // 1001 -> cap-maintain drains 1 -> 1000.
     let mut buffer: Vec<ReplayEntry> = (0..996)
         .map(|i| ReplayEntry::Update {
             update_kind: format!("fill-{i:03}"),
@@ -313,6 +321,9 @@ fn coalescence_reduces_entry_count_before_cap_check() {
             },
         ],
     );
+    let mut pending_calls: std::collections::HashMap<String, PendingToolCall> =
+        std::collections::HashMap::new();
+    enforce_replay_buffer_cap_and_maintain_positions_for_test(&mut buffer, &mut pending_calls);
     assert_eq!(
         buffer.len(),
         1000,
@@ -381,8 +392,10 @@ fn prompt_path_user_after_reader_thread_user_tail_does_not_merge() {
         lines: vec!["server-user".to_string()],
         source: UserSource::ReaderThread,
     }];
+    let mut pending_calls: HashMap<String, PendingToolCall> = HashMap::new();
     append_replay_entries_for_test(
         &mut buffer,
+        &mut pending_calls,
         vec![ReplayEntry::User {
             lines: vec!["operator-prompt".to_string()],
             source: UserSource::PromptPath,
@@ -408,8 +421,10 @@ fn prompt_path_user_after_reader_thread_user_tail_does_not_merge() {
 #[test]
 fn prompt_path_append_preserves_user_boundary_on_consecutive_submissions() {
     let mut buffer: Vec<ReplayEntry> = Vec::new();
+    let mut pending_calls: HashMap<String, PendingToolCall> = HashMap::new();
     append_replay_entries_for_test(
         &mut buffer,
+        &mut pending_calls,
         vec![ReplayEntry::User {
             lines: vec!["first-prompt".to_string()],
             source: UserSource::PromptPath,
@@ -417,6 +432,7 @@ fn prompt_path_append_preserves_user_boundary_on_consecutive_submissions() {
     );
     append_replay_entries_for_test(
         &mut buffer,
+        &mut pending_calls,
         vec![ReplayEntry::User {
             lines: vec!["second-prompt".to_string()],
             source: UserSource::PromptPath,

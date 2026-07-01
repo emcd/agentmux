@@ -46,6 +46,8 @@ pub(super) struct AcpStubOptions {
     pub(super) disconnect_on_prompt: Option<String>,
     pub(super) configured_session_id: Option<String>,
     pub(super) coder_prime_timeout_ms: Option<u64>,
+    pub(super) tool_call_on_prompt: bool,
+    pub(super) tool_call_id: String,
 }
 
 impl Default for AcpStubOptions {
@@ -69,6 +71,8 @@ impl Default for AcpStubOptions {
             disconnect_on_prompt: None,
             configured_session_id: None,
             coder_prime_timeout_ms: None,
+            tool_call_on_prompt: false,
+            tool_call_id: "tc-stub-1".to_string(),
         }
     }
 }
@@ -95,6 +99,8 @@ load_replay_line_prefix="${LOAD_REPLAY_LINE_PREFIX:-ACP-LOAD}"
 new_session_id="${NEW_SESSION_ID:-sess-generated}"
 disconnect_on_prompt="${DISCONNECT_ON_PROMPT:-none}"
 request_permission_on_prompt="${REQUEST_PERMISSION_ON_PROMPT:-0}"
+tool_call_on_prompt="${TOOL_CALL_ON_PROMPT:-0}"
+tool_call_id="${TOOL_CALL_ID:-tc-stub-1}"
 
 while IFS= read -r line; do
   printf '%s\n' "$line" >> "$log_file"
@@ -156,8 +162,24 @@ while IFS= read -r line; do
           count=$((count + 1))
         done
       }
+      emit_tool_call_lifecycle() {
+        # Emit a single tool_call notification followed by its terminal
+        # tool_call_update. The reader-thread parser mutates the
+        # Pending Invocation entry in place on the update, so the buffer
+        # ends up holding exactly one Invocation entry per call_id
+        # (not two). Used by the
+        # `replace-pending-completed-tool-call-in-place` proposal tests.
+        printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"%s","update":[{"sessionUpdate":"tool_call","toolCallId":"%s","title":"stub-tool","kind":"exec"}]}}\n' \
+          "$prompt_session_id" "$tool_call_id"
+        printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"%s","update":[{"sessionUpdate":"tool_call_update","toolCallId":"%s","status":"completed","result":{"ok":true}}]}}\n' \
+          "$prompt_session_id" "$tool_call_id"
+      }
       if [ "$update_after_response" != "1" ]; then
-        emit_updates
+        if [ "$tool_call_on_prompt" = "1" ]; then
+          emit_tool_call_lifecycle
+        else
+          emit_updates
+        fi
       fi
       if [ "$disconnect_on_prompt" = "after_activity" ]; then
         exit 0
@@ -259,6 +281,16 @@ pub(super) fn write_configuration(root: &Path, options: &AcpStubOptions) -> (Pat
             options.load_replay_line_prefix.clone(),
         ),
         ("NEW_SESSION_ID", "sess-generated".to_string()),
+        (
+            "TOOL_CALL_ON_PROMPT",
+            if options.tool_call_on_prompt {
+                "1"
+            } else {
+                "0"
+            }
+            .to_string(),
+        ),
+        ("TOOL_CALL_ID", options.tool_call_id.clone()),
     ];
 
     let mut env_toml = String::new();
