@@ -13,6 +13,8 @@ pub mod ui;
 pub mod vocabulary;
 
 pub use crate::acp::{AcpDriverServices, AcpTransport, AcpWorkerDriver};
+#[cfg(feature = "pty")]
+pub use crate::pty::{PtyTargetConfiguration, PtyTransport};
 pub use crate::tmux::TmuxTransport;
 pub use contract::{
     ChoiceMade, ChoiceToMake, Chooser, DeliveryEnvelope, DeliveryMessage, DeliveryWaitError,

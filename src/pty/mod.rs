@@ -4,18 +4,20 @@
 //! portable-pty and does NOT invoke Zig.
 //!
 //! Module layout:
-//! - [`state`] holds [`PtyState`] (the libghostty-vt terminal, render
-//!   state, and config snapshot) and [`PtyOutputView`] (the
-//!   [`OutputView`](crate::transports::OutputView) for the relay's look
-//!   request path).
+//! - [`state`] holds the cross-thread shared state ([`PtyShared`],
+//!   [`PtyConfigSnapshot`], [`SnapshotRequest`] / [`SnapshotResponse`])
+//!   plus the per-thread look / probe consumers ([`PtyOutputView`],
+//!   [`PtyQuiescenceProbe`]).
 //! - [`transport`] holds [`PtyTransport`] (the per-target
 //!   [`Transport`](crate::transports::Transport) implementation with its
-//!   worker thread, delivery task, and reader thread).
-//! - [`PtyQuiescenceProbe`](state::PtyQuiescenceProbe) adapts
-//!   [`PtyState`] to the cross-transport
-//!   [`WedgeProbe`](crate::transports::WedgeProbe) trait, so the shared
-//!   wedge/prime state machine in
-//!   [`crate::transports::quiescence`] drives Pty's quiescence wait.
+//!   worker thread, delivery task, and reader thread) plus
+//!   [`PtyTargetConfiguration`] (the per-coder config bundle).
 
 pub mod state;
 pub mod transport;
+
+pub use state::{
+    LOOK_LINES_DEFAULT, PtyConfigSnapshot, PtyOutputView, PtyQuiescenceProbe, PtyShared, PtyState,
+    SnapshotRequest, SnapshotResponse,
+};
+pub use transport::{PtyTargetConfiguration, PtyTransport};
