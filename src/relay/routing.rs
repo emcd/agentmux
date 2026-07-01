@@ -311,16 +311,21 @@ fn resolve_cross_relay_target(
     }
 }
 
-/// Interim guard until the outbound peer connection module lands (a follow-on
-/// commit of this change): a recognized cross-relay target is rejected with a
-/// typed, honest outcome rather than a misleading `validation_unknown_bundle`
-/// from the local catalog. Once forwarding exists, `Send`/`Raww` route these
-/// targets to the peer connection and this guard is removed for them.
-pub(super) fn reject_unrouted_cross_relay(route: &ResolvedRoute) -> Result<(), RelayError> {
+/// Rejects a cross-relay (bang-path) target on an operation that does not forward
+/// across relays.
+///
+/// `Send`/`Raww` (fire-and-forward delivery) forward cross-relay targets to the
+/// peer connection; `Look`/`List` do not. Their cross-relay support needs
+/// request/response snapshot/enumeration semantics over the peer boundary and is
+/// a deferred follow-on (`todos/relay/100`, with cross-relay `Look` behind it).
+/// Until then a well-formed cross-relay target on these inspection operations is
+/// a permanent, honest rejection rather than a misleading `validation_unknown_bundle`
+/// from the local catalog.
+pub(super) fn reject_cross_relay_unsupported(route: &ResolvedRoute) -> Result<(), RelayError> {
     if route.targets.iter().any(ResolvedTarget::is_cross_relay) {
         return Err(relay_error(
-            "runtime_cross_relay_unavailable",
-            "cross-relay routing is not yet available on this relay",
+            "runtime_cross_relay_unsupported",
+            "this operation does not support cross-relay targets",
             None,
         ));
     }

@@ -1,7 +1,8 @@
 use std::{
     io::{BufRead, BufReader, ErrorKind, Write},
-    os::unix::net::UnixStream,
+    os::unix::net::{UnixListener, UnixStream},
     path::{Path, PathBuf},
+    sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
@@ -851,5 +852,375 @@ fn relay_choices_pick_rejects_submitter_without_grant() {
     client
         .shutdown(std::net::Shutdown::Both)
         .expect("shutdown stream");
+    handle.join().expect("join relay stream");
+}
+
+// === Cross-relay peer forwarding (tasks 6.4/6.5) ===
+//
+// These exercise the outbound Send fan-out end to end: a bundle member on the
+// origin relay addresses a cross-relay bang-path target, the origin dials a stub
+// peer relay (PSK Hello), forwards the Send, and folds the peer's response (or a
+// transport failure) into the merged Send result.
+
+// Bundle whose member `alpha` holds `send = all`, so it may address a cross-relay
+// (always all-tier) target. Otherwise a minimal single-member tmux bundle.
+fn write_cross_relay_bundle_configuration(temporary: &TempDir, bundle_name: &str) -> PathBuf {
+    let configuration_root = temporary.path().join("config");
+    let bundles_directory = configuration_root.join("bundles");
+    std::fs::create_dir_all(&bundles_directory).expect("create bundles directory");
+    std::fs::write(
+        configuration_root.join("coders.toml"),
+        r#"
+format-version = 1
+
+[[coders]]
+id = "shell"
+
+[coders.tmux]
+initial-command = "sh -lc 'exec sleep 45'"
+resume-command = "sh -lc 'exec sleep 45'"
+"#,
+    )
+    .expect("write coders configuration");
+    std::fs::write(
+        configuration_root.join("policies.toml"),
+        r#"
+format-version = 1
+default = "peer_sender"
+
+[[policies]]
+id = "peer_sender"
+
+[policies.controls]
+find = "self"
+list = "home"
+look = "self"
+send = "all"
+"#,
+    )
+    .expect("write policies configuration");
+    std::fs::write(
+        bundles_directory.join(format!("{bundle_name}.toml")),
+        r#"
+format-version = 1
+
+[[sessions]]
+id = "alpha"
+name = "Alpha"
+directory = "/tmp"
+coder = "shell"
+"#,
+    )
+    .expect("write bundle configuration");
+    configuration_root
+}
+
+// Writes the outbound PSK for `alias` at `<state-root>/peers/<alias>.psk`, where
+// the peer connection manager reads it on first forward.
+fn write_peer_credential(state_root: &Path, alias: &str, psk: &str) {
+    let peers_dir = state_root.join("peers");
+    std::fs::create_dir_all(&peers_dir).expect("create peers dir");
+    std::fs::write(peers_dir.join(format!("{alias}.psk")), psk).expect("write peer psk");
+}
+
+// Serves one origin relay connection whose peer connection manager is configured
+// with a single peer relay (this relay's `relay_id`, the peer's `<id>@RELAY`, and
+// its Unix socket `address`), so a cross-relay Send is really dialed and
+// forwarded rather than reported unavailable.
+fn spawn_relay_stream_with_peer(
+    configuration_root: &Path,
+    bundle_paths: &BundleRuntimePaths,
+    relay_id: &str,
+    peer_id: &str,
+    peer_socket: &Path,
+) -> (UnixStream, thread::JoinHandle<()>) {
+    let (server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
+    let root = configuration_root.to_path_buf();
+    let state_root = bundle_paths.state_root.clone();
+    let catalog = BundleCatalog::from_paths([bundle_paths.clone()]);
+    let relay_id = relay_id.to_string();
+    let peers = vec![agentmux::relay::PeerConfiguration {
+        id: peer_id.to_string(),
+        address: peer_socket.to_string_lossy().into_owned(),
+    }];
+    let handle = thread::spawn(move || {
+        run_serve_connection_with_peers(server_stream, root, state_root, catalog, relay_id, peers)
+            .expect("serve connection");
+    });
+    (client_stream, handle)
+}
+
+fn run_serve_connection_with_peers(
+    server_stream: UnixStream,
+    configuration_root: PathBuf,
+    state_root: PathBuf,
+    bundle_catalog: BundleCatalog,
+    relay_id: String,
+    peers: Vec<agentmux::relay::PeerConfiguration>,
+) -> Result<(), std::io::Error> {
+    server_stream
+        .set_nonblocking(true)
+        .expect("non-blocking server stream");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build current-thread runtime");
+    runtime.block_on(async move {
+        let stream = tokio::net::UnixStream::from_std(server_stream)?;
+        let peer_connection_manager =
+            std::sync::Arc::new(agentmux::relay::PeerConnectionManager::from_configuration(
+                Some(relay_id),
+                &state_root,
+                &peers,
+            ));
+        let serve_context = agentmux::relay::ConnectionServeContext::new(
+            configuration_root,
+            state_root,
+            bundle_catalog,
+            peer_connection_manager,
+            false,
+            Duration::from_secs(2),
+        );
+        serve_connection(
+            stream,
+            &serve_context,
+            ConnectionDrainCoordinator::new().register_worker(),
+        )
+        .await
+    })
+}
+
+// A one-shot stub peer relay: completes the PSK Hello handshake (echoing the
+// dialer's schema_version + principal_id) and answers the single forwarded
+// request with `response`, echoing the wire request id for correlation. Returns
+// the request frame it observed.
+fn spawn_answering_peer(socket_path: &Path, response: Value) -> mpsc::Receiver<Value> {
+    let listener = UnixListener::bind(socket_path).expect("bind stub peer socket");
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let Ok((stream, _)) = listener.accept() else {
+            return;
+        };
+        let mut reader = BufReader::new(stream.try_clone().expect("clone stub stream"));
+        let mut stream = stream;
+        let mut hello_line = String::new();
+        if reader.read_line(&mut hello_line).is_err() {
+            return;
+        }
+        let Ok(hello) = serde_json::from_str::<Value>(hello_line.trim_end()) else {
+            return;
+        };
+        let ack = json!({
+            "frame": "hello_ack",
+            "schema_version": hello.get("schema_version").cloned().unwrap_or(json!("")),
+            "principal_id": hello.get("principal_id").cloned().unwrap_or(json!("")),
+        });
+        let _ = writeln!(stream, "{ack}");
+        let _ = stream.flush();
+        let mut request_line = String::new();
+        if reader.read_line(&mut request_line).is_ok()
+            && let Ok(request) = serde_json::from_str::<Value>(request_line.trim_end())
+        {
+            let response_frame = json!({
+                "frame": "response",
+                "request_id": request.get("request_id").cloned().unwrap_or(json!(null)),
+                "response": response,
+            });
+            let _ = writeln!(stream, "{response_frame}");
+            let _ = stream.flush();
+            let _ = sender.send(request);
+            thread::sleep(Duration::from_millis(50));
+        }
+    });
+    receiver
+}
+
+// Hellos as `alpha`, sends one cross-relay Send over the stream, and returns the
+// decoded `send` response's `results` array plus the request frame the stub peer
+// observed. Shared by the delivered/ingress-denied cases.
+fn forward_cross_relay_send(
+    configuration_root: &Path,
+    bundle_paths: &BundleRuntimePaths,
+    bundle_name: &str,
+    peer_socket: &Path,
+    observed: mpsc::Receiver<Value>,
+) -> (Vec<Value>, Value) {
+    let (mut client, handle) = spawn_relay_stream_with_peer(
+        configuration_root,
+        bundle_paths,
+        "origin-relay",
+        "peer@RELAY",
+        peer_socket,
+    );
+    let reader_stream = client.try_clone().expect("clone stream");
+    let mut reader = BufReader::new(reader_stream);
+    send_json(&mut client, hello_payload(bundle_name, "alpha"));
+    assert_eq!(read_json(&mut reader)["frame"], "hello_ack");
+
+    let request_id = format!("req-{}", Uuid::new_v4().simple());
+    send_json(
+        &mut client,
+        json!({
+            "frame": "request",
+            "request_id": request_id,
+            "request": {
+                "operation": "send",
+                "requester_session": "alpha",
+                "message": "cross-relay hello",
+                "targets": ["bravo@other!peer"],
+                "broadcast": false,
+            },
+        }),
+    );
+    let response = read_json(&mut reader);
+    assert_eq!(response["response"]["kind"], "send");
+    let results = response["response"]["results"]
+        .as_array()
+        .expect("results array")
+        .clone();
+    let forwarded = observed
+        .recv_timeout(Duration::from_secs(2))
+        .expect("stub peer observed the forwarded send");
+
+    client.shutdown(std::net::Shutdown::Both).ok();
+    handle.join().expect("join relay stream");
+    (results, forwarded)
+}
+
+#[test]
+fn cross_relay_send_propagates_peer_delivery_outcome() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = format!("party-{}", Uuid::new_v4().simple());
+    let configuration_root = write_cross_relay_bundle_configuration(&temporary, &bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths =
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+    write_peer_credential(&bundle_paths.state_root, "peer", "peer-secret");
+
+    let peer_socket = temporary.path().join("peer.sock");
+    // The peer answers with a queued delivery result for its local target; the
+    // origin re-labels it to the bang-path the requester addressed.
+    let peer_response = json!({
+        "kind": "send",
+        "schema_version": "test",
+        "requester_session": "origin-relay@RELAY",
+        "results": [{
+            "target_session": "bravo@other",
+            "message_id": "peer-m1",
+            "outcome": "queued",
+        }],
+    });
+    let observed = spawn_answering_peer(&peer_socket, peer_response);
+
+    let (results, forwarded) = forward_cross_relay_send(
+        &configuration_root,
+        &bundle_paths,
+        bundle_name.as_str(),
+        &peer_socket,
+        observed,
+    );
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["target_session"], "bravo@other!peer");
+    assert_eq!(results[0]["outcome"], "queued");
+
+    // The peer received a Send presenting this relay's `<relay-id>@RELAY` identity
+    // and its plain local target (not the bang-path).
+    assert_eq!(forwarded["request"]["operation"], "send");
+    assert_eq!(
+        forwarded["request"]["requester_session"],
+        "origin-relay@RELAY"
+    );
+    assert_eq!(forwarded["request"]["targets"][0], "bravo@other");
+}
+
+#[test]
+fn cross_relay_send_reports_ingress_denied_as_failed() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = format!("party-{}", Uuid::new_v4().simple());
+    let configuration_root = write_cross_relay_bundle_configuration(&temporary, &bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths =
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+    write_peer_credential(&bundle_paths.state_root, "peer", "peer-secret");
+
+    let peer_socket = temporary.path().join("peer.sock");
+    // The peer rejects the forwarded target at its ingress filter; the origin
+    // folds that error into a `failed` result carrying the peer's reason code.
+    let peer_response = json!({
+        "kind": "error",
+        "error": {
+            "code": "authorization_forbidden",
+            "message": "ingress scope does not cover this target",
+        },
+    });
+    let observed = spawn_answering_peer(&peer_socket, peer_response);
+
+    let (results, _forwarded) = forward_cross_relay_send(
+        &configuration_root,
+        &bundle_paths,
+        bundle_name.as_str(),
+        &peer_socket,
+        observed,
+    );
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["target_session"], "bravo@other!peer");
+    assert_eq!(results[0]["outcome"], "failed");
+    assert_eq!(results[0]["reason_code"], "authorization_forbidden");
+}
+
+#[test]
+fn cross_relay_send_reports_peer_unavailable_when_unreachable() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = format!("party-{}", Uuid::new_v4().simple());
+    let configuration_root = write_cross_relay_bundle_configuration(&temporary, &bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths =
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+    write_peer_credential(&bundle_paths.state_root, "peer", "peer-secret");
+
+    // No listener is bound at this path: the peer is unreachable. The origin still
+    // serves (an unreachable peer never blocks boot — the connection is lazy), and
+    // the first delivery to it yields the distinct `peer_unavailable` outcome.
+    let peer_socket = temporary.path().join("nonexistent-peer.sock");
+    let (mut client, handle) = spawn_relay_stream_with_peer(
+        &configuration_root,
+        &bundle_paths,
+        "origin-relay",
+        "peer@RELAY",
+        &peer_socket,
+    );
+    let reader_stream = client.try_clone().expect("clone stream");
+    let mut reader = BufReader::new(reader_stream);
+    send_json(&mut client, hello_payload(bundle_name.as_str(), "alpha"));
+    assert_eq!(read_json(&mut reader)["frame"], "hello_ack");
+
+    let request_id = format!("req-{}", Uuid::new_v4().simple());
+    send_json(
+        &mut client,
+        json!({
+            "frame": "request",
+            "request_id": request_id,
+            "request": {
+                "operation": "send",
+                "requester_session": "alpha",
+                "message": "cross-relay hello",
+                "targets": ["bravo@other!peer"],
+                "broadcast": false,
+            },
+        }),
+    );
+    let response = read_json(&mut reader);
+    assert_eq!(response["response"]["kind"], "send");
+    let results = response["response"]["results"]
+        .as_array()
+        .expect("results array");
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["target_session"], "bravo@other!peer");
+    assert_eq!(results[0]["outcome"], "peer_unavailable");
+    assert_eq!(results[0]["reason_code"], "runtime_peer_unavailable");
+
+    client.shutdown(std::net::Shutdown::Both).ok();
     handle.join().expect("join relay stream");
 }

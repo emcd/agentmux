@@ -15,7 +15,7 @@ use crate::{
 use super::super::connection::BundleCatalog;
 use super::super::delivery::get_output_view;
 use super::super::routing::{
-    Addressing, Capability, OperationProfile, ResolvedRoute, reject_unrouted_cross_relay,
+    Addressing, Capability, OperationProfile, ResolvedRoute, reject_cross_relay_unsupported,
     requester_home_namespace, resolve_look_route,
 };
 use super::super::stream::lookup_registry_session_type;
@@ -108,7 +108,7 @@ pub(in crate::relay) fn handle_look_routed(
                 requester.session_id.as_str(),
                 target_session.as_str(),
             )?;
-            reject_unrouted_cross_relay(&route)?;
+            reject_cross_relay_unsupported(&route)?;
             Ok(route)
         },
         |route| {

@@ -96,12 +96,16 @@ fn handle_request_with_principal(
     // here.)
     match request {
         RelayRequest::Send { .. } => {
+            // The non-stream single-bundle entry point holds no peer connection
+            // manager, so a cross-relay target reports as unavailable here; the
+            // stream path supplies the manager for real forwarding.
             return handlers::handle_send_routed(
                 bundle_name,
                 request,
                 configuration_root,
                 bundle_catalog,
                 principal.as_ref(),
+                None,
             );
         }
         RelayRequest::Look { .. } => {
@@ -351,6 +355,7 @@ pub(in crate::relay) fn dispatch_send(
     bound_bundle: Option<&crate::runtime::paths::BundleRuntimePaths>,
     principal: Option<RequestPrincipal>,
     bundle_catalog: &BundleCatalog,
+    peer_connection_manager: &PeerConnectionManager,
 ) -> RelayResponse {
     let home_namespace = match bound_bundle {
         Some(paths) => paths.bundle_name.clone(),
@@ -362,6 +367,7 @@ pub(in crate::relay) fn dispatch_send(
         configuration_root,
         bundle_catalog,
         principal.as_ref(),
+        Some(peer_connection_manager),
     ) {
         Ok(value) => value,
         Err(error) => RelayResponse::Error { error },

@@ -733,6 +733,7 @@ async fn serve_connection_frames(
                         let configuration_root = Arc::clone(&configuration_root);
                         let bound_bundle = bound_bundle.clone();
                         let bundle_catalog = bundle_catalog.clone();
+                        let peer_connection_manager = Arc::clone(peer_connection_manager);
                         dispatch_on_blocking_pool(move || {
                             dispatch_send(
                                 request,
@@ -740,6 +741,7 @@ async fn serve_connection_frames(
                                 bound_bundle.as_ref(),
                                 Some(principal),
                                 &bundle_catalog,
+                                peer_connection_manager.as_ref(),
                             )
                         })
                         .await

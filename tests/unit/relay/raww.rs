@@ -24,11 +24,14 @@ fn raww_rejects_unknown_target() {
 }
 
 #[test]
-fn raww_rejects_unrouted_cross_relay_target() {
+fn raww_without_peer_manager_reports_cross_relay_unavailable() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
 
+    // The non-stream single-bundle entry point holds no peer connection manager,
+    // so a cross-relay (bang-path) raww target cannot be forwarded and reports as
+    // unavailable. The stream path supplies the manager for real forwarding.
     let response = dispatch_request(
         RelayRequest::Raww {
             request_id: None,
@@ -41,7 +44,7 @@ fn raww_rejects_unrouted_cross_relay_target() {
         "party",
         &tmux_socket,
     )
-    .expect_err("cross-relay raww should fail until forwarding lands");
+    .expect_err("cross-relay raww has no peer manager on the non-stream path");
 
     assert_eq!(response.code, "runtime_cross_relay_unavailable");
 }

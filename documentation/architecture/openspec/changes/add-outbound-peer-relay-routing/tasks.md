@@ -41,13 +41,13 @@
 - [x] 3.2 Read `<state-root>/peers/<peer_alias>.psk` (fail the delivery, not
       startup, on absence/unreadable); dial `address` (Unix socket); Hello as this
       relay's configured `<relay-id>@RELAY` with the peer PSK.
-- [ ] 3.3 Route resolved cross-relay `Send`/`Raww` through the peer connection.
+- [x] 3.3 Route resolved cross-relay `Send`/`Raww` through the peer connection.
 
 ## 4. Delivery-outcome propagation (cross-relay-routing)
 
-- [ ] 4.1 Carry the origin `request_id` outbound; map the peer's typed response
+- [x] 4.1 Carry the origin `request_id` outbound; map the peer's typed response
       onto the originating requester's delivery-outcome channel.
-- [ ] 4.2 Add a `peer_unavailable` outcome distinct from local delivery outcomes
+- [x] 4.2 Add a `peer_unavailable` outcome distinct from local delivery outcomes
       and from `relay_unavailable`.
       (Cross-boundary sender attribution — setting `on_behalf_of` — is out of
       scope this slice; deferred to a follow-on with its `relay-identity` delta.)
@@ -75,9 +75,9 @@
       correct `relay_id` + foreign `session@bundle`; malformed bang-path).
 - [ ] 6.3 Unit/integration: ingress filter — in-scope target accepted,
       out-of-scope denied, absent-scope denied (deny-by-default).
-- [ ] 6.4 Integration: outbound delivery outcome propagation (delivered,
+- [x] 6.4 Integration: outbound delivery outcome propagation (delivered,
       ingress-denied, peer-unavailable) against a stub peer relay.
-- [ ] 6.5 Integration: unreachable peer at startup does not block boot; first
+- [x] 6.5 Integration: unreachable peer at startup does not block boot; first
       delivery to it yields `peer_unavailable`.
 
 ## 7. Validation

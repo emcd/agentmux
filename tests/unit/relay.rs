@@ -592,15 +592,16 @@ fn send_broadcast_with_only_sender_returns_empty_results() {
 }
 
 #[test]
-fn send_rejects_unrouted_cross_relay_target() {
+fn send_without_peer_manager_reports_cross_relay_unavailable() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
 
     // A bang-path target is classified as cross-relay from the address alone
-    // (config-free). Until the outbound peer connection module lands it is
-    // rejected with a typed, honest outcome rather than a misleading
-    // unknown-bundle error.
+    // (config-free). The non-stream single-bundle entry point holds no peer
+    // connection manager, so forwarding cannot run and the target reports as
+    // unavailable rather than a misleading unknown-bundle error. Real forwarding
+    // is exercised through the stream path, which supplies the manager.
     let response = dispatch_request(
         RelayRequest::Send {
             request_id: None,
@@ -614,7 +615,7 @@ fn send_rejects_unrouted_cross_relay_target() {
         "party",
         &tmux_socket,
     )
-    .expect_err("cross-relay send should fail until forwarding lands");
+    .expect_err("cross-relay send has no peer manager on the non-stream path");
     assert_eq!(response.code, "runtime_cross_relay_unavailable");
 }
 
@@ -647,11 +648,15 @@ fn send_rejects_malformed_cross_relay_target() {
 }
 
 #[test]
-fn look_rejects_cross_relay_target() {
+fn look_rejects_cross_relay_target_as_unsupported() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
 
+    // Unlike Send/Raww, Look does not forward across relays: cross-relay
+    // inspection needs request/response snapshot semantics over the peer boundary
+    // and is a deferred follow-on. A well-formed cross-relay Look target is a
+    // permanent, honest rejection rather than a routing-unavailable outcome.
     let response = dispatch_request(
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
@@ -664,7 +669,7 @@ fn look_rejects_cross_relay_target() {
         &tmux_socket,
     )
     .expect_err("cross-relay look should fail");
-    assert_eq!(response.code, "runtime_cross_relay_unavailable");
+    assert_eq!(response.code, "runtime_cross_relay_unsupported");
 }
 
 #[test]
