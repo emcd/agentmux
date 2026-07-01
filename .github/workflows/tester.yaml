@@ -28,6 +28,14 @@ jobs:
       - name: Check Formatting
         run: cargo fmt --all -- --check
 
+      - name: Install Zig
+        # Required so the next step's `scripts/clippy-pty.sh` can run.
+        # Pinned to 0.15.2 to match the test job's `pty-feature` row;
+        # the lint job has no matrix dimension so this is unconditional.
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
       - name: Run Clippy (default features)
         # Default-features lint only. The `pty` feature is intentionally
         # excluded; it requires Zig + outbound network. Lint with pty
