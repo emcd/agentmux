@@ -19,9 +19,9 @@ use tokio::{
 use crate::{
     configuration::load_bundle_group_memberships,
     relay::{
-        BundleCatalog, ConnectionDrainCoordinator, HostingIntent, append_startup_failure,
-        serve_connection, shutdown_bundle_runtime, spawn_bundle_watcher, startup_bundle,
-        wait_for_async_delivery_shutdown,
+        BundleCatalog, ConnectionDrainCoordinator, ConnectionServeContext, HostingIntent,
+        PeerConnectionManager, append_startup_failure, serve_connection, shutdown_bundle_runtime,
+        spawn_bundle_watcher, startup_bundle, wait_for_async_delivery_shutdown,
     },
     runtime::{
         bootstrap::{
@@ -87,6 +87,10 @@ struct RelayHostServePlan {
     // it never re-reads or re-resolves relay.toml.
     watch_bundles: bool,
     require_session_credentials: bool,
+    // The outbound peer connection manager, built once from the resolved
+    // relay.toml peers + relay-id and shared (behind an Arc) across every
+    // connection worker for cross-relay forwarding.
+    peer_connection_manager: Arc<PeerConnectionManager>,
 }
 
 #[derive(Debug)]
@@ -166,6 +170,7 @@ pub(super) async fn run_relay_host(arguments: RelayHostArguments) -> Result<(), 
                 runtime_lock,
                 watch_bundles,
                 require_session_credentials,
+                peer_connection_manager,
             } = *plan;
             serve_relay_host(
                 roots,
@@ -177,6 +182,7 @@ pub(super) async fn run_relay_host(arguments: RelayHostArguments) -> Result<(), 
                 require_session_credentials,
                 watch_bundles,
                 no_autostart,
+                peer_connection_manager,
             )
             .await
         }
@@ -405,6 +411,15 @@ fn prepare_relay_host(
 
     let listener = bind_relay_listener(&relay_paths)?;
 
+    // Build the outbound peer connection manager once from the resolved peers +
+    // relay-id, before those fields are consumed below. It is empty (and never
+    // dials) on a relay with no configured peers.
+    let peer_connection_manager = Arc::new(PeerConnectionManager::from_configuration(
+        relay_configuration.relay_id.clone(),
+        &roots.state_root,
+        &relay_configuration.peers,
+    ));
+
     Ok(RelayHostPreparation::Serve(Box::new(RelayHostServePlan {
         summary,
         hosted_bundles,
@@ -413,6 +428,7 @@ fn prepare_relay_host(
         runtime_lock,
         watch_bundles: relay_configuration.watch_bundles,
         require_session_credentials: relay_configuration.require_session_credentials,
+        peer_connection_manager,
     })))
 }
 
@@ -429,6 +445,7 @@ async fn serve_relay_host(
     require_session_credentials: bool,
     watch_bundles: bool,
     no_autostart: bool,
+    peer_connection_manager: Arc<PeerConnectionManager>,
 ) -> Result<(), RuntimeError> {
     emit_inscription("relay.startup.summary", &startup_summary_payload(&summary));
     render_startup_summary(&summary);
@@ -456,21 +473,25 @@ async fn serve_relay_host(
     remove_relay_ready_sentinel(&relay_paths);
 
     let accept_handle = {
-        let configuration_root = roots.configuration_root.clone();
-        let state_root = roots.state_root.clone();
         let stop_requested = Arc::clone(&stop_requested);
         let connection_permits = Arc::clone(&connection_permits);
-        let catalog = catalog.clone();
         let drain_coordinator = Arc::clone(&drain_coordinator);
+        // The shared serving context is cloned per accepted connection; each
+        // clone is cheap (Arc / catalog-handle clones plus the two root paths).
         // `require_session_credentials` is the resolved relay-wide enforcement
         // control (CLI override > environment override > relay.toml > default
         // disabled).
-        tokio::spawn(run_relay_accept_loop(
-            configuration_root,
-            state_root,
-            listener,
-            catalog,
+        let serve_context = ConnectionServeContext::new(
+            roots.configuration_root.clone(),
+            roots.state_root.clone(),
+            catalog.clone(),
+            peer_connection_manager,
             require_session_credentials,
+            relay_pre_hello_idle_timeout(),
+        );
+        tokio::spawn(run_relay_accept_loop(
+            listener,
+            serve_context,
             stop_requested,
             connection_permits,
             max_connections,
@@ -670,13 +691,9 @@ fn remove_relay_ready_sentinel(paths: &RelayRuntimePaths) {
 /// connection, bounded by the shared connection semaphore. At the cap, new
 /// connections receive an immediate overloaded response. Bundle routing is
 /// deferred to the connection worker's Hello handling.
-#[allow(clippy::too_many_arguments)]
 async fn run_relay_accept_loop(
-    configuration_root: std::path::PathBuf,
-    state_root: std::path::PathBuf,
     listener: UnixListener,
-    bundle_catalog: BundleCatalog,
-    require_session_credentials: bool,
+    serve_context: ConnectionServeContext,
     stop_requested: Arc<AtomicBool>,
     connection_permits: Arc<Semaphore>,
     max_connections: usize,
@@ -710,10 +727,7 @@ async fn run_relay_accept_loop(
                                 spawn_connection_worker(
                                     permit,
                                     stream,
-                                    configuration_root.clone(),
-                                    state_root.clone(),
-                                    bundle_catalog.clone(),
-                                    require_session_credentials,
+                                    serve_context.clone(),
                                     Arc::clone(&metrics),
                                     &drain_coordinator,
                                 );
@@ -746,31 +760,17 @@ async fn run_relay_accept_loop(
 /// connection's drop-guard unregister path. Per-connection writes run on a
 /// separate writer task spawned inside `serve_connection`, so no blocking call
 /// ever ties up a runtime worker.
-#[allow(clippy::too_many_arguments)]
 fn spawn_connection_worker(
     permit: OwnedSemaphorePermit,
     stream: TokioUnixStream,
-    configuration_root: std::path::PathBuf,
-    state_root: std::path::PathBuf,
-    bundle_catalog: BundleCatalog,
-    require_session_credentials: bool,
+    serve_context: ConnectionServeContext,
     metrics: Arc<RelayConnectionMetrics>,
     drain_coordinator: &Arc<ConnectionDrainCoordinator>,
 ) {
     metrics.active_connections.fetch_add(1, Ordering::SeqCst);
-    let pre_hello_idle_timeout = relay_pre_hello_idle_timeout();
     let worker_slot = drain_coordinator.register_worker();
     tokio::spawn(async move {
-        let result = serve_connection(
-            stream,
-            &configuration_root,
-            &state_root,
-            &bundle_catalog,
-            require_session_credentials,
-            pre_hello_idle_timeout,
-            worker_slot,
-        )
-        .await;
+        let result = serve_connection(stream, &serve_context, worker_slot).await;
         metrics.active_connections.fetch_sub(1, Ordering::SeqCst);
         drop(permit);
         if let Err(source) = result {

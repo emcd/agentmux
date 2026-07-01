@@ -34,7 +34,9 @@ pub use self::authorization::{
 };
 
 pub use self::client::{RelayStreamSession, request_relay};
-pub use self::connection::{BundleCatalog, HostingIntent, serve_connection};
+pub use self::connection::{
+    BundleCatalog, ConnectionServeContext, HostingIntent, serve_connection,
+};
 use self::constants::*;
 use self::context::*;
 pub use self::contract::*;
@@ -113,12 +115,16 @@ fn handle_request_with_principal(
             );
         }
         RelayRequest::Raww { .. } => {
+            // The non-stream single-bundle entry point holds no peer connection
+            // manager, so a cross-relay target reports as unavailable here; the
+            // stream path supplies the manager for real forwarding.
             return handlers::handle_raww_routed(
                 bundle_name,
                 Some(runtime_directory),
                 request,
                 configuration_root,
                 bundle_catalog,
+                None,
             );
         }
         _ => {}
@@ -408,6 +414,7 @@ pub(in crate::relay) fn dispatch_raww(
     configuration_root: &Path,
     bound_bundle: Option<&crate::runtime::paths::BundleRuntimePaths>,
     bundle_catalog: &BundleCatalog,
+    peer_connection_manager: &PeerConnectionManager,
 ) -> RelayResponse {
     let (home_namespace, home_runtime) = match bound_bundle {
         Some(paths) => (
@@ -422,6 +429,7 @@ pub(in crate::relay) fn dispatch_raww(
         request,
         configuration_root,
         bundle_catalog,
+        Some(peer_connection_manager),
     ) {
         Ok(value) => value,
         Err(error) => RelayResponse::Error { error },

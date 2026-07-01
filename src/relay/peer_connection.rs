@@ -44,6 +44,7 @@ struct PeerEndpoint {
 /// Shared (behind an `Arc`) across connection-handler tasks like the bundle
 /// catalog. Connections are established lazily and held per peer; a per-peer
 /// mutex serializes dials to one peer without blocking deliveries to others.
+#[derive(Debug)]
 pub struct PeerConnectionManager {
     /// This relay's own bare id, presented as `<relay-id>@RELAY` when dialing a
     /// peer. Present iff any peer is configured (guaranteed by relay.toml

@@ -47,6 +47,55 @@ fn spawn_stub_peer(socket_path: &std::path::Path) -> mpsc::Receiver<serde_json::
     receiver
 }
 
+/// Binds a stub peer that completes the Hello handshake and then answers one
+/// request, echoing the request frame's wire id in the response so the client's
+/// per-request correlation matches. Returns the observed request frame.
+fn spawn_answering_stub_peer(
+    socket_path: &std::path::Path,
+    response: serde_json::Value,
+) -> mpsc::Receiver<serde_json::Value> {
+    let listener = UnixListener::bind(socket_path).expect("bind stub peer socket");
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let Ok((stream, _)) = listener.accept() else {
+            return;
+        };
+        let mut reader = BufReader::new(stream.try_clone().expect("clone stub stream"));
+        let mut stream = stream;
+        // Hello -> HelloAck (echo schema_version + principal_id).
+        let mut hello_line = String::new();
+        if reader.read_line(&mut hello_line).is_err() {
+            return;
+        }
+        let Ok(hello) = serde_json::from_str::<serde_json::Value>(hello_line.trim_end()) else {
+            return;
+        };
+        let ack = json!({
+            "frame": "hello_ack",
+            "schema_version": hello.get("schema_version").cloned().unwrap_or(json!("")),
+            "principal_id": hello.get("principal_id").cloned().unwrap_or(json!("")),
+        });
+        let _ = writeln!(stream, "{ack}");
+        let _ = stream.flush();
+        // Request -> Response (echo the request's wire id for correlation).
+        let mut request_line = String::new();
+        if reader.read_line(&mut request_line).is_ok()
+            && let Ok(request) = serde_json::from_str::<serde_json::Value>(request_line.trim_end())
+        {
+            let response_frame = json!({
+                "frame": "response",
+                "request_id": request.get("request_id").cloned().unwrap_or(json!(null)),
+                "response": response,
+            });
+            let _ = writeln!(stream, "{response_frame}");
+            let _ = stream.flush();
+            let _ = sender.send(request);
+            thread::sleep(Duration::from_millis(50));
+        }
+    });
+    receiver
+}
+
 fn write_peer_credential(state_root: &std::path::Path, alias: &str, psk: &str) {
     let peers_dir = state_root.join("peers");
     std::fs::create_dir_all(&peers_dir).expect("create peers dir");
@@ -164,6 +213,61 @@ fn forward_reports_peer_unavailable_when_unreachable() {
         .forward("peer", &request)
         .expect_err("forwarding to an unreachable peer should be unavailable");
     assert_eq!(error.code, "runtime_peer_unavailable");
+}
+
+#[test]
+fn forward_returns_the_peer_response() {
+    let temporary = TempDir::new().expect("temporary");
+    let state_root = temporary.path().join("state");
+    write_peer_credential(&state_root, "peer", "peer-secret-token");
+    let socket_path = temporary.path().join("peer.sock");
+    let peer_response = json!({
+        "kind": "raww",
+        "schema_version": "test",
+        "status": "queued",
+        "target_session": "claude@myapp",
+        "transport": "tmux",
+        "request_id": "origin-1",
+        "message_id": "m1",
+    });
+    let observed = spawn_answering_stub_peer(&socket_path, peer_response);
+
+    let manager = PeerConnectionManager::from_configuration(
+        Some("this-relay".to_string()),
+        &state_root,
+        &[peer("peer@RELAY", &socket_path)],
+    );
+    let request = agentmux::relay::RelayRequest::Raww {
+        request_id: Some("origin-1".to_string()),
+        requester_session: "this-relay@RELAY".to_string(),
+        target_session: "claude@myapp".to_string(),
+        text: "hello".to_string(),
+        no_enter: false,
+    };
+    let response = manager
+        .forward("peer", &request)
+        .expect("forward returns the peer response");
+
+    match response {
+        agentmux::relay::RelayResponse::Raww {
+            status,
+            target_session,
+            request_id,
+            ..
+        } => {
+            assert_eq!(status, "queued");
+            assert_eq!(target_session, "claude@myapp");
+            assert_eq!(request_id.as_deref(), Some("origin-1"));
+        }
+        other => panic!("expected a forwarded raww response, got {other:?}"),
+    }
+
+    // The peer received a Raww request carrying this relay's identity and the
+    // foreign target.
+    let forwarded = observed
+        .recv_timeout(Duration::from_secs(2))
+        .expect("stub observed the forwarded request");
+    assert_eq!(forwarded["request"]["operation"], "raww");
 }
 
 #[test]

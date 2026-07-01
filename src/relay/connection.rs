@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     io,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
     time::Duration,
 };
@@ -36,10 +36,10 @@ use super::stream::{
     registration_is_current, spawn_stream_writer, unregister_stream, write_stream_frame_to_writer,
 };
 use super::{
-    RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
-    canonical_session_id, dispatch_identity_admin, dispatch_identity_introspect, dispatch_list,
-    dispatch_look, dispatch_raww, dispatch_request, dispatch_send, handlers, map_config,
-    map_tui_config, relay_error,
+    PeerConnectionManager, RelayError, RelayRequest, RelayResponse, RequestPrincipal,
+    SCHEMA_VERSION, canonical_session_id, dispatch_identity_admin, dispatch_identity_introspect,
+    dispatch_list, dispatch_look, dispatch_raww, dispatch_request, dispatch_send, handlers,
+    map_config, map_tui_config, relay_error,
 };
 
 /// Whether the relay should keep a bundle's sessions running. Seeded from the
@@ -217,13 +217,48 @@ impl BundleCatalog {
 /// coordinator: the frame loop observes its shutdown signal cooperatively — an
 /// idle read exits immediately, an in-flight request finishes and flushes its
 /// response first — and dropping it on exit reports the worker as drained.
-pub async fn serve_connection(
-    stream: UnixStream,
-    configuration_root: &Path,
-    state_root: &Path,
-    bundle_catalog: &BundleCatalog,
+/// Shared, connection-independent context threaded to every connection worker:
+/// the config/state roots, the live bundle catalog, the outbound peer connection
+/// manager, and the resolved relay-wide serving controls. Grouping these into one
+/// value keeps the connection-serving signatures within argument limits (rather
+/// than suppressing the lint) and gives each accepted connection a cheap clone of
+/// the shared handles.
+#[derive(Clone)]
+pub struct ConnectionServeContext {
+    configuration_root: PathBuf,
+    state_root: PathBuf,
+    bundle_catalog: BundleCatalog,
+    peer_connection_manager: Arc<PeerConnectionManager>,
     require_session_credentials: bool,
     pre_hello_idle_timeout: Duration,
+}
+
+impl ConnectionServeContext {
+    /// Assembles the shared serving context from resolved relay runtime state; it
+    /// is cloned per accepted connection.
+    #[must_use]
+    pub fn new(
+        configuration_root: PathBuf,
+        state_root: PathBuf,
+        bundle_catalog: BundleCatalog,
+        peer_connection_manager: Arc<PeerConnectionManager>,
+        require_session_credentials: bool,
+        pre_hello_idle_timeout: Duration,
+    ) -> Self {
+        Self {
+            configuration_root,
+            state_root,
+            bundle_catalog,
+            peer_connection_manager,
+            require_session_credentials,
+            pre_hello_idle_timeout,
+        }
+    }
+}
+
+pub async fn serve_connection(
+    stream: UnixStream,
+    context: &ConnectionServeContext,
     mut worker_slot: ConnectionWorkerSlot,
 ) -> Result<(), io::Error> {
     let (read_half, write_half) = stream.into_split();
@@ -250,11 +285,7 @@ pub async fn serve_connection(
             reader,
             &writer,
             &mut guard,
-            configuration_root,
-            state_root,
-            bundle_catalog,
-            require_session_credentials,
-            pre_hello_idle_timeout,
+            context,
             revoke.clone(),
             &mut worker_slot,
         );
@@ -332,24 +363,23 @@ struct HelloBinding {
     introspect_rights: Option<IdentityIntrospectRights>,
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn serve_connection_frames(
     mut reader: BufReader<OwnedReadHalf>,
     writer: &SharedStreamWriter,
     guard: &mut RegistrationGuard,
-    configuration_root: &Path,
-    state_root: &Path,
-    bundle_catalog: &BundleCatalog,
-    require_session_credentials: bool,
-    pre_hello_idle_timeout: Duration,
+    context: &ConnectionServeContext,
     revoke: StreamRevokeSignal,
     worker_slot: &mut ConnectionWorkerSlot,
 ) -> Result<(), io::Error> {
+    let bundle_catalog = &context.bundle_catalog;
+    let peer_connection_manager = &context.peer_connection_manager;
+    let require_session_credentials = context.require_session_credentials;
+    let pre_hello_idle_timeout = context.pre_hello_idle_timeout;
     // Shared-ownership copies of the root paths so each request dispatch can be
     // moved onto the blocking pool (`'static + Send`) without re-copying the
     // path data per request.
-    let configuration_root: Arc<Path> = Arc::from(configuration_root);
-    let state_root: Arc<Path> = Arc::from(state_root);
+    let configuration_root: Arc<Path> = Arc::from(context.configuration_root.as_path());
+    let state_root: Arc<Path> = Arc::from(context.state_root.as_path());
     let mut bound_bundle: Option<BundleRuntimePaths> = None;
     // Verified principal_id of the connection, set on a store-backed Hello and
     // attached to each dispatched request for sender attribution; stays `None`
@@ -758,12 +788,14 @@ async fn serve_connection_frames(
                         let configuration_root = Arc::clone(&configuration_root);
                         let bound_bundle = bound_bundle.clone();
                         let bundle_catalog = bundle_catalog.clone();
+                        let peer_connection_manager = Arc::clone(peer_connection_manager);
                         dispatch_on_blocking_pool(move || {
                             dispatch_raww(
                                 request,
                                 &configuration_root,
                                 bound_bundle.as_ref(),
                                 &bundle_catalog,
+                                peer_connection_manager.as_ref(),
                             )
                         })
                         .await

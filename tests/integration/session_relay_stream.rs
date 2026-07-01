@@ -142,13 +142,21 @@ fn run_serve_connection(
         .expect("build current-thread runtime");
     runtime.block_on(async move {
         let stream = tokio::net::UnixStream::from_std(server_stream)?;
-        serve_connection(
-            stream,
-            &configuration_root,
-            &state_root,
-            &bundle_catalog,
+        // No peers configured for these tests: an empty manager never dials.
+        let peer_connection_manager = std::sync::Arc::new(
+            agentmux::relay::PeerConnectionManager::from_configuration(None, &state_root, &[]),
+        );
+        let serve_context = agentmux::relay::ConnectionServeContext::new(
+            configuration_root,
+            state_root,
+            bundle_catalog,
+            peer_connection_manager,
             false,
             Duration::from_secs(2),
+        );
+        serve_connection(
+            stream,
+            &serve_context,
             ConnectionDrainCoordinator::new().register_worker(),
         )
         .await
