@@ -30,7 +30,6 @@
 //! for the state machine's diagnostic inscriptions.
 
 use std::{
-    cell::RefCell,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -42,7 +41,6 @@ use std::{
 use regex::Regex;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::configuration::BundleMember;
 use crate::transports::{
     DeliveryWaitError, LookMode, LookSnapshotPayload, OutputView, ReadinessMismatch,
     TransportError, WedgeObservation, WedgeProbe,
@@ -50,7 +48,7 @@ use crate::transports::{
 
 /// Default pty look window applied when the caller omits a window size.
 /// Mirrors the Tmux transport's `LOOK_LINES_DEFAULT`.
-const LOOK_LINES_DEFAULT: usize = 120;
+pub const LOOK_LINES_DEFAULT: usize = 120;
 
 /// Per-coder pty config snapshot carried on the `Send + Sync` shared
 /// state. Lives on [`PtyShared`] so the look path and the
@@ -58,7 +56,7 @@ const LOOK_LINES_DEFAULT: usize = 120;
 #[derive(Clone, Debug)]
 pub struct PtyConfigSnapshot {
     /// Target session id this transport is bound to.
-    pub target_member: BundleMember,
+    pub target_member_id: String,
     /// Initial grid columns (matches the per-coder config; Pty spawns
     /// the child at these dims).
     pub cols: u16,
@@ -126,24 +124,24 @@ pub struct PtyShared {
 }
 
 /// Worker-thread-local state for a single Pty target. Holds the
-/// libghostty-vt terminal (which is `!Send + !Sync`), the
-/// `on_pty_write` response buffer the effect handler drains after
-/// each `vt_write`, and the snapshot-request receiver the worker
-/// services from the same thread.
+/// libghostty-vt terminal (which is `!Send + !Sync`) and the
+/// snapshot-request receiver the worker services from the same
+/// thread.
 ///
 /// Not `Send` by design — the terminal must live on a single thread.
 /// The transport owns this state on the worker thread; the cross-thread
 /// coordination goes through [`PtyShared`] (snapshot channel +
 /// `last_byte_atomic`).
+///
+/// Effect-handler state (the `on_pty_write` response buffer, etc.) lives
+/// in the writer Arc the handler closure captures at startup; the
+/// handler writes responses back to the PTY master synchronously inside
+/// `vt_write`. There is no shared buffer between the handler and the
+/// worker.
 pub struct PtyState {
     /// The libghostty-vt terminal. `!Send + !Sync`. Owned exclusively
     /// by the worker thread that drives the PTY.
     pub terminal: libghostty_vt::Terminal<'static, 'static>,
-    /// Effect-handler response buffer (device-attribute responses,
-    /// size queries, etc.). The `on_pty_write` callback pushes bytes
-    /// here; the worker drains and writes to the PTY master after each
-    /// `vt_write`.
-    pub response_buffer: RefCell<Vec<u8>>,
     /// Snapshot-request channel receiver. The worker selects on this
     /// in its main loop alongside the bytes / write-command channels.
     pub snapshot_rx: mpsc::Receiver<SnapshotRequest>,
@@ -219,6 +217,13 @@ impl PtyQuiescenceProbe {
         Self { shared }
     }
 }
+
+// `BundleMember` is referenced via the `target_member_id` field on
+// `PtyConfigSnapshot`; the full bundle-member binding (initial command,
+// resume command, working directory) lands in §6 alongside the
+// `[coders.<id>.pty]` config parser.
+#[allow(unused_imports)]
+use crate::configuration::BundleMember as _ReexportBundleMember;
 
 impl WedgeProbe for PtyQuiescenceProbe {
     fn observe(&mut self) -> Result<WedgeObservation, String> {
