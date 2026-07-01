@@ -519,40 +519,52 @@ fn run_worker(
     // from write_rx.
     //
     // Critically, the worker does NOT block inside a delivery wait
-    // — `DeliveryRun::step` and `deliver_raw` advance the state
-    // machine by ONE classify-or-wait step per call. Between steps
-    // the worker services other channels. The wait step itself
-    // drains bytes_rx + absorbs write_rx envelopes (Findings 1+3
-    // fix), so the terminal reflects the latest child output before
-    // the next observation.
-    let mut delivery: Option<super::delivery::DeliveryRun> = None;
+    // — `Delivery::step` advances the state machine by ONE
+    // classify-or-wait-poll per call. Between steps the worker
+    // services other channels. The wait's `one_poll` drains
+    // bytes_rx (so the terminal reflects the latest child output
+    // before the next observation) and, for envelope-group waits,
+    // absorbs write_rx envelopes. Raw-only waits do NOT drain
+    // write_rx (avoids the v1 bug where raw waits absorbed
+    // envelopes into a throwaway group and dropped them).
+    let mut delivery: Option<super::delivery::Delivery> = None;
     let mut pending_raw: Option<super::delivery::PendingRaw> = None;
+    let mut wait_in_progress = false;
 
     while !shutdown_flag.load(Ordering::Acquire) {
         // 1. Always drain snapshot_rx. User-facing look requests
         // take priority over deliveries so the operator gets a
-        // responsive view.
+        // responsive view (Finding 2 fix: the wait is decomposed
+        // into per-tick polls so the worker loop services
+        // snapshot_rx between wait ticks).
         while let Ok(request) = snapshot_rx.try_recv() {
             handle_snapshot(&mut terminal, request);
         }
 
         // 2. If a `Raw` is pending (from a prior delivery's batch
-        // barrier, or a fresh raw from write_rx), process it as a
-        // raw-only delivery. `deliver_raw` runs its own state-
-        // machine loop with the same wait-time byte-drain and
-        // write_rx absorption semantics.
+        // barrier, or a fresh raw from write_rx), start a new
+        // raw-only delivery. The raw delivery's wait is
+        // `WaitKind::RawOnly` — does not drain write_rx.
         if let Some(raw) = pending_raw.take() {
-            super::delivery::deliver_raw(
-                raw,
-                &mut terminal,
-                &mut bytes_rx,
-                &mut write_rx,
+            match super::delivery::Delivery::start_raw(
+                raw.content,
+                raw.append_enter,
+                raw.outcome_tx,
                 &writer,
                 &shared,
                 &target_session,
-                &mut pending_raw,
-            );
-            continue;
+            ) {
+                Ok(d) => {
+                    delivery = Some(d);
+                    wait_in_progress = false;
+                    continue;
+                }
+                Err(_) => {
+                    // The failure outcome was already sent inside
+                    // start_raw. Return to idle.
+                    continue;
+                }
+            }
         }
 
         // 3. If a delivery is in progress, drive the state machine
@@ -560,8 +572,8 @@ fn run_worker(
         // drop the run and return to idle. A batch barrier during
         // the wait stashes the raw in `pending_raw` for the next
         // iteration.
-        if let Some(run) = delivery.as_mut() {
-            match run.step(
+        if let Some(d) = delivery.as_mut() {
+            match d.step(
                 &mut terminal,
                 &mut bytes_rx,
                 &mut write_rx,
@@ -569,9 +581,25 @@ fn run_worker(
                 &target_session,
                 &mut pending_raw,
             ) {
-                super::delivery::DeliveryStep::Continue => continue,
+                super::delivery::DeliveryStep::Continue => {
+                    // The wait is in progress. Sleep briefly to
+                    // bound the wait-poll frequency; the outer
+                    // loop will service snapshot_rx on the next
+                    // iteration before the next step.
+                    if wait_in_progress {
+                        thread::sleep(super::delivery::WAIT_POLL_INTERVAL);
+                    } else {
+                        // First wait iteration just set up the
+                        // wait; the next step will do the first
+                        // poll. Brief sleep to avoid busy-looping.
+                        thread::sleep(super::delivery::WAIT_POLL_INTERVAL);
+                    }
+                    wait_in_progress = true;
+                    continue;
+                }
                 super::delivery::DeliveryStep::Done => {
                     delivery = None;
+                    wait_in_progress = false;
                     continue;
                 }
             }
@@ -585,15 +613,15 @@ fn run_worker(
             shared.last_change_atomic.fetch_add(1, Ordering::AcqRel);
         }
 
-        // 5. Try to start a new delivery from write_rx. A `Raw`
-        // with no prior group is stashed in `pending_raw` and
-        // processed by step (2) on the next iteration. An
-        // `Envelope` starts a group delivery.
+        // 5. Try to start a new delivery from write_rx. An
+        // `Envelope` starts a group delivery; a `Raw` is stashed
+        // in `pending_raw` and processed by step (2) on the next
+        // iteration.
         match write_rx.try_recv() {
             Ok(DeliveryCommand::Envelope {
                 envelope,
                 outcome_tx,
-            }) => match super::delivery::DeliveryRun::start_envelope_group(
+            }) => match super::delivery::Delivery::start_envelope_group(
                 envelope,
                 outcome_tx,
                 &mut write_rx,
@@ -601,8 +629,9 @@ fn run_worker(
                 &shared,
                 &target_session,
             ) {
-                Ok(run) => {
-                    delivery = Some(run);
+                Ok(d) => {
+                    delivery = Some(d);
+                    wait_in_progress = false;
                     continue;
                 }
                 Err(failure) => {

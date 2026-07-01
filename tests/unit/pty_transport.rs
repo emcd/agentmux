@@ -968,3 +968,307 @@ fn pty_transport_spawns_multi_arg_initial_command() {
         thread::sleep(Duration::from_millis(25));
     }
 }
+
+/// Regression test for Finding 1 (re-review at 9990fc9): a `mailw`
+/// submitted while a `raww` is still in its wait must produce a
+/// delivery outcome, not a closed oneshot. The v1 implementation
+/// drained `write_rx` into a throwaway `empty_group` during the
+/// raw's wait, then dropped the group when the wait returned —
+/// closing every absorbed envelope's `outcome_tx` silently.
+///
+/// Run with `cargo test --test unit pty_transport -- --ignored`
+/// once Zig 0.15.x + libghostty-vt are available.
+#[test]
+#[ignore = "requires Zig 0.15.x + libghostty-vt built; run with --ignored"]
+fn pty_transport_mailw_during_raww_wait_is_not_dropped() {
+    use agentmux::configuration::{
+        BundleMember, PromptReadinessTemplate, PtyTargetConfiguration as PtyConfig,
+    };
+    use agentmux::envelope::AddressIdentity;
+    use agentmux::pty::PtyTargetConfiguration;
+    use agentmux::transports::{DeliveryMessage, StartupContext, Transport};
+
+    let target = BundleMember {
+        id: "fifo-test".to_string(),
+        name: None,
+        working_directory: None,
+        target: agentmux::configuration::TargetConfiguration::Pty(PtyConfig {
+            initial_command: "/bin/cat".to_string(),
+            resume_command: "/bin/cat".to_string(),
+            prompt_readiness: Some(PromptReadinessTemplate {
+                prompt_regex: r"hello".to_string(),
+                inspect_lines: None,
+                input_idle_cursor_column: None,
+            }),
+            prime_timeout_ms: Some(2000),
+            wedge_detection: true,
+            cols: 80,
+            rows: 24,
+        }),
+        coder_session_id: None,
+        policy_id: None,
+    };
+    let mut transport = agentmux::pty::PtyTransport::new(
+        target,
+        PtyTargetConfiguration {
+            initial_command: "/bin/cat".to_string(),
+            resume_command: "/bin/cat".to_string(),
+            prompt_readiness: Some(PromptReadinessTemplate {
+                prompt_regex: r"hello".to_string(),
+                inspect_lines: None,
+                input_idle_cursor_column: None,
+            }),
+            cols: 80,
+            rows: 24,
+            prime_timeout_ms: Some(2000),
+            wedge_detection: true,
+            working_directory: None,
+        },
+    );
+    let context = StartupContext {
+        namespace: "agentmux".to_string(),
+        runtime_directory: std::env::temp_dir(),
+        target_member: BundleMember {
+            id: "fifo-test".to_string(),
+            name: None,
+            working_directory: None,
+            target: agentmux::configuration::TargetConfiguration::Pty(PtyConfig {
+                initial_command: "/bin/cat".to_string(),
+                resume_command: "/bin/cat".to_string(),
+                prompt_readiness: Some(PromptReadinessTemplate {
+                    prompt_regex: r"hello".to_string(),
+                    inspect_lines: None,
+                    input_idle_cursor_column: None,
+                }),
+                prime_timeout_ms: Some(2000),
+                wedge_detection: true,
+                cols: 80,
+                rows: 24,
+            }),
+            coder_session_id: None,
+            policy_id: None,
+        },
+        choose: Arc::new(|_| agentmux::transports::ChoiceMade::Cancelled {
+            decided_by: "test".to_string(),
+            reason_code: "test_cancel".to_string(),
+            reason: None,
+        }),
+    };
+    let status = match transport.startup(context) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "pty_transport_mailw_during_raww_wait_is_not_dropped: \
+                 skipped (startup failed: {e:?})"
+            );
+            return;
+        }
+    };
+    assert!(matches!(
+        status.readiness,
+        agentmux::transports::TransportReadiness::Ready
+    ));
+
+    // Send raww("hello") and immediately (before its wait resolves)
+    // submit a mailw envelope. The envelope must be processed in a
+    // follow-up delivery cycle and produce an outcome (Delivered or
+    // Timeout) — NOT a closed oneshot. With the v1 bug, the
+    // envelope's outcome_tx was dropped on the floor.
+    let raw_outcome = transport.raww("hello".to_string(), true);
+    let envelope = agentmux::transports::DeliveryEnvelope {
+        message_id: "msg-2".to_string(),
+        message: DeliveryMessage {
+            body: "world".to_string(),
+            created_at: "1970-01-01T00:00:00Z".to_string(),
+            namespace: "test".to_string(),
+            sender: AddressIdentity {
+                session_name: "test".to_string(),
+                display_name: None,
+            },
+            target: AddressIdentity {
+                session_name: "fifo-test".to_string(),
+                display_name: None,
+            },
+            cc: Vec::new(),
+            authenticated_identity: None,
+        },
+        append_enter: true,
+        choice_decider_sessions: Vec::new(),
+        quiet_window: Duration::from_millis(50),
+        prime_timeout_ms: Some(2000),
+    };
+    let mailw_outcome = transport.mailw(envelope);
+
+    // The raw should resolve to Delivered (cat echoes "hello\n", the
+    // prompt regex matches).
+    let raw_result =
+        recv_bounded(raw_outcome, Duration::from_secs(5)).expect("raw outcome receive");
+    assert!(
+        matches!(
+            raw_result.outcome,
+            agentmux::transports::SendOutcome::Delivered
+        ),
+        "expected raw Delivered, got {:?}",
+        raw_result.outcome,
+    );
+
+    // The mailw must also produce an outcome. With the v1 bug, the
+    // oneshot was closed (Err), so the receive below would panic
+    // with "oneshot channel closed before delivery".
+    let mailw_result = recv_bounded(mailw_outcome, Duration::from_secs(5))
+        .expect("mailw outcome receive (would fail with closed channel under v1 bug)");
+    assert_eq!(
+        mailw_result.message_id, "msg-2",
+        "mailw outcome message_id should be preserved"
+    );
+    // The outcome can be Delivered (terminal re-matched) or Timeout
+    // (echo "world" did not match "hello" regex). The point is that
+    // an outcome was produced at all, not a closed channel.
+    assert!(
+        matches!(
+            mailw_result.outcome,
+            agentmux::transports::SendOutcome::Delivered
+                | agentmux::transports::SendOutcome::Timeout
+        ),
+        "expected Delivered or Timeout for mailw (NOT closed), got {:?}",
+        mailw_result.outcome,
+    );
+}
+
+/// Regression test for Finding 2 (re-review at 9990fc9): a `look`
+/// issued while a delivery wait is in progress must return
+/// promptly. The v1 implementation blocked the worker thread
+/// inside a `PtyDeliveryWait::run` loop that did not service
+/// `snapshot_rx`, so concurrent look requests waited for the
+/// full prime window (or indefinitely when unbounded).
+///
+/// Run with `cargo test --test unit pty_transport -- --ignored`
+/// once Zig 0.15.x + libghostty-vt are available.
+#[test]
+#[ignore = "requires Zig 0.15.x + libghostty-vt built; run with --ignored"]
+fn pty_transport_look_during_non_ready_wait_returns_promptly() {
+    use agentmux::configuration::{
+        BundleMember, PromptReadinessTemplate, PtyTargetConfiguration as PtyConfig,
+    };
+    use agentmux::pty::PtyTargetConfiguration;
+    use agentmux::transports::{LookSnapshotPayload, StartupContext, Transport};
+
+    // /bin/sleep 5 produces no terminal output for 5 seconds, so
+    // the wait is effectively non-ready for the test's duration.
+    // The raw's wait is bounded by prime_timeout_ms (5000).
+    let target = BundleMember {
+        id: "look-during-wait".to_string(),
+        name: None,
+        working_directory: None,
+        target: agentmux::configuration::TargetConfiguration::Pty(PtyConfig {
+            initial_command: "/bin/sleep 5".to_string(),
+            resume_command: "/bin/sleep 5".to_string(),
+            prompt_readiness: Some(PromptReadinessTemplate {
+                prompt_regex: r"NEVER_MATCHES".to_string(),
+                inspect_lines: None,
+                input_idle_cursor_column: None,
+            }),
+            prime_timeout_ms: Some(5000),
+            wedge_detection: true,
+            cols: 80,
+            rows: 24,
+        }),
+        coder_session_id: None,
+        policy_id: None,
+    };
+    let mut transport = agentmux::pty::PtyTransport::new(
+        target,
+        PtyTargetConfiguration {
+            initial_command: "/bin/sleep 5".to_string(),
+            resume_command: "/bin/sleep 5".to_string(),
+            prompt_readiness: Some(PromptReadinessTemplate {
+                prompt_regex: r"NEVER_MATCHES".to_string(),
+                inspect_lines: None,
+                input_idle_cursor_column: None,
+            }),
+            cols: 80,
+            rows: 24,
+            prime_timeout_ms: Some(5000),
+            wedge_detection: true,
+            working_directory: None,
+        },
+    );
+    let context = StartupContext {
+        namespace: "agentmux".to_string(),
+        runtime_directory: std::env::temp_dir(),
+        target_member: BundleMember {
+            id: "look-during-wait".to_string(),
+            name: None,
+            working_directory: None,
+            target: agentmux::configuration::TargetConfiguration::Pty(PtyConfig {
+                initial_command: "/bin/sleep 5".to_string(),
+                resume_command: "/bin/sleep 5".to_string(),
+                prompt_readiness: Some(PromptReadinessTemplate {
+                    prompt_regex: r"NEVER_MATCHES".to_string(),
+                    inspect_lines: None,
+                    input_idle_cursor_column: None,
+                }),
+                prime_timeout_ms: Some(5000),
+                wedge_detection: true,
+                cols: 80,
+                rows: 24,
+            }),
+            coder_session_id: None,
+            policy_id: None,
+        },
+        choose: Arc::new(|_| agentmux::transports::ChoiceMade::Cancelled {
+            decided_by: "test".to_string(),
+            reason_code: "test_cancel".to_string(),
+            reason: None,
+        }),
+    };
+    let status = match transport.startup(context) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "pty_transport_look_during_non_ready_wait_returns_promptly: \
+                 skipped (startup failed: {e:?})"
+            );
+            return;
+        }
+    };
+    assert!(matches!(
+        status.readiness,
+        agentmux::transports::TransportReadiness::Ready
+    ));
+
+    // Kick off a raw that will sit in its wait for ~5s.
+    let _raw_outcome = transport.raww("hello".to_string(), true);
+
+    // Give the worker a moment to enter the wait state.
+    thread::sleep(Duration::from_millis(100));
+
+    // Issue a look with a 2-second prime_timeout. With the v1 bug,
+    // the worker was blocked in PtyDeliveryWait::run, snapshot_rx
+    // was never drained, the look would wait the full 2s and then
+    // time out. With the fix, the worker services snapshot_rx
+    // every ~10ms, so the look returns in ~20-50ms.
+    let output = transport
+        .give_output()
+        .expect("give_output returns Some after startup");
+    let started = Instant::now();
+    let snapshot = output
+        .look(LookMode {
+            lines: Some(40),
+            offset: None,
+            prime_timeout: Duration::from_secs(2),
+        })
+        .expect("look should succeed");
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "look should return promptly during a non-ready wait, took {:?}",
+        elapsed,
+    );
+    // The look succeeds; the actual content depends on what
+    // /bin/sleep 5 has produced (likely empty since sleep is silent).
+    match snapshot {
+        LookSnapshotPayload::Lines { .. } => {}
+        _ => panic!("expected Lines payload"),
+    }
+}
