@@ -90,9 +90,14 @@ was designed for).
     per-notification multi-entry path is already aggregated into a single
     `Vec<ReplayEntry>` before reaching the append call, so within-
     notification collapse happens at append time over that vector).
-  - `src/acp/mod.rs` — no changes; `ReplayEntry` keeps its current shape.
-  - `src/acp/render.rs` — no changes; `replay_entries_to_snapshot_entries`
-    is a 1:1 clone and is coalescence-agnostic.
+  - `src/acp/mod.rs` — adds a `UserSource` enum
+    (`PromptPath` / `ReaderThread`) that `ReplayEntry::User` carries.
+    The structured-entry boundary drops the source field (consumer
+    side stays unchanged); see the amendment history (Amendment 4)
+    for the rationale.
+  - `src/acp/render.rs` — drops `UserSource` at the snapshot boundary
+    (`replay_entries_to_snapshot_entries` is the 1:1 clone that
+    carries that translation).
   - `src/acp/transport.rs` — no changes; `derive_acp_look_snapshot` reads
     the buffer and applies windowing math, both of which work over a buffer
     that already has the new shape.
