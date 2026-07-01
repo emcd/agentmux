@@ -27,7 +27,7 @@ use crate::runtime::paths::peer_relay_psk_path;
 
 use super::authorization::PeerConfiguration;
 use super::client::RelayStreamSession;
-use super::{RelayError, relay_error};
+use super::{RELAY_NAMESPACE, RelayError, RelayRequest, RelayResponse, relay_error};
 
 /// One configured outbound peer endpoint.
 #[derive(Clone, Debug)]
@@ -92,6 +92,41 @@ impl PeerConnectionManager {
         !self.endpoints.is_empty()
     }
 
+    /// This relay's own outbound identity local part, presented as
+    /// `<relay-id>@RELAY` to a peer. The forwarding handler uses it to set the
+    /// forwarded request's `requester_session` to this relay's authenticated
+    /// principal (the peer sees this relay as the sender; original-sender
+    /// attribution via `on_behalf_of` is deferred). `None` when no peers are
+    /// configured.
+    #[must_use]
+    pub fn own_relay_principal_id(&self) -> Option<String> {
+        self.relay_id
+            .as_deref()
+            .map(|relay_id| format!("{relay_id}@{RELAY_NAMESPACE}"))
+    }
+
+    /// Forwards a fully-formed request to the peer named by `relay_id` and
+    /// returns its response, establishing the connection lazily. Transport and
+    /// handshake failures map to the same typed errors as [`connect`]; a peer
+    /// that answers (including with an error response) returns that response for
+    /// the caller to propagate as the delivery outcome.
+    ///
+    /// [`connect`]: PeerConnectionManager::connect
+    pub fn forward(
+        &self,
+        relay_id: &str,
+        request: &RelayRequest,
+    ) -> Result<RelayResponse, RelayError> {
+        let prepared = self.prepare(relay_id)?;
+        let mut slot = prepared
+            .session
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Self::session_mut(&mut slot, &prepared)
+            .request(request)
+            .map_err(|source| prepared.unavailable_error(&source))
+    }
+
     /// Establishes (or reuses) the outbound connection to the peer named by the
     /// bang-path `relay_id`, presenting this relay's `<relay-id>@RELAY` identity
     /// with the peer PSK. Returns a typed [`RelayError`] the caller maps to a
@@ -106,6 +141,24 @@ impl PeerConnectionManager {
     /// None of these fail relay startup — the connection is lazy, so every
     /// failure is scoped to the affected delivery.
     pub fn connect(&self, relay_id: &str) -> Result<(), RelayError> {
+        let prepared = self.prepare(relay_id)?;
+        let mut slot = prepared
+            .session
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Self::session_mut(&mut slot, &prepared)
+            .connect()
+            .map_err(|source| prepared.unavailable_error(&source))
+    }
+
+    /// Validates the peer endpoint, this relay's identity, and the peer
+    /// credential, returning the per-peer session slot plus the parameters a
+    /// lazy dial needs. Shared by [`connect`] and [`forward`] so the two agree on
+    /// classification and credential handling.
+    ///
+    /// [`connect`]: PeerConnectionManager::connect
+    /// [`forward`]: PeerConnectionManager::forward
+    fn prepare(&self, relay_id: &str) -> Result<PreparedDial<'_>, RelayError> {
         let endpoint = self.endpoints.get(relay_id).ok_or_else(|| {
             relay_error(
                 "validation_unknown_peer",
@@ -121,24 +174,31 @@ impl PeerConnectionManager {
             )
         })?;
         let token = self.read_peer_credential(endpoint.alias.as_str())?;
-        let mutex = self
+        let session = self
             .sessions
             .get(relay_id)
             .expect("session slot exists for every configured peer");
-        let mut slot = mutex
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if slot.is_none() {
-            *slot = Some(RelayStreamSession::for_peer_relay(
-                endpoint.address.clone(),
-                own_relay_id.to_string(),
-                token,
-            ));
-        }
-        slot.as_mut()
-            .expect("peer session present after lazy initialization")
-            .connect()
-            .map_err(|source| self.unavailable_error(relay_id, endpoint, &source))
+        Ok(PreparedDial {
+            relay_id: relay_id.to_string(),
+            endpoint,
+            own_relay_id: own_relay_id.to_string(),
+            token,
+            session,
+        })
+    }
+
+    /// Returns the peer's session, initializing it lazily on first use.
+    fn session_mut<'slot>(
+        slot: &'slot mut Option<RelayStreamSession>,
+        prepared: &PreparedDial<'_>,
+    ) -> &'slot mut RelayStreamSession {
+        slot.get_or_insert_with(|| {
+            RelayStreamSession::for_peer_relay(
+                prepared.endpoint.address.clone(),
+                prepared.own_relay_id.clone(),
+                prepared.token.clone(),
+            )
+        })
     }
 
     /// Reads the outbound PSK for a peer from `<state-root>/peers/<alias>.psk`.
@@ -167,19 +227,27 @@ impl PeerConnectionManager {
             Err(source) => Err(credential_error(source.to_string().as_str())),
         }
     }
+}
 
-    fn unavailable_error(
-        &self,
-        relay_id: &str,
-        endpoint: &PeerEndpoint,
-        source: &std::io::Error,
-    ) -> RelayError {
+/// The validated inputs a lazy dial needs, borrowed from the manager for the
+/// duration of one [`PeerConnectionManager::connect`] or
+/// [`PeerConnectionManager::forward`] call.
+struct PreparedDial<'a> {
+    relay_id: String,
+    endpoint: &'a PeerEndpoint,
+    own_relay_id: String,
+    token: String,
+    session: &'a Mutex<Option<RelayStreamSession>>,
+}
+
+impl PreparedDial<'_> {
+    fn unavailable_error(&self, source: &std::io::Error) -> RelayError {
         relay_error(
             "runtime_peer_unavailable",
             "outbound peer relay connection could not be established",
             Some(json!({
-                "relay_id": relay_id,
-                "address": endpoint.address.display().to_string(),
+                "relay_id": self.relay_id,
+                "address": self.endpoint.address.display().to_string(),
                 "cause": source.to_string(),
             })),
         )

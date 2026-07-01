@@ -139,6 +139,51 @@ fn connect_reports_peer_unavailable_when_unreachable() {
 }
 
 #[test]
+fn forward_reports_peer_unavailable_when_unreachable() {
+    let temporary = TempDir::new().expect("temporary");
+    let state_root = temporary.path().join("state");
+    write_peer_credential(&state_root, "peer", "peer-secret-token");
+    // No listener bound: forwarding a request to an unreachable peer surfaces
+    // the same typed unavailability outcome as a bare connect.
+    let socket_path = temporary.path().join("nonexistent.sock");
+
+    let manager = PeerConnectionManager::from_configuration(
+        Some("this-relay".to_string()),
+        &state_root,
+        &[peer("peer@RELAY", &socket_path)],
+    );
+    let request = agentmux::relay::RelayRequest::Send {
+        request_id: Some("origin-1".to_string()),
+        requester_session: "this-relay@RELAY".to_string(),
+        message: "hello".to_string(),
+        targets: vec!["claude@myapp".to_string()],
+        broadcast: false,
+        quiet_window_ms: None,
+    };
+    let error = manager
+        .forward("peer", &request)
+        .expect_err("forwarding to an unreachable peer should be unavailable");
+    assert_eq!(error.code, "runtime_peer_unavailable");
+}
+
+#[test]
+fn own_relay_principal_id_qualifies_configured_relay_id() {
+    let temporary = TempDir::new().expect("temporary");
+    let manager = PeerConnectionManager::from_configuration(
+        Some("this-relay".to_string()),
+        temporary.path(),
+        &[],
+    );
+    assert_eq!(
+        manager.own_relay_principal_id().as_deref(),
+        Some("this-relay@RELAY"),
+    );
+
+    let without = PeerConnectionManager::from_configuration(None, temporary.path(), &[]);
+    assert!(without.own_relay_principal_id().is_none());
+}
+
+#[test]
 fn manager_without_peers_is_not_configured() {
     let temporary = TempDir::new().expect("temporary");
     let manager = PeerConnectionManager::from_configuration(None, temporary.path(), &[]);
