@@ -25,6 +25,7 @@
 //! [`is_ready`]: Transport::is_ready
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -39,12 +40,13 @@ use crate::acp::state::{
     persist_acp_session_id,
 };
 use crate::acp::{
-    AcpStdioClient, DispatchHandler, PermissionResponder, PromptCompletion,
+    AcpStdioClient, DispatchHandler, PermissionHandler, PermissionResponder, PromptCompletion,
     PromptCompletionHandler, PromptDispatchOutcome,
 };
 
 use crate::configuration::{AcpChannel, AcpTargetConfiguration, BundleMember, TargetConfiguration};
 use crate::envelope::PromptBatchSettings;
+use crate::runtime::inscriptions::emit_delivery_diagnostic;
 use crate::runtime::signals::shutdown_requested;
 use crate::transports::contract::OutcomeFuture;
 use crate::transports::{
@@ -57,6 +59,13 @@ use crate::transports::{SendOutcome, WorkerReadinessState};
 // catalogue). These mirror the codes the relay completion path used before the
 // transport move so the wire outcomes are unchanged.
 const ACP_REASON_CODE_STOP_CANCELLED: &str = "acp_stop_cancelled";
+/// Prime-timeout reason code reused for the bounded-prime-wait fire. The
+/// canonical mapping is recorded in `session-relay/spec.md` under
+/// "ACP Stop-Reason Outcome Mapping"; the
+/// `acp-prime-timeout-and-wedge-detection` proposal reuses this code on the
+/// ACP delivery task's prime timer fire (a new `SendOutcome` variant is NOT
+/// introduced).
+const ACP_REASON_CODE_PRIME_TIMEOUT: &str = "acp_turn_timeout";
 /// Bootstrap initialize failure; surfaced to the worker's respawn classifier.
 pub const ACP_ERROR_CODE_INITIALIZE_FAILED: &str = "runtime_acp_initialize_failed";
 const ACP_ERROR_CODE_SESSION_LOAD_FAILED: &str = "runtime_acp_session_load_failed";
@@ -574,11 +583,17 @@ fn set_shared_readiness(shared: &AcpSharedState, state: WorkerReadinessState) {
 }
 
 /// A batch of rendered envelopes with their metadata, ready for combining.
+///
+/// The batch carries a single `prime_timeout_ms` taken from the head envelope;
+/// the entire flush group's per-turn prime wait is governed by the head
+/// envelope's deadline. Coalesce-during-wait does NOT extend or restart the
+/// prime window — absorbed envelopes inherit the head envelope's anchor.
 struct EnvelopeBatch {
     rendered: Vec<String>,
     message_ids: Vec<String>,
     decider_sessions: Vec<Vec<String>>,
     outcome_senders: Vec<tokio::sync::oneshot::Sender<SingleDeliveryOutcome>>,
+    prime_timeout_ms: Option<u64>,
 }
 
 /// Channels connecting the transport to its internal delivery task.
@@ -648,6 +663,7 @@ fn acp_delivery_task(
                     message_ids: vec![envelope.message_id.clone()],
                     decider_sessions: vec![envelope.choice_decider_sessions.clone()],
                     outcome_senders: vec![outcome_tx],
+                    prime_timeout_ms: envelope.prime_timeout_ms,
                 };
 
                 loop {
@@ -763,6 +779,10 @@ fn dropped_on_shutdown_outcome() -> SingleDeliveryOutcome {
 /// Each sender receives its own message_id in the outcome, even when multiple
 /// envelopes are combined into one turn. The group's head message_id and decider
 /// sessions correlate any choice raised mid-turn.
+///
+/// `prime_timeout_ms` from the batch governs every turn submitted in this
+/// flush group; the value is set once at head-envelope time and does NOT
+/// change across coalesce iterations or token-budget splits.
 fn flush_envelope_group(
     client: &mut AcpStdioClient,
     ctx: &TurnContext,
@@ -771,6 +791,7 @@ fn flush_envelope_group(
 ) {
     let groups = crate::envelope::batch_envelope_groups(&batch.rendered, *batch_settings);
     batch.rendered.clear();
+    let prime_timeout_ms = batch.prime_timeout_ms;
     let mut message_ids = batch.message_ids.drain(..);
     let mut decider_sessions = batch.decider_sessions.drain(..);
     let mut outcome_senders = batch.outcome_senders.drain(..);
@@ -789,6 +810,7 @@ fn flush_envelope_group(
             &group.combined_prompt,
             &head_msg_id,
             &head_deciders,
+            prime_timeout_ms,
         );
         for (sender_msg_id, tx) in group_msg_ids.into_iter().zip(group_senders) {
             let mut sender_outcome = outcome.clone();
@@ -799,15 +821,36 @@ fn flush_envelope_group(
 }
 
 /// Submits one combined prompt as an ACP turn, blocking until completion.
+///
+/// `prime_timeout_ms` is the head envelope's bounded-prime-window value. When
+/// `Some(ms)`, the per-turn wait loop tracks a prime timer anchored at first
+/// wait start (does NOT reset on coalesce iterations; this function is invoked
+/// once per group, so there are no internal coalesce iterations to reset on).
+/// On prime-timer fire the loop exits with `SendOutcome::Timeout` +
+/// `reason_code = "acp_turn_timeout"`, latches per-target readiness to
+/// `Unavailable`, emits a `delivery_prime_timeout` inscription, and signals
+/// respawn-needed. When `None`, the prime timer is unbounded (today's default
+/// behavior) and the loop exits only on completion, shutdown, or transport
+/// failure.
+#[allow(clippy::too_many_arguments)]
 fn submit_envelope_turn(
     client: &mut AcpStdioClient,
     ctx: &TurnContext,
     prompt: &str,
     message_id: &str,
     decider_sessions: &[String],
+    prime_timeout_ms: Option<u64>,
 ) -> SingleDeliveryOutcome {
     let pending_choice: Arc<Mutex<Option<ChoiceMade>>> = Arc::new(Mutex::new(None));
     let completion_slot: Arc<Mutex<Option<PromptCompletion>>> = Arc::new(Mutex::new(None));
+    // Set to `true` by the wrapper around the real permission handler when
+    // the agent raises a `session/request_permission` for this turn. Used by
+    // the prime-timer suppression predicate to distinguish "no choice was
+    // raised" (suppress=false; the prime timer can fire normally) from "a
+    // choice is in flight, operator has not yet decided" (suppress=true; the
+    // prime timer must NOT fire because the operator is mid-decision and
+    // firing `Timeout` would be a false positive).
+    let permission_was_raised: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
     let shared_for_dispatch = Arc::clone(ctx.shared);
     let on_dispatched: DispatchHandler = Box::new(move || {
@@ -820,11 +863,19 @@ fn submit_envelope_turn(
             target_session: ctx.target_session.to_string(),
             decider_sessions: decider_sessions.to_vec(),
         };
-        build_acp_permission_handler(chooser.clone(), correlation, Arc::clone(&pending_choice))
+        let mut inner =
+            build_acp_permission_handler(chooser.clone(), correlation, Arc::clone(&pending_choice));
+        let raised_flag = Arc::clone(&permission_was_raised);
+        let wrapped: PermissionHandler = Box::new(move |req, responder| {
+            raised_flag.store(true, Ordering::Release);
+            (inner)(req, responder);
+        });
+        wrapped
     } else {
-        Box::new(|_req, mut responder: PermissionResponder| {
+        let wrapped: PermissionHandler = Box::new(|_req, mut responder: PermissionResponder| {
             responder.respond(None);
-        })
+        });
+        wrapped
     };
 
     let completion_writer = Arc::clone(&completion_slot);
@@ -842,13 +893,63 @@ fn submit_envelope_turn(
 
     match dispatch {
         PromptDispatchOutcome::Submitted => {
-            loop {
-                if client.wait_for_prompt_complete(ACP_PROMPT_WAIT_POLL_INTERVAL) {
-                    break;
-                }
-                if shutdown_requested() {
-                    break;
-                }
+            // Prime timer anchor: "first wait start" per
+            // `acp-prime-timeout-and-wedge-detection/design.md` Decision 3.
+            // The timer starts when this loop first enters the wait; not at
+            // envelope enqueue time, not at `client.prompt` call time. The
+            // deadline is `None` when no per-coder prime timeout is configured,
+            // which preserves today's unbounded behavior.
+            let prime_started_at = Instant::now();
+            let prime_deadline =
+                prime_timeout_ms.map(|ms| prime_started_at + Duration::from_millis(ms));
+            let timed_out = run_prime_bounded_wait(
+                client,
+                prime_deadline,
+                &completion_slot,
+                &pending_choice,
+                &permission_was_raised,
+            );
+            if timed_out {
+                // Prime timer fired before the `PromptCompletion` callback ran
+                // and before any pending choice resolved. Resolve the flush
+                // group as `Timeout` + `acp_turn_timeout`, latch readiness to
+                // `Unavailable` (matching `PromptCompletion::ConnectionClosed`),
+                // and emit the diagnostic. Do NOT cancel the in-flight prompt
+                // via `client.cancel()` — the prompt may still resolve and we
+                // should not assume the server honors cancellation; the
+                // transport resolves this flush group and the relay does not
+                // inject further messages until the worker respawns. The
+                // outer `acp_delivery_task` loop's `signal_respawn_if_needed`
+                // call publishes the respawn-needed signal once it observes
+                // `readiness == Unavailable` after this `submit_envelope_turn`
+                // returns, so no separate publish is needed here.
+                //
+                // The leaked `last_prompt_signal` on the client is cleaned up
+                // by the next `client.prompt` (it overwrites the slot) or by
+                // `client.shutdown` (which closes the channel). The
+                // `run_prime_bounded_wait` exit path skips the
+                // `completion_slot.take()` below; any future completion that
+                // arrives after we return is dropped by the next-turn
+                // overwrite of the slot.
+                let elapsed_ms = Instant::now()
+                    .saturating_duration_since(prime_started_at)
+                    .as_millis();
+                let timeout_ms = prime_timeout_ms.unwrap_or(0);
+                emit_delivery_diagnostic(
+                    "delivery_prime_timeout",
+                    &json!({
+                        "target_session": ctx.target_session,
+                        "timeout_ms": timeout_ms,
+                        "prime_wait_elapsed_ms": elapsed_ms,
+                    }),
+                );
+                let outcome = prime_timeout_outcome(
+                    ctx.target_session.to_string(),
+                    message_id.to_string(),
+                    timeout_ms,
+                );
+                set_turn_readiness(ctx, WorkerReadinessState::Unavailable);
+                return outcome;
             }
             let completion = completion_slot
                 .lock()
@@ -888,14 +989,87 @@ fn submit_envelope_turn(
     }
 }
 
-/// Submits raw content as an ACP turn (no envelope framing).
+/// Submits raw content as an ACP turn (no envelope framing). Raw-mode writes
+/// are intentionally NOT bounded by the prime timer — they preserve today's
+/// unbounded behavior because there is no per-raw-write envelope to read
+/// `prime_timeout_ms` from.
 fn submit_raw_turn(
     client: &mut AcpStdioClient,
     ctx: &TurnContext,
     content: &str,
     _append_enter: bool,
 ) -> SingleDeliveryOutcome {
-    submit_envelope_turn(client, ctx, content, "", &[])
+    submit_envelope_turn(client, ctx, content, "", &[], None)
+}
+
+/// Polls the prompt completion slot under a bounded prime wait.
+///
+/// Returns `true` if the prime window elapsed AND no `PromptCompletion` was
+/// observed AND any permission request raised for the turn has resolved by the
+/// time the deadline hit (an unresolved choice mid-turn suppresses the prime
+/// fire). Returns `false` for normal exits (completion observed, shutdown
+/// requested).
+///
+/// `prime_deadline` is `None` for the unbounded case; the helper still loops
+/// but the deadline check never trips. `permission_was_raised` is `true` when
+/// the agent raised a `session/request_permission` and the operator decision
+/// has not yet landed in `pending_choice`; in that state the prime timer
+/// keeps waiting. This matches the
+/// `acp-prime-timeout-and-wedge-detection/design.md` Decisions 3 and 6.
+fn run_prime_bounded_wait(
+    client: &mut AcpStdioClient,
+    prime_deadline: Option<Instant>,
+    completion_slot: &Arc<Mutex<Option<PromptCompletion>>>,
+    pending_choice: &Arc<Mutex<Option<ChoiceMade>>>,
+    permission_was_raised: &Arc<AtomicBool>,
+) -> bool {
+    loop {
+        if client.wait_for_prompt_complete(ACP_PROMPT_WAIT_POLL_INTERVAL) {
+            return false;
+        }
+        if shutdown_requested() {
+            return false;
+        }
+        if let Some(deadline) = prime_deadline
+            && Instant::now() >= deadline
+        {
+            let raised = permission_was_raised.load(Ordering::Acquire);
+            let resolved = pending_choice
+                .lock()
+                .expect("pending_choice mutex")
+                .is_some();
+            if raised && !resolved {
+                continue;
+            }
+            if completion_slot
+                .lock()
+                .expect("completion slot mutex")
+                .is_some()
+            {
+                return false;
+            }
+            return true;
+        }
+    }
+}
+
+/// Builds the `SendOutcome::Timeout` + `reason_code = "acp_turn_timeout"`
+/// outcome used when the prime timer fires. The `details` payload records
+/// the operator-configured deadline so operators can correlate the failure
+/// to the bundle config that produced it.
+fn prime_timeout_outcome(
+    target_session: String,
+    message_id: String,
+    timeout_ms: u64,
+) -> SingleDeliveryOutcome {
+    SingleDeliveryOutcome {
+        target_session,
+        message_id,
+        outcome: SendOutcome::Timeout,
+        reason_code: Some(ACP_REASON_CODE_PRIME_TIMEOUT.to_string()),
+        reason: Some("ACP prime timer elapsed before prompt completion".to_string()),
+        details: Some(json!({ "timeout_ms": timeout_ms })),
+    }
 }
 
 /// Builds the per-target ACP runtime. Used by the relay worker for initial

@@ -31,11 +31,11 @@ fn acp_turn_timeout_is_accepted_for_async_dispatch() {
 }
 
 #[test]
-fn acp_coder_default_turn_timeout_is_accepted_for_async_dispatch() {
+fn acp_coder_prime_timeout_is_accepted_for_async_dispatch() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions {
         prompt_delay_sec: 1,
-        coder_turn_timeout_ms: Some(120),
+        coder_prime_timeout_ms: Some(120),
         ..AcpStubOptions::default()
     };
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);

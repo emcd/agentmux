@@ -1,6 +1,6 @@
 ## 1. Spec and design
 
-- [ ] 1.1 ADD the ACP Prime Timeout requirement to
+- [x] 1.1 ADD the ACP Prime Timeout requirement to
       `session-relay/spec.md` (the new requirement lives in the
       `acp-prime-timeout-and-wedge-detection/specs/session-relay/spec.md`
       delta and merges into `specs/session-relay/spec.md` on archive)

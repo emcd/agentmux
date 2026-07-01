@@ -185,8 +185,28 @@ pub struct AcpTargetConfiguration {
     pub command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// Per-coder bounded prime window for the ACP per-turn prompt
+    /// completion wait. When `Some`, the ACP transport's internal
+    /// delivery task resolves the wait as `SendOutcome::Timeout` with
+    /// `reason_code = "acp_turn_timeout"` if no terminal
+    /// `PromptCompletion` AND no `pending_choice_outcome` is observed
+    /// for the configured milliseconds. `None` (or absent) preserves
+    /// the unbounded wait. The key lives under `[coders.<id>.acp]`
+    /// and is called `prime-timeout-ms` in TOML — symmetric with the
+    /// Tmux-side `[coders.<id>.tmux].prime-timeout-ms` key; the table
+    /// itself namespaces the transport.
+    ///
+    /// Mirrored onto [`crate::transports::DeliveryEnvelope::prime_timeout_ms`]
+    /// by the relay dispatch worker for ACP targets; the Tmux transport
+    /// consumes the same envelope field.
+    ///
+    /// Renamed from the pre-existing `turn_timeout_ms` field (which was
+    /// never consumed by the runtime; pre-existing field was dead
+    /// baggage). The TOML key is therefore `prime-timeout-ms`, not
+    /// `turn-timeout-ms`; legacy configs using `turn-timeout-ms` fail
+    /// the raw loader's `deny_unknown_fields` check at bundle load.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_timeout_ms: Option<u64>,
+    pub prime_timeout_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub headers: Vec<NameValueEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

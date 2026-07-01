@@ -47,10 +47,11 @@ use crate::transports::{
 const LOOK_LINES_DEFAULT: usize = 120;
 
 use super::pane::{
-    capture_pane_snapshot, capture_pane_tail_lines, emit_delivery_diagnostic, inject_literal_text,
+    capture_pane_snapshot, capture_pane_tail_lines, inject_literal_text,
     operator_interaction_active, resolve_active_pane_target, resolve_cursor_column,
     resolve_window_activity_marker, sanitize_diagnostic_text,
 };
+use crate::runtime::inscriptions::emit_delivery_diagnostic;
 
 const PROMPT_INSPECT_LINES_DEFAULT: usize = 3;
 const PROMPT_INSPECT_LINES_MAX: usize = 40;
