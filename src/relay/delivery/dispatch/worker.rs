@@ -308,20 +308,24 @@ fn build_worker_transport(
                 crate::configuration::TargetConfiguration::Pty(pty_cfg) => {
                     crate::pty::PtyTargetConfiguration {
                         initial_command: pty_cfg.initial_command.clone(),
-                        resume_command: pty_cfg.initial_command.clone(),
+                        resume_command: pty_cfg.resume_command.clone(),
+                        prompt_readiness: pty_cfg.prompt_readiness.clone(),
                         cols: pty_cfg.cols,
                         rows: pty_cfg.rows,
                         prime_timeout_ms: pty_cfg.prime_timeout_ms,
                         wedge_detection: pty_cfg.wedge_detection,
+                        working_directory: target_member.working_directory.clone(),
                     }
                 }
                 _ => crate::pty::PtyTargetConfiguration {
                     initial_command: String::new(),
                     resume_command: String::new(),
+                    prompt_readiness: None,
                     cols: 120,
                     rows: 40,
                     prime_timeout_ms: None,
                     wedge_detection: true,
+                    working_directory: target_member.working_directory.clone(),
                 },
             };
             let mut transport = TransportImpl::pty(target_member.clone(), pty_config);

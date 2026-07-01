@@ -80,13 +80,13 @@ fn stuck_unready_snapshot() -> SnapshotResponse {
 fn spawn_mock_worker(
     mut rx: mpsc::Receiver<agentmux::pty::SnapshotRequest>,
     script: Arc<Mutex<VecDeque<SnapshotResponse>>>,
-    last_byte_atomic: Arc<std::sync::atomic::AtomicU64>,
+    last_change_atomic: Arc<std::sync::atomic::AtomicU64>,
 ) -> (thread::JoinHandle<()>, thread::JoinHandle<()>) {
-    let atomic_for_worker = last_byte_atomic.clone();
+    let atomic_for_worker = last_change_atomic.clone();
     let worker = thread::spawn(move || {
         let mut last_response: Option<SnapshotResponse> = None;
         while let Some(req) = rx.blocking_recv() {
-            // Update last_byte_atomic on every snapshot request so the
+            // Update last_change_atomic on every snapshot request so the
             // probe's `wait_for_change` returns Ok(()) immediately (the
             // mock worker's reception of a request signals "something
             // changed").
@@ -111,7 +111,7 @@ fn spawn_mock_worker(
             let _ = req.tx.send(response);
         }
     });
-    let atomic_for_timer = last_byte_atomic;
+    let atomic_for_timer = last_change_atomic;
     let timer = thread::spawn(move || {
         loop {
             thread::sleep(Duration::from_millis(50));
@@ -133,7 +133,7 @@ fn make_pty_shared(
     prompt_idle_column: Option<u16>,
 ) -> (PtyShared, thread::JoinHandle<()>) {
     let (tx, rx) = mpsc::channel::<agentmux::pty::SnapshotRequest>(64);
-    let last_byte_atomic = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let last_change_atomic = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let shared = PtyShared {
         config: PtyConfigSnapshot {
             target_member_id: TEST_TARGET_SESSION.to_string(),
@@ -145,10 +145,10 @@ fn make_pty_shared(
             prime_timeout_ms,
             wedge_detection,
         },
-        last_byte_atomic: last_byte_atomic.clone(),
+        last_change_atomic: last_change_atomic.clone(),
         snapshot_tx: tx,
     };
-    let (_worker_handle, _timer_handle) = spawn_mock_worker(rx, script, last_byte_atomic);
+    let (_worker_handle, _timer_handle) = spawn_mock_worker(rx, script, last_change_atomic);
     (shared, _worker_handle)
 }
 
@@ -692,19 +692,103 @@ fn pty_transport_round_trips_cat_line() {
         coder_session_id: None,
         policy_id: None,
     };
-    let transport = agentmux::pty::PtyTransport::new(
+    let mut transport = agentmux::pty::PtyTransport::new(
         target,
         PtyTargetConfiguration {
             initial_command: "/bin/cat".to_string(),
             resume_command: "/bin/cat".to_string(),
+            prompt_readiness: None,
             cols: 80,
             rows: 24,
             prime_timeout_ms: None,
             wedge_detection: true,
+            working_directory: None,
         },
     );
-    // NOTE: full round-trip requires libghostty-vt built. The
-    // assertion below is a stub; replace with the actual look +
-    // assert once Zig 0.15.x is on PATH.
-    let _ = transport;
+    // `startup` spawns the child + builds the terminal. If libghostty-
+    // vt is not built or Zig 0.15.x is not on PATH, the terminal
+    // construction fails; the test then skips with a clear message so
+    // --ignored runs are meaningful when Zig is available but do not
+    // panic when it is not.
+    use agentmux::transports::{LookMode, LookSnapshotPayload, StartupContext, Transport};
+    use std::time::Duration;
+    let context = StartupContext {
+        namespace: "agentmux".to_string(),
+        runtime_directory: std::env::temp_dir(),
+        target_member: BundleMember {
+            id: "cat-test".to_string(),
+            name: None,
+            working_directory: None,
+            target: agentmux::configuration::TargetConfiguration::Pty(PtyConfig {
+                initial_command: "/bin/cat".to_string(),
+                resume_command: "/bin/cat".to_string(),
+                prompt_readiness: None,
+                prime_timeout_ms: None,
+                wedge_detection: true,
+                cols: 80,
+                rows: 24,
+            }),
+            coder_session_id: None,
+            policy_id: None,
+        },
+        choose: Arc::new(|_| agentmux::transports::ChoiceMade::Cancelled {
+            decided_by: "test".to_string(),
+            reason_code: "test_cancel".to_string(),
+            reason: None,
+        }),
+    };
+    let status = match transport.startup(context) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "pty_transport_round_trips_cat_line: skipped (startup failed: {e:?}); \
+                 requires Zig 0.15.x + libghostty-vt built via --features pty"
+            );
+            return;
+        }
+    };
+    assert!(
+        matches!(
+            status.readiness,
+            agentmux::transports::TransportReadiness::Ready
+        ),
+        "startup should report Ready, got {:?}",
+        status.readiness,
+    );
+
+    // Write "hello\n" via raww, await the outcome with a bounded wait.
+    let outcome_rx = transport.raww("hello".to_string(), true);
+    let outcome = outcome_rx
+        .blocking_recv()
+        .expect("raww outcome channel dropped before resolution");
+    assert!(
+        matches!(
+            outcome.outcome,
+            agentmux::transports::SendOutcome::Delivered
+                | agentmux::transports::SendOutcome::Failed
+                | agentmux::transports::SendOutcome::Timeout
+        ),
+        "unexpected outcome: {outcome:?}",
+    );
+
+    // Read back via give_output + look. The snapshot should contain
+    // "hello" somewhere in the lines if the round-trip succeeded.
+    let output = transport
+        .give_output()
+        .expect("give_output returns Some after startup");
+    let snapshot = output
+        .look(LookMode {
+            lines: Some(40),
+            offset: None,
+            prime_timeout: Duration::from_secs(2),
+        })
+        .expect("look should succeed");
+    let snapshot_lines = match snapshot {
+        LookSnapshotPayload::Lines { snapshot_lines } => snapshot_lines,
+        _ => panic!("expected Lines payload"),
+    };
+    assert!(
+        snapshot_lines.iter().any(|line| line.contains("hello")),
+        "snapshot did not contain the echoed input: {snapshot_lines:?}",
+    );
 }

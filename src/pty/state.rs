@@ -38,6 +38,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use libghostty_vt::fmt::{Format, Formatter, FormatterOptions};
 use regex::Regex;
 use tokio::sync::{mpsc, oneshot};
 
@@ -113,13 +114,14 @@ pub struct SnapshotResponse {
 
 /// `Send + Sync` shared state consulted by the look path and the
 /// [`PtyQuiescenceProbe`]. Holds the per-coder config snapshot, the
-/// last-byte atomic timestamp (used by the probe's `wait_for_change`),
-/// and the snapshot-request sender (the receiver lives in [`PtyState`]
-/// on the worker thread).
+/// change-generation atomic (advanced by the worker thread after each
+/// `vt_write` batch; polled by the probe's `wait_for_change` to detect
+/// new terminal output), and the snapshot-request sender (the
+/// receiver lives in [`PtyState`] on the worker thread).
 #[derive(Clone)]
 pub struct PtyShared {
     pub config: PtyConfigSnapshot,
-    pub last_byte_atomic: Arc<AtomicU64>,
+    pub last_change_atomic: Arc<AtomicU64>,
     pub snapshot_tx: mpsc::Sender<SnapshotRequest>,
 }
 
@@ -306,13 +308,150 @@ impl WedgeProbe for PtyQuiescenceProbe {
     }
 
     fn wait_for_change(&mut self, deadline: Instant) -> Result<(), DeliveryWaitError> {
-        // Poll the last-byte atomic timestamp. Pty's reader thread
-        // updates it on every byte it forwards into the terminal;
-        // a change indicates new terminal output is available, which
-        // breaks quiescence.
-        let initial = self.shared.last_byte_atomic.load(Ordering::Acquire);
+        // Poll the change atomic. The Pty worker thread advances it
+        // AFTER `terminal.vt_write(&bytes)` on each reader batch, so a
+        // change here signals "new terminal output is available" —
+        // the terminal has already consumed the bytes, so the next
+        // observation reflects the new screen state.
+        let initial = self.shared.last_change_atomic.load(Ordering::Acquire);
         while Instant::now() < deadline {
-            if self.shared.last_byte_atomic.load(Ordering::Acquire) != initial {
+            if self.shared.last_change_atomic.load(Ordering::Acquire) != initial {
+                return Ok(());
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        Err(DeliveryWaitError::Timeout {
+            timeout: deadline.saturating_duration_since(Instant::now()),
+            readiness_mismatch: false,
+            mismatch_reason: None,
+        })
+    }
+}
+
+/// Same-thread wedge probe for the Pty worker thread's delivery task.
+///
+/// The cross-thread [`PtyQuiescenceProbe`] drives quiescence via the
+/// snapshot channel, which is fine for callers running on a different
+/// thread (the relay look path). The worker thread itself, however,
+/// is the only thread servicing the snapshot receiver; if the delivery
+/// task constructed a `PtyQuiescenceProbe` and called `observe`, the
+/// `blocking_send` would queue a request that the worker (currently
+/// blocked inside `wait_for`) cannot service — a self-deadlock.
+///
+/// `WorkerTerminalProbe` instead holds a `&mut` borrow of the live
+/// terminal on the worker thread; `observe` reads the terminal state
+/// directly (no channel), and `wait_for_change` polls the
+/// `last_change_atomic` that the worker advances after each
+/// `vt_write` batch. The cross-thread and same-thread probes share
+/// the same `PtyShared` configuration (prompt regex, idle column,
+/// wedge/prime switches) so the state machine sees consistent
+/// readiness semantics from either side.
+///
+/// `!Send + !Sync` by construction: the terminal borrow is local to
+/// the worker thread. The probe must not outlive the worker.
+pub struct WorkerTerminalProbe<'a> {
+    terminal: &'a mut libghostty_vt::Terminal<'static, 'static>,
+    config: PtyConfigSnapshot,
+    last_change_atomic: Arc<AtomicU64>,
+}
+
+impl<'a> WorkerTerminalProbe<'a> {
+    /// Construct a worker-local probe. The `last_change_atomic` is
+    /// the same `Arc<AtomicU64>` shared with the cross-thread
+    /// `PtyQuiescenceProbe`; both probes see the same generation
+    /// sequence.
+    #[must_use]
+    pub fn new(
+        terminal: &'a mut libghostty_vt::Terminal<'static, 'static>,
+        config: PtyConfigSnapshot,
+        last_change_atomic: Arc<AtomicU64>,
+    ) -> Self {
+        Self {
+            terminal,
+            config,
+            last_change_atomic,
+        }
+    }
+}
+
+impl<'a> WedgeProbe for WorkerTerminalProbe<'a> {
+    fn observe(&mut self) -> Result<WedgeObservation, String> {
+        let formatter_result = Formatter::new(
+            self.terminal,
+            FormatterOptions::new()
+                .with_format(Format::Plain)
+                .with_trim(true),
+        );
+        let bytes = match formatter_result {
+            Ok(formatter) => {
+                let mut f = formatter;
+                match f.format_alloc(None) {
+                    Ok(bytes) => bytes.as_ref().to_vec(),
+                    Err(_) => Vec::new(),
+                }
+            }
+            Err(_) => Vec::new(),
+        };
+        let tail = String::from_utf8_lossy(&bytes).to_string();
+
+        let regex_matches = match self.config.prompt_regex.as_ref() {
+            Some(regex) => regex.is_match(&tail),
+            None => true,
+        };
+        let cursor_x = self.terminal.cursor_x().unwrap_or(0);
+        let cursor_idle_at_expected = match self.config.prompt_idle_column {
+            Some(expected) => cursor_x == expected,
+            None => true,
+        };
+        let is_prompt_ready = regex_matches && cursor_idle_at_expected;
+        let tail_empty = tail.trim().is_empty();
+
+        let mismatch = if is_prompt_ready {
+            None
+        } else if tail_empty && self.config.prompt_regex.is_some() {
+            Some(ReadinessMismatch {
+                reason: format!(
+                    "{} (no observable content)",
+                    crate::transports::EMPTY_PANE_MISMATCH_PREFIX
+                ),
+                regex_matched: Some(regex_matches),
+                expected_cursor_column: self.config.prompt_idle_column,
+                observed_cursor_column: Some(cursor_x),
+            })
+        } else if !cursor_idle_at_expected {
+            Some(ReadinessMismatch {
+                reason: format!(
+                    "cursor column {cursor_x} did not match required {}",
+                    self.config.prompt_idle_column.map_or(0, |c| c)
+                ),
+                regex_matched: Some(regex_matches),
+                expected_cursor_column: self.config.prompt_idle_column,
+                observed_cursor_column: Some(cursor_x),
+            })
+        } else if !regex_matches {
+            Some(ReadinessMismatch {
+                reason: "prompt regex did not match inspected pane tail".to_string(),
+                regex_matched: Some(regex_matches),
+                expected_cursor_column: self.config.prompt_idle_column,
+                observed_cursor_column: Some(cursor_x),
+            })
+        } else {
+            None
+        };
+
+        Ok(WedgeObservation {
+            inspected_tail: tail,
+            is_prompt_ready,
+            operator_interaction_active: false,
+            pane_target: None,
+            mismatch,
+        })
+    }
+
+    fn wait_for_change(&mut self, deadline: Instant) -> Result<(), DeliveryWaitError> {
+        let initial = self.last_change_atomic.load(Ordering::Acquire);
+        while Instant::now() < deadline {
+            if self.last_change_atomic.load(Ordering::Acquire) != initial {
                 return Ok(());
             }
             thread::sleep(Duration::from_millis(10));
