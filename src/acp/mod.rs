@@ -70,15 +70,39 @@ pub enum ReplayEntry {
 
 use std::collections::HashMap;
 
-pub fn parse_replay_entries_for_test(
-    params: &Value,
-    pending_calls: &mut HashMap<String, ReplayEntry>,
-) -> Vec<ReplayEntry> {
-    client::parse_replay_entries_from_params(params, pending_calls)
+/// Buffer-aware pending-tool-call record. The reader thread holds one of these
+/// per in-flight `tool_call` notification so a later `tool_call_update` can
+/// mutate the original buffer entry in place rather than appending a second
+/// Invocation entry. `buffer_position` is the index of the Pending entry in
+/// the buffer at the moment the parser pushed it; the
+/// `enforce_replay_buffer_cap_and_maintain_positions` helper keeps it valid
+/// across cap-driven drain.
+///
+/// Visibility is `pub` because the parser test re-exports in this module
+/// carry `PendingToolCall` in their signatures. Internal production code
+/// outside `crate::acp` should not depend on the fields; treat the type as
+/// crate-private to `crate::acp` and rely on the test re-exports for any
+/// cross-crate use.
+#[derive(Debug, Clone)]
+pub struct PendingToolCall {
+    pub entry: ReplayEntry,
+    pub buffer_position: usize,
 }
 
-pub fn append_replay_entries_for_test(buffer: &mut Vec<ReplayEntry>, entries: Vec<ReplayEntry>) {
-    client::append_replay_entries(buffer, entries);
+pub fn parse_replay_entries_for_test(
+    params: &Value,
+    pending_calls: &mut HashMap<String, PendingToolCall>,
+    buffer: &mut Vec<ReplayEntry>,
+) {
+    client::parse_replay_entries_from_params(params, pending_calls, buffer);
+}
+
+pub fn append_replay_entries_for_test(
+    buffer: &mut Vec<ReplayEntry>,
+    pending_calls: &mut HashMap<String, PendingToolCall>,
+    entries: Vec<ReplayEntry>,
+) {
+    client::append_replay_entries(buffer, pending_calls, entries);
 }
 
 pub fn coalesce_replay_entries_on_append_for_test(
@@ -86,6 +110,13 @@ pub fn coalesce_replay_entries_on_append_for_test(
     entries: Vec<ReplayEntry>,
 ) {
     client::coalesce_replay_entries_on_append(buffer, entries);
+}
+
+pub fn enforce_replay_buffer_cap_and_maintain_positions_for_test(
+    buffer: &mut Vec<ReplayEntry>,
+    pending_calls: &mut HashMap<String, PendingToolCall>,
+) {
+    client::enforce_replay_buffer_cap_and_maintain_positions(buffer, pending_calls);
 }
 
 #[derive(Debug, Clone)]

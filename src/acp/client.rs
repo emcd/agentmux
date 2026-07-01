@@ -14,7 +14,9 @@ use std::{
 
 use serde_json::{Value, json};
 
-use super::{PROTOCOL_VERSION, PermissionOption, PermissionRequest, ReplayEntry, UserSource};
+use super::{
+    PROTOCOL_VERSION, PendingToolCall, PermissionOption, PermissionRequest, ReplayEntry, UserSource,
+};
 use crate::runtime::inscriptions::emit_inscription;
 
 const ACP_CLIENT_NAME: &str = "agentmux-relay";
@@ -42,23 +44,26 @@ pub const REPLAY_BUFFER_MAX_ENTRIES: usize = 1000;
 /// `coalesce_replay_entries_on_append` instead, which performs same-kind
 /// adjacency coalescence for streaming User/Agent/Cognition/Update kinds.
 ///
-/// The 1000-entry cap is enforced at the end of the append.
+/// After the append, the helper enforces the 1000-entry cap via
+/// `enforce_replay_buffer_cap_and_maintain_positions` so a prompt-path
+/// append that trips the cap cannot leave `pending_tool_calls` with stale
+/// `buffer_position` values. The reader-thread parser calls the same
+/// cap-maintain helper at the end of its ingest pass; both paths share
+/// the helper to keep the invariant "every remaining pending entry's
+/// recorded position points to a valid Invocation" atomic with cap drain.
 pub(in crate::acp) fn append_replay_entries(
     buffer: &mut Vec<ReplayEntry>,
+    pending_calls: &mut HashMap<String, PendingToolCall>,
     entries: Vec<ReplayEntry>,
 ) {
     buffer.extend(entries);
-    if buffer.len() > REPLAY_BUFFER_MAX_ENTRIES {
-        let overflow = buffer.len() - REPLAY_BUFFER_MAX_ENTRIES;
-        buffer.drain(0..overflow);
-    }
+    enforce_replay_buffer_cap_and_maintain_positions(buffer, pending_calls);
 }
 
 /// Coalescing replay-buffer append for the reader-thread ingestion path
 /// (`AcpStdioClient::dispatch_session_update`). Walks `new_entries` and
 /// merges adjacent same-kind entries with the buffer tail, preserving all
-/// line content in receive order and enforcing the 1000-entry cap after
-/// coalescence.
+/// line content in receive order.
 ///
 /// Coalescence rules:
 /// - `User`, `Agent`, `Cognition`: adjacent same-kind entries merge into one
@@ -70,9 +75,9 @@ pub(in crate::acp) fn append_replay_entries(
 ///   identical; the merge extends `lines` and preserves the shared
 ///   `update_kind`.
 /// - `Invocation`: NEVER merges with an adjacent entry (per-call boundary
-///   must be preserved; the existing parser-side `tool_call` +
-///   `tool_call_update` merge already coalesces a single call's result onto
-///   the same entry).
+///   must be preserved; the parser-side `tool_call` + `tool_call_update`
+///   replace-in-place mechanism coalesces a single call's result onto the
+///   same entry, by `call_id`, independent of buffer position).
 /// - Different-kind adjacency never merges.
 ///
 /// The helper walks `new_entries` once. When the buffer tail and the next
@@ -82,6 +87,16 @@ pub(in crate::acp) fn append_replay_entries(
 /// entries per `session/update` notification via `params.update` as a JSON
 /// array) is covered naturally by the same walk: consecutive entries in
 /// `new_entries` are checked against each other and the tail.
+///
+/// The 1000-entry cap is NO LONGER drained here. The reader-thread ingestion
+/// path now calls `enforce_replay_buffer_cap_and_maintain_positions` once at
+/// the end of the parser's ingest pass so cap enforcement and the
+/// recorded-position adjustment for `PendingToolCall` happen as one atomic
+/// operation. The prompt path uses the simpler `append_replay_entries`
+/// helper, which also routes through the same cap-maintain helper so a
+/// prompt-path overflow cannot leave the parser-side `pending_tool_calls`
+/// map with stale `buffer_position` values (the position maintenance is
+/// idempotent on an empty map).
 pub(in crate::acp) fn coalesce_replay_entries_on_append(
     buffer: &mut Vec<ReplayEntry>,
     new_entries: Vec<ReplayEntry>,
@@ -94,10 +109,40 @@ pub(in crate::acp) fn coalesce_replay_entries_on_append(
         }
         buffer.push(new_entry);
     }
-    if buffer.len() > REPLAY_BUFFER_MAX_ENTRIES {
-        let overflow = buffer.len() - REPLAY_BUFFER_MAX_ENTRIES;
-        buffer.drain(0..overflow);
+}
+
+/// Enforces the 1000-entry replay-buffer cap and atomically adjusts every
+/// recorded `PendingToolCall::buffer_position` to remain valid after the
+/// drain. The drain removes the oldest entries (positions `0..overflow`),
+/// so every remaining position must shift down by `overflow`. Any pending
+/// whose recorded position fell below `overflow` had its Pending
+/// Invocation evicted; that pending is removed from the map entirely.
+///
+/// The atomicity is the contract: callers must run this helper (a) AFTER
+/// coalescence has settled, and (b) BEFORE handing the buffer back to a
+/// consumer. The parser's quiescent invariant -- every remaining
+/// `pending_calls[call_id].buffer_position` points to a valid Invocation
+/// entry with matching `call_id` in the buffer -- holds immediately after
+/// this call returns, and the helper is the only code path that evicts
+/// from the buffer front (the prompt path's `append_replay_entries` is a
+/// separate non-coalescing path with its own cap drain).
+pub(in crate::acp) fn enforce_replay_buffer_cap_and_maintain_positions(
+    buffer: &mut Vec<ReplayEntry>,
+    pending_calls: &mut HashMap<String, PendingToolCall>,
+) {
+    if buffer.len() <= REPLAY_BUFFER_MAX_ENTRIES {
+        return;
     }
+    let overflow = buffer.len() - REPLAY_BUFFER_MAX_ENTRIES;
+    buffer.drain(0..overflow);
+    pending_calls.retain(|_, pending| {
+        if pending.buffer_position < overflow {
+            false
+        } else {
+            pending.buffer_position -= overflow;
+            true
+        }
+    });
 }
 
 /// Returns `true` if `new_entry` was merged into `tail` in place (the caller
@@ -223,6 +268,16 @@ enum ResponseEnvelope {
 pub(in crate::acp) type SharedStdin = Arc<Mutex<ChildStdin>>;
 pub(crate) type SharedReplay = Arc<Mutex<Vec<ReplayEntry>>>;
 type SharedPending = Arc<Mutex<HashMap<u64, mpsc::Sender<ResponseEnvelope>>>>;
+// Shared pending-tool-call map. The reader thread owns the parser-side
+// writes (recording buffer_position on `tool_call`, removing on
+// `tool_call_update`); the prompt path needs read/write access too
+// because prompt-path appends can trip the buffer cap and drain the
+// front of the buffer -- without position maintenance, recorded
+// positions would dangle and the next `tool_call_update` would either
+// mutate the wrong Invocation or panic. The cap-maintain helper is
+// idempotent on empty maps and is therefore safe to call from both
+// paths.
+pub(in crate::acp) type SharedPendingToolCalls = Arc<Mutex<HashMap<String, PendingToolCall>>>;
 
 struct ActivePrompt {
     session_id: String,
@@ -253,6 +308,7 @@ pub struct AcpStdioClient {
     child: Child,
     stdin: SharedStdin,
     replay_buffer: SharedReplay,
+    pending_tool_calls: SharedPendingToolCalls,
     pending_responses: SharedPending,
     active_prompt: SharedActivePrompt,
     reader_handle: Option<JoinHandle<()>>,
@@ -356,6 +412,7 @@ impl AcpStdioClient {
 
         let stdin = Arc::new(Mutex::new(stdin));
         let replay_buffer: SharedReplay = Arc::new(Mutex::new(Vec::new()));
+        let pending_tool_calls: SharedPendingToolCalls = Arc::new(Mutex::new(HashMap::new()));
         let pending_responses: SharedPending = Arc::new(Mutex::new(HashMap::new()));
         let active_prompt: SharedActivePrompt = Arc::new(Mutex::new(None));
 
@@ -363,6 +420,7 @@ impl AcpStdioClient {
             BufReader::new(stdout),
             Arc::clone(&stdin),
             Arc::clone(&replay_buffer),
+            Arc::clone(&pending_tool_calls),
             Arc::clone(&pending_responses),
             Arc::clone(&active_prompt),
         );
@@ -371,6 +429,7 @@ impl AcpStdioClient {
             child,
             stdin,
             replay_buffer,
+            pending_tool_calls,
             pending_responses,
             active_prompt,
             reader_handle: Some(reader_handle),
@@ -530,9 +589,21 @@ impl AcpStdioClient {
         let mut user_lines: Vec<String> = Vec::new();
         append_text_lines(prompt, &mut user_lines);
         if !user_lines.is_empty() {
+            // Lock order matches the reader-thread dispatch path
+            // (buffer first, then pending_tool_calls) so the two paths
+            // cannot deadlock. Without holding both locks here, a
+            // prompt-path append that tripped the cap could evict a
+            // Pending Invocation whose `buffer_position` is still in
+            // the reader's map; the next `tool_call_update` would then
+            // mutate the wrong buffer entry or panic on out-of-bounds.
             let mut buffer = self.replay_buffer.lock().expect("replay_buffer mutex");
+            let mut pending = self
+                .pending_tool_calls
+                .lock()
+                .expect("pending_tool_calls mutex");
             append_replay_entries(
                 &mut buffer,
+                &mut pending,
                 vec![ReplayEntry::User {
                     lines: user_lines,
                     source: UserSource::PromptPath,
@@ -678,6 +749,7 @@ fn spawn_reader_thread(
     reader: BufReader<ChildStdout>,
     stdin: SharedStdin,
     replay_buffer: SharedReplay,
+    pending_tool_calls: SharedPendingToolCalls,
     pending_responses: SharedPending,
     active_prompt: SharedActivePrompt,
 ) -> JoinHandle<()> {
@@ -688,6 +760,7 @@ fn spawn_reader_thread(
                 reader,
                 &stdin,
                 &replay_buffer,
+                &pending_tool_calls,
                 &pending_responses,
                 &active_prompt,
             );
@@ -699,10 +772,10 @@ fn run_reader_loop(
     mut reader: BufReader<ChildStdout>,
     stdin: &SharedStdin,
     replay_buffer: &SharedReplay,
+    pending_tool_calls: &SharedPendingToolCalls,
     pending_responses: &SharedPending,
     active_prompt: &SharedActivePrompt,
 ) {
-    let mut pending_tool_calls: HashMap<String, ReplayEntry> = HashMap::new();
     loop {
         let mut line = String::new();
         match reader.read_line(&mut line) {
@@ -734,7 +807,7 @@ fn run_reader_loop(
         if let Some(method) = decoded.get("method").and_then(Value::as_str) {
             match method {
                 "session/update" => {
-                    dispatch_session_update(&decoded, replay_buffer, &mut pending_tool_calls)
+                    dispatch_session_update(&decoded, replay_buffer, pending_tool_calls)
                 }
                 "session/request_permission" => {
                     dispatch_permission_request(&decoded, active_prompt, stdin)
@@ -827,14 +900,17 @@ fn try_dispatch_prompt_response(
 fn dispatch_session_update(
     decoded: &Value,
     replay_buffer: &SharedReplay,
-    pending_tool_calls: &mut HashMap<String, ReplayEntry>,
+    pending_tool_calls: &SharedPendingToolCalls,
 ) {
     let params = decoded.get("params").unwrap_or(&Value::Null);
-    let entries = parse_replay_entries_from_params(params, pending_tool_calls);
-    if !entries.is_empty() {
-        let mut buffer = replay_buffer.lock().expect("replay_buffer mutex");
-        coalesce_replay_entries_on_append(&mut buffer, entries);
+    if params.get("update").is_none_or(Value::is_null) {
+        return;
     }
+    // Lock order: buffer first, then pending. The prompt path follows the
+    // same order so the two paths cannot deadlock against each other.
+    let mut buffer = replay_buffer.lock().expect("replay_buffer mutex");
+    let mut pending = pending_tool_calls.lock().expect("pending_tool_calls mutex");
+    parse_replay_entries_from_params(params, &mut pending, &mut buffer);
 }
 
 fn dispatch_permission_request(
@@ -998,17 +1074,57 @@ fn send_permission_response(
     }
 }
 
+/// Buffer-aware replay-entry ingestion. The reader-thread entry point:
+/// `dispatch_session_update` acquires the replay-buffer lock and invokes
+/// this function with the live buffer and the parser-side `pending_calls`
+/// map. Tool-call lifecycle coalescence is implemented here, by `call_id`:
+///
+/// - `tool_call`: a Pending Invocation is pushed into the buffer (via the
+///   cap-free `coalesce_replay_entries_on_append` helper -- Invocations
+///   never merge with adjacent entries, so the helper just appends); the
+///   pushed position is recorded in `pending_calls[call_id]`.
+/// - `tool_call_update` with a known `call_id`: the buffer entry at the
+///   recorded position is mutated in place to `status = Completed` and
+///   `result = Some(payload)`. The pending entry is removed from the map.
+///   The buffer's entry count does not advance on the completion.
+/// - `tool_call_update` with an unknown `call_id` (replay-baseline shape
+///   or a Pending that was evicted by the cap): a single Completed
+///   Invocation is pushed via the coalesce helper. This preserves the
+///   replay-baseline affordance and the cap-eviction-fallthrough
+///   behavior.
+///
+/// Non-tool-call entries (User/Agent/Cognition/Update) accumulate into a
+/// batch and are appended to the buffer through the coalesce helper in one
+/// call so within-notification-multi-entry adjacency is honored.
+///
+/// After the loop, `enforce_replay_buffer_cap_and_maintain_positions` runs
+/// once: it drains the buffer to the cap and adjusts every recorded
+/// position down by the drain count, removing pendings whose Pending
+/// Invocations were evicted. The parser's quiescent invariant -- every
+/// remaining `pending_calls[call_id].buffer_position` points to a valid
+/// Invocation entry with matching `call_id` in the buffer -- holds
+/// immediately after this call returns.
 pub(super) fn parse_replay_entries_from_params(
     params: &Value,
-    pending_calls: &mut HashMap<String, ReplayEntry>,
-) -> Vec<ReplayEntry> {
+    pending_calls: &mut HashMap<String, PendingToolCall>,
+    buffer: &mut Vec<ReplayEntry>,
+) {
     let update_field = params.get("update").unwrap_or(&Value::Null);
     let updates: Vec<&Value> = match update_field.as_array() {
         Some(arr) => arr.iter().collect(),
         None if !update_field.is_null() => vec![update_field],
-        None => return Vec::new(),
+        None => return,
     };
-    let mut entries = Vec::with_capacity(updates.len());
+    // Wire-order preservation: each entry in `updates` is processed in
+    // array order. Non-tool-call entries (User/Agent/Cognition/Update)
+    // are appended via the coalesce helper immediately so they land in
+    // the buffer in the order the wire sent them; tool_call entries are
+    // pushed in place (Invocations never merge with adjacent entries);
+    // tool_call_update entries mutate the existing buffer entry in place
+    // by `call_id` or push a single orphan Completed entry. Adjacent
+    // same-kind non-tool entries within the same notification still
+    // coalesce because each append goes through the same coalesce
+    // helper that walks the buffer tail.
     for update in updates {
         let Some(update_kind) = update
             .get("sessionUpdate")
@@ -1025,22 +1141,28 @@ pub(super) fn parse_replay_entries_from_params(
             "user_message_chunk" => {
                 let lines = collect_text_lines_from_value(update);
                 if !lines.is_empty() {
-                    entries.push(ReplayEntry::User {
-                        lines,
-                        source: UserSource::ReaderThread,
-                    });
+                    coalesce_replay_entries_on_append(
+                        buffer,
+                        vec![ReplayEntry::User {
+                            lines,
+                            source: UserSource::ReaderThread,
+                        }],
+                    );
                 }
             }
             "agent_message_chunk" => {
                 let lines = collect_text_lines_from_value(update);
                 if !lines.is_empty() {
-                    entries.push(ReplayEntry::Agent { lines });
+                    coalesce_replay_entries_on_append(buffer, vec![ReplayEntry::Agent { lines }]);
                 }
             }
             "agent_thought_chunk" => {
                 let lines = collect_text_lines_from_value(update);
                 if !lines.is_empty() {
-                    entries.push(ReplayEntry::Cognition { lines });
+                    coalesce_replay_entries_on_append(
+                        buffer,
+                        vec![ReplayEntry::Cognition { lines }],
+                    );
                 }
             }
             "tool_call" => {
@@ -1056,13 +1178,21 @@ pub(super) fn parse_replay_entries_from_params(
                     continue;
                 };
                 let invocation = update.clone();
-                entries.push(ReplayEntry::Invocation {
+                let pending_entry = ReplayEntry::Invocation {
                     call_id: call_id.clone(),
                     status: super::ToolCallStatus::Pending,
                     invocation,
                     result: None,
-                });
-                pending_calls.insert(call_id, entries.last().unwrap().clone());
+                };
+                coalesce_replay_entries_on_append(buffer, vec![pending_entry.clone()]);
+                let buffer_position = buffer.len() - 1;
+                pending_calls.insert(
+                    call_id,
+                    PendingToolCall {
+                        entry: pending_entry,
+                        buffer_position,
+                    },
+                );
             }
             "tool_call_update" => {
                 let Some(call_id) = update
@@ -1077,39 +1207,42 @@ pub(super) fn parse_replay_entries_from_params(
                     continue;
                 };
                 let result = update.clone();
-                if let Some(ReplayEntry::Invocation {
-                    status,
-                    result: existing_result,
-                    call_id: existing_call_id,
-                    invocation,
-                }) = pending_calls.get_mut(&call_id)
-                {
-                    *status = super::ToolCallStatus::Completed;
-                    let result_clone = result.clone();
-                    *existing_result = Some(result_clone);
-                    let completed = ReplayEntry::Invocation {
-                        call_id: existing_call_id.clone(),
-                        status: super::ToolCallStatus::Completed,
-                        invocation: invocation.clone(),
-                        result: Some(result),
-                    };
-                    entries.push(completed);
-                } else {
-                    entries.push(ReplayEntry::Invocation {
-                        call_id,
-                        status: super::ToolCallStatus::Completed,
-                        invocation: serde_json::json!({}),
-                        result: Some(result),
-                    });
+                match pending_calls.remove(&call_id) {
+                    Some(pending) => match &mut buffer[pending.buffer_position] {
+                        ReplayEntry::Invocation {
+                            status,
+                            result: existing_result,
+                            ..
+                        } => {
+                            *status = super::ToolCallStatus::Completed;
+                            *existing_result = Some(result);
+                        }
+                        _ => panic!(
+                            "tool_call_lifecycle invariant violated: pending call_id={} recorded at buffer position {} but entry is not Invocation",
+                            call_id, pending.buffer_position
+                        ),
+                    },
+                    None => {
+                        let orphan_entry = ReplayEntry::Invocation {
+                            call_id,
+                            status: super::ToolCallStatus::Completed,
+                            invocation: serde_json::json!({}),
+                            result: Some(result),
+                        };
+                        coalesce_replay_entries_on_append(buffer, vec![orphan_entry]);
+                    }
                 }
             }
-            _ => entries.push(ReplayEntry::Update {
-                update_kind,
-                lines: collect_text_lines_from_value(update),
-            }),
+            _ => {
+                let entry = ReplayEntry::Update {
+                    update_kind,
+                    lines: collect_text_lines_from_value(update),
+                };
+                coalesce_replay_entries_on_append(buffer, vec![entry]);
+            }
         }
     }
-    entries
+    enforce_replay_buffer_cap_and_maintain_positions(buffer, pending_calls);
 }
 
 impl Drop for AcpStdioClient {

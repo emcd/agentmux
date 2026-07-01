@@ -1,5 +1,7 @@
 #[path = "unit/acp/replay_coalescence.rs"]
 mod acp_replay_coalescence;
+#[path = "unit/acp/replay_tool_call_lifecycle.rs"]
+mod acp_replay_tool_call_lifecycle;
 #[path = "unit/acp_transport.rs"]
 mod acp_transport;
 #[path = "unit/association.rs"]

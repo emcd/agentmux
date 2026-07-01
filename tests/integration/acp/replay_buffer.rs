@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+
 use agentmux::acp::{
-    REPLAY_BUFFER_MAX_ENTRIES, ReplayEntry, UserSource, append_replay_entries_for_test,
+    PendingToolCall, REPLAY_BUFFER_MAX_ENTRIES, ReplayEntry, UserSource,
+    append_replay_entries_for_test,
 };
 
 fn user_entry(label: &str) -> ReplayEntry {
@@ -26,8 +29,9 @@ fn buffer_labels(buffer: &[ReplayEntry]) -> Vec<String> {
 #[test]
 fn append_below_cap_preserves_order() {
     let mut buffer: Vec<ReplayEntry> = Vec::new();
+    let mut pending_calls: HashMap<String, PendingToolCall> = HashMap::new();
     let incoming = (0..5).map(|i| user_entry(&format!("e{i}"))).collect();
-    append_replay_entries_for_test(&mut buffer, incoming);
+    append_replay_entries_for_test(&mut buffer, &mut pending_calls, incoming);
     assert_eq!(
         buffer_labels(&buffer),
         vec!["e0", "e1", "e2", "e3", "e4"]
@@ -42,7 +46,12 @@ fn append_at_cap_evicts_oldest_on_overflow() {
     let mut buffer: Vec<ReplayEntry> = (0..REPLAY_BUFFER_MAX_ENTRIES)
         .map(|i| user_entry(&format!("e{i}")))
         .collect();
-    append_replay_entries_for_test(&mut buffer, vec![user_entry("e_overflow")]);
+    let mut pending_calls: HashMap<String, PendingToolCall> = HashMap::new();
+    append_replay_entries_for_test(
+        &mut buffer,
+        &mut pending_calls,
+        vec![user_entry("e_overflow")],
+    );
     assert_eq!(buffer.len(), REPLAY_BUFFER_MAX_ENTRIES);
     let labels = buffer_labels(&buffer);
     assert_eq!(labels.first().map(String::as_str), Some("e1"));
@@ -54,8 +63,9 @@ fn append_batch_exceeding_cap_evicts_proportionally() {
     let mut buffer: Vec<ReplayEntry> = (0..REPLAY_BUFFER_MAX_ENTRIES)
         .map(|i| user_entry(&format!("e{i}")))
         .collect();
+    let mut pending_calls: HashMap<String, PendingToolCall> = HashMap::new();
     let incoming = (0..5).map(|i| user_entry(&format!("new{i}"))).collect();
-    append_replay_entries_for_test(&mut buffer, incoming);
+    append_replay_entries_for_test(&mut buffer, &mut pending_calls, incoming);
     assert_eq!(buffer.len(), REPLAY_BUFFER_MAX_ENTRIES);
     let labels = buffer_labels(&buffer);
     assert_eq!(labels.first().map(String::as_str), Some("e5"));

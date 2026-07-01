@@ -5,6 +5,7 @@ use std::collections::HashMap;
 #[test]
 fn invocation_coalescing_pending_to_completed() {
     let mut pending = HashMap::new();
+    let mut buffer = Vec::new();
 
     let tool_call = serde_json::json!({
         "sessionUpdate": "tool_call",
@@ -13,10 +14,10 @@ fn invocation_coalescing_pending_to_completed() {
         "args": {"q": "test"}
     });
     let params = serde_json::json!({"sessionId": "sess_1", "update": [tool_call]});
-    let entries = parse_replay_entries_for_test(&params, &mut pending);
+    parse_replay_entries_for_test(&params, &mut pending, &mut buffer);
 
-    assert_eq!(entries.len(), 1);
-    let entry = &entries[0];
+    assert_eq!(buffer.len(), 1);
+    let entry = &buffer[0];
     let (call_id, status, result) = match entry {
         ReplayEntry::Invocation {
             call_id,
@@ -36,10 +37,10 @@ fn invocation_coalescing_pending_to_completed() {
         "result": {"ok": true}
     });
     let params = serde_json::json!({"sessionId": "sess_1", "update": [tool_result]});
-    let entries = parse_replay_entries_for_test(&params, &mut pending);
+    parse_replay_entries_for_test(&params, &mut pending, &mut buffer);
 
-    assert_eq!(entries.len(), 1);
-    let entry = &entries[0];
+    assert_eq!(buffer.len(), 1);
+    let entry = &buffer[0];
     let (call_id, status, result) = match entry {
         ReplayEntry::Invocation {
             call_id,
@@ -52,11 +53,16 @@ fn invocation_coalescing_pending_to_completed() {
     assert_eq!(call_id, "call_1");
     assert_eq!(status, ToolCallStatus::Completed);
     assert!(result.is_some());
+    assert!(
+        pending.is_empty(),
+        "the pending entry is removed once the tool call is completed in place"
+    );
 }
 
 #[test]
 fn invocation_orphan_result_creates_standalone_entry() {
     let mut pending = HashMap::new();
+    let mut buffer = Vec::new();
 
     let tool_result = serde_json::json!({
         "sessionUpdate": "tool_call_update",
@@ -64,10 +70,10 @@ fn invocation_orphan_result_creates_standalone_entry() {
         "result": {"ok": false}
     });
     let params = serde_json::json!({"sessionId": "sess_1", "update": [tool_result]});
-    let entries = parse_replay_entries_for_test(&params, &mut pending);
+    parse_replay_entries_for_test(&params, &mut pending, &mut buffer);
 
-    assert_eq!(entries.len(), 1);
-    let entry = &entries[0];
+    assert_eq!(buffer.len(), 1);
+    let entry = &buffer[0];
     let (call_id, status, result) = match entry {
         ReplayEntry::Invocation {
             call_id,
@@ -85,14 +91,15 @@ fn invocation_orphan_result_creates_standalone_entry() {
 #[test]
 fn tool_call_without_tool_call_id_is_dropped() {
     let mut pending = HashMap::new();
+    let mut buffer = Vec::new();
 
     let tool_call = serde_json::json!({
         "sessionUpdate": "tool_call",
         "tool": "search",
     });
     let params = serde_json::json!({"sessionId": "sess_1", "update": [tool_call]});
-    let entries = parse_replay_entries_for_test(&params, &mut pending);
-    assert!(entries.is_empty());
+    parse_replay_entries_for_test(&params, &mut pending, &mut buffer);
+    assert!(buffer.is_empty());
     assert!(pending.is_empty());
 
     let tool_update = serde_json::json!({
@@ -100,6 +107,6 @@ fn tool_call_without_tool_call_id_is_dropped() {
         "result": {"ok": false},
     });
     let params = serde_json::json!({"sessionId": "sess_1", "update": [tool_update]});
-    let entries = parse_replay_entries_for_test(&params, &mut pending);
-    assert!(entries.is_empty());
+    parse_replay_entries_for_test(&params, &mut pending, &mut buffer);
+    assert!(buffer.is_empty());
 }

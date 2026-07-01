@@ -157,6 +157,80 @@ fn acp_look_coalesces_long_streaming_response_into_single_entry() {
 }
 
 #[test]
+fn acp_look_emits_one_coalesced_invocation_entry_for_tool_call_lifecycle() {
+    // End-to-end coverage for the `replace-pending-completed-tool-call-in-place`
+    // proposal: an ACP session that streams a single `tool_call` followed by
+    // its terminal `tool_call_update` must surface exactly one
+    // `StructuredEntry::Invocation` in `look` (status=Completed, with the
+    // result payload), not the two separate entries (Pending + Completed)
+    // that the pre-`/21` implementation would have produced.
+    let temporary = TempDir::new().expect("temporary");
+    let options = AcpStubOptions {
+        tool_call_on_prompt: true,
+        tool_call_id: "tc-look-1".to_string(),
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let tmux_socket = temporary.path().join("tmux.sock");
+    let response = dispatch_send(&config_root, &tmux_socket);
+    let result = send_result(response);
+    assert_eq!(result.outcome, SendOutcome::Queued);
+
+    // Settle on the buffer holding exactly: User prompt + 1 coalesced
+    // Invocation entry (status mutated to Completed in place). The
+    // post-tool-call-update buffer does NOT have a second Pending entry.
+    let look = wait_for_look(
+        &config_root,
+        &tmux_socket,
+        "bravo",
+        "bravo",
+        Some(10),
+        |lines| {
+            lines
+                .iter()
+                .any(|line| line.starts_with("invocation tc-look-1 Completed"))
+        },
+    );
+    let snapshot = expect_acp_snapshot(look);
+    assert_eq!(
+        snapshot.entries.len(),
+        2,
+        "User prompt + 1 coalesced Invocation entry (Pending mutated to Completed in place)"
+    );
+    assert_eq!(snapshot.entries_total, 2);
+    assert!(matches!(
+        snapshot.entries[0],
+        agentmux::transports::StructuredEntry::User { .. }
+    ));
+    let invocation = match &snapshot.entries[1] {
+        agentmux::transports::StructuredEntry::Invocation {
+            call_id,
+            status,
+            result,
+            ..
+        } => (call_id.clone(), status.clone(), result.clone()),
+        other => panic!("expected Invocation entry at index 1, got {other:?}"),
+    };
+    assert_eq!(invocation.0, "tc-look-1");
+    assert_eq!(
+        invocation.1,
+        agentmux::transports::ToolCallStatus::Completed,
+        "the in-place mutation sets status=Completed"
+    );
+    let result = invocation
+        .2
+        .expect("tool_call_update result payload is set on the completed Invocation");
+    assert_eq!(
+        result["status"], "completed",
+        "the stored payload is the tool_call_update notification"
+    );
+    assert_eq!(
+        result["result"]["ok"], true,
+        "the payload carries the agent's tool result"
+    );
+}
+
+#[test]
 fn acp_look_offset_walks_backward_through_replay_buffer_with_metadata() {
     // Under reader-thread same-kind adjacency coalescence, a 10-chunk Agent stream
     // coalesces into a single Agent entry; the buffer additionally holds
