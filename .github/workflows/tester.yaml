@@ -28,8 +28,17 @@ jobs:
       - name: Check Formatting
         run: cargo fmt --all -- --check
 
-      - name: Run Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Run Clippy (default features)
+        # Default-features lint only. The `pty` feature is intentionally
+        # excluded; it requires Zig + outbound network. Lint with pty
+        # enabled via the next step (CLIPPY_PTY_REQUIRE=1 makes it
+        # fail-closed in CI; locally the helper skips without Zig).
+        run: cargo clippy --all-targets --features "" -- -D warnings
+
+      - name: Run Clippy (pty feature)
+        env:
+          CLIPPY_PTY_REQUIRE: '1'
+        run: scripts/clippy-pty.sh
 
   test:
     needs: [initialize, lint]
@@ -38,19 +47,28 @@ jobs:
       matrix:
         platform: ${{ fromJSON(needs.initialize.outputs.platforms) }}
         exclude: ${{ fromJSON(needs.initialize.outputs.matrix-exclusions) }}
+        include:
+          - id: pty-feature
+            platform: ubuntu-latest
     runs-on: ${{ matrix.platform }}
     steps:
 
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Install Zig
+        if: matrix.id == 'pty-feature'
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build
-        run: cargo build --release
+        run: cargo build --release ${{ matrix.id == 'pty-feature' && '--features pty' || '' }}
 
       - name: Test
         env:
           RUST_BACKTRACE: '1'
-        run: cargo test --release
+        run: cargo test --release ${{ matrix.id == 'pty-feature' && '--features pty' || '' }}

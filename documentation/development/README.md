@@ -6,10 +6,24 @@ End-user/operator material is documented under `documentation/usage/`.
 
 ## Local Validation
 
+Default-features commands (run on every commit by the pre-commit hooks;
+no Zig required):
+
 ```bash
-cargo check --all-targets --all-features
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-features
+cargo check --all-targets
+cargo clippy --all-targets -- -D warnings
+cargo test
+```
+
+Pty-feature commands (run on Pty-source commits by the `cargo-clippy-pty`
+pre-commit hook and on CI's `pty-feature` matrix entry; requires
+Zig 0.15.x on `PATH` and outbound network for the libghostty-vt
+vendored ghostty clone — or set `GHOSTTY_SOURCE_DIR` to a pre-checked-out
+ghostty source tree):
+
+```bash
+cargo clippy --all-targets --features pty -- -D warnings
+cargo test --features pty
 ```
 
 ## Source Map

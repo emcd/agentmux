@@ -45,12 +45,28 @@ repos:
 
     - id: cargo-clippy
       name: 'Lint (Rust: Clippy)'
+      # Default-features lint only. The `pty` feature is intentionally
+      # excluded because it requires Zig 0.15.x + outbound network for
+      # the libghostty-vt vendored ghostty clone (or GHOSTTY_SOURCE_DIR
+      # override). Lint Pty sources via the `cargo-clippy-pty` hook
+      # below. To add a new feature to default-features lint, append
+      # its name to --features here.
       language: system
-      entry: 'cargo clippy --all-targets --all-features -- -D warnings'
+      entry: 'cargo clippy --all-targets --features "" -- -D warnings'
       pass_filenames: false
       require_serial: true
       stages: [ 'pre-commit' ]
       fail_fast: true
+
+    - id: cargo-clippy-pty
+      name: 'Lint Pty Transport (Rust: Clippy, requires Zig 0.15.x)'
+      language: system
+      entry: 'scripts/clippy-pty.sh'
+      pass_filenames: false
+      require_serial: true
+      stages: [ 'pre-commit' ]
+      files: '^(src/pty/|src/bin/agentmux_pty\.rs|Cargo\.toml|Cargo\.lock)'
+      fail_fast: false
 
     - id: cargo-test
       name: 'Test (Rust)'
