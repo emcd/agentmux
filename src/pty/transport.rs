@@ -9,8 +9,8 @@
 //!
 //! - `write_tx`: the relay submits [`DeliveryCommand`]s into this
 //!   channel; the worker drains them.
-//! - `bytes_tx`: the worker re-emits the terminal snapshot requests
-//!   into this channel when the relay's look path asks for them.
+//! - `bytes_tx`: the reader thread feeds terminal output bytes into
+//!   this channel; the worker feeds them into the terminal.
 //!
 //! Channels the worker thread owns:
 //!
@@ -41,7 +41,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
@@ -50,11 +50,12 @@ use tokio::sync::{mpsc, oneshot};
 use crate::configuration::BundleMember;
 use crate::transports::{
     DeliveryEnvelope, OutcomeFuture, OutputView, SingleDeliveryOutcome, StartupContext, Transport,
-    TransportError, TransportReadiness, TransportStatus,
+    TransportError, TransportReadiness, TransportStatus, wait_for_quiescent_three_state,
 };
 
 use super::state::{
-    PtyConfigSnapshot, PtyOutputView, PtyShared, SnapshotRequest, SnapshotResponse,
+    PtyConfigSnapshot, PtyOutputView, PtyQuiescenceProbe, PtyShared, SnapshotRequest,
+    SnapshotResponse,
 };
 
 /// Default pty cols when the per-coder config does not set them.
@@ -69,6 +70,11 @@ const WORKER_IDLE_POLL: Duration = Duration::from_millis(10);
 /// Poll interval for the reader thread when the master returns
 /// `WouldBlock`.
 const READER_IDLE_POLL: Duration = Duration::from_millis(5);
+/// Default quiet window for the wedge / prime quiescence wait.
+const QUIET_WINDOW: Duration = Duration::from_millis(50);
+/// Agentmux-pty version string returned by the `on_xtversion`
+/// callback. The relay-tui can display it for the operator.
+const PTY_VERSION_STRING: &str = concat!("agentmux-pty ", env!("CARGO_PKG_VERSION"));
 
 /// Per-coder pty target configuration as parsed from
 /// `[coders.<id>.pty]`. The full config surface lands in §6.
@@ -244,18 +250,17 @@ impl Transport for PtyTransport {
         };
 
         let target_session = self.target_member.id.clone();
-        let target_session_for_reader = target_session.clone();
+        let target_session_for_worker = target_session.clone();
         let writer_for_worker = writer_arc.clone();
         let child_for_worker = child_arc.clone();
         let shutdown_flag_for_worker = self.shutdown_flag.clone();
 
         let bytes_tx_for_reader = bytes_tx.clone();
-        let _writer_for_reader = writer_arc.clone();
         let last_byte_atomic_for_reader = self.shared.last_byte_atomic.clone();
         let reader_shutdown_flag = self.shutdown_flag.clone();
 
         let worker_handle = thread::Builder::new()
-            .name(format!("pty-worker-{target_session}"))
+            .name(format!("pty-worker-{target_session_for_worker}"))
             .spawn(move || {
                 run_worker(
                     cols,
@@ -266,7 +271,7 @@ impl Transport for PtyTransport {
                     shared_for_worker,
                     writer_for_worker,
                     child_for_worker,
-                    target_session,
+                    target_session_for_worker,
                     shutdown_flag_for_worker,
                 );
             })
@@ -277,7 +282,7 @@ impl Transport for PtyTransport {
             })?;
 
         let reader_handle = thread::Builder::new()
-            .name(format!("pty-reader-{target_session_for_reader}"))
+            .name(format!("pty-reader-{target_session}"))
             .spawn(move || {
                 run_reader(
                     reader,
@@ -349,7 +354,7 @@ impl Transport for PtyTransport {
             outcome_tx,
         };
         if write_tx.blocking_send(cmd).is_err() {
-            // Channel closed; the consumer is gone. Same as mailw.
+            // Channel closed; the consumer is gone.
         }
         outcome_rx
     }
@@ -392,14 +397,12 @@ fn run_worker(
     mut bytes_rx: mpsc::Receiver<Vec<u8>>,
     mut write_rx: mpsc::Receiver<DeliveryCommand>,
     mut snapshot_rx: mpsc::Receiver<SnapshotRequest>,
-    _shared: PtyShared,
+    shared: PtyShared,
     writer: Arc<std::sync::Mutex<Box<dyn Write + Send>>>,
-    child: Arc<std::sync::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
+    _child: Arc<std::sync::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
     target_session: String,
     shutdown_flag: Arc<AtomicBool>,
 ) {
-    let _ = (writer, child);
-
     // Construct the terminal INSIDE the worker thread. The terminal
     // is `!Send + !Sync` (raw FFI pointers inside); it cannot be moved
     // to this thread via `thread::spawn` so we build it here.
@@ -415,17 +418,18 @@ fn run_worker(
         }
     };
 
-    let writer_for_handler = _writer_or_clone();
-    install_minimal_handlers(&mut terminal, writer_for_handler);
+    install_handlers(&mut terminal, writer.clone(), cols, rows);
 
     while !shutdown_flag.load(Ordering::Acquire) {
-        // Priority: snapshot > write > bytes.
+        // Priority: snapshot > write > bytes. Snapshots are
+        // user-facing and should be quick; writes advance delivery;
+        // bytes are continuous terminal output.
         if let Ok(request) = snapshot_rx.try_recv() {
             handle_snapshot(&mut terminal, request);
             continue;
         }
         if let Ok(cmd) = write_rx.try_recv() {
-            handle_delivery_command(cmd);
+            handle_delivery_command(&mut terminal, cmd, &writer, &shared, &target_session);
             continue;
         }
         if let Ok(bytes) = bytes_rx.try_recv() {
@@ -446,29 +450,70 @@ fn run_worker(
     }
 }
 
-/// Helper to clone the writer Arc from the run_worker parameters.
-/// Avoids an "unused variable" warning on the `_ = (writer, child)`
-/// binding line while still letting us hand a writer to the effect
-/// handler installer.
-fn _writer_or_clone() -> Arc<std::sync::Mutex<Box<dyn Write + Send>>> {
-    // This is unreachable in practice — `_ = (writer, child)` above
-    // drops both. The function exists only so the closure below can
-    // keep its `Arc::clone` call for §4.3 follow-up.
-    Arc::new(std::sync::Mutex::new(Box::new(std::io::sink())))
-}
-
-fn install_minimal_handlers(
+/// Install the libghostty-vt effect handlers on the worker-thread
+/// terminal. The handlers run synchronously on the worker thread (the
+/// only thread that owns the terminal). They close over the writer
+/// Arc + cols/rows captures so responses flow back to the PTY master.
+fn install_handlers(
     terminal: &mut libghostty_vt::Terminal<'_, '_>,
-    _writer: Arc<std::sync::Mutex<Box<dyn Write + Send>>>,
+    writer: Arc<std::sync::Mutex<Box<dyn Write + Send>>>,
+    cols: u16,
+    rows: u16,
 ) {
-    // The minimal handler for the §4 skeleton: on_pty_write does
-    // nothing (responses can be sent later via a writer capture once
-    // §4.3 wires the full handler set). The full on_size /
-    // on_device_attributes / on_xtversion / on_title callbacks land
-    // in §4.3 alongside the delivery-task rendering pipeline.
-    let _ = terminal.on_pty_write(|_t, _data| {
-        // No-op for v1 skeleton.
-    });
+    let writer_for_pty_write = writer.clone();
+    terminal
+        .on_pty_write(move |_t, data| {
+            if let Ok(mut g) = writer_for_pty_write.lock() {
+                let _ = g.write_all(data);
+            }
+        })
+        .expect("install on_pty_write callback");
+    let _ = (writer, cols, rows); // Future handlers will capture these; reserved.
+    terminal
+        .on_size(move |_t| {
+            Some(libghostty_vt::terminal::SizeReportSize {
+                rows,
+                columns: cols,
+                cell_width: 8,
+                cell_height: 16,
+            })
+        })
+        .expect("install on_size callback");
+    terminal
+        .on_device_attributes(|_t| {
+            use libghostty_vt::terminal::{
+                ConformanceLevel, DeviceAttributeFeature, DeviceAttributes, DeviceType,
+                PrimaryDeviceAttributes, SecondaryDeviceAttributes,
+            };
+            Some(DeviceAttributes {
+                primary: PrimaryDeviceAttributes::new(
+                    ConformanceLevel::VT220,
+                    &[
+                        DeviceAttributeFeature::COLUMNS_132,
+                        DeviceAttributeFeature::SELECTIVE_ERASE,
+                        DeviceAttributeFeature::ANSI_COLOR,
+                    ],
+                ),
+                secondary: SecondaryDeviceAttributes {
+                    device_type: DeviceType::VT220,
+                    firmware_version: 1,
+                    rom_cartridge: 0,
+                },
+                tertiary: Default::default(),
+            })
+        })
+        .expect("install on_device_attributes callback");
+    terminal
+        .on_xtversion(|_t| Some(PTY_VERSION_STRING))
+        .expect("install on_xtversion callback");
+    terminal
+        .on_title_changed(|_t| {
+            // Title stream events land in §8 worker readiness; for
+            // v1 we do nothing. The terminal's title is preserved in
+            // its internal state and surfaces in PtyOutputView
+            // snapshots.
+        })
+        .expect("install on_title_changed callback");
 }
 
 fn handle_snapshot(terminal: &mut libghostty_vt::Terminal<'_, '_>, request: SnapshotRequest) {
@@ -516,15 +561,251 @@ fn render_snapshot(
     }
 }
 
-fn handle_delivery_command(cmd: DeliveryCommand) {
-    // The full delivery task (render envelope, coalesce group, wait
-    // for quiescence via the shared wedge/prime state machine) lands
-    // in §4.4 as a follow-up. For now the command is consumed and the
-    // outcome sender is dropped without resolution.
+#[allow(clippy::too_many_arguments)]
+fn handle_delivery_command(
+    terminal: &mut libghostty_vt::Terminal<'_, '_>,
+    cmd: DeliveryCommand,
+    writer: &Arc<std::sync::Mutex<Box<dyn Write + Send>>>,
+    shared: &PtyShared,
+    target_session: &str,
+) {
     match cmd {
-        DeliveryCommand::Envelope { outcome_tx, .. } => drop(outcome_tx),
-        DeliveryCommand::Raw { outcome_tx, .. } => drop(outcome_tx),
+        DeliveryCommand::Envelope {
+            envelope,
+            outcome_tx,
+        } => {
+            handle_envelope(
+                terminal,
+                envelope,
+                writer,
+                shared,
+                target_session,
+                outcome_tx,
+            );
+        }
+        DeliveryCommand::Raw {
+            content,
+            append_enter,
+            outcome_tx,
+        } => {
+            handle_raw(
+                terminal,
+                content,
+                append_enter,
+                writer,
+                shared,
+                target_session,
+                outcome_tx,
+            );
+        }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_envelope(
+    terminal: &mut libghostty_vt::Terminal<'_, '_>,
+    envelope: Box<DeliveryEnvelope>,
+    writer: &Arc<std::sync::Mutex<Box<dyn Write + Send>>>,
+    shared: &PtyShared,
+    target_session: &str,
+    outcome_tx: oneshot::Sender<SingleDeliveryOutcome>,
+) {
+    let message_id = envelope.message_id.clone();
+    let target = envelope.message.target.canonical_session_id();
+    // Render the structured message into pane-envelope text.
+    let text = envelope.message.render_pane_envelope(&envelope.message_id);
+    // Write the text + Enter to the PTY master. The `on_pty_write`
+    // callback fires during the resulting vt_write roundtrips and
+    // writes responses back to the master (device-attribute, size,
+    // xtversion).
+    let write_result = (|| -> std::io::Result<()> {
+        let mut g = writer
+            .lock()
+            .map_err(|_| std::io::Error::other("pty writer mutex poisoned"))?;
+        g.write_all(text.as_bytes())?;
+        g.write_all(b"\n")?;
+        Ok(())
+    })();
+    if let Err(e) = write_result {
+        let _ = outcome_tx.send(SingleDeliveryOutcome {
+            target_session: target_session.to_string(),
+            message_id,
+            outcome: crate::transports::SendOutcome::Failed,
+            reason_code: Some("pty_write_failed".to_string()),
+            reason: Some(format!("pty master write: {e}")),
+            details: None,
+        });
+        return;
+    }
+    // Drain the quiescence wait. Pty is prompt-ready when the
+    // configured regex matches the tail and (if configured) the
+    // cursor is at the expected idle column.
+    let probe = PtyQuiescenceProbe::new(shared.clone());
+    let prime_started_at = Instant::now();
+    let prime_timeout_ms = shared.config.prime_timeout_ms;
+    let prime_deadline = prime_timeout_ms.map(|ms| prime_started_at + Duration::from_millis(ms));
+    let wedge_detection = shared.config.wedge_detection;
+    let wait_result = wait_for_quiescent_three_state(
+        &mut { probe },
+        target,
+        QUIET_WINDOW,
+        prime_deadline,
+        prime_started_at,
+        prime_timeout_ms,
+        wedge_detection,
+    );
+    let outcome = match wait_result {
+        Ok(_pane_target) => SingleDeliveryOutcome {
+            target_session: target.to_string(),
+            message_id,
+            outcome: crate::transports::SendOutcome::Delivered,
+            reason_code: None,
+            reason: None,
+            details: None,
+        },
+        Err(crate::transports::DeliveryWaitError::Timeout {
+            timeout,
+            readiness_mismatch,
+            mismatch_reason,
+        }) => SingleDeliveryOutcome {
+            target_session: target.to_string(),
+            message_id,
+            outcome: crate::transports::SendOutcome::Timeout,
+            reason_code: Some("delivery_prime_timeout".to_string()),
+            reason: Some(format!(
+                "prime wait timed out after {}ms (readiness_mismatch={}, reason={:?})",
+                timeout.as_millis(),
+                readiness_mismatch,
+                mismatch_reason
+            )),
+            details: None,
+        },
+        Err(crate::transports::DeliveryWaitError::Wedged { reason }) => SingleDeliveryOutcome {
+            target_session: target.to_string(),
+            message_id,
+            outcome: crate::transports::SendOutcome::Failed,
+            reason_code: Some("pane_wedged".to_string()),
+            reason: Some(format!("pty pane wedged: {reason}")),
+            details: None,
+        },
+        Err(crate::transports::DeliveryWaitError::Failed { reason }) => SingleDeliveryOutcome {
+            target_session: target.to_string(),
+            message_id,
+            outcome: crate::transports::SendOutcome::Failed,
+            reason_code: Some("pty_probe_failed".to_string()),
+            reason: Some(reason),
+            details: None,
+        },
+        Err(crate::transports::DeliveryWaitError::Shutdown) => SingleDeliveryOutcome {
+            target_session: target.to_string(),
+            message_id,
+            outcome: crate::transports::SendOutcome::DroppedOnShutdown,
+            reason_code: Some("dropped_on_shutdown".to_string()),
+            reason: Some("delivery dropped due to relay shutdown".to_string()),
+            details: None,
+        },
+    };
+    let _ = outcome_tx.send(outcome);
+    let _ = terminal; // silence unused when probe-only path is taken
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_raw(
+    _terminal: &mut libghostty_vt::Terminal<'_, '_>,
+    content: String,
+    append_enter: bool,
+    writer: &Arc<std::sync::Mutex<Box<dyn Write + Send>>>,
+    shared: &PtyShared,
+    target_session: &str,
+    outcome_tx: oneshot::Sender<SingleDeliveryOutcome>,
+) {
+    let write_result = (|| -> std::io::Result<()> {
+        let mut g = writer
+            .lock()
+            .map_err(|_| std::io::Error::other("pty writer mutex poisoned"))?;
+        g.write_all(content.as_bytes())?;
+        if append_enter {
+            g.write_all(b"\n")?;
+        }
+        Ok(())
+    })();
+    if let Err(e) = write_result {
+        let _ = outcome_tx.send(SingleDeliveryOutcome {
+            target_session: target_session.to_string(),
+            message_id: String::new(),
+            outcome: crate::transports::SendOutcome::Failed,
+            reason_code: Some("pty_write_failed".to_string()),
+            reason: Some(format!("pty master write: {e}")),
+            details: None,
+        });
+        return;
+    }
+    let probe = PtyQuiescenceProbe::new(shared.clone());
+    let prime_started_at = Instant::now();
+    let prime_timeout_ms = shared.config.prime_timeout_ms;
+    let prime_deadline = prime_timeout_ms.map(|ms| prime_started_at + Duration::from_millis(ms));
+    let wedge_detection = shared.config.wedge_detection;
+    let wait_result = wait_for_quiescent_three_state(
+        &mut { probe },
+        target_session,
+        QUIET_WINDOW,
+        prime_deadline,
+        prime_started_at,
+        prime_timeout_ms,
+        wedge_detection,
+    );
+    let outcome = match wait_result {
+        Ok(_pane_target) => SingleDeliveryOutcome {
+            target_session: target_session.to_string(),
+            message_id: String::new(),
+            outcome: crate::transports::SendOutcome::Delivered,
+            reason_code: None,
+            reason: None,
+            details: None,
+        },
+        Err(crate::transports::DeliveryWaitError::Timeout {
+            timeout,
+            readiness_mismatch,
+            mismatch_reason,
+        }) => SingleDeliveryOutcome {
+            target_session: target_session.to_string(),
+            message_id: String::new(),
+            outcome: crate::transports::SendOutcome::Timeout,
+            reason_code: Some("delivery_prime_timeout".to_string()),
+            reason: Some(format!(
+                "prime wait timed out after {}ms (readiness_mismatch={}, reason={:?})",
+                timeout.as_millis(),
+                readiness_mismatch,
+                mismatch_reason
+            )),
+            details: None,
+        },
+        Err(crate::transports::DeliveryWaitError::Wedged { reason }) => SingleDeliveryOutcome {
+            target_session: target_session.to_string(),
+            message_id: String::new(),
+            outcome: crate::transports::SendOutcome::Failed,
+            reason_code: Some("pane_wedged".to_string()),
+            reason: Some(format!("pty pane wedged: {reason}")),
+            details: None,
+        },
+        Err(crate::transports::DeliveryWaitError::Failed { reason }) => SingleDeliveryOutcome {
+            target_session: target_session.to_string(),
+            message_id: String::new(),
+            outcome: crate::transports::SendOutcome::Failed,
+            reason_code: Some("pty_probe_failed".to_string()),
+            reason: Some(reason),
+            details: None,
+        },
+        Err(crate::transports::DeliveryWaitError::Shutdown) => SingleDeliveryOutcome {
+            target_session: target_session.to_string(),
+            message_id: String::new(),
+            outcome: crate::transports::SendOutcome::DroppedOnShutdown,
+            reason_code: Some("dropped_on_shutdown".to_string()),
+            reason: Some("delivery dropped due to relay shutdown".to_string()),
+            details: None,
+        },
+    };
+    let _ = outcome_tx.send(outcome);
 }
 
 fn drain_remaining(write_rx: &mut mpsc::Receiver<DeliveryCommand>, _target_session: &str) {
@@ -567,6 +848,3 @@ impl PtyConfigSnapshot {
         &self.target_member_id
     }
 }
-
-#[allow(unused_imports)]
-use crate::envelope::PromptBatchSettings as _ReexportBatchSettings;
