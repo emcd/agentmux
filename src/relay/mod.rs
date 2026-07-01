@@ -21,6 +21,7 @@ mod errors;
 mod handlers;
 mod identity;
 mod lifecycle;
+mod peer_connection;
 mod routing;
 mod startup_state;
 mod stream;
@@ -44,6 +45,7 @@ pub use self::delivery::observability::{
 pub use self::drain::{ConnectionDrainCoordinator, ConnectionDrainReport, ConnectionWorkerSlot};
 use self::errors::*;
 use self::identity::*;
+pub use self::peer_connection::PeerConnectionManager;
 pub use self::stream::second_claim_is_live_conflict_for_testing;
 pub use self::watcher::{BundleWatcher, spawn_bundle_watcher};
 

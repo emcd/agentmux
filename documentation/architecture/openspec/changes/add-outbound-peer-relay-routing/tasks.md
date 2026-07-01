@@ -35,10 +35,10 @@
 
 ## 3. Outbound connection management (cross-relay-routing)
 
-- [ ] 3.1 New module under `src/relay/` for a per-peer outbound connection
+- [x] 3.1 New module under `src/relay/` for a per-peer outbound connection
       manager: lazy establishment on first delivery, jittered exponential
       backoff reconnect (reuse `ensure_connected` backoff shape).
-- [ ] 3.2 Read `<state-root>/peers/<peer_alias>.psk` (fail the delivery, not
+- [x] 3.2 Read `<state-root>/peers/<peer_alias>.psk` (fail the delivery, not
       startup, on absence/unreadable); dial `address` (Unix socket); Hello as this
       relay's configured `<relay-id>@RELAY` with the peer PSK.
 - [ ] 3.3 Route resolved cross-relay `Send`/`Raww` through the peer connection.
