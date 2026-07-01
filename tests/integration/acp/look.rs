@@ -56,32 +56,57 @@ fn acp_look_returns_oldest_to_newest_session_update_lines() {
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
+    // Settle: wait until the post-coalescence buffer holds both the User
+    // prompt and the coalesced Agent entry.
     let look = wait_for_look(
         &config_root,
         &tmux_socket,
         "bravo",
         "bravo",
-        Some(3),
-        |lines| lines.len() == 3,
+        Some(10),
+        |lines| lines.len() >= 3 && lines.last().map(String::as_str) == Some("ACP-LINE-3"),
     );
     let snapshot = expect_acp_snapshot(look);
-    assert!(
-        snapshot
-            .entries
-            .iter()
-            .all(|entry| { matches!(entry, agentmux::transports::StructuredEntry::Agent { .. }) })
-    );
+    // The reader-thread same-kind adjacency coalescence rule collapses the 3
+    // streaming agent_message_chunk notifications into a single Agent
+    // entry; the buffer additionally holds the User prompt entry from
+    // `AcpStdioClient::prompt`.
     assert_eq!(
-        snapshot.lines,
-        vec!["ACP-LINE-1", "ACP-LINE-2", "ACP-LINE-3"]
+        snapshot.entries.len(),
+        2,
+        "User prompt + 1 coalesced Agent entry, not 1 + N fragment Agents"
     );
+    assert!(matches!(
+        snapshot.entries[0],
+        agentmux::transports::StructuredEntry::User { .. }
+    ));
+    match &snapshot.entries[1] {
+        agentmux::transports::StructuredEntry::Agent { lines } => {
+            assert_eq!(
+                lines,
+                &vec![
+                    "ACP-LINE-1".to_string(),
+                    "ACP-LINE-2".to_string(),
+                    "ACP-LINE-3".to_string()
+                ],
+                "the 3 streaming chunks coalesce into one Agent entry's lines"
+            );
+        }
+        other => panic!("expected Agent entry at index 1, got {other:?}"),
+    }
     assert_eq!(snapshot.freshness, LookFreshness::Fresh);
     assert_eq!(snapshot.snapshot_source, LookSnapshotSource::LiveBuffer);
     assert_eq!(snapshot.stale_reason_code, None);
 }
 
 #[test]
-fn acp_look_enforces_bounded_retention_and_tail_selection() {
+fn acp_look_coalesces_long_streaming_response_into_single_entry() {
+    // 1105 streaming chunks would have produced 1105 fragment Agent entries
+    // before coalescence, exercising the buffer cap at 1000. With
+    // reader-thread same-kind adjacency coalescence in place, the same input coalesces
+    // into a single Agent entry whose `lines` carry all 1105 lines; the
+    // entry-count cap is never reached (the cap-with-coalescence invariant
+    // is exercised at the unit-test layer in tests/unit/acp/replay_coalescence.rs).
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions {
         update_count: 1_105,
@@ -100,39 +125,44 @@ fn acp_look_enforces_bounded_retention_and_tail_selection() {
         "bravo",
         Some(1_000),
         |lines| {
-            lines.len() == 1_000
-                && lines.first().map(String::as_str) == Some("ACP-LINE-106")
+            lines.first().map(String::as_str) == Some("status?")
                 && lines.last().map(String::as_str) == Some("ACP-LINE-1105")
         },
     );
     let snapshot = expect_acp_snapshot(look);
-    let snapshot_lines = snapshot.lines;
-    assert_eq!(snapshot_lines.len(), 1_000);
     assert_eq!(
-        snapshot_lines.first().map(String::as_str),
-        Some("ACP-LINE-106")
+        snapshot.entries.len(),
+        2,
+        "User prompt entry + 1 coalesced Agent entry; the buffer held 2 entries, not 1000+"
     );
+    assert_eq!(snapshot.entries_total, 2);
+    assert!(matches!(
+        snapshot.entries[0],
+        agentmux::transports::StructuredEntry::User { .. }
+    ));
+    let agent_lines = match &snapshot.entries[1] {
+        agentmux::transports::StructuredEntry::Agent { lines } => lines.clone(),
+        other => panic!("expected Agent entry at index 1, got {other:?}"),
+    };
     assert_eq!(
-        snapshot_lines.last().map(String::as_str),
+        agent_lines.len(),
+        1_105,
+        "all 1105 streaming chunks coalesce into one Agent entry's lines"
+    );
+    assert_eq!(agent_lines.first().map(String::as_str), Some("ACP-LINE-1"));
+    assert_eq!(
+        agent_lines.last().map(String::as_str),
         Some("ACP-LINE-1105")
-    );
-
-    let tail = dispatch_look(&config_root, &tmux_socket, "bravo", "bravo", Some(5));
-    let tail_lines = expect_acp_snapshot(tail).lines;
-    assert_eq!(
-        tail_lines,
-        vec![
-            "ACP-LINE-1101".to_string(),
-            "ACP-LINE-1102".to_string(),
-            "ACP-LINE-1103".to_string(),
-            "ACP-LINE-1104".to_string(),
-            "ACP-LINE-1105".to_string(),
-        ]
     );
 }
 
 #[test]
 fn acp_look_offset_walks_backward_through_replay_buffer_with_metadata() {
+    // Under reader-thread same-kind adjacency coalescence, a 10-chunk Agent stream
+    // coalesces into a single Agent entry; the buffer additionally holds
+    // the User prompt entry, so `entries_total == 2`. The offset-walking
+    // math still holds on this smaller buffer; the semantics of
+    // `entries[total - N - offset .. total - offset]` are unchanged.
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions {
         update_count: 10,
@@ -144,48 +174,47 @@ fn acp_look_offset_walks_backward_through_replay_buffer_with_metadata() {
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
-    // Settle the replay buffer, then capture the full ordered window so the
-    // offset assertions stay robust regardless of any leading prompt entry.
     let full_look = wait_for_look(
         &config_root,
         &tmux_socket,
         "bravo",
         "bravo",
-        Some(1_000),
+        Some(10),
         |lines| lines.last().map(String::as_str) == Some("ACP-LINE-10"),
     );
     let full = expect_acp_snapshot(full_look);
     let total = full.entries_total;
+    assert_eq!(total, 2, "User prompt + 1 coalesced Agent entry");
     assert_eq!(full.returned_entries_count, total);
     assert_eq!(full.entries.len(), total);
-    assert!(total >= 10, "expected at least ten buffered entries");
 
-    // offset = 0 returns the newest window (tail-N). Windowing is over replay
-    // entries, not flattened lines, so compare the entry slices directly.
+    // offset = 0 returns the newest window (tail-N). With a 2-entry buffer
+    // and lines=1, the window is [entries[1]] (the coalesced Agent).
     let newest = expect_acp_snapshot(dispatch_look_with_offset(
         &config_root,
         &tmux_socket,
         "bravo",
         "bravo",
-        Some(5),
+        Some(1),
         Some(0),
     ));
     assert_eq!(newest.entries_total, total);
-    assert_eq!(newest.returned_entries_count, 5);
-    assert_eq!(newest.entries, full.entries[total - 5..].to_vec());
+    assert_eq!(newest.returned_entries_count, 1);
+    assert_eq!(newest.entries, full.entries[total - 1..].to_vec());
 
-    // offset = 5 skips the newest five and returns the five before them.
+    // offset = 1 skips the newest entry and returns the one before it
+    // (the User prompt entry).
     let older = expect_acp_snapshot(dispatch_look_with_offset(
         &config_root,
         &tmux_socket,
         "bravo",
         "bravo",
-        Some(5),
-        Some(5),
+        Some(1),
+        Some(1),
     ));
     assert_eq!(older.entries_total, total);
-    assert_eq!(older.returned_entries_count, 5);
-    assert_eq!(older.entries, full.entries[total - 10..total - 5].to_vec());
+    assert_eq!(older.returned_entries_count, 1);
+    assert_eq!(older.entries, full.entries[total - 2..total - 1].to_vec());
 
     // Walking past the start yields an empty window over a still-live buffer.
     let past_start = expect_acp_snapshot(dispatch_look_with_offset(
@@ -193,7 +222,7 @@ fn acp_look_offset_walks_backward_through_replay_buffer_with_metadata() {
         &tmux_socket,
         "bravo",
         "bravo",
-        Some(5),
+        Some(1),
         Some(total),
     ));
     assert_eq!(past_start.entries_total, total);
@@ -257,6 +286,11 @@ fn acp_look_reflects_outgoing_user_prompt_before_session_updates_arrive() {
 
 #[test]
 fn acp_look_captures_updates_emitted_after_prompt_response() {
+    // The stub agent emits 3 chunks before the response and 3 more after a
+    // 20ms delay; both batches coalesce against the buffer tail under the
+    // reader-thread same-kind adjacency coalescence rule. The buffer ends with a User
+    // prompt entry and a single Agent entry whose `lines` carry all 6
+    // streamed chunks.
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions {
         update_count: 3,
@@ -275,13 +309,30 @@ fn acp_look_captures_updates_emitted_after_prompt_response() {
         &tmux_socket,
         "bravo",
         "bravo",
-        Some(3),
-        |lines| lines.len() == 3,
+        Some(10),
+        |lines| {
+            lines.first().map(String::as_str) == Some("status?")
+                && lines.last().map(String::as_str) == Some("ACP-LINE-3")
+        },
     );
-    let snapshot_lines = expect_acp_snapshot(look).lines;
+    let snapshot = expect_acp_snapshot(look);
     assert_eq!(
-        snapshot_lines,
-        vec!["ACP-LINE-1", "ACP-LINE-2", "ACP-LINE-3"]
+        snapshot.entries.len(),
+        2,
+        "User prompt + 1 coalesced Agent entry across pre- and post-response chunks"
+    );
+    let agent_lines = match &snapshot.entries[1] {
+        agentmux::transports::StructuredEntry::Agent { lines } => lines.clone(),
+        other => panic!("expected Agent entry at index 1, got {other:?}"),
+    };
+    assert_eq!(
+        agent_lines,
+        vec![
+            "ACP-LINE-1".to_string(),
+            "ACP-LINE-2".to_string(),
+            "ACP-LINE-3".to_string()
+        ],
+        "post-response and pre-response chunks coalesce into the same Agent entry's lines"
     );
 }
 

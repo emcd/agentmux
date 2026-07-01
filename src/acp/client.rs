@@ -14,7 +14,7 @@ use std::{
 
 use serde_json::{Value, json};
 
-use super::{PROTOCOL_VERSION, PermissionOption, PermissionRequest, ReplayEntry};
+use super::{PROTOCOL_VERSION, PermissionOption, PermissionRequest, ReplayEntry, UserSource};
 use crate::runtime::inscriptions::emit_inscription;
 
 const ACP_CLIENT_NAME: &str = "agentmux-relay";
@@ -30,6 +30,19 @@ const ACP_OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub const REPLAY_BUFFER_MAX_ENTRIES: usize = 1000;
 
+/// Non-coalescing replay-buffer append. Reserved for the prompt path
+/// (`AcpStdioClient::prompt`): each operator submission becomes its own
+/// `ReplayEntry::User` regardless of any preceding `User` tail, so that two
+/// back-to-back prompts remain two distinct entries (per-call / per-submission
+/// boundary must be preserved; the operator aggregation principle says we
+/// only ever merge messages that actually arrive as streaming deltas, and
+/// user prompts are delivered whole).
+///
+/// Reader-thread ingestion from the ACP server uses
+/// `coalesce_replay_entries_on_append` instead, which performs same-kind
+/// adjacency coalescence for streaming User/Agent/Cognition/Update kinds.
+///
+/// The 1000-entry cap is enforced at the end of the append.
 pub(in crate::acp) fn append_replay_entries(
     buffer: &mut Vec<ReplayEntry>,
     entries: Vec<ReplayEntry>,
@@ -38,6 +51,103 @@ pub(in crate::acp) fn append_replay_entries(
     if buffer.len() > REPLAY_BUFFER_MAX_ENTRIES {
         let overflow = buffer.len() - REPLAY_BUFFER_MAX_ENTRIES;
         buffer.drain(0..overflow);
+    }
+}
+
+/// Coalescing replay-buffer append for the reader-thread ingestion path
+/// (`AcpStdioClient::dispatch_session_update`). Walks `new_entries` and
+/// merges adjacent same-kind entries with the buffer tail, preserving all
+/// line content in receive order and enforcing the 1000-entry cap after
+/// coalescence.
+///
+/// Coalescence rules:
+/// - `User`, `Agent`, `Cognition`: adjacent same-kind entries merge into one
+///   entry by `lines: Vec<String>` extension. `User` merges only when both
+///   entries share the same `UserSource`; cross-source adjacency
+///   (prompt-path tail + reader-thread arrival, or vice versa) does not
+///   merge.
+/// - `Update`: adjacent entries merge only when their `update_kind` is
+///   identical; the merge extends `lines` and preserves the shared
+///   `update_kind`.
+/// - `Invocation`: NEVER merges with an adjacent entry (per-call boundary
+///   must be preserved; the existing parser-side `tool_call` +
+///   `tool_call_update` merge already coalesces a single call's result onto
+///   the same entry).
+/// - Different-kind adjacency never merges.
+///
+/// The helper walks `new_entries` once. When the buffer tail and the next
+/// `new_entry` are coalescible per the rules above, the helper extends the
+/// tail's `lines` in place; otherwise the entry is pushed. The
+/// within-notification-multi-entry case (the wire may carry multiple
+/// entries per `session/update` notification via `params.update` as a JSON
+/// array) is covered naturally by the same walk: consecutive entries in
+/// `new_entries` are checked against each other and the tail.
+pub(in crate::acp) fn coalesce_replay_entries_on_append(
+    buffer: &mut Vec<ReplayEntry>,
+    new_entries: Vec<ReplayEntry>,
+) {
+    for new_entry in new_entries {
+        if let Some(tail) = buffer.last_mut()
+            && try_merge_adjacent(tail, &new_entry)
+        {
+            continue;
+        }
+        buffer.push(new_entry);
+    }
+    if buffer.len() > REPLAY_BUFFER_MAX_ENTRIES {
+        let overflow = buffer.len() - REPLAY_BUFFER_MAX_ENTRIES;
+        buffer.drain(0..overflow);
+    }
+}
+
+/// Returns `true` if `new_entry` was merged into `tail` in place (the caller
+/// should NOT push a new entry). Returns `false` if the caller should push
+/// `new_entry` as-is. Pass-by-reference with internal clone of merge-target
+/// fields; the merge cost is `O(new_entry's lines)` per mergeable pair.
+fn try_merge_adjacent(tail: &mut ReplayEntry, new_entry: &ReplayEntry) -> bool {
+    use ReplayEntry::{
+        Agent as AgentEntry, Cognition as CognitionEntry, Update as UpdateEntry, User as UserEntry,
+    };
+    match (tail, new_entry) {
+        (
+            UserEntry {
+                lines: tail_lines,
+                source: tail_source,
+            },
+            UserEntry {
+                lines: new_lines,
+                source: new_source,
+            },
+        ) if tail_source == new_source => {
+            tail_lines.extend(new_lines.iter().cloned());
+            true
+        }
+        (AgentEntry { lines: tail_lines }, AgentEntry { lines: new_lines }) => {
+            tail_lines.extend(new_lines.iter().cloned());
+            true
+        }
+        (CognitionEntry { lines: tail_lines }, CognitionEntry { lines: new_lines }) => {
+            tail_lines.extend(new_lines.iter().cloned());
+            true
+        }
+        (
+            UpdateEntry {
+                update_kind: tail_kind,
+                lines: tail_lines,
+            },
+            UpdateEntry {
+                update_kind: new_kind,
+                lines: new_lines,
+            },
+        ) if tail_kind == new_kind => {
+            tail_lines.extend(new_lines.iter().cloned());
+            true
+        }
+        // Invocation never merges with adjacent entries, regardless of
+        // identity (the per-call boundary must be preserved). Different-kind
+        // pairs never merge. Update entries with different `update_kind`
+        // never merge.
+        _ => false,
     }
 }
 
@@ -421,7 +531,13 @@ impl AcpStdioClient {
         append_text_lines(prompt, &mut user_lines);
         if !user_lines.is_empty() {
             let mut buffer = self.replay_buffer.lock().expect("replay_buffer mutex");
-            append_replay_entries(&mut buffer, vec![ReplayEntry::User { lines: user_lines }]);
+            append_replay_entries(
+                &mut buffer,
+                vec![ReplayEntry::User {
+                    lines: user_lines,
+                    source: UserSource::PromptPath,
+                }],
+            );
         }
 
         if let Some(callback) = on_dispatched {
@@ -717,7 +833,7 @@ fn dispatch_session_update(
     let entries = parse_replay_entries_from_params(params, pending_tool_calls);
     if !entries.is_empty() {
         let mut buffer = replay_buffer.lock().expect("replay_buffer mutex");
-        append_replay_entries(&mut buffer, entries);
+        coalesce_replay_entries_on_append(&mut buffer, entries);
     }
 }
 
@@ -909,7 +1025,10 @@ pub(super) fn parse_replay_entries_from_params(
             "user_message_chunk" => {
                 let lines = collect_text_lines_from_value(update);
                 if !lines.is_empty() {
-                    entries.push(ReplayEntry::User { lines });
+                    entries.push(ReplayEntry::User {
+                        lines,
+                        source: UserSource::ReaderThread,
+                    });
                 }
             }
             "agent_message_chunk" => {

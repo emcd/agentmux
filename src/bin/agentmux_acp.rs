@@ -114,7 +114,7 @@ fn replay_entries_to_messages(entries: Vec<ReplayEntry>) -> Vec<Message> {
     entries
         .into_iter()
         .map(|entry| match entry {
-            ReplayEntry::User { lines } => Message {
+            ReplayEntry::User { lines, .. } => Message {
                 role: MessageRole::User,
                 text: lines.join("\n"),
             },
