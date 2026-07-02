@@ -1,5 +1,6 @@
 pub mod client;
 pub mod permission;
+pub mod permissions;
 pub mod persistent_runtime;
 pub mod render;
 pub mod replay;
@@ -9,9 +10,10 @@ pub mod transport;
 pub mod worker_driver;
 
 pub use client::{
-    AcpRequestError, AcpStdioClient, DispatchHandler, PermissionHandler, PermissionResponder,
-    PromptCompletion, PromptCompletionHandler, PromptDispatchOutcome,
+    AcpRequestError, AcpStdioClient, DispatchHandler, PromptCompletion, PromptCompletionHandler,
+    PromptDispatchOutcome,
 };
+pub use permissions::{PermissionHandler, PermissionResponder};
 pub use persistent_runtime::{
     ACP_ERROR_CODE_INITIALIZE_FAILED, AcpBootstrapError, PersistentAcpWorkerRuntime,
     bootstrap_acp_worker_runtime,
