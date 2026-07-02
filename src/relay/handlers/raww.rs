@@ -412,8 +412,10 @@ fn execute_raww(
         sender_namespace: home_namespace.to_string(),
         sender: sender_member,
         // Raw input does not carry verified sender attribution, and its targets
-        // are never UI streams.
+        // are never UI streams; a peer-forwarded on_behalf_of has no attribution
+        // envelope to surface it in, so it is not carried into delivery.
         authenticated_identity: None,
+        on_behalf_of: None,
         all_target_sessions: vec![canonical_session_id(
             target_member.id.as_str(),
             raww_bundle.bundle_name.as_str(),

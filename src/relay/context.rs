@@ -13,6 +13,10 @@ pub(super) struct SendRequestContext {
     pub(super) targets: Vec<String>,
     pub(super) broadcast: bool,
     pub(super) quiet_window_ms: Option<u64>,
+    /// Origin attribution carried on a peer-forwarded request. Honored only when
+    /// the authenticated requester is a relay principal (ingress); ignored for a
+    /// regular session so a non-relay requester cannot self-assert it.
+    pub(super) on_behalf_of: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -52,6 +56,11 @@ pub(super) struct AsyncDeliveryTask {
     /// and for delivery paths that do not attribute a verified identity (e.g.
     /// raw input).
     pub(super) authenticated_identity: Option<String>,
+    /// Origin principal a peer relay forwarded this delivery on behalf of, carried
+    /// uninterpreted into the delivered envelope alongside `authenticated_identity`
+    /// (which names the peer relay). `None` for local delivery, socket-trust
+    /// senders, and raw input (which has no attribution envelope).
+    pub(super) on_behalf_of: Option<String>,
     /// Canonical `session@namespace` ids of every recipient of this message
     /// across all delivery groups, the task's own target included. Envelope
     /// rendering derives co-recipient (Cc) identities from this list.

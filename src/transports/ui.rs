@@ -73,6 +73,7 @@ pub struct UiIncomingMessage {
     pub body: String,
     pub cc_sessions: Vec<String>,
     pub authenticated_identity: Option<String>,
+    pub on_behalf_of: Option<String>,
 }
 
 /// One `delivery_outcome` phase the transport asks the relay to emit
@@ -159,6 +160,7 @@ impl Transport for UiTransport {
                 .map(|party| party.canonical_session_id().to_string())
                 .collect(),
             authenticated_identity: message.authenticated_identity,
+            on_behalf_of: message.on_behalf_of,
         };
         // Run the bounded reconnect wait off the async worker thread so `mailw`
         // stays non-blocking; resolve the future when it settles.

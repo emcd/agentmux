@@ -577,6 +577,9 @@ fn build_ui_transport_services(key: &AsyncWorkerKey) -> UiTransportServices {
                     payload["authenticated_identity"] =
                         Value::String(authenticated_identity.clone());
                 }
+                if let Some(on_behalf_of) = &incoming.on_behalf_of {
+                    payload["on_behalf_of"] = Value::String(on_behalf_of.clone());
+                }
                 let event = RelayStreamEvent {
                     event_type: "incoming_message".to_string(),
                     target_session: canonical_session_id(

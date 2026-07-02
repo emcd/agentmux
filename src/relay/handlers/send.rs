@@ -49,7 +49,7 @@ pub(in crate::relay) fn handle_send_routed(
         targets,
         broadcast,
         quiet_window_ms,
-        on_behalf_of: _,
+        on_behalf_of,
     } = request
     else {
         return Err(relay_error(
@@ -67,6 +67,7 @@ pub(in crate::relay) fn handle_send_routed(
             targets,
             broadcast,
             quiet_window_ms,
+            on_behalf_of,
         },
         configuration_root,
         bundle_catalog,
@@ -108,7 +109,11 @@ fn handle_send(
         targets,
         broadcast,
         quiet_window_ms,
+        on_behalf_of,
     } = request;
+    // Honor a peer-forwarded origin attribution only from a relay-principal
+    // (ingress) requester; a regular session cannot self-assert on_behalf_of.
+    let on_behalf_of = if relay_ingress { on_behalf_of } else { None };
 
     if message.trim().is_empty() {
         return Err(relay_error(
@@ -228,6 +233,7 @@ fn handle_send(
                 SendExecutionContext {
                     sender: &sender,
                     authenticated_identity,
+                    on_behalf_of,
                     message: message.as_str(),
                     home_namespace,
                     request_id,
@@ -313,6 +319,9 @@ fn prepare_send(
 struct SendExecutionContext<'a> {
     sender: &'a SenderIdentity,
     authenticated_identity: Option<String>,
+    /// Origin attribution for a peer-forwarded (ingress) send; carried into each
+    /// delivered envelope and the response. `None` for a locally-originated send.
+    on_behalf_of: Option<String>,
     message: &'a str,
     home_namespace: &'a str,
     request_id: Option<String>,
@@ -334,6 +343,7 @@ fn execute_send(
     let SendExecutionContext {
         sender,
         authenticated_identity,
+        on_behalf_of,
         message,
         home_namespace,
         request_id,
@@ -373,6 +383,7 @@ fn execute_send(
                 sender_namespace: home_namespace.to_string(),
                 sender: sender_member.clone(),
                 authenticated_identity: authenticated_identity.clone(),
+                on_behalf_of: on_behalf_of.clone(),
                 all_target_sessions: all_recipient_sessions.clone(),
                 target_session: target.session_id.clone(),
                 message: message.to_string(),
@@ -439,7 +450,7 @@ fn execute_send(
         requester_session: canonical_session_id(sender.session_id.as_str(), home_namespace),
         sender_display_name: sender.display_name.clone(),
         authenticated_identity: authenticated_identity.clone(),
-        on_behalf_of: None,
+        on_behalf_of,
         results,
     };
     if let RelayResponse::Send {

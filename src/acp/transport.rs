@@ -1414,6 +1414,7 @@ mod envelope_batch_prime_anchor_tests {
                 target: party.clone(),
                 cc: vec![],
                 authenticated_identity: None,
+                on_behalf_of: None,
             },
             append_enter: true,
             choice_decider_sessions: vec!["alpha".to_string()],

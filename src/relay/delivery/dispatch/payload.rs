@@ -75,6 +75,7 @@ pub(super) fn build_delivery_message(
         },
         cc: co_recipient_parties(task),
         authenticated_identity: task.authenticated_identity.clone(),
+        on_behalf_of: task.on_behalf_of.clone(),
     }
 }
 
