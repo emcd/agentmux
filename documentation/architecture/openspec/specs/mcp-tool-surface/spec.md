@@ -162,18 +162,27 @@ target identifiers and SHALL NOT be relay-routed.
 If one token matches both a bundle member `session_id` and UI session id, the
 bundle member `session_id` interpretation SHALL win.
 
-`send` SHALL accept a transport-specific timeout override field for ACP
-targets:
+`send` SHALL NOT accept any transport-scoped timeout override
+field in v1. v1 of ACP delivery and v1 of Tmux delivery are fully
+config-only: the per-coder config keys
+`[coders.<id>.acp].prime-timeout-ms` and
+`[coders.<id>.tmux].prime-timeout-ms` are the only timeout
+surfaces.
 
-- `acp_turn_timeout_ms` (positive integer milliseconds) for ACP targets
+The pre-existing `quiescence_timeout_ms` payload field was
+retired by the `tmux-wedge-detection` proposal; the pre-existing
+`acp_turn_timeout_ms` payload field is retired by this proposal.
+Both fields are rejected by the MCP server as unknown. Alpha
+defaults apply: the rejection is a generic unknown-field error;
+the server is NOT required to name a replacement. Operators who
+hit the rejection consult the changelog.
 
-Tmux delivery is configured per coder via the
-`[coders.<id>.tmux].prime-timeout-ms` TOML key (see the session-relay
-Tmux Prime Timeout requirement); `send` SHALL NOT accept a per-call
-tmux timeout override field. v1 of Tmux delivery is config-only.
-
-`send` SHALL reject ACP timeout overrides against non-ACP targets with
-`validation_invalid_timeout_field_for_transport`.
+`send` SHALL reject ACP timeout overrides against non-ACP targets
+with `validation_invalid_timeout_field_for_transport`. With no
+transport-scoped timeout override fields in v1, this validation
+class is reserved for future per-call overrides (if/when a
+transport-neutral `prime_timeout_ms` payload field is
+reintroduced — see `design.md` Future Work).
 
 `send` authorization scope SHALL follow requester policy control:
 
@@ -191,11 +200,23 @@ tmux timeout override field. v1 of Tmux delivery is config-only.
   UI session id
 - **THEN** the token is interpreted as bundle member `session_id`
 
-#### Scenario: Reject ACP timeout override for tmux target
+#### Scenario: Reject retired tmux timeout payload field
 
-- **WHEN** `send` targets tmux-backed session
-- **AND** the request payload includes `acp_turn_timeout_ms`
-- **THEN** the tool returns `validation_invalid_timeout_field_for_transport`
+- **WHEN** `send` request payload includes
+  `quiescence_timeout_ms` (a field that does not exist in v1)
+- **THEN** the tool rejects the field as unknown
+
+#### Scenario: Reject retired ACP timeout payload field
+
+- **WHEN** `send` request payload includes
+  `acp_turn_timeout_ms` (a field that does not exist in v1)
+- **THEN** the tool rejects the field as unknown
+
+#### Scenario: Reject hypothetical ACP prime timeout payload field
+
+- **WHEN** `send` request payload includes
+  `acp_prime_timeout_ms` (a field that has never existed)
+- **THEN** the tool rejects the field as unknown
 
 ### Requirement: Sender Identity Inference
 
