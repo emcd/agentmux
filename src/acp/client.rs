@@ -14,9 +14,8 @@ use std::{
 
 use serde_json::{Value, json};
 
-use super::{
-    PROTOCOL_VERSION, PendingToolCall, PermissionOption, PermissionRequest, ReplayEntry, UserSource,
-};
+use super::permissions::{PermissionHandler, PermissionResponder};
+use super::{PROTOCOL_VERSION, PendingToolCall, ReplayEntry, UserSource};
 use crate::runtime::inscriptions::emit_inscription;
 
 const ACP_CLIENT_NAME: &str = "agentmux-relay";
@@ -31,45 +30,7 @@ const ACP_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const ACP_OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub type DispatchHandler = Box<dyn FnOnce() + Send + 'static>;
-// Permission handler is void-returning: the reader thread must not block on
-// the operator's decision (see todos/acp/16). The handler receives a
-// `PermissionResponder` it can move onto a separate task; that task awaits
-// the decision and writes the JSON-RPC response via the responder when ready.
-pub type PermissionHandler =
-    Box<dyn FnMut(PermissionRequest, PermissionResponder) + Send + 'static>;
 pub type PromptCompletionHandler = Box<dyn FnOnce(PromptCompletion) + Send + 'static>;
-
-// Owns the obligation to write the agent's `session/request_permission`
-// response. The handler installed by relay delivery moves the responder onto
-// a short-lived resolver thread; once the operator's decision arrives, the
-// resolver calls `respond` (or, if the resolver path drops it without
-// responding, `Drop` emits a cancelled outcome) so the agent never waits
-// forever on a permission it issued.
-pub struct PermissionResponder {
-    stdin: SharedStdin,
-    request_id: u64,
-    in_flight_flag: Arc<AtomicBool>,
-    responded: bool,
-}
-
-impl PermissionResponder {
-    pub fn respond(&mut self, decision: Option<String>) {
-        if self.responded {
-            return;
-        }
-        send_permission_response(&self.stdin, self.request_id, decision);
-        self.responded = true;
-    }
-}
-
-impl Drop for PermissionResponder {
-    fn drop(&mut self) {
-        if !self.responded {
-            send_permission_response(&self.stdin, self.request_id, None);
-        }
-        self.in_flight_flag.store(false, Ordering::SeqCst);
-    }
-}
 
 #[derive(Debug)]
 pub enum AcpRequestError {
@@ -150,7 +111,7 @@ pub struct AcpStdioClient {
     last_prompt_signal: Mutex<Option<mpsc::Receiver<()>>>,
 }
 
-fn write_line_to_stdin(stdin: &SharedStdin, payload: &str) -> io::Result<()> {
+pub(super) fn write_line_to_stdin(stdin: &SharedStdin, payload: &str) -> io::Result<()> {
     let mut guard = stdin
         .lock()
         .map_err(|_| io::Error::other("ACP stdin mutex poisoned"))?;
@@ -774,7 +735,7 @@ fn dispatch_permission_request(
                 "acp.reader.permission_dropped_no_active_prompt",
                 &json!({"id": request_id}),
             );
-            send_permission_response(stdin, request_id, None);
+            super::permissions::send_permission_response(stdin, request_id, None);
             return;
         }
     };
@@ -784,7 +745,7 @@ fn dispatch_permission_request(
             "acp.reader.permission_dropped_session_mismatch",
             &json!({"id": request_id}),
         );
-        send_permission_response(stdin, request_id, None);
+        super::permissions::send_permission_response(stdin, request_id, None);
         return;
     }
 
@@ -804,17 +765,16 @@ fn dispatch_permission_request(
             "acp.reader.permission_dropped_already_in_flight",
             &json!({"id": request_id}),
         );
-        send_permission_response(stdin, request_id, None);
+        super::permissions::send_permission_response(stdin, request_id, None);
         return;
     }
 
-    let request = build_permission_request_from_params(params, request_id);
-    let responder = PermissionResponder {
-        stdin: Arc::clone(stdin),
+    let request = super::permissions::build_permission_request_from_params(params, request_id);
+    let responder = PermissionResponder::new(
+        Arc::clone(stdin),
         request_id,
-        in_flight_flag: Arc::clone(&active.permission_in_flight),
-        responded: false,
-    };
+        Arc::clone(&active.permission_in_flight),
+    );
 
     // The handler is expected to move the responder onto a separate task
     // (typically a short-lived thread) so the reader returns to its
@@ -835,76 +795,6 @@ fn dispatch_permission_request(
             // Responder dropped: sends cancelled, clears flag.
             drop(responder);
         }
-    }
-}
-
-fn build_permission_request_from_params(params: &Value, request_id: u64) -> PermissionRequest {
-    let tool_call_title = params
-        .get("toolCall")
-        .and_then(|tc| tc.get("title"))
-        .and_then(Value::as_str)
-        .unwrap_or("unknown tool")
-        .to_string();
-    let options: Vec<PermissionOption> = params
-        .get("options")
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|opt| {
-                    Some(PermissionOption {
-                        option_id: opt.get("optionId")?.as_str()?.to_string(),
-                        name: opt.get("name")?.as_str()?.to_string(),
-                        kind: opt
-                            .get("kind")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .to_string(),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    PermissionRequest {
-        request_id,
-        tool_call_title,
-        requested_kind: params
-            .get("kind")
-            .and_then(Value::as_str)
-            .unwrap_or("other")
-            .to_string(),
-        requested_details: params.clone(),
-        options,
-    }
-}
-
-fn send_permission_response(
-    stdin: &SharedStdin,
-    request_id: u64,
-    selected_option_id: Option<String>,
-) {
-    let outcome = match selected_option_id {
-        Some(option_id) => json!({"outcome": "selected", "optionId": option_id}),
-        None => json!({"outcome": "cancelled"}),
-    };
-    let response = match serde_json::to_string(&json!({
-        "jsonrpc": "2.0",
-        "id": request_id,
-        "result": {"outcome": outcome},
-    })) {
-        Ok(value) => value,
-        Err(source) => {
-            emit_inscription(
-                "acp.reader.permission_response_serialize_failed",
-                &json!({"cause": source.to_string()}),
-            );
-            return;
-        }
-    };
-    if let Err(source) = write_line_to_stdin(stdin, response.as_str()) {
-        emit_inscription(
-            "acp.reader.permission_response_write_failed",
-            &json!({"cause": source.to_string()}),
-        );
     }
 }
 

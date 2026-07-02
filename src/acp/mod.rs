@@ -1,5 +1,7 @@
 pub mod client;
 pub mod permission;
+pub mod permissions;
+pub mod persistent_runtime;
 pub mod render;
 pub mod replay;
 pub mod state;
@@ -8,15 +10,19 @@ pub mod transport;
 pub mod worker_driver;
 
 pub use client::{
-    AcpRequestError, AcpStdioClient, DispatchHandler, PermissionHandler, PermissionResponder,
-    PromptCompletion, PromptCompletionHandler, PromptDispatchOutcome,
+    AcpRequestError, AcpStdioClient, DispatchHandler, PromptCompletion, PromptCompletionHandler,
+    PromptDispatchOutcome,
+};
+pub use permissions::{PermissionHandler, PermissionResponder};
+pub use persistent_runtime::{
+    ACP_ERROR_CODE_INITIALIZE_FAILED, AcpBootstrapError, PersistentAcpWorkerRuntime,
+    bootstrap_acp_worker_runtime,
 };
 pub use render::{replay_entries_to_snapshot_entries, snapshot_entries_to_plain_lines};
 pub use replay::REPLAY_BUFFER_MAX_ENTRIES;
 pub use transport::{
-    ACP_ERROR_CODE_CONNECTION_CLOSED, ACP_ERROR_CODE_INITIALIZE_FAILED,
-    ACP_ERROR_CODE_PROMPT_FAILED, ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE, AcpBootstrapError,
-    AcpTransport, PersistentAcpWorkerRuntime, bootstrap_acp_worker_runtime,
+    ACP_ERROR_CODE_CONNECTION_CLOSED, ACP_ERROR_CODE_PROMPT_FAILED,
+    ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE, AcpTransport,
 };
 pub use worker_driver::{AcpDriverServices, AcpWorkerDriver};
 
