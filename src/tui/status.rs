@@ -12,7 +12,9 @@
 //!   aggregate (`startup_health`) can be `Degraded` while individual sessions
 //!   are still `ready=false`, and the operator needs the per-session detail.
 
-use crate::relay::{ListedBundle, ListedBundleStartupHealth, ListedBundleState};
+use crate::relay::{
+    ListedBundle, ListedBundleStartupHealth, ListedBundleState, StartupFailureRecord,
+};
 
 /// Snapshot of bundle-level status fields used by the TUI list view.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -23,6 +25,19 @@ pub struct BundleStatusDisplay {
     pub startup_health: Option<ListedBundleStartupHealth>,
     pub state_reason_code: Option<String>,
     pub startup_failure_count: usize,
+    pub startup_failures: Vec<StartupFailureSummary>,
+}
+
+/// One per-session startup failure surfaced beneath the bundle status header.
+/// Carries only the render-relevant fields (`session_id`, `code`, `reason`),
+/// dropping the wire record's `timestamp`, `sequence`, and `details` — the last
+/// of which (a `serde_json::Value`) is only `PartialEq`, so keeping it would
+/// block [`BundleStatusDisplay`] from deriving `Eq`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StartupFailureSummary {
+    pub session_id: String,
+    pub code: String,
+    pub reason: String,
 }
 
 impl BundleStatusDisplay {
@@ -34,6 +49,21 @@ impl BundleStatusDisplay {
             startup_health: bundle.startup_health.clone(),
             state_reason_code: bundle.state_reason_code.clone(),
             startup_failure_count: bundle.startup_failure_count,
+            startup_failures: bundle
+                .recent_startup_failures
+                .iter()
+                .map(StartupFailureSummary::from_record)
+                .collect(),
+        }
+    }
+}
+
+impl StartupFailureSummary {
+    fn from_record(record: &StartupFailureRecord) -> Self {
+        Self {
+            session_id: record.session_id.clone(),
+            code: record.code.clone(),
+            reason: record.reason.clone(),
         }
     }
 }
@@ -67,6 +97,24 @@ pub fn format_bundle_status_line(status: &BundleStatusDisplay) -> String {
         ));
     }
     parts.join(" ")
+}
+
+/// One k=v detail line per recent per-session startup failure, ordered oldest
+/// to newest as `load_startup_failures` returns them. Rendered beneath the
+/// bundle status header so the operator sees why individual sessions failed,
+/// not just the aggregate count. `reason` is placed last because it is free
+/// text that may contain spaces.
+pub fn format_startup_failure_lines(status: &BundleStatusDisplay) -> Vec<String> {
+    status
+        .startup_failures
+        .iter()
+        .map(|failure| {
+            format!(
+                "startup_failure session={} code={} reason={}",
+                failure.session_id, failure.code, failure.reason
+            )
+        })
+        .collect()
 }
 
 /// Severity classification for the bundle status, used to choose a render

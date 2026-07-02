@@ -7,7 +7,7 @@ use std::{
 
 use agentmux::relay::{
     ListedBundle, ListedBundleStartupHealth, ListedBundleState, ListedSession,
-    ListedSessionTransport, RelayError, RelayResponse,
+    ListedSessionTransport, RelayError, RelayResponse, StartupFailureRecord,
 };
 use agentmux::runtime::paths::{
     BundleRuntimePaths, RelayRuntimePaths, ensure_bundle_runtime_directory,
@@ -142,6 +142,88 @@ fn list_sessions_single_bundle_json_uses_canonical_bundle_shape() {
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0]["operation"], "list");
     assert_eq!(requests[0]["requester_session"], "user@GLOBAL");
+}
+
+#[test]
+fn list_sessions_human_output_renders_per_session_startup_failures() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration(&config_root, "agentmux", Some(&["dev"]), &["tui", "master"]);
+    write_tui_configuration(
+        &config_root,
+        Some("agentmux"),
+        Some("user"),
+        &[("user", "default", Some("Operator"))],
+    );
+
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux").expect("bundle paths");
+    ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
+    let request_log = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let relay_thread = spawn_fake_relay_once(
+        &RelayRuntimePaths::resolve(&state_root).relay_socket,
+        RelayResponse::List {
+            schema_version: "1".to_string(),
+            bundle: ListedBundle {
+                id: "agentmux".to_string(),
+                hosted: true,
+                state: ListedBundleState::Down,
+                startup_health: None,
+                state_reason_code: Some("startup_failed".to_string()),
+                state_reason: None,
+                startup_failure_count: 1,
+                recent_startup_failures: vec![StartupFailureRecord {
+                    session_id: "tui".to_string(),
+                    transport: ListedSessionTransport::Tmux,
+                    code: "runtime_startup_failed".to_string(),
+                    reason: "opencode: command not found".to_string(),
+                    timestamp: "2026-07-02T00:00:00Z".to_string(),
+                    sequence: 1,
+                    details: None,
+                }],
+                principals: vec![ListedSession {
+                    id: "tui".to_string(),
+                    name: None,
+                    transport: ListedSessionTransport::Tmux,
+                    ready: false,
+                }],
+            },
+        },
+        Arc::clone(&request_log),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "list",
+            "principals",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .output()
+        .expect("run list sessions");
+    relay_thread.join().expect("join fake relay thread");
+    assert!(output.status.success(), "command should succeed");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("startup_failure_count=1"),
+        "header should carry the aggregate count: {stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "  startup_failure session=tui code=runtime_startup_failed \
+             reason=opencode: command not found"
+        ),
+        "human output should render the per-session failure reason: {stdout}"
+    );
 }
 
 #[test]

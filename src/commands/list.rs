@@ -367,6 +367,27 @@ fn print_human_bundle(bundle: &serde_json::Map<String, Value>) {
     }
     println!("{header}");
 
+    if let Some(failures) = bundle
+        .get("recent_startup_failures")
+        .and_then(Value::as_array)
+    {
+        for failure in failures {
+            let session = failure
+                .get("session_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let code = failure
+                .get("code")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let reason = failure
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            println!("  startup_failure session={session} code={code} reason={reason}");
+        }
+    }
+
     if let Some(principals) = bundle.get("principals").and_then(Value::as_array) {
         for session in principals {
             let id = session

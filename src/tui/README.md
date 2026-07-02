@@ -178,6 +178,12 @@ auto-opens it.
   (`Healthy`/`Degraded`/`HostedDown`/`Unhosted`) so `hosted=true, state=down`
   (sessions failed to start) is visually distinct from `hosted=false,
   state=down` (not hosted),
+- picker per-session startup failures: beneath the status header, one red
+  `startup_failure session=… code=… reason=…` line per record from
+  `bundle.recent_startup_failures` (capped by
+  `STARTUP_FAILURE_PICKER_MAX_LINES`; the header's `startup_failure_count`
+  carries the true total), so the operator reads why individual sessions
+  failed rather than relying on the generic relay error path,
 - picker per-session readiness: rows sourced from `relay::ListedSession`
   surface `ready` directly — ready rows render in default style, not-ready
   rows render dimmed (`DarkGray`/`DIM`) and gain a trailing `[not ready]`
