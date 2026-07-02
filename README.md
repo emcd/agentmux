@@ -73,10 +73,18 @@ require-session-credentials = false # default false; true rejects socket-trust H
 [choices]
 pending-max = 256                  # bounded choices queue depth
 
-# Schema-only placeholders for future outbound peer routing. Validated at
-# startup, but the relay opens no outbound connection and adds no routing target.
+# Active outbound peer relays. A cross-relay target (<session>@<bundle>!<alias>)
+# is forwarded to the peer you locally call <alias>. Each entry names: `alias`,
+# this relay's LOCAL name for the peer (the !<alias> routing selector, internal to
+# us); `address`, the peer's listening Unix-domain socket (an absolute path; a
+# host:port TCP endpoint is not yet supported); and `connect-as`, the identity the
+# peer issued this relay (presented as <connect-as>@RELAY when dialing it, since
+# the receiver determines it). Inbound scope for a connecting peer is set
+# separately via `new peer <id>@RELAY --scope`, not in this file.
 [[peers]]
-address = "relay.example:9000"
+alias = "west"
+address = "/run/agentmux/west.sock"
+connect-as = "east"
 ```
 
 `watch-bundles` and `require-session-credentials` resolve by precedence: CLI

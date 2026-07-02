@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use serde_json::json;
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::{
@@ -10,18 +10,21 @@ use crate::{
 };
 
 use super::super::authorization::{
-    AuthorizationContext, choose_authorized_ui_sessions, has_ui_session, load_authorization_context,
+    AuthorizationContext, RouteAuthorization, choose_authorized_ui_sessions, has_ui_session,
+    load_authorization_context, reject_cross_relay_ingress,
 };
 use super::super::connection::BundleCatalog;
 use super::super::delivery::{QuiescenceOptions, enqueue_async_delivery};
+use super::super::identity::{PrincipalType, classify_principal_id};
 use super::super::routing::{
     Addressing, Capability, OperationProfile, ResolvedRoute, ResolvedTarget as RouteTarget,
     resolve_send_route,
 };
 use super::super::{
-    AsyncDeliveryTask, DeliveryPayloadMode, GLOBAL_NAMESPACE, RelayError, RelayRequest,
-    RelayResponse, RequestPrincipal, SCHEMA_VERSION, SendOutcome, SendRequestContext, SendResult,
-    bare_session_id, canonical_session_id, map_config, relay_error,
+    AsyncDeliveryTask, DeliveryPayloadMode, GLOBAL_NAMESPACE, PeerConnectionManager,
+    RELAY_NAMESPACE, RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
+    SendOutcome, SendRequestContext, SendResult, bare_session_id, canonical_session_id, map_config,
+    relay_error,
 };
 use super::routed::{load_home_context, run_target_operation};
 use super::sender::{SenderIdentity, resolve_sender_in_namespace};
@@ -37,6 +40,7 @@ pub(in crate::relay) fn handle_send_routed(
     configuration_root: &Path,
     bundle_catalog: &BundleCatalog,
     principal: Option<&RequestPrincipal>,
+    peer_connection_manager: Option<&PeerConnectionManager>,
 ) -> Result<RelayResponse, RelayError> {
     let RelayRequest::Send {
         request_id,
@@ -66,6 +70,7 @@ pub(in crate::relay) fn handle_send_routed(
         configuration_root,
         bundle_catalog,
         principal,
+        peer_connection_manager,
     )
 }
 
@@ -75,11 +80,25 @@ fn handle_send(
     configuration_root: &Path,
     bundle_catalog: &BundleCatalog,
     principal: Option<&RequestPrincipal>,
+    peer_connection_manager: Option<&PeerConnectionManager>,
 ) -> Result<RelayResponse, RelayError> {
-    // The sender is identified by its home namespace alone: a `GLOBAL` sender is
-    // relay-wide and has no bundle, any other namespace names the home bundle. The
-    // home authorization context (operator policy for `GLOBAL`, or the bundle's
-    // policy) is derived from it.
+    // A cross-relay ingress request arrives from an authenticated peer relay
+    // principal (`<id>@RELAY`): it carries no bundle policy, its home namespace is
+    // `RELAY`, and it is authorized by the peer's registered ingress scope rather
+    // than a policy tier. Detected from the AUTHENTICATED principal, never the
+    // (spoofable) wire `requester_session`.
+    let relay_ingress = principal.is_some_and(|principal| {
+        classify_principal_id(principal.session_id.as_str()) == Some(PrincipalType::Relay)
+    });
+    let home_namespace = if relay_ingress {
+        RELAY_NAMESPACE
+    } else {
+        home_namespace
+    };
+    // The sender is identified by its home namespace: a bundle namespace names the
+    // home bundle; `GLOBAL`/`RELAY` are relay-wide and carry no bundle. The home
+    // authorization context (operator policy, or the bundle's policy) is derived
+    // from it.
     let (home_bundle, authorization) = load_home_context(home_namespace, configuration_root)?;
     let SendRequestContext {
         request_id,
@@ -111,16 +130,32 @@ fn handle_send(
             None,
         ));
     }
-    // The requester is authorized in its home namespace (its bundle, or
-    // `GLOBAL`); strip any `@<home>` qualifier so internal lookups match. A
-    // relay-wide (`@GLOBAL`) requester keeps its suffix.
-    let requester_session = bare_session_id(requester_session.as_str(), home_namespace);
-    let sender = resolve_sender_in_namespace(
-        home_bundle.as_ref(),
-        &authorization,
-        requester_session.as_str(),
-        "requester_session",
-    )?;
+    // A peer relay's own principal is the sender for an ingress request (keyed on
+    // the authenticated identity); otherwise resolve the requester in its home
+    // namespace, stripping any `@<home>` qualifier so internal lookups match.
+    let sender = if relay_ingress {
+        let principal =
+            principal.expect("relay ingress is detected from an authenticated principal");
+        SenderIdentity::relay_principal(principal.session_id.as_str())
+    } else {
+        let requester_session = bare_session_id(requester_session.as_str(), home_namespace);
+        resolve_sender_in_namespace(
+            home_bundle.as_ref(),
+            &authorization,
+            requester_session.as_str(),
+            "requester_session",
+        )?
+    };
+    // The route authorization mode: a peer relay is gated per-target by its
+    // registered ingress scope (deny-by-default); every other requester by its
+    // policy tier resolved in the home bundle.
+    let route_authorization = if relay_ingress {
+        RouteAuthorization::Ingress {
+            scope: principal.and_then(|principal| principal.ingress_scope.as_deref()),
+        }
+    } else {
+        RouteAuthorization::Policy(&authorization)
+    };
     // Verified principal_id of the sender, carried both on the Send response
     // and into each recipient's delivered envelope; `None` for socket-trust.
     let authenticated_identity =
@@ -140,35 +175,64 @@ fn handle_send(
 
     // The spine owns resolution and authorization; `resolve_send_route_or_broadcast`
     // builds the config-free route, `prepare_send` assembles the per-namespace
-    // delivery groups (validating target existence), and `execute_send` enqueues
-    // delivery.
+    // delivery groups for the local targets (validating their existence), and
+    // `execute_send` enqueues local delivery and forwards cross-relay targets to
+    // their peer relays. Authorization runs over the *whole* route (local and
+    // cross-relay), so a mixed send atomically requires the highest tier any
+    // target demands — a cross-relay (bang-path) target always floors at `all`.
     run_target_operation(
         home_namespace,
-        &authorization,
+        route_authorization,
         OperationProfile {
             capability: Capability::Send,
             addressing: Addressing::MultiTarget,
         },
         || {
-            resolve_send_route_or_broadcast(
+            let route = resolve_send_route_or_broadcast(
                 broadcast,
                 home_namespace,
                 &sender,
                 home_bundle.as_ref(),
                 &targets,
-            )
+            )?;
+            // A peer relay ingress requester may address only plain local targets:
+            // reject any cross-relay (bang-path) target before the
+            // manager-availability check, so the rejection is deterministic and a
+            // peer can never chain onward through this relay to its own peers.
+            if relay_ingress
+                && let Some(target) = route.targets.iter().find(|target| target.is_cross_relay())
+            {
+                return Err(reject_cross_relay_ingress(target));
+            }
+            // Cross-relay forwarding needs the peer connection manager. The
+            // non-stream single-bundle entry point supplies none, so a cross-relay
+            // target there is reported as unavailable rather than silently dropped
+            // (mirrors the Raww path). The stream path always supplies the manager.
+            if peer_connection_manager.is_none()
+                && route.targets.iter().any(RouteTarget::is_cross_relay)
+            {
+                return Err(relay_error(
+                    "runtime_cross_relay_unavailable",
+                    "cross-relay routing is not available on this relay",
+                    None,
+                ));
+            }
+            Ok(route)
         },
         |route| prepare_send(route, &authorization, configuration_root, bundle_catalog),
         |route, groups| {
             execute_send(
                 route,
                 groups,
-                &sender,
-                authenticated_identity,
-                message.as_str(),
-                home_namespace,
-                request_id,
-                quiet_window_ms,
+                SendExecutionContext {
+                    sender: &sender,
+                    authenticated_identity,
+                    message: message.as_str(),
+                    home_namespace,
+                    request_id,
+                    quiet_window_ms,
+                    peer_connection_manager,
+                },
             )
         },
     )
@@ -201,6 +265,7 @@ fn resolve_send_route_or_broadcast(
         .map(|member| RouteTarget {
             namespace: home_namespace.to_string(),
             session_id: Some(member.id.clone()),
+            relay_id: None,
         })
         .collect();
     Ok(ResolvedRoute {
@@ -210,7 +275,10 @@ fn resolve_send_route_or_broadcast(
     })
 }
 
-/// Assembles the per-namespace delivery groups for a `Send`. Target existence is
+/// Assembles the per-namespace delivery groups for a `Send`'s **local** targets.
+/// Cross-relay (bang-path) targets are excluded — their foreign bundle is not in
+/// this relay's catalog, so they are validated and delivered by the peer-forward
+/// path in `execute_send`, never the local catalog. Local target existence is
 /// folded into `assemble_delivery_groups`; a broadcast route's targets are
 /// home-bundle members and resolve through the catalog like any other
 /// bundle-bound target. Runs as the spine's `prepare` stage, before
@@ -221,35 +289,64 @@ fn prepare_send(
     configuration_root: &Path,
     bundle_catalog: &BundleCatalog,
 ) -> Result<Vec<DeliveryGroup>, RelayError> {
+    let local_targets = route
+        .targets
+        .iter()
+        .filter(|target| !target.is_cross_relay())
+        .cloned()
+        .collect::<Vec<_>>();
     assemble_delivery_groups(
         authorization,
         configuration_root,
         bundle_catalog,
-        &route.targets,
+        &local_targets,
     )
 }
 
-/// Enqueues async delivery to every authorized target and builds the `Send`
-/// response. Runs as the spine's `execute` stage, after authorization.
-#[allow(clippy::too_many_arguments)]
+/// The parameters `execute_send` needs beyond the spine-supplied route and
+/// delivery groups: the resolved sender, its verified identity, the message body,
+/// the requester's home namespace, the request/quiescence controls, and the peer
+/// connection manager used to forward cross-relay targets. Grouped so the execute
+/// stage takes the route, the groups, and one context rather than a long
+/// positional argument list.
+struct SendExecutionContext<'a> {
+    sender: &'a SenderIdentity,
+    authenticated_identity: Option<String>,
+    message: &'a str,
+    home_namespace: &'a str,
+    request_id: Option<String>,
+    quiet_window_ms: Option<u64>,
+    peer_connection_manager: Option<&'a PeerConnectionManager>,
+}
+
+/// Enqueues async delivery to every authorized local target, forwards every
+/// cross-relay (bang-path) target to its peer relay, and builds the merged
+/// `Send` response. Runs as the spine's `execute` stage, after authorization.
+/// Local and cross-relay outcomes are folded into one `results` list; a peer
+/// transport or handshake failure surfaces as that target's `failed` outcome
+/// rather than failing the whole send.
 fn execute_send(
     route: &ResolvedRoute,
     groups: Vec<DeliveryGroup>,
-    sender: &SenderIdentity,
-    authenticated_identity: Option<String>,
-    message: &str,
-    home_namespace: &str,
-    request_id: Option<String>,
-    quiet_window_ms: Option<u64>,
+    context: SendExecutionContext<'_>,
 ) -> Result<RelayResponse, RelayError> {
+    let SendExecutionContext {
+        sender,
+        authenticated_identity,
+        message,
+        home_namespace,
+        request_id,
+        quiet_window_ms,
+        peer_connection_manager,
+    } = context;
     let sender_member = sender.to_bundle_member();
     let quiescence = QuiescenceOptions::for_async(quiet_window_ms);
     let mut results = Vec::with_capacity(route.targets.len());
-    // Every task carries the full recipient list across all delivery groups so
-    // delivered envelopes can show co-recipients in other namespaces. Entries
-    // are canonical `session@namespace` ids: bare ids are ambiguous outside
-    // their own group.
-    let all_recipient_sessions = groups
+    // Every task carries the full recipient list so delivered envelopes can show
+    // co-recipients elsewhere. Entries are canonical ids: local recipients as
+    // `session@namespace`, cross-relay recipients as the `session@bundle!relay`
+    // bang-path — bare ids are ambiguous outside their own group.
+    let mut all_recipient_sessions = groups
         .iter()
         .flat_map(|group| {
             group.targets.iter().map(|target| {
@@ -260,6 +357,13 @@ fn execute_send(
             })
         })
         .collect::<Vec<_>>();
+    all_recipient_sessions.extend(
+        route
+            .targets
+            .iter()
+            .filter(|target| target.is_cross_relay())
+            .map(cross_relay_target_label),
+    );
     for group in &groups {
         for target in &group.targets {
             let message_id = Uuid::new_v4().to_string();
@@ -301,6 +405,30 @@ fn execute_send(
             });
         }
     }
+    // Forward each cross-relay target to its peer relay and fold the peer's
+    // outcome (or a transport failure) into the merged results. The manager is
+    // present here: a cross-relay target on a manager-less entry point was already
+    // rejected at the resolve stage.
+    for target in route
+        .targets
+        .iter()
+        .filter(|target| target.is_cross_relay())
+    {
+        let Some(manager) = peer_connection_manager else {
+            return Err(relay_error(
+                "runtime_cross_relay_unavailable",
+                "cross-relay routing is not available on this relay",
+                None,
+            ));
+        };
+        results.push(forward_send_cross_relay(
+            manager,
+            target,
+            message,
+            quiet_window_ms,
+            request_id.clone(),
+        ));
+    }
     let response = RelayResponse::Send {
         schema_version: SCHEMA_VERSION.to_string(),
         request_id,
@@ -331,6 +459,140 @@ fn execute_send(
         );
     }
     Ok(response)
+}
+
+/// The origin-facing canonical id for a cross-relay target: the foreign
+/// `session@bundle` re-suffixed with its bang-path `!<relay_id>` selector, so the
+/// requester's merged results and co-recipient list name *where* the target was
+/// forwarded rather than a bare foreign session that would collide with a local
+/// bundle.
+fn cross_relay_target_label(target: &RouteTarget) -> String {
+    let relay_id = target
+        .relay_id
+        .as_deref()
+        .expect("cross-relay target carries a relay id");
+    let foreign_session = canonical_session_id(
+        target
+            .session_id
+            .as_deref()
+            .expect("cross-relay send target carries a session id"),
+        target.namespace.as_str(),
+    );
+    format!("{foreign_session}!{relay_id}")
+}
+
+/// Forwards one cross-relay `Send` target to its peer relay and maps the outcome
+/// to a single [`SendResult`] keyed by the origin-facing bang-path label.
+///
+/// The forwarded request presents this relay's per-peer `<connect_as>@RELAY`
+/// identity as the requester and the peer's *local* `session@bundle` as the sole
+/// target (the peer receives a plain local target, not the bang-path). A peer
+/// that answers with a `Send` response contributes its own per-target result
+/// verbatim (re-labelled to the bang-path); a peer error response or a
+/// transport/handshake failure folds into a `failed` result carrying the peer's
+/// or manager's reason, so one unreachable peer never fails the requester's other
+/// (local or cross-relay) deliveries.
+fn forward_send_cross_relay(
+    manager: &PeerConnectionManager,
+    target: &RouteTarget,
+    message: &str,
+    quiet_window_ms: Option<u64>,
+    request_id: Option<String>,
+) -> SendResult {
+    let label = cross_relay_target_label(target);
+    let relay_id = target
+        .relay_id
+        .as_deref()
+        .expect("cross-relay target carries a relay id");
+    let foreign_session = canonical_session_id(
+        target
+            .session_id
+            .as_deref()
+            .expect("cross-relay send target carries a session id"),
+        target.namespace.as_str(),
+    );
+    let Some(requester_session) = manager.presented_principal_id(relay_id) else {
+        return failed_cross_relay_result(
+            label,
+            "validation_unknown_peer",
+            "no configured peer relay matches the target alias",
+            None,
+        );
+    };
+    let forwarded = RelayRequest::Send {
+        request_id,
+        requester_session,
+        message: message.to_string(),
+        targets: vec![foreign_session],
+        broadcast: false,
+        quiet_window_ms,
+    };
+    match manager.forward(relay_id, &forwarded) {
+        Ok(RelayResponse::Send { mut results, .. }) => match results.pop() {
+            Some(mut result) => {
+                // A single-target forward yields a single result; re-label it so
+                // the requester sees the bang-path it addressed, not the peer's
+                // local `session@bundle`.
+                result.target_session = label;
+                result
+            }
+            None => failed_cross_relay_result(
+                label,
+                "internal_peer_empty_results",
+                "peer relay returned no delivery result for the forwarded target",
+                None,
+            ),
+        },
+        Ok(RelayResponse::Error { error }) => cross_relay_result_from_error(label, error),
+        Ok(_) => failed_cross_relay_result(
+            label,
+            "internal_peer_unexpected_response",
+            "peer relay returned an unexpected response kind for a forwarded send",
+            None,
+        ),
+        Err(error) => cross_relay_result_from_error(label, error),
+    }
+}
+
+/// Maps a typed [`RelayError`] the peer returned or the manager raised onto a
+/// cross-relay [`SendResult`]. An unreachable/handshake failure
+/// (`runtime_peer_unavailable`) becomes the distinct `peer_unavailable` outcome;
+/// every other error (a peer rejection such as ingress-denied, an unknown peer,
+/// or a missing credential) becomes `failed` carrying the error's reason.
+fn cross_relay_result_from_error(target_label: String, error: RelayError) -> SendResult {
+    let outcome = if error.code == "runtime_peer_unavailable" {
+        SendOutcome::PeerUnavailable
+    } else {
+        SendOutcome::Failed
+    };
+    SendResult {
+        target_session: target_label,
+        message_id: Uuid::new_v4().to_string(),
+        outcome,
+        reason_code: Some(error.code),
+        reason: Some(error.message),
+        details: error.details,
+    }
+}
+
+/// Builds a `failed` [`SendResult`] for a cross-relay target with a fresh message
+/// id and the supplied reason. Used when forwarding could not produce a peer
+/// delivery outcome (transport failure, peer error response, or an internal
+/// invariant violation).
+fn failed_cross_relay_result(
+    target_session: String,
+    reason_code: &str,
+    reason: &str,
+    details: Option<Value>,
+) -> SendResult {
+    SendResult {
+        target_session,
+        message_id: Uuid::new_v4().to_string(),
+        outcome: SendOutcome::Failed,
+        reason_code: Some(reason_code.to_string()),
+        reason: Some(reason.to_string()),
+        details,
+    }
 }
 
 /// One namespace-scoped delivery group: a target bundle's configuration plus

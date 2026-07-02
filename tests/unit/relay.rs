@@ -6,6 +6,8 @@ use tempfile::TempDir;
 
 #[path = "relay/error.rs"]
 mod error;
+#[path = "relay/peer_connection.rs"]
+mod peer_connection;
 #[path = "relay/preflight.rs"]
 mod preflight;
 #[path = "relay/principal_store.rs"]
@@ -587,6 +589,87 @@ fn send_broadcast_with_only_sender_returns_empty_results() {
         panic!("expected send response");
     };
     assert!(results.is_empty());
+}
+
+#[test]
+fn send_without_peer_manager_reports_cross_relay_unavailable() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    // A bang-path target is classified as cross-relay from the address alone
+    // (config-free). The non-stream single-bundle entry point holds no peer
+    // connection manager, so forwarding cannot run and the target reports as
+    // unavailable rather than a misleading unknown-bundle error. Real forwarding
+    // is exercised through the stream path, which supplies the manager.
+    let response = dispatch_request(
+        RelayRequest::Send {
+            request_id: None,
+            requester_session: "alpha".to_string(),
+            message: "hello".to_string(),
+            targets: vec!["bravo@other!peer-relay".to_string()],
+            broadcast: false,
+            quiet_window_ms: Some(1),
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect_err("cross-relay send has no peer manager on the non-stream path");
+    assert_eq!(response.code, "runtime_cross_relay_unavailable");
+}
+
+#[test]
+fn send_rejects_malformed_cross_relay_target() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    for target in ["bravo@other!", "bravo!peer-relay"] {
+        let response = dispatch_request(
+            RelayRequest::Send {
+                request_id: None,
+                requester_session: "alpha".to_string(),
+                message: "hello".to_string(),
+                targets: vec![target.to_string()],
+                broadcast: false,
+                quiet_window_ms: Some(1),
+            },
+            &config_root,
+            "party",
+            &tmux_socket,
+        )
+        .expect_err("malformed cross-relay target should fail at resolution");
+        assert_eq!(
+            response.code, "validation_malformed_cross_relay_target",
+            "target {target} should be rejected as malformed",
+        );
+    }
+}
+
+#[test]
+fn look_rejects_cross_relay_target_as_unsupported() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    // Unlike Send/Raww, Look does not forward across relays: cross-relay
+    // inspection needs request/response snapshot semantics over the peer boundary
+    // and is a deferred follow-on. A well-formed cross-relay Look target is a
+    // permanent, honest rejection rather than a routing-unavailable outcome.
+    let response = dispatch_request(
+        RelayRequest::Look {
+            requester_session: "alpha".to_string(),
+            target_session: "bravo@other!peer-relay".to_string(),
+            lines: Some(3),
+            offset: None,
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect_err("cross-relay look should fail");
+    assert_eq!(response.code, "runtime_cross_relay_unsupported");
 }
 
 #[test]

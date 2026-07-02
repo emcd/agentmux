@@ -32,6 +32,11 @@ pub(super) struct RequestPrincipal {
     /// `None` for every other connection. Request dispatch gates
     /// `IdentityIntrospect` on this.
     pub(super) introspect_rights: Option<IdentityIntrospectRights>,
+    /// Cross-relay ingress scope for a peer relay (`<id>@RELAY`) principal,
+    /// recorded at Hello; `None` for every other connection. A forwarded
+    /// `Send`/`Raww` from a peer relay is gated to this scope (deny-by-default
+    /// when absent).
+    pub(super) ingress_scope: Option<String>,
 }
 
 #[derive(Clone, Debug)]

@@ -14,11 +14,13 @@ use serde_json::json;
 use crate::configuration::{BundleConfiguration, load_bundle_configuration};
 
 use super::super::authorization::{
-    AuthorizationContext, authorize_route, load_authorization_context,
+    AuthorizationContext, RouteAuthorization, load_authorization_context,
 };
 use super::super::connection::BundleCatalog;
 use super::super::routing::{OperationProfile, ResolvedRoute};
-use super::super::{GLOBAL_NAMESPACE, RelayError, RelayResponse, map_config, relay_error};
+use super::super::{
+    GLOBAL_NAMESPACE, RELAY_NAMESPACE, RelayError, RelayResponse, map_config, relay_error,
+};
 
 /// The dispatch spine for target operations.
 ///
@@ -33,7 +35,7 @@ use super::super::{GLOBAL_NAMESPACE, RelayError, RelayResponse, map_config, rela
 /// body cannot run on a route the spine has not authorized.
 pub(super) fn run_target_operation<Prepared>(
     home_namespace: &str,
-    authorization: &AuthorizationContext,
+    authorization: RouteAuthorization<'_>,
     profile: OperationProfile,
     resolve: impl FnOnce() -> Result<ResolvedRoute, RelayError>,
     prepare: impl FnOnce(&ResolvedRoute) -> Result<Prepared, RelayError>,
@@ -41,18 +43,20 @@ pub(super) fn run_target_operation<Prepared>(
 ) -> Result<RelayResponse, RelayError> {
     let route = resolve()?;
     let prepared = prepare(&route)?;
-    authorize_route(home_namespace, authorization, profile, &route)?;
+    authorization.authorize(home_namespace, profile, &route)?;
     execute(&route, prepared)
 }
 
 /// Loads the requester's home authorization context. A bundle namespace loads the
-/// bundle and its policy; the relay-wide `GLOBAL` namespace has no bundle and
-/// resolves controls from the operator policy alone (`home_bundle` is `None`).
+/// bundle and its policy; the relay-wide `GLOBAL` and `RELAY` namespaces have no
+/// bundle and resolve controls from the operator policy alone (`home_bundle` is
+/// `None`). A `RELAY` (peer relay) requester is authorized by its ingress scope,
+/// not this policy context, but still loads it so the shared spine can run.
 pub(super) fn load_home_context(
     home_namespace: &str,
     configuration_root: &Path,
 ) -> Result<(Option<BundleConfiguration>, AuthorizationContext), RelayError> {
-    let home_bundle = if home_namespace == GLOBAL_NAMESPACE {
+    let home_bundle = if home_namespace == GLOBAL_NAMESPACE || home_namespace == RELAY_NAMESPACE {
         None
     } else {
         Some(load_bundle_configuration(configuration_root, home_namespace).map_err(map_config)?)

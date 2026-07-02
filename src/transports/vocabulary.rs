@@ -25,6 +25,13 @@ pub enum SendOutcome {
     Timeout,
     DroppedOnShutdown,
     Failed,
+    /// A cross-relay (bang-path) target whose peer relay could not be reached or
+    /// whose Hello handshake failed. Distinct from a local delivery `Failed` and
+    /// from the `relay_unavailable` error code (which names *this* relay being
+    /// unreachable to a client): this marks the *peer* relay as unreachable for
+    /// that one forwarded target, so the requester's other targets still report
+    /// their own outcomes.
+    PeerUnavailable,
 }
 
 /// Payload handling mode for one async delivery task.

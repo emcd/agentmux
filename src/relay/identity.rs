@@ -474,6 +474,14 @@ pub(crate) struct VerifiedIdentity {
     /// connection context so request dispatch can gate `IdentityIntrospect`
     /// (task 2.5).
     pub(crate) introspect_rights: Option<IdentityIntrospectRights>,
+    /// Cross-relay ingress scope for a `Relay` (peer) principal: the store
+    /// record's registered `scope` (set via `new peer <id>@RELAY --scope`),
+    /// bounding which targets a forwarded `Send`/`Raww` from this peer may reach.
+    /// `None` for every other principal type, and `None` for a peer registered
+    /// without a scope (which the ingress gate treats as fail-closed). Kept
+    /// separate from `introspect_rights` so a peer relay gains only delivery
+    /// ingress, not the application-only identity snapshot or revocation fan-out.
+    pub(crate) ingress_scope: Option<String>,
 }
 
 /// Verifies a Hello `principal_id` + `identity_token` against the principal
@@ -540,10 +548,14 @@ pub(crate) fn verify_hello_credential(
         (record.principal_type == PrincipalType::Application).then(|| IdentityIntrospectRights {
             scope: record.scope.clone(),
         });
+    let ingress_scope = (record.principal_type == PrincipalType::Relay)
+        .then(|| record.scope.clone())
+        .flatten();
     Ok(VerifiedIdentity {
         principal_type: record.principal_type,
         store_backed: true,
         introspect_rights,
+        ingress_scope,
     })
 }
 
@@ -570,9 +582,10 @@ fn verify_socket_trust(
                 principal_type: claimed_type,
                 store_backed: false,
                 // Socket-trust is accepted only for session and user
-                // principals, never `Application`, so it grants no introspect
-                // rights.
+                // principals, never `Application` or `Relay`, so it grants no
+                // introspect rights and no cross-relay ingress scope.
                 introspect_rights: None,
+                ingress_scope: None,
             })
         }
     }

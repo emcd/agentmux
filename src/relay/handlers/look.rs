@@ -12,11 +12,12 @@ use crate::{
     transports::{LookMode, LookSnapshotPayload as TransportLookSnapshotPayload, TransportError},
 };
 
+use super::super::authorization::RouteAuthorization;
 use super::super::connection::BundleCatalog;
 use super::super::delivery::get_output_view;
 use super::super::routing::{
-    Addressing, Capability, OperationProfile, ResolvedRoute, requester_home_namespace,
-    resolve_look_route,
+    Addressing, Capability, OperationProfile, ResolvedRoute, reject_cross_relay_unsupported,
+    requester_home_namespace, resolve_look_route,
 };
 use super::super::stream::lookup_registry_session_type;
 use super::super::{
@@ -97,17 +98,19 @@ pub(in crate::relay) fn handle_look_routed(
     // existence and loads the target bundle, `execute_look` captures the snapshot.
     run_target_operation(
         home_namespace,
-        &authorization,
+        RouteAuthorization::Policy(&authorization),
         OperationProfile {
             capability: Capability::Look,
             addressing: Addressing::SingleTarget,
         },
         || {
-            resolve_look_route(
+            let route = resolve_look_route(
                 requester_home_namespace(requester.session_id.as_str(), home_namespace),
                 requester.session_id.as_str(),
                 target_session.as_str(),
-            )
+            )?;
+            reject_cross_relay_unsupported(&route)?;
+            Ok(route)
         },
         |route| {
             prepare_look(

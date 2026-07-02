@@ -37,7 +37,7 @@ fn preflight_reports_invalid_relay_toml_peer() {
     let config_root = write_bundle(&temporary, "party");
     std::fs::write(
         config_root.join("relay.toml"),
-        "[[peers]]\naddress = \"\"\n",
+        "[[peers]]\nalias = \"west\"\naddress = \"\"\nconnect-as = \"east\"\n",
     )
     .expect("write relay.toml");
 
@@ -51,6 +51,32 @@ fn preflight_reports_invalid_relay_toml_peer() {
             .and_then(|details| details.get("field"))
             .and_then(|field| field.as_str()),
         Some("peers.address"),
+    );
+}
+
+#[test]
+fn preflight_reports_duplicate_peer_alias() {
+    // A duplicate `[[peers]].alias` collapses to one routable endpoint at
+    // runtime, so pre-flight must reject it before the relay is started.
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    std::fs::write(
+        config_root.join("relay.toml"),
+        "[[peers]]\nalias = \"west\"\naddress = \"/run/agentmux/west-a.sock\"\nconnect-as = \"east\"\n\
+         [[peers]]\nalias = \"west\"\naddress = \"/run/agentmux/west-b.sock\"\nconnect-as = \"north\"\n",
+    )
+    .expect("write relay.toml");
+
+    let error = preflight_bundle_configuration(&config_root, "party")
+        .expect_err("duplicate peer alias should fail pre-flight");
+    assert_eq!(error.code, "validation_invalid_arguments");
+    assert_eq!(
+        error
+            .details
+            .as_ref()
+            .and_then(|details| details.get("field"))
+            .and_then(|field| field.as_str()),
+        Some("peers.alias"),
     );
 }
 

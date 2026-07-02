@@ -79,6 +79,11 @@ pub(super) struct OperationProfile {
 pub(super) struct ResolvedTarget {
     pub namespace: String,
     pub session_id: Option<String>,
+    /// The bare id of the peer relay this target is forwarded to, set only for a
+    /// cross-relay bang-path target (`<session>@<bundle>!<relay_id>`). `None` for
+    /// every local target. A cross-relay target is cross-namespace by
+    /// construction, so it always classifies at the `all` tier.
+    pub relay_id: Option<String>,
 }
 
 /// The resolved, about-to-be-authorized shape of a request: the dispatch (home)
@@ -153,7 +158,18 @@ impl ResolvedTarget {
     /// The asymmetry is intentional; the integration tests exercise both
     /// directions.
     fn reachable_at_home_tier(&self, dispatch_namespace: &str) -> bool {
+        // A cross-relay target lives in a foreign trust domain; it is never a
+        // home-tier act, even if the foreign bundle name happens to match the
+        // requester's dispatch namespace.
+        if self.relay_id.is_some() {
+            return false;
+        }
         self.is_relay_wide() || self.namespace == dispatch_namespace
+    }
+
+    /// Whether this is a cross-relay (bang-path) target forwarded to a peer relay.
+    pub(super) fn is_cross_relay(&self) -> bool {
+        self.relay_id.is_some()
     }
 
     /// Classifies this target's relationship to the requester within the
@@ -217,10 +233,17 @@ pub(super) fn required_tier(route: &ResolvedRoute) -> ScopeTier {
 /// — that is the handler body's delivery concern, validated after this stage.
 fn resolve_target(dispatch_namespace: &str, target: &str) -> Result<ResolvedTarget, RelayError> {
     let requested = target.trim();
+    // The cross-relay `!<relay_id>` suffix is parsed before the `@<namespace>`
+    // split so a bang-path target is classified as cross-relay rather than as a
+    // local session in a bundle that happens to embed a `!`.
+    if let Some((principal, relay_id)) = requested.split_once('!') {
+        return resolve_cross_relay_target(principal, relay_id, requested);
+    }
     match classify_principal_id(requested) {
         Some(PrincipalType::User) => Ok(ResolvedTarget {
             namespace: dispatch_namespace.to_string(),
             session_id: Some(requested.to_string()),
+            relay_id: None,
         }),
         Some(PrincipalType::Session) => {
             let (session_id, namespace) = split_principal_id(requested)
@@ -228,6 +251,7 @@ fn resolve_target(dispatch_namespace: &str, target: &str) -> Result<ResolvedTarg
             Ok(ResolvedTarget {
                 namespace: namespace.to_string(),
                 session_id: Some(session_id.to_string()),
+                relay_id: None,
             })
         }
         Some(PrincipalType::Application | PrincipalType::Relay) => {
@@ -246,6 +270,66 @@ fn resolve_target(dispatch_namespace: &str, target: &str) -> Result<ResolvedTarg
             Some(json!({ "target": requested })),
         )),
     }
+}
+
+/// Classifies a bang-path `<session>@<bundle>!<relay_id>` target as a cross-relay
+/// target carrying the peer `relay_id` and the foreign `session@bundle`.
+///
+/// Config-free by design: the named peer's *existence* is a delivery-time concern
+/// (validated by the operation body against `[[peers]]`), never a resolution one,
+/// mirroring how an unknown local bundle surfaces at delivery rather than here.
+/// Only structural validity is checked — a non-empty `relay_id` free of further
+/// separators, and a bundle-qualified foreign session (`session@bundle`). A
+/// missing `@<bundle>` segment or an empty/garbled `relay_id` is a resolution-time
+/// validation error.
+fn resolve_cross_relay_target(
+    principal: &str,
+    relay_id: &str,
+    requested: &str,
+) -> Result<ResolvedTarget, RelayError> {
+    let malformed = || {
+        relay_error(
+            "validation_malformed_cross_relay_target",
+            "cross-relay target must be <session>@<bundle>!<relay_id> with a non-empty relay id and a bundle-qualified session",
+            Some(json!({ "target": requested })),
+        )
+    };
+    if relay_id.is_empty() || relay_id.contains('!') || relay_id.contains('@') {
+        return Err(malformed());
+    }
+    match classify_principal_id(principal) {
+        Some(PrincipalType::Session) => {
+            let (session_id, namespace) = split_principal_id(principal)
+                .expect("session classification implies a parseable suffix");
+            Ok(ResolvedTarget {
+                namespace: namespace.to_string(),
+                session_id: Some(session_id.to_string()),
+                relay_id: Some(relay_id.to_string()),
+            })
+        }
+        _ => Err(malformed()),
+    }
+}
+
+/// Rejects a cross-relay (bang-path) target on an operation that does not forward
+/// across relays.
+///
+/// `Send`/`Raww` (fire-and-forward delivery) forward cross-relay targets to the
+/// peer connection; `Look`/`List` do not. Their cross-relay support needs
+/// request/response snapshot/enumeration semantics over the peer boundary and is
+/// a deferred follow-on (`todos/relay/100`, with cross-relay `Look` behind it).
+/// Until then a well-formed cross-relay target on these inspection operations is
+/// a permanent, honest rejection rather than a misleading `validation_unknown_bundle`
+/// from the local catalog.
+pub(super) fn reject_cross_relay_unsupported(route: &ResolvedRoute) -> Result<(), RelayError> {
+    if route.targets.iter().any(ResolvedTarget::is_cross_relay) {
+        return Err(relay_error(
+            "runtime_cross_relay_unsupported",
+            "this operation does not support cross-relay targets",
+            None,
+        ));
+    }
+    Ok(())
 }
 
 /// Resolves a Send's fully-qualified targets into a config-free [`ResolvedRoute`]
@@ -340,6 +424,7 @@ pub(super) fn resolve_list_route(
         targets: vec![ResolvedTarget {
             namespace: enumerate_bundle.to_string(),
             session_id: None,
+            relay_id: None,
         }],
     }
 }

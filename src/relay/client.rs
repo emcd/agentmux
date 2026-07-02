@@ -59,6 +59,11 @@ pub struct RelayStreamSession {
     socket_path: PathBuf,
     namespace: String,
     session_id: String,
+    /// An explicit identity token that overrides the credential-path lookup.
+    /// Set for an outbound peer relay connection, which presents a peer PSK
+    /// rather than a session's provisioned credential or the socket-trust
+    /// sentinel; `None` for an ordinary session client.
+    identity_token_override: Option<String>,
     connection: Option<RelayStreamConnection>,
 }
 
@@ -108,8 +113,40 @@ impl RelayStreamSession {
             socket_path,
             namespace,
             session_id,
+            identity_token_override: None,
             connection: None,
         }
+    }
+
+    /// Creates an outbound peer relay session that presents `<connect_as>@RELAY`
+    /// with an explicit peer PSK.
+    ///
+    /// Unlike [`RelayStreamSession::new`], the identity token is supplied
+    /// directly (read from the peer credential path by the caller) rather than
+    /// resolved from a session credential path, since a peer relay authenticates
+    /// as the `@RELAY` principal the peer issued this relay, not a bundle session.
+    #[must_use]
+    pub(crate) fn for_peer_relay(
+        socket_path: PathBuf,
+        connect_as: String,
+        identity_token: String,
+    ) -> Self {
+        Self {
+            socket_path,
+            namespace: super::RELAY_NAMESPACE.to_string(),
+            session_id: connect_as,
+            identity_token_override: Some(identity_token),
+            connection: None,
+        }
+    }
+
+    /// Forces connection establishment (dial + Hello handshake) without sending
+    /// a request, so a caller can validate reachability and authentication up
+    /// front. Used by the outbound peer connection manager for lazy
+    /// establishment; a still-unestablished connection is retried on the next
+    /// call with the same jittered backoff as [`RelayStreamSession::request`].
+    pub(crate) fn connect(&mut self) -> Result<(), io::Error> {
+        self.ensure_connected()
     }
 
     /// Sends one request over a persistent stream and returns response.
@@ -314,6 +351,9 @@ impl RelayStreamSession {
     /// readable. The relay socket lives at `<state-root>/relay.sock`, so the
     /// state root is the socket's parent directory.
     fn read_identity_token(&self) -> String {
+        if let Some(token) = self.identity_token_override.as_deref() {
+            return token.to_string();
+        }
         let Some(state_root) = self.socket_path.parent() else {
             return SOCKET_TRUST_TOKEN.to_string();
         };

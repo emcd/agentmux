@@ -8,12 +8,12 @@ on the first cross-relay delivery to a given peer, never eagerly at startup, so
 that an unreachable peer neither blocks nor destabilizes relay startup.
 
 To connect to a peer, the relay SHALL read the outbound PSK from the well-known
-peer credential path `<state-root>/peers/<peer_alias>.psk` (where `<peer_alias>`
-is the bare id portion of the peer's `[[peers]]` entry), dial the peer's
-configured `address` (a Unix domain socket path in this slice), and present a
-Hello frame as this relay's own configured `<relay-id>@RELAY` principal (see the
-`runtime-bootstrap` capability's Relay Outbound Self Identity requirement) with
-that PSK. A missing or unreadable credential file SHALL fail the affected
+peer credential path `<state-root>/peers/<alias>.psk` (where `<alias>` is the
+peer's local `alias` from its `[[peers]]` entry), dial the peer's configured
+`address` (a Unix domain socket path in this slice), and present a Hello frame as
+the per-peer `<connect-as>@RELAY` principal that peer issued this relay (see the
+`runtime-bootstrap` capability's Relay Cross-Relay Presented Identity requirement)
+with that PSK. A missing or unreadable credential file SHALL fail the affected
 delivery with a typed outcome — not relay startup.
 
 While a peer connection is unavailable (unreachable endpoint or failed
@@ -27,10 +27,10 @@ exponential backoff rather than blocking.
   addressed to it
 - **THEN** the relay holds no outbound connection to that peer
 
-- **WHEN** the relay routes the first `Send` to a `!<relay_id>` target for that
-  peer
-- **THEN** the relay establishes the outbound connection, presenting its own
-  configured `<relay-id>@RELAY` principal with the peer credential
+- **WHEN** the relay routes the first `Send` to a `!<alias>` target for that peer
+- **THEN** the relay establishes the outbound connection, presenting the per-peer
+  `<connect-as>@RELAY` principal that peer issued this relay, with the peer
+  credential
 
 #### Scenario: Unreachable peer does not block startup
 
@@ -42,7 +42,7 @@ exponential backoff rather than blocking.
 #### Scenario: Missing peer credential fails the delivery only
 
 - **WHEN** a cross-relay delivery is routed to a peer whose
-  `<state-root>/peers/<peer_alias>.psk` file is absent or unreadable
+  `<state-root>/peers/<alias>.psk` file is absent or unreadable
 - **THEN** the delivery fails with a typed outcome identifying the credential
   problem
 - **AND** relay startup and unrelated deliveries are unaffected

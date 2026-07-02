@@ -6,19 +6,21 @@ use uuid::Uuid;
 use crate::configuration::{BundleConfiguration, TargetConfiguration};
 
 use super::super::authorization::{
-    AuthorizationContext, choose_authorized_ui_sessions, load_authorization_context,
+    AuthorizationContext, RouteAuthorization, authorize_route, choose_authorized_ui_sessions,
+    load_authorization_context, reject_cross_relay_ingress,
 };
 use super::super::connection::BundleCatalog;
 use super::super::delivery::{QuiescenceOptions, enqueue_async_delivery};
+use super::super::identity::{PrincipalType, classify_principal_id};
 use super::super::routing::{
     Addressing, Capability, OperationProfile, ResolvedRoute, requester_home_namespace,
     resolve_raww_route,
 };
 use super::super::stream::lookup_registry_session_type;
 use super::super::{
-    AsyncDeliveryTask, DeliveryPayloadMode, ListedSessionTransport, RelayError, RelayRequest,
-    RelayResponse, SCHEMA_VERSION, bare_session_id, canonical_session_id, relay_error,
-    unsupported_operation,
+    AsyncDeliveryTask, DeliveryPayloadMode, ListedSessionTransport, PeerConnectionManager,
+    RELAY_NAMESPACE, RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
+    bare_session_id, canonical_session_id, relay_error, unsupported_operation,
 };
 use super::routed::{load_home_context, resolve_target_bundle, run_target_operation};
 use super::sender::{SenderIdentity, resolve_sender_in_namespace};
@@ -43,6 +45,8 @@ pub(in crate::relay) fn handle_raww_routed(
     request: RelayRequest,
     configuration_root: &Path,
     bundle_catalog: &BundleCatalog,
+    principal: Option<&RequestPrincipal>,
+    peer_connection_manager: Option<&PeerConnectionManager>,
 ) -> Result<RelayResponse, RelayError> {
     let RelayRequest::Raww {
         request_id,
@@ -80,33 +84,87 @@ pub(in crate::relay) fn handle_raww_routed(
         ));
     }
 
-    // The requester is identified and authorized in its home namespace (operator
-    // policy for `GLOBAL`, or the bundle's policy), never a borrowed target bundle.
+    // A cross-relay ingress request arrives from an authenticated peer relay
+    // principal (`<id>@RELAY`): it carries no bundle policy, its home namespace is
+    // `RELAY`, and it is authorized by the peer's registered ingress scope rather
+    // than a policy tier. Detected from the AUTHENTICATED principal, never the
+    // (spoofable) wire `requester_session`.
+    let relay_ingress = principal.is_some_and(|principal| {
+        classify_principal_id(principal.session_id.as_str()) == Some(PrincipalType::Relay)
+    });
+    let home_namespace = if relay_ingress {
+        RELAY_NAMESPACE
+    } else {
+        home_namespace
+    };
+    // The requester is identified in its home namespace (operator policy for
+    // `GLOBAL`, the bundle's policy, or — for a peer relay — no bundle), never a
+    // borrowed target bundle.
     let (home_bundle, authorization) = load_home_context(home_namespace, configuration_root)?;
-    let requester_session = bare_session_id(requester_session.as_str(), home_namespace);
-    let sender = resolve_sender_in_namespace(
-        home_bundle.as_ref(),
-        &authorization,
-        requester_session.as_str(),
-        "requester_session",
+    // A peer relay's own principal is the sender for an ingress request (keyed on
+    // the authenticated identity); otherwise resolve the requester in its home
+    // namespace.
+    let sender = if relay_ingress {
+        let principal =
+            principal.expect("relay ingress is detected from an authenticated principal");
+        SenderIdentity::relay_principal(principal.session_id.as_str())
+    } else {
+        let requester_session = bare_session_id(requester_session.as_str(), home_namespace);
+        resolve_sender_in_namespace(
+            home_bundle.as_ref(),
+            &authorization,
+            requester_session.as_str(),
+            "requester_session",
+        )?
+    };
+
+    let route = resolve_raww_route(
+        requester_home_namespace(sender.session_id.as_str(), home_namespace),
+        sender.session_id.as_str(),
+        target_session.as_str(),
     )?;
+
+    // A cross-relay (bang-path) target is forwarded to the peer relay rather than
+    // delivered locally; the local delivery spine below only ever sees local
+    // targets. A peer relay ingress requester may address only plain local
+    // targets, so its bang-path target is rejected before any forwarding — a peer
+    // must not chain onward through this relay to its own peers.
+    if let Some(target) = route.targets.iter().find(|target| target.is_cross_relay()) {
+        if relay_ingress {
+            return Err(reject_cross_relay_ingress(target));
+        }
+        return forward_raww_cross_relay(
+            &route,
+            &authorization,
+            home_namespace,
+            text,
+            no_enter,
+            request_id,
+            peer_connection_manager,
+        );
+    }
+
+    // The route authorization mode: a peer relay is gated per-target by its
+    // registered ingress scope (deny-by-default); every other requester by its
+    // policy tier resolved in the home bundle.
+    let route_authorization = if relay_ingress {
+        RouteAuthorization::Ingress {
+            scope: principal.and_then(|principal| principal.ingress_scope.as_deref()),
+        }
+    } else {
+        RouteAuthorization::Policy(&authorization)
+    };
 
     // The spine owns resolution and authorization; `prepare_raww` validates
     // existence and loads the target bundle, `execute_raww` delivers the input.
     run_target_operation(
         home_namespace,
-        &authorization,
+        route_authorization,
         OperationProfile {
             capability: Capability::Raww,
             addressing: Addressing::SingleTarget,
         },
-        || {
-            resolve_raww_route(
-                requester_home_namespace(sender.session_id.as_str(), home_namespace),
-                sender.session_id.as_str(),
-                target_session.as_str(),
-            )
-        },
+        || Ok(route.clone()),
         |route| {
             prepare_raww(
                 route,
@@ -129,6 +187,74 @@ pub(in crate::relay) fn handle_raww_routed(
             )
         },
     )
+}
+
+/// Forwards a cross-relay `Raww` to the peer relay named by the target's
+/// bang-path `relay_id` and propagates the peer's outcome to the origin
+/// requester.
+///
+/// The origin-side authorization runs first: a cross-relay target classifies at
+/// the `all` tier, so the requester's `raww` scope must reach `all`. The peer is
+/// then dialed lazily and presented this relay's per-peer `<connect_as>@RELAY`
+/// identity; the forwarded request carries the origin `request_id` and the
+/// foreign `session@bundle` target (the peer receives a plain local target, not
+/// the bang-path). The peer's response — a queued acknowledgement or a typed
+/// rejection — is returned verbatim (it already echoes the origin `request_id`);
+/// a transport or handshake failure surfaces as the manager's typed error
+/// (`runtime_peer_unavailable` and friends), distinct from a local
+/// `relay_unavailable`.
+fn forward_raww_cross_relay(
+    route: &ResolvedRoute,
+    authorization: &AuthorizationContext,
+    home_namespace: &str,
+    text: String,
+    no_enter: bool,
+    request_id: Option<String>,
+    peer_connection_manager: Option<&PeerConnectionManager>,
+) -> Result<RelayResponse, RelayError> {
+    let Some(manager) = peer_connection_manager else {
+        return Err(relay_error(
+            "runtime_cross_relay_unavailable",
+            "cross-relay routing is not available on this relay",
+            None,
+        ));
+    };
+    authorize_route(
+        home_namespace,
+        authorization,
+        OperationProfile {
+            capability: Capability::Raww,
+            addressing: Addressing::SingleTarget,
+        },
+        route,
+    )?;
+    let target = &route.targets[0];
+    let relay_id = target
+        .relay_id
+        .as_deref()
+        .expect("cross-relay target carries a relay id");
+    let foreign_target = canonical_session_id(
+        target
+            .session_id
+            .as_deref()
+            .expect("cross-relay raww target carries a session id"),
+        target.namespace.as_str(),
+    );
+    let requester_session = manager.presented_principal_id(relay_id).ok_or_else(|| {
+        relay_error(
+            "validation_unknown_peer",
+            "no configured peer relay matches the target alias",
+            None,
+        )
+    })?;
+    let forwarded = RelayRequest::Raww {
+        request_id,
+        requester_session,
+        target_session: foreign_target,
+        text,
+        no_enter,
+    };
+    manager.forward(relay_id, &forwarded)
 }
 
 /// Resolves the raww target's bundle, validates that the target is a configured

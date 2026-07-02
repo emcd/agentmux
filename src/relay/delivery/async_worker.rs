@@ -445,6 +445,10 @@ pub(super) fn emit_sender_delivery_outcome_event(
         SendOutcome::Timeout => ("failed", Some("timeout")),
         SendOutcome::DroppedOnShutdown => ("failed", Some("failed")),
         SendOutcome::Failed => ("failed", Some("failed")),
+        // A cross-relay peer-unavailable outcome is reported synchronously on the
+        // send response, never through this local async terminal-outcome path; the
+        // arm is defensive so the outcome maps honestly if it ever reaches here.
+        SendOutcome::PeerUnavailable => ("failed", Some("peer_unavailable")),
         SendOutcome::Queued => ("routed", None),
     };
     let mut payload = serde_json::Map::new();

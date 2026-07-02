@@ -206,7 +206,7 @@ exported from `src/relay/mod.rs`.
   other principal they are keyed in the unified registry by canonical
   `principal_id`.
 - PSK files (`<state-root>/bundles/<b>/sessions/<s>/identity.psk` for sessions,
-  `<state-root>/peers/<peer_alias>.psk` for peers) and the principal store
+  `<state-root>/peers/<alias>.psk` for peers) and the principal store
   itself are written with mode 0600 (owner read/write only).
 - **Bootstrap lockout warning**: `require-session-credentials` is a relay-level
   setting (a single socket serves every bundle, so per-bundle enforcement is not
@@ -216,11 +216,20 @@ exported from `src/relay/mod.rs`.
   PSK file are rejected at Hello. Operators must register at least one principal
   via `agentmux new peer <session_id>@<bundle>` (or run with the default) before
   flipping enforcement on, otherwise no client can connect to drive recovery.
-- **Peer placeholders**: `relay.toml` `[[peers]]` entries (required non-empty
-  `address`) are validated at startup as schema-only placeholders for future
-  outbound peer routing; the relay opens no outbound connection and advertises no
-  peer target for them. Raw peer PSKs stay owner-only at
-  `<state-root>/peers/<peer_alias>.psk`; the principal store holds only hashes.
+- **Outbound peer relays**: `relay.toml` `[[peers]]` entries are active
+  outbound-only endpoints — each carries the local `alias`, an absolute
+  Unix-socket `address` (TCP host:port is future work), and the `connect-as`
+  identity, and is validated at startup. A `Send`/`Raww` addressed with the
+  bang-path `<session>@<bundle>!<alias>` is forwarded to the peer this relay
+  locally calls `<alias>`. The presented identity is **per-peer**: `connect-as`
+  is the identity that peer issued this relay (via its own `new peer`), presented
+  as `<connect-as>@RELAY` when dialing it — there is no single relay-wide
+  identity, because the *receiver* determines it (two peers can issue different or
+  colliding identities to this relay). `[[peers]]` is outbound-only and takes no
+  `scope`: **inbound** cross-relay authorization is the scope this relay grants a
+  connecting peer's principal via `new peer <id>@RELAY --scope`, enforced by the
+  target-side ingress filter (deny-by-default). Raw peer PSKs stay owner-only at
+  `<state-root>/peers/<alias>.psk`; the principal store holds only hashes.
 - **Expiry pruning**: records with an RFC 3339 `expires_at` in the past (and,
   fail-closed, any with an unparseable `expires_at`) are pruned. The store is
   pruned-and-persisted once at relay startup and pruned before each
@@ -355,11 +364,17 @@ exported from `src/relay/mod.rs`.
   "global/relay-principal exempt tier": a relay-wide principal's home is its own
   namespace (`GLOBAL` / `RELAY`), so it reaches bundles through the same uniform
   `all` threshold as anyone else, just configured on a privileged operator
-  preset. The natural insertion point for a future target-side filter now exists
-  as a single seam: the `authorize_route` stage is the one place every target
-  operation passes through, so an ingress hook is a localized addition there
-  rather than N per-operation edits. See `ideas/relay` (inter-relay target
-  filtering) for the open design thread.
+  preset. The **cross-relay** ingress filter now occupies that single seam: the
+  shared authorization stage (`RouteAuthorization`) is the one place every target
+  operation passes through, so a peer relay's forwarded `Send`/`Raww` is gated
+  there — `RouteAuthorization::Ingress` deny-by-default against the peer
+  principal's registered `scope`, distinct from the tier-based
+  `RouteAuthorization::Policy` — rather than through N per-operation edits.
+  Existence still sorts before it (`validation_unknown_target` before
+  `authorization_forbidden`), since the spine validates targets in its prepare
+  stage before authorization. The **intra-relay** target-side filter remains
+  deliberately deferred; see `ideas/relay` (inter-relay target filtering) for that
+  open design thread.
 
 ### Delivery
 

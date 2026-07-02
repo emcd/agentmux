@@ -431,16 +431,19 @@ fn run_serve_connection_with_slot(
         .expect("build multi-thread runtime");
     runtime.block_on(async move {
         let stream = tokio::net::UnixStream::from_std(server_stream)?;
-        serve_connection(
-            stream,
-            &configuration_root,
-            &state_root,
-            &bundle_catalog,
+        // No peers configured for these tests: an empty manager never dials.
+        let peer_connection_manager = std::sync::Arc::new(
+            agentmux::relay::PeerConnectionManager::from_configuration(&state_root, &[]),
+        );
+        let serve_context = agentmux::relay::ConnectionServeContext::new(
+            configuration_root,
+            state_root,
+            bundle_catalog,
+            peer_connection_manager,
             require_session_credentials,
             TEST_PRE_HELLO_IDLE_TIMEOUT,
-            worker_slot,
-        )
-        .await
+        );
+        serve_connection(stream, &serve_context, worker_slot).await
     })
 }
 

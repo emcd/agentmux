@@ -21,6 +21,7 @@ mod errors;
 mod handlers;
 mod identity;
 mod lifecycle;
+mod peer_connection;
 mod routing;
 mod startup_state;
 mod stream;
@@ -33,7 +34,9 @@ pub use self::authorization::{
 };
 
 pub use self::client::{RelayStreamSession, request_relay};
-pub use self::connection::{BundleCatalog, HostingIntent, serve_connection};
+pub use self::connection::{
+    BundleCatalog, ConnectionServeContext, HostingIntent, serve_connection,
+};
 use self::constants::*;
 use self::context::*;
 pub use self::contract::*;
@@ -44,6 +47,7 @@ pub use self::delivery::observability::{
 pub use self::drain::{ConnectionDrainCoordinator, ConnectionDrainReport, ConnectionWorkerSlot};
 use self::errors::*;
 use self::identity::*;
+pub use self::peer_connection::PeerConnectionManager;
 pub use self::stream::second_claim_is_live_conflict_for_testing;
 pub use self::watcher::{BundleWatcher, spawn_bundle_watcher};
 
@@ -92,12 +96,16 @@ fn handle_request_with_principal(
     // here.)
     match request {
         RelayRequest::Send { .. } => {
+            // The non-stream single-bundle entry point holds no peer connection
+            // manager, so a cross-relay target reports as unavailable here; the
+            // stream path supplies the manager for real forwarding.
             return handlers::handle_send_routed(
                 bundle_name,
                 request,
                 configuration_root,
                 bundle_catalog,
                 principal.as_ref(),
+                None,
             );
         }
         RelayRequest::Look { .. } => {
@@ -111,12 +119,17 @@ fn handle_request_with_principal(
             );
         }
         RelayRequest::Raww { .. } => {
+            // The non-stream single-bundle entry point holds no peer connection
+            // manager, so a cross-relay target reports as unavailable here; the
+            // stream path supplies the manager for real forwarding.
             return handlers::handle_raww_routed(
                 bundle_name,
                 Some(runtime_directory),
                 request,
                 configuration_root,
                 bundle_catalog,
+                principal.as_ref(),
+                None,
             );
         }
         _ => {}
@@ -343,6 +356,7 @@ pub(in crate::relay) fn dispatch_send(
     bound_bundle: Option<&crate::runtime::paths::BundleRuntimePaths>,
     principal: Option<RequestPrincipal>,
     bundle_catalog: &BundleCatalog,
+    peer_connection_manager: &PeerConnectionManager,
 ) -> RelayResponse {
     let home_namespace = match bound_bundle {
         Some(paths) => paths.bundle_name.clone(),
@@ -354,6 +368,7 @@ pub(in crate::relay) fn dispatch_send(
         configuration_root,
         bundle_catalog,
         principal.as_ref(),
+        Some(peer_connection_manager),
     ) {
         Ok(value) => value,
         Err(error) => RelayResponse::Error { error },
@@ -405,7 +420,9 @@ pub(in crate::relay) fn dispatch_raww(
     request: RelayRequest,
     configuration_root: &Path,
     bound_bundle: Option<&crate::runtime::paths::BundleRuntimePaths>,
+    principal: Option<RequestPrincipal>,
     bundle_catalog: &BundleCatalog,
+    peer_connection_manager: &PeerConnectionManager,
 ) -> RelayResponse {
     let (home_namespace, home_runtime) = match bound_bundle {
         Some(paths) => (
@@ -420,6 +437,8 @@ pub(in crate::relay) fn dispatch_raww(
         request,
         configuration_root,
         bundle_catalog,
+        principal.as_ref(),
+        Some(peer_connection_manager),
     ) {
         Ok(value) => value,
         Err(error) => RelayResponse::Error { error },
