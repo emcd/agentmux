@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::{configuration::SessionType, transports::StructuredEntry};
 // Delivery/look vocabulary now lives canonically in `crate::transports`. Re-export
@@ -100,6 +100,59 @@ pub struct StartupFailureRecord {
     pub sequence: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<Value>,
+}
+
+/// A folded operator-facing reason plus structured detail for a set of
+/// per-session startup failures.
+///
+/// Both the relay-host autostart summary and the bundle-watcher load/reload path
+/// give up on a bundle when no configured session reaches ready state. Rather than
+/// each surface independently re-deriving (and drifting on) the "why", they share
+/// this fold: [`reason`](Self::reason) names each failed session and its cause
+/// inline, and [`details`](Self::details) carries the structured per-session
+/// records under a `failed_sessions` key.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FoldedStartupFailures {
+    /// Human-readable summary naming each failed session and its cause.
+    pub reason: String,
+    /// Structured `{ "failed_sessions": [ ... ] }` detail object.
+    pub details: Value,
+}
+
+/// Folds per-session startup failures into a shared operator-facing reason and
+/// structured detail, or `None` when there are no recorded failures (for example a
+/// bundle that configures no sessions) — the caller then keeps its plain "nothing
+/// became ready" placeholder rather than inventing a per-session breakdown.
+pub fn fold_startup_failures(
+    failed_startups: &[StartupFailureRecord],
+) -> Option<FoldedStartupFailures> {
+    if failed_startups.is_empty() {
+        return None;
+    }
+    let joined = failed_startups
+        .iter()
+        .map(|failure| format!("{}: {}", failure.session_id, failure.reason))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let failed_sessions = failed_startups
+        .iter()
+        .map(|failure| {
+            json!({
+                "session_id": failure.session_id,
+                "transport": failure.transport,
+                "code": failure.code,
+                "reason": failure.reason,
+                "details": failure.details,
+            })
+        })
+        .collect::<Vec<_>>();
+    Some(FoldedStartupFailures {
+        reason: format!(
+            "no configured session reached ready state ({} failed) -- {joined}",
+            failed_startups.len()
+        ),
+        details: json!({ "failed_sessions": failed_sessions }),
+    })
 }
 
 /// Canonical listed bundle payload for session-listing responses.
