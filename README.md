@@ -155,7 +155,7 @@ agentmux list sessions [--bundle NAME|--all] [--as-session NAME] [--json]
 agentmux look <target-session> [--bundle NAME] [--as-session NAME] [--lines N]
 agentmux raww <target-session> --text TEXT [--no-enter] [--bundle NAME] [--as-session NAME] [--json]
 agentmux tui [--bundle NAME] [--as-session NAME] [--lines N]
-agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--delivery-mode async|sync] [--acp-turn-timeout-ms MS] [--request-id ID] [--bundle NAME] [--as-session NAME] [--json]
+agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--request-id ID] [--bundle NAME] [--as-session NAME] [--json]
 ```
 
 Use `--help` on each command for the full flag list.
@@ -180,16 +180,12 @@ The MCP server advertises:
 
 Delivery behavior:
 
-- `delivery_mode=async` (default): accept immediately and queue background
-  delivery.
-- `delivery_mode=sync`: block until per-target sync outcomes are known.
-- `acp_turn_timeout_ms` optionally bounds ACP turn-wait behavior.
-- For ACP sync sends, success is declared at first observed ACP activity
-  (`details.delivery_phase = accepted_in_progress`); relay does not wait for
-  terminal turn completion before returning sync success.
+- ACP delivery bounds are configured per-coder under
+  `[coders.<id>.acp]` (`prime-timeout-ms`); v1 has no per-call
+  operator override.
 - Tmux delivery bounds are configured per-coder under
-  `[coders.<id>.tmux]` (`prime-timeout-ms`, `wedge-detection`); v1 has no
-  per-call operator override.
+  `[coders.<id>.tmux]` (`prime-timeout-ms`, `wedge-detection`); v1
+  has no per-call operator override.
 - Pty sessions use the same look bounds as Tmux (the relay truncates
   to `mode.lines` rows). Pty delivery bounds are configured per-coder
   under `[coders.<id>.pty]` (`prime-timeout-ms`, `wedge-detection`,
