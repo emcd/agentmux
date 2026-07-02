@@ -228,6 +228,13 @@ pub enum RelayRequest {
         broadcast: bool,
         #[serde(default)]
         quiet_window_ms: Option<u64>,
+        /// Origin principal this request is forwarded on behalf of. Set only by a
+        /// cross-relay forward (the origin requester's `principal_id`); absent
+        /// otherwise. Advisory and opaque — the receiving relay honors it only
+        /// from a relay-principal (peer) requester and carries it, uninterpreted,
+        /// into the delivered envelope; it is never an authorization input.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_behalf_of: Option<String>,
     },
     Look {
         requester_session: String,
@@ -247,6 +254,13 @@ pub enum RelayRequest {
         text: String,
         #[serde(default)]
         no_enter: bool,
+        /// Origin principal this request is forwarded on behalf of. Set only by a
+        /// cross-relay forward; absent otherwise. Raw input has no delivered
+        /// attribution envelope, so the receiving relay does not surface it — the
+        /// field carries the origin on the wire for symmetry with `Send` and
+        /// future raww attribution/observability.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_behalf_of: Option<String>,
     },
     ChoicesPick {
         choice_request_id: String,
@@ -298,10 +312,10 @@ pub enum RelayResponse {
         /// socket-trust sessions.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         authenticated_identity: Option<String>,
-        /// Delegated principal the requester is acting on behalf of. Reserved: the
-        /// setting mechanism lands in a later delta, so this is always absent for
-        /// now. Defined here so consumers can handle it without a breaking change
-        /// when it is activated.
+        /// Advisory origin subject the requester was forwarded on behalf of.
+        /// Echoed on a cross-relay ingress `Send` (the peer-supplied origin
+        /// `principal_id`, honored only from a relay-principal requester); absent
+        /// for a locally-originated send. Never an authorization input.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         on_behalf_of: Option<String>,
         results: Vec<SendResult>,

@@ -576,6 +576,10 @@ pub struct DeliveryMessage {
     /// The sender's verified `principal_id`, when present; `None` for
     /// socket-trust senders.
     pub authenticated_identity: Option<String>,
+    /// Origin principal a peer relay forwarded this message on behalf of, carried
+    /// uninterpreted alongside `authenticated_identity` (the peer relay). `None`
+    /// for local delivery and non-relay senders.
+    pub on_behalf_of: Option<String>,
 }
 
 impl DeliveryMessage {

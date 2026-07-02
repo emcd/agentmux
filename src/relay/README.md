@@ -375,6 +375,22 @@ exported from `src/relay/mod.rs`.
   stage before authorization. The **intra-relay** target-side filter remains
   deliberately deferred; see `ideas/relay` (inter-relay target filtering) for that
   open design thread.
+- **Cross-relay sender attribution (`on_behalf_of`)**: a forwarded `Send`/`Raww`
+  carries the *originating* relay's verified requester as an advisory
+  `on_behalf_of` origin subject, distinct from `authenticated_identity` (which at
+  the receiver names the *forwarding* relay's own peer principal). The origin
+  relay stamps `on_behalf_of` with the requester's verified `principal_id` when
+  the requester is store-backed, and omits it for socket-trust (unauthenticated)
+  requesters — it never forges one. The receiving relay honors an inbound
+  `on_behalf_of` **only from a peer-relay (ingress) requester** (a non-relay
+  requester cannot self-assert it; the value is dropped), then carries it
+  uninterpreted into the delivered `incoming_message` envelope alongside
+  `authenticated_identity` and echoes it on the `Send` response. It is **advisory
+  and single-hop**: never an authorization input (the ingress filter still gates
+  solely on the peer's registered `scope`), not chained onward to a third relay,
+  and read only relative to `authenticated_identity`. Raw input (`Raww`) has no
+  delivered attribution envelope, so `on_behalf_of` rides the wire for symmetry
+  but is not surfaced on delivery.
 
 ### Delivery
 

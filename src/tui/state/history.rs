@@ -26,6 +26,7 @@ impl AppState {
             targets,
             broadcast: false,
             quiet_window_ms: None,
+            on_behalf_of: None,
         })?;
         match response {
             RelayResponse::Send { results, .. } => {

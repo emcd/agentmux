@@ -52,6 +52,7 @@ pub(super) fn run_agentmux_send(arguments: &[String]) -> Result<(), RuntimeError
             targets: parsed.targets.clone(),
             broadcast: parsed.broadcast,
             quiet_window_ms: None,
+            on_behalf_of: None,
         },
     )
     .map_err(|source| shared::map_relay_request_failure(&relay_paths.relay_socket, source))?;

@@ -33,6 +33,7 @@ fn sample_message() -> DeliveryMessage {
             },
         ],
         authenticated_identity: Some("principal-alice".to_string()),
+        on_behalf_of: None,
     }
 }
 

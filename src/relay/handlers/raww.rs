@@ -54,6 +54,7 @@ pub(in crate::relay) fn handle_raww_routed(
         target_session,
         text,
         no_enter,
+        on_behalf_of: _,
     } = request
     else {
         return Err(relay_error(
@@ -137,9 +138,16 @@ pub(in crate::relay) fn handle_raww_routed(
             &route,
             &authorization,
             home_namespace,
-            text,
-            no_enter,
-            request_id,
+            CrossRelayRawwForward {
+                text,
+                no_enter,
+                request_id,
+                // The origin's verified principal_id (None for socket-trust):
+                // stamped as on_behalf_of so the peer knows who this relay
+                // forwards for.
+                on_behalf_of: principal
+                    .and_then(|principal| principal.authenticated_identity.clone()),
+            },
             peer_connection_manager,
         );
     }
@@ -189,6 +197,18 @@ pub(in crate::relay) fn handle_raww_routed(
     )
 }
 
+/// The forwarded-payload inputs for a cross-relay `Raww`: the raw text and its
+/// enter/no-enter flag, the origin `request_id` echoed back to the requester, and
+/// the origin principal stamped as `on_behalf_of`. Grouped so
+/// [`forward_raww_cross_relay`] takes the route, authorization, namespace, this
+/// payload, and the manager rather than a long positional argument list.
+struct CrossRelayRawwForward {
+    text: String,
+    no_enter: bool,
+    request_id: Option<String>,
+    on_behalf_of: Option<String>,
+}
+
 /// Forwards a cross-relay `Raww` to the peer relay named by the target's
 /// bang-path `relay_id` and propagates the peer's outcome to the origin
 /// requester.
@@ -207,11 +227,15 @@ fn forward_raww_cross_relay(
     route: &ResolvedRoute,
     authorization: &AuthorizationContext,
     home_namespace: &str,
-    text: String,
-    no_enter: bool,
-    request_id: Option<String>,
+    forward: CrossRelayRawwForward,
     peer_connection_manager: Option<&PeerConnectionManager>,
 ) -> Result<RelayResponse, RelayError> {
+    let CrossRelayRawwForward {
+        text,
+        no_enter,
+        request_id,
+        on_behalf_of,
+    } = forward;
     let Some(manager) = peer_connection_manager else {
         return Err(relay_error(
             "runtime_cross_relay_unavailable",
@@ -253,6 +277,7 @@ fn forward_raww_cross_relay(
         target_session: foreign_target,
         text,
         no_enter,
+        on_behalf_of,
     };
     manager.forward(relay_id, &forwarded)
 }
@@ -387,8 +412,10 @@ fn execute_raww(
         sender_namespace: home_namespace.to_string(),
         sender: sender_member,
         // Raw input does not carry verified sender attribution, and its targets
-        // are never UI streams.
+        // are never UI streams; a peer-forwarded on_behalf_of has no attribution
+        // envelope to surface it in, so it is not carried into delivery.
         authenticated_identity: None,
+        on_behalf_of: None,
         all_target_sessions: vec![canonical_session_id(
             target_member.id.as_str(),
             raww_bundle.bundle_name.as_str(),
