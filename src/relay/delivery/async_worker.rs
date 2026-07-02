@@ -16,7 +16,7 @@ use crate::configuration::{BundleMember, TargetConfiguration};
 use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 use crate::runtime::{inscriptions::emit_inscription, signals::shutdown_requested};
 use crate::tmux::TmuxOutputView;
-use crate::transports::{OutputView, WorkerReadinessState};
+use crate::transports::{OutputView, WorkerFailureReason, WorkerReadinessState};
 
 use super::super::stream::{RelayStreamEvent, send_event_to_registered_ui};
 use super::super::{AsyncDeliveryTask, RelayError, SendOutcome, SendResult, canonical_session_id};
@@ -46,6 +46,11 @@ pub(super) struct AsyncWorkerEntry {
     pub pending: std::sync::Arc<AtomicUsize>,
     pub bounded_acp_queue: bool,
     pub readiness: Option<WorkerReadinessState>,
+    /// The worker's most recent unrecoverable failure, recorded just before its
+    /// `Unavailable` transition and cleared once it returns to a healthy state.
+    /// Lets the startup poller surface the true cause behind an `Unavailable`
+    /// readiness rather than a generic placeholder.
+    pub last_failure: Option<WorkerFailureReason>,
     pub acp_output_view: Option<Arc<dyn OutputView>>,
 }
 
@@ -152,6 +157,7 @@ pub(super) fn register_worker(
                 pending,
                 bounded_acp_queue,
                 readiness: None,
+                last_failure: None,
                 acp_output_view: None,
             },
         );
@@ -181,6 +187,7 @@ pub(super) fn register_worker_if_absent(
             pending,
             bounded_acp_queue,
             readiness: None,
+            last_failure: None,
             acp_output_view: None,
         },
     );
@@ -198,6 +205,14 @@ pub(in crate::relay) fn set_worker_readiness(
         && let Some(entry) = workers.get_mut(&key)
     {
         entry.readiness = Some(state);
+        // A worker that reaches a healthy state has recovered; drop any stale
+        // failure so a later `Unavailable` is never attributed to an old cause.
+        if matches!(
+            state,
+            WorkerReadinessState::Available | WorkerReadinessState::Busy
+        ) {
+            entry.last_failure = None;
+        }
     }
     // Publish to any observers regardless of whether a worker entry was
     // present. Publishers are keyed identically and live independently of
@@ -218,6 +233,34 @@ pub(in crate::relay) fn get_worker_readiness(
         .ok()?
         .get(&key)
         .and_then(|entry| entry.readiness)
+}
+
+pub(in crate::relay) fn set_worker_failure(
+    namespace: &str,
+    runtime_directory: &Path,
+    target_session: &str,
+    failure: WorkerFailureReason,
+) {
+    let key = build_worker_key(namespace, runtime_directory, target_session);
+    if let Ok(mut workers) = async_delivery_registry().workers.lock()
+        && let Some(entry) = workers.get_mut(&key)
+    {
+        entry.last_failure = Some(failure);
+    }
+}
+
+pub(in crate::relay) fn get_worker_failure(
+    namespace: &str,
+    runtime_directory: &Path,
+    target_session: &str,
+) -> Option<WorkerFailureReason> {
+    let key = build_worker_key(namespace, runtime_directory, target_session);
+    async_delivery_registry()
+        .workers
+        .lock()
+        .ok()?
+        .get(&key)
+        .and_then(|entry| entry.last_failure.clone())
 }
 
 pub(in crate::relay) fn install_acp_worker_output_view(

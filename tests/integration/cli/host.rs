@@ -293,9 +293,24 @@ fn host_relay_records_startup_failures_and_list_reports_degraded_health() {
     let failures = listed_json["bundle"]["recent_startup_failures"]
         .as_array()
         .expect("startup failures array");
+    let bravo_failure = failures
+        .iter()
+        .find(|entry| entry["session_id"] == "bravo")
+        .unwrap_or_else(|| panic!("expected ACP startup failure for bravo session: {listed_json}"));
+    // The record must carry the true bootstrap cause plumbed out of the worker
+    // task — here the ACP child binary could not be spawned — rather than the
+    // generic "worker unavailable" placeholder the startup poller sees from the
+    // readiness state alone.
+    assert_eq!(
+        bravo_failure["code"], "runtime_startup_failed",
+        "bravo startup failure should carry the bootstrap failure code, not the \
+         generic unavailable placeholder: {listed_json}"
+    );
     assert!(
-        failures.iter().any(|entry| entry["session_id"] == "bravo"),
-        "expected ACP startup failure for bravo session: {listed_json}"
+        bravo_failure["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("spawn ACP stdio command failed")),
+        "bravo startup failure should surface the true spawn cause: {listed_json}"
     );
 
     shutdown_relay_if_present(&state_root, "alpha");

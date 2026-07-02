@@ -31,7 +31,7 @@ use crate::runtime::signals::shutdown_requested;
 use crate::transports::contract::OutcomeFuture;
 use crate::transports::{
     Chooser, DeliveryEnvelope, OutputView, StartupContext, Transport, TransportError,
-    TransportStatus, WorkerReadinessState,
+    TransportStatus, WorkerFailureReason, WorkerReadinessState,
 };
 
 use super::{
@@ -52,6 +52,10 @@ const RESPAWN_TRIGGER_REASON: &str = "worker_unavailable";
 
 /// Mirrors the worker readiness state into the relay's global registry.
 pub type MirrorStateFn = Arc<dyn Fn(WorkerReadinessState) + Send + Sync>;
+/// Records the worker's most recent unrecoverable failure into the relay
+/// registry, so the startup path can surface its true cause behind an
+/// `Unavailable` readiness state.
+pub type RecordFailureFn = Arc<dyn Fn(WorkerFailureReason) + Send + Sync>;
 /// Publishes the transport's `look` [`OutputView`] handle into the relay registry.
 pub type PublishOutputFn = Arc<dyn Fn(Option<Arc<dyn OutputView>>) + Send + Sync>;
 /// Broadcasts an ACP respawn stream event (`event_type`, `payload`) to the bundle UI.
@@ -69,6 +73,11 @@ pub struct AcpDriverServices {
     /// Mirrors the worker readiness state into the relay's global registry (the
     /// TUI worker-state stream and the relay's own respawn gate observe it).
     pub mirror_state: MirrorStateFn,
+    /// Records the worker's structured failure into the relay registry just
+    /// before the `Unavailable` transition, so the startup poller reads the true
+    /// cause (e.g. the ACP `initialize` failure reason) rather than a generic
+    /// placeholder. Called only on unrecoverable failures.
+    pub record_failure: RecordFailureFn,
     /// Publishes the transport's `look` [`OutputView`] handle into the relay
     /// look registry. Called before each `startup` so a `look` racing init finds
     /// the handle and runs its bounded prime-wait.
@@ -172,6 +181,13 @@ impl AcpWorkerDriver {
             }
             Err(error) => {
                 self.lock_transport().mark_runtime_unavailable();
+                // Record the failure before the readiness transition so the
+                // startup poller, which acts the moment it observes Unavailable,
+                // finds the true cause already stored.
+                (self.services.record_failure)(WorkerFailureReason {
+                    code: error.code.clone(),
+                    reason: error.reason.clone(),
+                });
                 (self.services.mirror_state)(WorkerReadinessState::Unavailable);
                 emit_inscription(
                     "relay.acp.worker.bootstrap_failed",
@@ -403,6 +419,10 @@ async fn run_acp_respawn(
                         .lock()
                         .expect("acp transport mutex poisoned")
                         .mark_runtime_unavailable();
+                    (services.record_failure)(WorkerFailureReason {
+                        code: error.code.clone(),
+                        reason: error.reason.clone(),
+                    });
                     (services.mirror_state)(WorkerReadinessState::Unavailable);
                     emit_inscription(
                         "relay.acp.respawn.permanent_failure",
