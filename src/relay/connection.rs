@@ -85,6 +85,18 @@ pub struct BundleCatalog {
     bundles: Arc<RwLock<HashMap<String, CatalogEntry>>>,
 }
 
+impl std::fmt::Debug for BundleCatalog {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // RwLock contents are never observable without acquiring the lock, and
+        // Debug-formatting while the lock is held could deadlock any thread
+        // already partway through an inspect/print. Surface the structural
+        // placeholder only.
+        formatter
+            .debug_struct("BundleCatalog")
+            .finish_non_exhaustive()
+    }
+}
+
 impl BundleCatalog {
     /// Builds a catalog from hosted bundle paths, defaulting every entry to
     /// `HostingIntent::Run`. Used where the entries are known to be running (the
@@ -223,7 +235,7 @@ impl BundleCatalog {
 /// value keeps the connection-serving signatures within argument limits (rather
 /// than suppressing the lint) and gives each accepted connection a cheap clone of
 /// the shared handles.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ConnectionServeContext {
     configuration_root: PathBuf,
     state_root: PathBuf,
@@ -253,6 +265,27 @@ impl ConnectionServeContext {
             require_session_credentials,
             pre_hello_idle_timeout,
         }
+    }
+
+    /// Configuration root the catalog was built against, used by the serve phase
+    /// to spawn per-config-directory watchers without holding a `RuntimeRoots`.
+    #[must_use]
+    pub fn configuration_root(&self) -> &Path {
+        &self.configuration_root
+    }
+
+    /// State root the catalog was built against; carried alongside the
+    /// configuration root so watcher spawning doesn't depend on outer state.
+    #[must_use]
+    pub fn state_root(&self) -> &Path {
+        &self.state_root
+    }
+
+    /// Live bundle catalog; cloned (cheaply, via the inner `Arc<RwLock<...>>`)
+    /// when a connection worker needs to resolve a bundle by name.
+    #[must_use]
+    pub fn bundle_catalog(&self) -> &BundleCatalog {
+        &self.bundle_catalog
     }
 }
 

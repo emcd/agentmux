@@ -79,7 +79,6 @@ enum RelayHostPreparation {
 #[derive(Debug)]
 struct RelayHostServePlan {
     summary: RelayHostStartupSummary,
-    hosted_bundles: Vec<HostedBundle>,
     relay_paths: RelayRuntimePaths,
     listener: UnixListener,
     runtime_lock: RelayRuntimeLock,
@@ -87,11 +86,15 @@ struct RelayHostServePlan {
     // once in the blocking startup phase and carried to the async serve phase so
     // it never re-reads or re-resolves relay.toml.
     watch_bundles: bool,
-    require_session_credentials: bool,
-    // The outbound peer connection manager, built once from the resolved
-    // relay.toml peers + relay-id and shared (behind an Arc) across every
-    // connection worker for cross-relay forwarding.
-    peer_connection_manager: Arc<PeerConnectionManager>,
+    // The relay-host flag that controls autostart vs process-only semantics for
+    // every bundle the watcher later loads; carried through the plan so the
+    // serve phase signature does not have to thread it as a loose argument.
+    no_autostart: bool,
+    // Pre-built per the resolved relay-wide controls and the outbound peer
+    // connection manager; cloned (cheaply) per accepted connection. Carrying it
+    // in the plan keeps the serve phase signature within the project's argument
+    // budget without `#[allow(clippy::too_many_arguments)]`.
+    serve_context: ConnectionServeContext,
 }
 
 #[derive(Debug)]
@@ -138,16 +141,14 @@ pub(super) async fn run_relay_host(arguments: RelayHostArguments) -> Result<(), 
     let _signal_handlers = install_shutdown_signal_handlers()?;
     spawn_shutdown_watchdog()?;
 
-    // Captured before `arguments` is moved into the blocking startup closure;
-    // `no_autostart` also selects the serve-phase watcher behavior. The resolved
-    // `watch_bundles` / `require_session_credentials` are computed from
-    // `relay.toml` during startup and carried out on the serve plan.
-    let no_autostart = arguments.no_autostart;
-
     // Startup (config load, tmux autostart, lock acquisition, socket binding) is
     // blocking, so it runs on a blocking task. The async serve phase then drives
     // the per-bundle accept loops on the runtime (tokio::net + tokio::spawn).
-    let (roots, preparation) = tokio::task::spawn_blocking(move || {
+    // Resolved `watch_bundles` / `require_session_credentials` and the
+    // `no_autostart` flag are computed from arguments/relay.toml during
+    // startup and carried out on the serve plan so the serve phase does not
+    // need to re-read any of them.
+    let preparation = tokio::task::spawn_blocking(move || {
         let roots = resolve_runtime_roots(arguments.runtime)?;
         let preparation = prepare_relay_host(
             &roots,
@@ -155,38 +156,14 @@ pub(super) async fn run_relay_host(arguments: RelayHostArguments) -> Result<(), 
             arguments.watch_bundles,
             arguments.require_session_credentials,
         )?;
-        Ok::<_, RuntimeError>((roots, preparation))
+        Ok::<_, RuntimeError>(preparation)
     })
     .await
     .map_err(|source| supervisor_join_error("relay host startup", source))??;
 
     match preparation {
         RelayHostPreparation::NoHostedBundles => Ok(()),
-        RelayHostPreparation::Serve(plan) => {
-            let RelayHostServePlan {
-                summary,
-                hosted_bundles,
-                relay_paths,
-                listener,
-                runtime_lock,
-                watch_bundles,
-                require_session_credentials,
-                peer_connection_manager,
-            } = *plan;
-            serve_relay_host(
-                roots,
-                summary,
-                hosted_bundles,
-                relay_paths,
-                listener,
-                runtime_lock,
-                require_session_credentials,
-                watch_bundles,
-                no_autostart,
-                peer_connection_manager,
-            )
-            .await
-        }
+        RelayHostPreparation::Serve(plan) => serve_relay_host(plan).await,
     }
 }
 
@@ -421,33 +398,49 @@ fn prepare_relay_host(
         &relay_configuration.peers,
     ));
 
+    // Build the bundle catalog and pre-build the shared serving context so the
+    // serve phase constructs `ConnectionServeContext` exactly once and clones
+    // (cheaply, via the inner `Arc`s) per accepted connection. Carrying the
+    // already-built context in the plan keeps the serve-phase signature within
+    // the project's argument budget without resorting to a clippy suppression.
+    let catalog = BundleCatalog::from_entries(
+        hosted_bundles
+            .iter()
+            .map(|hosted| (hosted.paths.clone(), hosted.hosting_intent)),
+    );
+    let pre_hello_idle_timeout = relay_pre_hello_idle_timeout();
+    let serve_context = ConnectionServeContext::new(
+        roots.configuration_root.clone(),
+        roots.state_root.clone(),
+        catalog,
+        peer_connection_manager,
+        relay_configuration.require_session_credentials,
+        pre_hello_idle_timeout,
+    );
+
     Ok(RelayHostPreparation::Serve(Box::new(RelayHostServePlan {
         summary,
-        hosted_bundles,
         relay_paths,
         listener,
         runtime_lock,
         watch_bundles: relay_configuration.watch_bundles,
-        require_session_credentials: relay_configuration.require_session_credentials,
-        peer_connection_manager,
+        no_autostart,
+        serve_context,
     })))
 }
 
 /// Drives the single relay accept loop on the async runtime until shutdown,
 /// then performs runtime cleanup.
-#[allow(clippy::too_many_arguments)]
-async fn serve_relay_host(
-    roots: RuntimeRoots,
-    summary: RelayHostStartupSummary,
-    hosted_bundles: Vec<HostedBundle>,
-    relay_paths: RelayRuntimePaths,
-    listener: UnixListener,
-    runtime_lock: RelayRuntimeLock,
-    require_session_credentials: bool,
-    watch_bundles: bool,
-    no_autostart: bool,
-    peer_connection_manager: Arc<PeerConnectionManager>,
-) -> Result<(), RuntimeError> {
+async fn serve_relay_host(plan: Box<RelayHostServePlan>) -> Result<(), RuntimeError> {
+    let RelayHostServePlan {
+        summary,
+        relay_paths,
+        listener,
+        runtime_lock,
+        watch_bundles,
+        no_autostart,
+        serve_context,
+    } = *plan;
     emit_inscription("relay.startup.summary", &startup_summary_payload(&summary));
     render_startup_summary(&summary);
 
@@ -455,17 +448,6 @@ async fn serve_relay_host(
     let max_connections = relay_max_connections();
     let connection_permits = Arc::new(Semaphore::new(max_connections));
     let drain_coordinator = ConnectionDrainCoordinator::new();
-
-    // Build the bundle catalog: map from bundle_name to per-bundle paths.
-    // Connection workers consult this on Hello to route to the correct bundle.
-    // The catalog is the live source of truth once the watcher can mutate it, so
-    // the shutdown cleanup list is taken from it after the watcher is stopped
-    // (below) rather than from this initial set.
-    let catalog = BundleCatalog::from_entries(
-        hosted_bundles
-            .into_iter()
-            .map(|hosted| (hosted.paths, hosted.hosting_intent)),
-    );
 
     // Remove any stale sentinel left by a crashed predecessor before we publish
     // ours. Otherwise a waiter could observe "stale sentinel + new socket
@@ -477,22 +459,14 @@ async fn serve_relay_host(
         let stop_requested = Arc::clone(&stop_requested);
         let connection_permits = Arc::clone(&connection_permits);
         let drain_coordinator = Arc::clone(&drain_coordinator);
-        // The shared serving context is cloned per accepted connection; each
-        // clone is cheap (Arc / catalog-handle clones plus the two root paths).
-        // `require_session_credentials` is the resolved relay-wide enforcement
-        // control (CLI override > environment override > relay.toml > default
-        // disabled).
-        let serve_context = ConnectionServeContext::new(
-            roots.configuration_root.clone(),
-            roots.state_root.clone(),
-            catalog.clone(),
-            peer_connection_manager,
-            require_session_credentials,
-            relay_pre_hello_idle_timeout(),
-        );
+        // The accept loop owns one cheap clone of the shared serving context;
+        // every per-connection clone happens *inside* the loop at
+        // `spawn_connection_worker`. The original `serve_context` remains
+        // available here for the watcher spawn and the cleanup snapshot.
+        let accept_context = serve_context.clone();
         tokio::spawn(run_relay_accept_loop(
             listener,
-            serve_context,
+            accept_context,
             stop_requested,
             connection_permits,
             max_connections,
@@ -516,9 +490,9 @@ async fn serve_relay_host(
     // and a removal produces no event at all.
     let bundle_watcher = if watch_bundles {
         match spawn_bundle_watcher(
-            &roots.configuration_root,
-            &roots.state_root,
-            catalog.clone(),
+            serve_context.configuration_root(),
+            serve_context.state_root(),
+            serve_context.bundle_catalog().clone(),
             no_autostart,
         ) {
             Ok(watcher) => Some(watcher),
@@ -578,7 +552,7 @@ async fn serve_relay_host(
     // Snapshot the live catalog for cleanup now that the watcher is stopped: this
     // reflects bundles loaded or unloaded at runtime, so a runtime-added bundle's
     // tmux runtime is still torn down (and a runtime-removed one is not retried).
-    let bundle_paths_for_cleanup = catalog.snapshot();
+    let bundle_paths_for_cleanup = serve_context.bundle_catalog().snapshot();
 
     // Cleanup (async-delivery drain, socket removal, tmux shutdown per bundle)
     // is blocking. The relay-level runtime lock is held until cleanup returns.
