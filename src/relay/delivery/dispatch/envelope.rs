@@ -52,13 +52,6 @@ use crate::transports::{
 /// receive a `UiTransport` built via `build_ui_transport_services`; Pubsub and
 /// Acp variants carry their own forwarding/bootstrap path (the enqueue layer
 /// rejects ACP unless a bootstrap driver already exists).
-///
-/// Builds the [`TransportImpl`] for a non-bootstrap worker delivery, dispatching
-/// on `task`'s target `SessionType`. Tmux/Pty surfaces run a cooperative
-/// `startup` so the relay's `StartupContext` contract is satisfied; UI surfaces
-/// receive a `UiTransport` built via `build_ui_transport_services`; Pubsub and
-/// Acp variants carry their own forwarding/bootstrap path (the enqueue layer
-/// rejects ACP unless a bootstrap driver already exists).
 pub(super) fn build_worker_transport(
     task: &AsyncDeliveryTask,
     key: &AsyncWorkerKey,

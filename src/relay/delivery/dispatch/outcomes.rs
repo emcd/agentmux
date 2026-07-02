@@ -1,13 +1,10 @@
 //! Outcome shaping and timestamp helpers for the async-delivery worker.
 //!
-//! Six free fns extracted from `worker.rs`:
+//! Five free fns extracted from `worker.rs`:
 //! - `now_rfc3339` formats the current UTC time as RFC 3339. Used by the
 //!   envelope builders to stamp `created_at` on every emitted `RelayStreamEvent`.
 //! - `acp_respawn_stream_event` builds the canonical `RelayStreamEvent` template
 //!   the ACP worker broadcasts to watching hosts on respawn.
-//! - `stream_send_to_broadcast_status` maps the relay-side
-//!   `StreamEventSendOutcome` taxonomy onto the transport-side
-//!   `UiBroadcastStatus` (kept out of `src/transports`).
 //! - `outcome_to_send_result`/`dropped_send_result` map a transport-side
 //!   `SingleDeliveryOutcome` (or its absence) onto a relay-side `SendResult`,
 //!   filling in the relay-authoritative `target_session` and `message_id`.
@@ -15,6 +12,9 @@
 //!   producer-and-collect loop: it routes a resolved outcome onto the relay's
 //!   bookkeeping (record-served, complete-task, release-slot), treats a drop
 //!   as a shutdown, and treats a panicked collector task as a release-only.
+//!
+//! (`stream_send_to_broadcast_status` lives in `envelope.rs` because every
+//! call site is inside an envelope builder.)
 
 use super::super::async_worker;
 use crate::relay::{

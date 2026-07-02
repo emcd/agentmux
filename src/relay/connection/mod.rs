@@ -210,23 +210,6 @@ impl BundleCatalog {
     }
 }
 
-/// Serves one relay socket connection on the async runtime.
-///
-/// The stream is split into independent halves: a per-connection writer task
-/// owns the write half and serializes outgoing frames; this function consumes
-/// the read half here. A `RegistrationGuard` ensures the stream registry entry
-/// is released on every exit path (including async cancellation), so a
-/// reconnecting client with the same identity cannot be wedged into an
-/// identity-claim conflict by a stale entry.
-///
-/// `state_root` locates the relay-level principal store consulted at Hello time
-/// for credential verification; `require_session_credentials` enables relay-wide
-/// enforcement (rejecting `"socket-trust"` and unrecognized tokens).
-///
-/// `worker_slot` is this connection's registration with the host's drain
-/// coordinator: the frame loop observes its shutdown signal cooperatively — an
-/// idle read exits immediately, an in-flight request finishes and flushes its
-/// response first — and dropping it on exit reports the worker as drained.
 /// Shared, connection-independent context threaded to every connection worker:
 /// the config/state roots, the live bundle catalog, the outbound peer connection
 /// manager, and the resolved relay-wide serving controls. Grouping these into one
@@ -287,6 +270,23 @@ impl ConnectionServeContext {
     }
 }
 
+/// Serves one relay socket connection on the async runtime.
+///
+/// The stream is split into independent halves: a per-connection writer task
+/// owns the write half and serializes outgoing frames; this function consumes
+/// the read half here. A `RegistrationGuard` ensures the stream registry entry
+/// is released on every exit path (including async cancellation), so a
+/// reconnecting client with the same identity cannot be wedged into an
+/// identity-claim conflict by a stale entry.
+///
+/// `state_root` locates the relay-level principal store consulted at Hello time
+/// for credential verification; `require_session_credentials` enables relay-wide
+/// enforcement (rejecting `"socket-trust"` and unrecognized tokens).
+///
+/// `worker_slot` is this connection's registration with the host's drain
+/// coordinator: the frame loop observes its shutdown signal cooperatively — an
+/// idle read exits immediately, an in-flight request finishes and flushes its
+/// response first — and dropping it on exit reports the worker as drained.
 pub async fn serve_connection(
     stream: UnixStream,
     context: &ConnectionServeContext,

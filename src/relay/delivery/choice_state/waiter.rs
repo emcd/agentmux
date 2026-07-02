@@ -6,7 +6,7 @@
 //! each choice request). A waiter is registered just after the queue records
 //! the request and consumed (`take_waiter`) when the resolution completes.
 //!
-//! Free fns (in the order they appear in the audit's waiter cluster):
+//! Waiter helpers, in declaration order:
 //! - `choice_waiters` accessor for the underlying `OnceLock<Mutex<...>>`.
 //! - `register_waiter` inserts a fresh `(Mutex, Condvar)` pair keyed by
 //!   `choice_request_id`.

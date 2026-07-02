@@ -34,7 +34,7 @@ const CHOICE_ALREADY_RESOLVED_CODE: &str = "runtime_choices_request_already_reso
 const CHOICES_QUEUE_FULL_CODE: &str = "runtime_choices_queue_full";
 const CHOICE_WAIT_POLL_MS: u64 = 100;
 
-pub(super) type SharedWaiterState = Arc<(Mutex<Option<ChoiceResolutionOutcome>>, Condvar)>;
+type SharedWaiterState = Arc<(Mutex<Option<ChoiceResolutionOutcome>>, Condvar)>;
 
 // The queue is process-local in-memory state keyed by runtime_directory. The
 // ACP server is authoritative for whether a choice request is still

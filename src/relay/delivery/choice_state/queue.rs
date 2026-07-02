@@ -5,7 +5,7 @@
 //! ACP server's outstanding choice requests; the ACP side is consulted via
 //! `build_acp_chooser` only when the operator acts.
 //!
-//! Free fns (in the order they appear in the audit's queue cluster):
+//! Queue helpers, in declaration order:
 //! - `choices_queues` accessor for the underlying `OnceLock<Mutex<...>>`.
 //! - `with_queue_state` reads, edits, and re-stores one bundle's queue state
 //!   atomically under the global lock.
