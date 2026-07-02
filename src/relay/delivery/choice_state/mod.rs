@@ -1,12 +1,10 @@
 use std::{
-    collections::HashMap,
     path::{Path, PathBuf},
-    sync::{Arc, Condvar, Mutex, OnceLock},
+    sync::{Arc, Condvar, Mutex},
     time::Duration,
 };
 
 use serde_json::{Value, json};
-use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
 use crate::runtime::{inscriptions::emit_inscription, signals::shutdown_requested};
@@ -17,6 +15,17 @@ use super::super::{
     stream::{RelayStreamEvent, send_event_to_registered_ui},
 };
 
+/// Free-fn helpers for the per-bundle choices queue state (process-local map
+/// of in-flight `PendingChoiceRequest`s). Extracted to a sibling module so the
+/// mod.rs can stay focused on the public enqueue / resolve / wait paths.
+pub(super) mod queue;
+/// Free-fn helpers for the choice-resolution waiter state (per-request
+/// `(Mutex, Condvar)` pair shared between resolver and waiter future).
+pub(super) mod waiter;
+
+use self::queue::{pending_choice_option_ids, sort_pending_by_sequence, with_queue_state};
+use self::waiter::{get_waiter, register_waiter, take_waiter, timestamp_rfc3339};
+
 const CHOICES_QUEUE_UNAVAILABLE_CODE: &str = "runtime_choices_queue_unavailable";
 
 const CHOICE_CANCELLED_CODE: &str = "runtime_choices_request_cancelled";
@@ -25,7 +34,7 @@ const CHOICE_ALREADY_RESOLVED_CODE: &str = "runtime_choices_request_already_reso
 const CHOICES_QUEUE_FULL_CODE: &str = "runtime_choices_queue_full";
 const CHOICE_WAIT_POLL_MS: u64 = 100;
 
-type SharedWaiterState = Arc<(Mutex<Option<ChoiceResolutionOutcome>>, Condvar)>;
+pub(super) type SharedWaiterState = Arc<(Mutex<Option<ChoiceResolutionOutcome>>, Condvar)>;
 
 // The queue is process-local in-memory state keyed by runtime_directory. The
 // ACP server is authoritative for whether a choice request is still
@@ -87,66 +96,6 @@ pub(in crate::relay) struct ChoiceEventContext {
     pub(in crate::relay) authorized_ui_sessions: Vec<String>,
 }
 
-static CHOICES_QUEUES: OnceLock<Mutex<HashMap<PathBuf, ChoicesQueueState>>> = OnceLock::new();
-static CHOICE_WAITERS: OnceLock<Mutex<HashMap<String, SharedWaiterState>>> = OnceLock::new();
-
-fn choices_queues() -> &'static Mutex<HashMap<PathBuf, ChoicesQueueState>> {
-    CHOICES_QUEUES.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn choice_waiters() -> &'static Mutex<HashMap<String, SharedWaiterState>> {
-    CHOICE_WAITERS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-// Holds the global queues lock for the duration of `mutate`, so callers can
-// read, edit, and re-store one bundle's queue state atomically. Replaces the
-// prior file lock + load + store sequence.
-fn with_queue_state<R>(
-    runtime_directory: &Path,
-    mutate: impl FnOnce(&mut ChoicesQueueState) -> R,
-) -> Result<R, String> {
-    let mut queues = choices_queues()
-        .lock()
-        .map_err(|_| "failed to lock choices queue state".to_string())?;
-    let state = queues
-        .entry(runtime_directory.to_path_buf())
-        .or_insert_with(|| ChoicesQueueState {
-            next_sequence: 1,
-            pending: Vec::new(),
-        });
-    Ok(mutate(state))
-}
-
-fn sort_pending_by_sequence(pending: &mut [PendingChoiceRequest]) {
-    pending.sort_by(|left, right| {
-        left.sequence
-            .cmp(&right.sequence)
-            .then(left.choice_request_id.cmp(&right.choice_request_id))
-    });
-}
-
-fn pending_choice_option_ids(record: &PendingChoiceRequest) -> Vec<String> {
-    record
-        .requested_details
-        .get("options")
-        .and_then(Value::as_array)
-        .map(|options| {
-            options
-                .iter()
-                .filter_map(|option| {
-                    option
-                        .get("option_id")
-                        .and_then(Value::as_str)
-                        .map(ToString::to_string)
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
-}
-
-/// Builds the relay-injected [`Chooser`] handed to an ACP transport at startup.
-///
-/// The transport invokes this on its own thread when an agent raises a tool-call
 /// permission; it blocks here on the relay choice queue (via
 /// `enqueue_choice_request` and `wait_for_choice_resolution`) until the operator
 /// decides, then maps the relay [`ChoiceResolutionOutcome`] into the transport's
@@ -609,35 +558,4 @@ fn choices_requested_event(
             "enqueued_at": request.enqueued_at,
         }),
     }
-}
-
-fn register_waiter(choice_request_id: &str) -> Result<(), String> {
-    let mut waiters = choice_waiters()
-        .lock()
-        .map_err(|_| "failed to lock choice waiters".to_string())?;
-    waiters.insert(
-        choice_request_id.to_string(),
-        Arc::new((Mutex::new(None), Condvar::new())),
-    );
-    Ok(())
-}
-
-fn get_waiter(choice_request_id: &str) -> Result<Option<SharedWaiterState>, String> {
-    let waiters = choice_waiters()
-        .lock()
-        .map_err(|_| "failed to lock choice waiters".to_string())?;
-    Ok(waiters.get(choice_request_id).cloned())
-}
-
-fn take_waiter(choice_request_id: &str) -> Result<Option<SharedWaiterState>, String> {
-    let mut waiters = choice_waiters()
-        .lock()
-        .map_err(|_| "failed to lock choice waiters".to_string())?;
-    Ok(waiters.remove(choice_request_id))
-}
-
-fn timestamp_rfc3339() -> String {
-    time::OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
