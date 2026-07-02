@@ -119,3 +119,62 @@ same-kind chunks into one entry per turn.
 through the same reader-thread path, so coalescence also covers the
 reconnect-coalescence invariant. Look snapshots after a reconnect
 hold coherent turns rather than fragments of the same turn.
+
+## Prime timeout
+
+ACP delivery exposes a per-coder bounded prime window configured
+under `[coders.<id>.acp].prime-timeout-ms`. The knob replaces the
+pre-existing `turn-timeout-ms` key, which was declared on the typed
+config but never consumed by the runtime. Legacy bundle configs
+that still carry the old key fail the raw loader's
+`deny_unknown_fields` check at bundle load.
+
+When the configured field is absent (the default), the ACP transport
+preserves today's unbounded wait. When set to a finite millisecond
+value, the ACP transport's internal delivery task bounds the per-turn
+prompt completion wait for a flush group to that window. On fire:
+
+- the flush group resolves with `SendOutcome::Timeout` and
+  `reason_code = "acp_turn_timeout"`;
+- the per-target readiness latches to `Unavailable`, matching the
+  path used for `PromptCompletion::ConnectionClosed`;
+- a `delivery_prime_timeout` inscription is emitted carrying
+  `target_session`, `timeout_ms`, and `prime_wait_elapsed_ms`;
+- the transport signals respawn-needed so the worker can re-bootstrap
+  the runtime on the same path used for connection closure.
+
+The prime timer anchor is the moment the delivery task first enters
+the per-turn wait. New envelopes absorbed into the flush group via
+coalesce-during-wait inherit the head envelope's prime timer; the
+timer does not extend or restart on coalesce. Raw writes and
+unbounded envelopes preserve today's behavior.
+
+The relay populates `DeliveryEnvelope.prime_timeout_ms` from
+`[coders.<id>.acp].prime-timeout-ms` at envelope construction time;
+the ACP transport reads the field on the same generic envelope seam
+that the Tmux transport consumes (`prime_timeout_ms` is the only
+timeout field, with no transport-prefixed variant).
+
+Wedge detection is intentionally not applied to the ACP path. ACP
+does not have a tmux-style pane-wedge classifier: there is no
+snapshot polling, no operator-interaction concept in the same shape,
+and no empty-pane mismatch to compare against. The prime timeout is
+the only wedge-classifier surface on ACP in v1; a follow-up
+proposal may add wedge semantics if ACP runtime signals warrant them.
+
+## Prime timeout suppresses during pending choice
+
+The prime timer does NOT fire while a `pending_choice_outcome` is in
+flight. When the agent raises a `session/request_permission` mid-turn,
+the prime timer continues to count down without firing until the
+choice resolves or the turn completes. Firing `Timeout` against a
+mid-decision operator would be a false positive: the transport must
+not classify the flush group as `unresponsive` while an operator
+decision is pending.
+
+This matches the non-expiring choice pending lifecycle contract:
+choice requests remain pending until the operator makes an explicit
+authorized `selected` or `cancelled` decision, the session or worker
+terminates, or a hard terminal cancellation condition fires. The
+ACP prime timeout field is a turn-wait bound, not a choice-decision
+lifecycle bound; the two surfaces are independent.

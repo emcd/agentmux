@@ -242,18 +242,41 @@ pub struct AcpTargetConfiguration {
     /// delivery task resolves the wait as `SendOutcome::Timeout` with
     /// `reason_code = "acp_turn_timeout"` if no terminal
     /// `PromptCompletion` AND no `pending_choice_outcome` is observed
-    /// for the configured milliseconds. `None` (or absent) preserves
-    /// the unbounded wait. The key lives under `[coders.<id>.acp]`
-    /// and is called `prime-timeout-ms` in TOML — symmetric with the
-    /// Tmux-side `[coders.<id>.tmux].prime-timeout-ms` key; the table
-    /// itself namespaces the transport.
+    /// for the configured milliseconds. The per-target readiness is
+    /// then latched to `Unavailable` (matching the
+    /// `PromptCompletion::ConnectionClosed` path) and a
+    /// `delivery_prime_timeout` inscription is emitted carrying
+    /// `target_session`, `timeout_ms`, and `prime_wait_elapsed_ms`.
+    /// The transport signals respawn-needed so the worker can
+    /// re-bootstrap the runtime on the same path used for connection
+    /// closure.
+    ///
+    /// The prime timer does NOT fire while a `pending_choice_outcome`
+    /// is in flight; the timer continues to count down without firing
+    /// until the choice resolves or the turn completes. Pending choice
+    /// requests remain non-expiring as long as relay and worker state
+    /// remain healthy; the prime timeout is a turn-wait bound, not a
+    /// choice-decision lifecycle bound.
+    ///
+    /// Absent (default) preserves the unbounded wait. The key lives
+    /// under `[coders.<id>.acp]` and is called `prime-timeout-ms` in
+    /// TOML — symmetric with the Tmux-side
+    /// `[coders.<id>.tmux].prime-timeout-ms` key; the table itself
+    /// namespaces the transport.
     ///
     /// Mirrored onto [`crate::transports::DeliveryEnvelope::prime_timeout_ms`]
     /// by the relay dispatch worker for ACP targets; the Tmux transport
     /// consumes the same envelope field.
     ///
+    /// Wedge detection is intentionally NOT applied to the ACP path:
+    /// ACP does not have a tmux-style pane-wedge classifier (no
+    /// snapshot polling, no operator-interaction concept in the same
+    /// shape). The prime timeout is the only wedge-classifier surface
+    /// on ACP in v1; a follow-up proposal may add wedge semantics if
+    /// ACP runtime signals warrant them.
+    ///
     /// Renamed from the pre-existing `turn_timeout_ms` field (which was
-    /// never consumed by the runtime; pre-existing field was dead
+    /// never consumed by the runtime; the pre-existing field was dead
     /// baggage). The TOML key is therefore `prime-timeout-ms`, not
     /// `turn-timeout-ms`; legacy configs using `turn-timeout-ms` fail
     /// the raw loader's `deny_unknown_fields` check at bundle load.
