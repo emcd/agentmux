@@ -145,6 +145,7 @@
       "git ls-files *": "allow",
       "git ls-tree *": "allow",
       "git merge-base *": "allow",
+      "git range-diff *": "allow",
       "git rebase *": "allow",
       "git restore *": "allow",
       "git rev-list *": "allow",
