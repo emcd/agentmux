@@ -428,6 +428,9 @@ fn execute_send(
             message,
             quiet_window_ms,
             request_id.clone(),
+            // The origin's verified principal_id (None for socket-trust): stamped
+            // as on_behalf_of so the peer knows who this relay forwards for.
+            authenticated_identity.as_deref(),
         ));
     }
     let response = RelayResponse::Send {
@@ -499,6 +502,7 @@ fn forward_send_cross_relay(
     message: &str,
     quiet_window_ms: Option<u64>,
     request_id: Option<String>,
+    on_behalf_of: Option<&str>,
 ) -> SendResult {
     let label = cross_relay_target_label(target);
     let relay_id = target
@@ -527,7 +531,7 @@ fn forward_send_cross_relay(
         targets: vec![foreign_session],
         broadcast: false,
         quiet_window_ms,
-        on_behalf_of: None,
+        on_behalf_of: on_behalf_of.map(str::to_string),
     };
     match manager.forward(relay_id, &forwarded) {
         Ok(RelayResponse::Send { mut results, .. }) => match results.pop() {
