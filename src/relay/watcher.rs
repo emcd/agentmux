@@ -37,7 +37,7 @@ use super::lifecycle::{
     register_configured_bundle_principals, shutdown_bundle_runtime, startup_bundle,
 };
 use super::stream::evict_streams_for_bundle;
-use super::{RelayError, RelayResponse};
+use super::{RelayError, RelayResponse, StartupFailureRecord, fold_startup_failures};
 
 /// Debounce window for coalescing rapid filesystem events. Long enough to ride
 /// over an editor's write-temp-then-rename save sequence (so a single logical
@@ -348,12 +348,10 @@ fn load_new_bundle(
                 }),
             );
         }
-        Ok(_report) => {
-            record_load_failure(
+        Ok(report) => {
+            record_no_ready_session_failure(
                 bundle_name,
-                "zero configured sessions reached ready state",
-                None,
-                None,
+                &report.failed_startups,
                 state,
                 fingerprint,
             );
@@ -436,11 +434,9 @@ fn reload_bundle(
                     state,
                     fingerprint,
                 ),
-                _ => record_load_failure(
+                Ok(report) => record_no_ready_session_failure(
                     bundle_name,
-                    "zero configured sessions reached ready state",
-                    None,
-                    None,
+                    &report.failed_startups,
                     state,
                     fingerprint,
                 ),
@@ -467,6 +463,39 @@ fn unload_bundle(catalog: &BundleCatalog, bundle_name: &str, state: &mut Reconci
             "evicted_session_count": evicted_session_count,
         }),
     );
+}
+
+/// Records a load/reload attempt that hit no fatal error yet left no session
+/// ready. Folds the per-session startup failure reasons (the same
+/// [`fold_startup_failures`] the relay-host autostart summary uses) into the
+/// recorded reason and structured detail, so the reload/watch surface names why
+/// each session failed rather than emitting the blanket "nothing became ready"
+/// placeholder. With no recorded failures (for example a bundle that configures
+/// no sessions) it keeps the plain placeholder.
+fn record_no_ready_session_failure(
+    bundle_name: &str,
+    failed_startups: &[StartupFailureRecord],
+    state: &mut ReconcileState,
+    fingerprint: [u8; 32],
+) {
+    match fold_startup_failures(failed_startups) {
+        Some(folded) => record_load_failure(
+            bundle_name,
+            &folded.reason,
+            Some("runtime_startup_failed"),
+            Some(&folded.details),
+            state,
+            fingerprint,
+        ),
+        None => record_load_failure(
+            bundle_name,
+            "no configured session reached ready state",
+            Some("runtime_startup_failed"),
+            None,
+            state,
+            fingerprint,
+        ),
+    }
 }
 
 fn record_load_failure(

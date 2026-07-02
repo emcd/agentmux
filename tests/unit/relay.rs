@@ -18,6 +18,8 @@ mod raww;
 mod relay_configuration;
 #[path = "relay/request_validation.rs"]
 mod request_validation;
+#[path = "relay/startup_failures.rs"]
+mod startup_failures;
 
 fn dispatch_request(
     request: RelayRequest,
