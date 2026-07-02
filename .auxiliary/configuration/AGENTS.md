@@ -226,6 +226,13 @@ Team roster, lane ownership, merge policy, coordinator and specialist responsibi
   backwards compatibility unless the human developer explicitly requests it.
 - Prefer **raising errors** (fail fast) over "graceful degradation" with
   defaults; only use silent fallbacks when explicitly requested.
+- When a field, flag, parameter, or variant is dropped, delete it outright.
+  Do not add explicit rejection logic, a dedicated error code, or unit/
+  integration tests asserting the removed thing is now rejected or absent.
+  Existing unknown-field/unknown-flag validation (`deny_unknown_fields`,
+  clap's unknown-flag error, etc.) already covers it without bespoke
+  machinery. This applies to OpenSpec requirements too: do not add a
+  "Reject X" scenario for a removed surface.
 - Do not add new `-mvp` suffixes to OpenSpec change IDs. Existing archived
   MVP-era proposal names may remain as historical artifacts.
 
