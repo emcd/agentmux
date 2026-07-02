@@ -121,11 +121,11 @@ than zero" to "ACP prime-timeout-ms must be greater than zero."
 
 The Tmux wedge-detection proposal retired the
 `--quiescence-timeout-ms` CLI flag and the `quiescence_timeout_ms`
-MCP payload field — both transport-specific timeout fields on the
-generic `send` interface. It kept the ACP equivalents
-(`--acp-turn-timeout-ms`, `acp_turn_timeout_ms`) because those were
-pre-existing fields with no obvious reason to retire a working
-surface.
+MCP payload field — both transport-specific timeout fields
+reachable through the generic `send` interface. The ACP equivalents
+(`--acp-turn-timeout-ms`, `acp_turn_timeout_ms`) were outside that
+proposal's scope; they remained in place through the
+`tmux-wedge-detection` change.
 
 Operator feedback on this proposal (2026-06-30) directs the
 retirement: drop `--acp-turn-timeout-ms` and `acp_turn_timeout_ms`
