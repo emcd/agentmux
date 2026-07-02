@@ -54,6 +54,7 @@ pub(in crate::relay) fn handle_raww_routed(
         target_session,
         text,
         no_enter,
+        on_behalf_of: _,
     } = request
     else {
         return Err(relay_error(
@@ -253,6 +254,7 @@ fn forward_raww_cross_relay(
         target_session: foreign_target,
         text,
         no_enter,
+        on_behalf_of: None,
     };
     manager.forward(relay_id, &forwarded)
 }

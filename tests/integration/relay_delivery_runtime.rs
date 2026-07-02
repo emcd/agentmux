@@ -97,6 +97,7 @@ async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
             targets: vec!["alpha@party".to_string()],
             broadcast: false,
             quiet_window_ms: None,
+            on_behalf_of: None,
         },
     )
     .expect("queue async request");
@@ -187,6 +188,7 @@ async fn relay_send_to_configured_pubsub_member_is_not_implemented_and_skips_tmu
             targets: vec!["pub1@party".to_string()],
             broadcast: false,
             quiet_window_ms: None,
+            on_behalf_of: None,
         },
     )
     .expect("send to pubsub target");
@@ -267,6 +269,7 @@ async fn relay_graceful_shutdown_after_pubsub_send_does_not_panic() {
             targets: vec!["pub1@party".to_string()],
             broadcast: false,
             quiet_window_ms: None,
+            on_behalf_of: None,
         },
     )
     .expect("send to pubsub target");
@@ -692,6 +695,7 @@ async fn relay_delivery_sends_submit_in_separate_tmux_command() {
             targets: vec!["alpha@party".to_string()],
             broadcast: false,
             quiet_window_ms: Some(50),
+            on_behalf_of: None,
         },
     )
     .expect("send request should succeed");
@@ -851,6 +855,7 @@ async fn relay_async_delivery_does_not_inject_while_pane_in_mode() {
             targets: vec!["alpha@party".to_string()],
             broadcast: false,
             quiet_window_ms: Some(50),
+            on_behalf_of: None,
         },
     )
     .expect("send request should complete");
@@ -904,6 +909,7 @@ async fn relay_raww_tmux_default_queues_and_appends_enter() {
             target_session: "alpha@party".to_string(),
             text: "hello from raww".to_string(),
             no_enter: false,
+            on_behalf_of: None,
         },
     )
     .expect("raww request should succeed");
@@ -994,6 +1000,7 @@ async fn relay_raww_tmux_no_enter_omits_enter_command() {
             target_session: "alpha@party".to_string(),
             text: "hello without enter".to_string(),
             no_enter: true,
+            on_behalf_of: None,
         },
     )
     .expect("raww request should succeed");
@@ -1130,6 +1137,7 @@ send = "all"
             targets: vec!["bravo@party".to_string(), "zulu@qa".to_string()],
             broadcast: false,
             quiet_window_ms: Some(50),
+            on_behalf_of: None,
         },
     )
     .expect("cross-bundle send request should succeed");

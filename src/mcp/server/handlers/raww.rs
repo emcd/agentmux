@@ -57,6 +57,7 @@ impl McpServer {
             target_session: params.target_session.clone(),
             text: params.text.clone(),
             no_enter: params.no_enter,
+            on_behalf_of: None,
         };
         match self.request_relay(&request) {
             Ok(RelayResponse::Raww {

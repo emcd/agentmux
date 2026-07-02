@@ -204,6 +204,7 @@ fn forward_reports_peer_unavailable_when_unreachable() {
         targets: vec!["claude@myapp".to_string()],
         broadcast: false,
         quiet_window_ms: None,
+        on_behalf_of: None,
     };
     let error = manager
         .forward("peer", &request)
@@ -238,6 +239,7 @@ fn forward_returns_the_peer_response() {
         target_session: "claude@myapp".to_string(),
         text: "hello".to_string(),
         no_enter: false,
+        on_behalf_of: None,
     };
     let response = manager
         .forward("peer", &request)

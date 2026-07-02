@@ -222,6 +222,7 @@ fn normalize_request_identities(request: RelayRequest, namespace: &str) -> Relay
             targets,
             broadcast,
             quiet_window_ms,
+            on_behalf_of,
         } => RelayRequest::Send {
             request_id,
             requester_session: bare(requester_session),
@@ -231,6 +232,8 @@ fn normalize_request_identities(request: RelayRequest, namespace: &str) -> Relay
             targets,
             broadcast,
             quiet_window_ms,
+            // A peer-forwarded origin attribution survives normalization unchanged.
+            on_behalf_of,
         },
         RelayRequest::Look {
             requester_session,
@@ -249,12 +252,14 @@ fn normalize_request_identities(request: RelayRequest, namespace: &str) -> Relay
             target_session,
             text,
             no_enter,
+            on_behalf_of,
         } => RelayRequest::Raww {
             request_id,
             requester_session: bare(requester_session),
             target_session,
             text,
             no_enter,
+            on_behalf_of,
         },
         request @ (RelayRequest::Up
         | RelayRequest::Down

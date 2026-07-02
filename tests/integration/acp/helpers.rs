@@ -371,6 +371,7 @@ fn acp_send_request() -> RelayRequest {
         targets: vec!["bravo@party".to_string()],
         broadcast: false,
         quiet_window_ms: Some(50),
+        on_behalf_of: None,
     }
 }
 
@@ -652,6 +653,7 @@ pub(super) fn dispatch_raww(
             target_session: qualify_party_target(target_session),
             text: text.to_string(),
             no_enter,
+            on_behalf_of: None,
         },
         config_root,
         "party",

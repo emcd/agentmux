@@ -49,6 +49,7 @@ pub(in crate::relay) fn handle_send_routed(
         targets,
         broadcast,
         quiet_window_ms,
+        on_behalf_of: _,
     } = request
     else {
         return Err(relay_error(
@@ -526,6 +527,7 @@ fn forward_send_cross_relay(
         targets: vec![foreign_session],
         broadcast: false,
         quiet_window_ms,
+        on_behalf_of: None,
     };
     match manager.forward(relay_id, &forwarded) {
         Ok(RelayResponse::Send { mut results, .. }) => match results.pop() {

@@ -47,6 +47,7 @@ pub(super) fn run_agentmux_raww(arguments: &[String]) -> Result<(), RuntimeError
             target_session: parsed.target_session,
             text: parsed.text,
             no_enter: parsed.no_enter,
+            on_behalf_of: None,
         },
     )
     .map_err(|source| shared::map_relay_request_failure(&relay_paths.relay_socket, source))?;

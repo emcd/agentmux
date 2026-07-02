@@ -62,6 +62,7 @@ impl McpServer {
             targets,
             broadcast: params.broadcast,
             quiet_window_ms: None,
+            on_behalf_of: None,
         };
         match self.request_relay(&request) {
             Ok(RelayResponse::Send {

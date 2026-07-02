@@ -91,6 +91,7 @@ impl AppState {
             target_session: target.clone(),
             text,
             no_enter: false,
+            on_behalf_of: None,
         })?;
 
         match response {
