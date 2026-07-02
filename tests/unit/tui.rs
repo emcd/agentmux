@@ -1,11 +1,12 @@
 use agentmux::relay::{
     ListedBundle, ListedBundleStartupHealth, ListedBundleState, ListedSession,
-    ListedSessionTransport,
+    ListedSessionTransport, StartupFailureRecord,
 };
 use agentmux::tui::{
     BundleStatusDisplay, BundleStatusSeverity, RecipientReadiness, autocomplete_recipient_input,
     bundle_status_severity, format_bundle_status_line, format_recipient_picker_label,
-    merge_tui_targets, parse_tui_target_identifier, sender_bound_bundle,
+    format_startup_failure_lines, merge_tui_targets, parse_tui_target_identifier,
+    sender_bound_bundle,
 };
 
 #[test]
@@ -314,6 +315,57 @@ fn recipient_readiness_classifies_relay_ready_field() {
         RecipientReadiness::from_ready(false),
         RecipientReadiness::NotReady
     );
+}
+
+fn startup_failure_record(session_id: &str, code: &str, reason: &str) -> StartupFailureRecord {
+    StartupFailureRecord {
+        session_id: session_id.to_string(),
+        transport: ListedSessionTransport::Tmux,
+        code: code.to_string(),
+        reason: reason.to_string(),
+        timestamp: "2026-07-02T00:00:00Z".to_string(),
+        sequence: 1,
+        details: None,
+    }
+}
+
+#[test]
+fn from_listed_bundle_carries_per_session_startup_failures() {
+    let mut bundle = listed_bundle(
+        "agentmux",
+        true,
+        ListedBundleState::Down,
+        None,
+        Some("startup_failed"),
+        1,
+    );
+    bundle.recent_startup_failures = vec![startup_failure_record(
+        "alpha",
+        "runtime_startup_failed",
+        "opencode: command not found",
+    )];
+    let display = BundleStatusDisplay::from_listed_bundle(&bundle);
+    assert_eq!(
+        format_startup_failure_lines(&display),
+        vec![
+            "startup_failure session=alpha code=runtime_startup_failed \
+             reason=opencode: command not found"
+                .to_string()
+        ]
+    );
+}
+
+#[test]
+fn startup_failure_lines_empty_without_recorded_failures() {
+    let display = BundleStatusDisplay::from_listed_bundle(&listed_bundle(
+        "agentmux",
+        true,
+        ListedBundleState::Up,
+        Some(ListedBundleStartupHealth::Healthy),
+        None,
+        0,
+    ));
+    assert!(format_startup_failure_lines(&display).is_empty());
 }
 
 #[test]

@@ -9,9 +9,14 @@ use ratatui::{
 use super::super::super::state::{AppState, PickerColumn, ScreenMode};
 use super::super::super::status::{
     BundleStatusDisplay, BundleStatusSeverity, RecipientReadiness, bundle_status_severity,
-    format_bundle_status_line, format_recipient_picker_label,
+    format_bundle_status_line, format_recipient_picker_label, format_startup_failure_lines,
 };
 use super::super::geometry::centered_rect;
+
+/// Cap on per-session startup failure detail lines rendered beneath the bundle
+/// status header. The header's `startup_failure_count` still carries the true
+/// total, so this only bounds how much of the picker the detail can consume.
+const STARTUP_FAILURE_PICKER_MAX_LINES: usize = 6;
 
 /// Renders the unified bundle+session picker. The bundle column (left) drives
 /// active-bundle switching; the session column (right) lists the active
@@ -24,20 +29,19 @@ pub(in crate::tui::render) fn render_picker_overlay(frame: &mut Frame, state: &m
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
+    let status_lines = bundle_status_lines(state.bundle_status.as_ref());
+    let status_height = u16::try_from(status_lines.len()).unwrap_or(1).max(1);
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),
+            Constraint::Length(status_height),
             Constraint::Length(1),
             Constraint::Min(1),
             Constraint::Length(1),
         ])
         .split(inner);
 
-    frame.render_widget(
-        Paragraph::new(bundle_status_header_line(state.bundle_status.as_ref())),
-        sections[0],
-    );
+    frame.render_widget(Paragraph::new(status_lines), sections[0]);
     frame.render_widget(Paragraph::new(picker_filter_line(state)), sections[1]);
 
     let columns = Layout::default()
@@ -192,17 +196,32 @@ fn recipient_readiness_style(readiness: RecipientReadiness) -> Style {
     }
 }
 
-pub(super) fn bundle_status_header_line(status: Option<&BundleStatusDisplay>) -> Line<'static> {
+/// Builds the bundle status block: the k=v header line styled by severity,
+/// followed by one detail line per recent per-session startup failure (capped
+/// by [`STARTUP_FAILURE_PICKER_MAX_LINES`]). The failures carry the real cause
+/// each session failed with, so the operator sees them here rather than relying
+/// on the generic error path.
+fn bundle_status_lines(status: Option<&BundleStatusDisplay>) -> Vec<Line<'static>> {
     let Some(status) = status else {
-        return Line::from(Span::styled(
+        return vec![Line::from(Span::styled(
             "(bundle status pending list refresh)",
             Style::default().fg(Color::DarkGray),
-        ));
+        ))];
     };
-    Line::from(Span::styled(
+    let mut lines = vec![Line::from(Span::styled(
         format_bundle_status_line(status),
         bundle_status_severity_style(bundle_status_severity(status)),
-    ))
+    ))];
+    for failure in format_startup_failure_lines(status)
+        .into_iter()
+        .take(STARTUP_FAILURE_PICKER_MAX_LINES)
+    {
+        lines.push(Line::from(Span::styled(
+            failure,
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )));
+    }
+    lines
 }
 
 fn bundle_status_severity_style(severity: BundleStatusSeverity) -> Style {
