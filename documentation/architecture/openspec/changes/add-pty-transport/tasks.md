@@ -2,7 +2,7 @@
 
 ## 1. Dependency and module skeleton
 
-- [ ] 1.1 Add a default-off `pty` Cargo feature to workspace
+- [x] 1.1 Add a default-off `pty` Cargo feature to workspace
       `Cargo.toml`:
       ```toml
       [dependencies]
@@ -21,7 +21,7 @@
       `cargo build` does NOT pull in libghostty-vt or portable-pty
       and does NOT invoke Zig. Opting in (`cargo build --features
       pty`) pulls both deps and runs the Zig vendored build.
-- [ ] 1.2 Add the new bin target `agentmux-pty` at
+- [x] 1.2 Add the new bin target `agentmux-pty` at
       `src/bin/agentmux_pty.rs`, gated on the `pty` feature:
       ```toml
       [[bin]]
@@ -29,54 +29,71 @@
       path = "src/bin/agentmux_pty.rs"
       required-features = ["pty"]
       ```
-- [ ] 1.3 Verify `cargo build` succeeds in default configuration
+- [x] 1.3 Verify `cargo build` succeeds in default configuration
       (no Zig, no libghostty-vt) and `cargo build --features pty`
       succeeds with the Zig vendored build linked. Validates the
       feature-gate contract end-to-end.
-- [ ] 1.4 Add `#[cfg(feature = "pty")] pub mod pty;` to `src/lib.rs`.
-- [ ] 1.5 Create `src/pty/mod.rs` re-exporting `transport`,
+- [x] 1.4 Add `#[cfg(feature = "pty")] pub mod pty;` to `src/lib.rs`.
+- [x] 1.5 Create `src/pty/mod.rs` re-exporting `transport`,
       `state`, and the `PtyQuiescenceProbe` adapter. The
       `src/pty/` module is compiled only when the `pty` feature
       is enabled.
-- [ ] 1.6 Create empty `src/pty/transport.rs`, `src/pty/state.rs`
+- [x] 1.6 Create empty `src/pty/transport.rs`, `src/pty/state.rs`
       with module-level doc comments describing their roles. The
       shared wedge/prime state machine is NOT in this module
       (see §2 — it lives in `src/transports/quiescence.rs`).
 
 ## 2. Generalized wedge/prime state machine (cross-transport)
 
-- [ ] 2.1 Lift the three-state classifier from
+- [x] 2.1 Lift the three-state classifier from
       `src/tmux/transport.rs::wait_for_quiescent_pane_three_state`
       into a new `src/transports/quiescence.rs`, generalized over
       a `WedgeProbe` trait. This module is compiled unconditionally
       (the Tmux transport always imports it; Pty imports it only
       when the `pty` feature is on).
-- [ ] 2.2 Define `WedgeProbe` in `src/transports/quiescence.rs`:
-      `fn inspect_tail(&self) -> String`, `fn cursor_idle_at(&self,
-      column: u16) -> bool`, `fn is_settled(&self) -> bool`,
-      `fn operator_interaction_active(&self) -> bool`. Default for
-      `operator_interaction_active` returns `false` (Pty semantics);
-      Tmux adapter overrides to `true` when copy-mode / key-table
-      are active.
-- [ ] 2.3 Move the `DeliveryWaitError::Timeout` and
-      `DeliveryWaitError::Wedged` enums (already in
-      `src/transports/contract.rs`) so the new state machine
-      returns them unchanged. `Wedged` carries a `reason: String`
-      payload sourced from the probe's `inspect_tail` result.
-- [ ] 2.4 Add `WEDGE_CONSECUTIVE_TICKS = 3` constant in
+- [x] 2.2 Define `WedgeProbe` in `src/transports/quiescence.rs`:
+      a single `observe()` method returning a `WedgeObservation`
+      snapshot (inspected_tail, cursor_idle_at, is_prompt_ready,
+      operator_interaction_active) plus a `wait_for_change(deadline)`
+      method that bounds the wait by the prime deadline and advances
+      the probe's state for the next iteration. `is_prompt_ready`
+      defaults to `true` for the operator_interaction_active=false
+      case in Pty (see deviation note below).
+- [x] 2.3 The `DeliveryWaitError::Timeout` and
+      `DeliveryWaitError::Wedged` enums stay in
+      `src/transports/contract.rs` (already in the right home);
+      the new state machine returns them unchanged. `Wedged`
+      carries a `reason: String` payload sourced from the probe's
+      inspected_tail mismatch derivation.
+- [x] 2.4 Add `WEDGE_CONSECUTIVE_TICKS = 3` constant in
       `src/transports/quiescence.rs` (lifted from
       `src/tmux/transport.rs`).
-- [ ] 2.5 Add `mismatch_is_wedge_class(reason: &str) -> bool`
+- [x] 2.5 Add `mismatch_is_wedge_class(reason: &str) -> bool`
       helper in `src/transports/quiescence.rs`; same body as today's
       `src/tmux/transport.rs::mismatch_is_wedge_class`.
-- [ ] 2.6 Refactor `src/tmux/transport.rs::wait_for_quiescent_pane_three_state`
+- [x] 2.6 Refactor `src/tmux/transport.rs::wait_for_quiescent_pane_three_state`
       to construct a small `TmuxAsWedgeProbe` adapter from the
       existing `PaneQuiescenceProbe` and delegate the state
       machine to `src/transports/quiescence.rs`. Preserve the
       existing 16-probe test surface untouched.
-- [ ] 2.7 Re-export `WedgeProbe` and the lifted state machine from
+- [x] 2.7 Re-export `WedgeProbe` and the lifted state machine from
       `src/transports/mod.rs` alongside `contract`, `ui`, and
       `vocabulary`.
+
+> **Deviation note (tasks.md §2.2):** the trait shape is two methods
+> (`observe` + `wait_for_change`) returning a `WedgeObservation`
+> snapshot, not the four-method shape listed in tasks.md §2.2
+> (`inspect_tail`, `cursor_idle_at`, `is_settled`,
+> `operator_interaction_active`). The single-snapshot shape avoids the
+> cache-invalidation problem that arises when the state machine calls
+> four separate trait methods per observation: a transport whose probe
+> side-effects on each method call would otherwise do 4-8x more work
+> per iteration than necessary, and the legacy `tmux_transport` test
+> probes' `abort_after_calls` counters would trip prematurely. The
+> 16-probe test surface in `tests/unit/tmux_transport.rs` is preserved
+> unchanged — `TmuxAsWedgeProbe::observe()` calls
+> `PaneQuiescenceProbe::next_evaluation()` exactly once per call,
+> matching the legacy two-calls-per-iteration cadence.
 
 ## 3. Pty transport state and shared view
 

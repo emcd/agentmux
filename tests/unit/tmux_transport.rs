@@ -6,9 +6,8 @@
 //! real tmux IPC, the probe's state machine is the only seam that can
 //! exercise the wait loop's wedge/timeout/ready branches.
 //!
-//! See the `tmux-wedge-detection` proposal for the behavioral contract;
-//! this file is the executable specification. The five-probe surface
-//! covers the design.md Decision 6 test plan:
+//! The five baseline probe classes cover the wedge/prime-timeout
+//! behavioral contract:
 //!
 //! - `AlwaysUnresponsiveProbe` — never produces output. Asserts `Timeout`.
 //! - `AlwaysWedgeProbe` — immediately quiesces at a non-prompt state.
@@ -90,6 +89,29 @@ impl ProbeObservation {
             evaluation: PromptReadinessEvaluation {
                 ready: true,
                 ..Default::default()
+            },
+            operator_interaction: None,
+        }
+    }
+
+    /// Cursor-class mismatch: regex matched but the cursor column did
+    /// not match the per-coder `expected_cursor_column`. Mirrors the
+    /// `prompt_readiness_matches` output for
+    /// `input_idle_cursor_column`-constrained configs in
+    /// `src/tmux/transport.rs::prompt_readiness_matches`. The mismatch
+    /// reason must propagate through the wedge state machine unchanged
+    /// so operators can distinguish cursor mismatches from regex
+    /// mismatches in diagnostics.
+    fn cursor_mismatch() -> Self {
+        Self {
+            pane_target: TEST_PANE_TARGET.to_string(),
+            evaluation: PromptReadinessEvaluation {
+                ready: false,
+                mismatch_reason: Some("cursor column 0 did not match required 4".to_string()),
+                inspected_block: Some("> ".to_string()),
+                regex_matched: Some(true),
+                expected_cursor_column: Some(4),
+                observed_cursor_column: Some(0),
             },
             operator_interaction: None,
         }
@@ -463,6 +485,73 @@ fn coalesce_during_wedge_counter_fires_after_consecutive_identical_signatures() 
         matches!(result, Err(DeliveryWaitError::Wedged { .. })),
         "expected Wedged after consecutive identical signatures, got {result:?}",
     );
+}
+
+/// Cursor-class mismatch: the prompt regex matched but the cursor column
+/// did not match the per-coder `expected_cursor_column`. Verifies the
+/// probe-supplied `mismatch_reason` propagates through the wedge state
+/// machine unchanged — the resulting `Wedged.reason` (or `Timeout`
+/// `mismatch_reason`) must contain `"cursor column"` rather than the
+/// generic `"prompt regex did not match"` reason that the generalized
+/// state machine would derive from the inspected tail's emptiness.
+#[test]
+fn cursor_mismatch_preserves_its_reason_in_wedged_outcome() {
+    let mut probe = ScriptedProbe::sequence(vec![
+        ProbeObservation::cursor_mismatch(),
+        ProbeObservation::cursor_mismatch(),
+        ProbeObservation::cursor_mismatch(),
+    ]);
+    let result = wait_for_quiescent_pane_three_state(
+        &mut probe,
+        TEST_TARGET_SESSION,
+        SHORT_QUIET_WINDOW,
+        prime_window(Some(10_000)).0,
+        prime_window(Some(10_000)).1,
+        prime_window(Some(10_000)).2,
+        true,
+    );
+    match result {
+        Err(DeliveryWaitError::Wedged { reason }) => {
+            assert!(
+                reason.contains("cursor column"),
+                "expected cursor-column reason, got {reason:?}",
+            );
+        }
+        other => panic!("expected Wedged with cursor reason, got {other:?}"),
+    }
+}
+
+/// Same cursor-class probe, but with wedge detection disabled so the
+/// state machine takes the prime-timeout branch instead. Verifies the
+/// `Timeout` `mismatch_reason` also preserves the cursor-class reason
+/// (the same diagnostic path passes through `delivery_prime_timeout`).
+#[test]
+fn cursor_mismatch_preserves_its_reason_in_timeout_outcome() {
+    let mut probe = ScriptedProbe::sequence(vec![
+        ProbeObservation::cursor_mismatch(),
+        ProbeObservation::cursor_mismatch(),
+    ]);
+    let result = wait_for_quiescent_pane_three_state(
+        &mut probe,
+        TEST_TARGET_SESSION,
+        SHORT_QUIET_WINDOW,
+        prime_window(Some(10)).0,
+        prime_window(Some(10)).1,
+        prime_window(Some(10)).2,
+        false,
+    );
+    match result {
+        Err(DeliveryWaitError::Timeout {
+            mismatch_reason: Some(reason),
+            ..
+        }) => {
+            assert!(
+                reason.contains("cursor column"),
+                "expected cursor-column reason, got {reason:?}",
+            );
+        }
+        other => panic!("expected Timeout with cursor reason, got {other:?}"),
+    }
 }
 
 /// Verifies the spec requirement that the prime timer is anchored to

@@ -20,6 +20,8 @@ pub(super) struct RawCoder {
     pub(super) tmux: Option<RawTmuxTarget>,
     #[serde(default)]
     pub(super) acp: Option<RawAcpTarget>,
+    #[serde(default)]
+    pub(super) pty: Option<RawPtyTarget>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -73,6 +75,37 @@ pub(super) struct RawAcpTarget {
     pub(super) environment: Vec<NameValueEntry>,
 }
 
+/// Raw `[coders.<id>.pty]` subtable. Exactly one of `tmux`, `acp`, or
+/// `pty` must be set per coder entry; the validator rejects both or
+/// neither (see `targets::validate_coder_transport`).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub(super) struct RawPtyTarget {
+    pub(super) initial_command: String,
+    pub(super) resume_command: String,
+    #[serde(default)]
+    pub(super) prompt_regex: Option<String>,
+    #[serde(default)]
+    pub(super) prompt_inspect_lines: Option<usize>,
+    #[serde(default)]
+    pub(super) prompt_idle_column: Option<usize>,
+    /// Per-coder bounded prime window for the Pty quiescence wait.
+    /// Same semantics as the Tmux / ACP `prime_timeout_ms` field.
+    #[serde(default)]
+    pub(super) prime_timeout_ms: Option<u64>,
+    /// Per-coder wedge detection switch. Defaults to `true` (enabled)
+    /// when absent; operators MAY set `false` to opt out and preserve
+    /// the prior unbounded-wait behavior for a wedged pane.
+    #[serde(default)]
+    pub(super) wedge_detection: Option<bool>,
+    /// Per-coder grid columns (TOML key `cols`). Default 120.
+    #[serde(default)]
+    pub(super) cols: Option<u16>,
+    /// Per-coder grid rows (TOML key `rows`). Default 40.
+    #[serde(default)]
+    pub(super) rows: Option<u16>,
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct Coder {
     pub(super) target: CoderTarget,
@@ -82,6 +115,7 @@ pub(super) struct Coder {
 pub(super) enum CoderTarget {
     Tmux(TmuxTarget),
     Acp(AcpTarget),
+    Pty(PtyTarget),
 }
 
 #[derive(Clone, Debug)]
@@ -103,6 +137,20 @@ pub(super) struct AcpTarget {
     pub(super) prime_timeout_ms: Option<u64>,
     pub(super) headers: Vec<NameValueEntry>,
     pub(super) environment: Vec<NameValueEntry>,
+}
+
+/// Validated `[coders.<id>.pty]` target fields.
+#[derive(Clone, Debug)]
+pub(super) struct PtyTarget {
+    pub(super) initial_command: String,
+    pub(super) resume_command: String,
+    pub(super) prompt_regex: Option<String>,
+    pub(super) prompt_inspect_lines: Option<usize>,
+    pub(super) prompt_idle_column: Option<usize>,
+    pub(super) prime_timeout_ms: Option<u64>,
+    pub(super) wedge_detection: Option<bool>,
+    pub(super) cols: Option<u16>,
+    pub(super) rows: Option<u16>,
 }
 
 #[derive(Debug, Deserialize)]

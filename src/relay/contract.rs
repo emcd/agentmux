@@ -22,6 +22,7 @@ pub use crate::transports::vocabulary::{
 pub enum ListedSessionTransport {
     Tmux,
     Acp,
+    Pty,
     Ui,
     Pubsub,
 }
@@ -31,6 +32,7 @@ impl From<SessionType> for ListedSessionTransport {
         match value {
             SessionType::Tmux => Self::Tmux,
             SessionType::Acp => Self::Acp,
+            SessionType::Pty => Self::Pty,
             SessionType::Ui => Self::Ui,
             SessionType::Pubsub => Self::Pubsub,
         }

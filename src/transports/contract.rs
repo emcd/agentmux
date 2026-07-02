@@ -192,10 +192,15 @@ pub enum TransportImpl {
     /// are unimplemented until the Pubsub transport lands. When it does, this
     /// becomes `Pubsub(PubsubTransport)`.
     Pubsub,
-    /// Forward-declared PTY transport. The capability row answers now
-    /// (look/write/stream all true); delivery methods are unimplemented until
-    /// the PTY transport lands as the long-term replacement for Tmux. When it
-    /// does, this becomes `Pty(PtyTransport)`.
+    /// Pty transport (libghostty-vt-backed delivery with portable-pty child
+    /// process management). When the `pty` Cargo feature is OFF, the
+    /// variant stays a unit stub (matches the original forward-declared
+    /// shape) and every dispatch arm panics. When the feature is ON,
+    /// the variant carries a real [`PtyTransport`](crate::pty::PtyTransport)
+    /// and the dispatch arms delegate to it.
+    #[cfg(feature = "pty")]
+    Pty(crate::pty::PtyTransport),
+    #[cfg(not(feature = "pty"))]
     Pty,
 }
 
@@ -236,12 +241,29 @@ impl TransportImpl {
         Self::Ui(UiTransport::new(services))
     }
 
+    /// Builds a Pty transport for one target. Only available when the
+    /// `pty` Cargo feature is enabled; callers select transport at the
+    /// bundle-config layer per `[coders.<id>]` (the per-coder
+    /// configuration lands in §6 alongside `PtyTargetConfiguration`).
+    #[cfg(feature = "pty")]
+    #[must_use]
+    pub fn pty(
+        target_member: crate::configuration::BundleMember,
+        config: crate::pty::PtyTargetConfiguration,
+    ) -> Self {
+        Self::Pty(crate::pty::PtyTransport::new(target_member, config))
+    }
+
     /// The target can be captured by `look`.
     #[must_use]
     pub fn can_be_looked(&self) -> bool {
         match self {
-            Self::Acp(_) | Self::Tmux(_) | Self::Pty => true,
+            Self::Acp(_) | Self::Tmux(_) => true,
+            #[cfg(feature = "pty")]
+            Self::Pty(_) => true,
             Self::Ui(_) | Self::Pubsub => false,
+            #[cfg(not(feature = "pty"))]
+            Self::Pty => false,
         }
     }
 
@@ -249,8 +271,12 @@ impl TransportImpl {
     #[must_use]
     pub fn can_be_written(&self) -> bool {
         match self {
-            Self::Acp(_) | Self::Tmux(_) | Self::Pty => true,
+            Self::Acp(_) | Self::Tmux(_) => true,
+            #[cfg(feature = "pty")]
+            Self::Pty(_) => true,
             Self::Ui(_) | Self::Pubsub => false,
+            #[cfg(not(feature = "pty"))]
+            Self::Pty => false,
         }
     }
 
@@ -258,8 +284,12 @@ impl TransportImpl {
     #[must_use]
     pub fn can_stream_output(&self) -> bool {
         match self {
-            Self::Acp(_) | Self::Pty => true,
+            Self::Acp(_) => true,
+            #[cfg(feature = "pty")]
+            Self::Pty(_) => true,
             Self::Tmux(_) | Self::Ui(_) | Self::Pubsub => false,
+            #[cfg(not(feature = "pty"))]
+            Self::Pty => false,
         }
     }
 
@@ -268,7 +298,11 @@ impl TransportImpl {
     pub fn can_give_choices(&self) -> bool {
         match self {
             Self::Acp(_) => true,
-            Self::Tmux(_) | Self::Ui(_) | Self::Pubsub | Self::Pty => false,
+            Self::Tmux(_) | Self::Ui(_) | Self::Pubsub => false,
+            #[cfg(feature = "pty")]
+            Self::Pty(_) => false,
+            #[cfg(not(feature = "pty"))]
+            Self::Pty => false,
         }
     }
 
@@ -279,7 +313,12 @@ impl TransportImpl {
             Self::Tmux(transport) => transport.startup(context),
             Self::Ui(transport) => transport.startup(context),
             Self::Pubsub => unimplemented!("Pubsub transport not yet implemented"),
-            Self::Pty => unimplemented!("PTY transport not yet implemented"),
+            #[cfg(feature = "pty")]
+            Self::Pty(transport) => transport.startup(context),
+            #[cfg(not(feature = "pty"))]
+            Self::Pty => {
+                unimplemented!("PTY transport is feature-gated; rebuild with --features pty")
+            }
         }
     }
 
@@ -291,7 +330,12 @@ impl TransportImpl {
             Self::Tmux(transport) => transport.mailw(envelope),
             Self::Ui(transport) => transport.mailw(envelope),
             Self::Pubsub => unimplemented!("Pubsub transport not yet implemented"),
-            Self::Pty => unimplemented!("PTY transport not yet implemented"),
+            #[cfg(feature = "pty")]
+            Self::Pty(transport) => transport.mailw(envelope),
+            #[cfg(not(feature = "pty"))]
+            Self::Pty => {
+                unimplemented!("PTY transport is feature-gated; rebuild with --features pty")
+            }
         }
     }
 
@@ -303,7 +347,12 @@ impl TransportImpl {
             Self::Tmux(transport) => transport.raww(content, append_enter),
             Self::Ui(transport) => transport.raww(content, append_enter),
             Self::Pubsub => unimplemented!("Pubsub transport not yet implemented"),
-            Self::Pty => unimplemented!("PTY transport not yet implemented"),
+            #[cfg(feature = "pty")]
+            Self::Pty(transport) => transport.raww(content, append_enter),
+            #[cfg(not(feature = "pty"))]
+            Self::Pty => {
+                unimplemented!("PTY transport is feature-gated; rebuild with --features pty")
+            }
         }
     }
 
@@ -319,7 +368,10 @@ impl TransportImpl {
             // outcome), so its query/lifecycle delegates must not panic. It is
             // never ready to deliver.
             Self::Pubsub => false,
-            Self::Pty => unimplemented!("PTY transport not yet implemented"),
+            #[cfg(feature = "pty")]
+            Self::Pty(transport) => transport.is_ready(),
+            #[cfg(not(feature = "pty"))]
+            Self::Pty => false,
         }
     }
 
@@ -332,10 +384,15 @@ impl TransportImpl {
             // The `Pubsub` stub owns no runtime, so teardown is a no-op — and it
             // MUST NOT panic: the delivery worker latches this stub for a
             // configured Pubsub target and calls `shutdown()` on it during relay
-            // shutdown (`shutdown_drain`). `Pty` is not yet constructible, so it
-            // can never be a latched shutdown target and stays loudly unimplemented.
+            // shutdown (`shutdown_drain`). `Pty` is not yet constructible when
+            // the `pty` feature is off, so it can never be a latched shutdown
+            // target; when the feature is on, the inner `PtyTransport`
+            // receives the shutdown call.
             Self::Pubsub => {}
-            Self::Pty => unimplemented!("PTY transport not yet implemented"),
+            #[cfg(feature = "pty")]
+            Self::Pty(transport) => transport.shutdown(),
+            #[cfg(not(feature = "pty"))]
+            Self::Pty => {}
         }
     }
 
@@ -347,7 +404,10 @@ impl TransportImpl {
             Self::Ui(transport) => transport.give_output(),
             // The latched `Pubsub` stub is not lookable; it publishes no handle.
             Self::Pubsub => None,
-            Self::Pty => unimplemented!("PTY transport not yet implemented"),
+            #[cfg(feature = "pty")]
+            Self::Pty(transport) => transport.give_output(),
+            #[cfg(not(feature = "pty"))]
+            Self::Pty => None,
         }
     }
 }

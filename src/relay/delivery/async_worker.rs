@@ -274,6 +274,12 @@ pub(in crate::relay) fn get_output_view(
                 member.id.clone(),
             )))
         }
+        TargetConfiguration::Pty(_) => {
+            // Pty sessions surface look output via the transport's own
+            // PtyOutputView handle; the relay constructs the transport
+            // lazily on first look request.
+            None
+        }
         TargetConfiguration::Ui | TargetConfiguration::Pubsub => None,
     }
 }

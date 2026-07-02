@@ -318,6 +318,18 @@ fn startup_loaded_bundle(
                     }),
                 }
             }
+            // Pty startup is recorded as ready when the per-coder config
+            // resolves cleanly. The bootstrap path constructs the Pty
+            // transport lazily when the dispatcher first references it;
+            // for the v1 startup-count accounting we record Pty members
+            // as ready alongside Tmux / ACP. The full Pty bootstrap
+            // path lands alongside the bootstrap-side refactor
+            // (referenced from the add-pty-transport OpenSpec §8
+            // worker readiness; not implemented in this commit).
+            TargetConfiguration::Pty(_) => {
+                clear_session_startup_failures(runtime_directory, member.id.as_str())?;
+                ready_session_count += 1;
+            }
             // `ui`/`pubsub` members have no implemented startup path; record a
             // structured startup failure and exclude them from active routing.
             TargetConfiguration::Ui | TargetConfiguration::Pubsub => {

@@ -296,6 +296,54 @@ fn build_worker_transport(
         }
         SessionType::Ui => Ok(TransportImpl::ui(build_ui_transport_services(key))),
         SessionType::Pubsub => Ok(TransportImpl::Pubsub),
+        #[cfg(feature = "pty")]
+        SessionType::Pty => {
+            // Pty target reached the non-bootstrap worker construction
+            // path. The bootstrap path (`acp_target_ready_for_startup`)
+            // handles startup() under the per-coder config snapshot; this
+            // branch constructs the transport with placeholder defaults
+            // so dispatch does not panic when the feature is enabled.
+            // The full startup wiring lands alongside §6 config parsing.
+            let pty_config = match &target_member.target {
+                crate::configuration::TargetConfiguration::Pty(pty_cfg) => {
+                    crate::pty::PtyTargetConfiguration {
+                        initial_command: pty_cfg.initial_command.clone(),
+                        resume_command: pty_cfg.resume_command.clone(),
+                        prompt_readiness: pty_cfg.prompt_readiness.clone(),
+                        cols: pty_cfg.cols,
+                        rows: pty_cfg.rows,
+                        prime_timeout_ms: pty_cfg.prime_timeout_ms,
+                        wedge_detection: pty_cfg.wedge_detection,
+                        working_directory: target_member.working_directory.clone(),
+                    }
+                }
+                _ => crate::pty::PtyTargetConfiguration {
+                    initial_command: String::new(),
+                    resume_command: String::new(),
+                    prompt_readiness: None,
+                    cols: 120,
+                    rows: 40,
+                    prime_timeout_ms: None,
+                    wedge_detection: true,
+                    working_directory: target_member.working_directory.clone(),
+                },
+            };
+            let mut transport = TransportImpl::pty(target_member.clone(), pty_config);
+            let context = StartupContext {
+                namespace: task.bundle.bundle_name.clone(),
+                runtime_directory: task.runtime_directory.clone(),
+                target_member: target_member.clone(),
+                choose: noop_tmux_chooser(),
+            };
+            let _ = transport.startup(context);
+            Ok(transport)
+        }
+        #[cfg(not(feature = "pty"))]
+        SessionType::Pty => Err(super::super::super::relay_error(
+            "internal_unexpected_failure",
+            "PTY target configured but pty Cargo feature is disabled",
+            Some(json!({ "target_session": task.target_session })),
+        )),
         SessionType::Acp => Err(super::super::super::relay_error(
             "internal_unexpected_failure",
             "ACP target reached the non-bootstrap worker construction path",
@@ -402,6 +450,7 @@ fn build_coder_envelope(task: &AsyncDeliveryTask, message: DeliveryMessage) -> D
         Ok(Some(member)) => match &member.target {
             TargetConfiguration::Tmux(tmux_target) => tmux_target.prime_timeout_ms,
             TargetConfiguration::Acp(acp_target) => acp_target.prime_timeout_ms,
+            TargetConfiguration::Pty(pty_target) => pty_target.prime_timeout_ms,
             TargetConfiguration::Ui | TargetConfiguration::Pubsub => None,
         },
         _ => None,
