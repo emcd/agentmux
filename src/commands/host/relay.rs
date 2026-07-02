@@ -45,8 +45,9 @@ use crate::commands::{
 };
 
 use super::summary::{
-    build_startup_summary, failed_startup_bundle, failed_startup_bundle_from_relay_error,
-    hosted_startup_bundle, render_startup_summary, skipped_startup_bundle, startup_summary_payload,
+    build_startup_summary, failed_autostart_bundle, failed_startup_bundle,
+    failed_startup_bundle_from_relay_error, hosted_startup_bundle, render_startup_summary,
+    skipped_startup_bundle, startup_summary_payload,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -940,13 +941,7 @@ fn host_selected_bundle(
             if report.ready_session_count > 0 {
                 hosted_startup_bundle(bundle_name)
             } else {
-                RelayHostStartupBundle {
-                    bundle_name: bundle_name.to_string(),
-                    outcome: "failed".to_string(),
-                    reason_code: Some("runtime_startup_failed".to_string()),
-                    reason: Some("zero configured sessions reached ready state".to_string()),
-                    details: None,
-                }
+                failed_autostart_bundle(bundle_name, &report.failed_startups)
             }
         }
         RelayHostStartupMode::ProcessOnly => skipped_startup_bundle(
