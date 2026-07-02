@@ -283,28 +283,6 @@ fn send_rejects_unknown_explicit_session_without_fallback() {
 }
 
 #[test]
-fn send_rejects_sender_flag_in_mvp() {
-    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
-        .args([
-            "send",
-            "--sender",
-            "relay",
-            "--target",
-            "bravo",
-            "--message",
-            "hello",
-        ])
-        .output()
-        .expect("run send with sender flag");
-    assert!(!output.status.success(), "command should fail");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("invalid argument --sender"),
-        "unexpected stderr: {stderr}"
-    );
-}
-
-#[test]
 fn send_uses_tui_defaults_for_bundle_and_session() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = temporary.path().join("config");

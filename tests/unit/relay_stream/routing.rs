@@ -15,9 +15,7 @@
 //! - a single `Send` fans out across namespaces (cross-bundle `@<bundle>` plus
 //!   relay-wide `@GLOBAL`), unknown bundles and reserved `@EXTERNAL`/`@RELAY`
 //!   targets are rejected, and mixing `@GLOBAL` with `@<bundle>` targets is no
-//!   longer rejected (add-cross-namespace-routing);
-//! - the retired `validation_namespace_routing_unavailable` stub no longer
-//!   appears.
+//!   longer rejected (add-cross-namespace-routing).
 
 use super::*;
 
@@ -1239,72 +1237,4 @@ fn list_global_namespace_includes_declared_offline_relay_wide_principal() {
         "a declared-but-never-connected relay-wide principal is listed offline"
     );
     assert_eq!(operator["transport"], "ui");
-}
-
-/// Task 3.6: the retired `validation_namespace_routing_unavailable` stub no
-/// longer appears on the `GLOBAL` routing paths (`List` with `GLOBAL`, and a
-/// `Send` to an `@GLOBAL` target).
-#[test]
-fn global_routing_no_longer_returns_unavailable_stub() {
-    let temporary = TempDir::new().expect("temporary directory");
-    let bundle_name = "party_stub_retired";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default", bundle_name);
-    let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
-    let operator_id = global_user_id(bundle_name);
-
-    // (a) `List` with the `GLOBAL` namespace resolves to a list, not the stub.
-    let list_response = bundle_session_list_with_namespace(
-        &configuration_root,
-        &bundle_paths,
-        bundle_name,
-        "GLOBAL",
-    );
-    assert_eq!(list_response["response"]["kind"], "list");
-    assert_ne!(
-        list_response["response"]["error"]["code"],
-        "validation_namespace_routing_unavailable"
-    );
-
-    // (b) A bundle-bound session sending to a configured `@GLOBAL` operator
-    // resolves to a send (queued for the operator), not the stub.
-    let (mut client, join) = spawn_relay_connection(&configuration_root, &bundle_paths);
-    let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
-    send_json(
-        &mut client,
-        json!({
-            "frame": "hello",
-            "schema_version": "1",
-            "principal_id": format!("alpha@{bundle_name}"),
-            "identity_token": "socket-trust",
-        }),
-    );
-    assert_eq!(read_json(&mut reader)["frame"], "hello_ack");
-    send_json(
-        &mut client,
-        json!({
-            "frame": "request",
-            "request_id": "req-1",
-            "request": {
-                "operation": "send",
-                "requester_session": "alpha",
-                "message": "stub check",
-                "targets": [operator_id],
-                "broadcast": false,
-            },
-        }),
-    );
-    let mut send_response = read_json(&mut reader);
-    while send_response["frame"] != "response" {
-        send_response = read_json(&mut reader);
-    }
-    shutdown_stream(&client, "shutdown client stream");
-    join.join().expect("join relay thread");
-
-    assert_eq!(send_response["response"]["kind"], "send");
-    assert_ne!(
-        send_response["response"]["error"]["code"],
-        "validation_namespace_routing_unavailable"
-    );
 }

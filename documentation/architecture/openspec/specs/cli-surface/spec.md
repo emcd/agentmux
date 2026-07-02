@@ -227,27 +227,26 @@ the process exits.
 
 - positional `<bundle-id>`
 - `--group <GROUP>`
-- `--all`
-- `--include-bundle`
-- `--exclude-bundle`
 
-#### Scenario: Reject all flag for host relay
+#### Scenario: Run host relay with default autostart mode
 
-- **WHEN** an operator passes `--all` to `agentmux host relay`
-- **THEN** the system rejects invocation with a structured argument validation
-  error
+- **WHEN** operator runs `agentmux host relay` with no selector
+- **THEN** startup autostarts every configured bundle with `autostart: true`
 
-#### Scenario: Reject include-bundle override for host relay
+#### Scenario: Run host relay in process-only mode
 
-- **WHEN** an operator passes `--include-bundle` to `agentmux host relay`
-- **THEN** the system rejects invocation with a structured argument validation
-  error
+- **WHEN** operator runs `agentmux host relay --no-autostart`
+- **THEN** startup proceeds without autostarting any bundle
 
-#### Scenario: Reject exclude-bundle override for host relay
+#### Scenario: Reject bundle selector argument for host relay
 
-- **WHEN** an operator passes `--exclude-bundle` to `agentmux host relay`
-- **THEN** the system rejects invocation with a structured argument validation
-  error
+- **WHEN** operator runs `agentmux host relay <bundle-id>`
+- **THEN** startup rejects the invocation with `validation_invalid_arguments`
+
+#### Scenario: Reject group selector flag for host relay
+
+- **WHEN** operator runs `agentmux host relay --group <GROUP>`
+- **THEN** startup rejects the invocation as an unknown argument
 
 ### Requirement: Look Command Surface
 
@@ -406,8 +405,6 @@ context:
 - optional `--as-session <session-selector>`
 - optional `--bundle <bundle-id>`
 
-`agentmux tui --sender` SHALL NOT be supported.
-
 Bundle selection SHALL resolve as:
 
 1. explicit `--bundle`
@@ -439,11 +436,6 @@ operations in that process.
 - **WHEN** operator runs `agentmux tui` without `--as-session`
 - **AND** `default-session` is absent from `tui.toml`
 - **THEN** CLI fails fast with `validation_unknown_session`
-
-#### Scenario: Reject sender flag on TUI command
-
-- **WHEN** an operator runs `agentmux tui --sender relay`
-- **THEN** CLI rejects invocation as an unknown argument
 
 ### Requirement: Bundle Lifecycle Command Surface
 
@@ -571,8 +563,6 @@ transport-neutral `--prime-timeout-ms` is reintroduced — see
 
 - `--as-session <session-selector>`
 
-`agentmux send --sender` SHALL NOT be supported.
-
 Send bundle resolution SHALL be:
 
 1. explicit `--bundle`
@@ -612,11 +602,6 @@ relay dispatch.
 - **WHEN** an operator runs `agentmux send --bundle agentmux --as-session missing --target mcp --message "hi"`
 - **AND** `tui.toml` has no matching `[[sessions]]` selector
 - **THEN** CLI rejects invocation with `validation_unknown_session`
-
-#### Scenario: Reject sender flag on send command
-
-- **WHEN** an operator runs `agentmux send --sender relay --target mcp --message "hi"`
-- **THEN** CLI rejects invocation as an unknown argument
 
 ### Requirement: List Sessions Command Surface
 

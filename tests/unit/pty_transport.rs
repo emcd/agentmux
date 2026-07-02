@@ -1091,6 +1091,7 @@ fn pty_transport_mailw_during_raww_wait_is_not_dropped() {
             },
             cc: Vec::new(),
             authenticated_identity: None,
+            on_behalf_of: None,
         },
         append_enter: true,
         choice_decider_sessions: Vec::new(),
