@@ -20,7 +20,7 @@ use super::super::super::{
     AsyncDeliveryTask, DeliveryPayloadMode, RelayError, SendOutcome, SendResult,
 };
 use super::super::async_worker::{
-    AsyncWorkerKey, install_acp_worker_output_view, set_worker_readiness,
+    AsyncWorkerKey, install_acp_worker_output_view, set_worker_failure, set_worker_readiness,
 };
 use super::super::choice_state::{
     ChoiceEventContext, build_acp_chooser, invalidate_pending_for_respawn,
@@ -489,6 +489,19 @@ fn build_acp_driver_services(
                     runtime_directory.as_path(),
                     target_session.as_str(),
                     state,
+                );
+            })
+        },
+        record_failure: {
+            let namespace = namespace.clone();
+            let runtime_directory = runtime_directory.clone();
+            let target_session = target_session.clone();
+            Arc::new(move |failure| {
+                set_worker_failure(
+                    namespace.as_str(),
+                    runtime_directory.as_path(),
+                    target_session.as_str(),
+                    failure,
                 );
             })
         },

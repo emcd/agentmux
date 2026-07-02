@@ -12,9 +12,9 @@ use crate::configuration::{BundleMember, TargetConfiguration};
 use super::super::super::{AsyncDeliveryTask, RelayError};
 use crate::acp::state::ACP_STARTUP_PRIME_TIMEOUT_MS;
 
-use super::super::async_worker::get_worker_readiness;
+use super::super::async_worker::{get_worker_failure, get_worker_readiness};
 use super::worker::{AcpWorkerBootstrap, spawn_async_delivery_worker};
-use crate::transports::WorkerReadinessState;
+use crate::transports::{WorkerFailureReason, WorkerReadinessState};
 
 pub(in crate::relay) fn wait_for_async_delivery_shutdown(timeout: Duration) -> usize {
     super::super::async_worker::wait_for_async_delivery_shutdown(timeout)
@@ -88,28 +88,57 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
                 return Ok(());
             }
             Some(WorkerReadinessState::Unavailable) => {
-                return Err((
-                    "runtime_acp_worker_unavailable".to_string(),
-                    "ACP worker is unavailable after startup".to_string(),
-                    Some(json!({
+                let recorded =
+                    get_worker_failure(namespace, runtime_directory, target_member.id.as_str());
+                return Err(startup_failure_error(
+                    recorded,
+                    "runtime_acp_worker_unavailable",
+                    "ACP worker is unavailable after startup",
+                    json!({
                         "target_session": target_member.id,
-                    })),
+                    }),
                 ));
             }
             Some(WorkerReadinessState::Initializing | WorkerReadinessState::Recovering) | None => {
                 if Instant::now() >= deadline {
-                    return Err((
-                        "runtime_startup_failed".to_string(),
-                        "ACP worker did not become ready during startup".to_string(),
-                        Some(json!({
+                    let recorded =
+                        get_worker_failure(namespace, runtime_directory, target_member.id.as_str());
+                    return Err(startup_failure_error(
+                        recorded,
+                        "runtime_startup_failed",
+                        "ACP worker did not become ready during startup",
+                        json!({
                             "target_session": target_member.id,
                             "timeout_ms": ACP_STARTUP_PRIME_TIMEOUT_MS,
-                        })),
+                        }),
                     ));
                 }
                 thread::sleep(Duration::from_millis(25));
             }
         }
+    }
+}
+
+/// Builds the startup failure tuple, preferring the worker's recorded structured
+/// failure — the true cause captured inside the worker task (e.g. why the ACP
+/// `initialize` handshake failed) — over the generic `fallback_*` placeholder,
+/// which only names how the readiness poll concluded (unavailable, or timed out
+/// still initializing). When a recorded failure is present its code/reason
+/// replace the placeholder; the startup-path `details` (target session, timeout)
+/// are retained either way so the operator keeps that context.
+fn startup_failure_error(
+    recorded: Option<WorkerFailureReason>,
+    fallback_code: &str,
+    fallback_reason: &str,
+    details: serde_json::Value,
+) -> (String, String, Option<serde_json::Value>) {
+    match recorded {
+        Some(failure) => (failure.code, failure.reason, Some(details)),
+        None => (
+            fallback_code.to_string(),
+            fallback_reason.to_string(),
+            Some(details),
+        ),
     }
 }
 

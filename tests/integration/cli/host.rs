@@ -106,6 +106,61 @@ coder = "acp-broken"
     .expect("write bundle config");
 }
 
+/// Writes a bundle whose only session is an ACP member with a missing binary,
+/// so every configured session fails to start and the autostart summary reports
+/// the bundle as `failed`.
+fn write_all_acp_failure_bundle(config_root: &Path, bundle_name: &str) {
+    fs::create_dir_all(config_root.join("bundles")).expect("create bundles directory");
+    fs::write(
+        config_root.join("coders.toml"),
+        r#"
+format-version = 1
+
+[[coders]]
+id = "acp-broken"
+
+[coders.acp]
+channel = "stdio"
+command = "/definitely/missing/agentmux-acp"
+"#,
+    )
+    .expect("write coders config");
+    fs::write(
+        config_root.join("policies.toml"),
+        r#"
+format-version = 1
+default = "default"
+
+[[policies]]
+id = "default"
+
+[policies.controls]
+find = "self"
+list = "all"
+look = "self"
+send = "home"
+"#,
+    )
+    .expect("write policies config");
+    fs::write(
+        config_root
+            .join("bundles")
+            .join(format!("{bundle_name}.toml")),
+        r#"
+format-version = 1
+autostart = true
+groups = ["dev"]
+
+[[sessions]]
+id = "bravo"
+name = "bravo"
+directory = "/tmp"
+coder = "acp-broken"
+"#,
+    )
+    .expect("write bundle config");
+}
+
 #[test]
 fn host_relay_rejects_positional_bundle_selector() {
     let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
@@ -293,9 +348,24 @@ fn host_relay_records_startup_failures_and_list_reports_degraded_health() {
     let failures = listed_json["bundle"]["recent_startup_failures"]
         .as_array()
         .expect("startup failures array");
+    let bravo_failure = failures
+        .iter()
+        .find(|entry| entry["session_id"] == "bravo")
+        .unwrap_or_else(|| panic!("expected ACP startup failure for bravo session: {listed_json}"));
+    // The record must carry the true bootstrap cause plumbed out of the worker
+    // task — here the ACP child binary could not be spawned — rather than the
+    // generic "worker unavailable" placeholder the startup poller sees from the
+    // readiness state alone.
+    assert_eq!(
+        bravo_failure["code"], "runtime_startup_failed",
+        "bravo startup failure should carry the bootstrap failure code, not the \
+         generic unavailable placeholder: {listed_json}"
+    );
     assert!(
-        failures.iter().any(|entry| entry["session_id"] == "bravo"),
-        "expected ACP startup failure for bravo session: {listed_json}"
+        bravo_failure["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("spawn ACP stdio command failed")),
+        "bravo startup failure should surface the true spawn cause: {listed_json}"
     );
 
     shutdown_relay_if_present(&state_root, "alpha");
@@ -303,6 +373,78 @@ fn host_relay_records_startup_failures_and_list_reports_degraded_health() {
         .wait_with_output()
         .expect("wait for agentmux host relay");
     assert!(output.status.success(), "command should succeed");
+}
+
+#[test]
+fn host_relay_autostart_summary_folds_failed_session_reasons() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_all_acp_failure_bundle(&config_root, "alpha");
+    write_tui_configuration(
+        &config_root,
+        Some("alpha"),
+        Some("user"),
+        &[("user", "default", Some("Operator"))],
+    );
+
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay");
+    wait_for_relay_ready(&state_root, "alpha");
+    shutdown_relay_if_present(&state_root, "alpha");
+    let output = child
+        .wait_with_output()
+        .expect("wait for agentmux host relay");
+    assert!(output.status.success(), "command should succeed");
+
+    let summary_json = parse_summary_json_line(&output.stdout);
+    let alpha = summary_json["bundles"]
+        .as_array()
+        .expect("startup summary bundles")
+        .iter()
+        .find(|bundle| bundle["bundle_name"] == "alpha")
+        .expect("alpha startup summary");
+    assert_eq!(alpha["outcome"], "failed");
+    // The blanket "zero configured sessions reached ready state" placeholder is
+    // replaced with the real per-session cause folded from the startup report.
+    let reason = alpha["reason"].as_str().expect("failed reason string");
+    assert!(
+        reason.contains("bravo") && reason.contains("spawn ACP stdio command failed"),
+        "summary reason should name the failed session and its cause: {summary_json}"
+    );
+    let failed_sessions = alpha["details"]["failed_sessions"]
+        .as_array()
+        .expect("failed_sessions details array");
+    assert!(
+        failed_sessions.iter().any(|entry| {
+            entry["session_id"] == "bravo"
+                && entry["reason"]
+                    .as_str()
+                    .is_some_and(|reason| reason.contains("spawn ACP stdio command failed"))
+        }),
+        "failed_sessions should carry the structured bravo cause: {summary_json}"
+    );
 }
 
 #[test]

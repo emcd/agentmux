@@ -2,6 +2,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     commands::{RelayHostStartupBundle, RelayHostStartupSummary, shared},
+    relay::StartupFailureRecord,
     runtime::error::RuntimeError,
     runtime::inscriptions::emit_inscription,
 };
@@ -106,6 +107,55 @@ pub(super) fn skipped_startup_bundle(
         reason_code: Some(reason_code.to_string()),
         reason: Some(reason),
         details: None,
+    }
+}
+
+/// Builds the summary for an autostart bundle where no session reached ready
+/// state. When individual sessions failed, folds their real per-session causes
+/// into the summary — the `reason` string names each failed session and its
+/// cause, and `details.failed_sessions` carries the structured records — so the
+/// operator sees why startup failed rather than a blanket placeholder. With no
+/// recorded failures (for example a bundle that configures no sessions) it keeps
+/// the plain "nothing became ready" message.
+pub(super) fn failed_autostart_bundle(
+    bundle_name: &str,
+    failed_startups: &[StartupFailureRecord],
+) -> RelayHostStartupBundle {
+    if failed_startups.is_empty() {
+        return RelayHostStartupBundle {
+            bundle_name: bundle_name.to_string(),
+            outcome: "failed".to_string(),
+            reason_code: Some("runtime_startup_failed".to_string()),
+            reason: Some("no configured session reached ready state".to_string()),
+            details: None,
+        };
+    }
+    let joined = failed_startups
+        .iter()
+        .map(|failure| format!("{}: {}", failure.session_id, failure.reason))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let failed_sessions = failed_startups
+        .iter()
+        .map(|failure| {
+            json!({
+                "session_id": failure.session_id,
+                "transport": failure.transport,
+                "code": failure.code,
+                "reason": failure.reason,
+                "details": failure.details,
+            })
+        })
+        .collect::<Vec<_>>();
+    RelayHostStartupBundle {
+        bundle_name: bundle_name.to_string(),
+        outcome: "failed".to_string(),
+        reason_code: Some("runtime_startup_failed".to_string()),
+        reason: Some(format!(
+            "no configured session reached ready state ({} failed) -- {joined}",
+            failed_startups.len()
+        )),
+        details: Some(json!({ "failed_sessions": failed_sessions })),
     }
 }
 

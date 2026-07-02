@@ -33,5 +33,5 @@ pub use ui::{
 };
 pub use vocabulary::{
     DeliveryPayloadMode, LookFreshness, LookSnapshotPayload, LookSnapshotSource, SendOutcome,
-    StructuredEntry, ToolCallStatus, WorkerReadinessState,
+    StructuredEntry, ToolCallStatus, WorkerFailureReason, WorkerReadinessState,
 };
