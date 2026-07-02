@@ -17,9 +17,10 @@
 
 pub mod lifecycle;
 pub mod pane;
+mod quiescence_probe;
 pub mod transport;
 
-pub use transport::{
-    PaneQuiescenceProbe, PromptReadinessEvaluation, TmuxOutputView, TmuxTransport,
-    wait_error_to_outcome_for_test, wait_for_quiescent_pane_three_state,
+pub use quiescence_probe::{
+    PaneQuiescenceProbe, PromptReadinessEvaluation, wait_for_quiescent_pane_three_state,
 };
+pub use transport::{TmuxOutputView, TmuxTransport, wait_error_to_outcome_for_test};
