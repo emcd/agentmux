@@ -190,20 +190,6 @@ fn host_relay_rejects_group_selector_flag() {
 }
 
 #[test]
-fn host_relay_rejects_all_flag_in_group_mvp() {
-    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
-        .args(["host", "relay", "--all"])
-        .output()
-        .expect("run agentmux host relay --all");
-    assert!(!output.status.success(), "command should fail");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("validation_invalid_arguments"),
-        "unexpected stderr: {stderr}"
-    );
-}
-
-#[test]
 fn host_relay_default_mode_starts_autostart_bundles() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = temporary.path().join("config");

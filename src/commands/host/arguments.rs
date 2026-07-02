@@ -22,12 +22,6 @@ pub(super) fn parse_host_relay_arguments(
             "--no-autostart" => parsed.no_autostart = true,
             "--require-credentials" => parsed.require_session_credentials = Some(true),
             "--no-watch" => parsed.watch_bundles = Some(false),
-            "--all" | "--include-bundle" | "--exclude-bundle" => {
-                return Err(RuntimeError::validation(
-                    "validation_invalid_arguments",
-                    format!("'{}' is not supported by relay host", arguments[index]),
-                ));
-            }
             value if !value.starts_with('-') => {
                 return Err(RuntimeError::validation(
                     "validation_invalid_arguments",

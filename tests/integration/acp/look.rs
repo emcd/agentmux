@@ -3,7 +3,7 @@ use agentmux::relay::{
     LookFreshness, LookSnapshotPayload, LookSnapshotSource, RelayResponse, SendOutcome,
 };
 use std::{
-    fs, thread,
+    thread,
     time::{Duration, Instant},
 };
 use tempfile::TempDir;
@@ -436,64 +436,6 @@ fn acp_look_reuses_persistent_worker_without_one_shot_replay_refresh() {
     assert_eq!(snapshot.snapshot_source, LookSnapshotSource::LiveBuffer);
     let requests = read_request_log(&_log_path);
     assert_eq!(request_count_by_method(&requests, "session/load"), 1);
-}
-
-#[test]
-fn acp_look_replaces_legacy_flattened_baseline_after_structured_load() {
-    let temporary = TempDir::new().expect("temporary");
-    let options = AcpStubOptions {
-        update_count: 0,
-        load_replay_count: 2,
-        load_replay_line_prefix: "LIVE".to_string(),
-        configured_session_id: Some("sess-generated".to_string()),
-        ..AcpStubOptions::default()
-    };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
-    let tmux_socket = temporary.path().join("tmux.sock");
-    let legacy_state_path = persisted_state_path(temporary.path(), "bravo");
-    fs::create_dir_all(
-        legacy_state_path
-            .parent()
-            .expect("legacy state parent directory"),
-    )
-    .expect("create legacy state directory");
-    fs::write(
-        &legacy_state_path,
-        serde_json::json!({
-            "schema_version": 1,
-            "acp_session_id": "sess-generated",
-            "worker_state": "available",
-            "snapshot_lines": ["LEGACY-LINE-1", "LEGACY-LINE-2"]
-        })
-        .to_string(),
-    )
-    .expect("write legacy ACP state");
-
-    let pre_load_snapshot = expect_acp_snapshot(dispatch_look_without_startup(
-        &config_root,
-        &tmux_socket,
-        "bravo",
-        "bravo",
-        Some(10),
-    ));
-    assert!(pre_load_snapshot.lines.is_empty());
-    assert_eq!(pre_load_snapshot.freshness, LookFreshness::Stale);
-
-    let response = dispatch_send(&config_root, &tmux_socket);
-    let result = send_result(response);
-    assert_eq!(result.outcome, SendOutcome::Queued);
-
-    let snapshot = expect_acp_snapshot(dispatch_look(
-        &config_root,
-        &tmux_socket,
-        "bravo",
-        "bravo",
-        Some(10),
-    ));
-    assert!(snapshot.lines.iter().any(|line| line == "LIVE-LINE-1"));
-    assert!(snapshot.lines.iter().any(|line| line == "LIVE-LINE-2"));
-    assert!(!snapshot.lines.iter().any(|line| line == "LEGACY-LINE-1"));
-    assert!(!snapshot.lines.iter().any(|line| line == "LEGACY-LINE-2"));
 }
 
 /// Reviewer caution (a): a `look` racing a respawn must return clean

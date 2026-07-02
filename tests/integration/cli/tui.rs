@@ -4,20 +4,6 @@ use tempfile::TempDir;
 
 use super::helpers::{write_bundle_configuration, write_tui_configuration};
 
-#[test]
-fn tui_rejects_sender_flag_in_mvp() {
-    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
-        .args(["tui", "--sender", "relay"])
-        .output()
-        .expect("run agentmux tui with sender flag");
-    assert!(!output.status.success(), "command should fail");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("invalid argument --sender"),
-        "unexpected stderr: {stderr}"
-    );
-}
-
 // The interactive TUI no longer rejects a missing default bundle at startup
 // (issues/tui/11, issues/runtime/3): a fresh install ships none and the operator
 // picks a bundle in the picker. The lenient launch resolution is covered by

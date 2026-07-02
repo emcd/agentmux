@@ -213,8 +213,6 @@ Browsing bundle resolution:
 3. first available configured bundle
 4. empty browsing context when no bundle is available
 
-`agentmux tui --sender` SHALL NOT be supported.
-
 Association-derived sender fallback SHALL NOT be used for TUI startup.
 
 TUI runtime SHALL use resolved session `id` consistently for
@@ -235,11 +233,6 @@ If selected session references unknown policy, startup SHALL fail fast with
 - **AND** active TUI configuration defines `default-bundle` and
   `default-session`
 - **THEN** TUI resolves startup identity from those defaults
-
-#### Scenario: Reject sender flag at startup
-
-- **WHEN** operator starts TUI with `--sender relay`
-- **THEN** startup fails with a stable validation error
 
 #### Scenario: Allow startup without bundle default
 
