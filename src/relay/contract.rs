@@ -312,10 +312,10 @@ pub enum RelayResponse {
         /// socket-trust sessions.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         authenticated_identity: Option<String>,
-        /// Delegated principal the requester is acting on behalf of. Reserved: the
-        /// setting mechanism lands in a later delta, so this is always absent for
-        /// now. Defined here so consumers can handle it without a breaking change
-        /// when it is activated.
+        /// Advisory origin subject the requester was forwarded on behalf of.
+        /// Echoed on a cross-relay ingress `Send` (the peer-supplied origin
+        /// `principal_id`, honored only from a relay-principal requester); absent
+        /// for a locally-originated send. Never an authorization input.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         on_behalf_of: Option<String>,
         results: Vec<SendResult>,
