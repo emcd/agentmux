@@ -500,12 +500,6 @@ async fn serve_relay_host(
         ))
     };
 
-    // Publish the ready sentinel only after the accept loop has been spawned.
-    // The signal handler is already installed (in `run_relay_host`), so
-    // `relay_socket_connectable && relay.ready exists` is a sound readiness
-    // gate for callers waiting on relay startup.
-    write_relay_ready_sentinel(&relay_paths)?;
-
     // Start watching the bundles configuration directory for runtime
     // add/remove/modify unless resolved `watch-bundles` is false (CLI override,
     // environment override, or relay.toml). The guard is held for the
@@ -513,6 +507,13 @@ async fn serve_relay_host(
     // hosted bundles down. A watcher that cannot be created (e.g. the platform
     // lacks filesystem notifications) is non-fatal: the relay keeps serving
     // without dynamic reconciliation.
+    //
+    // Spawned before the ready sentinel is published: `spawn_bundle_watcher`
+    // returns with the filesystem watch armed and the content fingerprints
+    // seeded, so a bundle-file mutation made after readiness is observable
+    // as a change. Publishing readiness first would open a gap where an edit
+    // is silently absorbed into the seeded fingerprints (never reconciled)
+    // and a removal produces no event at all.
     let bundle_watcher = if watch_bundles {
         match spawn_bundle_watcher(
             &roots.configuration_root,
@@ -532,6 +533,13 @@ async fn serve_relay_host(
     } else {
         None
     };
+
+    // Publish the ready sentinel only after the accept loop has been spawned
+    // and the bundle watcher (when enabled) is armed. The signal handler is
+    // already installed (in `run_relay_host`), so `relay_socket_connectable &&
+    // relay.ready exists` is a sound readiness gate for callers waiting on
+    // relay startup.
+    write_relay_ready_sentinel(&relay_paths)?;
 
     let accept_outcome = supervise_accept_loop(&stop_requested, accept_handle).await;
 

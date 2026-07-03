@@ -14,6 +14,13 @@ use tempfile::TempDir;
 
 use super::helpers::*;
 
+/// Wait budget for observing a watcher-driven signal: a reload/suppression
+/// inscription, an eviction frame on a live stream, or a catalog change probed
+/// via Hello. Generous because the pre-commit hook runs the full suite in
+/// parallel on arbitrarily loaded machines; every wait returns as soon as the
+/// signal arrives, so the budget is only paid on genuine failure.
+const WATCHER_SIGNAL_WAIT_BUDGET: Duration = Duration::from_secs(30);
+
 /// Connects a raw client to the live relay socket, sends one Hello, and returns
 /// the first server frame (a `hello_ack` on acceptance or an error `response`
 /// on rejection). Used to exercise the relay-wide credential-enforcement flag
@@ -897,7 +904,7 @@ fn relay_hello_keepalive(
     let mut stream = UnixStream::connect(&socket).expect("connect relay socket");
     let reader_stream = stream.try_clone().expect("clone relay stream");
     reader_stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
+        .set_read_timeout(Some(WATCHER_SIGNAL_WAIT_BUDGET))
         .expect("set relay read timeout");
     let hello = json!({
         "frame": "hello",
@@ -925,6 +932,36 @@ fn read_next_frame(reader: &mut BufReader<UnixStream>) -> Option<Value> {
     }
 }
 
+/// Asserts the relay armed its bundle watcher before publishing readiness.
+/// `relay.bundle.watch.started` is inscribed before the ready sentinel, so
+/// after `wait_for_relay_ready` its absence means the watch could not be
+/// created (for example inotify instance exhaustion) and the relay is serving
+/// without reconciliation — every watcher signal the test waits on afterwards
+/// would starve for the full budget with no explanation.
+fn assert_bundle_watch_started(inscriptions_root: &Path) {
+    let log = fs::read_to_string(inscriptions_root.join("relay.log")).unwrap_or_default();
+    let started = log
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .any(|entry| entry["event"] == "relay.bundle.watch.started");
+    assert!(
+        started,
+        "relay published readiness without arming the bundle watcher; relay inscriptions: {log}"
+    );
+}
+
+/// Unwraps a watcher-driven signal, panicking with the relay inscriptions log
+/// so a starved wait reports how far the watcher actually got (event observed?
+/// unload/reload inscribed?) instead of a bare expect message.
+fn expect_watcher_signal<T>(signal: Option<T>, what: &str, inscriptions_root: &Path) -> T {
+    signal.unwrap_or_else(|| {
+        panic!(
+            "{what} not observed within {WATCHER_SIGNAL_WAIT_BUDGET:?}; relay inscriptions: {}",
+            fs::read_to_string(inscriptions_root.join("relay.log")).unwrap_or_default()
+        )
+    })
+}
+
 /// Repeatedly opens a fresh Hello connection until `accept` matches the returned
 /// frame or the deadline passes. Used to observe the watcher's eventual catalog
 /// state (a newly loaded bundle accepting Hello, or an unloaded one rejecting).
@@ -934,7 +971,7 @@ fn poll_hello_first_frame(
     identity_token: &str,
     accept: impl Fn(&Value) -> bool,
 ) -> Value {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + WATCHER_SIGNAL_WAIT_BUDGET;
     loop {
         let frame = relay_hello_first_frame(state_root, principal_id, identity_token);
         if accept(&frame) || Instant::now() >= deadline {
@@ -948,7 +985,6 @@ fn poll_hello_first_frame(
 // loads and starts the bundle without a restart, and a new connection to that
 // bundle succeeds where it was previously rejected as an unknown bundle.
 #[test]
-#[ignore = "flaky under pre-commit parallel load (bundle file-watcher reload timing); see issues/cli/8"]
 fn host_relay_watcher_loads_new_bundle_file_at_runtime() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = temporary.path().join("config");
@@ -984,6 +1020,7 @@ fn host_relay_watcher_loads_new_bundle_file_at_runtime() {
         .spawn()
         .expect("spawn agentmux host relay");
     wait_for_relay_ready(&state_root, "alpha");
+    assert_bundle_watch_started(&inscriptions_root);
 
     // The bravo bundle does not exist yet: Hello is rejected as unknown.
     let before = relay_hello_first_frame(&state_root, "b@bravo", "socket-trust");
@@ -1014,8 +1051,10 @@ fn host_relay_watcher_loads_new_bundle_file_at_runtime() {
         "validation_unknown_bundle"
     );
     assert_eq!(
-        added["frame"], "hello_ack",
-        "expected hello_ack after add: {added:?}"
+        added["frame"],
+        "hello_ack",
+        "expected hello_ack after add: {added:?}; relay inscriptions: {}",
+        fs::read_to_string(inscriptions_root.join("relay.log")).unwrap_or_default()
     );
     assert_eq!(added["principal_id"], "b@bravo");
 }
@@ -1024,7 +1063,6 @@ fn host_relay_watcher_loads_new_bundle_file_at_runtime() {
 // the relay learns it (its members register as offline shells, so Hello is
 // accepted) but does not start it, mirroring the boot-time process-only path.
 #[test]
-#[ignore = "flaky under pre-commit parallel load (bundle file-watcher reload timing); see issues/cli/8"]
 fn host_relay_watcher_loads_non_autostart_bundle_held_without_starting() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = temporary.path().join("config");
@@ -1060,6 +1098,7 @@ fn host_relay_watcher_loads_non_autostart_bundle_held_without_starting() {
         .spawn()
         .expect("spawn agentmux host relay");
     wait_for_relay_ready(&state_root, "alpha");
+    assert_bundle_watch_started(&inscriptions_root);
 
     // Add a non-autostart bravo bundle at runtime; the watcher should register it
     // held rather than start it.
@@ -1085,7 +1124,8 @@ fn host_relay_watcher_loads_non_autostart_bundle_held_without_starting() {
 
     assert!(
         loaded_held,
-        "expected relay.bundle.loaded_held for the non-autostart runtime add"
+        "expected relay.bundle.loaded_held for the non-autostart runtime add; relay inscriptions: {}",
+        fs::read_to_string(inscriptions_root.join("relay.log")).unwrap_or_default()
     );
     assert_eq!(
         known["frame"], "hello_ack",
@@ -1110,7 +1150,6 @@ fn host_relay_watcher_loads_non_autostart_bundle_held_without_starting() {
 // receive a `runtime_bundle_unloaded` error frame before disconnect, and
 // subsequent connection attempts to that bundle are rejected as unknown.
 #[test]
-#[ignore = "flaky under pre-commit parallel load (bundle file-watcher reload timing); see issues/cli/8"]
 fn host_relay_watcher_unloads_removed_bundle_file_at_runtime() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = temporary.path().join("config");
@@ -1146,12 +1185,17 @@ fn host_relay_watcher_unloads_removed_bundle_file_at_runtime() {
         .spawn()
         .expect("spawn agentmux host relay");
     wait_for_relay_ready(&state_root, "alpha");
+    assert_bundle_watch_started(&inscriptions_root);
 
     let (_stream, mut reader, hello) =
         relay_hello_keepalive(&state_root, "a@alpha", "socket-trust");
     fs::remove_file(config_root.join("bundles").join("alpha.toml")).expect("remove bundle file");
     // The active session's connection receives the typed unload frame.
-    let eviction = read_next_frame(&mut reader).expect("eviction frame");
+    let eviction = expect_watcher_signal(
+        read_next_frame(&mut reader),
+        "unload eviction frame",
+        &inscriptions_root,
+    );
     // The catalog is updated before the eviction frame is written, so a new
     // Hello to the unloaded bundle is now rejected as unknown.
     let after = relay_hello_first_frame(&state_root, "a@alpha", "socket-trust");
@@ -1185,7 +1229,6 @@ fn host_relay_watcher_unloads_removed_bundle_file_at_runtime() {
 // reload: active sessions receive a `runtime_bundle_reloaded` error frame before
 // disconnect, and the relay reloads the bundle (a fresh connection succeeds).
 #[test]
-#[ignore = "flaky under pre-commit parallel load (bundle file-watcher reload timing); see issues/cli/8"]
 fn host_relay_watcher_reloads_modified_bundle_file_at_runtime() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = temporary.path().join("config");
@@ -1221,6 +1264,7 @@ fn host_relay_watcher_reloads_modified_bundle_file_at_runtime() {
         .spawn()
         .expect("spawn agentmux host relay");
     wait_for_relay_ready(&state_root, "alpha");
+    assert_bundle_watch_started(&inscriptions_root);
 
     let (_stream, mut reader, hello) =
         relay_hello_keepalive(&state_root, "a@alpha", "socket-trust");
@@ -1232,7 +1276,11 @@ fn host_relay_watcher_reloads_modified_bundle_file_at_runtime() {
         &["a", "c"],
         Some(true),
     );
-    let eviction = read_next_frame(&mut reader).expect("eviction frame");
+    let eviction = expect_watcher_signal(
+        read_next_frame(&mut reader),
+        "reload eviction frame",
+        &inscriptions_root,
+    );
     // After reload the bundle is still loaded: a fresh Hello succeeds.
     let after = poll_hello_first_frame(&state_root, "a@alpha", "socket-trust", |frame| {
         frame["frame"] == "hello_ack"
@@ -1254,8 +1302,10 @@ fn host_relay_watcher_reloads_modified_bundle_file_at_runtime() {
         "runtime_bundle_reloaded"
     );
     assert_eq!(
-        after["frame"], "hello_ack",
-        "expected hello_ack after reload: {after:?}"
+        after["frame"],
+        "hello_ack",
+        "expected hello_ack after reload: {after:?}; relay inscriptions: {}",
+        fs::read_to_string(inscriptions_root.join("relay.log")).unwrap_or_default()
     );
     assert_eq!(after["principal_id"], "a@alpha");
 }
@@ -1266,7 +1316,7 @@ fn host_relay_watcher_reloads_modified_bundle_file_at_runtime() {
 /// (so it cannot be awaited on a keepalive connection).
 fn poll_inscription_event(inscriptions_root: &Path, event: &str, bundle_name: &str) -> bool {
     let log = inscriptions_root.join("relay.log");
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + WATCHER_SIGNAL_WAIT_BUDGET;
     loop {
         if let Ok(contents) = fs::read_to_string(&log) {
             let found = contents
@@ -1291,7 +1341,6 @@ fn poll_inscription_event(inscriptions_root: &Path, event: &str, bundle_name: &s
 // fingerprint and records `relay.bundle.reload_suppressed_downed` instead of
 // reloading (and restarting) the runtime.
 #[test]
-#[ignore = "flaky under pre-commit parallel load (bundle file-watcher reload timing); see issues/cli/8"]
 fn host_relay_watcher_preserves_down_intent_across_file_edit() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = temporary.path().join("config");
@@ -1327,6 +1376,7 @@ fn host_relay_watcher_preserves_down_intent_across_file_edit() {
         .spawn()
         .expect("spawn agentmux host relay");
     wait_for_relay_ready(&state_root, "alpha");
+    assert_bundle_watch_started(&inscriptions_root);
 
     // Operator takes the bundle down. This flows over the live relay socket and
     // records the down intent on the shared catalog the watcher observes.
@@ -1369,7 +1419,8 @@ fn host_relay_watcher_preserves_down_intent_across_file_edit() {
 
     assert!(
         suppressed,
-        "expected relay.bundle.reload_suppressed_held for the downed bundle"
+        "expected relay.bundle.reload_suppressed_held for the downed bundle; relay inscriptions: {}",
+        fs::read_to_string(inscriptions_root.join("relay.log")).unwrap_or_default()
     );
     // The suppressed edit must not have reloaded (and thereby restarted) the
     // bundle the operator deliberately took down.
@@ -1393,7 +1444,6 @@ fn host_relay_watcher_preserves_down_intent_across_file_edit() {
 // (declared) counterpart to an explicit `down` — the same hold rule, sourced
 // from config rather than a runtime command, with no `down` issued.
 #[test]
-#[ignore = "flaky under pre-commit parallel load (bundle file-watcher reload timing); see issues/cli/8"]
 fn host_relay_watcher_holds_non_autostart_bundle_on_file_edit() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = temporary.path().join("config");
@@ -1429,6 +1479,7 @@ fn host_relay_watcher_holds_non_autostart_bundle_on_file_edit() {
         .spawn()
         .expect("spawn agentmux host relay");
     wait_for_relay_ready(&state_root, "alpha");
+    assert_bundle_watch_started(&inscriptions_root);
 
     // Edit the never-started bundle file: the standing `autostart = false` hold
     // must keep the watcher from bringing it up.
@@ -1453,7 +1504,8 @@ fn host_relay_watcher_holds_non_autostart_bundle_on_file_edit() {
 
     assert!(
         suppressed,
-        "expected relay.bundle.reload_suppressed_held for the non-autostart bundle"
+        "expected relay.bundle.reload_suppressed_held for the non-autostart bundle; relay inscriptions: {}",
+        fs::read_to_string(inscriptions_root.join("relay.log")).unwrap_or_default()
     );
     let inscriptions = fs::read_to_string(inscriptions_root.join("relay.log"))
         .expect("read relay inscriptions log");
