@@ -25,8 +25,7 @@ use time::format_description::well_known::Rfc3339;
 
 use super::SharedWaiterState;
 
-pub(super) static CHOICE_WAITERS: OnceLock<Mutex<HashMap<String, SharedWaiterState>>> =
-    OnceLock::new();
+static CHOICE_WAITERS: OnceLock<Mutex<HashMap<String, SharedWaiterState>>> = OnceLock::new();
 
 fn choice_waiters() -> &'static Mutex<HashMap<String, SharedWaiterState>> {
     CHOICE_WAITERS.get_or_init(|| Mutex::new(HashMap::new()))

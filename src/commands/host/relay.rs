@@ -405,7 +405,7 @@ fn prepare_relay_host(
     // the project's argument budget without resorting to a clippy suppression.
     let catalog = BundleCatalog::from_entries(
         hosted_bundles
-            .iter()
+            .into_iter()
             .map(|hosted| (hosted.paths.clone(), hosted.hosting_intent)),
     );
     let pre_hello_idle_timeout = relay_pre_hello_idle_timeout();
