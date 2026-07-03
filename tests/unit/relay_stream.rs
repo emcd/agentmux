@@ -26,7 +26,7 @@ const TEST_PRE_HELLO_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[path = "relay_stream/choices.rs"]
 mod choices;
-#[path = "relay_stream/identity.rs"]
+#[path = "relay_stream/identity/mod.rs"]
 mod identity;
 #[path = "relay_stream/list.rs"]
 mod list;
