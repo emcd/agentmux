@@ -73,10 +73,15 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9
+
       - name: Build
         run: cargo build --release ${{ matrix.id == 'pty-feature' && '--features pty' || '' }}
 
       - name: Test
         env:
           RUST_BACKTRACE: '1'
-        run: cargo test --release ${{ matrix.id == 'pty-feature' && '--features pty' || '' }}
+        run: cargo nextest run --release --locked --config-file .auxiliary/configuration/nextest.toml ${{ matrix.id == 'pty-feature' && '--features pty' || '' }}

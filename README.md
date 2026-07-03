@@ -124,6 +124,19 @@ For login-time startup, service examples, shared runtime flags, and runtime
 artifact locations, see
 [documentation/usage/operations.md](documentation/usage/operations.md).
 
+## Development Prerequisites
+
+The pre-commit hooks and CI use [cargo-nextest](https://nexte.st/) as the
+test runner. Install it locally if you intend to run the test suite:
+
+```bash
+cargo install cargo-nextest --locked
+```
+
+The hooks will fail otherwise. See
+[documentation/development-practices.md](documentation/development-practices.md)
+for the full development workflow.
+
 ## Architecture At A Glance
 
 - Relay host:

@@ -68,10 +68,10 @@ repos:
       files: '^(src/pty/|src/bin/agentmux_pty\.rs|Cargo\.toml|Cargo\.lock)'
       fail_fast: false
 
-    - id: cargo-test
-      name: 'Test (Rust)'
+    - id: cargo-nextest
+      name: 'Test (Rust, cargo-nextest)'
       language: system
-      entry: 'cargo test --locked'
+      entry: 'cargo nextest run --locked --config-file .auxiliary/configuration/nextest.toml'
       pass_filenames: false
       require_serial: true
       stages: [ 'pre-commit' ]
@@ -87,10 +87,10 @@ repos:
       always_run: true
       fail_fast: true
 
-    - id: cargo-test-release
-      name: 'Test (Rust: Release)'
+    - id: cargo-nextest-release
+      name: 'Test (Rust: Release, cargo-nextest)'
       language: system
-      entry: 'cargo test --release --locked'
+      entry: 'cargo nextest run --release --locked --config-file .auxiliary/configuration/nextest.toml'
       pass_filenames: false
       require_serial: true
       stages: [ 'pre-push' ]

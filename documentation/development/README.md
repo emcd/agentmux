@@ -12,7 +12,7 @@ no Zig required):
 ```bash
 cargo check --all-targets
 cargo clippy --all-targets -- -D warnings
-cargo test
+cargo nextest run --locked --config-file .auxiliary/configuration/nextest.toml
 ```
 
 Pty-feature commands (run on Pty-source commits by the `cargo-clippy-pty`
@@ -23,7 +23,7 @@ ghostty source tree):
 
 ```bash
 cargo clippy --all-targets --features pty -- -D warnings
-cargo test --features pty
+cargo nextest run --features pty --locked --config-file .auxiliary/configuration/nextest.toml
 ```
 
 ## Source Map
