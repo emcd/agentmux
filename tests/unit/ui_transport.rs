@@ -117,7 +117,10 @@ fn ui_mailw_times_out_when_no_ui_reconnects() {
         },
     };
 
-    let mut transport = UiTransport::new(services);
+    // Inject a short reconnect budget so the no-UI timeout path resolves in
+    // milliseconds rather than blocking the full production window.
+    let mut transport =
+        UiTransport::new(services).with_reconnect_timeout(Duration::from_millis(50));
     let outcome = block_on(transport.mailw(ui_envelope())).expect("mailw outcome future resolves");
 
     assert_eq!(outcome.outcome, SendOutcome::Timeout);
