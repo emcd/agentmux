@@ -220,7 +220,7 @@ pub struct PtyTargetConfiguration {
     /// Per-coder terminal protocol. Selects the literal `TERM`
     /// environment-variable value the Pty transport sets when
     /// spawning the child. Defaults to `xterm-256color` (preserves
-    /// the pre-`add-pty-terminal-protocol-config` behavior).
+    /// the pre-existing behavior).
     #[serde(default)]
     pub term_protocol: TermProtocol,
 }
@@ -364,8 +364,7 @@ pub enum AcpChannel {
 /// string the Pty transport sets when spawning the child coder
 /// process. The closed-enum shape keeps the schema self-validating
 /// (an unknown value fails serde's enum-variant deserializer with a
-/// structured "unknown variant" error); see the proposal
-/// `add-pty-terminal-protocol-config` for the rationale.
+/// structured "unknown variant" error).
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub enum TermProtocol {
     #[default]

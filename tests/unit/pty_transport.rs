@@ -1288,7 +1288,6 @@ fn pty_transport_look_during_non_ready_wait_returns_promptly() {
 
 // =========================================================================
 // per-coder term-protocol tests
-// (tasks.md section 4; proposal add-pty-terminal-protocol-config)
 // =========================================================================
 
 /// Builds a `[coders.<id>.pty]`-backed `BundleMember` plus a parallel
@@ -1323,8 +1322,8 @@ fn make_term_protocol_transport(
         policy_id: None,
     };
     let transport_cfg = agentmux::pty::PtyTargetConfiguration {
-        initial_command,
-        resume_command: id.to_string(),
+        initial_command: initial_command.clone(),
+        resume_command: initial_command,
         prompt_readiness: None,
         cols: 80,
         rows: 24,
@@ -1345,7 +1344,7 @@ fn pty_transport_term_protocol_propagates_to_child_command() {
     // The child MUST print its own TERM through the PTY for the
     // assertion to be meaningful; reading `/proc/self/environ` from the
     // test process would report the test's env, not the spawned PTY
-    // child's. Per RG's correction during the proposal review.
+    // child's.
     let child_command = "sh -c 'printf \"TERM=%s\\n\" \"$TERM\"; sleep 1'".to_string();
     let term_protocol = TermProtocol::XtermKitty;
     let expected = "TERM=xterm-kitty";
@@ -1413,11 +1412,8 @@ fn pty_transport_term_protocol_dependent_round_trip_through_snapshot() {
 
     // Child branches on TERM and emits distinct output per branch; the
     // Pty transport's snapshot path (PtyOutputView::look) should reflect
-    // the branch that was actually taken. This validates the end-to-end
-    // signal: TERM reaches the child -> child's TERM-conditional code
-    // executes -> VTE renders -> snapshot reflects the result. Does NOT
-    // exercise full libghostty-vt CSI-u query/response (out of scope,
-    // blocked behind todos/pty/5's upstream pin breakage ticket).
+    // the branch that was actually taken. Does NOT exercise full
+    // libghostty-vt CSI-u query/response (deferred).
     let child_command = "sh -c 'case \"$TERM\" in xterm-kitty) printf \"kitty-mode\\n\";; *) printf \"default-mode\\n\";; esac; sleep 1'".to_string();
     let term_protocol = TermProtocol::XtermKitty;
     let expected_branch = "kitty-mode";

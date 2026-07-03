@@ -300,6 +300,29 @@ command = "opencode acp"
 # enabled at build time (`cargo build --features pty`). Each coder
 # entry declares exactly one of `tmux`, `acp`, or `pty`; the validator
 # rejects both or neither.
+#
+# Per-coder `term-protocol` selects the literal `TERM` env-var value
+# the Pty transport sets when spawning the child. Defaults to
+# `xterm-256color`. Supported values:
+#
+# - xterm-256color (default): modern xterm with 256 colors.
+# - xterm-kitty:              advertises kitty-keyboard-protocol
+#                              support to TUIs that honor it. The
+#                              project's TUIs (claude, codex, gemini,
+#                              opencode) detect terminal capabilities
+#                              from TERM and adapt accordingly; see
+#                              [Claude Code terminal-config](https://code.claude.com/docs/en/terminal-config.md)
+#                              and the [opencode config docs](https://opencode.ai/docs)
+#                              for the per-TUI detection patterns.
+#                              Whether TERM is sufficient on its own
+#                              to flip a TUI into kitty-protocol mode
+#                              depends on the TUI's libghostty-vt /
+#                              terminal emulation stack; the live
+#                              joint smoke session (`tasks.md` §6.6)
+#                              is the empirical ground truth for the
+#                              project's TUIs.
+# - alacritty, foot, wezterm, screen-256color: pass-through to the
+#   child for emulator-specific behavior.
 [[coders]]
 id = "codex-pty"
 
@@ -312,6 +335,7 @@ cols = 120
 rows = 40
 prime-timeout-ms = 30000
 wedge-detection = true
+term-protocol = "xterm-kitty"
 ```
 
 ### Example `bundles/myproject.toml`

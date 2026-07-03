@@ -98,8 +98,7 @@ pub struct PtyTargetConfiguration {
     pub working_directory: Option<std::path::PathBuf>,
     /// Per-coder terminal protocol; selects the literal `TERM`
     /// env-var value the transport sets when spawning the child.
-    /// Defaults to `xterm-256color` when absent
-    /// (`add-pty-terminal-protocol-config`).
+    /// Defaults to `xterm-256color` when absent.
     pub term_protocol: TermProtocol,
 }
 

@@ -13,7 +13,13 @@
 //! `TransportImpl::pty`. Gated behind the default-off `pty` Cargo
 //! feature so default builds do not pull in libghostty-vt /
 //! portable-pty and do not invoke Zig. The bin target name uses a
-//! hyphen; the Cargo binary is named `agentmux-pty`:
+//! hyphen; the Cargo binary is named `agentmux-pty`.
+//!
+//! Note: this smoke binary hardcodes `TERM=xterm-256color` and
+//! `COLORTERM=truecolor` because it has no per-coder configuration
+//! surface. The relay-owned per-coder `term-protocol` selection lives
+//! in `PtyTransport::startup`; this binary intentionally does not
+//! exercise that path.
 //!
 //! ```bash
 //! cargo build --features pty --bin agentmux-pty
