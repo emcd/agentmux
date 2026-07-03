@@ -131,8 +131,10 @@ shared handle.
   Pty-backed bundle member
 - **THEN** the transport opens a `portable_pty` master sized to the per-coder
   `cols` and `rows`
-- **AND** spawns the configured child command with `TERM=xterm-256color` and
-  `COLORTERM=truecolor` environment variables
+- **AND** spawns the configured child command with `COLORTERM=truecolor` and
+  a `TERM` env-var value derived from the per-coder `term-protocol` field
+  (defaulting to `xterm-256color` when `term-protocol` is unset; see
+  `pty-terminal-protocols` for the configurable `term-protocol` surface)
 - **AND** constructs a `libghostty_vt::Terminal` with the same dimensions and
   installs the canonical effect handlers (`on_pty_write`, `on_size`,
   `on_device_attributes`, `on_xtversion`, `on_title_changed`)

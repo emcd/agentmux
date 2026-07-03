@@ -145,7 +145,10 @@
       - Build `portable_pty::CommandBuilder` with the per-coder
         `initial-command` or `resume-command` (with
         `{coder-session-id}` substitution), `cwd`, and env vars
-        (`TERM=xterm-256color`, `COLORTERM=truecolor`).
+        (`COLORTERM=truecolor`, plus a `TERM` value derived from
+        the per-coder `term-protocol` field with a default of
+        `xterm-256color`; the configurable `term-protocol` surface
+        lands in `add-pty-terminal-protocol-config`).
       - `spawn_command(cmd)` returns a `Child`; stash the PID.
       - Clone the master; split into reader / writer.
       - Build `Terminal::new(TerminalOptions { cols, rows,
