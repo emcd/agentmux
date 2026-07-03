@@ -141,6 +141,31 @@ constraints — not in separate ADR documents.
 
 ## Testing Practices
 
+The canonical test runner is [cargo-nextest](https://nexte.st/). It is
+installed as a standalone binary (not a Cargo dev-dependency):
+
+```shell
+cargo install cargo-nextest --locked
+```
+
+Run the suite locally with:
+
+```shell
+cargo nextest run --locked --config-file .auxiliary/configuration/nextest.toml
+```
+
+Per-repository configuration lives at
+`.auxiliary/configuration/nextest.toml` (currently a slow-test warning
+tripwire at 10s; do not raise the global threshold without a per-test
+override for any test that legitimately exceeds it). The config file is
+not at nextest's default autoload path (`.config/nextest.toml`), so the
+`--config-file` flag is mandatory on every invocation -- forget it and
+the slow-timeout warning silently won't trip.
+
+Pre-commit hooks and CI also use `cargo nextest run --locked
+--config-file ...`; if you only have `cargo test` installed, hooks
+will fail.
+
 - Prefer tests under `tests/unit` and `tests/integration` over inline
   `#[cfg(test)]` modules in `src/**`.
 - Prefer tests that exercise public interfaces; avoid source-inclusion
@@ -163,7 +188,7 @@ Run validation before committing to avoid hook failures:
 ```shell
 cargo fmt --check
 cargo clippy -- -D warnings
-cargo test
+cargo nextest run --locked --config-file .auxiliary/configuration/nextest.toml
 ```
 
 Hooks run these automatically, but running them manually first saves
