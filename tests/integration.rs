@@ -14,7 +14,7 @@ mod session_relay_list;
 mod session_relay_look;
 #[path = "integration/session_relay_reconciliation.rs"]
 mod session_relay_reconciliation;
-#[path = "integration/session_relay_stream.rs"]
+#[path = "integration/session_relay_stream/mod.rs"]
 mod session_relay_stream;
 #[path = "integration/support/mod.rs"]
 mod support;
