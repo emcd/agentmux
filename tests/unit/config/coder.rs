@@ -575,3 +575,132 @@ coder = "acp"
         TargetConfiguration::Acp(_)
     ));
 }
+
+#[test]
+fn pty_term_protocol_round_trips_each_variant() {
+    use agentmux::configuration::TermProtocol;
+
+    let cases: &[(&str, TermProtocol)] = &[
+        ("xterm-256color", TermProtocol::Xterm256Color),
+        ("xterm-kitty", TermProtocol::XtermKitty),
+        ("alacritty", TermProtocol::Alacritty),
+        ("foot", TermProtocol::Foot),
+        ("wezterm", TermProtocol::WezTerm),
+        ("screen-256color", TermProtocol::Screen256Color),
+    ];
+    for (term_str, expected) in cases {
+        let temporary = TempDir::new().expect("temporary");
+        let dir = temporary.path().display().to_string();
+        let root = write_config(
+            &temporary,
+            "alpha",
+            &format!(
+                r#"
+format-version = 1
+
+[[coders]]
+id = "alpha"
+
+[coders.pty]
+initial-command = "/bin/cat"
+resume-command = "/bin/cat"
+term-protocol = "{term_str}"
+"#
+            ),
+            &format!(
+                r#"
+format-version = 1
+
+[[sessions]]
+id = "a"
+name = "a"
+directory = "{dir}"
+coder = "alpha"
+"#
+            ),
+        );
+        let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+        let TargetConfiguration::Pty(ref pty) = loaded.members[0].target else {
+            panic!("expected Pty target configuration for term-protocol = {term_str}");
+        };
+        assert_eq!(
+            pty.term_protocol, *expected,
+            "term-protocol = {term_str} should map to {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn pty_term_protocol_defaults_to_xterm_256color_when_absent() {
+    use agentmux::configuration::TermProtocol;
+
+    let temporary = TempDir::new().expect("temporary");
+    let dir = temporary.path().display().to_string();
+    let root = write_config(
+        &temporary,
+        "alpha",
+        r#"
+format-version = 1
+
+[[coders]]
+id = "alpha"
+
+[coders.pty]
+initial-command = "/bin/cat"
+resume-command = "/bin/cat"
+"#,
+        &format!(
+            r#"
+format-version = 1
+
+[[sessions]]
+id = "a"
+name = "a"
+directory = "{dir}"
+coder = "alpha"
+"#
+        ),
+    );
+    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    let TargetConfiguration::Pty(ref pty) = loaded.members[0].target else {
+        panic!("expected Pty target configuration");
+    };
+    assert_eq!(pty.term_protocol, TermProtocol::Xterm256Color);
+}
+
+#[test]
+fn pty_term_protocol_rejects_unknown_variant() {
+    let temporary = TempDir::new().expect("temporary");
+    let dir = temporary.path().display().to_string();
+    let root = write_config(
+        &temporary,
+        "alpha",
+        r#"
+format-version = 1
+
+[[coders]]
+id = "alpha"
+
+[coders.pty]
+initial-command = "/bin/cat"
+resume-command = "/bin/cat"
+term-protocol = "xterm-kittie"
+"#,
+        &format!(
+            r#"
+format-version = 1
+
+[[sessions]]
+id = "a"
+name = "a"
+directory = "{dir}"
+coder = "alpha"
+"#
+        ),
+    );
+    let result = load_bundle_configuration(&root, "alpha");
+    assert!(
+        result.is_err(),
+        "unknown TermProtocol variant (typo xterm-kittie) should fail to load"
+    );
+}

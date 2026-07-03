@@ -1285,3 +1285,198 @@ fn pty_transport_look_during_non_ready_wait_returns_promptly() {
         _ => panic!("expected Lines payload"),
     }
 }
+
+// =========================================================================
+// per-coder term-protocol tests
+// (tasks.md section 4; proposal add-pty-terminal-protocol-config)
+// =========================================================================
+
+/// Builds a `[coders.<id>.pty]`-backed `BundleMember` plus a parallel
+/// `pty::PtyTargetConfiguration` and constructs a `PtyTransport`. Used by
+/// the term-protocol #[ignore] tests below.
+fn make_term_protocol_transport(
+    id: &str,
+    initial_command: String,
+    term_protocol: agentmux::configuration::TermProtocol,
+) -> (
+    agentmux::configuration::BundleMember,
+    agentmux::pty::PtyTargetConfiguration,
+) {
+    use agentmux::configuration::{BundleMember, PtyTargetConfiguration as PtyConfig};
+
+    let pty_cfg = PtyConfig {
+        initial_command: initial_command.clone(),
+        resume_command: initial_command.clone(),
+        prompt_readiness: None,
+        prime_timeout_ms: Some(2000),
+        wedge_detection: true,
+        cols: 80,
+        rows: 24,
+        term_protocol,
+    };
+    let target = BundleMember {
+        id: id.to_string(),
+        name: None,
+        working_directory: None,
+        target: agentmux::configuration::TargetConfiguration::Pty(pty_cfg),
+        coder_session_id: None,
+        policy_id: None,
+    };
+    let transport_cfg = agentmux::pty::PtyTargetConfiguration {
+        initial_command,
+        resume_command: id.to_string(),
+        prompt_readiness: None,
+        cols: 80,
+        rows: 24,
+        prime_timeout_ms: Some(2000),
+        wedge_detection: true,
+        working_directory: None,
+        term_protocol,
+    };
+    (target, transport_cfg)
+}
+
+#[test]
+#[ignore = "requires Zig 0.15.x + libghostty-vt built; run with --ignored"]
+fn pty_transport_term_protocol_propagates_to_child_command() {
+    use agentmux::configuration::TermProtocol;
+    use agentmux::transports::{LookMode, LookSnapshotPayload, StartupContext, Transport};
+
+    // The child MUST print its own TERM through the PTY for the
+    // assertion to be meaningful; reading `/proc/self/environ` from the
+    // test process would report the test's env, not the spawned PTY
+    // child's. Per RG's correction during the proposal review.
+    let child_command = "sh -c 'printf \"TERM=%s\\n\" \"$TERM\"; sleep 1'".to_string();
+    let term_protocol = TermProtocol::XtermKitty;
+    let expected = "TERM=xterm-kitty";
+
+    let (target, transport_cfg) = make_term_protocol_transport(
+        "term-protocol-propagation-test",
+        child_command,
+        term_protocol,
+    );
+    let mut transport = agentmux::pty::PtyTransport::new(target.clone(), transport_cfg);
+    let context = StartupContext {
+        namespace: "agentmux".to_string(),
+        runtime_directory: std::env::temp_dir(),
+        target_member: target,
+        choose: Arc::new(|_| agentmux::transports::ChoiceMade::Cancelled {
+            decided_by: "test".to_string(),
+            reason_code: "test_cancel".to_string(),
+            reason: None,
+        }),
+    };
+    let status = match transport.startup(context) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "pty_transport_term_protocol_propagates_to_child_command: \
+                 skipped (startup failed: {e:?}); requires Zig 0.15.x + \
+                 libghostty-vt built via --features pty"
+            );
+            return;
+        }
+    };
+    assert!(matches!(
+        status.readiness,
+        agentmux::transports::TransportReadiness::Ready
+    ));
+
+    // Give VTE time to render the child's printf output.
+    thread::sleep(Duration::from_millis(500));
+
+    let output = transport
+        .give_output()
+        .expect("give_output returns Some after startup");
+    let snapshot = output
+        .look(LookMode {
+            lines: Some(40),
+            offset: None,
+            prime_timeout: Duration::from_secs(2),
+        })
+        .expect("look should succeed");
+    let tail = match snapshot {
+        LookSnapshotPayload::Lines { snapshot_lines } => snapshot_lines.join("\n"),
+        _ => panic!("expected Lines payload"),
+    };
+    assert!(
+        tail.contains(expected),
+        "expected {expected:?} in snapshot tail, got: {tail:?}"
+    );
+}
+
+#[test]
+#[ignore = "requires Zig 0.15.x + libghostty-vt built; run with --ignored"]
+fn pty_transport_term_protocol_dependent_round_trip_through_snapshot() {
+    use agentmux::configuration::TermProtocol;
+    use agentmux::transports::{LookMode, LookSnapshotPayload, StartupContext, Transport};
+
+    // Child branches on TERM and emits distinct output per branch; the
+    // Pty transport's snapshot path (PtyOutputView::look) should reflect
+    // the branch that was actually taken. This validates the end-to-end
+    // signal: TERM reaches the child -> child's TERM-conditional code
+    // executes -> VTE renders -> snapshot reflects the result. Does NOT
+    // exercise full libghostty-vt CSI-u query/response (out of scope,
+    // blocked behind todos/pty/5's upstream pin breakage ticket).
+    let child_command = "sh -c 'case \"$TERM\" in xterm-kitty) printf \"kitty-mode\\n\";; *) printf \"default-mode\\n\";; esac; sleep 1'".to_string();
+    let term_protocol = TermProtocol::XtermKitty;
+    let expected_branch = "kitty-mode";
+    let unexpected_branch = "default-mode";
+
+    let (target, transport_cfg) = make_term_protocol_transport(
+        "term-protocol-dependent-round-trip-test",
+        child_command,
+        term_protocol,
+    );
+    let mut transport = agentmux::pty::PtyTransport::new(target.clone(), transport_cfg);
+    let context = StartupContext {
+        namespace: "agentmux".to_string(),
+        runtime_directory: std::env::temp_dir(),
+        target_member: target,
+        choose: Arc::new(|_| agentmux::transports::ChoiceMade::Cancelled {
+            decided_by: "test".to_string(),
+            reason_code: "test_cancel".to_string(),
+            reason: None,
+        }),
+    };
+    let status = match transport.startup(context) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "pty_transport_term_protocol_dependent_round_trip_through_snapshot: \
+                 skipped (startup failed: {e:?}); requires Zig 0.15.x + \
+                 libghostty-vt built via --features pty"
+            );
+            return;
+        }
+    };
+    assert!(matches!(
+        status.readiness,
+        agentmux::transports::TransportReadiness::Ready
+    ));
+
+    thread::sleep(Duration::from_millis(500));
+
+    let output = transport
+        .give_output()
+        .expect("give_output returns Some after startup");
+    let snapshot = output
+        .look(LookMode {
+            lines: Some(40),
+            offset: None,
+            prime_timeout: Duration::from_secs(2),
+        })
+        .expect("look should succeed");
+    let tail = match snapshot {
+        LookSnapshotPayload::Lines { snapshot_lines } => snapshot_lines.join("\n"),
+        _ => panic!("expected Lines payload"),
+    };
+    assert!(
+        tail.contains(expected_branch),
+        "expected snapshot to reflect xterm-kitty branch ({expected_branch:?}), got: {tail:?}"
+    );
+    assert!(
+        !tail.contains(unexpected_branch),
+        "snapshot should NOT contain the default-mode branch ({unexpected_branch:?}); got: {tail:?}"
+    );
+}
