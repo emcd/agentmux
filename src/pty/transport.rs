@@ -49,6 +49,7 @@ use regex::Regex;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::configuration::BundleMember;
+use crate::configuration::TermProtocol;
 use crate::transports::{
     DeliveryEnvelope, OutcomeFuture, OutputView, SingleDeliveryOutcome, StartupContext, Transport,
     TransportError, TransportReadiness, TransportStatus,
@@ -95,6 +96,11 @@ pub struct PtyTargetConfiguration {
     /// uses the bundle's runtime directory (the relay passes that
     /// in via `StartupContext::runtime_directory`).
     pub working_directory: Option<std::path::PathBuf>,
+    /// Per-coder terminal protocol; selects the literal `TERM`
+    /// env-var value the transport sets when spawning the child.
+    /// Defaults to `xterm-256color` when absent
+    /// (`add-pty-terminal-protocol-config`).
+    pub term_protocol: TermProtocol,
 }
 
 /// Internal command the relay submits via `mailw` / `raww`.
@@ -132,6 +138,11 @@ pub struct PtyTransport {
     /// worker uses the runtime directory the relay passes via
     /// `StartupContext::runtime_directory`.
     configured_working_directory: Option<std::path::PathBuf>,
+    /// Configured terminal protocol; selects the literal `TERM`
+    /// env-var value the transport sets when spawning the child.
+    /// Defaults to `xterm-256color` when the per-coder config omits
+    /// `term-protocol`.
+    configured_term_protocol: TermProtocol,
     /// Write-command channel the relay submits into. `None` before
     /// `startup`; `Some` once the worker thread is running.
     write_tx: Option<mpsc::Sender<DeliveryCommand>>,
@@ -203,6 +214,7 @@ impl PtyTransport {
             shared,
             configured_initial_command: config.initial_command.clone(),
             configured_working_directory: config.working_directory.clone(),
+            configured_term_protocol: config.term_protocol,
             write_tx: None,
             bytes_tx: None,
             ready: Arc::new(AtomicBool::new(false)),
@@ -295,7 +307,7 @@ impl Transport for PtyTransport {
         for arg in &args {
             cmd.arg(arg);
         }
-        cmd.env("TERM", "xterm-256color");
+        cmd.env("TERM", self.configured_term_protocol.as_env_var());
         cmd.env("COLORTERM", "truecolor");
         // Prefer the per-coder `working_directory` (from
         // `[coders.<id>.pty]` or the bundle member's

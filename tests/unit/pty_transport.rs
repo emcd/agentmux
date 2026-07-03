@@ -707,7 +707,7 @@ fn recv_bounded<T>(
 #[ignore = "requires Zig 0.15.x + libghostty-vt built; run with --ignored"]
 fn pty_transport_round_trips_raww_with_prompt_readiness() {
     use agentmux::configuration::{
-        BundleMember, PromptReadinessTemplate, PtyTargetConfiguration as PtyConfig,
+        BundleMember, PromptReadinessTemplate, PtyTargetConfiguration as PtyConfig, TermProtocol,
     };
     use agentmux::pty::PtyTargetConfiguration;
     use agentmux::transports::{
@@ -730,6 +730,7 @@ fn pty_transport_round_trips_raww_with_prompt_readiness() {
             wedge_detection: true,
             cols: 80,
             rows: 24,
+            term_protocol: TermProtocol::Xterm256Color,
         }),
         coder_session_id: None,
         policy_id: None,
@@ -749,6 +750,7 @@ fn pty_transport_round_trips_raww_with_prompt_readiness() {
             prime_timeout_ms: Some(2000),
             wedge_detection: true,
             working_directory: None,
+            term_protocol: TermProtocol::Xterm256Color,
         },
     );
     let context = StartupContext {
@@ -770,6 +772,7 @@ fn pty_transport_round_trips_raww_with_prompt_readiness() {
                 wedge_detection: true,
                 cols: 80,
                 rows: 24,
+                term_protocol: TermProtocol::Xterm256Color,
             }),
             coder_session_id: None,
             policy_id: None,
@@ -845,7 +848,7 @@ fn pty_transport_round_trips_raww_with_prompt_readiness() {
 #[ignore = "requires Zig 0.15.x + libghostty-vt built; run with --ignored"]
 fn pty_transport_spawns_multi_arg_initial_command() {
     use agentmux::configuration::{
-        BundleMember, PromptReadinessTemplate, PtyTargetConfiguration as PtyConfig,
+        BundleMember, PromptReadinessTemplate, PtyTargetConfiguration as PtyConfig, TermProtocol,
     };
     use agentmux::pty::PtyTargetConfiguration;
     use agentmux::transports::{LookMode, LookSnapshotPayload, StartupContext, Transport};
@@ -866,6 +869,7 @@ fn pty_transport_spawns_multi_arg_initial_command() {
             wedge_detection: true,
             cols: 80,
             rows: 24,
+            term_protocol: TermProtocol::Xterm256Color,
         }),
         coder_session_id: None,
         policy_id: None,
@@ -885,6 +889,7 @@ fn pty_transport_spawns_multi_arg_initial_command() {
             prime_timeout_ms: Some(2000),
             wedge_detection: true,
             working_directory: None,
+            term_protocol: TermProtocol::Xterm256Color,
         },
     );
     let context = StartupContext {
@@ -906,6 +911,7 @@ fn pty_transport_spawns_multi_arg_initial_command() {
                 wedge_detection: true,
                 cols: 80,
                 rows: 24,
+                term_protocol: TermProtocol::Xterm256Color,
             }),
             coder_session_id: None,
             policy_id: None,
@@ -982,7 +988,7 @@ fn pty_transport_spawns_multi_arg_initial_command() {
 #[ignore = "requires Zig 0.15.x + libghostty-vt built; run with --ignored"]
 fn pty_transport_mailw_during_raww_wait_is_not_dropped() {
     use agentmux::configuration::{
-        BundleMember, PromptReadinessTemplate, PtyTargetConfiguration as PtyConfig,
+        BundleMember, PromptReadinessTemplate, PtyTargetConfiguration as PtyConfig, TermProtocol,
     };
     use agentmux::envelope::AddressIdentity;
     use agentmux::pty::PtyTargetConfiguration;
@@ -1004,6 +1010,7 @@ fn pty_transport_mailw_during_raww_wait_is_not_dropped() {
             wedge_detection: true,
             cols: 80,
             rows: 24,
+            term_protocol: TermProtocol::Xterm256Color,
         }),
         coder_session_id: None,
         policy_id: None,
@@ -1023,6 +1030,7 @@ fn pty_transport_mailw_during_raww_wait_is_not_dropped() {
             prime_timeout_ms: Some(2000),
             wedge_detection: true,
             working_directory: None,
+            term_protocol: TermProtocol::Xterm256Color,
         },
     );
     let context = StartupContext {
@@ -1044,6 +1052,7 @@ fn pty_transport_mailw_during_raww_wait_is_not_dropped() {
                 wedge_detection: true,
                 cols: 80,
                 rows: 24,
+                term_protocol: TermProtocol::Xterm256Color,
             }),
             coder_session_id: None,
             policy_id: None,
@@ -1149,7 +1158,7 @@ fn pty_transport_mailw_during_raww_wait_is_not_dropped() {
 #[ignore = "requires Zig 0.15.x + libghostty-vt built; run with --ignored"]
 fn pty_transport_look_during_non_ready_wait_returns_promptly() {
     use agentmux::configuration::{
-        BundleMember, PromptReadinessTemplate, PtyTargetConfiguration as PtyConfig,
+        BundleMember, PromptReadinessTemplate, PtyTargetConfiguration as PtyConfig, TermProtocol,
     };
     use agentmux::pty::PtyTargetConfiguration;
     use agentmux::transports::{LookSnapshotPayload, StartupContext, Transport};
@@ -1173,6 +1182,7 @@ fn pty_transport_look_during_non_ready_wait_returns_promptly() {
             wedge_detection: true,
             cols: 80,
             rows: 24,
+            term_protocol: TermProtocol::Xterm256Color,
         }),
         coder_session_id: None,
         policy_id: None,
@@ -1192,6 +1202,7 @@ fn pty_transport_look_during_non_ready_wait_returns_promptly() {
             prime_timeout_ms: Some(5000),
             wedge_detection: true,
             working_directory: None,
+            term_protocol: TermProtocol::Xterm256Color,
         },
     );
     let context = StartupContext {
@@ -1213,6 +1224,7 @@ fn pty_transport_look_during_non_ready_wait_returns_promptly() {
                 wedge_detection: true,
                 cols: 80,
                 rows: 24,
+                term_protocol: TermProtocol::Xterm256Color,
             }),
             coder_session_id: None,
             policy_id: None,

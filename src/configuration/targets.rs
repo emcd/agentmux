@@ -102,6 +102,7 @@ pub(super) fn build_session_target(
                             wedge_detection: pty_target.wedge_detection.unwrap_or(true),
                             cols: pty_target.cols.unwrap_or(120),
                             rows: pty_target.rows.unwrap_or(40),
+                            term_protocol: pty_target.term_protocol.unwrap_or_default(),
                         }),
                         coder_session_id,
                     ))
@@ -513,6 +514,7 @@ pub(super) fn validate_pty_target(
         wedge_detection: target.wedge_detection,
         cols: target.cols,
         rows: target.rows,
+        term_protocol: target.term_protocol,
     })
 }
 

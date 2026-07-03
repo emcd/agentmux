@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
-use super::types::{AcpChannel, NameValueEntry};
+use super::types::{AcpChannel, NameValueEntry, TermProtocol};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -124,6 +124,14 @@ pub(super) struct RawPtyTarget {
     /// Per-coder grid rows (TOML key `rows`). Default 40.
     #[serde(default)]
     pub(super) rows: Option<u16>,
+    /// Per-coder terminal protocol (TOML key `term-protocol`).
+    /// Selects the literal `TERM` env-var value the Pty transport
+    /// sets when spawning the child. Absent means
+    /// `xterm-256color` (preserves the pre-change behavior).
+    /// See the proposal `add-pty-terminal-protocol-config` for
+    /// the rationale.
+    #[serde(default)]
+    pub(super) term_protocol: Option<TermProtocol>,
 }
 
 #[derive(Clone, Debug)]
@@ -171,6 +179,7 @@ pub(super) struct PtyTarget {
     pub(super) wedge_detection: Option<bool>,
     pub(super) cols: Option<u16>,
     pub(super) rows: Option<u16>,
+    pub(super) term_protocol: Option<TermProtocol>,
 }
 
 #[derive(Debug, Deserialize)]
