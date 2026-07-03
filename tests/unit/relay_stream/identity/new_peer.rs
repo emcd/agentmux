@@ -1,7 +1,5 @@
 //! `new peer --output` credential-file writer (path validation, O_NOFOLLOW,
 //! mode 0600, end-to-end auth).
-//!
-//! Tasks 1.5 / `write_psk_output_file`.
 
 use std::path::Path;
 

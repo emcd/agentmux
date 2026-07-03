@@ -1,7 +1,5 @@
 //! Hello with valid / mismatched / unrecognized credentials, including the
 //! socket-trust paths and the application-principal hello.
-//!
-//! Tasks 1.12-1.19.
 
 use agentmux::runtime::paths::BundleRuntimePaths;
 use serde_json::json;

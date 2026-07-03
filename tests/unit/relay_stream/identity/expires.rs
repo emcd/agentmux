@@ -1,7 +1,5 @@
 //! Credential expiry teardown at Hello and the typed identity-lifecycle error
 //! codes.
-//!
-//! Tasks 2.12, 2.13.
 
 use std::io::{BufRead, BufReader};
 

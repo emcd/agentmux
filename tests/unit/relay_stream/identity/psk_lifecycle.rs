@@ -1,7 +1,5 @@
 //! `change psk` rotation, revocation of the credential-holding session, and
 //! fan-out of `identity.revoked` to trusted hosts.
-//!
-//! Tasks 1.20, 2.7, 2.11.
 
 use std::io::BufReader;
 

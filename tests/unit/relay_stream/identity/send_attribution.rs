@@ -1,7 +1,5 @@
 //! `authenticated_identity` on the Send response and on the delivered
 //! envelope, for both store-backed and socket-trust senders.
-//!
-//! Tasks 3.4, 3.5, 3.6, 3.7.
 
 use std::io::BufReader;
 
