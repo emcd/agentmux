@@ -48,8 +48,15 @@ jobs:
       - name: Build
         run: cargo build --release
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9
+
       - name: Test
-        run: cargo test --release
+        env:
+          RUST_BACKTRACE: '1'
+        run: cargo nextest run --release --locked --config-file .auxiliary/configuration/nextest.toml
 
   build-binaries:
     needs: [initialize, test]
