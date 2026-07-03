@@ -97,6 +97,7 @@ pub(super) fn build_worker_transport(
                         prime_timeout_ms: pty_cfg.prime_timeout_ms,
                         wedge_detection: pty_cfg.wedge_detection,
                         working_directory: target_member.working_directory.clone(),
+                        term_protocol: pty_cfg.term_protocol,
                     }
                 }
                 _ => crate::pty::PtyTargetConfiguration {
@@ -108,6 +109,7 @@ pub(super) fn build_worker_transport(
                     prime_timeout_ms: None,
                     wedge_detection: true,
                     working_directory: target_member.working_directory.clone(),
+                    term_protocol: crate::configuration::TermProtocol::default(),
                 },
             };
             let mut transport = TransportImpl::pty(target_member.clone(), pty_config);

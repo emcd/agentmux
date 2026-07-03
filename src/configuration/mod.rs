@@ -20,7 +20,8 @@ pub use paths::{
 pub use types::{
     AcpChannel, AcpTargetConfiguration, BundleConfiguration, BundleGroupMembership, BundleMember,
     NameValueEntry, PromptReadinessTemplate, PtyTargetConfiguration, RESERVED_GROUP_ALL,
-    SessionType, TargetConfiguration, TmuxTargetConfiguration, TuiConfiguration, TuiSession,
+    SessionType, TargetConfiguration, TermProtocol, TmuxTargetConfiguration, TuiConfiguration,
+    TuiSession,
 };
 
 pub(super) const BUNDLE_SCHEMA_VERSION: u32 = 1;

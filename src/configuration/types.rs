@@ -217,6 +217,12 @@ pub struct PtyTargetConfiguration {
     /// Per-coder grid rows. Default 40.
     #[serde(default = "pty_rows_default")]
     pub rows: u16,
+    /// Per-coder terminal protocol. Selects the literal `TERM`
+    /// environment-variable value the Pty transport sets when
+    /// spawning the child. Defaults to `xterm-256color` (preserves
+    /// the pre-`add-pty-terminal-protocol-config` behavior).
+    #[serde(default)]
+    pub term_protocol: TermProtocol,
 }
 
 /// Default cols value for `PtyTargetConfiguration::cols`.
@@ -350,4 +356,44 @@ pub struct NameValueEntry {
 pub enum AcpChannel {
     Stdio,
     Http,
+}
+
+/// Per-coder terminal protocol selection for the Pty transport.
+///
+/// Each variant maps 1:1 to the literal `TERM` environment-variable
+/// string the Pty transport sets when spawning the child coder
+/// process. The closed-enum shape keeps the schema self-validating
+/// (an unknown value fails serde's enum-variant deserializer with a
+/// structured "unknown variant" error); see the proposal
+/// `add-pty-terminal-protocol-config` for the rationale.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub enum TermProtocol {
+    #[default]
+    #[serde(rename = "xterm-256color")]
+    Xterm256Color,
+    #[serde(rename = "xterm-kitty")]
+    XtermKitty,
+    #[serde(rename = "alacritty")]
+    Alacritty,
+    #[serde(rename = "foot")]
+    Foot,
+    #[serde(rename = "wezterm")]
+    WezTerm,
+    #[serde(rename = "screen-256color")]
+    Screen256Color,
+}
+
+impl TermProtocol {
+    /// The literal `TERM` env-var value this variant emits.
+    #[must_use]
+    pub const fn as_env_var(self) -> &'static str {
+        match self {
+            Self::Xterm256Color => "xterm-256color",
+            Self::XtermKitty => "xterm-kitty",
+            Self::Alacritty => "alacritty",
+            Self::Foot => "foot",
+            Self::WezTerm => "wezterm",
+            Self::Screen256Color => "screen-256color",
+        }
+    }
 }
