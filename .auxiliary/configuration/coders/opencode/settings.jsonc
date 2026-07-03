@@ -105,6 +105,7 @@
     "bash": {
       "*": "ask",
       "cargo build *": "allow",
+      "cargo nextest *": "allow",
       "cargo test *": "allow",
       "cargo check *": "allow",
       "cargo clippy *": "allow",

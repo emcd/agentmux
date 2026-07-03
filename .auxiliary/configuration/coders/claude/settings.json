@@ -57,6 +57,7 @@
       "Bash(cargo clippy *)",
       "Bash(cargo fmt)",
       "Bash(cargo fmt *)",
+      "Bash(cargo nextest *)",
       "Bash(cargo test *)",
       "Bash(openspec *)",
       "Bash(awk *)",
