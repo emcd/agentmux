@@ -20,7 +20,7 @@ use std::{
 
 use notify_debouncer_full::{
     DebounceEventResult, Debouncer, RecommendedCache, new_debouncer,
-    notify::{RecommendedWatcher, RecursiveMode},
+    notify::{EventKind, RecommendedWatcher, RecursiveMode},
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -121,7 +121,19 @@ pub fn spawn_bundle_watcher(
         .spawn(move || {
             for result in receiver {
                 match result {
-                    Ok(_events) => {
+                    Ok(events) => {
+                        // Access (open/close/read) events cannot change bundle
+                        // content, and the watcher generates them itself: seeding
+                        // and every reconcile read the watched `.toml` files, so
+                        // acting on access-only batches would re-trigger
+                        // reconciliation from its own reads in a perpetual
+                        // ~debounce-interval rescan loop.
+                        if events
+                            .iter()
+                            .all(|event| matches!(event.kind, EventKind::Access(_)))
+                        {
+                            continue;
+                        }
                         reconcile_bundles(
                             &configuration_root,
                             &state_root,
