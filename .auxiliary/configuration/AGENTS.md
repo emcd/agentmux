@@ -26,12 +26,13 @@ and coordinate work across multiple worktrees with clear contracts.
 - Rust (stable; minimum version 1.90 per Cargo.toml's `rust-version` --
   no exact toolchain pin; CI and local builds float on whatever
   `stable` resolves to at build time).
-- tmux (only required when working on the Tmux transport — `cargo test`
-  exercises the Tmux commands directly).
+- tmux (only required when working on the Tmux transport — the
+  canonical `cargo nextest run` invocation exercises the Tmux commands
+  directly via integration tests).
 - **Zig 0.15.x** (only required when building with the `pty` Cargo
   feature, since `libghostty-vt`'s build script requires it; CI
-  installs it via `setup-zig`). Default `cargo build` / `cargo test`
-  do NOT invoke Zig and do NOT require it on `PATH`.
+  installs it via `setup-zig`). Default `cargo build` and the canonical
+  `cargo nextest run` do NOT invoke Zig and do NOT require it on `PATH`.
 - For libghostty-vt's vendored ghostty clone (only when building with
   `--features pty` without a local override): outbound network access
   to `github.com/ghostty-org/ghostty.git`. To bypass the network clone,
