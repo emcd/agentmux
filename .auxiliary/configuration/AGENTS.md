@@ -23,13 +23,15 @@ and coordinate work across multiple worktrees with clear contracts.
 
 ## Prerequisites
 
-- Rust (stable; pinned via `rust-toolchain.toml`).
+- Rust (stable; minimum version 1.90 per Cargo.toml's `rust-version` --
+  no exact toolchain pin; CI and local builds float on whatever
+  `stable` resolves to at build time).
 - tmux (only required when working on the Tmux transport — `cargo test`
   exercises the Tmux commands directly).
-- **Zig 0.15.x** (only required when working on the Pty transport or
-  running the `pty` Cargo feature; installed via `mise` or
-  `setup-zig` for CI). Default `cargo build` / `cargo test` do NOT
-  invoke Zig and do NOT require it on `PATH`.
+- **Zig 0.15.x** (only required when building with the `pty` Cargo
+  feature, since `libghostty-vt`'s build script requires it; CI
+  installs it via `setup-zig`). Default `cargo build` / `cargo test`
+  do NOT invoke Zig and do NOT require it on `PATH`.
 - For libghostty-vt's vendored ghostty clone (only when building with
   `--features pty` without a local override): outbound network access
   to `github.com/ghostty-org/ghostty.git`. To bypass the network clone,
