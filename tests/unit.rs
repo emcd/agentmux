@@ -15,7 +15,7 @@ mod envelope;
 #[cfg(feature = "pty")]
 #[path = "unit/pty_transport.rs"]
 mod pty_transport;
-#[path = "unit/relay.rs"]
+#[path = "unit/relay/mod.rs"]
 mod relay;
 #[path = "unit/relay_stream.rs"]
 mod relay_stream;
