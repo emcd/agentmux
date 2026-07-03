@@ -34,7 +34,7 @@ mod list;
 mod look;
 #[path = "relay_stream/robustness.rs"]
 mod robustness;
-#[path = "relay_stream/routing.rs"]
+#[path = "relay_stream/routing/mod.rs"]
 mod routing;
 
 fn write_bundle_configuration(temporary: &TempDir, bundle_name: &str) -> PathBuf {
