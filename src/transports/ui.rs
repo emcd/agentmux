@@ -43,10 +43,13 @@ const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delive
 const DROPPED_ON_SHUTDOWN_REASON_CODE: &str = "dropped_on_shutdown";
 const UI_RAW_WRITE_UNSUPPORTED_CODE: &str = "ui_raw_write_unsupported";
 const UI_RECONNECT_POLL_INTERVAL_MS: u64 = 100;
-/// Cap on the UI reconnect wait when no UI endpoint is registered or the
+/// Default cap on the UI reconnect wait when no UI endpoint is registered or the
 /// registered one is disconnected. Owned entirely by the UI transport — the
 /// relay no longer threads an external knob through the envelope for it
 /// (`DeliveryEnvelope.quiescence_timeout` was removed in `tmux-wedge-detection`).
+/// [`UiTransport::new`] seeds this; [`UiTransport::with_reconnect_timeout`]
+/// overrides it (tests inject a short budget so the no-UI timeout path resolves
+/// in milliseconds instead of blocking the full production window).
 const UI_RECONNECT_TIMEOUT_MS_DEFAULT: u64 = 30_000;
 
 /// Transport-side outcome of one UI stream-broadcast attempt. Keeps the relay's
@@ -123,12 +126,26 @@ impl std::fmt::Debug for UiTransportServices {
 #[derive(Debug)]
 pub struct UiTransport {
     services: UiTransportServices,
+    reconnect_timeout: Duration,
 }
 
 impl UiTransport {
     #[must_use]
     pub fn new(services: UiTransportServices) -> Self {
-        Self { services }
+        Self {
+            services,
+            reconnect_timeout: Duration::from_millis(UI_RECONNECT_TIMEOUT_MS_DEFAULT),
+        }
+    }
+
+    /// Overrides the UI-reconnect wait cap seeded by [`new`](Self::new). The
+    /// production default is [`UI_RECONNECT_TIMEOUT_MS_DEFAULT`]; tests inject a
+    /// short budget so the no-UI timeout path resolves in milliseconds instead
+    /// of blocking the full production window.
+    #[must_use]
+    pub fn with_reconnect_timeout(mut self, reconnect_timeout: Duration) -> Self {
+        self.reconnect_timeout = reconnect_timeout;
+        self
     }
 }
 
@@ -144,7 +161,7 @@ impl Transport for UiTransport {
     fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
         let (sender, receiver) = oneshot::channel();
         let services = self.services.clone();
-        let timeout = Duration::from_millis(UI_RECONNECT_TIMEOUT_MS_DEFAULT);
+        let timeout = self.reconnect_timeout;
         let message_id = envelope.message_id.clone();
         let message = envelope.message;
         let incoming = UiIncomingMessage {
