@@ -132,7 +132,7 @@ async fn consume_startup_until_available(
     }
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn acp_prime_timeout_fires_after_configured_window() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions {
@@ -165,7 +165,7 @@ async fn acp_prime_timeout_fires_after_configured_window() {
     );
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn acp_prime_timer_does_not_fire_during_pending_choice() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions {
@@ -200,7 +200,7 @@ async fn acp_prime_timer_does_not_fire_during_pending_choice() {
     );
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn acp_prime_timeout_default_unbounded() {
     let temporary = TempDir::new().expect("temporary");
     let options = AcpStubOptions {
