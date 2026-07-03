@@ -26,7 +26,7 @@ const TEST_PRE_HELLO_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[path = "relay_stream/choices.rs"]
 mod choices;
-#[path = "relay_stream/identity.rs"]
+#[path = "relay_stream/identity/mod.rs"]
 mod identity;
 #[path = "relay_stream/list.rs"]
 mod list;
@@ -34,7 +34,7 @@ mod list;
 mod look;
 #[path = "relay_stream/robustness.rs"]
 mod robustness;
-#[path = "relay_stream/routing.rs"]
+#[path = "relay_stream/routing/mod.rs"]
 mod routing;
 
 fn write_bundle_configuration(temporary: &TempDir, bundle_name: &str) -> PathBuf {

@@ -24,8 +24,7 @@ use serde_json::Value;
 
 use super::{ChoicesQueueState, PendingChoiceRequest};
 
-pub(super) static CHOICES_QUEUES: OnceLock<Mutex<HashMap<PathBuf, ChoicesQueueState>>> =
-    OnceLock::new();
+static CHOICES_QUEUES: OnceLock<Mutex<HashMap<PathBuf, ChoicesQueueState>>> = OnceLock::new();
 
 fn choices_queues() -> &'static Mutex<HashMap<PathBuf, ChoicesQueueState>> {
     CHOICES_QUEUES.get_or_init(|| Mutex::new(HashMap::new()))

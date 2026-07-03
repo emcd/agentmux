@@ -4,7 +4,7 @@ mod acp;
 mod cli;
 #[path = "integration/mcp/mod.rs"]
 mod mcp;
-#[path = "integration/runtime_bootstrap.rs"]
+#[path = "integration/runtime_bootstrap/mod.rs"]
 mod runtime_bootstrap;
 #[path = "integration/session_relay_delivery.rs"]
 mod session_relay_delivery;
@@ -14,7 +14,7 @@ mod session_relay_list;
 mod session_relay_look;
 #[path = "integration/session_relay_reconciliation.rs"]
 mod session_relay_reconciliation;
-#[path = "integration/session_relay_stream.rs"]
+#[path = "integration/session_relay_stream/mod.rs"]
 mod session_relay_stream;
 #[path = "integration/support/mod.rs"]
 mod support;
