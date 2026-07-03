@@ -47,3 +47,37 @@ id = 'opencode-acp'
 [coders.acp]
 channel = 'stdio'
 command = 'opencode acp'
+
+# Illustrative per-coder Pty transport configuration. The project
+# currently ships Tmux and ACP coders; a Pty coder is opt-in per
+# coder entry and requires the `pty` Cargo feature at build time
+# (`cargo build --features pty`). The validator rejects both
+# `[coders.<id>.pty]` and `[coders.<id>.tmux]` (or both
+# `[coders.<id>.pty]` and `[coders.<id>.acp]`) being set on the
+# same coder entry.
+#
+# `term-protocol` selects the literal `TERM` env-var value the
+# Pty transport sets when spawning the child. Defaults to
+# `xterm-256color`. The supported values are: `xterm-256color`
+# (default), `xterm-kitty`, `alacritty`, `foot`, `wezterm`,
+# `screen-256color`. `xterm-kitty` advertises kitty-keyboard-protocol
+# support to TUIs that honor it; whether TERM alone is sufficient
+# to flip a TUI into kitty-protocol mode depends on the TUI's
+# terminal emulation stack. The project's TUIs (claude, codex,
+# gemini, opencode) detect terminal capabilities from TERM and
+# adapt accordingly; see `tasks.md` §6.6 for the empirical
+# ground truth on the live bundle.
+#
+# [[coders]]
+# id = 'codex-pty'
+#
+# [coders.pty]
+# initial-command = 'codex'
+# resume-command = 'codex resume {coder-session-id}'
+# prompt-regex = '(?m)^READY_MARKER'
+# prompt-inspect-lines = 3
+# cols = 120
+# rows = 40
+# prime-timeout-ms = 30000
+# wedge-detection = true
+# term-protocol = 'xterm-kitty'

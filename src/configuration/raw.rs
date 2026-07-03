@@ -128,8 +128,6 @@ pub(super) struct RawPtyTarget {
     /// Selects the literal `TERM` env-var value the Pty transport
     /// sets when spawning the child. Absent means
     /// `xterm-256color` (preserves the pre-change behavior).
-    /// See the proposal `add-pty-terminal-protocol-config` for
-    /// the rationale.
     #[serde(default)]
     pub(super) term_protocol: Option<TermProtocol>,
 }
