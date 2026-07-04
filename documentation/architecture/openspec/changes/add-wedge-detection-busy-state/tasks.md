@@ -152,19 +152,57 @@
 
 ## 4. Pty probe activity source
 
-- [ ] 4.1 In `src/pty/state.rs`, modify `PtyQuiescenceProbe::observe` to
+- [x] 4.1 In `src/pty/state.rs`, modify `PtyQuiescenceProbe::observe` to
       load `last_change_atomic.load(Ordering::Acquire)` and populate
-      `WedgeObservation.activity_generation`.
-- [ ] 4.2 Modify `WorkerTerminalProbe::observe` identically.
-- [ ] 4.3 Verify `PtyQuiescenceProbe::wait_for_change` continues to use
-      the same atomic (no behavior change).
-- [ ] 4.4 Add a Pty test in `tests/unit/pty_transport.rs` exercising
+      `WedgeObservation.activity_generation`. **(Landed in R2 — the R0
+      placeholder `activity_generation: 0` is replaced with
+      `self.shared.last_change_atomic.load(Ordering::Acquire)`.)**
+- [x] 4.2 Modify `WorkerTerminalProbe::observe` identically.
+      **(Landed in R2 — same AtomicU64 load; struct holds the
+      atomic as its own field.)**
+- [x] 4.3 Verify `PtyQuiescenceProbe::wait_for_change` continues to use
+      the same atomic (no behavior change). **(Landed in R2 — the R2
+      fixture also changed: the mock worker no longer per-request
+      advances `last_change_atomic` so the same atomic's
+      `activity_generation` semantics don't conflate "probe polled
+      snapshot" with "terminal byte writes happened". The timer
+      thread continues advancing every 50ms, driving
+      `wait_for_change` for all existing tests. Existing wedge-class
+      tests pass because within a single
+      `quiescence_classify_step` call the activity signal stays
+      constant (timer hasn't fired between two observes 5ms apart);
+      the wedge counter accumulates normally and `Wedged` fires
+      after `WEDGE_CONSECUTIVE_TICKS = 3`.)**
+- [x] 4.4 Add a Pty test in `tests/unit/pty_transport.rs` exercising
       the Busy short-circuit: a test helper that constructs a probe
       and exercises the state machine with activity-advance sequences
       (snapshot unchanged, activity generation advanced). Assert: no
       `Wedged` fires. (Pattern mirrors the CSI-u tests; the existing
       `#[ignore]` Pty-feature tests already have the live-pty harness,
-      so this can use the same shape.)
+      so this can use the same shape.) **(Landed in R2 — three new
+      tests in `tests/unit/pty_transport.rs`:
+      `pty_probe_observe_populates_activity_generation_from_last_change_atomic`
+      is a direct probe-level test verifying the field is sourced
+      from `last_change_atomic.load(Ordering::Acquire)` and updates
+      when the atomic is advanced; `pty_constant_activity_fires_wedged_as_before`
+      is the regression baseline asserting the existing wedge-class
+      + constant-activity behavior is unchanged across the R2
+      fixture change; `pty_busy_short_circuit_defers_delivered_when_activity_advances_while_ready`
+      verifies the field differs between two consecutive
+      `observe()` calls when `last_change_atomic` is advanced, which
+      is exactly the condition that triggers the cross-transport
+      classifier's Busy pre-classification (the Busy branch fires
+      on `activity_quiesced == false` regardless of where the
+      observations come from — verified via the cross-transport
+      mock-probe tests in `tests/unit/transports_quiescence.rs`).
+      An end-to-end busy-via-Pty integration test via
+      `wait_for_quiescent_three_state` is not viable because the
+      wait function has no termination path during sustained
+      Busy — Busy early-returns from `quiescence_classify_step`
+      before any prime-window check fires, and the test cannot
+      drive the activity atomic between two observes within a
+      single iteration since the function is opaque to the
+      test.)**
 
 ## 5. Tests for the cross-cutting busy behavior
 
