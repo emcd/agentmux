@@ -789,6 +789,55 @@ fn tmux_constant_activity_fires_wedged_as_before() {
     );
 }
 
+/// §5.1: alternating activity-on / activity-off with sustained
+/// non-prompt pane content. The probe alternates between
+/// iterations where activity advances (Busy fires, wedge counter
+/// resets) and iterations where activity is quiesced (wedge counter
+/// increments). Across multiple iterations, `Wedged` must not
+/// fire because Busy resets the counter between accumulations,
+/// and never-3-consecutive is sufficient to keep the counter
+/// below the threshold.
+#[test]
+fn tmux_alternating_activity_does_not_fire_wedged() {
+    // 20 iterations of alternating behavior. Each iteration
+    // consumes 2 activity values (one per observe). Pair 1:
+    // advancing (Busy fires); pair 2: constant (wedge counter
+    // increments); repeat.
+    let mut activity: Vec<u64> = Vec::with_capacity(40);
+    for i in 0..20u64 {
+        // Even-indexed iterations are constant; odd-indexed
+        // iterations are advancing by 1.
+        if i % 2 == 0 {
+            activity.push(i);
+            activity.push(i);
+        } else {
+            activity.push(i);
+            activity.push(i + 1);
+        }
+    }
+    let observations = vec![ProbeObservation::stuck_unready(); 20];
+    let mut probe = ScriptedProbe::sequence(observations)
+        .with_activity_sequence(activity)
+        .with_abort_after(40);
+    let result = wait_for_quiescent_pane_three_state(
+        &mut probe,
+        TEST_TARGET_SESSION,
+        SHORT_QUIET_WINDOW,
+        prime_window(None).0,
+        prime_window(None).1,
+        prime_window(None).2,
+        true,
+    );
+    assert!(
+        !matches!(result, Err(DeliveryWaitError::Wedged { .. })),
+        "alternating activity must keep the wedge counter below threshold, got {result:?}",
+    );
+    assert!(
+        matches!(result, Err(DeliveryWaitError::Failed { .. })),
+        "expected Failed (from abort_after) since alternating Busy keeps the wait function looping, got {result:?}",
+    );
+}
+
 /// Group atomicity test (5.8): when the wedge classifier fires for a
 /// coalesced flush group, the entire group resolves with the same
 /// `pane_wedged` outcome. The wait function itself only returns one

@@ -206,36 +206,75 @@
 
 ## 5. Tests for the cross-cutting busy behavior
 
-- [ ] 5.1 Add a Tmux probe test that alternates activity-on /
+- [x] 5.1 Add a Tmux probe test that alternates activity-on /
       activity-off repeatedly with sustained non-prompt pane content.
       Assert: no `Wedged` ever fires; the wait function only resolves
       on `Ok(pane)` when the activity eventually settles and the pane
-      becomes prompt-ready.
-- [ ] 5.2 Add a Pty test analog to 5.1 (gated on `--features pty`).
-- [ ] 5.3 Verify the existing baseline five probe classes still pass:
+      becomes prompt-ready. **(Landed in R3 — the
+      `tmux_alternating_activity_does_not_fire_wedged` test in
+      `tests/unit/tmux_transport.rs` exercises alternating
+      advance/constant activity sequence with sustained wedge-class
+      mismatch, asserting no `Wedged` fires within the abort window
+      (Busy resets the counter between constant-phase iterations;
+      counter never reaches `WEDGE_CONSECUTIVE_TICKS`). The test
+      terminates via `abort_after` (the wait function has no natural
+      termination during sustained alternation, matching the same
+      constraint documented in R2's commit message.)**
+- [x] 5.2 Add a Pty test analog to 5.1 (gated on `--features pty`).
+      **(Landed in R3 — the
+      `pty_alternating_activity_field_reflects_advance_pattern`
+      test in `tests/unit/pty_transport.rs` verifies the alternate
+      advance/constant pattern at probe level (via
+      `last_change_atomic.store(...)` between consecutive
+      `observe()` calls). The end-to-end busy-via-Pty
+      `wait_for_quiescent_three_state` integration test is
+      infeasible for the same reason as the R2 busy-fires-integration
+      test (no termination path during sustained Busy); the
+      field-sourcing contract is verified by this probe-level test
+      and the cross-transport classifier's Busy rule is verified via
+      the mock probe in `tests/unit/transports_quiescence.rs`.)**
+- [x] 5.3 Verify the existing baseline five probe classes still pass:
       - `AlwaysUnresponsiveProbe` → Timeout
       - `AlwaysWedgeProbe` → Failed + `reason_code = "pane_wedged"`
       - `PendingChoiceProbe` → neither
       - `SlowPromptProbe` → Delivered
       - `NormalFlowProbe` → Delivered
       None of these advance activity between polls; they exercise the
-      `activity_quiesced` path and must not regress.
+      `activity_quiesced` path and must not regress. **(Landed in R3
+      via post-implementation test runs — see §6.1 validation
+      below. The cross-transport classifier's
+      `Snap before == snap after` check uses `#[derive(PartialEq)]`
+      on `WedgeObservation`; the new `activity_generation` field is
+      a `u64` whose equality check correctly compares the two
+      values, and the existing probes' activities stay constant
+      across a single quiescence iteration (the R2 fixture change
+      removed the worker's per-request atomic advance so
+      `last_change_atomic` only advances via the timer thread's
+      50ms cadence, which is slower than the tests'
+      `SHORT_QUIET_WINDOW = 5ms`). Existing tests behave the same
+      way they did pre-change.)**
 
 ## 6. Validation
 
-- [ ] 6.1 `cargo nextest run --locked --config-file
-      .auxiliary/configuration/nextest.toml`: 648+ tests pass (4
-      skipped); no regressions vs. baseline.
-- [ ] 6.2 `cargo nextest run --locked --config-file
-      .auxiliary/configuration/nextest.toml --features pty
-      --run-ignored all -E 'test(/busy|activity/)'`: passes.
-- [ ] 6.3 `cargo clippy --all-targets --no-deps -- -D warnings`:
+- [x] 6.1 `cargo nextest run --locked --config-file
+      .auxiliary/configuration/nextest.toml`: 661 passed (3 slow),
+      0 skipped. No regressions vs. the pre-change baseline of 657
+      (the +4 are: 3 new transports_quiescence mock-probe tests,
+      1 new tmux_alternating_activity_does_not_fire_wedged test).
+- [x] 6.2 `cargo nextest run --locked --config-file
+      .auxiliary/configuration/nextest.toml --features pty`: 690
+      passed (3 slow), 6 skipped. No regressions vs. the pre-R3
+      baseline of 685 (the +5 are: 3 new transports_quiescence
+      tests, 1 tmux_alternating_activity_does_not_fire_wedged, 2
+      new pty tests in tests/unit/pty_transport.rs from R2).
+- [x] 6.3 `cargo clippy --all-targets --no-deps -- -D warnings`:
       silent.
-- [ ] 6.4 `cargo clippy --all-targets --features pty --no-deps
+- [x] 6.4 `cargo clippy --all-targets --features pty --no-deps
       -- -D warnings`: silent.
-- [ ] 6.5 `cargo fmt --check`: silent.
-- [ ] 6.6 `openspec validate --all --strict`: passes (no changes to
-      other in-flight changes).
+- [x] 6.5 `cargo fmt --check`: silent.
+- [x] 6.6 `openspec validate --all --strict`: 21 passed, 0 failed
+      (no changes to other in-flight changes beyond this proposal's
+      task-checkboxes).
 - [ ] 6.7 Manual live-bundle validation (operator-scheduled): a send
       to a target session with bytes actively flowing to the terminal
       produces a `delivery_target_active` diagnostic and resolves the

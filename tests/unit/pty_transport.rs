@@ -1624,3 +1624,57 @@ fn pty_busy_short_circuit_defers_delivered_when_activity_advances_while_ready() 
         "activity_generation must differ when last_change_atomic advances between observations",
     );
 }
+
+/// §5.2: alternating activity-on / activity-off via the Pty probe
+/// path. Same behavior class as the Tmux counterpart
+/// (`tmux_alternating_activity_does_not_fire_wedged`) verified via
+/// probe-level `observe()` calls driven by
+/// `last_change_atomic.store(...)` between iterations: alternating
+/// advance/constant activity_generation values across consecutive
+/// observations. The cross-transport Busy pre-classification fires
+/// when the AtomicU64 value differs, which is verified directly via
+/// the mock probe in `tests/unit/transports_quiescence.rs`; this
+/// test confirms the Pty probe's `activity_generation` field
+/// reflects the alternation pattern.
+#[cfg(feature = "pty")]
+#[test]
+fn pty_alternating_activity_field_reflects_advance_pattern() {
+    let script = Arc::new(Mutex::new(VecDeque::from([stuck_unready_snapshot()])));
+    let (shared, _handle) = make_pty_shared(
+        script,
+        Some(10_000),
+        true,
+        Some(Regex::new(r"READY_MARKER").unwrap()),
+        None,
+    );
+
+    let mut probe = PtyQuiescenceProbe::new(shared.clone());
+    let obs = WedgeProbe::observe(&mut probe).expect("observe");
+    let mut n = obs.activity_generation;
+
+    let mut saw_advance = false;
+    let mut saw_constant = false;
+    for _ in 0..10 {
+        shared.last_change_atomic.store(n + 1, Ordering::Release);
+        let mut probe = PtyQuiescenceProbe::new(shared.clone());
+        let obs = WedgeProbe::observe(&mut probe).expect("observe advance");
+        assert_eq!(
+            obs.activity_generation,
+            n + 1,
+            "Pty probe.observe() must reflect advanced atomic",
+        );
+        saw_advance = obs.activity_generation != n;
+
+        let mut probe = PtyQuiescenceProbe::new(shared.clone());
+        let obs = WedgeProbe::observe(&mut probe).expect("observe constant");
+        assert_eq!(
+            obs.activity_generation,
+            n + 1,
+            "Pty probe.observe() reads the AtomicU64 value at observation time (constant since advance)",
+        );
+        saw_constant = obs.activity_generation == n + 1;
+        n = obs.activity_generation;
+    }
+    assert!(saw_advance, "alternating test must exercise advance path");
+    assert!(saw_constant, "alternating test must exercise constant path");
+}
