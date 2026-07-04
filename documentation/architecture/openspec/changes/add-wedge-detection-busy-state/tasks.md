@@ -2,23 +2,28 @@
 
 ## 1. Cross-transport WedgeObservation addition
 
-- [ ] 1.1 Add `activity_generation: u64` field to
+- [x] 1.1 Add `activity_generation: u64` field to
       `WedgeObservation` in `src/transports/quiescence.rs`. Update the
       module-level doc to document the field. Default-initialize in
       the existing `#[derive(Default)]` so legacy observation sites
-      (none today, but future-proof) compile.
-- [ ] 1.2 Update `WedgeObservation`'s `PartialEq` derive to include the
+      (none today, but future-proof) compile. **(Landed in R0.)**
+- [x] 1.2 Update `WedgeObservation`'s `PartialEq` derive to include the
       new field (already implicit from the struct-level derive; verify
-      the diff in the type system).
-- [ ] 1.3 Verify `cargo check --all-targets` (no warnings).
+      the diff in the type system). **(Landed in R0 — the struct-level
+      `derive(PartialEq)` covers it; verified `cargo check` passes.)**
+- [x] 1.3 Verify `cargo check --all-targets` (no warnings).
+      **(Landed in R0 — `cargo check --all-targets` and
+      `cargo check --all-targets --features pty` both pass clean.)**
 
 ## 2. Classifier Busy short-circuit
 
-- [ ] 2.1 In `quiescence_classify_step`, **BEFORE the `delivery_ready`
+- [x] 2.1 In `quiescence_classify_step`, **BEFORE the `delivery_ready`
       branch** (which currently sits at `src/transports/quiescence.rs:353`
       ahead of the operator-interaction branch at `:365`), add the
       Busy short-circuit. The required branch order after the second
-      observation capture becomes:
+      observation capture becomes: **(Landed in R0 — Busy branch sits
+      between `operator_interaction_active` (moved up to step 1) and
+      the simplified `delivery_ready` check at step 3.)**
       1. `operator_interaction_active` check (existing) — reset
          counter, return `NeedsWait`.
       2. **Busy short-circuit (NEW)** — when activity advanced,
@@ -64,22 +69,31 @@
       classifications including Delivered" contract. Placing Busy
       BEFORE `delivery_ready` is what implements that contract.
 
-- [ ] 2.2 Verify the wedge-counter increment block (existing) is now
+- [x] 2.2 Verify the wedge-counter increment block (existing) is now
       implicitly guarded by `activity_quiesced`: the Busy branch above
       returns early at step 2, so the increment at step 4 is
       unreachable while activity is advancing. No code change to the
       increment block; just a comment noting the implicit guard.
-- [ ] 2.3 Add a unit-style test (or extend an existing test) verifying
+      **(Landed in R0 — the increment block now documents the implicit
+      guard against the Busy short-circuit's early return at step 2.)**
+- [x] 2.3 Add a unit-style test (or extend an existing test) verifying
       that the Busy short-circuit returns `QuiescenceAction::NeedsWait`
       and resets `consecutive_quiescent_mismatches` to 0 when the
-      activity generation advances between observations.
-- [ ] 2.4 Add the branch-ordering-contract test for both Tmux and Pty
+      activity generation advances between observations. **(Landed in
+      R0 — `tests/unit/transports_quiescence.rs` `busy_short_circuit_returns_needs_wait_when_activity_advances`
+      covers both branches of the assertion.)**
+- [x] 2.4 Add the branch-ordering-contract test for both Tmux and Pty
       probes: a probe whose `activity_generation` advances between
       observations AND whose `is_prompt_ready == true` MUST resolve
       as `NeedsWait` (Busy), NOT `Ok(pane)` (Delivered), until the
       activity generation quiesces across an observation pair. This
       is the test for the spec scenario "Busy short-circuit defers
-      Delivered during active output."
+      Delivered during active output." **(Landed in R0 via the cross-
+      transport mock probe in `tests/unit/transports_quiescence.rs`
+      (`busy_short_circuit_defers_delivered_when_activity_advances_while_ready`
+      covers the cross-transport contract; per-transport coverage via
+      `TmuxAsWedgeProbe` and the Pty probes lands in R1/R2 integration
+      tests.)**
 
 ## 3. Tmux probe activity source
 

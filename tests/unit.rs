@@ -29,6 +29,8 @@ mod runtime_paths;
 mod runtime_starter;
 #[path = "unit/tmux_transport.rs"]
 mod tmux_transport;
+#[path = "unit/transports_quiescence.rs"]
+mod transports_quiescence;
 #[path = "unit/tui.rs"]
 mod tui;
 #[path = "unit/tui_session.rs"]

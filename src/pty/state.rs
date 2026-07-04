@@ -304,6 +304,7 @@ impl WedgeProbe for PtyQuiescenceProbe {
             operator_interaction_active: false,
             pane_target: None,
             mismatch,
+            activity_generation: 0,
         })
     }
 
@@ -459,6 +460,7 @@ impl<'a> WedgeProbe for WorkerTerminalProbe<'a> {
             operator_interaction_active: false,
             pane_target: None,
             mismatch,
+            activity_generation: 0,
         })
     }
 

@@ -250,6 +250,7 @@ impl<'a, P: PaneQuiescenceProbe> WedgeProbe for TmuxAsWedgeProbe<'a, P> {
             operator_interaction_active: op_interaction.is_some(),
             pane_target: Some(pane_target),
             mismatch,
+            activity_generation: 0,
         })
     }
 
