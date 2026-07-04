@@ -133,6 +133,16 @@ impl ProbeObservation {
 /// wait function without firing wedge or timeout.
 struct ScriptedProbe {
     states: VecDeque<ProbeObservation>,
+    /// Terminal-output-write marker sequence consumed on every
+    /// `last_window_activity_marker()` call. Default-initialized
+    /// to a single `0` element so existing tests continue to
+    /// not advance activity between observations (the cross-
+    /// transport classifier's Busy pre-classification sees no
+    /// comparator advance and silently disables itself). Tests
+    /// driving the Busy short-circuit use
+    /// `with_activity_sequence(...)` to provide a scripted
+    /// sequence.
+    activity_states: VecDeque<u64>,
     abort_after_calls: Option<usize>,
     call_count: usize,
 }
@@ -142,6 +152,12 @@ impl ScriptedProbe {
     fn constant(observation: ProbeObservation) -> Self {
         Self {
             states: VecDeque::from([observation]),
+            // Default to a constant-zero activity marker so the
+            // cross-transport classifier's Busy pre-classification
+            // sees no comparator advance and silently disables
+            // itself; this preserves pre-change behavior for
+            // existing tests.
+            activity_states: VecDeque::from([0u64]),
             abort_after_calls: None,
             call_count: 0,
         }
@@ -150,11 +166,33 @@ impl ScriptedProbe {
     /// Probe that advances through a sequence of observations each time
     /// `wait_for_change` is called.
     fn sequence(observations: Vec<ProbeObservation>) -> Self {
+        // Default-init activity to a constant-zero sequence
+        // (twice the length, so `last_window_activity_marker`'s
+        // consume-on-each-observe semantics stays in zero
+        // territory). Tests use `with_activity_sequence(...)` to
+        // override when exercising the Busy short-circuit.
+        let activity_states =
+            std::iter::repeat_n(0u64, observations.len().saturating_mul(2)).collect();
         Self {
             states: VecDeque::from(observations),
+            activity_states,
             abort_after_calls: None,
             call_count: 0,
         }
+    }
+
+    /// Replaces the activity-marker sequence with the supplied
+    /// values. Each `last_window_activity_marker()` call consumes
+    /// one value; when the queue is exhausted, the probe falls
+    /// back to `Some(0)`. Tests exercising the Busy short-
+    /// circuit pre-classification supply a sequence where the
+    /// value differs between consecutive calls within a single
+    /// `quiescence_classify_step` (which has two `observe()`
+    /// calls) so the cross-transport classifier's comparator
+    /// registers an advance.
+    fn with_activity_sequence(mut self, values: Vec<u64>) -> Self {
+        self.activity_states = VecDeque::from(values);
+        self
     }
 
     fn with_abort_after(mut self, calls: usize) -> Self {
@@ -184,6 +222,17 @@ impl PaneQuiescenceProbe for ScriptedProbe {
 
     fn resolve_active_pane(&mut self) -> Result<String, String> {
         Ok(self.current().pane_target.clone())
+    }
+
+    fn last_window_activity_marker(&mut self) -> Result<Option<u64>, String> {
+        // Consume (pop_front) so two consecutive
+        // `last_window_activity_marker()` calls within a single
+        // `quiescence_classify_step` can return different
+        // values — the cross-transport classifier's Busy short-
+        // circuit compares the two. Empty queue => `Some(0)`
+        // (constant activity, no comparator advance, Busy
+        // silently disabled).
+        Ok(self.activity_states.pop_front().or(Some(0)))
     }
 
     fn wait_for_change(&mut self, _deadline: Instant) -> Result<(), DeliveryWaitError> {
@@ -642,6 +691,101 @@ fn coalesce_during_prime_does_not_extend_window() {
     assert!(
         matches!(result, Err(DeliveryWaitError::Timeout { .. })),
         "expected Timeout from pre-elapsed prime deadline, got {result:?}",
+    );
+}
+
+/// R1 integration test: Busy pre-classification prevents Wedged from
+/// firing on a Tmux probe whose terminal-output-write marker advances
+/// on every iteration. The probe keeps `is_prompt_ready == false` and
+/// the same wedge-class mismatch signature across iterations, so under
+/// the pre-R0 classifier this exact sequence would fire `Wedged` after
+/// `WEDGE_CONSECUTIVE_TICKS = 3` consecutive identical signatures.
+/// The Busy short-circuit (Tasks.md §3.3) must reset the wedge counter
+/// every iteration, preventing Wedged from firing within the abort
+/// window. The wait function terminates via the probe's
+/// `abort_after` instead, returning `DeliveryWaitError::Failed`.
+#[test]
+fn tmux_busy_short_circuit_prevents_wedged_when_activity_advances_on_every_iteration() {
+    let observations = vec![ProbeObservation::stuck_unready(); 40];
+    let activity: Vec<u64> = (1..=80).collect();
+    let mut probe = ScriptedProbe::sequence(observations)
+        .with_activity_sequence(activity)
+        .with_abort_after(60);
+    let result = wait_for_quiescent_pane_three_state(
+        &mut probe,
+        TEST_TARGET_SESSION,
+        SHORT_QUIET_WINDOW,
+        prime_window(None).0,
+        prime_window(None).1,
+        prime_window(None).2,
+        true,
+    );
+    assert!(
+        !matches!(result, Err(DeliveryWaitError::Wedged { .. })),
+        "Busy must have prevented Wedged from firing, got {result:?}",
+    );
+    assert!(
+        matches!(result, Err(DeliveryWaitError::Failed { .. })),
+        "expected Failed (from abort_after) since Busy should keep the wait function looping, got {result:?}",
+    );
+}
+
+/// R1 integration test: branch-ordering contract via the Tmux probe
+/// path. The probe's every observation is prompt-ready, so the
+/// `delivery_ready` branch WOULD resolve as `Ok(pane)` after the
+/// first iteration absent Busy. Activity marker advances on every
+/// observation (consume-on-each-observe = 2 consumes per quiescence
+/// iteration). The Busy short-circuit must fire every iteration,
+/// deferring the `Ok(pane)` resolution indefinitely within the test
+/// window. Net assertion: the wait function does NOT return
+/// `Ok(_)`.
+#[test]
+fn tmux_busy_short_circuit_defers_delivered_when_activity_advances_while_ready() {
+    let observations = vec![ProbeObservation::ready(); 40];
+    let activity: Vec<u64> = (1..=80).collect();
+    let mut probe = ScriptedProbe::sequence(observations)
+        .with_activity_sequence(activity)
+        .with_abort_after(60);
+    let result = wait_for_quiescent_pane_three_state(
+        &mut probe,
+        TEST_TARGET_SESSION,
+        SHORT_QUIET_WINDOW,
+        prime_window(None).0,
+        prime_window(None).1,
+        prime_window(None).2,
+        true,
+    );
+    assert!(
+        result.is_err(),
+        "Busy must have deferred Delivered (branch-ordering contract), got {result:?}",
+    );
+    assert!(
+        matches!(result, Err(DeliveryWaitError::Failed { .. })),
+        "expected Failed (from abort_after), got {result:?}",
+    );
+}
+
+/// R1 regression check: when activity stays constant (the default
+/// ScriptedProbe behavior — no `with_activity_sequence` call), the
+/// Tmux probe behaves identically to before R1. Wedge-class mismatch
+/// on a constant observation fires `Wedged` after the counter
+/// threshold (`WEDGE_CONSECUTIVE_TICKS = 3`). This guards against an
+/// accidental default-activity=non-zero regression.
+#[test]
+fn tmux_constant_activity_fires_wedged_as_before() {
+    let mut probe = ScriptedProbe::constant(ProbeObservation::stuck_unready());
+    let result = wait_for_quiescent_pane_three_state(
+        &mut probe,
+        TEST_TARGET_SESSION,
+        SHORT_QUIET_WINDOW,
+        prime_window(Some(10_000)).0,
+        prime_window(Some(10_000)).1,
+        prime_window(Some(10_000)).2,
+        true,
+    );
+    assert!(
+        matches!(result, Err(DeliveryWaitError::Wedged { .. })),
+        "constant activity must not change Wedged baseline behavior, got {result:?}",
     );
 }
 

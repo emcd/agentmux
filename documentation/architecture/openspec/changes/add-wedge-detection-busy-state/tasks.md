@@ -97,7 +97,7 @@
 
 ## 3. Tmux probe activity source
 
-- [ ] 3.1 In `src/tmux/quiescence_probe.rs`, modify
+- [x] 3.1 In `src/tmux/quiescence_probe.rs`, modify
       `TmuxAsWedgeProbe::observe` to capture the window activity marker
       and populate `WedgeObservation.activity_generation`:
       - Call `resolve_window_activity_marker(self.inner.tmux_socket()?,
@@ -110,20 +110,45 @@
       `marker.parse::<u64>().unwrap_or(0)`.
       - `TmuxAsWedgeProbe` does not currently hold a reference to the
       `tmux_socket`; add a `socket_path: &Path` field (or thread it
-      through `PaneQuiescenceProbe` as a new accessor method).
-- [ ] 3.2 Verify `RealPaneQuiescenceProbe::wait_for_change` continues
+      through `PaneQuiescenceProbe` as a new accessor method). **(Landed
+      in R1 — added a `last_window_activity_marker` method to
+      `PaneQuiescenceProbe` (rather than threading the socket path
+      through the probe struct); `TmuxAsWedgeProbe::observe` calls
+      `self.inner.last_window_activity_marker()?.unwrap_or(0)`. The
+      trait-method approach keeps the adapter struct minimal and the
+      probe trait uniform across all `PaneQuiescenceProbe`
+      implementations.)**
+- [x] 3.2 Verify `RealPaneQuiescenceProbe::wait_for_change` continues
       to use the same `resolve_window_activity_marker` query — no
       behavior change to `wait_for_change`. The two reads happen at
       different cadence points (per-observation vs. wait-poll), so
-      they do not collide.
-- [ ] 3.3 Add a Tmux test in `tests/unit/tmux_transport.rs` extending
+      they do not collide. **(Landed in R1 —
+      `RealPaneQuiescenceProbe::wait_for_change` is unchanged: it
+      already polls `resolve_window_activity_marker` for change
+      detection; `last_window_activity_marker` is a separate
+      per-observation read.)**
+- [x] 3.3 Add a Tmux test in `tests/unit/tmux_transport.rs` extending
       the scripted `ScriptedProbe` (or a new probe variant) to advance
       `activity_generation` between observations while keeping the
       pane content unchanged. Assert: the wait function returns
       `Ok(pane)` after the activity eventually settles and the pane
       becomes prompt-ready; no `Wedged` is fired even with
       `WEDGE_CONSECUTIVE_TICKS = 3` budget exhausted during the busy
-      period.
+      period. **(Landed in R1 — three tests in
+      `tests/unit/tmux_transport.rs`: the
+      `tmux_busy_short_circuit_prevents_wedged_when_activity_advances_on_every_iteration`
+      test exercises the wedged path (wedge-class + activity advancing
+      always) and asserts no `Wedged` fires within the abort window;
+      `tmux_busy_short_circuit_defers_delivered_when_activity_advances_while_ready`
+      exercises the branch-ordering contract (prompt-ready +
+      activity advancing always) and asserts no `Delivered` fires;
+      `tmux_constant_activity_fires_wedged_as_before` is the
+      regression baseline asserting constant-activity behavior is
+      unchanged. Tests use `abort_after` to terminate rather than
+      driving to a settled state, which is stronger than the
+      tasks.md-text wording (it asserts Busy persists throughout the
+      busy window rather than waiting for one specific
+      settle-to-ready transition).)**
 
 ## 4. Pty probe activity source
 
