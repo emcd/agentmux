@@ -14,7 +14,7 @@
 //!
 //! ## Three-state classifier
 //!
-//! - `running` — output flowing or settled at prompt. Returns `Ok`.
+//! - `running` — output is flowing or settled at prompt. Returns `Ok`.
 //! - `unresponsive` — prime window elapsed with no observable change AND
 //!   no operator interaction AND an empty inspected tail. Returns
 //!   `Err(DeliveryWaitError::Timeout)`.
@@ -22,6 +22,30 @@
 //!   AND the inspected tail has observable non-prompt content. Returns
 //!   `Err(DeliveryWaitError::Wedged)` after the counter threshold
 //!   (`WEDGE_CONSECUTIVE_TICKS`) is reached.
+//!
+//! In addition to the three terminal classifications above, the
+//! classifier recognizes a non-terminal **Busy** pre-classification:
+//! when the terminal-output-write marker
+//! ([`WedgeObservation::activity_generation`]) advances between two
+//! consecutive observation polls, the classifier suppresses ALL
+//! terminal classifications (Delivered / Timeout / Failed) and emits
+//! a `delivery_target_active` diagnostic, returning
+//! `QuiescenceAction::NeedsWait`. The pre-classification ordering is
+//!
+//! 1. `operator_interaction_active` check (highest precedence;
+//!    resets wedge counter, returns `NeedsWait`).
+//! 2. Busy short-circuit (the new branch from this change;
+//!    resets wedge counter, emits diagnostic, returns `NeedsWait`).
+//! 3. `delivery_ready` check (terminal: returns `Done(Ok(...))`).
+//! 4. Wedge-counter increment block.
+//! 5. Wedge check.
+//! 6. Prime timeout check.
+//!
+//! Busy fires on a terminal-output-write-marker advance (Tmux:
+//! `#{window_activity}`; Pty: `last_change_atomic`). It does NOT fire
+//! on a child process being busy with zero byte output — that case is
+//! the Class B silent-thinking bug class, filed as a separate
+//! follow-up proposal.
 //!
 //! Operator interaction (copy-mode, active key-table, etc.) indefinitely
 //! suppresses both the unresponsive and the wedged classification. The
@@ -145,6 +169,23 @@ pub struct WedgeObservation {
     /// wedge/prime-timeout `reason` payload; falls back to deriving
     /// a generic reason from the inspected tail when this is `None`.
     pub mismatch: Option<ReadinessMismatch>,
+    /// Terminal-output-write marker captured at observation time.
+    /// Populated by each transport's `observe()` from a transport-
+    /// native primitive: Tmux uses `#{window_activity}` parsed as a
+    /// `u64` epoch-seconds value (falling back to `0` when the
+    /// format is unavailable on the running tmux version); Pty
+    /// uses `last_change_atomic.load(Ordering::Acquire)` from
+    /// `PtyShared`. A monotonic counter / generation; an advance
+    /// between two consecutive observations signals that bytes were
+    /// written to the target during the `quiet_window`, which the
+    /// classifier uses to suppress all terminal classifications
+    /// (Busy pre-classification — see module-level docs). This is a
+    /// terminal-output-write marker, NOT a process-busy marker: a
+    /// target whose agent is in silent thinking with zero byte output
+    /// produces a constant value here and the Busy pre-classification
+    /// does NOT fire (that's the Class B silent-thinking case,
+    /// filed as a follow-up).
+    pub activity_generation: u64,
 }
 
 /// Probe abstraction for the wedge/prime state machine.
@@ -285,11 +326,22 @@ impl QuiescenceState {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Returns the current consecutive-quiescent-mismatch counter
+    /// value the wedge classifier uses to fire `Wedged` after the
+    /// `WEDGE_CONSECUTIVE_TICKS` threshold. Exposed for tests and
+    /// for callers that need to observe classifier-side state
+    /// without taking a `&mut` borrow (e.g., diagnostic readouts).
+    #[must_use]
+    pub fn consecutive_quiescent_mismatches(&self) -> usize {
+        self.consecutive_quiescent_mismatches
+    }
 }
 
 /// Outcome of a single [`quiescence_classify_step`] call. The state
 /// machine either resolves (Done) or needs the caller to wait for a
 /// change before the next step.
+#[derive(Clone, Debug, PartialEq)]
 pub enum QuiescenceAction {
     /// The wait has resolved. The caller should propagate the result.
     Done(Result<String, DeliveryWaitError>),
@@ -347,24 +399,16 @@ pub fn quiescence_classify_step<W: WedgeProbe>(
     };
 
     // Quiescence: both observations agree across all signals
-    // (including pane target and mismatch metadata).
+    // (including pane target and mismatch metadata and the
+    // activity_generation terminal-output-write marker).
     let quiescent = snapshot_before == snapshot_after;
 
-    // `running` — pane is ready.
-    if snapshot_after.is_prompt_ready && !snapshot_after.operator_interaction_active {
-        emit_delivery_diagnostic(
-            "delivery_ready",
-            &json!({
-                "target_session": target_session,
-                "pane_target": snapshot_after.pane_target,
-            }),
-        );
-        return QuiescenceAction::Done(Ok(snapshot_after.pane_target.unwrap_or_default()));
-    }
-
-    // Operator interaction indefinitely suppresses both the unresponsive
-    // (prime-timeout) and the wedged classification. Reset the wedge
-    // counter so re-entry does not accumulate ticks.
+    // --- Operator interaction (highest precedence). -------------------
+    // Copy-mode / active key-table indefinitely suppress all
+    // classification; reset wedge counter on entry so re-entry does
+    // not accumulate ticks. The Busy short-circuit does not override
+    // this — a pane in copy-mode stays in NeedsWait regardless of
+    // any terminal-output-write activity.
     if snapshot_after.operator_interaction_active {
         emit_delivery_diagnostic(
             "delivery_operator_interaction",
@@ -376,6 +420,72 @@ pub fn quiescence_classify_step<W: WedgeProbe>(
         );
         state.consecutive_quiescent_mismatches = 0;
         return QuiescenceAction::NeedsWait(prime_deadline.unwrap_or_else(unbounded_deadline));
+    }
+
+    // --- Busy short-circuit. ------------------------------------------
+    // When the terminal-output-write marker advanced between two
+    // consecutive observations, the target is mid-generation: bytes
+    // are flowing but the snapshot might not yet reflect them
+    // (Class A: partial escape-sequence redraws, scroll-during-
+    // capture, cursor-blanking sequences, etc.). Suppress ALL
+    // terminal classifications (Delivered / Timeout / Failed) and
+    // emit `delivery_target_active` so operators can see when the
+    // short-circuit fired. The wedge counter resets because we
+    // return early before the increment block — this is an
+    // implicit guard from the early `return`. The diagnostic dedups
+    // by generation: an iteration whose activity_generation did not
+    // advance does not enter this branch.
+    //
+    // SCOPE: this fires only on terminal-output-write activity
+    // advance. It does NOT fire on a child process being busy with
+    // zero byte output (Class B silent-thinking); that case is filed
+    // as a follow-up proposal with a process-level aliveness signal.
+    if snapshot_before.activity_generation != snapshot_after.activity_generation {
+        state.consecutive_quiescent_mismatches = 0;
+        emit_delivery_diagnostic(
+            "delivery_target_active",
+            &json!({
+                "target_session": target_session,
+                "pane_target": snapshot_after.pane_target,
+                "activity_delta": snapshot_after
+                    .activity_generation
+                    .saturating_sub(snapshot_before.activity_generation),
+            }),
+        );
+        // Return `NeedsWait` with a SHORT deadline (`now + quiet_window`)
+        // rather than the prime deadline. The prime deadline can be
+        // unbounded when `prime_timeout_ms = None`; production
+        // `wait_for_change` (Tmux: polls `#{window_activity}` / snapshot;
+        // Pty: polls `last_change_atomic`) blocks until a transport
+        // change OR the deadline elapses. After a Busy iteration the
+        // activity has just advanced during the observe-sleep-observe
+        // pair; if it then settles and there is no subsequent change
+        // to wake the loop, the wrapper would otherwise block on an
+        // unbounded deadline and `delivery_ready` would never fire on
+        // the next iteration. Bounding the deadline at
+        // `quiet_window` keeps re-classification cadence tightly
+        // tied to the polling interval — production Tmux wakes up
+        // at most every `quiet_window` after the activity has settled,
+        // enough to deliver promptly without artificial signals.
+        return QuiescenceAction::NeedsWait(Instant::now() + quiet_window);
+    }
+
+    // --- `running` — pane is ready. -----------------------------------
+    // After the Busy short-circuit, so a post-sleep snapshot that
+    // matches the prompt regex while activity was advancing during
+    // the same quiet_window fires Busy above (returning NeedsWait)
+    // rather than Delivered here. The `operator_interaction_active`
+    // guard previously in this condition is now redundant (the
+    // operator-interaction branch above returns early when set).
+    if snapshot_after.is_prompt_ready {
+        emit_delivery_diagnostic(
+            "delivery_ready",
+            &json!({
+                "target_session": target_session,
+                "pane_target": snapshot_after.pane_target,
+            }),
+        );
+        return QuiescenceAction::Done(Ok(snapshot_after.pane_target.unwrap_or_default()));
     }
 
     let mismatch_reason = resolve_mismatch_reason(&snapshot_after);

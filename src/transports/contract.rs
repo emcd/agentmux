@@ -606,7 +606,7 @@ impl DeliveryMessage {
 /// group. The task maps it to a [`SingleDeliveryOutcome`] for the buffered
 /// group. Its canonical home is the transport contract, so the tmux loop that
 /// raises it forms no transport<->relay back-edge.
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DeliveryWaitError {
     /// The prime window elapsed during the wait with no observable output
     /// and no operator-interaction signal active. Maps to

@@ -97,6 +97,21 @@ pub trait PaneQuiescenceProbe: Send {
     /// thread through to the wedge inscription event.
     fn resolve_active_pane(&mut self) -> Result<String, String>;
 
+    /// Resolves the pane's terminal-output-write marker (Tmux's
+    /// `#{window_activity}`) as a `u64` epoch-seconds value. The
+    /// `quiescence_classify_step` cross-transport classifier compares
+    /// this field between two consecutive observations to detect
+    /// whether bytes were written to the terminal during the
+    /// `quiet_window` (a positive "output is flowing" signal); an
+    /// advance suppresses the wedge / unresponsive / delivered
+    /// classifications via the Busy pre-classification. Returns
+    /// `Ok(Some(0))` (constant activity, no advance possible) when
+    /// the format is unavailable on the running tmux version or
+    /// when the marker is unparseable; the cross-transport
+    /// classifier treats this as "no activity signal available,"
+    /// falling back to pre-change behavior for that probe.
+    fn last_window_activity_marker(&mut self) -> Result<Option<u64>, String>;
+
     /// Blocks until the pane shows a change (the next observation differs
     /// from the previous one) or the supplied `deadline` elapses. Returns
     /// `Ok(())` on observed change; `Err(DeliveryWaitError::Timeout)` on
@@ -151,6 +166,31 @@ impl PaneQuiescenceProbe for RealPaneQuiescenceProbe<'_> {
 
     fn resolve_active_pane(&mut self) -> Result<String, String> {
         resolve_active_pane_target(self.tmux_socket, self.target_session)
+    }
+
+    fn last_window_activity_marker(&mut self) -> Result<Option<u64>, String> {
+        // Re-query tmux for `#{window_activity}` at observation
+        // time. The existing `resolve_window_activity_marker`
+        // returns `Ok(None)` when the format is unavailable on the
+        // running tmux version; we surface that as `Some(0)` so
+        // the cross-transport classifier's Busy pre-classification
+        // is silently disabled (constant activity => no comparator
+        // advance => Busy never fires), preserving pre-change
+        // behavior for older tmux versions.
+        //
+        // The parsed `u64` is the project-defined surface — the
+        // cross-transport classifier uses it as a monotonic
+        // comparison value, not as a wall-clock timestamp. Tmux's
+        // `#{window_activity}` returns seconds-since-epoch on
+        // modern versions, which is naturally monotonic within a
+        // session lifetime.
+        let pane_target = resolve_active_pane_target(self.tmux_socket, self.target_session)?;
+        let marker = resolve_window_activity_marker(self.tmux_socket, &pane_target)?;
+        let value = marker
+            .as_deref()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
+        Ok(Some(value))
     }
 
     fn wait_for_change(&mut self, deadline: Instant) -> Result<(), DeliveryWaitError> {
@@ -230,6 +270,7 @@ impl<'a, P: PaneQuiescenceProbe> WedgeProbe for TmuxAsWedgeProbe<'a, P> {
         let evaluation = self.inner.next_evaluation()?;
         let op_interaction = self.inner.operator_interaction_active()?;
         let pane_target = self.inner.resolve_active_pane()?;
+        let activity_generation = self.inner.last_window_activity_marker()?.unwrap_or(0);
         let mismatch = if evaluation.ready {
             None
         } else {
@@ -250,6 +291,7 @@ impl<'a, P: PaneQuiescenceProbe> WedgeProbe for TmuxAsWedgeProbe<'a, P> {
             operator_interaction_active: op_interaction.is_some(),
             pane_target: Some(pane_target),
             mismatch,
+            activity_generation,
         })
     }
 
