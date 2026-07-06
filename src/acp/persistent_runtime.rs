@@ -106,7 +106,8 @@ fn initialize_persistent_acp_worker_runtime(
             AcpStdioClient::spawn(
                 command,
                 working_directory,
-                &acp.environment
+                &target_member
+                    .environment
                     .iter()
                     .map(|entry| (entry.name.clone(), entry.value.clone()))
                     .collect::<Vec<_>>(),

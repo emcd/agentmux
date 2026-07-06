@@ -308,6 +308,12 @@ impl Transport for PtyTransport {
         }
         cmd.env("TERM", self.configured_term_protocol.as_env_var());
         cmd.env("COLORTERM", "truecolor");
+        // Apply the merged coder/bundle/session environment last so an
+        // operator-declared variable (including an explicit TERM/COLORTERM
+        // override) wins over the transport defaults set above.
+        for entry in &self.target_member.environment {
+            cmd.env(entry.name.as_str(), entry.value.as_str());
+        }
         // Prefer the per-coder `working_directory` (from
         // `[coders.<id>.pty]` or the bundle member's
         // `working_directory`); fall back to the runtime directory the

@@ -297,7 +297,7 @@ pub(super) fn write_configuration(root: &Path, options: &AcpStubOptions) -> (Pat
     for (name, value) in &env_entries {
         let escaped_value = value.replace('\\', "\\\\").replace('"', "\\\"");
         env_toml.push_str(&format!(
-            "\n[[coders.acp.environment]]\nname = \"{name}\"\nvalue = \"{escaped_value}\"\n"
+            "\n[[coders.environment]]\nname = \"{name}\"\nvalue = \"{escaped_value}\"\n"
         ));
     }
 

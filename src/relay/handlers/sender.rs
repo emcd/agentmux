@@ -52,6 +52,7 @@ impl SenderIdentity {
             }),
             coder_session_id: None,
             policy_id: None,
+            environment: Vec::new(),
         }
     }
 }

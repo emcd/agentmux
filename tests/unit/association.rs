@@ -66,6 +66,7 @@ fn bundle_with_sessions(sessions: &[&str]) -> BundleConfiguration {
                 ),
                 coder_session_id: None,
                 policy_id: None,
+                environment: Vec::new(),
             })
             .collect(),
     }
@@ -96,6 +97,7 @@ fn bundle_with_directories(
                     ),
                     coder_session_id: None,
                     policy_id: None,
+                    environment: Vec::new(),
                 },
             )
             .collect(),

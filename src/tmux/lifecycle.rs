@@ -139,6 +139,14 @@ fn create_member_once(tmux_socket: &Path, member: &BundleMember) -> Result<(), S
         arguments.push("-c".to_string());
         arguments.push(working_directory.display().to_string());
     }
+    // Apply the merged coder/bundle/session environment to the session's
+    // spawned command via tmux's own `-e KEY=VALUE` flags (a plain
+    // `Command::env` on the tmux client would not reach the pane's child).
+    // The flags must precede the command argument.
+    for entry in &member.environment {
+        arguments.push("-e".to_string());
+        arguments.push(format!("{}={}", entry.name, entry.value));
+    }
     arguments.push(start_command.to_string());
     run_tmux_command(tmux_socket, &arguments)?;
     run_tmux_command(

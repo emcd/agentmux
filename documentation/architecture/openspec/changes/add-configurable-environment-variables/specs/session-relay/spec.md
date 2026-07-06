@@ -3,8 +3,10 @@
 ### Requirement: Coder Environment Variables
 
 A `[[coders]]` entry SHALL support an optional `environment` array of entries
-with required `name` and `value` string fields. The runtime SHALL apply the
-coder's declared environment to the child process it spawns for a session
+with required `name` and `value` string fields. Each `name` MUST be a usable OS
+environment-variable key — non-empty and free of `=` and NUL — validated at
+configuration load; a `value` MAY be an empty string. The runtime SHALL apply
+the coder's declared environment to the child process it spawns for a session
 backed by that coder, regardless of which transport (Tmux, Pty, or ACP
 command-spawn) the coder selects. Environment declared on a coder whose target
 does not spawn a local child process (ACP `http` channel) SHALL be inert rather
@@ -22,8 +24,8 @@ no transport-scoped environment subtable.
 
 #### Scenario: Reject malformed coder environment entry
 
-- **WHEN** a `[[coders]]` entry declares an `environment` entry missing `name`
-  or `value`
+- **WHEN** a `[[coders]]` entry declares an `environment` entry whose `name` or
+  `value` field is missing, or whose `name` is empty or contains `=` or NUL
 - **THEN** relay rejects configuration with a structured config error
 
 #### Scenario: Coder environment inert on non-spawning target
@@ -48,8 +50,8 @@ in that bundle.
 
 #### Scenario: Reject malformed bundle environment entry
 
-- **WHEN** a bundle file declares an `environment` entry missing `name` or
-  `value`
+- **WHEN** a bundle file declares an `environment` entry whose `name` or
+  `value` field is missing, or whose `name` is empty or contains `=` or NUL
 - **THEN** relay rejects configuration with a structured config error
 
 ### Requirement: Session Environment Variables
@@ -66,8 +68,8 @@ environment to that session's spawned child.
 
 #### Scenario: Reject malformed session environment entry
 
-- **WHEN** a `[[sessions]]` entry declares an `environment` entry missing
-  `name` or `value`
+- **WHEN** a `[[sessions]]` entry declares an `environment` entry whose `name`
+  or `value` field is missing, or whose `name` is empty or contains `=` or NUL
 - **THEN** relay rejects configuration with a structured config error
 
 ### Requirement: Environment Variable Precedence

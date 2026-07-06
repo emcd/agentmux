@@ -19,11 +19,12 @@ use super::{
         RawUsersSession,
     },
     targets::{
-        build_session_target, select_marker_session_type, validate_acp_target, validate_pty_target,
-        validate_tmux_target,
+        build_session_target, select_marker_session_type, validate_acp_target,
+        validate_environment_entries, validate_pty_target, validate_tmux_target,
     },
     types::{
-        BundleConfiguration, BundleGroupMembership, BundleMember, TuiConfiguration, TuiSession,
+        BundleConfiguration, BundleGroupMembership, BundleMember, NameValueEntry, TuiConfiguration,
+        TuiSession,
     },
 };
 
@@ -273,6 +274,11 @@ fn validate_loaded_configuration(
 
     let coders = validate_coders(coders_file.coders, coders_path)?;
     let groups = validate_bundle_groups(&bundle_file.groups, bundle_path)?;
+    validate_environment_entries(
+        &bundle_file.environment,
+        bundle_path,
+        &format!("bundle '{expected_bundle_name}'"),
+    )?;
 
     if bundle_file.sessions.is_empty() {
         return Err(ConfigurationError::invalid(
@@ -332,6 +338,30 @@ fn validate_loaded_configuration(
         let (target, coder_session_id) =
             build_session_target(session, &coders, coders_path, bundle_path, session_id)?;
 
+        validate_environment_entries(
+            &session.environment,
+            bundle_path,
+            &format!("session '{session_id}'"),
+        )?;
+
+        // Merge the three environment layers once at load. `build_session_target`
+        // has already validated that a coder-backed session's coder resolves, so
+        // this lookup cannot miss for a coder session; coder-less members simply
+        // carry an empty coder layer.
+        let coder_environment = session
+            .coder
+            .as_deref()
+            .map(normalize_field)
+            .filter(|coder_id| !coder_id.is_empty())
+            .and_then(|coder_id| coders.get(coder_id))
+            .map(|coder| coder.environment.as_slice())
+            .unwrap_or_default();
+        let environment = merge_environment(
+            coder_environment,
+            &bundle_file.environment,
+            &session.environment,
+        );
+
         members.push(BundleMember {
             id: session_id.to_string(),
             name: session_name.map(ToString::to_string),
@@ -339,6 +369,7 @@ fn validate_loaded_configuration(
             target,
             coder_session_id,
             policy_id,
+            environment,
         });
     }
 
@@ -458,8 +489,44 @@ fn validate_coders(
             }
         };
 
-        unique.insert(coder_id.to_string(), Coder { target });
+        validate_environment_entries(
+            &coder.environment,
+            coders_path,
+            &format!("coder '{coder_id}'"),
+        )?;
+
+        unique.insert(
+            coder_id.to_string(),
+            Coder {
+                target,
+                environment: coder.environment,
+            },
+        );
     }
 
     Ok(unique)
+}
+
+/// Merges the coder, bundle, and session environment layers into the effective
+/// environment for one member. Precedence is per-variable, most-specific-wins
+/// (session > bundle > coder); non-colliding names union across the layers.
+/// Declaration order is preserved: a name keeps the position of its first
+/// appearance (coder, then new bundle names, then new session names), while a
+/// more-specific layer overrides the value in place.
+fn merge_environment(
+    coder: &[NameValueEntry],
+    bundle: &[NameValueEntry],
+    session: &[NameValueEntry],
+) -> Vec<NameValueEntry> {
+    let mut merged: Vec<NameValueEntry> = Vec::new();
+    for layer in [coder, bundle, session] {
+        for entry in layer {
+            if let Some(existing) = merged.iter_mut().find(|current| current.name == entry.name) {
+                existing.value = entry.value.clone();
+            } else {
+                merged.push(entry.clone());
+            }
+        }
+    }
+    merged
 }

@@ -5,7 +5,7 @@ use agentmux::configuration::{TargetConfiguration, load_bundle_configuration};
 use super::helpers::*;
 
 #[test]
-fn loads_acp_coder_with_environment() {
+fn loads_coder_environment_onto_member() {
     let temporary = TempDir::new().expect("temporary");
     let root = write_config(
         &temporary,
@@ -16,17 +16,17 @@ format-version = 1
 [[coders]]
 id = "acp"
 
-[coders.acp]
-channel = "stdio"
-command = "opencode acp"
-
-[[coders.acp.environment]]
+[[coders.environment]]
 name = "ACP_TOKEN"
 value = "secret-123"
 
-[[coders.acp.environment]]
+[[coders.environment]]
 name = "LOG_LEVEL"
 value = "debug"
+
+[coders.acp]
+channel = "stdio"
+command = "opencode acp"
 "#,
         &format!(
             r#"
@@ -48,11 +48,14 @@ coder = "acp"
         panic!("expected ACP target configuration");
     };
     assert_eq!(acp.command.as_deref(), Some("opencode acp"));
-    assert_eq!(acp.environment.len(), 2);
-    assert_eq!(acp.environment[0].name, "ACP_TOKEN");
-    assert_eq!(acp.environment[0].value, "secret-123");
-    assert_eq!(acp.environment[1].name, "LOG_LEVEL");
-    assert_eq!(acp.environment[1].value, "debug");
+    // The coder-level environment is lifted transport-agnostically onto the
+    // resolved member, not held on the ACP-specific target descriptor.
+    let environment = &loaded.members[0].environment;
+    assert_eq!(environment.len(), 2);
+    assert_eq!(environment[0].name, "ACP_TOKEN");
+    assert_eq!(environment[0].value, "secret-123");
+    assert_eq!(environment[1].name, "LOG_LEVEL");
+    assert_eq!(environment[1].value, "debug");
 }
 
 #[test]
