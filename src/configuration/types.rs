@@ -101,6 +101,12 @@ pub struct BundleMember {
     pub coder_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_id: Option<String>,
+    /// Merged environment for this member's spawned child, resolved once at
+    /// configuration load from the coder, bundle, and session layers
+    /// (precedence session > bundle > coder). Each spawning transport applies
+    /// these at spawn; inert on non-spawning targets (ACP `http`, ui/pubsub).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub environment: Vec<NameValueEntry>,
 }
 
 /// Optional prompt-readiness template for one bundle member.
@@ -290,8 +296,6 @@ pub struct AcpTargetConfiguration {
     pub prime_timeout_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub headers: Vec<NameValueEntry>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub environment: Vec<NameValueEntry>,
 }
 
 /// Configuration for one named bundle.

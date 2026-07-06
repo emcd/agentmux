@@ -248,6 +248,55 @@ pub(crate) fn write_bundle_with_pubsub_member(
     config_root
 }
 
+/// Writes a single-session tmux bundle whose bundle file declares the given
+/// top-level `environment` entries, reusing the standard coders/policies/users
+/// config. Used to prove the merged environment reaches the tmux
+/// session-creation call as `new-session -e KEY=VALUE` flags.
+pub(crate) fn write_bundle_configuration_with_environment(
+    root: &Path,
+    bundle_name: &str,
+    session: &str,
+    environment: &[(&str, &str)],
+) -> PathBuf {
+    let coders = vec![CoderSpec {
+        id: "default".to_string(),
+        initial_command: "sh -lc 'exec sleep 45'".to_string(),
+        resume_command: "sh -lc 'exec sleep 45'".to_string(),
+        prompt_regex: None,
+        prompt_inspect_lines: None,
+        prompt_idle_column: None,
+    }];
+    let sessions = vec![SessionSpec {
+        id: session.to_string(),
+        name: Some(session.to_string()),
+        directory: PathBuf::from("/tmp"),
+        coder: "default".to_string(),
+        coder_session_id: None,
+    }];
+    let config_root = write_bundle_configuration_members(root, bundle_name, &coders, &sessions);
+
+    let mut bundle_toml = String::from("format-version = 1\nautostart = true\n");
+    for (name, value) in environment {
+        bundle_toml.push_str(
+            format!("\n[[environment]]\nname = \"{name}\"\nvalue = \"{value}\"\n").as_str(),
+        );
+    }
+    bundle_toml.push_str(
+        format!(
+            "\n[[sessions]]\nid = \"{session}\"\nname = \"{session}\"\ndirectory = \"/tmp\"\ncoder = \"default\"\n",
+        )
+        .as_str(),
+    );
+    fs::write(
+        config_root
+            .join("bundles")
+            .join(format!("{bundle_name}.toml")),
+        bundle_toml,
+    )
+    .expect("write bundle config with environment");
+    config_root
+}
+
 pub(crate) fn spawn_session(socket: &Path, session_name: &str, shell_command: &str) {
     let output = tmux_command(
         socket,

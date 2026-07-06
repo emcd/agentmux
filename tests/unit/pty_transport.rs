@@ -743,6 +743,7 @@ fn pty_transport_round_trips_raww_with_prompt_readiness() {
         }),
         coder_session_id: None,
         policy_id: None,
+        environment: Vec::new(),
     };
     let mut transport = agentmux::pty::PtyTransport::new(
         target,
@@ -785,6 +786,7 @@ fn pty_transport_round_trips_raww_with_prompt_readiness() {
             }),
             coder_session_id: None,
             policy_id: None,
+            environment: Vec::new(),
         },
         choose: Arc::new(|_| agentmux::transports::ChoiceMade::Cancelled {
             decided_by: "test".to_string(),
@@ -882,6 +884,7 @@ fn pty_transport_spawns_multi_arg_initial_command() {
         }),
         coder_session_id: None,
         policy_id: None,
+        environment: Vec::new(),
     };
     let mut transport = agentmux::pty::PtyTransport::new(
         target,
@@ -924,6 +927,7 @@ fn pty_transport_spawns_multi_arg_initial_command() {
             }),
             coder_session_id: None,
             policy_id: None,
+            environment: Vec::new(),
         },
         choose: Arc::new(|_| agentmux::transports::ChoiceMade::Cancelled {
             decided_by: "test".to_string(),
@@ -1023,6 +1027,7 @@ fn pty_transport_mailw_during_raww_wait_is_not_dropped() {
         }),
         coder_session_id: None,
         policy_id: None,
+        environment: Vec::new(),
     };
     let mut transport = agentmux::pty::PtyTransport::new(
         target,
@@ -1065,6 +1070,7 @@ fn pty_transport_mailw_during_raww_wait_is_not_dropped() {
             }),
             coder_session_id: None,
             policy_id: None,
+            environment: Vec::new(),
         },
         choose: Arc::new(|_| agentmux::transports::ChoiceMade::Cancelled {
             decided_by: "test".to_string(),
@@ -1195,6 +1201,7 @@ fn pty_transport_look_during_non_ready_wait_returns_promptly() {
         }),
         coder_session_id: None,
         policy_id: None,
+        environment: Vec::new(),
     };
     let mut transport = agentmux::pty::PtyTransport::new(
         target,
@@ -1237,6 +1244,7 @@ fn pty_transport_look_during_non_ready_wait_returns_promptly() {
             }),
             coder_session_id: None,
             policy_id: None,
+            environment: Vec::new(),
         },
         choose: Arc::new(|_| agentmux::transports::ChoiceMade::Cancelled {
             decided_by: "test".to_string(),
@@ -1329,6 +1337,7 @@ fn make_term_protocol_transport(
         target: agentmux::configuration::TargetConfiguration::Pty(pty_cfg),
         coder_session_id: None,
         policy_id: None,
+        environment: Vec::new(),
     };
     let transport_cfg = agentmux::pty::PtyTargetConfiguration {
         initial_command: initial_command.clone(),

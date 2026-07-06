@@ -22,6 +22,11 @@ pub(super) struct RawCoder {
     pub(super) acp: Option<RawAcpTarget>,
     #[serde(default)]
     pub(super) pty: Option<RawPtyTarget>,
+    /// Transport-agnostic environment applied to the child this coder spawns
+    /// for a session, regardless of transport (Tmux, Pty, or ACP
+    /// command-spawn). The base layer of the coder/bundle/session merge.
+    #[serde(default)]
+    pub(super) environment: Vec<NameValueEntry>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -91,8 +96,6 @@ pub(super) struct RawAcpTarget {
     pub(super) prime_timeout_ms: Option<u64>,
     #[serde(default)]
     pub(super) headers: Vec<NameValueEntry>,
-    #[serde(default)]
-    pub(super) environment: Vec<NameValueEntry>,
 }
 
 /// Raw `[coders.<id>.pty]` subtable. Exactly one of `tmux`, `acp`, or
@@ -135,6 +138,8 @@ pub(super) struct RawPtyTarget {
 #[derive(Clone, Debug)]
 pub(super) struct Coder {
     pub(super) target: CoderTarget,
+    /// Validated coder-level environment (base merge layer).
+    pub(super) environment: Vec<NameValueEntry>,
 }
 
 #[derive(Clone, Debug)]
@@ -162,7 +167,6 @@ pub(super) struct AcpTarget {
     pub(super) url: Option<String>,
     pub(super) prime_timeout_ms: Option<u64>,
     pub(super) headers: Vec<NameValueEntry>,
-    pub(super) environment: Vec<NameValueEntry>,
 }
 
 /// Validated `[coders.<id>.pty]` target fields.
@@ -188,6 +192,10 @@ pub(super) struct RawBundleFile {
     pub(super) autostart: bool,
     #[serde(default)]
     pub(super) groups: Vec<String>,
+    /// Bundle-level environment applied to every coder-backed session in the
+    /// bundle. Overrides colliding coder-level names; overridden by session.
+    #[serde(default)]
+    pub(super) environment: Vec<NameValueEntry>,
     #[serde(default)]
     pub(super) sessions: Vec<RawSession>,
 }
@@ -249,6 +257,11 @@ pub(super) struct RawSession {
     pub(super) coder: Option<String>,
     #[serde(default)]
     pub(super) coder_session_id: Option<String>,
+    /// Session-level environment applied to this session's spawned child. The
+    /// most-specific merge layer: overrides colliding coder- and bundle-level
+    /// names.
+    #[serde(default)]
+    pub(super) environment: Vec<NameValueEntry>,
     #[serde(default)]
     pub(super) ui: Option<RawSessionMarker>,
     #[serde(default)]

@@ -75,7 +75,6 @@ pub(super) fn build_session_target(
                         url: acp_target.url.clone(),
                         prime_timeout_ms: acp_target.prime_timeout_ms,
                         headers: acp_target.headers.clone(),
-                        environment: acp_target.environment.clone(),
                     }),
                     coder_session_id,
                 )),
@@ -344,18 +343,19 @@ pub(super) fn validate_acp_target(
         }
     }
 
-    validate_name_value_entries(&target.environment, coders_path, coder_id, "environment")?;
-
     Ok(AcpTarget {
         channel: target.channel,
         command: target.command,
         url: target.url,
         prime_timeout_ms: target.prime_timeout_ms,
         headers: target.headers,
-        environment: target.environment,
     })
 }
 
+/// Validates an ACP `name`/`value` header list: both fields non-empty after
+/// trimming. Headers are an HTTP concept with looser key rules than an OS
+/// environment variable, so this is intentionally distinct from
+/// [`validate_environment_entries`].
 fn validate_name_value_entries(
     entries: &[NameValueEntry],
     path: &Path,
@@ -373,6 +373,50 @@ fn validate_name_value_entries(
             return Err(ConfigurationError::invalid(
                 path,
                 format!("coder '{coder_id}' {field_name} entry {index} has empty value"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Validates an `environment` array declared at the coder, bundle, or session
+/// level. `context` is the caller's subject phrase (e.g. `coder 'acp'`,
+/// `bundle 'alpha'`, `session 'a'`) so the structured error names the declaring
+/// scope.
+///
+/// Unlike the looser header validator, an environment `name` must be a usable
+/// OS environment-variable key: non-empty (after trimming) and free of `=` and
+/// NUL. Both characters are unrepresentable as an env key —
+/// `std::process::Command::env` panics on them, and tmux `-e KEY=VALUE` would
+/// parse a `=`-bearing name ambiguously — so an invalid name must fail at
+/// configuration load rather than at spawn. The `value` MAY be empty (a
+/// legitimate OS environment value; the field's presence is already required by
+/// the struct) but must be free of NUL.
+pub(super) fn validate_environment_entries(
+    entries: &[NameValueEntry],
+    path: &Path,
+    context: &str,
+) -> Result<(), ConfigurationError> {
+    for (index, entry) in entries.iter().enumerate() {
+        let name = entry.name.as_str();
+        if normalize_field(name).is_empty() {
+            return Err(ConfigurationError::invalid(
+                path,
+                format!("{context} environment entry {index} has empty name"),
+            ));
+        }
+        if name.contains('=') || name.contains('\0') {
+            return Err(ConfigurationError::invalid(
+                path,
+                format!(
+                    "{context} environment entry {index} name '{name}' must not contain '=' or NUL"
+                ),
+            ));
+        }
+        if entry.value.contains('\0') {
+            return Err(ConfigurationError::invalid(
+                path,
+                format!("{context} environment entry {index} value must not contain NUL"),
             ));
         }
     }
