@@ -96,19 +96,28 @@ and SHALL NOT expose MCP tools that mutate bundle configuration.
 `list` with `command="principals"` SHALL return bundle principal listing
 payloads.
 
-Single-bundle successful responses SHALL include:
+Successful responses SHALL always use the aggregate shape, regardless of the
+`namespace` selector:
 
 - `schema_version`
-- `bundle` object:
-  - `id`
-  - `state` (`up`|`down`)
-  - `startup_health` (`healthy`|`degraded`) (required when `state=up`;
-    omitted when `state=down`)
-  - `state_reason_code` (required when `state=down`; omitted when `state=up`)
-  - `state_reason` (optional)
-  - `startup_failure_count` (required integer)
-  - `recent_startup_failures` (required array; may be empty)
-  - `principals[]`
+- `bundles[]` (array of canonical bundle objects)
+
+A relay-wide `GLOBAL` bundle view SHALL always be appended to `bundles[]` as the
+final entry, regardless of the requested `namespace` (so a home-bundle or
+named-bundle request returns the resolved bundle followed by the `GLOBAL` view;
+a `namespace="GLOBAL"` request returns only the `GLOBAL` view).
+
+Each `bundles[]` entry SHALL include:
+
+- `id`
+- `state` (`up`|`down`)
+- `startup_health` (`healthy`|`degraded`) (required when `state=up`;
+  omitted when `state=down`)
+- `state_reason_code` (required when `state=down`; omitted when `state=up`)
+- `state_reason` (optional)
+- `startup_failure_count` (required integer)
+- `recent_startup_failures` (required array; may be empty)
+- `principals[]`
 
 Each `principals[]` entry SHALL include:
 
@@ -126,28 +135,34 @@ Each `recent_startup_failures[]` entry SHALL include:
 - `sequence`
 - optional `details`
 
-If requester identity is valid and policy denies relay-handled single-bundle
-list access, MCP SHALL return `authorization_forbidden` and SHALL NOT return a
-successful list payload.
+If requester identity is valid and policy denies relay-handled list access, MCP
+SHALL return `authorization_forbidden` and SHALL NOT return a successful list
+payload.
 
 #### Scenario: Include startup health and startup-failure fields in successful list payload
 
 - **WHEN** `list` with `command="principals"` succeeds for one bundle
-- **THEN** MCP response includes required startup health/state fields
+- **THEN** each `bundles[]` entry includes required startup health/state fields
 - **AND** includes required startup failure history fields
+
+#### Scenario: Append GLOBAL view regardless of selector
+
+- **WHEN** `list` with `command="principals"` succeeds for a single bundle
+- **THEN** the response `bundles[]` includes the resolved bundle
+- **AND** appends a final `GLOBAL` bundle view
 
 #### Scenario: Omit startup health for down state
 
-- **WHEN** bundle state is `down`
-- **THEN** MCP response omits `startup_health`
+- **WHEN** a `bundles[]` entry state is `down`
+- **THEN** that entry omits `startup_health`
 - **AND** includes required `state_reason_code`
 
-#### Scenario: Deny single-bundle list request with authorization_forbidden
+#### Scenario: Deny list request with authorization_forbidden
 
 - **WHEN** requester identity is valid
 - **AND** policy denies list visibility for requester
 - **THEN** MCP returns `authorization_forbidden`
-- **AND** does not return successful `bundle.principals[]` output
+- **AND** does not return successful `bundles[]` output
 
 ### Requirement: Send Target Selection
 
@@ -514,12 +529,13 @@ MCP SHALL NOT parse or reinterpret ACP `snapshot_entries` content.
 
 ### Requirement: MCP List Sessions All-Mode Aggregation
 
-When `list` is called with `command="principals"` and `namespace="*"`, MCP SHALL
-perform adapter-owned fanout in lexicographic bundle-id order and return aggregate
-payload:
+All `list` `command="principals"` responses SHALL use the aggregate `bundles[]`
+shape (see the Recipient Listing Contract); the `namespace` selector varies only
+which bundles populate the array before the always-appended `GLOBAL` view.
 
-- `schema_version`
-- `bundles[]` (array of canonical single-bundle `bundle` objects)
+When `namespace="*"`, MCP SHALL perform adapter-owned fanout in lexicographic
+bundle-id order, populating `bundles[]` with every configured bundle followed by
+the `GLOBAL` view.
 
 Relay all-bundle list requests are not used; the relay accepts only a single
 resolved namespace (a bundle name or `GLOBAL`) and never receives `"*"`.
@@ -546,8 +562,10 @@ for associated/home bundle using configuration + runtime reachability evidence.
 If unreachable target is not associated/home bundle, MCP SHALL return
 `relay_unavailable` and SHALL NOT synthesize cross-bundle payload.
 
-In single-bundle mode, authorized home-bundle fallback SHALL return canonical
-single-bundle payload shape.
+In single-bundle mode, authorized home-bundle fallback SHALL return the canonical
+aggregate `bundles[]` shape: the synthesized home bundle followed by the
+always-appended `GLOBAL` view (itself synthesized as an empty `down` bundle when
+the relay is unreachable).
 
 In `namespace="*"` mode, encountering unreachable non-home bundle SHALL fail with
 `relay_unavailable` and terminate fanout.
@@ -564,7 +582,7 @@ runtime failure history is unavailable, MCP SHALL return:
 
 - **WHEN** caller requests associated/home bundle
 - **AND** bundle relay is unreachable
-- **THEN** MCP returns canonical single-bundle payload with `state=down`
+- **THEN** MCP returns the home `bundles[]` entry with `state=down`
 - **AND** includes required startup failure fields
 
 #### Scenario: Default fallback startup-failure fields when local history is unavailable
