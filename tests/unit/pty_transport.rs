@@ -1495,6 +1495,181 @@ fn pty_transport_term_protocol_dependent_round_trip_through_snapshot() {
     );
 }
 
+// =========================================================================
+// Pty runtime child-env propagation (env-vars tasks.md 4.3)
+// =========================================================================
+
+/// End-to-end Pty runtime child-env propagation test
+/// (`add-configurable-environment-variables` tasks.md 4.3). Confirms
+/// the Pty transport at `src/pty/transport.rs` `startup` applies the
+/// merged coder/bundle/session `BundleMember.environment` to the
+/// spawned child — including a plain operator-declared key AND an
+/// explicit operator override of `TERM`/`COLORTERM` (which must win
+/// over the transport defaults set just before the env-merge loop per
+/// the after-defaults placement comment in `src/pty/transport.rs`
+/// `startup`).
+///
+/// Mirrors the term-protocol propagation test pattern at
+/// `tests/unit/pty_transport.rs:1347-1486` (same starting shape:
+/// `BundleMember` + `PtyTargetConfiguration` + `PtyTransport::new` +
+/// `StartupContext` + 500ms render delay + `PtyOutputView::look`),
+/// but the child command prints three env values (operator-declared
+/// key + two explicit `TERM`/`COLORTERM` overrides) so the assertions
+/// lock both "env reaches child" and "operator wins over transport
+/// defaults".
+///
+/// Run with `cargo test --test unit pty_transport --features pty --
+/// --ignored` once Zig 0.15.x is on PATH and `cargo check --features
+/// pty` succeeds locally. Skipped by default because the underlying
+/// `PtyTransport` spawns threads that consume the snapshot channel
+/// for the full lifetime of the test; without libghostty-vt built,
+/// `startup()` fails.
+#[test]
+#[ignore = "requires Zig 0.15.x + libghostty-vt built; run with --ignored"]
+fn pty_transport_runtime_child_env_propagates_operator_overrides() {
+    use agentmux::configuration::{
+        BundleMember, NameValueEntry, PtyTargetConfiguration as PtyConfig, TermProtocol,
+    };
+    use agentmux::transports::{LookMode, LookSnapshotPayload, StartupContext, Transport};
+
+    // The child prints three env values to verify both the
+    // operator-declared-key reach and the precedence story:
+    //   - FOR_TEST_OPERATOR_KEY: custom operator key — must reach child.
+    //   - TERM: must reflect operator's override, NOT the
+    //     `PtyTargetConfiguration` default "xterm-kitty" (XtermKitty).
+    //   - COLORTERM: must reflect operator's override, NOT the
+    //     transport default of "truecolor".
+    // Then sleeps so the snapshot has time to render.
+    let child_command = "sh -c 'printf \"FOR_TEST_OPERATOR_KEY=%s\\nTERM=%s\\nCOLORTERM=%s\\n\" \"$FOR_TEST_OPERATOR_KEY\" \"$TERM\" \"$COLORTERM\"; sleep 1'".to_string();
+
+    let pty_cfg = PtyConfig {
+        initial_command: child_command.clone(),
+        resume_command: child_command.clone(),
+        prompt_readiness: None,
+        prime_timeout_ms: Some(2000),
+        wedge_detection: false,
+        cols: 80,
+        rows: 24,
+        term_protocol: TermProtocol::XtermKitty,
+    };
+    let target = BundleMember {
+        id: "child-env-propagation-test".to_string(),
+        name: None,
+        working_directory: None,
+        target: agentmux::configuration::TargetConfiguration::Pty(pty_cfg.clone()),
+        coder_session_id: None,
+        policy_id: None,
+        environment: vec![
+            // Custom operator-declared key (no transport default to
+            // compete with — purely verifying the env-merge loop
+            // reaches the child).
+            NameValueEntry {
+                name: "FOR_TEST_OPERATOR_KEY".to_string(),
+                value: "operator_test_value".to_string(),
+            },
+            // Operator override of TERM (should beat the
+            // `PtyTargetConfiguration` default "xterm-kitty").
+            NameValueEntry {
+                name: "TERM".to_string(),
+                value: "xterm-test-override".to_string(),
+            },
+            // Operator override of COLORTERM (should beat the
+            // transport default "truecolor").
+            NameValueEntry {
+                name: "COLORTERM".to_string(),
+                value: "operator-colorterm-override".to_string(),
+            },
+        ],
+    };
+    let transport_cfg = agentmux::pty::PtyTargetConfiguration {
+        initial_command: child_command.clone(),
+        resume_command: child_command,
+        prompt_readiness: None,
+        cols: 80,
+        rows: 24,
+        prime_timeout_ms: Some(2000),
+        wedge_detection: false,
+        working_directory: None,
+        term_protocol: TermProtocol::XtermKitty,
+    };
+
+    let mut transport = agentmux::pty::PtyTransport::new(target.clone(), transport_cfg);
+    let context = StartupContext {
+        namespace: "agentmux".to_string(),
+        runtime_directory: std::env::temp_dir(),
+        target_member: target,
+        choose: Arc::new(|_| agentmux::transports::ChoiceMade::Cancelled {
+            decided_by: "test".to_string(),
+            reason_code: "test_cancel".to_string(),
+            reason: None,
+        }),
+    };
+    let status = match transport.startup(context) {
+        Ok(s) => s,
+        Err(e) => panic!(
+            "pty_transport_runtime_child_env_propagates_operator_overrides: \
+             PtyTransport::startup failed: {e:?}. This test requires \
+             Zig 0.15.x + libghostty-vt built via --features pty to lock \
+             the env-merge contract; a loud failure is the correct \
+             behavior — a silent skip would mask a regression in the \
+             Pty infrastructure and let the env-merge contract go \
+             unguarded."
+        ),
+    };
+    assert!(
+        matches!(
+            status.readiness,
+            agentmux::transports::TransportReadiness::Ready
+        ),
+        "startup should report Ready, got {:?}",
+        status.readiness,
+    );
+
+    // Give VTE time to render the child's printf output.
+    thread::sleep(Duration::from_millis(500));
+
+    let output = transport
+        .give_output()
+        .expect("give_output returns Some after startup");
+    let snapshot = output
+        .look(LookMode {
+            lines: Some(40),
+            offset: None,
+            prime_timeout: Duration::from_secs(2),
+        })
+        .expect("look should succeed");
+    let tail = match snapshot {
+        LookSnapshotPayload::Lines { snapshot_lines } => snapshot_lines.join("\n"),
+        _ => panic!("expected Lines payload"),
+    };
+
+    // All three env values must appear in the snapshot. If the
+    // after-defaults placement of the env-merge loop in
+    // `src/pty/transport.rs` `startup` is broken, the `TERM` /
+    // `COLORTERM` assertions would surface the
+    // `PtyTargetConfiguration` / transport defaults
+    // ("xterm-kitty" / "truecolor") instead of the operator
+    // overrides.
+    assert!(
+        tail.contains("FOR_TEST_OPERATOR_KEY=operator_test_value"),
+        "snapshot did not contain operator-declared env key \
+         FOR_TEST_OPERATOR_KEY=operator_test_value: {tail:?}",
+    );
+    assert!(
+        tail.contains("TERM=xterm-test-override"),
+        "snapshot did not contain operator TERM override \
+         (operator-declared 'xterm-test-override' should beat \
+         PtyTargetConfiguration::term_protocol default of 'xterm-kitty'): \
+         {tail:?}",
+    );
+    assert!(
+        tail.contains("COLORTERM=operator-colorterm-override"),
+        "snapshot did not contain operator COLORTERM override \
+         (operator-declared 'operator-colorterm-override' should beat \
+         transport default of 'truecolor'): {tail:?}",
+    );
+}
+
 // ---------------------------------------------------------------------------
 // R2 wedge-busy-state probes (tasks.md §4.4)
 // ---------------------------------------------------------------------------
