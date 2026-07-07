@@ -1,4 +1,5 @@
-//! `raww` tool: write raw text directly to one target session.
+//! `raww` tool: write raw text directly to one target session's input,
+//! bypassing normal chat/message semantics.
 
 use rmcp::{
     ErrorData as McpError,
@@ -20,7 +21,7 @@ use crate::mcp::validation::{qualify_target, validate_raww_request};
 impl McpServer {
     #[tool(
         name = "raww",
-        description = "Write raw text directly to one target session."
+        description = "Write raw text directly to one target session's input, bypassing normal chat/message semantics; use with care. Target is a bare id in the associated bundle or a fully-qualified id@namespace peer."
     )]
     async fn tool_raww(
         &self,

@@ -1,4 +1,5 @@
-//! `look` tool: inspect a target session pane snapshot for this bundle.
+//! `look` tool: inspect a target session snapshot — tmux pane lines or ACP
+//! structured replay entries — in the associated bundle or a qualified peer.
 
 use rmcp::{
     ErrorData as McpError,
@@ -20,7 +21,7 @@ use crate::mcp::validation::{qualify_target, validate_look_request};
 impl McpServer {
     #[tool(
         name = "look",
-        description = "Inspect a target session pane snapshot for this bundle."
+        description = "Inspect a target session's latest snapshot: tmux pane lines, or ACP structured replay entries. Target is a bare id in the associated bundle or a fully-qualified id@namespace peer."
     )]
     async fn tool_look(
         &self,

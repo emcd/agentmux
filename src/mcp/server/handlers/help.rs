@@ -16,7 +16,7 @@ use crate::mcp::validation::validate_help_request;
 impl McpServer {
     #[tool(
         name = "help",
-        description = "Return tool/command help and JSON schemas. Query omitted or `agentmux` for tool list, `list` for list meta-tool commands, or `list.principals`/`send`/`look`/`raww` for exact schemas."
+        description = "Return tool/command help and JSON schemas. Query omitted or `agentmux` for the tool list; `list`, `updown`, `new`, or `change` for a meta-tool's command list; or `list.principals`/`list.decisions`/`send`/`look`/`raww`/`choose`/`updown.up`/`updown.down`/`new.peer`/`change.psk` for exact arg schemas."
     )]
     async fn tool_help(
         &self,

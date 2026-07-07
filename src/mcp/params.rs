@@ -78,7 +78,9 @@ pub(super) struct SendParams {
     pub(super) request_id: Option<String>,
     /// Message body to route to targets.
     pub(super) message: String,
-    /// Explicit target recipients by canonical session id (one or many).
+    /// Explicit target recipients as principal ids (one or many). Each is a
+    /// bare id resolved within the associated bundle, or a fully-qualified
+    /// `<id>@<namespace>` for a cross-namespace peer.
     #[serde(default)]
     pub(super) targets: Vec<String>,
     /// Broadcast to all known sessions for the bundle.
@@ -93,8 +95,10 @@ pub(super) struct SendParams {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub(super) struct LookParams {
-    /// Session identifier to inspect. Routing context is inferred from the
-    /// `@<namespace>` suffix; no explicit namespace parameter is accepted.
+    /// Principal id to inspect: a bare id resolves within the associated
+    /// bundle, or a fully-qualified `<id>@<namespace>` targets a cross-namespace
+    /// peer. Routing context is inferred from the `@<namespace>` suffix; no
+    /// explicit namespace parameter is accepted.
     pub(super) target_session: String,
     /// Optional snapshot window size: tmux pane lines, or ACP replay entries.
     #[serde(default)]
@@ -236,9 +240,12 @@ pub(super) struct ChangePskArgs {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub(super) struct RawwParams {
-    /// Session identifier to write to.
+    /// Principal id to write to: a bare id resolved within the associated
+    /// bundle, or a fully-qualified `<id>@<namespace>` for a cross-namespace
+    /// peer.
     pub(super) target_session: String,
-    /// Raw text content to write.
+    /// Raw text content written directly to the target's input, bypassing
+    /// normal chat/message semantics.
     pub(super) text: String,
     /// When true, suppress trailing Enter after raw write dispatch.
     #[serde(default)]

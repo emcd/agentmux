@@ -22,7 +22,7 @@ use crate::mcp::validation::{parse_meta_tool_args, validate_updown_args, validat
 impl McpServer {
     #[tool(
         name = "updown",
-        description = "Administer bundle runtime updown. Use command=\"up\" to host the associated bundle or command=\"down\" to unhost it."
+        description = "Administer the associated bundle's runtime state. Use command=\"up\" to host it or command=\"down\" to unhost it."
     )]
     async fn tool_updown(
         &self,
