@@ -133,6 +133,10 @@ async fn raww_returns_queued_payload_for_acp_target() {
     // Bare `charlie` is qualified to the bound bundle before the relay call.
     assert_eq!(payload["target_session"], format!("charlie@{BUNDLE_NAME}"));
     assert_eq!(payload["transport"], "acp");
+    // The relay omitted request_id, so it is absent (not null); message_id is
+    // present and passes through.
+    assert!(payload.get("request_id").is_none());
+    assert_eq!(payload["message_id"], "raww-acp-1");
     assert!(
         payload.get("details").is_none(),
         "raww response must not carry a details field: {payload:?}"

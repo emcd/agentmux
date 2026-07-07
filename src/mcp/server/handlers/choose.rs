@@ -9,7 +9,7 @@ use rmcp::{
     model::{CallToolResult, Content},
     tool, tool_router,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::relay::{RelayRequest, RelayResponse};
 use crate::runtime::inscriptions::emit_inscription;
@@ -68,15 +68,28 @@ impl McpServer {
                 reason_code,
                 reason,
             }) => {
-                let response = json!({
-                    "schema_version": schema_version,
-                    "status": status,
-                    "choice_request_id": choice_request_id,
-                    "outcome": outcome,
-                    "decided_by": decided_by,
-                    "reason_code": reason_code,
-                    "reason": reason,
-                });
+                // Omit absent optional fields rather than serializing them as
+                // null: decided_by, reason_code, and reason follow the relay's
+                // skip_serializing_if semantics (the json! re-box would otherwise
+                // force them back to null).
+                let mut response_map = serde_json::Map::new();
+                response_map.insert("schema_version".to_string(), Value::String(schema_version));
+                response_map.insert("status".to_string(), Value::String(status));
+                response_map.insert(
+                    "choice_request_id".to_string(),
+                    Value::String(choice_request_id),
+                );
+                response_map.insert("outcome".to_string(), Value::String(outcome));
+                if let Some(decided_by) = decided_by {
+                    response_map.insert("decided_by".to_string(), Value::String(decided_by));
+                }
+                if let Some(reason_code) = reason_code {
+                    response_map.insert("reason_code".to_string(), Value::String(reason_code));
+                }
+                if let Some(reason) = reason {
+                    response_map.insert("reason".to_string(), Value::String(reason));
+                }
+                let response = Value::Object(response_map);
                 emit_inscription(
                     "mcp.tool.choose.success",
                     &json!({

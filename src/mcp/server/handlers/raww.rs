@@ -6,7 +6,7 @@ use rmcp::{
     model::{CallToolResult, Content},
     tool, tool_router,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::relay::{RelayRequest, RelayResponse};
 use crate::runtime::inscriptions::emit_inscription;
@@ -74,14 +74,22 @@ impl McpServer {
                 request_id,
                 message_id,
             }) => {
-                let response = json!({
-                    "schema_version": schema_version,
-                    "status": status,
-                    "target_session": target_session,
-                    "transport": transport,
-                    "request_id": request_id,
-                    "message_id": message_id,
-                });
+                // Omit absent optional fields rather than serializing them as
+                // null: request_id and message_id follow the relay's
+                // skip_serializing_if semantics (the json! re-box would otherwise
+                // force them back to null).
+                let mut response_map = serde_json::Map::new();
+                response_map.insert("schema_version".to_string(), Value::String(schema_version));
+                response_map.insert("status".to_string(), Value::String(status));
+                response_map.insert("target_session".to_string(), Value::String(target_session));
+                response_map.insert("transport".to_string(), json!(transport));
+                if let Some(request_id) = request_id {
+                    response_map.insert("request_id".to_string(), Value::String(request_id));
+                }
+                if let Some(message_id) = message_id {
+                    response_map.insert("message_id".to_string(), Value::String(message_id));
+                }
+                let response = Value::Object(response_map);
                 emit_inscription(
                     "mcp.tool.raww.success",
                     &json!({

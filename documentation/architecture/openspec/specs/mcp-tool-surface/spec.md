@@ -741,13 +741,15 @@ The following payload fields SHALL be rejected with `validation_invalid_params`:
 
 Unknown fields SHALL be rejected with `validation_invalid_params`.
 
-Successful response SHALL preserve relay decision payload contract including:
+Successful response SHALL preserve the relay decision payload contract:
 
 - `schema_version`
 - `status`
 - `choice_request_id`
 - `outcome`
-- `decided_by` (relay-derived, association-bound)
+- optional `decided_by` (relay-derived, association-bound; present when the
+  relay supplies it, omitted otherwise per the relay contract's
+  skip-serializing semantics)
 - optional `reason_code`, `reason`
 
 #### Scenario: Choose with explicit option id

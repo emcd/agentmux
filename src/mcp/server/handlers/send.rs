@@ -74,19 +74,36 @@ impl McpServer {
                 on_behalf_of,
                 results,
             }) => {
-                let mut response = json!({
-                    "schema_version": schema_version,
-                    "request_id": request_id,
-                    "requester_session": requester_session,
-                    "sender_display_name": sender_display_name,
-                    "results": results,
-                });
+                // Omit absent optional fields rather than serializing them as
+                // null: request_id (present only when the caller provided one) and
+                // sender_display_name follow the relay's skip_serializing_if
+                // semantics, matching the identity fields below.
+                let mut response_map = serde_json::Map::new();
+                response_map.insert("schema_version".to_string(), Value::String(schema_version));
+                if let Some(request_id) = request_id {
+                    response_map.insert("request_id".to_string(), Value::String(request_id));
+                }
+                response_map.insert(
+                    "requester_session".to_string(),
+                    Value::String(requester_session),
+                );
+                if let Some(sender_display_name) = sender_display_name {
+                    response_map.insert(
+                        "sender_display_name".to_string(),
+                        Value::String(sender_display_name),
+                    );
+                }
                 if let Some(identity) = authenticated_identity {
-                    response["authenticated_identity"] = Value::String(identity);
+                    response_map.insert(
+                        "authenticated_identity".to_string(),
+                        Value::String(identity),
+                    );
                 }
                 if let Some(delegate) = on_behalf_of {
-                    response["on_behalf_of"] = Value::String(delegate);
+                    response_map.insert("on_behalf_of".to_string(), Value::String(delegate));
                 }
+                response_map.insert("results".to_string(), json!(results));
+                let response = Value::Object(response_map);
                 emit_inscription(
                     "mcp.tool.send.success",
                     &json!({
