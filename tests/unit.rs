@@ -23,6 +23,8 @@ mod relay_stream;
 mod relay_stream_client;
 #[path = "unit/runtime_inscriptions.rs"]
 mod runtime_inscriptions;
+#[path = "unit/runtime_owned_relay.rs"]
+mod runtime_owned_relay;
 #[path = "unit/runtime_paths.rs"]
 mod runtime_paths;
 #[path = "unit/runtime_starter.rs"]

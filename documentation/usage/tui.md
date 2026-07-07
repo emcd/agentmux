@@ -22,6 +22,18 @@ Startup behavior:
 - Auto-start uses the same resolved runtime roots as the active TUI launch
   (`--config-directory`, `--state-directory`, `--inscriptions-directory`).
 
+Relay lifecycle:
+
+- If the TUI auto-spawns a relay, it stops that relay when the TUI exits (any
+  exit path: quit key or terminal signal). Shutdown is graceful and active — it
+  prunes the tmux sessions the relay owns and reaps the tmux server — so the
+  coder sessions that relay is hosting are torn down with it.
+- A TUI-auto-spawned relay is therefore an ad hoc, single-operator convenience,
+  not a durable or shared relay. For a relay that must outlive any single TUI
+  (or be shared across clients), run it under a service manager (e.g. systemd)
+  or via `agentmux host relay` directly. A relay that is already running when
+  the TUI starts is left untouched on TUI exit.
+
 ## Screen Modes
 
 The TUI has two co-equal top-level screen modes. Exactly one is active at a
