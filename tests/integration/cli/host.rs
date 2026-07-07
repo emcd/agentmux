@@ -12,6 +12,7 @@ use agentmux::runtime::paths::RelayRuntimePaths;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+use super::super::support::process;
 use super::helpers::*;
 
 /// Wait budget for observing a watcher-driven signal: a reload/suppression
@@ -20,6 +21,15 @@ use super::helpers::*;
 /// parallel on arbitrarily loaded machines; every wait returns as soon as the
 /// signal arrives, so the budget is only paid on genuine failure.
 const WATCHER_SIGNAL_WAIT_BUDGET: Duration = Duration::from_secs(30);
+
+/// Negative-assertion budget for `--no-watch` and `watch-bundles = false`
+/// tests: how long to wait after writing a runtime bundle before asserting
+/// the relay still reports it as unknown. A watcher (if one existed)
+/// would have had this long to reconcile. The watcher polls on the
+/// bundle-watcher's internal interval (well under 1 second even on
+/// slow CI); 1 second is generous margin to ensure a missing watcher
+/// is correctly distinguished from a slow watcher.
+const WATCHER_RECONCILE_BUDGET: Duration = Duration::from_secs(1);
 
 /// Connects a raw client to the live relay socket, sends one Hello, and returns
 /// the first server frame (a `hello_ack` on acceptance or an error `response`
@@ -39,7 +49,11 @@ fn relay_hello_first_frame(state_root: &Path, principal_id: &str, identity_token
         .write_all(format!("{encoded}\n").as_bytes())
         .expect("write hello");
     stream.flush().expect("flush hello");
-    let mut reader = BufReader::new(stream.try_clone().expect("clone relay stream"));
+    let reader_stream = stream.try_clone().expect("clone relay stream");
+    reader_stream
+        .set_read_timeout(Some(WATCHER_SIGNAL_WAIT_BUDGET))
+        .expect("set hello read timeout");
+    let mut reader = BufReader::new(reader_stream);
     let mut line = String::new();
     reader.read_line(&mut line).expect("read relay frame");
     serde_json::from_str(line.trim_end()).expect("decode relay frame")
@@ -240,8 +254,7 @@ fn host_relay_default_mode_starts_autostart_bundles() {
         .expect("spawn agentmux host relay");
     wait_for_relay_ready(&state_root, "alpha");
     shutdown_relay_if_present(&state_root, "alpha");
-    let output = child
-        .wait_with_output()
+    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
         .expect("wait for agentmux host relay");
 
     assert!(output.status.success(), "command should succeed");
@@ -362,8 +375,7 @@ fn host_relay_records_startup_failures_and_list_reports_degraded_health() {
     );
 
     shutdown_relay_if_present(&state_root, "alpha");
-    let output = child
-        .wait_with_output()
+    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
         .expect("wait for agentmux host relay");
     assert!(output.status.success(), "command should succeed");
 }
@@ -406,8 +418,7 @@ fn host_relay_autostart_summary_folds_failed_session_reasons() {
         .expect("spawn agentmux host relay");
     wait_for_relay_ready(&state_root, "alpha");
     shutdown_relay_if_present(&state_root, "alpha");
-    let output = child
-        .wait_with_output()
+    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
         .expect("wait for agentmux host relay");
     assert!(output.status.success(), "command should succeed");
 
@@ -542,8 +553,7 @@ fn host_relay_clears_startup_failures_for_sessions_that_start_successfully() {
     );
 
     shutdown_relay_if_present(&state_root, "alpha");
-    let output = child
-        .wait_with_output()
+    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
         .expect("wait for agentmux host relay");
     assert!(output.status.success(), "command should succeed");
 }
@@ -703,8 +713,7 @@ fn host_relay_no_autostart_mode_reports_process_only_summary() {
         .expect("spawn agentmux host relay --no-autostart");
     wait_for_relay_ready(&state_root, "alpha");
     shutdown_relay_if_present(&state_root, "alpha");
-    let output = child
-        .wait_with_output()
+    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
         .expect("wait for agentmux host relay --no-autostart");
 
     assert!(output.status.success(), "command should succeed");
@@ -770,8 +779,7 @@ fn host_relay_require_credentials_flag_rejects_socket_trust() {
     let frame = relay_hello_first_frame(&state_root, "a@alpha", "socket-trust");
 
     shutdown_relay_if_present(&state_root, "alpha");
-    let output = child
-        .wait_with_output()
+    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
         .expect("wait for agentmux host relay");
     assert!(output.status.success(), "command should succeed");
 
@@ -824,8 +832,7 @@ fn host_relay_without_require_credentials_accepts_socket_trust() {
     let frame = relay_hello_first_frame(&state_root, "a@alpha", "socket-trust");
 
     shutdown_relay_if_present(&state_root, "alpha");
-    let output = child
-        .wait_with_output()
+    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
         .expect("wait for agentmux host relay");
     assert!(output.status.success(), "command should succeed");
 
@@ -876,8 +883,7 @@ fn host_relay_require_credentials_from_relay_toml_rejects_socket_trust() {
     let frame = relay_hello_first_frame(&state_root, "a@alpha", "socket-trust");
 
     shutdown_relay_if_present(&state_root, "alpha");
-    let output = child
-        .wait_with_output()
+    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
         .expect("wait for agentmux host relay");
     assert!(output.status.success(), "command should succeed");
 
@@ -1037,8 +1043,7 @@ fn host_relay_watcher_loads_new_bundle_file_at_runtime() {
     });
 
     shutdown_relay_if_present(&state_root, "alpha");
-    let output = child
-        .wait_with_output()
+    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
         .expect("wait for agentmux host relay");
     assert!(output.status.success(), "command should succeed");
 
@@ -1117,8 +1122,7 @@ fn host_relay_watcher_loads_non_autostart_bundle_held_without_starting() {
     });
 
     shutdown_relay_if_present(&state_root, "alpha");
-    let output = child
-        .wait_with_output()
+    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
         .expect("wait for agentmux host relay");
     assert!(output.status.success(), "command should succeed");
 
@@ -1201,8 +1205,7 @@ fn host_relay_watcher_unloads_removed_bundle_file_at_runtime() {
     let after = relay_hello_first_frame(&state_root, "a@alpha", "socket-trust");
 
     shutdown_relay_if_present(&state_root, "alpha");
-    let output = child
-        .wait_with_output()
+    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
         .expect("wait for agentmux host relay");
     assert!(output.status.success(), "command should succeed");
 
@@ -1287,8 +1290,7 @@ fn host_relay_watcher_reloads_modified_bundle_file_at_runtime() {
     });
 
     shutdown_relay_if_present(&state_root, "alpha");
-    let output = child
-        .wait_with_output()
+    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
         .expect("wait for agentmux host relay");
     assert!(output.status.success(), "command should succeed");
 
@@ -1412,8 +1414,7 @@ fn host_relay_watcher_preserves_down_intent_across_file_edit() {
     );
 
     shutdown_relay_if_present(&state_root, "alpha");
-    let output = child
-        .wait_with_output()
+    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
         .expect("wait for agentmux host relay");
     assert!(output.status.success(), "command should succeed");
 
@@ -1497,8 +1498,7 @@ fn host_relay_watcher_holds_non_autostart_bundle_on_file_edit() {
     );
 
     shutdown_relay_if_present(&state_root, "alpha");
-    let output = child
-        .wait_with_output()
+    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
         .expect("wait for agentmux host relay");
     assert!(output.status.success(), "command should succeed");
 
@@ -1570,12 +1570,11 @@ fn host_relay_no_watch_flag_disables_runtime_reconcile() {
     );
     // Give a watcher (if one existed) ample time to reconcile, then confirm the
     // bundle is still unknown: no reconciliation happened.
-    thread::sleep(Duration::from_secs(1));
+    thread::sleep(WATCHER_RECONCILE_BUDGET);
     let frame = relay_hello_first_frame(&state_root, "b@bravo", "socket-trust");
 
     shutdown_relay_if_present(&state_root, "alpha");
-    let output = child
-        .wait_with_output()
+    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
         .expect("wait for agentmux host relay");
     assert!(output.status.success(), "command should succeed");
 
@@ -1639,12 +1638,11 @@ fn host_relay_watch_bundles_false_from_relay_toml_disables_reconcile() {
     );
     // Give a watcher (if one existed) ample time to reconcile, then confirm the
     // bundle is still unknown: no reconciliation happened.
-    thread::sleep(Duration::from_secs(1));
+    thread::sleep(WATCHER_RECONCILE_BUDGET);
     let frame = relay_hello_first_frame(&state_root, "b@bravo", "socket-trust");
 
     shutdown_relay_if_present(&state_root, "alpha");
-    let output = child
-        .wait_with_output()
+    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
         .expect("wait for agentmux host relay");
     assert!(output.status.success(), "command should succeed");
 

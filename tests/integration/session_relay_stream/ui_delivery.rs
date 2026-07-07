@@ -326,7 +326,7 @@ fn relay_configured_ui_target_recovers_after_late_stream_registration() {
 
     // Let the worker process send #1 so the routing decision is exercised once
     // while no UI stream exists.
-    thread::sleep(Duration::from_millis(300));
+    thread::sleep(UI_DELIVERY_WORKER_BUDGET);
 
     // The UI client now connects and registers a Ui stream for `display`.
     let (mut ui_client, ui_handle) = spawn_relay_stream(&configuration_root, &bundle_paths);

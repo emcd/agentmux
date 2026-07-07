@@ -633,6 +633,15 @@ const INGRESS_PEER_TOKEN: &str = "ingress-peer-secret";
 const INGRESS_PEER_CREDENTIAL_HASH: &str =
     "1c9c2d8823d0f52409743bb29168008f69157c166de636fcca23631e26f8daa7";
 
+/// Negative-assertion budget: how long to wait after `SendOutcome::Queued`
+/// for the worker to attempt delivery against a not-yet-registered UI
+/// stream, before the test registers the UI stream. The worker must
+/// have had time to subscribe-fail-drop for the routing decision to be
+/// exercised; 300ms is generous for the worker cycle on any loaded
+/// CI machine. Reduce with a per-test override if a future test
+/// shows the cycle is faster.
+const UI_DELIVERY_WORKER_BUDGET: Duration = Duration::from_millis(300);
+
 // A per-test-unique peer relay principal id. The process-wide stream registry is
 // keyed by `principal_id`, so concurrent tests must not share one or they collide
 // with an identity-claim conflict. The credential hash is fixed (tied to the one

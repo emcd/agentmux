@@ -13,6 +13,7 @@ use agentmux::runtime::paths::{
 use serde_json::Value;
 use tempfile::TempDir;
 
+use super::super::support::process;
 use super::helpers::*;
 
 #[test]
@@ -45,7 +46,8 @@ fn send_rejects_conflicting_flag_and_piped_message_sources() {
             .write_all(b"hello from stdin")
             .expect("write piped input");
     }
-    let output = child.wait_with_output().expect("wait for child");
+    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
+        .expect("wait for child");
     assert!(!output.status.success(), "command should fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -121,7 +123,8 @@ fn send_accepts_message_flag_when_piped_stdin_is_empty() {
         .spawn()
         .expect("spawn agentmux send");
     drop(child.stdin.take());
-    let output = child.wait_with_output().expect("wait for child");
+    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
+        .expect("wait for child");
     relay_thread.join().expect("join fake relay thread");
 
     assert!(output.status.success(), "command should succeed");
@@ -202,7 +205,8 @@ fn send_preserves_valid_explicit_session_in_relay_request() {
         let stdin = child.stdin.as_mut().expect("open child stdin");
         stdin.write_all(b"hello").expect("write piped input");
     }
-    let output = child.wait_with_output().expect("wait for child");
+    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
+        .expect("wait for child");
     relay_thread.join().expect("join fake relay thread");
 
     assert!(output.status.success(), "command should succeed");
@@ -268,7 +272,8 @@ fn send_rejects_unknown_explicit_session_without_fallback() {
         let stdin = child.stdin.as_mut().expect("open child stdin");
         stdin.write_all(b"hello").expect("write piped input");
     }
-    let output = child.wait_with_output().expect("wait for child");
+    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
+        .expect("wait for child");
 
     assert!(!output.status.success(), "command should fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -350,7 +355,8 @@ fn send_uses_tui_defaults_for_bundle_and_session() {
         let stdin = child.stdin.as_mut().expect("open child stdin");
         stdin.write_all(b"hello").expect("write piped input");
     }
-    let output = child.wait_with_output().expect("wait for child");
+    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
+        .expect("wait for child");
     relay_thread.join().expect("join fake relay thread");
     assert!(output.status.success(), "command should succeed");
 
