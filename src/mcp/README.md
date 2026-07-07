@@ -86,14 +86,15 @@ This module implements the MCP stdio server for `agentmux`.
    from `McpState.configuration.sender_session` (or surfaces
    `validation_unknown_sender` if the MCP server is unassociated), and
    builds a `RelayRequest`.
-5. For `send`, `qualify_send_targets` fills in the `@<namespace>` suffix
-   the relay requires on every target: a target that already carries
-   `@<namespace>` passes through verbatim; a bare target is qualified
-   with the MCP server's bound bundle; a bare target on a relay-wide
-   (unassociated) MCP server has no namespace to borrow and is rejected
-   as `validation_unqualified_target` rather than silently borrowing
-   one. `look` and `raww` do not qualify: the caller-supplied
-   `target_session` must already carry `@<namespace>`.
+5. `send`, `look`, and `raww` qualify their targets through the shared
+   `qualify_target` helper, filling in the `@<namespace>` suffix the relay
+   requires: a target that already carries `@<namespace>` passes through
+   verbatim (so a `<session>@<peer-bundle>` target still reaches a peer
+   bundle); a bare target is qualified with the MCP server's bound bundle;
+   a bare target on a relay-wide (unassociated) MCP server has no namespace
+   to borrow and is rejected as `validation_unqualified_target` rather than
+   silently borrowing one. (`send` qualifies its whole target list via
+   `qualify_send_targets`, which maps `qualify_target` over each entry.)
 6. Request is forwarded as a relay contract:
    - `list` (`command="principals"`) -> `RelayStreamSession`
      (`RelayRequest::List`). For `args.namespace="*"` the MCP server
@@ -279,9 +280,10 @@ This module implements the MCP stdio server for `agentmux`.
   `option_id` is rejected with `validation_invalid_params`; caller
   -supplied sender-identity fields (`decided_by`, `ui_session_id`,
   `operator_session_id`) are rejected as unknown parameters.
-- `send` enforces target qualification via `qualify_send_targets`:
-  a bare target on a relay-wide (unassociated) MCP server is
-  rejected with `validation_unqualified_target` rather than
+- `send`, `look`, and `raww` enforce target qualification via the shared
+  `qualify_target` helper (`send` maps it over its target list as
+  `qualify_send_targets`): a bare target on a relay-wide (unassociated) MCP
+  server is rejected with `validation_unqualified_target` rather than
   silently borrowing a namespace.
 - Help schemas set `additionalProperties=false` for documented
   request shapes.

@@ -341,8 +341,12 @@ The system SHALL expose a read-only MCP inspection tool named `look`.
   `<session>@<bundle>` id to inspect a session in a peer bundle)
 - `lines` (optional positive integer)
 
-The tool forwards `target_session` to the relay verbatim; cross-bundle
-resolution and authorization are performed by the relay and surfaced unchanged.
+A bare `target_session` is qualified to the MCP server's bound bundle before the
+relay call; a target that already carries an `@<bundle>` suffix is forwarded
+verbatim (so a peer-bundle target reaches that bundle). A bare target on a
+relay-wide (unassociated) MCP server is rejected with
+`validation_unqualified_target`. Cross-bundle resolution and authorization are
+performed by the relay and surfaced unchanged.
 
 #### Scenario: Advertise look tool
 
@@ -594,8 +598,12 @@ MCP `raww` request fields SHALL be:
 - `no_enter` (optional boolean, default `false`)
 - `request_id` (optional)
 
-Routing context for `raww` SHALL be inferred from the `@<namespace>` suffix of
-`target_session`. No explicit `namespace` parameter is accepted.
+A bare `target_session` SHALL be qualified to the MCP server's bound bundle
+before the relay call; a target that already carries an `@<namespace>` suffix is
+forwarded verbatim. A bare target on a relay-wide (unassociated) MCP server SHALL
+be rejected with `validation_unqualified_target`. Routing context for `raww` SHALL
+then be inferred from the target's `@<namespace>` suffix. No explicit `namespace`
+parameter is accepted.
 
 `raww` requests SHALL reject caller-supplied sender-like identity fields with
 `validation_invalid_params`.
