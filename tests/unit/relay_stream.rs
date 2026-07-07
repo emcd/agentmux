@@ -24,6 +24,16 @@ use tokio::runtime::Builder as TokioRuntimeBuilder;
 // the OS stream.
 const TEST_PRE_HELLO_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Negative-assertion budget: how long to wait after joining a relay
+/// connection's thread before spawning a second connection. The first
+/// connection's worker thread returns immediately on `shutdown_stream`,
+/// but the relay's internal cleanup (closing the registered stream,
+/// flushing the drain coordinator, releasing the slot) is asynchronous.
+/// 200ms is generous for in-process cleanup on any loaded CI
+/// machine; shorter values risk the second connection observing
+/// stale state from the first.
+const RELAY_CONNECTION_CLEANUP_BUDGET: Duration = Duration::from_millis(200);
+
 #[path = "relay_stream/choices.rs"]
 mod choices;
 #[path = "relay_stream/identity/mod.rs"]

@@ -384,7 +384,7 @@ fn choice_request_persists_across_authorized_ui_reconnect() {
     shutdown_stream(&first_client, "shutdown first client");
     first_handle.join().expect("join first relay thread");
 
-    thread::sleep(std::time::Duration::from_millis(200));
+    thread::sleep(RELAY_CONNECTION_CLEANUP_BUDGET);
 
     let (mut second_client, second_handle) =
         spawn_relay_connection(&configuration_root, &bundle_paths);

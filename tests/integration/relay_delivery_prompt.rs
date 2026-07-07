@@ -11,6 +11,15 @@ use crate::support::relay_delivery::{
     tmux_command, wait_for_pane_contains, write_bundle_configuration_members,
 };
 
+/// Negative-assertion budget: how long to wait after `SendOutcome::Queued`
+/// before asserting the message has NOT been injected into the tmux
+/// pane. The relay delivers via a worker that subscribes to a UI stream;
+/// if no UI stream is registered (this test's setup), the worker drops
+/// the message. 2 seconds is generous for the worker's subscribe-no-
+/// stream cycle on any reasonably loaded CI runner. Reduce with a
+/// per-test override if a future test shows the cycle is faster.
+const RELAY_NEGATIVE_DELIVERY_BUDGET: Duration = Duration::from_millis(2_000);
+
 fn dispatch_request(
     request: RelayRequest,
     configuration_root: &std::path::Path,
@@ -194,7 +203,7 @@ fn relay_send_times_out_when_prompt_readiness_never_matches() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].outcome, SendOutcome::Queued);
 
-    std::thread::sleep(Duration::from_millis(2_000));
+    std::thread::sleep(RELAY_NEGATIVE_DELIVERY_BUDGET);
     let snapshot = capture_pane(&paths.tmux_socket, "bravo", "-200");
     assert!(
         !snapshot.contains(marker),
@@ -494,7 +503,7 @@ fn relay_send_times_out_when_prompt_idle_column_does_not_match() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].outcome, SendOutcome::Queued);
 
-    std::thread::sleep(Duration::from_millis(2_000));
+    std::thread::sleep(RELAY_NEGATIVE_DELIVERY_BUDGET);
     let snapshot = capture_pane(&paths.tmux_socket, "bravo", "-200");
     assert!(
         !snapshot.contains(marker),

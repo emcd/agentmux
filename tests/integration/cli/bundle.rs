@@ -6,6 +6,7 @@ use std::{
 use serde_json::Value;
 use tempfile::TempDir;
 
+use super::super::support::process;
 use super::helpers::*;
 
 #[test]
@@ -153,7 +154,9 @@ fn up_and_down_report_idempotent_transitions() {
     );
 
     shutdown_relay_if_present(&state_root, "alpha");
-    let host_output = host_child.wait_with_output().expect("wait for relay host");
+    let host_output =
+        process::wait_with_output_bounded(host_child, process::HARNESS_CHILD_WAIT_DEFAULT)
+            .expect("wait for relay host");
     assert!(host_output.status.success(), "host should succeed");
 }
 
@@ -254,7 +257,9 @@ fn up_rejects_caller_whose_policy_lacks_updown() {
     );
 
     shutdown_relay_if_present(&state_root, "alpha");
-    let host_output = host_child.wait_with_output().expect("wait for relay host");
+    let host_output =
+        process::wait_with_output_bounded(host_child, process::HARNESS_CHILD_WAIT_DEFAULT)
+            .expect("wait for relay host");
     assert!(host_output.status.success(), "host should succeed");
 }
 
@@ -315,7 +320,9 @@ fn up_succeeds_for_operator_policy_with_updown_capability() {
     assert_eq!(summary["bundles"][0]["outcome"], "hosted");
 
     shutdown_relay_if_present(&state_root, "alpha");
-    let host_output = host_child.wait_with_output().expect("wait for relay host");
+    let host_output =
+        process::wait_with_output_bounded(host_child, process::HARNESS_CHILD_WAIT_DEFAULT)
+            .expect("wait for relay host");
     assert!(host_output.status.success(), "host should succeed");
 }
 
@@ -357,8 +364,7 @@ fn host_relay_summary_json_omits_group_name() {
         .expect("spawn agentmux host relay");
     wait_for_relay_ready(&state_root, "alpha");
     shutdown_relay_if_present(&state_root, "alpha");
-    let output = child
-        .wait_with_output()
+    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
         .expect("wait for agentmux host relay");
     assert!(output.status.success(), "command should succeed");
     let stdout = String::from_utf8_lossy(&output.stdout);
