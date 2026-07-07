@@ -13,7 +13,7 @@ use serde_json::json;
 use crate::relay::{RelayRequest, RelayResponse};
 use crate::runtime::inscriptions::emit_inscription;
 
-use crate::mcp::errors::{internal_tool_error, map_relay_error, validation_tool_error};
+use crate::mcp::errors::validation_tool_error;
 use crate::mcp::params::{UPDOWN_COMMAND_DOWN, UPDOWN_COMMAND_UP, UpdownArgs, UpdownParams};
 use crate::mcp::server::McpServer;
 use crate::mcp::validation::{parse_meta_tool_args, validate_updown_args, validate_updown_params};
@@ -22,7 +22,7 @@ use crate::mcp::validation::{parse_meta_tool_args, validate_updown_args, validat
 impl McpServer {
     #[tool(
         name = "updown",
-        description = "Administer bundle runtime updown. Use command=\"up\" to host the associated bundle or command=\"down\" to unhost it."
+        description = "Administer the associated bundle's runtime state. Use command=\"up\" to host it or command=\"down\" to unhost it."
     )]
     async fn tool_updown(
         &self,
@@ -62,11 +62,10 @@ impl McpServer {
         command: &str,
         request: RelayRequest,
     ) -> Result<CallToolResult, McpError> {
-        let request_event = format!("mcp.tool.updown.{command}.request");
-        let success_event = format!("mcp.tool.updown.{command}.success");
-        let relay_error_event = format!("mcp.tool.updown.{command}.relay_error");
-        let unexpected_event = format!("mcp.tool.updown.{command}.unexpected_response");
-        let io_error_event = format!("mcp.tool.updown.{command}.io_error");
+        let event_prefix = format!("mcp.tool.updown.{command}");
+        let request_event = format!("{event_prefix}.request");
+        let success_event = format!("{event_prefix}.success");
+        let io_error_event = format!("{event_prefix}.io_error");
         emit_inscription(
             request_event.as_str(),
             &json!({
@@ -105,25 +104,7 @@ impl McpServer {
                 );
                 Ok(CallToolResult::success(vec![Content::json(response)?]))
             }
-            Ok(RelayResponse::Error { error }) => {
-                emit_inscription(
-                    relay_error_event.as_str(),
-                    &json!({
-                        "code": error.code.clone(),
-                        "message": error.message.clone(),
-                        "details": error.details.clone(),
-                    }),
-                );
-                Err(map_relay_error(error))
-            }
-            Ok(other) => {
-                emit_inscription(unexpected_event.as_str(), &json!({"response": other}));
-                Err(internal_tool_error(
-                    "internal_unexpected_failure",
-                    "relay returned unexpected response variant",
-                    Some(json!({"response": other})),
-                ))
-            }
+            Ok(other) => Err(self.map_nonsuccess_relay_response(event_prefix.as_str(), other)),
             Err(source) => Err(self.map_relay_stream_failure(io_error_event.as_str(), source)),
         }
     }

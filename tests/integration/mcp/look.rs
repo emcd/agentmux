@@ -523,3 +523,54 @@ async fn look_surfaces_authenticated_identity_from_relay() {
     // entirely rather than surfaced as null.
     assert!(payload.get("on_behalf_of").is_none());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn look_maps_unexpected_relay_variant_to_internal_error() {
+    // A relay that answers `look` with a valid but wrong response variant must
+    // surface as `internal_unexpected_failure` carrying the shared
+    // "relay returned unexpected response variant" message and echoing the
+    // offending variant under details.response. This locks the failure-tail
+    // mapping that every tool now routes through
+    // `map_nonsuccess_relay_response`, distinct from a relay-side error.
+    let runtime = TestRuntime::create();
+    let _relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("look") => json!({
+                    "kind": "change_psk",
+                    "schema_version": "1",
+                    "principal_id": format!("bravo@{BUNDLE_NAME}"),
+                    "psk": "unexpected-variant",
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let mut arguments = Map::new();
+    arguments.insert(
+        "target_session".to_string(),
+        Value::String("bravo".to_string()),
+    );
+    let response = harness.call_tool(2, "look", arguments).await;
+
+    assert!(
+        response.get("result").is_none(),
+        "expected error response for unexpected relay variant: {response}"
+    );
+    let data = &response["error"]["data"];
+    assert_eq!(data["code"], "internal_unexpected_failure");
+    assert_eq!(
+        data["message"],
+        "relay returned unexpected response variant"
+    );
+    assert_eq!(data["details"]["response"]["kind"], "change_psk");
+}

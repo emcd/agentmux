@@ -24,10 +24,10 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
             "tools": [
                 {"tool": TOOL_LIST, "kind": "meta_tool", "description": "List principals for one namespace or fan out across namespaces."},
                 {"tool": TOOL_SEND, "kind": "tool", "description": "Submit a message to explicit targets or broadcast."},
-                {"tool": TOOL_LOOK, "kind": "tool", "description": "Inspect a target session pane snapshot for this bundle."},
-                {"tool": TOOL_RAWW, "kind": "tool", "description": "Write raw text directly to one target session."},
+                {"tool": TOOL_LOOK, "kind": "tool", "description": "Inspect a target session's latest snapshot: tmux pane lines, or ACP structured replay entries. Target is a bare id in the associated bundle or a fully-qualified id@namespace peer."},
+                {"tool": TOOL_RAWW, "kind": "tool", "description": "Write raw text directly to one target session's input, bypassing normal chat/message semantics; use with care. Target is a bare id in the associated bundle or a fully-qualified id@namespace peer."},
                 {"tool": TOOL_CHOOSE, "kind": "tool", "description": "Submit an ACP-native decision on a pending choice request."},
-                {"tool": TOOL_UPDOWN, "kind": "meta_tool", "description": "Administer bundle runtime updown (up/down)."},
+                {"tool": TOOL_UPDOWN, "kind": "meta_tool", "description": "Administer the associated bundle's runtime state (up=host, down=unhost)."},
                 {"tool": TOOL_NEW, "kind": "meta_tool", "description": "Register a principal credential and mint its PSK."},
                 {"tool": TOOL_CHANGE, "kind": "meta_tool", "description": "Rotate the PSK for an existing principal."},
                 {"tool": TOOL_HELP, "kind": "tool", "description": "Return tool/command help and JSON schemas."}
@@ -94,7 +94,7 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
         )),
         TOOL_LOOK => Ok(command_help(
             TOOL_LOOK,
-            "Inspect a target session pane snapshot for this bundle.",
+            "Inspect a target session's latest snapshot: tmux pane lines, or ACP structured replay entries. Target is a bare id in the associated bundle or a fully-qualified id@namespace peer.",
             json_schema_for::<LookParams>(),
             json!({
                 "tool": TOOL_LOOK,
@@ -103,7 +103,7 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
         )),
         TOOL_RAWW => Ok(command_help(
             TOOL_RAWW,
-            "Write raw text directly to one target session.",
+            "Write raw text directly to one target session's input, bypassing normal chat/message semantics; use with care. Target is a bare id in the associated bundle or a fully-qualified id@namespace peer.",
             json_schema_for::<RawwParams>(),
             json!({
                 "tool": TOOL_RAWW,
@@ -135,7 +135,7 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
         TOOL_UPDOWN => Ok(json!({
             "tool": TOOL_UPDOWN,
             "kind": "meta_tool",
-            "description": "Administer bundle runtime updown (up/down) for the associated bundle.",
+            "description": "Administer the associated bundle's runtime state (up=host, down=unhost).",
             "commands": [
                 {
                     "command": "updown.up",
