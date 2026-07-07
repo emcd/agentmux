@@ -54,7 +54,7 @@
 - [x] 4.2 Merge precedence tests (`tests/unit/config/environment.rs`): session
   overrides bundle overrides coder for a colliding name; distinct names union
   across the three levels; deterministic order asserted.
-- [~] 4.3 Per-transport application:
+- [x] 4.3 Per-transport application:
   - ACP command-spawn: covered end-to-end by the existing ACP integration suite
     (`tests/integration/acp/*`), which drives its stub entirely through the
     coder-level `environment` (now `[[coders.environment]]`) — every ACP test
@@ -64,17 +64,17 @@
     `tests/integration/relay_delivery_runtime.rs` boots an autostart bundle with
     bundle-level env and asserts the fake tmux's recorded `new-session` argv
     carries `-e KEY=VALUE`.
-  - Pty: the `cmd.env` application is implemented and compile-verified but has no
-    runtime child-env test — the `pty` cargo feature is not built by the
-    canonical `cargo nextest run` (needs Zig/libghostty-vt) and no real-PTY
-    spawn harness exists in the unit suite (the pty tests exercise the
-    quiescence probe only). The hunk mirrors the proven ACP/Tmux application and
-    was reviewed/approved by Pty Specialist. **Follow-up owned by Pty Specialist**
-    (pty@agentmux): a `#[cfg(feature = "pty")]` `#[ignore]`-gated runtime test
-    modeled on the term-protocol test (`tests/unit/pty_transport.rs` ~1347-1486)
-    that spawns a child, sets operator env (incl. an explicit TERM/COLORTERM
-    override), and asserts via the PTY output view. Blocked on the ghostty pin
-    (fdbf9ff3) being unblocked.
+  - Pty: `pty_transport_runtime_child_env_propagates_operator_overrides`
+    (`tests/unit/pty_transport.rs`, `#[cfg(feature = "pty")]` `#[ignore]`-gated,
+    commit `70b269f` -> master `6e9f336`) spawns a real child and asserts
+    `BundleMember.environment` reaches it (`FOR_TEST_OPERATOR_KEY`), plus
+    operator TERM/COLORTERM overrides winning over the transport defaults.
+    RG signed off twice (initial pass + a medium-finding amend requiring the
+    startup-failure path to hard-fail via `panic!` rather than silently
+    succeed, so the test can't pass without exercising the real contract).
+    The ghostty pin (`fdbf9ff3`) turned out to be transient, not dead —
+    confirmed via three independent clean builds — so this landed without
+    further blockers.
 - [x] 4.4 Rewrote the ACP-environment fixtures to the new coder-level key:
   `tests/unit/config/coder.rs` (`loads_coder_environment_onto_member`, asserting
   `member.environment`) and the `tests/integration/acp/helpers.rs` fixture
@@ -84,8 +84,9 @@
 
 - [x] 5.1 `src/configuration/README.md` is a modules/invariants overview and
   does not enumerate the coder/bundle/session schema surface — no update needed.
-- [ ] 5.2 Commit message flags the **BREAKING** ACP-environment lift and cites
-  `agents-common:todos/template/9`. (Applied at commit time.)
+- [x] 5.2 Commit message flags the **BREAKING** ACP-environment lift and cites
+  `agents-common:todos/template/9`. (Applied at commit time; confirmed in
+  `f66bf53`'s message, merged to master as `2a44f9e`.)
 
 ## 6. Validation
 
