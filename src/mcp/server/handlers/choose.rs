@@ -14,7 +14,6 @@ use serde_json::{Value, json};
 use crate::relay::{RelayRequest, RelayResponse};
 use crate::runtime::inscriptions::emit_inscription;
 
-use crate::mcp::errors::{internal_tool_error, map_relay_error};
 use crate::mcp::params::ChooseParams;
 use crate::mcp::server::McpServer;
 use crate::mcp::validation::validate_choose_request;
@@ -101,28 +100,7 @@ impl McpServer {
                 );
                 Ok(CallToolResult::success(vec![Content::json(response)?]))
             }
-            Ok(RelayResponse::Error { error }) => {
-                emit_inscription(
-                    "mcp.tool.choose.relay_error",
-                    &json!({
-                        "code": error.code.clone(),
-                        "message": error.message.clone(),
-                        "details": error.details.clone(),
-                    }),
-                );
-                Err(map_relay_error(error))
-            }
-            Ok(other) => {
-                emit_inscription(
-                    "mcp.tool.choose.unexpected_response",
-                    &json!({"response": other}),
-                );
-                Err(internal_tool_error(
-                    "internal_unexpected_failure",
-                    "relay returned unexpected response variant",
-                    Some(json!({"response": other})),
-                ))
-            }
+            Ok(other) => Err(self.map_nonsuccess_relay_response("mcp.tool.choose", other)),
             Err(source) => Err(self.map_relay_stream_failure("mcp.tool.choose.io_error", source)),
         }
     }

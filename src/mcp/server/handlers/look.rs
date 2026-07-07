@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use crate::relay::{LookSnapshotPayload, RelayRequest, RelayResponse};
 use crate::runtime::inscriptions::emit_inscription;
 
-use crate::mcp::errors::{internal_tool_error, map_relay_error, validation_tool_error};
+use crate::mcp::errors::validation_tool_error;
 use crate::mcp::params::LookParams;
 use crate::mcp::server::McpServer;
 use crate::mcp::validation::{qualify_target, validate_look_request};
@@ -143,28 +143,7 @@ impl McpServer {
                 );
                 Ok(CallToolResult::success(vec![Content::json(response)?]))
             }
-            Ok(RelayResponse::Error { error }) => {
-                emit_inscription(
-                    "mcp.tool.look.relay_error",
-                    &json!({
-                        "code": error.code.clone(),
-                        "message": error.message.clone(),
-                        "details": error.details.clone(),
-                    }),
-                );
-                Err(map_relay_error(error))
-            }
-            Ok(other) => {
-                emit_inscription(
-                    "mcp.tool.look.unexpected_response",
-                    &json!({"response": other}),
-                );
-                Err(internal_tool_error(
-                    "internal_unexpected_failure",
-                    "relay returned unexpected response variant",
-                    Some(json!({"response": other})),
-                ))
-            }
+            Ok(other) => Err(self.map_nonsuccess_relay_response("mcp.tool.look", other)),
             Err(source) => Err(self.map_relay_stream_failure("mcp.tool.look.io_error", source)),
         }
     }

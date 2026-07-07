@@ -21,7 +21,7 @@ use crate::relay::{RelayRequest, RelayResponse, RelayStreamSession};
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::paths::{BundleRuntimePaths, RelayRuntimePaths};
 
-use crate::mcp::errors::{internal_tool_error, map_relay_request_failure};
+use crate::mcp::errors::{internal_tool_error, map_relay_error, map_relay_request_failure};
 
 /// Configuration provided when booting MCP stdio service.
 #[derive(Clone, Debug)]
@@ -111,6 +111,43 @@ impl McpServer {
             );
         }
         Ok(response)
+    }
+
+    /// Map a non-success relay response to the shared MCP error taxonomy,
+    /// emitting the matching inscription under `event_prefix`. Collapses the two
+    /// failure tails every tool repeats: a relay-side `RelayResponse::Error`
+    /// (`{event_prefix}.relay_error`) and any unexpected variant
+    /// (`{event_prefix}.unexpected_response`). Callers match the success variant
+    /// inline and route every other arm here.
+    pub(super) fn map_nonsuccess_relay_response(
+        &self,
+        event_prefix: &str,
+        response: RelayResponse,
+    ) -> rmcp::ErrorData {
+        match response {
+            RelayResponse::Error { error } => {
+                emit_inscription(
+                    &format!("{event_prefix}.relay_error"),
+                    &json!({
+                        "code": error.code.clone(),
+                        "message": error.message.clone(),
+                        "details": error.details.clone(),
+                    }),
+                );
+                map_relay_error(error)
+            }
+            other => {
+                emit_inscription(
+                    &format!("{event_prefix}.unexpected_response"),
+                    &json!({"response": other}),
+                );
+                internal_tool_error(
+                    "internal_unexpected_failure",
+                    "relay returned unexpected response variant",
+                    Some(json!({"response": other})),
+                )
+            }
+        }
     }
 
     pub(super) fn map_relay_stream_failure(
