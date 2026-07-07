@@ -537,15 +537,31 @@ where
     }
 }
 
+/// Maximum wall-clock time `assert_acp_delivery_unavailable` will wait for a
+/// failed-stage ACP worker to settle `Unavailable` before panicking. Sized to
+/// align with `agentmux::acp::client::ACP_OPERATION_TIMEOUT` so the test
+/// budget cannot be exhausted faster than the production bootstrap
+/// legitimately can; the previous 10 s value undersized under the
+/// `cargo nextest run --release` full-suite load profile (debug-mode full
+/// suite and isolated runs in the same wall-time budget stayed clean, so
+/// the constraint is load-profile-specific). On exhaustion the panic
+/// message carries the observed wall time, last seen watch state, and
+/// readiness-poll state so a future release-mode nextest flake can be
+/// triaged from the panic alone rather than re-deriving context from
+/// relay inscriptions.
+pub(super) const ACP_FAIL_LOAD_SETTLE_BUDGET: Duration = Duration::from_secs(30);
+
 /// Asserts that an ACP send to `bravo` does not succeed: either the relay
 /// rejects the enqueue outright with `runtime_acp_worker_unavailable`, or it
 /// accepts the async dispatch and the persistent worker settles `unavailable`.
 ///
 /// Subscribes to the worker readiness channel BEFORE dispatching so the
 /// terminal `Unavailable` transition cannot be missed if it fires before the
-/// test code reaches the await. Uses a 10 s budget to absorb slow stub spawns
-/// under heavy concurrent pre-commit load (the test thread is parked on the
-/// in-process watch channel, so a wider deadline costs nothing).
+/// test code reaches the await. Uses [`ACP_FAIL_LOAD_SETTLE_BUDGET`] (30 s,
+/// aligned with `ACP_OPERATION_TIMEOUT`) so the test outlasts any legitimate
+/// path the production bootstrap can take; the test thread is parked on the
+/// in-process watch channel, so the wider deadline costs nothing in the
+/// happy case.
 pub(super) fn assert_acp_delivery_unavailable(config_root: &Path, tmux_socket: &Path) {
     let root = tmux_socket.parent().unwrap_or_else(|| Path::new("."));
     let mut receiver = subscribe_bravo_worker_state(root);
@@ -553,14 +569,25 @@ pub(super) fn assert_acp_delivery_unavailable(config_root: &Path, tmux_socket: &
         Err(error) => assert_eq!(error.code, "runtime_acp_worker_unavailable"),
         Ok(response) => {
             let _result = send_result(response);
-            assert!(
-                await_acp_worker_state(
-                    &mut receiver,
-                    WorkerReadinessState::Unavailable,
-                    Duration::from_secs(10),
-                ),
-                "ACP worker did not settle unavailable after a failed startup stage"
+            let started = Instant::now();
+            let settled = await_acp_worker_state(
+                &mut receiver,
+                WorkerReadinessState::Unavailable,
+                ACP_FAIL_LOAD_SETTLE_BUDGET,
             );
+            if !settled {
+                let elapsed = started.elapsed();
+                let last_state_label = (*receiver.borrow())
+                    .map(|s| format!("{s:?}"))
+                    .unwrap_or_else(|| "None (no transitions published)".to_string());
+                let poll_state = read_worker_state(root, "bravo")
+                    .unwrap_or_else(|| "None (worker not registered)".to_string());
+                panic!(
+                    "ACP worker did not settle unavailable within {ACP_FAIL_LOAD_SETTLE_BUDGET:?} \
+                     after a failed startup stage; observed wall time {elapsed:?}, last watch \
+                     state = {last_state_label}, readiness poll state = {poll_state}"
+                );
+            }
         }
     }
 }
