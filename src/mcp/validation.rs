@@ -126,34 +126,36 @@ pub(super) fn validate_send_request(params: &SendParams) -> Result<(), McpError>
     Ok(())
 }
 
-/// Fills in the namespace suffix the relay now requires on every `send` target.
-///
-/// A target that already carries an `@<namespace>` suffix passes through
-/// verbatim (the operator named the namespace explicitly). A bare target is
-/// qualified with the MCP server's bound bundle, mirroring the convenience the
-/// relay used to perform internally. A bare target on a relay-wide
-/// (bundle-less) MCP server has no namespace to borrow, so it is rejected as
-/// unqualified rather than silently borrowing one.
+/// Qualifies one caller-supplied target with the namespace the relay requires on
+/// every target. A target that already carries an `@<namespace>` suffix passes
+/// through verbatim (so a `<session>@<peer-bundle>` target still reaches a peer
+/// bundle); a bare target is qualified with the MCP server's bound bundle. A bare
+/// target on a relay-wide (unassociated) MCP server has no namespace to borrow and
+/// is rejected as `validation_unqualified_target` rather than silently borrowing
+/// one. Shared by `send`, `look`, and `raww` so bare-target ergonomics are uniform
+/// across the delivery/inspection surface.
+pub(super) fn qualify_target(target: &str, bound_bundle: Option<&str>) -> Result<String, McpError> {
+    if target.contains('@') {
+        Ok(target.to_string())
+    } else if let Some(bundle) = bound_bundle {
+        Ok(format!("{target}@{bundle}"))
+    } else {
+        Err(validation_tool_error(
+            "validation_unqualified_target",
+            "target must be a fully-qualified principal id (id@namespace); \
+             a relay-wide MCP server cannot infer a bundle namespace",
+            Some(json!({"target": target})),
+        ))
+    }
+}
+
 pub(super) fn qualify_send_targets(
     targets: &[String],
     bound_bundle: Option<&str>,
 ) -> Result<Vec<String>, McpError> {
     targets
         .iter()
-        .map(|target| {
-            if target.contains('@') {
-                Ok(target.clone())
-            } else if let Some(bundle) = bound_bundle {
-                Ok(format!("{target}@{bundle}"))
-            } else {
-                Err(validation_tool_error(
-                    "validation_unqualified_target",
-                    "target must be a fully-qualified principal id (id@namespace); \
-                     a relay-wide MCP server cannot infer a bundle namespace",
-                    Some(json!({"target": target})),
-                ))
-            }
-        })
+        .map(|target| qualify_target(target, bound_bundle))
         .collect()
 }
 

@@ -304,6 +304,56 @@ async fn send_omits_sender_attribution_when_relay_omits_it() {
 
     assert!(payload.get("authenticated_identity").is_none());
     assert!(payload.get("on_behalf_of").is_none());
+    // The caller supplied no request_id and the relay omitted
+    // sender_display_name, so both are absent rather than serialized as null.
+    assert!(payload.get("request_id").is_none());
+    assert!(payload.get("sender_display_name").is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn send_includes_request_id_and_display_name_when_relay_provides_them() {
+    let runtime = TestRuntime::create();
+    let _relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("send") => json!({
+                    "kind": "send",
+                    "schema_version": "1",
+                    "request_id": request.get("request_id").cloned().unwrap_or(Value::Null),
+                    "requester_session": request.get("requester_session").cloned().unwrap_or(Value::Null),
+                    "sender_display_name": "Alpha",
+                    "results": [],
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let mut arguments = Map::new();
+    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments.insert(
+        "targets".to_string(),
+        Value::Array(vec![Value::String("bravo".to_string())]),
+    );
+    arguments.insert("broadcast".to_string(), Value::Bool(false));
+    arguments.insert(
+        "request_id".to_string(),
+        Value::String("req-send-1".to_string()),
+    );
+    let response = harness.call_tool(2, "send", arguments).await;
+    let payload = decode_tool_payload(&response);
+
+    // Present optional fields still pass through when the relay populates them.
+    assert_eq!(payload["request_id"], "req-send-1");
+    assert_eq!(payload["sender_display_name"], "Alpha");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

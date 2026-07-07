@@ -14,7 +14,7 @@ use crate::runtime::inscriptions::emit_inscription;
 use crate::mcp::errors::{internal_tool_error, map_relay_error, validation_tool_error};
 use crate::mcp::params::LookParams;
 use crate::mcp::server::McpServer;
-use crate::mcp::validation::validate_look_request;
+use crate::mcp::validation::{qualify_target, validate_look_request};
 
 #[tool_router(router = tool_router_look, vis = "pub(crate)")]
 impl McpServer {
@@ -51,9 +51,15 @@ impl McpServer {
                 )
             })?;
 
+        // Qualify a bare target to the bound bundle (mirrors send); an
+        // already-qualified `@<namespace>` target passes through so peer-bundle
+        // inspection still works. Done after sender resolution so an unidentified
+        // sender fails as `validation_unknown_sender` regardless of target shape.
+        let target_session = qualify_target(&params.target_session, self.associated_namespace())?;
+
         let request = RelayRequest::Look {
             requester_session,
-            target_session: params.target_session.clone(),
+            target_session,
             lines: params.lines.map(|value| value as usize),
             offset: params.offset.map(|value| value as usize),
         };

@@ -41,7 +41,9 @@ async fn look_returns_snapshot_payload_and_forwards_request_shape() {
 
     assert_eq!(payload["schema_version"], "1");
     assert_eq!(payload["requester_session"], SENDER_SESSION);
-    assert_eq!(payload["target_session"], "bravo");
+    // Bare `bravo` is qualified to the bound bundle before the relay call, so the
+    // relay echoes the qualified target back.
+    assert_eq!(payload["target_session"], format!("bravo@{BUNDLE_NAME}"));
     assert_eq!(payload["snapshot_format"], "lines");
     assert_eq!(
         payload["snapshot_lines"],
@@ -62,7 +64,10 @@ async fn look_returns_snapshot_payload_and_forwards_request_shape() {
     let relay_requests = relay.requests_for_operation("look");
     assert_eq!(relay_requests.len(), 1);
     assert_eq!(relay_requests[0]["requester_session"], SENDER_SESSION);
-    assert_eq!(relay_requests[0]["target_session"], "bravo");
+    assert_eq!(
+        relay_requests[0]["target_session"],
+        format!("bravo@{BUNDLE_NAME}")
+    );
     assert_eq!(relay_requests[0]["lines"], 3);
 }
 

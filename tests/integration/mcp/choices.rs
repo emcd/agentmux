@@ -132,6 +132,10 @@ async fn choose_forwards_decision_and_returns_relay_response() {
     assert_eq!(payload["choice_request_id"], "choice-1");
     assert_eq!(payload["outcome"], "selected");
     assert_eq!(payload["decided_by"], "operator@agentmux");
+    // reason_code and reason are absent on the wire, so they are omitted rather
+    // than serialized as null.
+    assert!(payload.get("reason_code").is_none());
+    assert!(payload.get("reason").is_none());
 
     let relay_requests = relay.requests_for_operation("choices_pick");
     assert_eq!(relay_requests.len(), 1);

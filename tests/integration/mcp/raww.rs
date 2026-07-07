@@ -71,7 +71,9 @@ async fn raww_returns_queued_payload_and_forwards_request_shape() {
 
     assert_eq!(payload["schema_version"], "1");
     assert_eq!(payload["status"], "queued");
-    assert_eq!(payload["target_session"], "bravo");
+    // Bare `bravo` is qualified to the bound bundle before the relay call, so the
+    // relay echoes the qualified target back.
+    assert_eq!(payload["target_session"], format!("bravo@{BUNDLE_NAME}"));
     assert_eq!(payload["transport"], "tmux");
     assert_eq!(payload["request_id"], "req-raww-1");
     assert_eq!(payload["message_id"], "raww-1");
@@ -83,7 +85,10 @@ async fn raww_returns_queued_payload_and_forwards_request_shape() {
     let relay_requests = relay.requests_for_operation("raww");
     assert_eq!(relay_requests.len(), 1);
     assert_eq!(relay_requests[0]["requester_session"], SENDER_SESSION);
-    assert_eq!(relay_requests[0]["target_session"], "bravo");
+    assert_eq!(
+        relay_requests[0]["target_session"],
+        format!("bravo@{BUNDLE_NAME}")
+    );
     assert_eq!(relay_requests[0]["text"], "hello");
     assert_eq!(relay_requests[0]["no_enter"], true);
 }
@@ -125,8 +130,13 @@ async fn raww_returns_queued_payload_for_acp_target() {
     let payload = decode_tool_payload(&response);
 
     assert_eq!(payload["status"], "queued");
-    assert_eq!(payload["target_session"], "charlie");
+    // Bare `charlie` is qualified to the bound bundle before the relay call.
+    assert_eq!(payload["target_session"], format!("charlie@{BUNDLE_NAME}"));
     assert_eq!(payload["transport"], "acp");
+    // The relay omitted request_id, so it is absent (not null); message_id is
+    // present and passes through.
+    assert!(payload.get("request_id").is_none());
+    assert_eq!(payload["message_id"], "raww-acp-1");
     assert!(
         payload.get("details").is_none(),
         "raww response must not carry a details field: {payload:?}"
@@ -254,8 +264,10 @@ async fn raww_omits_wire_envelope_namespace_for_suffix_routing() {
     let response = harness.call_tool(2, "raww", arguments).await;
     decode_tool_payload(&response);
 
-    // Raww is suffix-routed (mirrors Send): the relay derives the routing bundle
-    // from the target's `@<bundle>` suffix, so the client omits the wire namespace.
+    // Raww is suffix-routed (mirrors Send): the bare `bravo` target is qualified to
+    // the bound bundle (`bravo@party`) before the relay call, and the relay derives
+    // the routing bundle from that `@<bundle>` suffix, so the client omits the wire
+    // namespace.
     let envelopes = relay.envelopes_for_operation("raww");
     assert_eq!(envelopes.len(), 1);
     assert!(
