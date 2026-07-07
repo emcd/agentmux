@@ -297,6 +297,129 @@ pub(crate) fn write_bundle_configuration_with_environment(
     config_root
 }
 
+/// Writes a bundle whose sole coder is a stdio ACP coder backed by a stub that
+/// answers `initialize`/`session/new` but deliberately never completes a
+/// `session/prompt` turn, so a send to an ACP session leaves a turn in flight.
+/// The stub appends every spawned child's PID to `pid_file` and logs each
+/// received JSON-RPC line to `log_file`. Stub configuration rides in through the
+/// coder-level `[[coders.environment]]` surface (the same channel the ACP
+/// integration suite uses), which the relay applies to the spawned child.
+///
+/// Used to reproduce the in-flight-ACP-turn shutdown condition for
+/// `issues/relay/49`: relay shutdown must reap the delivery thread's bounded
+/// prompt-completion wait within a bounded window rather than pinning the
+/// process until SIGKILL.
+pub(crate) fn write_acp_hang_bundle_configuration(
+    root: &Path,
+    bundle_name: &str,
+    sessions: &[&str],
+    stub_path: &Path,
+    log_file: &Path,
+    pid_file: &Path,
+) -> PathBuf {
+    write_acp_hang_stub(stub_path);
+    let config_root = root.join("config");
+    let bundles = config_root.join("bundles");
+    fs::create_dir_all(&bundles).expect("create bundles directory");
+
+    let coders = format!(
+        r#"format-version = 1
+
+[[coders]]
+id = "acp"
+
+[coders.acp]
+channel = "stdio"
+command = "{command}"
+
+[[coders.environment]]
+name = "ACP_LOG_FILE"
+value = "{log}"
+
+[[coders.environment]]
+name = "ACP_PID_FILE"
+value = "{pid}"
+"#,
+        command = stub_path.display(),
+        log = log_file.display(),
+        pid = pid_file.display(),
+    );
+    fs::write(config_root.join("coders.toml"), coders).expect("write coders config");
+
+    fs::write(
+        config_root.join("policies.toml"),
+        r#"
+format-version = 1
+default = "default"
+
+[[policies]]
+id = "default"
+
+[policies.controls]
+find = "self"
+list = "home"
+look = "self"
+raww = "home"
+send = "home"
+"#,
+    )
+    .expect("write policies config");
+    fs::write(config_root.join("users.toml"), "").expect("write users config");
+
+    let mut bundle_toml = String::from("format-version = 1\nautostart = true\n");
+    for session in sessions {
+        bundle_toml.push_str(
+            format!(
+                "\n[[sessions]]\nid = \"{session}\"\nname = \"{session}\"\ndirectory = \"/tmp\"\ncoder = \"acp\"\n",
+            )
+            .as_str(),
+        );
+    }
+    fs::write(bundles.join(format!("{bundle_name}.toml")), bundle_toml)
+        .expect("write bundle config");
+    config_root
+}
+
+/// Writes a minimal stdio ACP agent stub that hangs on `session/prompt`.
+///
+/// It answers `initialize`, `session/new`, and `session/load` so worker
+/// bootstrap succeeds and the worker reaches `Available`, but on
+/// `session/prompt` it emits no `stopReason` result and loops back to read.
+/// The turn therefore stays in flight and the child stays alive (blocked on
+/// read) until relay shutdown kills it or closes its stdin (EOF ends the loop).
+fn write_acp_hang_stub(path: &Path) {
+    let script = r#"#!/bin/sh
+set -eu
+
+log_file="${ACP_LOG_FILE:?}"
+pid_file="${ACP_PID_FILE:?}"
+printf '%s\n' "$$" >> "$pid_file"
+
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$log_file"
+  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  [ -z "$id" ] && continue
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"promptSession":true}}}\n' "$id"
+      ;;
+    *'"method":"session/new"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"sess-hang"}}\n' "$id"
+      ;;
+    *'"method":"session/load"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":null}\n' "$id"
+      ;;
+    *'"method":"session/prompt"'*)
+      : # never respond -- leave the turn in flight
+      ;;
+  esac
+done
+"#;
+    fs::write(path, script).expect("write ACP hang stub");
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+        .expect("set ACP hang stub executable");
+}
+
 pub(crate) fn spawn_session(socket: &Path, session_name: &str, shell_command: &str) {
     let output = tmux_command(
         socket,
