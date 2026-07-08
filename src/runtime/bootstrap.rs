@@ -9,6 +9,7 @@ use std::{
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
+    process::Child,
     thread,
     time::{Duration, Instant},
 };
@@ -42,6 +43,74 @@ impl Default for BootstrapOptions {
 pub struct BootstrapReport {
     pub spawned_relay: bool,
 }
+
+/// A relay process that this client auto-spawned and now owns for teardown.
+///
+/// Constructed only by the client invocation that actually performed the spawn
+/// (`BootstrapReport.spawned_relay == true`). A relay that was already running
+/// when the client started is never wrapped here and is therefore never stopped
+/// by the client.
+#[derive(Debug)]
+pub struct SpawnedRelay {
+    child: Child,
+}
+
+impl SpawnedRelay {
+    /// Takes ownership of a freshly spawned relay child for later teardown.
+    #[must_use]
+    pub fn new(child: Child) -> Self {
+        Self { child }
+    }
+
+    /// Returns the spawned relay's process id.
+    #[must_use]
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    /// Sends the relay a graceful termination signal and waits up to `grace`
+    /// for it to exit.
+    ///
+    /// This reuses the relay's standard SIGTERM shutdown path, which prunes the
+    /// tmux sessions the relay owns and reaps the tmux server when it becomes
+    /// unowned (see `shutdown_bundle_runtime`). No SIGKILL fallback is issued
+    /// here: the relay installs its own shutdown watchdog that force-exits it
+    /// within its grace window if graceful teardown stalls, so the process is
+    /// guaranteed to go away without the client escalating.
+    pub fn stop(mut self, grace: Duration) {
+        signal_graceful_terminate(self.child.id());
+        let deadline = Instant::now() + grace;
+        loop {
+            match self.child.try_wait() {
+                // Reaped: teardown completed (or the relay self-force-exited).
+                Ok(Some(_status)) => return,
+                Ok(None) => {
+                    if Instant::now() >= deadline {
+                        return;
+                    }
+                    thread::sleep(POLL_SLEEP_INTERVAL);
+                }
+                // Nothing more the client can usefully do about a wait error;
+                // the relay's own watchdog still bounds its lifetime.
+                Err(_) => return,
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn signal_graceful_terminate(pid: u32) {
+    // SAFETY: `kill` targets a pid we spawned and still hold an unreaped `Child`
+    // for, so the pid cannot have been recycled onto an unrelated process. A
+    // best-effort signal; a failure (e.g. the relay already exited) needs no
+    // handling because `stop` then observes the exit through `try_wait`.
+    unsafe {
+        libc::kill(pid as libc::pid_t, libc::SIGTERM);
+    }
+}
+
+#[cfg(not(unix))]
+fn signal_graceful_terminate(_pid: u32) {}
 
 /// Acquires and holds the relay runtime lock.
 #[derive(Debug)]
