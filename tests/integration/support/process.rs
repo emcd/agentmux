@@ -135,7 +135,7 @@ mod tests {
     /// that writes nothing also completes cleanly within the budget.
     #[test]
     fn silent_child_completes_within_budget() {
-        let child = Command::new("/bin/true")
+        let child = Command::new("true")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
