@@ -34,15 +34,26 @@ use crate::transports::{
     TransportStatus, WorkerFailureReason, WorkerReadinessState,
 };
 
-use super::{
-    ACP_ERROR_CODE_INITIALIZE_FAILED, AcpBootstrapError, AcpTransport, bootstrap_acp_worker_runtime,
-};
+use super::{AcpBootstrapError, AcpTransport, bootstrap_acp_worker_runtime};
 
 const RESPAWN_BACKOFF_MAX_MS_ENVVAR: &str = "AGENTMUX_RELAY_ACP_RESPAWN_BACKOFF_MAX_MS";
 const RESPAWN_SLEEP_POLL_MS: u64 = 50;
 const RESPAWN_BACKOFF_INITIAL_MS: u64 = 1_000;
 const RESPAWN_BACKOFF_CAP_DEFAULT_MS: u64 = 30_000;
-const RESPAWN_INIT_FAILURE_THRESHOLD: u32 = 3;
+// How many times the same bootstrap failure may repeat before the respawn
+// monitor gives up and settles the worker Unavailable. This is stage-agnostic:
+// any non-permanent bootstrap failure (spawn, initialize, session/load,
+// session/new, persist) counts, keyed on its (code, reason) signature. A
+// deterministic failure that reproduces identically across this many
+// backoff-spaced attempts is not going to self-resolve, so we surface it to
+// operators rather than loop forever -- a genuinely transient failure that
+// changes signature or succeeds within the window resets the counter and keeps
+// recovering. Permanent failures (missing capability) short-circuit this via
+// AcpBootstrapError::is_permanent before the count is even consulted. Before
+// this was stage-agnostic, only repeated `initialize` failures could give up,
+// so a coder whose session/load or session/new deterministically failed
+// respawned forever and never published a terminal Unavailable.
+const RESPAWN_REPEATED_FAILURE_THRESHOLD: u32 = 3;
 /// Idle poll interval for the respawn monitor's shutdown gate.
 const RESPAWN_MONITOR_POLL_MS: u64 = 100;
 /// Generic respawn trigger label. The internal delivery task signals a boolean
@@ -477,8 +488,8 @@ fn respawn_backoff_cap_ms() -> u64 {
 struct AcpRespawnState {
     attempt: u32,
     next_backoff_ms: u64,
-    last_initialize_failure_reason: Option<String>,
-    consecutive_initialize_failures: u32,
+    last_failure_signature: Option<(String, String)>,
+    consecutive_identical_failures: u32,
 }
 
 impl AcpRespawnState {
@@ -486,8 +497,8 @@ impl AcpRespawnState {
         Self {
             attempt: 0,
             next_backoff_ms: 0,
-            last_initialize_failure_reason: None,
-            consecutive_initialize_failures: 0,
+            last_failure_signature: None,
+            consecutive_identical_failures: 0,
         }
     }
 
@@ -504,28 +515,24 @@ impl AcpRespawnState {
     }
 
     fn record_failure(&mut self, error: &AcpBootstrapError) {
-        if error.code == ACP_ERROR_CODE_INITIALIZE_FAILED {
-            if self.last_initialize_failure_reason.as_deref() == Some(error.reason.as_str()) {
-                self.consecutive_initialize_failures =
-                    self.consecutive_initialize_failures.saturating_add(1);
-            } else {
-                self.last_initialize_failure_reason = Some(error.reason.clone());
-                self.consecutive_initialize_failures = 1;
-            }
+        let signature = (error.code.clone(), error.reason.clone());
+        if self.last_failure_signature.as_ref() == Some(&signature) {
+            self.consecutive_identical_failures =
+                self.consecutive_identical_failures.saturating_add(1);
         } else {
-            self.last_initialize_failure_reason = None;
-            self.consecutive_initialize_failures = 0;
+            self.last_failure_signature = Some(signature);
+            self.consecutive_identical_failures = 1;
         }
     }
 
     fn should_give_up(&self) -> bool {
-        self.consecutive_initialize_failures >= RESPAWN_INIT_FAILURE_THRESHOLD
+        self.consecutive_identical_failures >= RESPAWN_REPEATED_FAILURE_THRESHOLD
     }
 
     fn reset_on_success(&mut self) {
         self.attempt = 0;
         self.next_backoff_ms = 0;
-        self.last_initialize_failure_reason = None;
-        self.consecutive_initialize_failures = 0;
+        self.last_failure_signature = None;
+        self.consecutive_identical_failures = 0;
     }
 }
