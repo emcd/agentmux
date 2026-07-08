@@ -204,6 +204,57 @@ fn acp_new_failure_returns_runtime_stage_code() {
     assert_acp_delivery_unavailable(&config_root, &temporary.path().join("tmux.sock"));
 }
 
+// Regression guard for the give-up policy being stage-agnostic. A worker whose
+// session/new bootstrap deterministically fails must make the respawn monitor
+// give up after a bounded number of identical failures rather than respawn
+// forever. Before the policy counted repeated failures of any bootstrap stage
+// (it previously counted only `initialize`), a session/new failure reset the
+// give-up counter on every attempt, so the monitor looped indefinitely; that
+// never-settling churn is what made the sibling settle-unavailable tests flake
+// under load, since their watch await had to win a race against the brief
+// pre-churn Unavailable transient.
+//
+// The bounded-vs-unbounded respawn is asserted by the census of logged
+// session/new requests: it freezes once the monitor gives up, and grows without
+// bound while it churns. Two spaced samples discriminate the two behaviors
+// without depending on catching any single readiness transition (the initial
+// bootstrap publishes a real Unavailable, so state-based waits race it).
+#[test]
+fn acp_repeated_new_failure_gives_up_instead_of_respawning_forever() {
+    let temporary = TempDir::new().expect("temporary");
+    let options = AcpStubOptions {
+        fail_new: true,
+        ..AcpStubOptions::default()
+    };
+    let (config_root, log_path) = write_configuration(temporary.path(), &options);
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    // A delivery to the failed worker drives the respawn loop. Each respawn
+    // attempt re-spawns the stub and re-issues session/new (nothing was
+    // persisted, so the load-vs-new lifecycle stays on new), so the count of
+    // logged session/new requests is a direct census of respawn attempts.
+    let _ = dispatch_send_result(&config_root, &tmux_socket);
+
+    // Let the respawn monitor run to its terminal decision. The stage-agnostic
+    // give-up abandons the repeatedly-failing session/new after a bounded number
+    // of identical failures, freezing the attempt count; the old initialize-only
+    // policy reset its counter on every session/new failure and respawned
+    // forever, re-issuing session/new on each backoff cycle (~10+/s at the test
+    // backoff cap). Comparing two spaced samples discriminates the two without
+    // depending on catching any single readiness transition.
+    thread::sleep(Duration::from_secs(3));
+    let attempts_after_settle =
+        request_count_by_method(&read_request_log(&log_path), "session/new");
+    thread::sleep(Duration::from_secs(1));
+    let attempts_later = request_count_by_method(&read_request_log(&log_path), "session/new");
+
+    assert_eq!(
+        attempts_later, attempts_after_settle,
+        "session/new bootstrap attempts kept growing ({attempts_after_settle} -> {attempts_later}); \
+         respawn never gave up"
+    );
+}
+
 #[test]
 fn acp_missing_load_capability_returns_canonical_failure_code_and_details() {
     let temporary = TempDir::new().expect("temporary");
