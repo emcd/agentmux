@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use agentmux::relay::{RelayRequest, RelayResponse, handle_request};
 use tempfile::TempDir;
 
+mod contract;
 mod error;
 mod list;
 mod look;
