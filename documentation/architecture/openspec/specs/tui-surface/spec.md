@@ -561,54 +561,74 @@ pane, and a raww-or-choice region.
 
 `Interaction` mode SHALL maintain an active interaction target session.
 When no interaction target is selected, the mode SHALL render an empty-target
-placeholder with hint text directing the operator to open the picker.
+placeholder with hint text directing the operator to open the picker and
+choose a session.
 
-`Interaction` mode SHALL NOT auto-open the picker on entry.
+When `Interaction` mode is entered with no interaction target selected, the
+TUI SHALL auto-open the recipient picker focused on the session column so the
+operator can choose a target immediately. Dismissing the picker without a
+selection returns to the empty-target placeholder.
 
 When an interaction target is selected, the look snapshot pane SHALL render
 the same payload semantics as the current Look workflow (tmux line snapshot
 or ACP structured entries) for that target.
 
-#### Scenario: Interaction mode with no target shows placeholder
+#### Scenario: Interaction mode with no target auto-opens the picker
 
 - **WHEN** operator switches to `Interaction` and no target is selected
-- **THEN** the TUI renders an empty-target placeholder with hint text
-- **AND** the TUI does not auto-open the picker overlay
+- **THEN** the TUI auto-opens the recipient picker focused on the session column
+- **AND** dismissing the picker without a selection shows the empty-target
+  placeholder with hint text
 
 #### Scenario: Interaction mode renders look snapshot for active target
 
 - **WHEN** `Interaction` mode has active target `acp`
 - **THEN** the look snapshot pane renders the snapshot payload for `acp`
 
-### Requirement: Picker Mode-Switch Actions
+### Requirement: Picker Session Selection Actions
 
-The recipient picker overlay SHALL provide mode-switch actions that set the
-`Interaction` mode target and switch the active mode to `Interaction`:
+The recipient picker overlay session column SHALL provide a mode-aware `Enter`
+action that commits the selected recipient according to the active mode:
 
-- `l` / `L` — set interaction target to the selected recipient and switch to
-  `Interaction` mode
-- `w` / `W` — set interaction target to the selected recipient, switch to
-  `Interaction` mode, and place input focus on the raww input pane
+- In `Communication` mode, `Enter` inserts the selected recipient into the
+  `To` field. Insertion SHALL NOT depend on which compose field holds focus:
+  the picker is the recipient affordance and `To` is the only field a recipient
+  can occupy, so opening the picker while composing the message body still
+  inserts into `To` and leaves compose focus unchanged.
+- In `Interaction` mode, `Enter` sets the interaction target to the selected
+  recipient, synchronously captures that target's look snapshot via the relay
+  `Look` operation, and closes the picker so the operator reaches the populated
+  Interaction surface.
 
-Picker mode-switch actions SHALL NOT dispatch raww or capture look snapshots
-directly from the picker.
+Picker session selection SHALL NOT dispatch raww directly; raww dispatch
+requires explicit operator submission from the raww input pane in `Interaction`
+mode.
 
-#### Scenario: Picker l switches to Interaction with selected target
+#### Scenario: Picker Enter inserts recipient in Communication mode
 
-- **WHEN** operator opens the picker, selects recipient `acp`, and presses `l`
+- **WHEN** operator opens the picker in `Communication` mode, selects recipient
+  `acp`, and presses `Enter` on the session column
+- **THEN** the recipient `acp` is inserted into the `To` field
+
+#### Scenario: Picker Enter inserts recipient while composing the message body
+
+- **WHEN** operator is focused on the message body in `Communication` mode,
+  opens the picker, selects recipient `acp`, and presses `Enter` on the session
+  column
+- **THEN** the recipient `acp` is inserted into the `To` field
+- **AND** compose focus remains on the message body
+
+#### Scenario: Picker Enter enters Interaction with a synchronous look snapshot
+
+- **WHEN** operator opens the picker in `Interaction` mode, selects recipient
+  `acp`, and presses `Enter` on the session column
 - **THEN** the picker closes
-- **AND** the TUI switches to `Interaction` mode with active target `acp`
+- **AND** the TUI sets active target `acp` and captures its look snapshot
+  synchronously before the operator reaches the raww input pane
 
-#### Scenario: Picker w switches to Interaction and focuses raww input
+#### Scenario: Picker selection does not dispatch raww directly
 
-- **WHEN** operator opens the picker, selects recipient `acp`, and presses `w`
-- **THEN** the picker closes
-- **AND** the TUI switches to `Interaction` mode with active target `acp`
-- **AND** input focus is on the raww input pane
-
-#### Scenario: Picker w does not dispatch raww directly
-
-- **WHEN** operator presses `w` in the picker
+- **WHEN** operator selects a recipient in the picker
 - **THEN** no raww request is dispatched to relay from the picker action
 - **AND** raww dispatch requires explicit operator submission from the raww
   input pane in `Interaction` mode

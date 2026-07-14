@@ -35,6 +35,8 @@ mod tmux_transport;
 mod transports_quiescence;
 #[path = "unit/tui.rs"]
 mod tui;
+#[path = "unit/tui_relay_error_mapping.rs"]
+mod tui_relay_error_mapping;
 #[path = "unit/tui_session.rs"]
 mod tui_session;
 #[path = "unit/tui_workbench.rs"]

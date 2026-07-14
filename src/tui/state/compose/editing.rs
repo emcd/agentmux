@@ -139,6 +139,26 @@ impl AppState {
         if self.focus != FocusField::To {
             return;
         }
+        self.snap_to_field_cursor_to_end();
+    }
+
+    /// Places the `To` cursor at the end of the field irrespective of compose
+    /// focus, clearing any completion state the old cursor position anchored.
+    ///
+    /// The cursor movements above are key handlers, so they are deliberately
+    /// gated on `To` holding focus: a keystroke must not move a cursor the
+    /// operator is not looking at. That gate makes them the wrong tool for a
+    /// writer that rewrites `to_field` from outside the focused-editing path —
+    /// it would leave `to_cursor_index` pointing into the old value, and the
+    /// stale index survives as an insertion point in the middle of text the
+    /// operator never typed. Such a writer must land the cursor itself, and
+    /// lands it here.
+    ///
+    /// The other writers need no snap and correctly do not call it: the
+    /// interactive insert/backspace editors move the cursor incrementally as
+    /// they go, and `clear_compose_fields` and the completion replacement set
+    /// it explicitly to a position this helper's end-of-field is not.
+    pub(super) fn snap_to_field_cursor_to_end(&mut self) {
         self.to_cursor_index = self.to_field.len();
         self.clear_to_completion();
     }
