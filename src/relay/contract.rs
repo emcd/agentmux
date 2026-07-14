@@ -356,6 +356,7 @@ pub enum RelayResponse {
     },
     Send {
         schema_version: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
         request_id: Option<String>,
         requester_session: String,
         #[serde(skip_serializing_if = "Option::is_none")]
