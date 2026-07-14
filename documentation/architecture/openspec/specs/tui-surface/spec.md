@@ -561,19 +561,24 @@ pane, and a raww-or-choice region.
 
 `Interaction` mode SHALL maintain an active interaction target session.
 When no interaction target is selected, the mode SHALL render an empty-target
-placeholder with hint text directing the operator to open the picker.
+placeholder with hint text directing the operator to open the picker and
+choose a session.
 
-`Interaction` mode SHALL NOT auto-open the picker on entry.
+When `Interaction` mode is entered with no interaction target selected, the
+TUI SHALL auto-open the recipient picker focused on the session column so the
+operator can choose a target immediately. Dismissing the picker without a
+selection returns to the empty-target placeholder.
 
 When an interaction target is selected, the look snapshot pane SHALL render
 the same payload semantics as the current Look workflow (tmux line snapshot
 or ACP structured entries) for that target.
 
-#### Scenario: Interaction mode with no target shows placeholder
+#### Scenario: Interaction mode with no target auto-opens the picker
 
 - **WHEN** operator switches to `Interaction` and no target is selected
-- **THEN** the TUI renders an empty-target placeholder with hint text
-- **AND** the TUI does not auto-open the picker overlay
+- **THEN** the TUI auto-opens the recipient picker focused on the session column
+- **AND** dismissing the picker without a selection shows the empty-target
+  placeholder with hint text
 
 #### Scenario: Interaction mode renders look snapshot for active target
 
