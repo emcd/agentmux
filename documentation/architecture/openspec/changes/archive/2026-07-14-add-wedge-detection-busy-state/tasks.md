@@ -275,18 +275,21 @@
 - [x] 6.6 `openspec validate --all --strict`: 21 passed, 0 failed
       (no changes to other in-flight changes beyond this proposal's
       task-checkboxes).
-- [ ] 6.7 Manual live-bundle validation (operator-scheduled): a send
-      to a target session with bytes actively flowing to the terminal
-      produces a `delivery_target_active` diagnostic and resolves the
-      flush group as `Delivered`, never as `Failed +
-      reason_code = "pane_wedged"`. Owner and timing per the lane
-      workflow (parallel to the `add-pty-terminal-protocol-config`
-      §6.6 joint session). **Note (Scope A only):** this validation
-      covers the Class A case (terminal bytes flowing but not
-      reflected in the captured snapshot). A target in silent
-      thinking (Class B, zero bytes during `quiet_window`) is NOT
-      expected to be rescued by this change — that requires the
-      follow-up proposal in §7.
+- [x] 6.7 **WAIVED (2026-07-14, operator).** Manual live-bundle
+      validation: a send to a target session with bytes actively
+      flowing to the terminal produces a `delivery_target_active`
+      diagnostic and resolves the flush group as `Delivered`, never as
+      `Failed + reason_code = "pane_wedged"`. Waived as this change's
+      closeout gate because it was the only open item, the underlying
+      contract is already covered by deterministic unit tests (§2.3,
+      §2.4, §3.3, §5.1-5.3), and it was blocking archive, which in turn
+      blocked `issues/relay/52`'s proposal (drafted against this
+      change's post-merge baseline). Not dropped — deferred to a
+      standalone todo tracked on the `coordination/general/16` (0.9.0)
+      milestone note: Class A manual live-bundle validation (bytes
+      actively flowing → `delivery_target_active` → `Delivered`, never
+      `Failed`/`pane_wedged`). Class B (silent thinking, zero bytes)
+      stays out of scope per §7.
 
 ## 7. [Follow-up, NOT this proposal] Process-alive signal for Class B silent thinking
 
