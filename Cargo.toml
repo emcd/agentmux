@@ -58,6 +58,9 @@ uuid = { version = "1.18.1", features = ["v4"] }
 # its bin target, and its vendored libghostty-vt build chain (which
 # requires Zig 0.15.x on PATH and a network clone of ghostty at build
 # time, or `GHOSTTY_SOURCE_DIR` / `GHOSTTY_ZIG_SYSTEM_DIR` overrides).
+# See `documentation/development/README.md` Zig-free Pty Builds for
+# the upstream escape hatches and the `libghostty-vt-sys/pkg-config`
+# wrapper gap.
 default = []
 pty = ["dep:libghostty-vt", "dep:portable-pty", "dep:shell-words"]
 

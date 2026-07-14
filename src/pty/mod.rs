@@ -3,6 +3,12 @@
 //! enabled; the default `cargo build` does NOT pull libghostty-vt or
 //! portable-pty and does NOT invoke Zig.
 //!
+//! Build-time prerequisites (Zig 0.15.x on PATH, optional outbound
+//! network access for the vendored ghostty clone) and the upstream
+//! escape hatches (`GHOSTTY_SOURCE_DIR`, `GHOSTTY_ZIG_SYSTEM_DIR`,
+//! `libghostty-vt-sys/pkg-config`) are documented in
+//! `documentation/development/README.md` Zig-free Pty Builds.
+//!
 //! Module layout:
 //! - [`state`] holds the cross-thread shared state ([`PtyShared`],
 //!   [`PtyConfigSnapshot`], [`SnapshotRequest`] / [`SnapshotResponse`])
