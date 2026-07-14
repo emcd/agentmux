@@ -1,4 +1,4 @@
-use super::{AppState, FocusField, PickerColumn, append_recipient_token};
+use super::{AppState, PickerColumn, append_recipient_token};
 
 impl AppState {
     /// Opens the unified picker focused on the session column. Used by the
@@ -142,6 +142,11 @@ impl AppState {
         }
     }
 
+    /// Commits the picker's selected recipient to the `To` field. Insertion does
+    /// not depend on compose focus: the picker is the recipient affordance and
+    /// `To` is the only field a recipient can land in, so an operator who opens
+    /// it from the message body gets the recipient they asked for and keeps
+    /// their compose focus where it was.
     pub fn insert_picker_selection(&mut self) {
         let Some(session_name) = self.selected_picker_recipient_id() else {
             self.push_status(
@@ -150,19 +155,8 @@ impl AppState {
             );
             return;
         };
-        match self.focus {
-            FocusField::To => {
-                self.to_field = append_recipient_token(&self.to_field, session_name.as_str());
-                self.move_to_field_cursor_end();
-            }
-            FocusField::Message => {
-                self.push_status(
-                    Some("validation_invalid_arguments".to_string()),
-                    "picker inserts recipients only in To field",
-                );
-                return;
-            }
-        }
+        self.to_field = append_recipient_token(&self.to_field, session_name.as_str());
+        self.snap_to_field_cursor_to_end();
         self.last_selected_recipient = Some(session_name.clone());
         self.close_picker();
         self.push_status(None, format!("Inserted recipient {session_name}."));

@@ -430,6 +430,47 @@ fn picker_enter_in_communication_mode_inserts_selected_recipient_into_to() {
 }
 
 #[test]
+fn picker_enter_inserts_recipient_when_composing_the_message_body() {
+    let mut state = make_state();
+    state.set_recipients(&["master"]);
+    // The picker is the recipient affordance regardless of which compose field
+    // holds focus: opening it from the message body must still deliver the
+    // recipient rather than dead-ending the operator.
+    state.set_focus(WorkbenchField::Message);
+    state
+        .dispatch_event(key_event(KeyCode::F(2), KeyModifiers::NONE))
+        .expect("f2 should open picker");
+    state
+        .dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE))
+        .expect("enter should insert the recipient from message focus");
+    assert_eq!(state.to_field(), "master");
+    assert!(!state.picker_open());
+    assert_eq!(
+        state.focus(),
+        WorkbenchField::Message,
+        "insertion must leave compose focus where the operator left it",
+    );
+
+    // The unfocused To cursor must still track the value the picker wrote.
+    // A stale index survives as a mid-field insertion point: the operator tabs
+    // over, types, and lands their text inside a recipient they never edited.
+    assert_eq!(
+        state.to_cursor_column(),
+        "master".chars().count(),
+        "To cursor must sit at the end of the inserted recipient",
+    );
+    state.set_focus(WorkbenchField::To);
+    state
+        .dispatch_event(key_event(KeyCode::Char('x'), KeyModifiers::NONE))
+        .expect("typing in the To field should be handled");
+    assert_eq!(
+        state.to_field(),
+        "masterx",
+        "typing after the insertion must append, not split the recipient",
+    );
+}
+
+#[test]
 fn picker_enter_in_interaction_mode_requires_selected_recipient() {
     let mut state = make_state();
     state
