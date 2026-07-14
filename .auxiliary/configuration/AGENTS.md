@@ -6,7 +6,7 @@
 
 - Use the 'context7' MCP server to retrieve up-to-date documentation for any SDKs or APIs.
 - Use the 'nb' MCP server for project note-taking, issue tracking, and collaboration. The server provides LLM-friendly access to the `nb` note-taking system with proper escaping and project-specific notebook context.
-- Check README files in directories you're working with for insights about architecture, constraints, and TODO items.
+- Check README files in directories you're working with for insights about architecture and design decisions.
 
 ## Purpose
 Agentmux is a multi-agent coordination runtime for coder sessions. It
@@ -56,100 +56,41 @@ and module organization.
 
 # Operation
 
-- Use `rg --line-number --column` to get precise coordinates for MCP tools that require line/column positions.
-- Choose appropriate editing tools based on the task complexity and your familiarity with the tools.
-- If instruction files mention multiple language ecosystems, prefer tools and commands that match the project's configured languages; ignore language-inapplicable tooling unless the user explicitly requests it.
 - Use a README-first discovery workflow to reduce token churn:
   - Start at the repository root `README.{md,rst}`, then read the nearest relevant subtree README.
   - After reading the nearest README, scope code searches to that subtree before considering repo-wide searches.
   - If a touched subsystem README is stale after your change, update it in the same batch.
-- Batch related changes together when possible to maintain consistency.
-- Use relative paths rather than absolute paths when possible.
+- Use relative paths rather than absolute paths when possible (relative paths are less likely to trigger tool call permission requests).
 - Do not write to paths outside the current project unless explicitly requested.
-- Use `.auxiliary/scribbles` for scratch work and one-off experiments instead of `/tmp`; use `.auxiliary/temporary` for ephemeral test state and build artifacts that are safe to delete.
+- Use `.auxiliary/scribbles` for scratch work and one-off experiments instead of `/tmp`.
+- Use `.auxiliary/temporary` for ephemeral test state and build artifacts that are safe to delete.
 - In sandboxed environments (e.g., Codex CLI), treat file/network permission failures as escalation boundaries:
   - If an operation fails due to sandbox, file access, or network restrictions, rerun it with user escalation.
   - Do not spend time on retry loops or workaround exploration before escalating blocked operations.
+- When writing here-docs or multi-line shell strings, suppress expansions by quoting the delimiter (e.g., `'EOF'` instead of `EOF`) unless you intentionally need variable or command substitution.
 
-## Note-Taking with `nb` MCP Server
+## Guidance Files
 
-### When to Use
-- **Project coordination**: Record handoffs, document decisions, maintain task lists.
-- **Issue tracking**: Create and manage todos with status tracking.
-- **Knowledge sharing**: Document patterns, APIs, and project-specific knowledge.
-- **Meeting notes**: Record discussions and action items.
+| Topic | File |
+|-------|------|
+| `nb` MCP tools, tagging, and notebook organization | @documentation/agents/notebook.md |
+| OpenSpec proposals and workflow | @documentation/agents/openspec.md |
+| Delegated review flow and stacked commits | @documentation/agents/reviews.md |
 
-### Scope and Noise Control
-- Prefer to update an existing related note/todo over creating a new one when context already exists.
-- Avoid logging routine, immediately completed mechanical actions in separate notes.
-  Treat rolling handoffs as checkpoint notes, not activity logs: update them near
-  compaction, after a major milestone, or after an agenda/ownership change
-  discussed with the human.
-- Create new notes/todos when information is likely to be useful across sessions or for other collaborators.
+### Recommended Organization
 
-### Tagging Conventions
-Use consistent tags for discoverability:
-- **Project Component**: `#component-<name>` (e.g., `#component-data-models`)
-- **Task Type**: `#task-<type>` (e.g., `#task-design`, `#task-bug`)
-- **Status**: `#status-<state>` (e.g., `#status-in-progress`, `#status-review`)
-- **Coordination**: `#handoff`, `#coordination`
-- **Assignment**: Avoid owner tags (for example `#llm-*`) for task ownership. Use lane/folder ownership and explicit owner text in the note body when needed.
-
-### Choosing `nb.todo` vs `nb.add`
-
-- Use **`nb.todo`** for any item with actionable state (open/done): todos AND
-  bugs/issues. This gives the note a checkbox, enables `nb.do`/`nb.undo`
-  state tracking, and makes it appear in `nb.tasks` output.
-- Use **`nb.add`** for everything else: coordination notes, decisions, designs,
-  reference material, handoffs, and meeting notes.
-- **Always specify a `folder`** when creating a note. A note created without a
-  folder lands at the notebook root and is invisible to folder-scoped list
-  views.
-- Do not duplicate: if a bug is already tracked in `issues/<component>/`,
-  do not also create a matching todo. Reference the issue selector in
-  coordination notes or the relevant todo body instead.
-
-### Notebook Identifier Clarification
-- Treat note selectors (for example `coordination/mcp/1`) as canonical IDs for operations on existing notes (`nb.show`, `nb.edit`, `nb.delete`, etc.); do not supply a selector when creating new notes.
-- `nb` MCP responses may include notebook-scoped identifiers (for example `agentmux:coordination/...`) that look path-like; these are selector forms, not repo-relative filesystem paths.
-- Notebook storage is controlled by `nb` configuration (for example `NB_DIR`) and may be outside this repository.
-- Prefer `nb` MCP commands to read/edit notes. Avoid assuming a selector maps to a file under the current repo.
-- Use `nb.help` to read full command schemas; key lookups: `nb.search` with tag queries, `nb.tasks` for open todos, `nb.folders` to browse structure.
-
-### Recommended `nb` Organization (Project-Defined)
-- Prefer a folder taxonomy of `<issue-type>/<component>` (max depth 2) and avoid mixing top-level component folders with top-level issue-type folders.
-
-| Category | Location | Purpose |
-|----------|----------|---------|
-| `coordination/` | notebook | Handoffs, org chart, team workflow |
-| `ideas/` | notebook | Rough ideas, early-stage proposals; tag `#task-proposal` for OpenSpec drafts |
-| `issues/` | notebook | Bug tracking, known issues |
-| `reviews/` | notebook | Code and proposal reviews |
-| `procedures/` | notebook | How-to guides, checklists |
-| `todos/` | notebook | Task tracking |
-| `artifacts/` | notebook | Preserved reference material: completed POCs, historical analysis |
-| OpenSpec | filesystem | Formal proposals, specs, designs |
-| `src/**/README.md` | filesystem | Architecture, constraints, design rationale |
-
-- When an idea promotes to a formal OpenSpec proposal, delete the notebook draft — the OpenSpec file is the canonical record.
-- For cross-component work, prefer `coordination/general` and use multiple `#component-*` tags.
-- For per-component rolling handoffs, prefer `coordination/<component>` (one stable note updated at checkpoints).
-- Keep notebook lifecycle hygiene:
-    - prune completed todos quickly,
-    - keep only active/near-term coordination checkpoints,
-    - delete stale history-only notes with no owner or action.
-- Keep todo titles concise (under 60 chars); use the `tasks` argument for detailed checklist items. This keeps notebook list views readable.
-
-### `nb` vs OpenSpec Rubric
-- Use **OpenSpec proposals** for cross-cutting changes, contract-shaping work, architecture shifts, or work that needs explicit design discussion.
-- Use **`nb` todos/notes** for scoped, self-contained implementation tasks where the path is straightforward.
-- When in doubt about whether work needs an OpenSpec proposal or only `nb` execution tracking, prefer OpenSpec first for design clarity.
-- For each active OpenSpec proposal, keep **exactly one** linked `nb` todo as the tracking anchor (with proposal reference), rather than duplicating full task trees in both systems.
-
-### OpenSpec Proposal Workflow
-- Treat OpenSpec proposals like code: commit proposal files to master, share the commit hash with reviewers (`git show <hash>`), amend as needed, merge when settled. No notebook draft step.
-- Keep rolling handoff notes stable and update in place, separate from OpenSpec proposal content.
-- Do not repurpose or overwrite rolling handoff notes with proposal content.
+| Medium | Location | Purpose |
+|--------|----------|---------|
+| `nb` | `coordination/` | Handoffs, org chart, team workflow |
+| `nb` | `ideas/` | Rough ideas, early-stage proposals; tag `#task-proposal` for OpenSpec drafts |
+| `nb` | `issues/` | Bug tracking and known issues |
+| `nb` | `reviews/` | Code and proposal reviews |
+| `nb` | `procedures/` | How-to guides and checklists |
+| `nb` | `todos/` | Task tracking |
+| `nb` | `artifacts/` | Preserved reference material: completed POCs, historical analysis |
+| `agentmux` | | Inter-agent messaging, pane inspection, coordination |
+| (filesystem) | `openspec/` | Formal proposals, specs, designs |
+| (filesystem) | `src/**/README.md` | Architecture, constraints, design rationale |
 
 ## Agentmux Coordination
 
@@ -174,30 +115,37 @@ Batch related updates into one message. When conversation volume rises, coordina
 
 ## OpenSpec Instructions
 
-Workflow Guide: @openspec/AGENTS.md
+This project uses OpenSpec 1.x (OPSX), the action-based workflow. OPSX skills
+deliver workflow instructions through the agentsmgr distribution pipeline.
 
-Always open `openspec/AGENTS.md` when the request:
+Workflow skills: `opsx-propose`, `opsx-explore`, `opsx-apply`,
+`opsx-sync`, `opsx-archive`.
+
+Use OPSX skills when the request:
 - Mentions planning or proposals (words like proposal, spec, change, plan).
 - Introduces new capabilities, breaking changes, architecture shifts, or big performance/security work.
 - Sounds ambiguous and you need the authoritative spec before coding.
 
-Use `openspec/AGENTS.md` to learn:
-- How to create and apply change proposals
-- Spec format and conventions
-- Project structure and guidelines
+CLI state queries: `openspec list`, `openspec list --specs`,
+`openspec status --change <id>`, `openspec validate --all --strict`.
+
+When a commit completes an OpenSpec task or requirement, update the relevant OpenSpec task status in the same commit.
 
 # Commits
 
 - Use `git status` to ensure all relevant changes are in the changeset.
-- Do **not** commit without explicit user approval. Unless the user has requested the commit, **ask first** for a review of your work.
+- Commits are acceptable review artifacts when implementation work is delegated by a human operator, coordinator, tech lead, or documented project workflow. Otherwise, ask before committing.
+- Do **not** merge, push, publish review branches, or modify shared branches without explicit human approval.
 - Do **not** bypass commit safety checks (e.g., `--no-verify`, `--no-gpg-sign`) unless the user explicitly approves doing so.
-- If a commit hook rejects a commit, fix the issue, restage the intended files, and rerun `git commit` with the same message. Do **not** amend a *different, already-existing* commit as a workaround for a rejected attempt — that risks destroying the boundary of unrelated prior work.
-- When addressing review feedback on a commit that is unmerged, unpushed, and solely yours, amend it in place (`git commit --amend`) and re-share the new hash — do not stack a separate "address review feedback" commit. Name what changed in the re-review message (and offer `git range-diff <old> <new>`) so reviewers can see the delta without re-reading the whole diff. **Never** amend a commit that is merged or pushed/shared.
-- When feedback targets a specific commit inside a **stack** of multiple unmerged, unpushed, solely-yours commits, use `git commit --fixup <target-hash>` instead of manually editing history to reach a non-HEAD commit. Fold the stack with `--autosquash`, which requires `-i` explicitly — `--autosquash` alone is a silent no-op, it does not fold anything on its own. Always preview the fold before applying it: `GIT_SEQUENCE_EDITOR="cat; exit 1" git rebase -i --autosquash <base>` prints the reordered/folded plan and aborts cleanly (verified: no rebase state left behind, nothing rewritten) — read the plan before running for real. To apply non-interactively (no editor available in an agent shell): `GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash <base>`. If the result is wrong, recover with `git reset --hard ORIG_HEAD` — git sets `ORIG_HEAD` to the exact pre-rebase position regardless of how far back `<base>` was, so this is a precise one-shot undo; do not try to hand-count `HEAD~N` to reconstruct the prior state.
+- If a commit hook rejects a commit, assume no commit was created unless Git clearly reports otherwise. Fix the issue, restage the intended files, and rerun `git commit` with the same message. Do **not** amend a *different, already-existing* commit as a workaround for a rejected attempt — that risks destroying the boundary of unrelated prior work.
 - Use present tense, imperative mood verbs (e.g., "Fix" not "Fixed").
 - Write sentences with proper punctuation.
 - Include a `Co-Authored-By:` field as the final line. Should include the model name and a no-reply address.
-- Avoid using `backticks` in commit messages as shell tools may evaluate them as subshell captures.
+- Avoid using `backticks` in commit messages as shell tools may evaluate them as subshell captures. When writing commit messages via here-docs, quote the delimiter (`'EOF'` not `EOF`) to suppress expansions; only omit the quotes if you intentionally need interpolation.
+
+## Delegated Review and Stacked Commits
+
+**Read this section before reviewing or stacking commits.** @documentation/agents/reviews.md covers the delegated review flow, review request packet format, and how to handle stacked commits with `--fixup`/`--autosquash`.
 
 # Project Notes
 

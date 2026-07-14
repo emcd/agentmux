@@ -1,6 +1,6 @@
 # agentsmgr populates generated coder content in these directories.
-agent/
-command/
+agents/
+commands/
 prompt/
 skills/
 node_modules/
