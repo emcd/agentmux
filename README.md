@@ -27,7 +27,10 @@ in any way.
   clone, set `GHOSTTY_SOURCE_DIR` to a pre-checked-out ghostty source
   tree that contains `build.zig`; to bypass Zig's package fetch, set
   `GHOSTTY_ZIG_SYSTEM_DIR` to a directory containing the Zig package
-  cache.
+  cache. The `libghostty-vt-sys/pkg-config` feature (skip Zig entirely
+  via an installed `libghostty-vt`) is not currently reachable
+  through agentmux's consumer dep — see
+  `documentation/development/README.md` Zig-free Pty Builds.
 
 ## Install
 

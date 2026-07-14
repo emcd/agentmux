@@ -40,6 +40,13 @@ and coordinate work across multiple worktrees with clear contracts.
   that contains `build.zig`; to bypass Zig's package fetch, set
   `GHOSTTY_ZIG_SYSTEM_DIR` to a directory containing the Zig package
   cache.
+- The `libghostty-vt-sys/pkg-config` feature (point at an installed
+  `libghostty-vt.a` via pkg-config, skipping the vendored Zig build
+  entirely) is currently unreachable through agentmux's consumer
+  dep `libghostty-vt = "=0.2.0"` because the safe wrapper does not
+  re-export that feature. See `documentation/development/README.md`
+  Zig-free Pty Builds for the recommended escape hatches today and
+  the upstream-PR gap for unlocking `pkg-config`.
 
 # Development Standards
 
