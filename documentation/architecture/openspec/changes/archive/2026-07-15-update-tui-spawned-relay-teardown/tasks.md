@@ -17,7 +17,7 @@
 
 ## 3. Specs & docs
 
-- [ ] 3.1 Fold the `runtime-bootstrap` and `tui-surface` deltas into `specs/` at
+- [x] 3.1 Fold the `runtime-bootstrap` and `tui-surface` deltas into `specs/` at
       archive time.
 - [x] 3.2 Document the residual teardown risk (spawned relay is an ad hoc
       single-operator convenience; use systemd / `agentmux host relay` for a
