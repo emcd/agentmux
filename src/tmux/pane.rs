@@ -63,87 +63,6 @@ pub(crate) fn resolve_window_activity_marker(
     Ok(Some(marker))
 }
 
-pub(crate) fn operator_interaction_active(
-    tmux_socket: &Path,
-    target_session: &str,
-    pane_target: &str,
-) -> Result<Option<String>, String> {
-    if pane_in_mode_active(tmux_socket, pane_target)? {
-        return Ok(Some("pane_in_mode".to_string()));
-    }
-    if let Some(table) = active_client_key_table(tmux_socket, target_session)? {
-        return Ok(Some(format!("client_key_table={table}")));
-    }
-    Ok(None)
-}
-
-fn pane_in_mode_active(tmux_socket: &Path, pane_target: &str) -> Result<bool, String> {
-    let output = run_tmux_command_capture(
-        tmux_socket,
-        &[
-            "display-message",
-            "-p",
-            "-t",
-            pane_target,
-            "#{pane_in_mode}",
-        ],
-    )?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let lower = stderr.to_ascii_lowercase();
-        if lower.contains("unknown format")
-            || lower.contains("invalid format")
-            || lower.contains("bad format")
-        {
-            return Ok(false);
-        }
-        if stderr.is_empty() {
-            return Err("tmux display-message for pane_in_mode failed".to_string());
-        }
-        return Err(stderr);
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim() == "1")
-}
-
-fn active_client_key_table(
-    tmux_socket: &Path,
-    target_session: &str,
-) -> Result<Option<String>, String> {
-    let output = run_tmux_command_capture(
-        tmux_socket,
-        &[
-            "list-clients",
-            "-t",
-            target_session,
-            "-F",
-            "#{client_key_table}",
-        ],
-    )?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let lower = stderr.to_ascii_lowercase();
-        if lower.contains("no current client")
-            || lower.contains("unknown command")
-            || lower.contains("unsupported")
-            || lower.contains("unknown format")
-            || lower.contains("invalid format")
-            || lower.contains("bad format")
-        {
-            return Ok(None);
-        }
-        if stderr.is_empty() {
-            return Err("tmux list-clients for key table failed".to_string());
-        }
-        return Err(stderr);
-    }
-    let active = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::trim)
-        .find(|value| !value.is_empty() && *value != "root")
-        .map(ToOwned::to_owned);
-    Ok(active)
-}
-
 pub(crate) fn capture_pane_snapshot(
     tmux_socket: &Path,
     pane_target: &str,
@@ -206,24 +125,41 @@ pub(crate) fn inject_literal_text(
     append_enter: bool,
 ) -> Result<(), String> {
     if !text.is_empty() {
-        let buffer_name = next_paste_buffer_name();
-        load_tmux_buffer(tmux_socket, &buffer_name, text)?;
-        run_tmux_command(
-            tmux_socket,
-            &[
-                "paste-buffer",
-                "-d",
-                "-p",
-                "-b",
-                buffer_name.as_str(),
-                "-t",
-                pane_target,
-            ],
-        )?;
+        paste_into_pane(tmux_socket, pane_target, text, PasteMode::Bracketed)?;
     }
     if append_enter {
-        run_tmux_command(tmux_socket, &["send-keys", "-t", pane_target, "Enter"])?;
+        // Submit with an unbracketed carriage-return paste rather than
+        // `send-keys Enter`. paste-buffer writes straight to the pane pty and
+        // reaches the child even while the pane sits in copy-mode; `send-keys`
+        // is routed through the copy-mode key table and silently swallowed
+        // there. The body stays bracketed so multi-line content does not submit
+        // early, and the submit is unbracketed so the bare CR is delivered as a
+        // real Enter. Guarded by `append_enter` so a `raww` body-only write
+        // (`no_enter=true`) injects no submit.
+        paste_into_pane(tmux_socket, pane_target, "\r", PasteMode::Unbracketed)?;
     }
+    Ok(())
+}
+
+enum PasteMode {
+    Bracketed,
+    Unbracketed,
+}
+
+fn paste_into_pane(
+    tmux_socket: &Path,
+    pane_target: &str,
+    text: &str,
+    mode: PasteMode,
+) -> Result<(), String> {
+    let buffer_name = next_paste_buffer_name();
+    load_tmux_buffer(tmux_socket, &buffer_name, text)?;
+    let mut arguments = vec!["paste-buffer", "-d"];
+    if matches!(mode, PasteMode::Bracketed) {
+        arguments.push("-p");
+    }
+    arguments.extend(["-b", buffer_name.as_str(), "-t", pane_target]);
+    run_tmux_command(tmux_socket, &arguments)?;
     Ok(())
 }
 
