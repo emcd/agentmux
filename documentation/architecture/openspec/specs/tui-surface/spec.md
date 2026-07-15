@@ -301,8 +301,9 @@ silently degrade into synthetic success states.
 When startup transport is unavailable, TUI SHALL attempt runtime relay
 auto-start before rendering an unavailable state.
 
-Auto-started relay lifecycle remains external; TUI exit SHALL NOT auto-stop
-relay.
+When TUI auto-spawns a relay during startup, TUI exit SHALL terminate that
+auto-spawned relay through the relay's graceful shutdown path. A relay that was
+already running at TUI startup SHALL remain untouched on TUI exit.
 
 #### Scenario: Surface relay connectivity failure explicitly
 
@@ -316,11 +317,17 @@ relay.
 - **AND** relay socket is unavailable at startup
 - **THEN** TUI attempts runtime relay auto-start before declaring unavailable
 
-#### Scenario: Do not auto-stop relay on tui exit
+#### Scenario: Stop auto-spawned relay on tui exit
 
-- **WHEN** relay was auto-started during TUI startup
+- **WHEN** relay was auto-spawned during TUI startup
 - **AND** TUI process exits
-- **THEN** TUI does not issue relay shutdown solely due to TUI exit
+- **THEN** TUI issues a graceful relay shutdown for the relay it spawned
+
+#### Scenario: Leave already-running relay on tui exit
+
+- **WHEN** relay was already running at TUI startup
+- **AND** TUI process exits
+- **THEN** TUI does not issue relay shutdown
 
 ### Requirement: TUI raww dispatch contract
 
@@ -679,3 +686,4 @@ the active mode.
 
 - **WHEN** operator presses `F3` in either mode
 - **THEN** the events overlay opens over the active mode surface
+

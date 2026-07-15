@@ -23,5 +23,5 @@
 
 - [x] 3.1 Update `src/commands/README.md` and `src/relay/README.md` for the new
       command and relay entrypoint.
-- [ ] 3.2 On archive, apply the cli-surface spec delta to
+- [x] 3.2 On archive, apply the cli-surface spec delta to
       `specs/cli-surface/spec.md`.
