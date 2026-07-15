@@ -97,14 +97,14 @@
 
 ## 3. Pty transport state and shared view
 
-- [ ] 3.1 Define `PtyState` in `src/pty/state.rs`: holds a
+- [x] 3.1 Define `PtyState` in `src/pty/state.rs`: holds a
       `libghostty_vt::Terminal<'static, 'static>`,
       `libghostty_vt::RenderState<'static>`, the
       `[coders.<id>.pty]` config snapshot (cols, rows, prompt
       template, prime_timeout_ms, wedge_detection), and the
       shared-effect-handler state (`Cell<RefCell<Vec<u8>>>` for
       `on_pty_write` responses).
-- [ ] 3.2 Define `PtyOutputView` in `src/pty/state.rs` wrapping
+- [x] 3.2 Define `PtyOutputView` in `src/pty/state.rs` wrapping
       `Arc<Mutex<PtyState>>`. Implement the `OutputView` trait:
       - `look(mode)` — locks the mutex, recreates the formatter
         from `&terminal`, calls `format_alloc(Format::Plain)`,
@@ -112,7 +112,7 @@
         reads cursor via `terminal.cursor_x()`/`cursor_y()` and
         visibility via `RenderState::cursor_visible()`. Returns
         `LookSnapshotPayload::Lines { snapshot_lines }`.
-- [ ] 3.3 Define `PtyQuiescenceProbe` in `src/pty/state.rs`
+- [x] 3.3 Define `PtyQuiescenceProbe` in `src/pty/state.rs`
       implementing the cross-transport `WedgeProbe` trait
       (defined in `src/transports/quiescence.rs`, §2.2):
       - `inspect_tail` uses `Formatter::format_alloc(Format::Plain)`
@@ -130,7 +130,7 @@
 
 ## 4. PtyTransport core
 
-- [ ] 4.1 Define `PtyTransport` in `src/pty/transport.rs`:
+- [x] 4.1 Define `PtyTransport` in `src/pty/transport.rs`:
       - `target_member: BundleMember`
       - `pty_master: Option<Box<dyn Write + Send>>` (raw-write side)
       - `child_pid: Option<u32>`
@@ -139,7 +139,7 @@
       - `delivery_tx: mpsc::Sender<DeliveryCommand>`
       - `reader_thread: Option<JoinHandle<()>>`
       - `delivery_thread: Option<JoinHandle<()>>`
-- [ ] 4.2 Implement `Transport::startup(&mut self, context)`:
+- [x] 4.2 Implement `Transport::startup(&mut self, context)`:
       - Use `portable_pty::native_pty_system().openpty(...)` with
         per-coder `cols`/`rows`.
       - Build `portable_pty::CommandBuilder` with the per-coder
@@ -160,7 +160,7 @@
       - Publish `WorkerReadinessState::Available` via
         `set_worker_readiness`.
       - Return `TransportStatus { readiness: Ready }`.
-- [ ] 4.3 Implement effect-handler installation:
+- [x] 4.3 Implement effect-handler installation:
       - `on_pty_write` → push bytes onto a `RefCell<Vec<u8>>`
         response buffer; the delivery task drains and writes to
         the master.
@@ -173,7 +173,7 @@
         (injected via the same `StartupContext`-style closure
         pattern ACP uses).
       - `on_bell` → no-op for v1.
-- [ ] 4.4 Implement `Transport::mailw(&mut self, envelope)`:
+- [x] 4.4 Implement `Transport::mailw(&mut self, envelope)`:
       - Enqueue `DeliveryCommand::Mailw(envelope)` onto the
         delivery task's `mpsc::Sender`.
       - Return an `OutcomeFuture` (`oneshot::Receiver<
@@ -184,29 +184,29 @@
         the master), waits for quiescence via the shared wedge
         state machine from §2, and resolves the future with
         `SingleDeliveryOutcome`.
-- [ ] 4.5 Implement `Transport::raww(&mut self, content,
+- [x] 4.5 Implement `Transport::raww(&mut self, content,
       append_enter)`: same envelope-enqueue shape as `mailw` but
       raw bytes; the delivery task flushes any buffered `mailw`
       group first then writes the raw bytes (then a `"\n"` if
       `append_enter`), waits for quiescence, resolves.
-- [ ] 4.6 Implement `Transport::is_ready(&self) -> bool`:
+- [x] 4.6 Implement `Transport::is_ready(&self) -> bool`:
       child PID is set AND `state.lock().terminal` is initialized.
-- [ ] 4.7 Implement `Transport::shutdown(&mut self)`:
+- [x] 4.7 Implement `Transport::shutdown(&mut self)`:
       - Publish `WorkerReadinessState::Unavailable`.
       - Close the PTY master (causes the reader thread to exit).
       - Send SIGTERM to the child; after a short grace period,
         SIGKILL.
       - `child.wait()` to reap.
       - Drop `state` (drops the terminal and render state).
-- [ ] 4.8 Implement `Transport::give_output(&self) ->
+- [x] 4.8 Implement `Transport::give_output(&self) ->
       Option<Arc<dyn OutputView>>`: returns
       `Some(self.output.clone())`.
-- [ ] 4.9 Add `TransportImpl::pty(target_member, batch_settings)`
+- [x] 4.9 Add `TransportImpl::pty(target_member, batch_settings)`
       constructor mirroring `tmux(batch_settings)`.
 
 ## 5. TransportImpl wiring (feature-gated)
 
-- [ ] 5.1 In `src/transports/contract.rs`, replace the `Pty,` unit
+- [x] 5.1 In `src/transports/contract.rs`, replace the `Pty,` unit
       variant with cfg-gated alternatives:
       ```rust
       #[cfg(feature = "pty")]
@@ -217,22 +217,22 @@
       When the `pty` feature is on, the variant carries a real
       `PtyTransport`; when off, the variant stays the existing
       unit-variant stub.
-- [ ] 5.2 Replace the existing
+- [x] 5.2 Replace the existing
       `unimplemented!("PTY transport not yet implemented")` arms
       in `startup`, `mailw`, `raww`, `is_ready`, `shutdown`,
       `give_output` with cfg-gated alternatives: when the
       feature is on, the arm delegates to the inner `PtyTransport`
       method (like the existing Tmux arm); when off, the arm
       falls through to today's `unimplemented!(...)`.
-- [ ] 5.3 Add a `TransportImpl::pty(target_member, batch_settings)`
+- [x] 5.3 Add a `TransportImpl::pty(target_member, batch_settings)`
       constructor (cfg'd on the `pty` feature) mirroring
       `tmux(batch_settings)`.
-- [ ] 5.4 Re-export `PtyTransport` from `src/transports/mod.rs`
+- [x] 5.4 Re-export `PtyTransport` from `src/transports/mod.rs`
       (cfg'd).
 
 ## 6. Configuration
 
-- [ ] 6.1 Add `PtyTargetConfiguration` to
+- [x] 6.1 Add `PtyTargetConfiguration` to
       `src/configuration/types.rs`:
       ```rust
       pub struct PtyTargetConfiguration {
@@ -247,10 +247,10 @@
           pub wedge_detection: bool,  // default true
       }
       ```
-- [ ] 6.2 Mirror the same fields through `RawPtyTarget` in
+- [x] 6.2 Mirror the same fields through `RawPtyTarget` in
       `src/configuration/raw.rs` (deserialize from
       `[coders.<id>.pty]`).
-- [ ] 6.3 Validator (`src/configuration/targets.rs`):
+- [x] 6.3 Validator (`src/configuration/targets.rs`):
       - Reject `prime-timeout-ms = 0` (same rule as Tmux).
       - Reject `cols = 0` or `rows = 0`.
       - Per-coder validator enforces exactly one of
@@ -258,14 +258,14 @@
         neither). Reuse the existing per-coder mutual-exclusion
         check that today covers `[coders.<id>.tmux]` /
         `[coders.<id>.acp]`.
-- [ ] 6.4 In `src/relay/handlers/sender.rs`, construct a
+- [x] 6.4 In `src/relay/handlers/sender.rs`, construct a
       `PtyTargetConfiguration` (analogous to the existing
       `TmuxTargetConfiguration` construction) when the bundle
       member is Pty-backed.
 
 ## 7. Session type taxonomy
 
-- [ ] 7.1 Add `SessionType::Pty` variant. The capability row
+- [x] 7.1 Add `SessionType::Pty` variant. The capability row
       `look=true, write=true, stream=true, choices=false` is
       already declared in `session-relay/spec.md` (it is the
       forward-looking row); the spec delta updates that note to
@@ -289,27 +289,27 @@
 
 ## 9. Unit tests
 
-- [ ] 9.1 Register `tests/unit/pty_transport.rs` in
+- [x] 9.1 Register `tests/unit/pty_transport.rs` in
       `tests/unit.rs`.
-- [ ] 9.2 Implement the five behavior-class probes (always
+- [x] 9.2 Implement the five behavior-class probes (always
       unresponsive, always wedge, pending choice, slow prompt,
       normal flow) for Pty's generalized wedge/prime state
       machine. Mirror the Tmux probe test surface so the same
       five scenarios exercise Pty's path.
-- [ ] 9.3 Add coalesce-during-wedge-counter scenarios (counter
+- [x] 9.3 Add coalesce-during-wedge-counter scenarios (counter
       increments, resets on signature change, fires at 3).
 - [ ] 9.4 Add coalesce-during-prime-does-not-extend-window
       scenario.
-- [ ] 9.5 Add wedge-outcome-maps-to-pane_wedged and
+- [x] 9.5 Add wedge-outcome-maps-to-pane_wedged and
       prime-timeout-outcome-maps-to-Timeout outcome-mapping
       scenarios.
-- [ ] 9.6 Add wedge-default-on and wedge-disabled scenarios.
-- [ ] 9.7 Add prime-timeout-default-off and prime-timeout-opt-in
+- [x] 9.6 Add wedge-default-on and wedge-disabled scenarios.
+- [x] 9.7 Add prime-timeout-default-off and prime-timeout-opt-in
       scenarios.
 - [ ] 9.8 Add the wedge-disabled + prime-timeout-set scenario
       (prime-timeout bounds every quiescent state when wedge is
       disabled) — matches the existing Tmux spec scenario.
-- [ ] 9.9 Add a `PtyTransport`-level integration test that
+- [x] 9.9 Add a `PtyTransport`-level integration test that
       spawns `cat` under portable-pty, writes a line, captures
       the snapshot via `PtyOutputView::look`, and asserts the
       line appears in `snapshot_lines`. This is the closest
@@ -318,7 +318,7 @@
 
 ## 10. Operator tooling
 
-- [ ] 10.1 Update `README.md`:
+- [x] 10.1 Update `README.md`:
       - "Requirements" section gains a note about Zig 0.15.x for
         Pty users; document `GHOSTTY_SOURCE_DIR` and
         `GHOSTTY_ZIG_SYSTEM_DIR` overrides for sandboxed CI.
@@ -326,22 +326,22 @@
         `[coders.<id>.pty]` coder config table.
       - MCP Surface section notes that Pty sessions use the same
         look bounds as Tmux.
-- [ ] 10.2 Update `AGENTS.md` Prerequisites section to mention
+- [x] 10.2 Update `AGENTS.md` Prerequisites section to mention
       Zig 0.15.x.
-- [ ] 10.3 Promote `src/bin/agentmux_pty.rs` from "throwaway
+- [x] 10.3 Promote `src/bin/agentmux_pty.rs` from "throwaway
       spike" to "operator smoke-test entry point." Update the
       file's module-level doc comment to reflect this.
 
 ## 11. Validation
 
-- [ ] 11.1 `cargo test --lib` and `cargo test --tests` pass
+- [x] 11.1 `cargo test --lib` and `cargo test --tests` pass
       with no regressions in the existing 17 lib tests and
       320+ integration tests.
-- [ ] 11.2 `cargo clippy --all-targets --no-deps` is silent.
-- [ ] 11.3 `cargo fmt --check` is silent.
-- [ ] 11.4 `openspec validate add-pty-transport --strict` is
+- [x] 11.2 `cargo clippy --all-targets --no-deps` is silent.
+- [x] 11.3 `cargo fmt --check` is silent.
+- [x] 11.4 `openspec validate add-pty-transport --strict` is
       valid.
-- [ ] 11.5 `cargo run --bin agentmux-pty -- /bin/bash`
+- [x] 11.5 `cargo run --bin agentmux-pty -- /bin/bash`
       round-trips a real shell prompt through libghostty-vt.
 - [ ] 11.6 Pty-configured coder session in a real bundle
       delivers a `mailw` envelope to a child shell and resolves
@@ -370,20 +370,20 @@ involves the GitHub Actions workflow YAML and the lint/test
 runner configuration, which is infrastructure that the BE or
 Coordinator typically owns rather than the Pty Specialist.
 
-- [ ] 12.1 Install Zig 0.15.x in the lint runner (the existing
+- [x] 12.1 Install Zig 0.15.x in the lint runner (the existing
       `.github/workflows/tester.yaml` `lint` job). The runner
       needs the `zig` binary on `PATH` and outbound network
       access to `github.com/ghostty-org/ghostty.git` (or the
       `GHOSTTY_SOURCE_DIR` / `GHOSTTY_ZIG_SYSTEM_DIR` overrides
       set via workflow env if hermetic CI is preferred).
-- [ ] 12.2 Add a `pty` matrix entry to the `test` job's
+- [x] 12.2 Add a `pty` matrix entry to the `test` job's
       `matrix.platform` config so Pty gets CI coverage. Without
       `--all-features` on the test invocation, the `pty` feature
       is otherwise invisible to CI.
-- [ ] 12.3 Document the CI behavior in `.github/workflows/tester.yaml`
+- [x] 12.3 Document the CI behavior in `.github/workflows/tester.yaml`
       with a comment explaining why `pty` is a separate matrix
       entry (Zig dep + ghostty clone at build time).
-- [ ] 12.4 Verify the CI configuration: open a PR, observe both
+- [x] 12.4 Verify the CI configuration: open a PR, observe both
       the default-feature and `pty`-feature matrix entries run
       successfully, observe lint passes with the `pty` feature
       enabled.
