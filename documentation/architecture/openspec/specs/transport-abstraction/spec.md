@@ -395,14 +395,12 @@ one of three terminal states:
   match; the transport continues to wait normally and resolves the flush
   group as `Delivered` when the prompt becomes ready.
 - `unresponsive` — during the quiescence wait for the flush group, no
-  observable output has been produced within the prime window AND no
-  operator-interaction signal is active; the transport resolves the flush
-  group as `SendOutcome::Timeout`.
+  observable output has been produced within the prime window; the transport
+  resolves the flush group as `SendOutcome::Timeout`.
 - `wedged` — during the quiescence wait for the flush group, output has
-  settled, the prompt-readiness template does not match, and no
-  operator-interaction signal is active; the transport resolves the flush
-  group as `SendOutcome::Failed` with a transport-defined `reason_code`
-  on the same `Failed` variant (for the Tmux transport,
+  settled and the prompt-readiness template does not match; the transport
+  resolves the flush group as `SendOutcome::Failed` with a transport-defined
+  `reason_code` on the same `Failed` variant (for the Tmux transport,
   `reason_code = "pane_wedged"`).
 
 In addition to the three terminal classifications above, the classifier
@@ -453,18 +451,16 @@ observe-sleep-observe iteration. The required branch order in
 `quiescence_classify_step` (in `src/transports/quiescence.rs`), after
 the second observation capture, is:
 
-1. `operator_interaction_active` check (operator copy-mode /
-   key-table) — suppresses all classification.
-2. **Busy short-circuit** (the new branch from this proposal) — when
-   the activity generation advanced, reset the wedge counter, emit
-   `delivery_target_active`, return `NeedsWait`.
-3. `delivery_ready` check — terminal: returns
+1. **Busy short-circuit** — when the activity generation advanced,
+   reset the wedge counter, emit `delivery_target_active`, return
+   `NeedsWait`.
+2. `delivery_ready` check — terminal: returns
    `Done(Ok(snapshot_after.pane_target.unwrap_or_default()))` when
    the snapshot is prompt-ready.
-4. Wedge-counter increment block.
-5. Wedge check (counter threshold or prime-window elapsed) —
+3. Wedge-counter increment block.
+4. Wedge check (counter threshold or prime-window elapsed) —
    `Done(Err(Wedged))`.
-6. Prime timeout check — `Done(Err(Timeout))`.
+5. Prime timeout check — `Done(Err(Timeout))`.
 
 This ordering is what implements the Busy-suppresses-all-terminal-
 classifications behavior above. In particular, Busy SHALL be
@@ -473,7 +469,7 @@ matches the prompt regex while the activity generation advanced
 during the same quiet window SHALL return `NeedsWait` (Busy), not
 `Done(Ok(...))` (Delivered). The wedge counter SHALL only advance
 during iterations in which the activity signal was also quiesced;
-this is an implicit guard from Busy returning early at step 2.
+this is an implicit guard from Busy returning early at step 1.
 
 The `unresponsive` and `wedged` classifiers SHALL each be config-surfaced
 per the per-transport spec (see `session-relay` Tmux Prime Timeout and
@@ -489,11 +485,16 @@ Tmux Wedged State Detection requirements for the Tmux surface).
   `[coders.<id>.tmux].wedge-detection = false` to preserve the prior
   unbounded-wait behavior.
 
-Active operator-interaction signals (such as tmux copy-mode or active
-key-table for the Tmux transport) SHALL indefinitely suppress both
-`unresponsive` and `wedged` classification while they remain active.
-The classifier SHALL NOT fire any failure classification while
-operator-interaction is active.
+No operator-observable rendering state on the Tmux transport — copy-mode or
+a non-`root` client key-table — SHALL suppress, defer, or otherwise gate any
+classification. Such states do not change what `capture-pane` or `cursor_x`
+report and do not impede injection (see the `session-relay`
+`Copy-Mode-Transparent Injection` requirement), so they are not delivery
+preconditions. A quiescence wait SHALL always progress toward one of its
+terminal classifications; the classifier SHALL NOT hold a flush group in a
+non-terminal state on the basis of a rendering signal it cannot bound. (This
+does not affect the ACP transport's `pending_choice_outcome` pause, which is a
+distinct turn-blocking operator *decision*, not a rendering signal.)
 
 The classifier SHALL be evaluated at the transport's quiescence wait,
 NOT at the relay delivery worker. The relay SHALL NOT inspect
@@ -517,8 +518,8 @@ flush group SHALL NOT resolve as `Timeout AND Failed`).
 
 - **WHEN** the bundle config does not set
   `[coders.<id>.tmux].wedge-detection` (or sets it to `true`)
-- **THEN** the Tmux transport classifies a settled, non-prompt-ready,
-  no-operator-interaction pane as `wedged`
+- **THEN** the Tmux transport classifies a settled, non-prompt-ready pane as
+  `wedged`
 - **AND** resolves the flush group as `Failed` with
   `reason_code = "pane_wedged"`
 
@@ -542,28 +543,15 @@ flush group SHALL NOT resolve as `Timeout AND Failed`).
   `Failed` + `reason_code = "pane_wedged"` (when wedge detection is
   enabled, which is the default) and `Shutdown`
 
-#### Scenario: Wedge classification requires no pending operator interaction
+#### Scenario: Classification is unaffected by operator copy-mode
 
-- **WHEN** the Tmux transport's quiescence wait observes a settled pane
-  that does not match the prompt-readiness template
-- **AND** `operator_interaction_active` reports an active copy-mode or
-  key-table for the target session
-- **THEN** the transport continues to wait and does NOT classify the
-  flush group as `wedged`
-- **AND** this suppression persists for as long as
-  `operator_interaction_active` remains active
-
-#### Scenario: Unresponsive classification requires no pending operator interaction
-
-- **WHEN** the Tmux transport's prime window elapses during the
-  quiescence wait for a flush group with no observable output from the
-  target
-- **AND** `operator_interaction_active` reports an active copy-mode or
-  key-table for the target session
-- **THEN** the transport continues to wait and does NOT classify the
-  flush group as `unresponsive`
-- **AND** the prime timer does NOT reset and does NOT fire while
-  operator interaction remains active
+- **WHEN** the target pane is in tmux copy-mode (for example, the operator
+  scrolled it with the mouse wheel)
+- **THEN** the classifier evaluates prompt-readiness against the pane's live
+  content, which copy-mode does not alter
+- **AND** a prompt-ready pane resolves as `Delivered`
+- **AND** the transport does NOT suppress or defer classification on account
+  of the copy-mode state
 
 #### Scenario: Group atomicity on failure classification
 
@@ -607,6 +595,8 @@ flush group SHALL NOT resolve as `Timeout AND Failed`).
 - **AND** the next observation reports an activity-signal advance
 - **THEN** the wedge counter is reset to zero
 - **AND** the counter starts accumulating again only after the activity
+  signal quiesces and the pane content remains settled at a non-prompt
+  state
 
 #### Scenario: Busy short-circuit defers Delivered during active output (branch-ordering contract)
 
@@ -632,8 +622,6 @@ a probe that advances `activity_generation` between observations
 while keeping `is_prompt_ready == true` MUST resolve as
 `QuiescenceAction::NeedsWait`, NOT `Ok(pane)`, until the activity
 generation quiesces across an observation pair.
-  signal quiesces and the pane content remains settled at a non-prompt
-  state
 
 ### Requirement: Prime Timeout Envelope Field
 
@@ -683,15 +671,15 @@ the decoupling arc.
 ### Requirement: Transport-Internal Probe Seam for Testability
 
 Each promptable transport that owns a quiescence wait SHALL expose an
-internal probe trait that lets tests inject deterministic quiescence,
-prompt-readiness, and operator-interaction results. The probe trait
-SHALL be transport-internal (not part of the `Transport` contract) and
-SHALL NOT appear in `src/transports/contract.rs`.
+internal probe trait that lets tests inject deterministic quiescence and
+prompt-readiness results. The probe trait SHALL be transport-internal (not
+part of the `Transport` contract) and SHALL NOT appear in
+`src/transports/contract.rs`.
 
 The probe trait SHALL return the next observation on demand so tests can
 drive the classifier through specific sequences. The probe SHALL cover
-at minimum the five canonical sequences: unresponsive, wedged,
-pending-choice, slow-prompt, and normal-flow.
+at minimum the four canonical sequences: unresponsive, wedged,
+slow-prompt, and normal-flow.
 
 #### Scenario: Tmux probe trait is transport-internal
 
@@ -702,17 +690,14 @@ pending-choice, slow-prompt, and normal-flow.
 - **AND** the `Transport` trait in `src/transports/contract.rs` has no
   knowledge of probes
 
-#### Scenario: Tmux unit tests cover the five canonical sequences
+#### Scenario: Tmux unit tests cover the four canonical sequences
 
 - **WHEN** `cargo test --test tmux_transport` runs
-- **THEN** it asserts the five canonical probe sequences produce the
+- **THEN** it asserts the four canonical probe sequences produce the
   expected terminal outcomes:
   - `AlwaysUnresponsiveProbe` → `SendOutcome::Timeout`
   - `AlwaysWedgeProbe` → `SendOutcome::Failed` +
     `reason_code = "pane_wedged"`
-  - `PendingChoiceProbe` → neither timeout nor wedge; the transport
-    continues to wait indefinitely while operator interaction is
-    active and the prime timer does NOT fire
   - `SlowPromptProbe` → `Delivered` after several quiescence ticks
   - `NormalFlowProbe` → `Delivered` without prime or wedge firing
 
