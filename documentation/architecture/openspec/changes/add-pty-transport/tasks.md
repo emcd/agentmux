@@ -343,23 +343,16 @@
       valid.
 - [x] 11.5 `cargo run --bin agentmux-pty -- /bin/bash`
       round-trips a real shell prompt through libghostty-vt.
-- [ ] 11.6 Pty-configured coder session in a real bundle
-      delivers a `mailw` envelope to a child shell and resolves
-      `SendOutcome::Delivered` within the configured
-      `quiet_window` (manual smoke test against a real bundle).
-- [ ] 11.7 Pty `look` returns a `LookSnapshotPayload::Lines {
-      snapshot_lines }` consistent with the captured screen
-      (manual smoke test against `cat /etc/hostname`).
-- [ ] 11.8 Pty wedge detection fires on a wedged pane with
-      default-on config (manual smoke test using `cat > /dev/full`
-      or equivalent).
-- [ ] 11.9 Pty prime timeout fires on an unresponsive pane when
-      configured (manual smoke test using `sleep infinity` as
-      the child command).
-- [ ] 11.10 Pty wedge-disabled + prime-timeout-set scenario
-      matches the Tmux spec's `Scenario: Tmux prime timeout
-      bounds post-quiescence wait when wedge is disabled` (manual
-      smoke test).
+
+> **§11.6-§11.10 removed at 2026-07-15 (no-dual-maintenance).** The five
+> manual smoke tests are tracked exclusively under `todos/pty/9`
+> (the canonical §11 close-out tracker, plus the broader
+> `add-wedge-detection-busy-state` §6.7 / live joint test session
+> coordination in coordination/general/16). Owner: Pty Specialist
+> with QA Partner + Coordinator + operator for the joint session;
+> blocked on operator-scheduled live joint Pty-transport test
+> session. Adding proposal boxes here was dual maintenance with
+> `todos/pty/9`.
 
 ## 12. CI feature-gating (immediate follow-up, not in this proposal's implementation)
 

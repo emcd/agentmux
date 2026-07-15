@@ -23,13 +23,12 @@ is why the delta base matters and why the ordering is fixed, not incidental.
       requirement diff-verified to change only the gate clauses. Nothing further
       required before this change's own archive, which stays sequenced after
       882283b (already true — 882283b is an ancestor of this branch).
-- [ ] 0.2 Downstream archive coupling: the active `add-pty-transport` proposal
-      still carries ~12 `operator_interaction_active` references (its
-      `design.md`, `proposal.md`, `tasks.md`, and both spec deltas) that would
-      RE-ADD the field at its own archive. Owned by the Pty lane (agreed option
-      1): Pty updates that proposal against the post-archive live spec, sequenced
-      AFTER this change archives. Not a blocker for merging this change — only a
-      constraint on archive order between the two.
+
+> **§0.2 removed at archive time (2026-07-15).** The Pty lane owns the
+> downstream `add-pty-transport` spec-delta rebuild (option 1 from BE's
+> cross-lane review); the coupling is tracked in
+> coordination/pty/1 + coordination/relay/1. Adding a proposal
+> box here was dual maintenance.
 
 ## 1. Tmux injection path (`src/tmux/pane.rs`)
 
@@ -155,10 +154,10 @@ is why the delta base matters and why the ordering is fixed, not incidental.
 - [x] 6.5 `cargo fmt --check` — silent.
 - [x] 6.6 `openspec validate remove-operator-interaction-delivery-gate --strict`
       — valid.
-- [ ] 6.7 Manual live validation (operator-scheduled): scroll a live agent's
-      pane into copy-mode, send it a message, confirm the message arrives, is
-      submitted, and the operator's scroll position is undisturbed. Can be run
-      in the same sitting as `add-wedge-detection-busy-state` §6.7.
+
+> **§6.7 removed at archive time (2026-07-15).** Moved to
+> `todos/relay/116` for operator tracking against 0.9.0; adding a
+> proposal box here was dual maintenance with the todo.
 
 ## 7. Documentation
 
