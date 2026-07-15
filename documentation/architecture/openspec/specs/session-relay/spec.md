@@ -957,6 +957,13 @@ Event types SHALL include:
 - `body`
 - optional `cc_sessions`
 
+`sender_session` and `cc_sessions` SHALL carry the bare canonical
+`session@namespace` form obtained via the non-decorating identity accessor.
+They SHALL NOT carry the decorating pane-header form
+(`Display Name <session:session_name>`) produced by `render_address`. The
+pane-envelope From/To/Cc header is the only surface that uses the decorating
+form; the `incoming_message` machine event fields are exempt from it.
+
 `delivery_outcome` payload SHALL include:
 
 - `message_id`
@@ -986,6 +993,16 @@ Relay terminal state `dropped_on_shutdown` SHALL map to:
 
 - **WHEN** relay delivers message to connected ui recipient
 - **THEN** relay pushes `incoming_message` event frame on that stream
+
+#### Scenario: Emit bare canonical sender and cc identity in incoming_message
+
+- **WHEN** the sender identity is `session_name = "alice@bundle"` with
+  `display_name = "Alice Cooper"` and a co-recipient has the same shape
+- **THEN** the `incoming_message` event `sender_session` equals `"alice@bundle"`
+- **AND** each entry in `cc_sessions` is the bare canonical `session@namespace`
+  id
+- **AND** neither field carries the decorating
+  `Display Name <session:session_name>` form
 
 #### Scenario: Push routed diagnostic update
 

@@ -297,12 +297,18 @@ The structured payload SHALL include:
 - message body,
 - created timestamp,
 - namespace,
-- canonical sender session id and optional sender display name,
-- canonical target session id and optional target display name,
-- canonical co-recipient session ids and optional display names,
+- sender, target, and co-recipient identities, each carried as a structured
+  `AddressIdentity` (canonical `session@namespace` id plus optional display
+  name),
 - authenticated sender identity when available,
 - choice decider sessions,
 - quiescence hints.
+
+The payload SHALL carry each party as an `AddressIdentity` value directly; it
+SHALL NOT carry a parallel party type whose canonical id is a bare string
+requiring per-transport conversion before rendering. Transports SHALL obtain the
+bare canonical id via the non-decorating accessor and the decorating header form
+via `render_address`.
 
 The relay SHALL populate these fields after routing and authorization. Transports
 SHALL treat attribution fields as read-only input and SHALL NOT infer or rewrite
@@ -316,6 +322,14 @@ out-of-band delivery metadata.
 - **THEN** it constructs a `DeliveryEnvelope` containing structured message data
   and per-write control hints
 - **AND** it does not render pane-envelope text before calling `mailw`
+
+#### Scenario: Payload carries AddressIdentity per party
+
+- **WHEN** the relay constructs the delivery payload
+- **THEN** sender, target, and each co-recipient are carried as `AddressIdentity`
+  values directly on the payload
+- **AND** no transport performs a bare-string-to-identity conversion before
+  rendering
 
 #### Scenario: Transport consumes relay-authored attribution
 
