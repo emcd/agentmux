@@ -245,13 +245,28 @@ impl TransportImpl {
     /// `pty` Cargo feature is enabled; callers select transport at the
     /// bundle-config layer per `[coders.<id>]` (the per-coder
     /// configuration lands in §6 alongside `PtyTargetConfiguration`).
+    ///
+    /// `mirror_state` is the relay-constructed closure that mirrors
+    /// per-turn readiness transitions into the relay's global
+    /// worker-state registry. The relay dispatcher closes over
+    /// `set_worker_readiness(namespace, runtime_directory,
+    /// target_session, state)` (see
+    /// `src/relay/delivery/async_worker.rs`); the transport holds an
+    /// opaque `Arc<dyn Fn>` so `src/pty` does not import
+    /// `crate::relay`. Mirrors `AcpWorkerDriver`'s `MirrorStateFn`
+    /// (see `src/acp/worker_driver.rs`).
     #[cfg(feature = "pty")]
     #[must_use]
     pub fn pty(
         target_member: crate::configuration::BundleMember,
         config: crate::pty::PtyTargetConfiguration,
+        mirror_state: Option<crate::pty::PtyMirrorStateFn>,
     ) -> Self {
-        Self::Pty(crate::pty::PtyTransport::new(target_member, config))
+        Self::Pty(crate::pty::PtyTransport::new(
+            target_member,
+            config,
+            mirror_state,
+        ))
     }
 
     /// The target can be captured by `look`.

@@ -274,7 +274,7 @@
 
 ## 8. Worker readiness
 
-- [ ] 8.1 Pty's worker thread publishes `WorkerReadinessState`
+- [x] 8.1 Pty's worker thread publishes `WorkerReadinessState`
       transitions via the existing `set_worker_readiness` /
       `publish_worker_readiness` functions in
       `src/relay/`. Mirror ACP's wiring:
@@ -298,7 +298,7 @@
       five scenarios exercise Pty's path.
 - [x] 9.3 Add coalesce-during-wedge-counter scenarios (counter
       increments, resets on signature change, fires at 3).
-- [ ] 9.4 Add coalesce-during-prime-does-not-extend-window
+- [x] 9.4 Add coalesce-during-prime-does-not-extend-window
       scenario.
 - [x] 9.5 Add wedge-outcome-maps-to-pane_wedged and
       prime-timeout-outcome-maps-to-Timeout outcome-mapping
@@ -306,7 +306,7 @@
 - [x] 9.6 Add wedge-default-on and wedge-disabled scenarios.
 - [x] 9.7 Add prime-timeout-default-off and prime-timeout-opt-in
       scenarios.
-- [ ] 9.8 Add the wedge-disabled + prime-timeout-set scenario
+- [x] 9.8 Add the wedge-disabled + prime-timeout-set scenario
       (prime-timeout bounds every quiescent state when wedge is
       disabled) — matches the existing Tmux spec scenario.
 - [x] 9.9 Add a `PtyTransport`-level integration test that

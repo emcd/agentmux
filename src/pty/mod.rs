@@ -29,4 +29,4 @@ pub use state::{
     LOOK_LINES_DEFAULT, PtyConfigSnapshot, PtyOutputView, PtyQuiescenceProbe, PtyShared, PtyState,
     SnapshotRequest, SnapshotResponse,
 };
-pub use transport::{PtyTargetConfiguration, PtyTransport};
+pub use transport::{PtyMirrorStateFn, PtyTargetConfiguration, PtyTransport};

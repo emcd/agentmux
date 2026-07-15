@@ -210,6 +210,13 @@ pub struct DeliveryFailure {
     pub pending_raw: Option<PendingRaw>,
 }
 
+/// Extract the `wedged` flag from a quiescence-classify result. Used
+/// by the worker thread to publish `WorkerReadinessState::Unavailable`
+/// instead of `Available` on a wedge-class delivery resolution.
+fn is_wedged(result: &Result<String, DeliveryWaitError>) -> bool {
+    matches!(result, Err(DeliveryWaitError::Wedged { .. }))
+}
+
 /// Marker for "the write failed and the failure outcome was already
 /// sent" — used by `Delivery::start_raw` to signal failure without
 /// returning a unit `Result`.
@@ -250,8 +257,13 @@ pub enum DeliveryStep {
     Continue,
     /// The delivery has resolved. The current group's outcomes have
     /// been sent to each sender. The worker should drop the run and
-    /// return to idle.
-    Done,
+    /// return to idle. `wedged` is `true` when the resolution was a
+    /// `DeliveryWaitError::Wedged { .. }`; the worker uses that flag
+    /// to publish `WorkerReadinessState::Unavailable` instead of
+    /// `Available` on wedge-class resolutions (per the worker-
+    /// readiness contract; see `src/pty/transport.rs` `run_worker`'s
+    /// `Done { wedged }` branch).
+    Done { wedged: bool },
 }
 
 /// One in-flight raw-only delivery. Writes the raw content to the
@@ -442,6 +454,45 @@ impl Delivery {
             Delivery::Raw(raw) => raw.resolved,
         }
     }
+
+    /// Abandon an in-flight delivery by resolving it as `Failed`
+    /// with the supplied `reason_code` and `reason`. Called from the
+    /// child-exit branch of the worker event loop so the caller's
+    /// `OutcomeFuture` does not hang after the worker has observed
+    /// child death and refused to drive the delivery to its terminal
+    /// classification.
+    ///
+    /// For an envelope-group delivery, every sender in the
+    /// coalesced group receives the same `Failed` outcome. For a
+    /// raw-only delivery, the raw's `outcome_tx` is resolved.
+    /// Best-effort: a `send` failure (the caller has dropped their
+    /// receiver) is silently swallowed.
+    pub fn abandon_into_failed(&mut self, target_session: &str, reason_code: &str, reason: &str) {
+        match self {
+            Delivery::Group(run) => {
+                send_group_outcomes_with_explicit_failure(
+                    &mut run.group,
+                    reason.to_string(),
+                    reason_code,
+                    target_session,
+                );
+                run.resolved = true;
+            }
+            Delivery::Raw(raw) => {
+                if let Some(r) = raw.raw.take() {
+                    let _ = r.outcome_tx.send(SingleDeliveryOutcome {
+                        target_session: target_session.to_string(),
+                        message_id: String::new(),
+                        outcome: crate::transports::SendOutcome::Failed,
+                        reason_code: Some(reason_code.to_string()),
+                        reason: Some(reason.to_string()),
+                        details: None,
+                    });
+                }
+                raw.resolved = true;
+            }
+        }
+    }
 }
 
 impl DeliveryRun {
@@ -515,8 +566,9 @@ impl DeliveryRun {
         match classify {
             QuiescenceAction::Done(result) => {
                 self.resolved = true;
+                let wedged = is_wedged(&result);
                 send_group_outcomes(&mut self.group, result, target_session);
-                DeliveryStep::Done
+                DeliveryStep::Done { wedged }
             }
             QuiescenceAction::NeedsWait(deadline) => {
                 // Initialize wait state; the next step will do the
@@ -593,7 +645,7 @@ impl DeliveryRun {
                             "raw_interrupted",
                             target_session,
                         );
-                        DeliveryStep::Done
+                        DeliveryStep::Done { wedged: false }
                     }
                 }
             }
@@ -629,8 +681,9 @@ impl DeliveryRun {
         match classify {
             QuiescenceAction::Done(result) => {
                 self.resolved = true;
+                let wedged = is_wedged(&result);
                 send_group_outcomes(&mut self.group, result, target_session);
-                Some(DeliveryStep::Done)
+                Some(DeliveryStep::Done { wedged })
             }
             QuiescenceAction::NeedsWait(_) => None,
         }
@@ -696,11 +749,12 @@ impl RawDelivery {
         match classify {
             QuiescenceAction::Done(result) => {
                 self.resolved = true;
+                let wedged = is_wedged(&result);
                 let outcome = envelope_outcome_from_wait_result(result, target_session);
                 if let Some(raw) = self.raw.take() {
                     let _ = raw.outcome_tx.send(outcome);
                 }
-                DeliveryStep::Done
+                DeliveryStep::Done { wedged }
             }
             QuiescenceAction::NeedsWait(deadline) => {
                 // Initialize wait state; the next step will do

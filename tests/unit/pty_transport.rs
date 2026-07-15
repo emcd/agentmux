@@ -156,6 +156,7 @@ fn make_pty_shared(
         },
         last_change_atomic: last_change_atomic.clone(),
         snapshot_tx: tx,
+        child_exited: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
     let (_worker_handle, _timer_handle) = spawn_mock_worker(rx, script, last_change_atomic);
     (shared, _worker_handle)
@@ -429,6 +430,56 @@ fn coalesce_during_wedge_counter_fires_after_consecutive_identical_signatures() 
     );
 }
 
+/// §9.4 — coalesce-during-prime-does-not-extend-window. Configures
+/// a bounded 50 ms prime window and a snapshot stream that returns
+/// the same unready snapshot throughout the wait. The state machine
+/// processes many classify cycles (each consuming one scripted
+/// snapshot and triggering a fresh `wait_for_change` poll); the test
+/// asserts `Timeout` fires within a bounded elapsed time, NOT
+/// extended by the repeated classify iterations. Mirrors the
+/// existing `prime_timeout_opt_in_fires_after_window` test but adds
+/// the elapsed-time bound that guards the "prime window does not
+/// extend" guarantee.
+#[test]
+fn coalesce_during_prime_does_not_extend_window() {
+    let script = Arc::new(Mutex::new(VecDeque::from(vec![
+        empty_unready_snapshot();
+        50
+    ])));
+    let (shared, _handle) = make_pty_shared(
+        script,
+        Some(50),
+        true,
+        Some(Regex::new(r"READY_MARKER").unwrap()),
+        None,
+    );
+    let mut probe = PtyQuiescenceProbe::new(shared);
+    let started = Instant::now();
+    let result = wait_for_quiescent_three_state(
+        &mut probe,
+        TEST_TARGET_SESSION,
+        SHORT_QUIET_WINDOW,
+        prime_window(Some(50)).0,
+        prime_window(Some(50)).1,
+        prime_window(Some(50)).2,
+        true,
+    );
+    let elapsed = started.elapsed();
+    assert!(
+        matches!(result, Err(DeliveryWaitError::Timeout { .. })),
+        "expected Timeout (prime window fired), got {result:?}",
+    );
+    // The prime window must NOT extend beyond ~4x the configured
+    // timeout (50 ms). Each classify cycle is one wait-poll
+    // (~10 ms); a few cycles after the deadline is acceptable, but
+    // indefinite extension is the regression §9.4 guards against.
+    assert!(
+        elapsed < Duration::from_millis(200),
+        "prime window extended by classify cycles; elapsed = {:?}",
+        elapsed,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Wedge / prime-timeout switches (tasks.md §9.6-9.8)
 // ---------------------------------------------------------------------------
@@ -570,7 +621,7 @@ fn prime_timeout_opt_in_fires_after_window() {
 
 #[test]
 fn short_prime_timeout_does_not_preempt_wedge_for_wedge_class_mismatch() {
-    let script = Arc::new(Mutex::new(VecDeque::from([
+    let script = Arc::new(Mutex::from(VecDeque::from([
         stuck_unready_snapshot(),
         stuck_unready_snapshot(),
         stuck_unready_snapshot(),
@@ -595,6 +646,54 @@ fn short_prime_timeout_does_not_preempt_wedge_for_wedge_class_mismatch() {
     assert!(
         matches!(result, Err(DeliveryWaitError::Wedged { .. })),
         "expected Wedged (wedge governs over short prime-timeout), got {result:?}",
+    );
+}
+
+/// §9.8 — wedge-disabled + prime-timeout-set combined scenario.
+/// With wedge detection disabled, wedge-class mismatches cannot
+/// fire `Wedged` (the wedge counter is short-circuited); the
+/// prime-timeout bounds every quiescent state instead. The wait
+/// fires `Timeout` within the bounded prime window regardless of
+/// whether the snapshot signature is wedge-class — `stuck_…`
+/// (wedge-class) is used here specifically to exercise the
+/// regression that would let a wedge-class signature fire Wedged
+/// even when wedge is disabled. Mirrors the existing
+/// `wedge_disabled_does_not_fire_wedged_within_short_window` test
+/// but explicitly exercises the wedge-class signature path with an
+/// elapsed-time bound.
+#[test]
+fn wedge_disabled_with_prime_timeout_bounds_every_quiescent_state() {
+    let script = Arc::new(Mutex::new(VecDeque::from(vec![
+        stuck_unready_snapshot();
+        20
+    ])));
+    let (shared, _handle) = make_pty_shared(
+        script,
+        Some(50),
+        false,
+        Some(Regex::new(r"READY_MARKER").unwrap()),
+        None,
+    );
+    let mut probe = PtyQuiescenceProbe::new(shared);
+    let started = Instant::now();
+    let result = wait_for_quiescent_three_state(
+        &mut probe,
+        TEST_TARGET_SESSION,
+        SHORT_QUIET_WINDOW,
+        prime_window(Some(50)).0,
+        prime_window(Some(50)).1,
+        prime_window(Some(50)).2,
+        false,
+    );
+    let elapsed = started.elapsed();
+    assert!(
+        matches!(result, Err(DeliveryWaitError::Timeout { .. })),
+        "expected Timeout (wedge disabled, prime bounds every quiescent state), got {result:?}",
+    );
+    assert!(
+        elapsed < Duration::from_millis(200),
+        "prime window extended; elapsed = {:?}",
+        elapsed,
     );
 }
 
@@ -762,6 +861,7 @@ fn pty_transport_round_trips_raww_with_prompt_readiness() {
             working_directory: None,
             term_protocol: TermProtocol::Xterm256Color,
         },
+        None,
     );
     let context = StartupContext {
         namespace: "agentmux".to_string(),
@@ -903,6 +1003,7 @@ fn pty_transport_spawns_multi_arg_initial_command() {
             working_directory: None,
             term_protocol: TermProtocol::Xterm256Color,
         },
+        None,
     );
     let context = StartupContext {
         namespace: "agentmux".to_string(),
@@ -1046,6 +1147,7 @@ fn pty_transport_mailw_during_raww_wait_is_not_dropped() {
             working_directory: None,
             term_protocol: TermProtocol::Xterm256Color,
         },
+        None,
     );
     let context = StartupContext {
         namespace: "agentmux".to_string(),
@@ -1220,6 +1322,7 @@ fn pty_transport_look_during_non_ready_wait_returns_promptly() {
             working_directory: None,
             term_protocol: TermProtocol::Xterm256Color,
         },
+        None,
     );
     let context = StartupContext {
         namespace: "agentmux".to_string(),
@@ -1372,7 +1475,7 @@ fn pty_transport_term_protocol_propagates_to_child_command() {
         child_command,
         term_protocol,
     );
-    let mut transport = agentmux::pty::PtyTransport::new(target.clone(), transport_cfg);
+    let mut transport = agentmux::pty::PtyTransport::new(target.clone(), transport_cfg, None);
     let context = StartupContext {
         namespace: "agentmux".to_string(),
         runtime_directory: std::env::temp_dir(),
@@ -1442,7 +1545,7 @@ fn pty_transport_term_protocol_dependent_round_trip_through_snapshot() {
         child_command,
         term_protocol,
     );
-    let mut transport = agentmux::pty::PtyTransport::new(target.clone(), transport_cfg);
+    let mut transport = agentmux::pty::PtyTransport::new(target.clone(), transport_cfg, None);
     let context = StartupContext {
         namespace: "agentmux".to_string(),
         runtime_directory: std::env::temp_dir(),
@@ -1593,7 +1696,7 @@ fn pty_transport_runtime_child_env_propagates_operator_overrides() {
         term_protocol: TermProtocol::XtermKitty,
     };
 
-    let mut transport = agentmux::pty::PtyTransport::new(target.clone(), transport_cfg);
+    let mut transport = agentmux::pty::PtyTransport::new(target.clone(), transport_cfg, None);
     let context = StartupContext {
         namespace: "agentmux".to_string(),
         runtime_directory: std::env::temp_dir(),
@@ -1861,4 +1964,601 @@ fn pty_alternating_activity_field_reflects_advance_pattern() {
     }
     assert!(saw_advance, "alternating test must exercise advance path");
     assert!(saw_constant, "alternating test must exercise constant path");
+}
+
+// =========================================================================
+// Pty worker-readiness lifecycle regression tests (gated on
+// --features pty; NOT #[ignore]'d so they run as part of the
+// normal Pty-feature nextest pass — these verify the
+// worker-readiness lifecycle contract, the latched-child-exit
+// condition, and the bounded-shutdown guarantee)
+// =========================================================================
+
+#[cfg(feature = "pty")]
+use agentmux::transports::Transport as _PtyLifecycleTransport;
+
+#[cfg(feature = "pty")]
+fn make_pty_transport_for_lifecycle_test(
+    id: &str,
+    initial_command: &str,
+    term_protocol: agentmux::configuration::TermProtocol,
+) -> (
+    agentmux::pty::PtyTransport,
+    agentmux::transports::StartupContext,
+) {
+    make_pty_transport_for_lifecycle_test_with_prompt_and_mirror(
+        id,
+        initial_command,
+        term_protocol,
+        None,
+        None,
+    )
+}
+
+/// Extended lifecycle-test helper that takes a `prompt_regex` and
+/// an optional relay-mirror closure (so tests can capture the
+/// readiness-transition sequence through the public seam). Both
+/// fields default to `None`, matching `make_pty_transport_for_lifecycle_test`.
+#[cfg(feature = "pty")]
+fn make_pty_transport_for_lifecycle_test_with_prompt_and_mirror(
+    id: &str,
+    initial_command: &str,
+    term_protocol: agentmux::configuration::TermProtocol,
+    prompt_regex: Option<&str>,
+    mirror: Option<agentmux::pty::PtyMirrorStateFn>,
+) -> (
+    agentmux::pty::PtyTransport,
+    agentmux::transports::StartupContext,
+) {
+    use agentmux::configuration::{
+        BundleMember, PromptReadinessTemplate, PtyTargetConfiguration as PtyConfig,
+    };
+    use agentmux::pty::PtyTargetConfiguration;
+    use agentmux::transports::{ChoiceMade, StartupContext};
+
+    let prompt_readiness = prompt_regex.map(|r| PromptReadinessTemplate {
+        prompt_regex: r.to_string(),
+        inspect_lines: None,
+        input_idle_cursor_column: None,
+    });
+    let pty_cfg = PtyConfig {
+        initial_command: initial_command.to_string(),
+        resume_command: initial_command.to_string(),
+        prompt_readiness: prompt_readiness.clone(),
+        prime_timeout_ms: Some(2000),
+        wedge_detection: true,
+        cols: 80,
+        rows: 24,
+        term_protocol,
+    };
+    let target = BundleMember {
+        id: id.to_string(),
+        name: None,
+        working_directory: None,
+        target: agentmux::configuration::TargetConfiguration::Pty(pty_cfg),
+        coder_session_id: None,
+        policy_id: None,
+        environment: Vec::new(),
+    };
+    let transport_cfg = PtyTargetConfiguration {
+        initial_command: initial_command.to_string(),
+        resume_command: initial_command.to_string(),
+        prompt_readiness,
+        cols: 80,
+        rows: 24,
+        prime_timeout_ms: Some(2000),
+        wedge_detection: true,
+        working_directory: None,
+        term_protocol,
+    };
+    let transport = agentmux::pty::PtyTransport::new(target.clone(), transport_cfg, mirror);
+    let context = StartupContext {
+        namespace: "agentmux".to_string(),
+        runtime_directory: std::env::temp_dir(),
+        target_member: target,
+        choose: Arc::new(|_| ChoiceMade::Cancelled {
+            decided_by: String::new(),
+            reason_code: "test_cancel".to_string(),
+            reason: None,
+        }),
+    };
+    (transport, context)
+}
+
+/// Verifies the startup handshake: the worker publishes
+/// `Available` only after `Terminal::new` + handler install
+/// succeed, and the relay's `startup_inner` returns `Ok(Ready)`
+/// only once the worker has signaled via the init handshake. A
+/// failure here indicates the startup race (publish-before-
+/// construct) regressed.
+#[cfg(feature = "pty")]
+#[test]
+fn pty_transport_startup_handshake_publishes_available_before_returning_ready() {
+    let (mut transport, context) = make_pty_transport_for_lifecycle_test(
+        "handshake-success",
+        "/bin/bash",
+        agentmux::configuration::TermProtocol::Xterm256Color,
+    );
+    let status = transport
+        .startup(context)
+        .expect("startup of /bin/bash should succeed when libghostty-vt is built");
+    assert!(
+        matches!(
+            status.readiness,
+            agentmux::transports::TransportReadiness::Ready
+        ),
+        "startup should report Ready, got {:?}",
+        status.readiness,
+    );
+    assert_eq!(
+        transport.readiness(),
+        agentmux::transports::WorkerReadinessState::Available,
+        "transport-local readiness should be Available after successful startup",
+    );
+    transport.shutdown();
+}
+
+/// Verifies the retry guard rejects `Unavailable` after a
+/// shutdown. The `started` flag distinguishes never-attempted from
+/// previously-attempted; the readiness check then rejects
+/// re-init. Once `Unavailable`, restart is unsupported until a
+/// teardown-then-restart path lands.
+#[cfg(feature = "pty")]
+#[test]
+fn pty_transport_retry_guard_rejects_unavailable_after_shutdown() {
+    use agentmux::transports::{Transport, TransportError};
+
+    let (mut transport, context) = make_pty_transport_for_lifecycle_test(
+        "retry-unavailable",
+        "/bin/bash",
+        agentmux::configuration::TermProtocol::Xterm256Color,
+    );
+    transport
+        .startup(context)
+        .expect("first startup should succeed");
+    transport.shutdown();
+
+    // Build a fresh context for the retry attempt (the prior one
+    // was moved into startup_inner).
+    let (_, context2) = make_pty_transport_for_lifecycle_test(
+        "retry-unavailable",
+        "/bin/bash",
+        agentmux::configuration::TermProtocol::Xterm256Color,
+    );
+    let result = transport.startup(context2);
+    assert!(
+        matches!(
+            result,
+            Err(TransportError {
+                ref code, ..
+            }) if code == "pty_unavailable_restart_unsupported"
+        ),
+        "retry should be rejected with pty_unavailable_restart_unsupported, got {:?}",
+        result,
+    );
+}
+
+/// Verifies the child-exit latch. Spawning `/bin/true` (which
+/// exits immediately) causes the reader thread to observe EOF on
+/// the PTY master, set `child_exited=true`, and exit. The worker
+/// observes `child_exited` on its next iteration, publishes
+/// `Unavailable`, abandons the in-flight delivery (if any) with
+/// `Failed` + `reason_code = "pty_child_exited"`, and breaks out
+/// of the loop. The latched condition holds: subsequent
+/// classification attempts MUST NOT publish `Available` again,
+/// and `startup()` retry MUST be rejected with
+/// `pty_unavailable_restart_unsupported`.
+#[cfg(feature = "pty")]
+#[test]
+fn pty_transport_child_exit_publishes_unavailable_and_latches() {
+    use std::time::{Duration, Instant};
+
+    use agentmux::transports::{Transport, TransportError, WorkerReadinessState};
+
+    let (mut transport, context) = make_pty_transport_for_lifecycle_test(
+        "child-exit-latch",
+        "/bin/true",
+        agentmux::configuration::TermProtocol::Xterm256Color,
+    );
+    let _ = transport
+        .startup(context)
+        .expect("startup of /bin/true should succeed");
+
+    // Wait for the worker to observe child-exit (up to 5 s; in
+    // practice it observes within milliseconds because the reader
+    // sees EOF immediately after `/bin/true` exits and the worker
+    // checks `child_exited` on the next iteration).
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline
+        && !matches!(transport.readiness(), WorkerReadinessState::Unavailable)
+    {
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        transport.readiness(),
+        WorkerReadinessState::Unavailable,
+        "worker should publish Unavailable after child exit; actual = {:?}",
+        transport.readiness(),
+    );
+
+    // The latched condition: a subsequent attempt that would
+    // otherwise resolve `Available` MUST NOT publish `Available`.
+    // The retry guard test exercises this directly.
+    let (_, context2) = make_pty_transport_for_lifecycle_test(
+        "child-exit-latch",
+        "/bin/true",
+        agentmux::configuration::TermProtocol::Xterm256Color,
+    );
+    let result = transport.startup(context2);
+    assert!(
+        matches!(
+            result,
+            Err(TransportError {
+                ref code, ..
+            }) if code == "pty_unavailable_restart_unsupported"
+        ),
+        "retry after child exit should be rejected, got {:?}",
+        result,
+    );
+
+    // Explicit shutdown so the exited child is reaped and the
+    // thread handles are joined before the test returns. Without
+    // this the test process would carry the zombie / live handles
+    // until the PtyTransport drops at scope exit, leaving the
+    // spawned thread handles dangling for the rest of the test
+    // binary's lifetime.
+    transport.shutdown();
+}
+
+/// Verifies the bounded-shutdown guarantee: a `shutdown()` call
+/// against a transport whose child is a long-running silent
+/// process (e.g. `/bin/sleep 60`) MUST unblock the reader (the
+/// PTY EOF triggered by `child.kill` / `wait` is the wakeup path)
+/// and join both threads within a bounded time. The bound is 5 s;
+/// the actual time should be a fraction of a second. This is the
+/// regression for the join-before-kill hang.
+///
+/// Note: the implementation kills the child FIRST so the PTY
+/// master closes; the reader's blocking `read()` returns Ok(0)
+/// (EOF) and the reader thread sets `child_exited=true` and
+/// exits; only THEN do we join the reader (now unblocked) and
+/// the worker (sees `shutdown_flag` on its next iteration).
+#[cfg(feature = "pty")]
+#[test]
+fn pty_transport_shutdown_returns_within_bound_for_live_silent_child() {
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    let (mut transport, context) = make_pty_transport_for_lifecycle_test(
+        "shutdown-bound",
+        "/bin/sleep 60",
+        agentmux::configuration::TermProtocol::Xterm256Color,
+    );
+    transport
+        .startup(context)
+        .expect("startup of /bin/sleep 60 should succeed");
+
+    // Run shutdown in a separate thread so we can time-bound it.
+    // The test panics if shutdown does not return within 5 s.
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    let handle = thread::spawn(move || {
+        transport.shutdown();
+        let _ = done_tx.send(());
+    });
+
+    let started = Instant::now();
+    match done_rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(()) => {
+            let elapsed = started.elapsed();
+            // Strict assertion: shutdown should be near-instant (kill
+            // + EOF + thread joins), well under 5 s. A 1 s bound
+            // catches any regression to the join-before-kill hang
+            // (which would otherwise block forever).
+            assert!(
+                elapsed < Duration::from_secs(1),
+                "shutdown for a live silent child should be near-instant, got {elapsed:?}",
+            );
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            panic!(
+                "shutdown did not return within 5 s for a live silent child — join-before-kill regression?"
+            );
+        }
+        Err(_) => unreachable!(),
+    }
+    let _ = handle.join();
+}
+
+/// Verifies a `Busy` → `Available` cycle, captured via the
+/// public injected `PtyMirrorStateFn` (the relay-global publish
+/// seam). The earlier `pty_transport_busy_available_cycle_on_mailw`
+/// test polled only the transport-local `readiness()` mutex and
+/// discarded the result, so it passed even if `Busy` was never
+/// published; this version captures every transition through the
+/// mirror closure and asserts `Busy` appears in the sequence
+/// before the final `Available`.
+#[cfg(feature = "pty")]
+#[test]
+fn pty_transport_busy_available_cycle_records_via_mirror() {
+    use agentmux::transports::{SendOutcome, Transport};
+
+    let transitions = Arc::new(Mutex::new(
+        Vec::<agentmux::transports::WorkerReadinessState>::new(),
+    ));
+    let transitions_for_mirror = transitions.clone();
+    let mirror: agentmux::pty::PtyMirrorStateFn = Arc::new(move |state| {
+        transitions_for_mirror.lock().unwrap().push(state);
+    });
+
+    let (mut transport, context) = make_pty_transport_for_lifecycle_test_with_prompt_and_mirror(
+        "busy-available-cycle-mirror",
+        "/bin/cat",
+        agentmux::configuration::TermProtocol::Xterm256Color,
+        Some("hello"),
+        Some(mirror),
+    );
+    transport
+        .startup(context)
+        .expect("startup of /bin/cat should succeed");
+
+    // raww writes "hello\n" to the PTY master; /bin/cat echoes it
+    // back; the wait step sees "hello\n" in the terminal snapshot;
+    // the regex "hello" matches; the delivery resolves Delivered;
+    // the worker publishes Busy (during the wait) then Available
+    // (after the wait resolves). The recording mirror captures
+    // both transitions through the public seam.
+    let outcome_rx = transport.raww("hello".to_string(), true);
+    let outcome = recv_bounded_for(outcome_rx, std::time::Duration::from_secs(5))
+        .expect("raww outcome receive");
+    assert!(
+        matches!(outcome.outcome, SendOutcome::Delivered),
+        "expected Delivered (echo 'hello' should match prompt regex), got {:?}",
+        outcome.outcome,
+    );
+
+    // Allow the worker's final-readiness publish to settle before
+    // asserting on the recorded sequence.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    // Snapshot the transitions into an owned Vec and drop the
+    // guard BEFORE calling `transport.shutdown()`. The shutdown
+    // path publishes `Unavailable` via the mirror closure, and
+    // the mirror tries to re-acquire this same non-reentrant
+    // `Mutex` — holding the guard across `shutdown()` would
+    // deadlock. Asserting on the cloned snapshot also makes the
+    // assertions robust against any later mirror-producing call.
+    let (busy_idx, last_avail_idx) = {
+        let observed = transitions.lock().unwrap().clone();
+        let busy_idx = observed
+            .iter()
+            .position(|s| *s == agentmux::transports::WorkerReadinessState::Busy);
+        let last_avail_idx = observed
+            .iter()
+            .rposition(|s| *s == agentmux::transports::WorkerReadinessState::Available);
+        assert!(
+            busy_idx.is_some(),
+            "Busy should have been published via the mirror, transitions: {:?}",
+            observed,
+        );
+        assert!(
+            last_avail_idx.is_some(),
+            "final Available should have been published via the mirror, transitions: {:?}",
+            observed,
+        );
+        (busy_idx.unwrap(), last_avail_idx.unwrap())
+    };
+    assert!(
+        busy_idx < last_avail_idx,
+        "Busy (idx {busy_idx}) must appear strictly before the final Available (idx {last_avail_idx})",
+    );
+
+    transport.shutdown();
+}
+
+/// Verifies the worker-readiness transition for a wedge-class
+/// delivery resolution. The prompt regex does not match the
+/// child's idle output, so the wedge counter fires and the
+/// delivery resolves to `Failed` + `pane_wedged`. The worker
+/// MUST then publish `Unavailable` via the relay-global mirror
+/// (the local-mutex is NOT consulted here — this asserts the
+/// actual seam). The delivery MUST also reach the
+/// `Unavailable` steady state and the retry guard MUST reject
+/// the next `startup()`.
+#[cfg(feature = "pty")]
+#[test]
+fn pty_transport_wedge_publishes_unavailable_via_mirror() {
+    use std::time::{Duration, Instant};
+
+    use agentmux::envelope::AddressIdentity;
+    use agentmux::transports::{
+        DeliveryEnvelope, DeliveryMessage, SendOutcome, Transport, TransportError,
+        WorkerReadinessState,
+    };
+
+    let transitions = Arc::new(Mutex::new(Vec::<WorkerReadinessState>::new()));
+    let transitions_for_mirror = transitions.clone();
+    let mirror: agentmux::pty::PtyMirrorStateFn = Arc::new(move |state| {
+        transitions_for_mirror.lock().unwrap().push(state);
+    });
+
+    // /bin/cat produces no output until stdin is written, so the
+    // prompt regex "NEVER_MATCHES" stays unmatched across the
+    // wedge counter's N consecutive ticks. The wedge counter
+    // therefore fires and the delivery resolves to
+    // `Failed` + `pane_wedged`, triggering the `Wedged` →
+    // `Unavailable` worker transition.
+    let (mut transport, context) = make_pty_transport_for_lifecycle_test_with_prompt_and_mirror(
+        "wedge-mirror",
+        "/bin/cat",
+        agentmux::configuration::TermProtocol::Xterm256Color,
+        Some("NEVER_MATCHES"),
+        Some(mirror),
+    );
+    transport
+        .startup(context)
+        .expect("startup of /bin/cat should succeed");
+
+    let envelope = DeliveryEnvelope {
+        message_id: "msg-wedge-mirror".to_string(),
+        message: DeliveryMessage {
+            body: "hello".to_string(),
+            created_at: "1970-01-01T00:00:00Z".to_string(),
+            namespace: "test".to_string(),
+            sender: AddressIdentity {
+                session_name: "test".to_string(),
+                display_name: None,
+            },
+            target: AddressIdentity {
+                session_name: "wedge-mirror".to_string(),
+                display_name: None,
+            },
+            cc: Vec::new(),
+            authenticated_identity: None,
+            on_behalf_of: None,
+        },
+        append_enter: true,
+        choice_decider_sessions: Vec::new(),
+        quiet_window: Duration::from_millis(50),
+        prime_timeout_ms: Some(2000),
+    };
+
+    let outcome_rx = transport.mailw(envelope);
+
+    // Wait up to 5 s for Unavailable to appear in the transitions
+    // vector (the wedge counter needs N consecutive ticks before
+    // firing; with default quiet-window/poll cadence this completes
+    // well under 1 s on a real system, but 5 s is the safe upper
+    // bound for a CI environment).
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        let t = transitions.lock().unwrap();
+        if t.contains(&WorkerReadinessState::Unavailable) {
+            break;
+        }
+        drop(t);
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    // Receive the wedge-class terminal outcome. This proves the
+    // wedge fired (Failed + reason_code = "pane_wedged") AND the
+    // `DeliveryStep::Done { wedged: true }` path produced the
+    // wedge-class resolution that the worker then mapped to the
+    // `Unavailable` publish (the wedge-result-to-readiness
+    // contract). Snapshot the transitions into an owned Vec,
+    // assert on the snapshot, then drop the guard before any
+    // operation that can publish readiness.
+    let outcome = recv_bounded_for(outcome_rx, Duration::from_secs(5))
+        .expect("wedge-class terminal outcome should arrive within 5 s");
+    assert!(
+        matches!(outcome.outcome, SendOutcome::Failed),
+        "expected Failed wedge-class outcome, got {:?}",
+        outcome.outcome,
+    );
+    assert_eq!(
+        outcome.reason_code.as_deref(),
+        Some("pane_wedged"),
+        "wedge-class outcome must carry reason_code = pane_wedged, got {:?}",
+        outcome.reason_code,
+    );
+    let contains_unavailable = transitions
+        .lock()
+        .unwrap()
+        .clone()
+        .contains(&WorkerReadinessState::Unavailable);
+    assert!(
+        contains_unavailable,
+        "wedge must publish Unavailable via the mirror",
+    );
+
+    // The retry guard should now reject (the Unavailable steady
+    // state makes re-init unsupported until a teardown-then-restart
+    // path lands).
+    let (_, context2) = make_pty_transport_for_lifecycle_test_with_prompt_and_mirror(
+        "wedge-mirror",
+        "/bin/cat",
+        agentmux::configuration::TermProtocol::Xterm256Color,
+        Some("NEVER_MATCHES"),
+        None,
+    );
+    let result = transport.startup(context2);
+    assert!(
+        matches!(
+            result,
+            Err(TransportError {
+                ref code, ..
+            }) if code == "pty_unavailable_restart_unsupported"
+        ),
+        "retry after wedge should be rejected, got {:?}",
+        result,
+    );
+
+    transport.shutdown();
+}
+
+/// Verifies the shutdown-before-start guard: a `shutdown()` call
+/// WITHOUT a prior `startup()` sets `started = true` (so the
+/// lifecycle is marked as attempted), publishes `Unavailable`,
+/// and arms `shutdown_flag`. A subsequent first `startup()` MUST
+/// be rejected with `pty_unavailable_restart_unsupported` rather
+/// than proceeding with init and immediately exiting because
+/// `shutdown_flag` is already set (the regression that would
+/// produce a transient `Ready` followed by the worker's immediate
+/// exit).
+#[cfg(feature = "pty")]
+#[test]
+fn pty_transport_shutdown_before_start_rejects_subsequent_startup() {
+    use agentmux::transports::{Transport, TransportError};
+
+    let (mut transport, _context) = make_pty_transport_for_lifecycle_test(
+        "shutdown-before-start",
+        "/bin/bash",
+        agentmux::configuration::TermProtocol::Xterm256Color,
+    );
+
+    // shutdown WITHOUT a prior startup. No resources to clean,
+    // but `started` is now `true` and `readiness()` is `Unavailable`.
+    transport.shutdown();
+
+    // Subsequent first startup must be rejected.
+    let (_, context2) = make_pty_transport_for_lifecycle_test(
+        "shutdown-before-start",
+        "/bin/bash",
+        agentmux::configuration::TermProtocol::Xterm256Color,
+    );
+    let result = transport.startup(context2);
+    assert!(
+        matches!(
+            result,
+            Err(TransportError {
+                ref code, ..
+            }) if code == "pty_unavailable_restart_unsupported"
+        ),
+        "startup after shutdown-before-start should be rejected, got {:?}",
+        result,
+    );
+}
+
+/// Bounded receive helper for the busy/available cycle, wedge,
+/// and any other test that uses `tokio::sync::oneshot::Receiver`
+/// for `SingleDeliveryOutcome`.
+#[cfg(feature = "pty")]
+fn recv_bounded_for(
+    mut rx: tokio::sync::oneshot::Receiver<agentmux::transports::SingleDeliveryOutcome>,
+    timeout: std::time::Duration,
+) -> Result<agentmux::transports::SingleDeliveryOutcome, String> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match rx.try_recv() {
+            Ok(value) => return Ok(value),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(format!("oneshot receive timed out after {:?}", timeout));
+                }
+                thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                return Err("oneshot channel closed before delivery".to_string());
+            }
+        }
+    }
 }

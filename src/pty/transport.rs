@@ -37,7 +37,7 @@
 use std::{
     io::Write,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
@@ -52,8 +52,19 @@ use crate::configuration::BundleMember;
 use crate::configuration::TermProtocol;
 use crate::transports::{
     DeliveryEnvelope, OutcomeFuture, OutputView, SingleDeliveryOutcome, StartupContext, Transport,
-    TransportError, TransportReadiness, TransportStatus,
+    TransportError, TransportReadiness, TransportStatus, WorkerReadinessState,
 };
+
+/// Mirrors the worker readiness state into the relay's global registry.
+///
+/// Constructed relay-side closing over `set_worker_readiness(namespace,
+/// runtime_directory, target_session, state)` (see
+/// `src/relay/delivery/async_worker.rs`); the transport holds an opaque
+/// `Arc<dyn Fn>` so `src/pty` does not import `crate::relay`. `None` in
+/// tests that construct the transport without a relay registry.
+///
+/// Mirrors ACP's `MirrorStateFn` (see `src/acp/worker_driver.rs`).
+pub type PtyMirrorStateFn = Arc<dyn Fn(WorkerReadinessState) + Send + Sync>;
 
 use super::command::program_and_args;
 use super::state::{
@@ -126,6 +137,17 @@ pub enum DeliveryCommand {
 pub struct PtyTransport {
     target_member: BundleMember,
     shared: PtyShared,
+    /// True after the first `startup()` call has returned, whether
+    /// successfully or with `Err`. Used by the `startup()` guard to
+    /// distinguish never-attempted (`started == false`, the
+    /// constructor state) from a re-attempt against an in-progress
+    /// or previously-failed runtime. The readiness state alone
+    /// cannot make this distinction: the constructor leaves
+    /// readiness at `Initializing` (the same state a startup call
+    /// that is currently in flight would expose), so a guard that
+    /// rejects every `Initializing` would also reject the first
+    /// legitimate call.
+    started: bool,
     /// Configured initial command (from the per-coder
     /// `[coders.<id>.pty].initial-command` after the bootstrap path
     /// substitutes `{coder-session-id}`). Used by `startup` to launch
@@ -148,8 +170,6 @@ pub struct PtyTransport {
     /// Bytes channel the reader thread feeds into the worker.
     /// `None` before `startup`; `Some` once the worker thread is running.
     bytes_tx: Option<mpsc::Sender<Vec<u8>>>,
-    /// Set to `true` once `startup` completes successfully.
-    ready: Arc<AtomicBool>,
     /// Set to `true` by `shutdown` so the worker / reader threads
     /// drain and exit cleanly.
     shutdown_flag: Arc<AtomicBool>,
@@ -159,14 +179,28 @@ pub struct PtyTransport {
     reader_handle: Option<thread::JoinHandle<()>>,
     /// Live handle to the spawned child. `shutdown` kills and reaps.
     child: Option<Arc<std::sync::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>>,
+    /// Per-transport readiness state. The relay thread reads it via
+    /// `is_ready`; the worker thread mutates it via the cloned
+    /// `Arc` after each lifecycle transition (Busy / Available /
+    /// Unavailable). The relay-side guard `startup` consults the
+    /// `Available` / `Busy` variants to skip re-init.
+    readiness: Arc<Mutex<WorkerReadinessState>>,
+    /// Optional relay-provided closure that mirrors per-turn readiness
+    /// transitions into the relay's global worker-state registry. The
+    /// relay dispatcher constructs it closing over
+    /// `set_worker_readiness(namespace, runtime_directory,
+    /// target_session, state)`; the transport holds an opaque
+    /// `Arc<dyn Fn>` so `src/pty` does not import `crate::relay`.
+    /// `None` in tests that construct the transport without a relay
+    /// registry.
+    mirror_state: Option<PtyMirrorStateFn>,
 }
 
 impl std::fmt::Debug for PtyTransport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PtyTransport")
             .field("target_member", &self.target_member)
-            .field("ready", &self.ready.load(Ordering::Acquire))
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -178,8 +212,19 @@ impl PtyTransport {
     /// into the shared `PtyConfigSnapshot` so the runtime probe
     /// (both cross-thread and worker-local) sees the same per-coder
     /// values.
+    ///
+    /// `mirror_state` is the relay-constructed closure that mirrors
+    /// per-turn readiness transitions into the relay's global
+    /// worker-state registry. Pass `None` in tests constructed
+    /// without a relay registry; the transport's internal readiness
+    /// state still advances so `is_ready()` can drive the lifecycle
+    /// locally.
     #[must_use]
-    pub fn new(target_member: BundleMember, config: PtyTargetConfiguration) -> Self {
+    pub fn new(
+        target_member: BundleMember,
+        config: PtyTargetConfiguration,
+        mirror_state: Option<PtyMirrorStateFn>,
+    ) -> Self {
         let (prompt_regex, prompt_inspect_lines, prompt_idle_column) =
             match config.prompt_readiness.as_ref() {
                 Some(pr) => {
@@ -207,21 +252,52 @@ impl PtyTransport {
             },
             last_change_atomic: Arc::new(AtomicU64::new(0)),
             snapshot_tx: mpsc::channel(64).0,
+            child_exited: Arc::new(AtomicBool::new(false)),
         };
         Self {
             target_member,
             shared,
+            started: false,
             configured_initial_command: config.initial_command.clone(),
             configured_working_directory: config.working_directory.clone(),
             configured_term_protocol: config.term_protocol,
             write_tx: None,
             bytes_tx: None,
-            ready: Arc::new(AtomicBool::new(false)),
             shutdown_flag: Arc::new(AtomicBool::new(false)),
             worker_handle: None,
             reader_handle: None,
             child: None,
+            readiness: Arc::new(Mutex::new(WorkerReadinessState::Initializing)),
+            mirror_state,
         }
+    }
+
+    /// Update the readiness state and (if a closure was injected)
+    /// mirror the transition into the relay's global worker-state
+    /// registry. Used at every relay-side lifecycle point: the
+    /// pre-init `Initializing` publish, the post-failure `Unavailable`
+    /// publish, and the pre-shutdown `Unavailable` publish.
+    ///
+    /// The worker thread publishes the rest of the lifecycle
+    /// (`Available` on successful init, `Busy`/`Available`/
+    /// `Unavailable` around each delivery) via the cloned
+    /// `Arc<Mutex<WorkerReadinessState>>` + cloned `mirror_state`
+    /// closure it owns.
+    ///
+    /// `Recovering` transitions are not emitted by this transport —
+    /// they require a respawn monitor that does not yet exist for Pty
+    /// (deferred to the bootstrap-side wiring follow-up). The live
+    /// `WorkerReadinessState` enum retains the variant; only Pty's
+    /// emissions of it are deferred.
+    fn set_readiness(&self, state: WorkerReadinessState) {
+        publish(&self.readiness, self.mirror_state.as_ref(), state);
+    }
+
+    /// Read the current readiness state. Used by `is_ready` and by
+    /// tests asserting lifecycle transitions.
+    #[must_use]
+    pub fn readiness(&self) -> WorkerReadinessState {
+        *self.readiness.lock().expect("pty readiness mutex")
     }
 
     /// Update the prompt-readiness settings after construction. Used
@@ -251,15 +327,27 @@ impl PtyTransport {
         self.shared.config.prompt_inspect_lines = prompt_inspect_lines;
         self.shared.config.prompt_idle_column = prompt_idle_column;
     }
-}
 
-impl Transport for PtyTransport {
-    fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError> {
-        if self.ready.load(Ordering::Acquire) {
-            return Ok(TransportStatus {
-                readiness: TransportReadiness::Ready,
-            });
-        }
+    /// Performs the bootstrap work behind [`Transport::startup`].
+    /// Opens the PTY pair, spawns the child, launches the worker and
+    /// reader threads, and stashes the runtime handles. Separated from
+    /// `startup` so the outer method can publish the
+    /// `Initializing` → `Available | Unavailable` transitions uniformly
+    /// on every code path (success, mapped errors, panicking spawns).
+    ///
+    /// On success, returns `Ok(TransportStatus::Ready)`. On any
+    /// failure, the inner code path returns an `Err(TransportError)`
+    /// WITHOUT calling `set_readiness` — the outer `startup` method
+    /// publishes `Unavailable` after observing the error. On any
+    /// failure after a child / worker / reader has been acquired, a
+    /// [`StartupGuard`] holds the partial resources and tears them
+    /// down on `Drop`. On success, [`StartupGuard::finish`] returns
+    /// the owned resources and the caller moves them into `self`.
+    fn startup_inner(
+        &mut self,
+        context: &StartupContext,
+    ) -> Result<TransportStatus, TransportError> {
+        let mut guard = StartupGuard::new(self.shutdown_flag.clone());
 
         let cols = self.shared.config.cols;
         let rows = self.shared.config.rows;
@@ -268,9 +356,9 @@ impl Transport for PtyTransport {
         // resolved `[coders.<id>.pty].initial-command` (with
         // `{coder-session-id}` substitution) through the dispatcher;
         // when the dispatcher constructs the transport via
-        // `TransportImpl::pty(target_member, config)` it stores the
-        // resolved command here. Falls back to `/bin/bash` for the
-        // tests' default-constructed transport.
+        // `TransportImpl::pty(target_member, config, mirror_state)` it
+        // stores the resolved command here. Falls back to `/bin/bash`
+        // for the tests' default-constructed transport.
         let initial_command = if self.configured_initial_command.is_empty() {
             "/bin/bash".to_string()
         } else {
@@ -332,6 +420,18 @@ impl Transport for PtyTransport {
         })?;
         drop(pair.slave);
 
+        // Wrap the child handle in an `Arc<Mutex<...>>` and register
+        // it with the guard IMMEDIATELY (before any fallible master
+        // operation). A subsequent `try_clone_reader` / `take_writer`
+        // failure then triggers `StartupGuard::Drop`, which kills +
+        // waits the child before joining the threads. Without this,
+        // a failure between `spawn_command` and the eventual
+        // `self.child = Some(...)` assignment would leak the spawned
+        // OS process — the local `child` value would fall out of
+        // scope on `?` without ever being killed.
+        let child_arc: PtyChildHandle = Arc::new(std::sync::Mutex::new(child));
+        guard.note_child(child_arc.clone());
+
         let reader = pair.master.try_clone_reader().map_err(|e| TransportError {
             code: "pty_reader_clone_failed".to_string(),
             reason: format!("try_clone_reader: {e}"),
@@ -345,9 +445,6 @@ impl Transport for PtyTransport {
         let writer_arc: Arc<std::sync::Mutex<Box<dyn Write + Send>>> =
             Arc::new(std::sync::Mutex::new(writer));
 
-        let child_arc: Arc<std::sync::Mutex<Box<dyn portable_pty::Child + Send + Sync>>> =
-            Arc::new(std::sync::Mutex::new(child));
-
         let (bytes_tx, bytes_rx) = mpsc::channel::<Vec<u8>>(256);
         let (write_tx, write_rx) = mpsc::channel::<DeliveryCommand>(WRITE_CHANNEL_CAPACITY);
         let (snapshot_tx, snapshot_rx) = mpsc::channel::<SnapshotRequest>(64);
@@ -357,6 +454,7 @@ impl Transport for PtyTransport {
             config: self.shared.config.clone(),
             last_change_atomic: self.shared.last_change_atomic.clone(),
             snapshot_tx,
+            child_exited: self.shared.child_exited.clone(),
         };
 
         let target_session = self.target_member.id.clone();
@@ -364,10 +462,15 @@ impl Transport for PtyTransport {
         let writer_for_worker = writer_arc.clone();
         let child_for_worker = child_arc.clone();
         let shutdown_flag_for_worker = self.shutdown_flag.clone();
+        let mirror_state_for_worker = self.mirror_state.clone();
+        let readiness_for_worker = self.readiness.clone();
 
         let bytes_tx_for_reader = bytes_tx.clone();
         let last_byte_atomic_for_reader = self.shared.last_change_atomic.clone();
         let reader_shutdown_flag = self.shutdown_flag.clone();
+        let child_exited_for_reader = self.shared.child_exited.clone();
+
+        let (init_tx, init_rx) = oneshot::channel::<Result<(), String>>();
 
         let worker_handle = thread::Builder::new()
             .name(format!("pty-worker-{target_session_for_worker}"))
@@ -383,6 +486,9 @@ impl Transport for PtyTransport {
                     child_for_worker,
                     target_session_for_worker,
                     shutdown_flag_for_worker,
+                    Some(init_tx),
+                    mirror_state_for_worker,
+                    readiness_for_worker,
                 );
             })
             .map_err(|e| TransportError {
@@ -390,6 +496,7 @@ impl Transport for PtyTransport {
                 reason: format!("worker thread spawn: {e}"),
                 details: None,
             })?;
+        guard.note_worker(worker_handle);
 
         let reader_handle = thread::Builder::new()
             .name(format!("pty-reader-{target_session}"))
@@ -399,6 +506,7 @@ impl Transport for PtyTransport {
                     bytes_tx_for_reader,
                     last_byte_atomic_for_reader,
                     reader_shutdown_flag,
+                    child_exited_for_reader,
                 );
             })
             .map_err(|e| TransportError {
@@ -406,17 +514,233 @@ impl Transport for PtyTransport {
                 reason: format!("reader thread spawn: {e}"),
                 details: None,
             })?;
+        guard.note_reader(reader_handle);
 
-        self.write_tx = Some(write_tx);
-        self.bytes_tx = Some(bytes_tx);
-        self.child = Some(child_arc);
-        self.worker_handle = Some(worker_handle);
-        self.reader_handle = Some(reader_handle);
-        self.ready.store(true, Ordering::Release);
+        // Block on the worker's init-result handshake: the worker
+        // publishes `WorkerReadinessState::Available` on success
+        // BEFORE sending the init result, so when this recv returns
+        // Ok(Ok(())) the local + relay-global readiness state is
+        // already `Available`. On failure (Terminal::new error or
+        // channel drop before init report) we surface the error and
+        // the guard's Drop cleans up the partial runtime state.
+        let result = match init_rx.blocking_recv() {
+            Ok(Ok(())) => Ok(TransportStatus {
+                readiness: TransportReadiness::Ready,
+            }),
+            Ok(Err(reason)) => Err(TransportError {
+                code: "pty_init_failed".to_string(),
+                reason,
+                details: None,
+            }),
+            Err(_) => Err(TransportError {
+                code: "pty_init_dropped".to_string(),
+                reason: "pty worker thread exited before reporting initialization result"
+                    .to_string(),
+                details: None,
+            }),
+        };
 
-        Ok(TransportStatus {
-            readiness: TransportReadiness::Ready,
-        })
+        if result.is_ok() {
+            // Success: disarm the guard and move the resources into
+            // self. The guard's Drop is a no-op from here on; the
+            // resources are owned by self.
+            let (child, worker, reader) = guard.finish();
+            self.write_tx = Some(write_tx);
+            self.bytes_tx = Some(bytes_tx);
+            self.child = Some(child);
+            self.worker_handle = Some(worker);
+            self.reader_handle = Some(reader);
+        }
+        // On Err, guard drops and tears down the partial state. The
+        // `bytes_tx` / `write_tx` Senders fall out of scope here and
+        // close their channels; the worker / reader threads see
+        // their receivers return Err on the next poll and exit; the
+        // child is killed + reaped by the guard.
+
+        result
+    }
+}
+
+/// Explicit ownership guard for partial startup resources. The
+/// guard owns every acquired child / thread handle as soon as it
+/// is registered, so a failure at any subsequent step triggers
+/// `Drop`, which kills the child + joins both threads. On
+/// success, [`StartupGuard::finish`] returns the owned resources
+/// and the caller moves them into the parent `PtyTransport`.
+/// `finish` sets the disarmed flag, so the subsequent `Drop` is
+/// a no-op.
+struct StartupGuard {
+    shutdown_flag: Arc<AtomicBool>,
+    child: Option<PtyChildHandle>,
+    worker_handle: Option<thread::JoinHandle<()>>,
+    reader_handle: Option<thread::JoinHandle<()>>,
+    disarmed: bool,
+}
+
+type PtyChildHandle = Arc<std::sync::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>;
+
+impl StartupGuard {
+    fn new(shutdown_flag: Arc<AtomicBool>) -> Self {
+        Self {
+            shutdown_flag,
+            child: None,
+            worker_handle: None,
+            reader_handle: None,
+            disarmed: false,
+        }
+    }
+
+    fn note_child(&mut self, child: PtyChildHandle) {
+        self.child = Some(child);
+    }
+
+    fn note_worker(&mut self, handle: thread::JoinHandle<()>) {
+        self.worker_handle = Some(handle);
+    }
+
+    fn note_reader(&mut self, handle: thread::JoinHandle<()>) {
+        self.reader_handle = Some(handle);
+    }
+
+    /// Mark this guard as having successfully transferred its
+    /// resources to the parent `PtyTransport`. Returns the owned
+    /// resources; the subsequent `Drop` is a no-op because
+    /// `disarmed == true` AND the resource fields are already
+    /// `None` (consumed by this call).
+    fn finish(
+        mut self,
+    ) -> (
+        PtyChildHandle,
+        thread::JoinHandle<()>,
+        thread::JoinHandle<()>,
+    ) {
+        self.disarmed = true;
+        let child = self
+            .child
+            .take()
+            .expect("StartupGuard invariant: child is set before finish");
+        let worker = self
+            .worker_handle
+            .take()
+            .expect("StartupGuard invariant: worker_handle is set before finish");
+        let reader = self
+            .reader_handle
+            .take()
+            .expect("StartupGuard invariant: reader_handle is set before finish");
+        (child, worker, reader)
+    }
+}
+
+impl Drop for StartupGuard {
+    fn drop(&mut self) {
+        if self.disarmed {
+            return;
+        }
+        // Best-effort partial cleanup. The order mirrors
+        // `PtyTransport::shutdown`: kill the child FIRST so the
+        // PTY master closes (this unblocks the reader's
+        // `read()` via `Ok(0` EOF); the reader's `Err(_)` arm
+        // also flips `child_exited`, but EOF is the
+        // typical-path), then join the reader + worker.
+        self.shutdown_flag.store(true, Ordering::Release);
+
+        let child_arc = self.child.take();
+        if let Some(child_arc) = child_arc {
+            if let Ok(mut child) = child_arc.lock() {
+                let _ = child.kill();
+            }
+            if let Ok(mut child) = child_arc.lock() {
+                let _ = child.wait();
+            }
+        }
+
+        if let Some(handle) = self.reader_handle.take() {
+            let _ = handle.join();
+        }
+        if let Some(handle) = self.worker_handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl Transport for PtyTransport {
+    fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError> {
+        // Re-init is gated by the `started` flag + readiness state.
+        //
+        // `started == false` is the never-attempted constructor
+        // state. The constructor leaves readiness at `Initializing`,
+        // so a guard keyed only on readiness would reject the first
+        // legitimate `startup()` call — `started` distinguishes
+        // never-attempted from in-progress.
+        //
+        // `started == true && readiness in {Available, Busy}` is a
+        // live transport; the no-op fast path returns
+        // `TransportStatus::Ready` so callers can re-invoke
+        // `startup()` after a `Drop` of a held `TransportImpl`
+        // without consequence.
+        //
+        // `started == true && readiness in {Initializing,
+        // Unavailable, Recovering}` is rejected: a re-attempt
+        // against an in-progress startup would race with the
+        // existing call; a re-attempt after `Unavailable` (prior
+        // shutdown / child-exit / init-failure) is unsupported
+        // until a teardown-then-restart path lands.
+        if self.started {
+            match self.readiness() {
+                WorkerReadinessState::Available | WorkerReadinessState::Busy => {
+                    return Ok(TransportStatus {
+                        readiness: TransportReadiness::Ready,
+                    });
+                }
+                WorkerReadinessState::Initializing => {
+                    return Err(TransportError {
+                        code: "pty_startup_in_progress".to_string(),
+                        reason: "Pty transport startup is already in progress".to_string(),
+                        details: None,
+                    });
+                }
+                WorkerReadinessState::Unavailable => {
+                    return Err(TransportError {
+                        code: "pty_unavailable_restart_unsupported".to_string(),
+                        reason:
+                            "Pty transport is in Unavailable state after a prior shutdown or child exit; \
+                             restart is not yet supported (await respawn-monitor follow-up)"
+                                .to_string(),
+                        details: None,
+                    });
+                }
+                WorkerReadinessState::Recovering => {
+                    return Err(TransportError {
+                        code: "pty_recovering_restart_unsupported".to_string(),
+                        reason:
+                            "Pty transport is in Recovering state; restart is not yet supported"
+                                .to_string(),
+                        details: None,
+                    });
+                }
+            }
+        }
+
+        self.set_readiness(WorkerReadinessState::Initializing);
+
+        let result = self.startup_inner(&context);
+        // Mark the attempt complete regardless of outcome so a
+        // subsequent call observes `started == true` and consults
+        // the readiness state (not the never-attempted path).
+        self.started = true;
+
+        if result.is_err() {
+            // `startup_inner`'s `StartupGuard::Drop` cleaned up any
+            // partial resources; the worker (if it reached the
+            // publish step) may have published `Unavailable` on its
+            // way out. Ensure the transport-local readiness reflects
+            // the failure even if neither cleanup ran (very early
+            // failure before any thread / child resource existed).
+            if !matches!(self.readiness(), WorkerReadinessState::Unavailable) {
+                self.set_readiness(WorkerReadinessState::Unavailable);
+            }
+        }
+        result
     }
 
     fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
@@ -470,26 +794,50 @@ impl Transport for PtyTransport {
     }
 
     fn is_ready(&self) -> bool {
-        self.ready.load(Ordering::Acquire)
+        matches!(
+            self.readiness(),
+            WorkerReadinessState::Available | WorkerReadinessState::Busy
+        )
     }
 
     fn shutdown(&mut self) {
+        // Mark the lifecycle as attempted so a subsequent
+        // `startup()` hits the retry guard with `Unavailable` and
+        // returns `Err(pty_unavailable_restart_unsupported)`.
+        // Without this, a `shutdown()` call before any `startup()`
+        // would leave `started == false`, and the next `startup()`
+        // would proceed with init — only to have the worker exit
+        // immediately because `shutdown_flag` is already true. The
+        // retry guard catches this case; setting `started = true`
+        // is what makes the guard observable.
+        self.started = true;
+        // Publish Unavailable FIRST so observers (look handle,
+        // worker-state stream) see the transition before the worker
+        // / reader threads drain and the child is killed. Mirrors
+        // AcpTransport::shutdown's `set_readiness(Unavailable)`
+        // ordering.
+        self.set_readiness(WorkerReadinessState::Unavailable);
         self.shutdown_flag.store(true, Ordering::Release);
         self.write_tx = None;
         self.bytes_tx = None;
-        if let Some(handle) = self.worker_handle.take() {
-            let _ = handle.join();
-        }
-        if let Some(handle) = self.reader_handle.take() {
-            let _ = handle.join();
-        }
+        // Kill the child FIRST so the PTY master closes; this wakes
+        // the reader's blocking `read()`. The reader then sees
+        // `Ok(0)` EOF, sets `child_exited=true`, and exits
+        // naturally. We `wait()` the child BEFORE joining the
+        // reader so the join order is deterministic and the
+        // reader's EOF-driven exit happens on a closed master.
         if let Some(child_arc) = self.child.take()
             && let Ok(mut child) = child_arc.lock()
         {
             let _ = child.kill();
             let _ = child.wait();
         }
-        self.ready.store(false, Ordering::Release);
+        if let Some(handle) = self.reader_handle.take() {
+            let _ = handle.join();
+        }
+        if let Some(handle) = self.worker_handle.take() {
+            let _ = handle.join();
+        }
     }
 
     fn give_output(&self) -> Option<Arc<dyn OutputView>> {
@@ -512,6 +860,25 @@ fn run_worker(
     _child: Arc<std::sync::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
     target_session: String,
     shutdown_flag: Arc<AtomicBool>,
+    // Init-result handshake: send `Ok(())` after a successful
+    // Terminal::new + handler installation + initial `Available`
+    // publish, or `Err(reason)` if Terminal::new failed. The relay's
+    // `startup_inner` blocks on the receiving end and only returns
+    // `TransportStatus::Ready` once `Ok(())` arrives, so a
+    // `startup()`-reported `Ready` is guaranteed to post-date
+    // the worker publishing `Available` (and `Ready` is reported
+    // as a transport-level failure when the init result is
+    // `Err`).
+    init_tx: Option<oneshot::Sender<Result<(), String>>>,
+    // Optional mirror closure for per-turn readiness transitions.
+    // `None` in tests constructed without a relay registry; the
+    // worker skips the publish in that case.
+    mirror_state: Option<PtyMirrorStateFn>,
+    // Cloned `Arc<Mutex<WorkerReadinessState>>` so the worker
+    // thread can mutate the transport-local readiness state on
+    // each lifecycle transition. Mirrors `AcpSharedState::readiness`
+    // (see `src/acp/transport.rs`).
+    readiness: Arc<Mutex<WorkerReadinessState>>,
 ) {
     // Construct the terminal INSIDE the worker thread. The terminal
     // is `!Send + !Sync` (raw FFI pointers inside); it cannot be moved
@@ -524,11 +891,27 @@ fn run_worker(
         Ok(t) => t,
         Err(e) => {
             eprintln!("[pty-worker-{target_session}] Terminal::new failed: {e}");
+            let _ = init_tx.map(|tx| tx.send(Err(format!("Terminal::new failed: {e}"))));
             return;
         }
     };
 
     install_handlers(&mut terminal, writer.clone(), cols, rows);
+
+    // Publish `Available` BEFORE signalling the init handshake so
+    // that by the time `startup_inner` returns `TransportStatus::Ready`
+    // the transport-local + relay-global readiness state is already
+    // `Available`. The `startup` guard (which checks for `Available` /
+    // `Busy`) sees a consistent post-init snapshot, and a caller
+    // racing `is_ready` after `startup` returns sees `true` rather
+    // than the brief `Initializing` window before the worker
+    // publishes.
+    publish(
+        &readiness,
+        mirror_state.as_ref(),
+        WorkerReadinessState::Available,
+    );
+    let _ = init_tx.map(|tx| tx.send(Ok(())));
 
     // Event loop. Each iteration services snapshot_rx (user-facing
     // look requests) and the active delivery. When idle, it drains
@@ -544,16 +927,57 @@ fn run_worker(
     // absorbs write_rx envelopes. Raw-only waits do NOT drain
     // write_rx (avoids the v1 bug where raw waits absorbed
     // envelopes into a throwaway group and dropped them).
+    //
+    // Once the reader thread observes EOF on the PTY master
+    // (`Ok(0`) or a fatal `Err(_)` (typical cause: the underlying
+    // handle went bad on the OS side), it sets `child_exited=true`
+    // and exits. The worker checks `child_exited` on every
+    // iteration; once observed, it publishes `Unavailable`,
+    // abandons the in-flight delivery (if any) with a
+    // `pty_child_exited` `Failed` outcome, resolves the pending
+    // raw (if any) with the same outcome, drains queued
+    // `Envelope` / `Raw` commands with the same `Failed`
+    // outcome, and breaks out of the loop. The worker MUST NOT
+    // publish `Available` again until restart — the latched
+    // condition keeps the local + relay-global readiness at
+    // `Unavailable` even if a delivery would otherwise resolve
+    // successfully. The `child_exited` flag lives on `PtyShared`
+    // (the reader and worker both observe the same atomic), so the
+    // latched condition is preserved across worker thread
+    // lifetimes; `shutdown_flag` is not used for the latch because
+    // `shutdown()` already publishes `Unavailable` and we want the
+    // two paths to stay independent.
     let mut delivery: Option<super::delivery::Delivery> = None;
     let mut pending_raw: Option<super::delivery::PendingRaw> = None;
     let mut wait_in_progress = false;
 
     while !shutdown_flag.load(Ordering::Acquire) {
+        // 0. Detect child-exit BEFORE servicing any other channel.
+        // Once observed, publish `Unavailable`, abandon the
+        // in-flight delivery (if any), resolve the pending raw
+        // (if any), and drain queued commands with `Failed`
+        // outcomes — then break out of the loop. The loop never
+        // re-enters this branch because `child_exited` stays
+        // `true` on `PtyShared` (no clearing — restart goes through
+        // `Transport::startup`, which is currently blocked on
+        // `Unavailable` until the respawn-monitor follow-up lands).
+        if shared.child_exited.load(Ordering::Acquire) {
+            publish(
+                &readiness,
+                mirror_state.as_ref(),
+                WorkerReadinessState::Unavailable,
+            );
+            resolve_pending_raw_failed(&mut pending_raw, &target_session);
+            abandon_in_flight(&mut delivery, &target_session);
+            drain_remaining_with_failed(&mut write_rx, &target_session);
+            break;
+        }
+
         // 1. Always drain snapshot_rx. User-facing look requests
         // take priority over deliveries so the operator gets a
-        // responsive view (Finding 2 fix: the wait is decomposed
-        // into per-tick polls so the worker loop services
-        // snapshot_rx between wait ticks).
+        // responsive view (the wait is decomposed into per-tick
+        // polls so the worker loop services snapshot_rx between
+        // wait ticks).
         while let Ok(request) = snapshot_rx.try_recv() {
             handle_snapshot(&mut terminal, request);
         }
@@ -572,6 +996,11 @@ fn run_worker(
                 &target_session,
             ) {
                 Ok(d) => {
+                    publish(
+                        &readiness,
+                        mirror_state.as_ref(),
+                        WorkerReadinessState::Busy,
+                    );
                     delivery = Some(d);
                     wait_in_progress = false;
                     continue;
@@ -614,7 +1043,23 @@ fn run_worker(
                     wait_in_progress = true;
                     continue;
                 }
-                super::delivery::DeliveryStep::Done => {
+                super::delivery::DeliveryStep::Done { wedged } => {
+                    // Delivery resolved. Publish the readiness
+                    // transition implied by the outcome kind:
+                    // `Wedged` → `Unavailable` (per-turn failure
+                    // observable to the relay); everything else
+                    // (`Delivered` / `Timeout`) → `Available` (idle
+                    // worker, awaiting the next write). The
+                    // `child_exited` check on step 0 above means we
+                    // can never reach this branch with the latch
+                    // armed — the step-0 branch would have broken
+                    // first.
+                    let next = if wedged {
+                        WorkerReadinessState::Unavailable
+                    } else {
+                        WorkerReadinessState::Available
+                    };
+                    publish(&readiness, mirror_state.as_ref(), next);
                     delivery = None;
                     wait_in_progress = false;
                     continue;
@@ -647,6 +1092,11 @@ fn run_worker(
                 &target_session,
             ) {
                 Ok(d) => {
+                    publish(
+                        &readiness,
+                        mirror_state.as_ref(),
+                        WorkerReadinessState::Busy,
+                    );
                     delivery = Some(d);
                     wait_in_progress = false;
                     continue;
@@ -685,6 +1135,92 @@ fn run_worker(
             cursor_y: 0,
             cursor_visible: false,
         });
+    }
+}
+
+/// Abandon an in-flight delivery by resolving it as `Failed` with a
+/// `pty_child_exited` reason. Called from the child-exit branch of the
+/// worker event loop so the caller's `OutcomeFuture` does not hang
+/// after the worker has observed child death and refused to drive
+/// the delivery to its terminal classification. Best-effort: a
+/// `send` failure (the caller has dropped their receiver) is silently
+/// swallowed.
+fn abandon_in_flight(delivery: &mut Option<super::delivery::Delivery>, target_session: &str) {
+    if let Some(mut d) = delivery.take() {
+        d.abandon_into_failed(
+            target_session,
+            "pty_child_exited",
+            "pty child exited before delivery resolved",
+        );
+    }
+}
+
+/// Drain any remaining queued `Envelope`/`Raw` commands from the
+/// relay's write channel after the worker has observed child exit.
+/// Each `outcome_tx` is resolved with `Failed` /
+/// `reason_code = "pty_child_exited"` so the relay's collected
+/// `OutcomeFuture`s do not hang on dropped senders.
+fn drain_remaining_with_failed(
+    write_rx: &mut mpsc::Receiver<DeliveryCommand>,
+    target_session: &str,
+) {
+    while let Ok(cmd) = write_rx.try_recv() {
+        let outcome_tx = match cmd {
+            DeliveryCommand::Envelope { outcome_tx, .. } => outcome_tx,
+            DeliveryCommand::Raw { outcome_tx, .. } => outcome_tx,
+        };
+        let _ = outcome_tx.send(SingleDeliveryOutcome {
+            target_session: target_session.to_string(),
+            message_id: String::new(),
+            outcome: crate::transports::SendOutcome::Failed,
+            reason_code: Some("pty_child_exited".to_string()),
+            reason: Some(
+                "pty child exited before the queued delivery could be processed".to_string(),
+            ),
+            details: None,
+        });
+    }
+}
+
+/// Resolve a `PendingRaw` (a queued `Raw` command that has been
+/// parsed off `write_rx` but not yet handed to
+/// `Delivery::start_raw`) as `Failed` /
+/// `reason_code = "pty_child_exited"`. Called from the child-exit
+/// branch of the worker event loop alongside `abandon_in_flight`
+/// and `drain_remaining_with_failed` so that the raw's
+/// `outcome_tx` is resolved deterministically — without this, the
+/// raw's caller would receive a closed-channel error after the
+/// worker thread exits, not the `pty_child_exited` failure the
+/// caller can correlate with the same `reason_code` the other
+/// queued + in-flight deliveries received.
+fn resolve_pending_raw_failed(
+    pending_raw: &mut Option<super::delivery::PendingRaw>,
+    target_session: &str,
+) {
+    if let Some(raw) = pending_raw.take() {
+        let _ = raw.outcome_tx.send(SingleDeliveryOutcome {
+            target_session: target_session.to_string(),
+            message_id: String::new(),
+            outcome: crate::transports::SendOutcome::Failed,
+            reason_code: Some("pty_child_exited".to_string()),
+            reason: Some("pty child exited before the pending raw could be processed".to_string()),
+            details: None,
+        });
+    }
+}
+
+/// Update the transport-local readiness mutex AND (when injected)
+/// mirror the transition into the relay's global worker-state
+/// registry. Single source of truth for every readiness publish on
+/// the worker thread.
+fn publish(
+    readiness: &Arc<Mutex<WorkerReadinessState>>,
+    mirror_state: Option<&PtyMirrorStateFn>,
+    state: WorkerReadinessState,
+) {
+    *readiness.lock().expect("pty readiness mutex") = state;
+    if let Some(mirror) = mirror_state {
+        mirror(state);
     }
 }
 
@@ -811,6 +1347,7 @@ fn run_reader(
     bytes_tx: mpsc::Sender<Vec<u8>>,
     _last_change_atomic: Arc<AtomicU64>,
     shutdown_flag: Arc<AtomicBool>,
+    child_exited: Arc<AtomicBool>,
 ) {
     // The reader forwards raw bytes to the worker. The change atomic
     // is updated by the worker AFTER `terminal.vt_write(&bytes)` so
@@ -819,10 +1356,29 @@ fn run_reader(
     // here (before vt_write) would let `wait_for_change` return while
     // the terminal still shows the old screen, producing stale
     // readiness decisions.
+    //
+    // On EOF (`Ok(0)` — the master has closed, typically because
+    // the spawned child exited or the relay called `shutdown()`'s
+    // `child.kill`/`wait`), set `child_exited` so the worker thread
+    // observes the death on its next loop iteration. The worker
+    // latches the condition and refuses to publish `Available`
+    // again (see `run_worker`'s terminal-state branch).
+    //
+    // On a fatal `Err(_)` (anything other than `WouldBlock`), treat
+    // the read failure as transport death: the PTY master has
+    // become unusable (typical cause: the underlying terminal
+    // handle went bad on the OS side). Set `child_exited` and exit
+    // the same way we do on `Ok(0)`. Without this, the worker
+    // would never observe transport death and would sit indefinitely
+    // in a `Busy`/`Available` state while the child is effectively
+    // dead.
     let mut buf = vec![0u8; 4096];
     while !shutdown_flag.load(Ordering::Acquire) {
         match reader.read(&mut buf) {
-            Ok(0) => break,
+            Ok(0) => {
+                child_exited.store(true, Ordering::Release);
+                break;
+            }
             Ok(n) => {
                 let bytes = buf[..n].to_vec();
                 if bytes_tx.blocking_send(bytes).is_err() {
@@ -832,7 +1388,19 @@ fn run_reader(
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 thread::sleep(READER_IDLE_POLL);
             }
-            Err(_) => break,
+            Err(_) => {
+                // Fatal read error (anything other than WouldBlock):
+                // the PTY master has become unusable (typical cause:
+                // the underlying handle went bad on the OS side, or
+                // the master was closed from the outside). Treat as
+                // transport death: set `child_exited` so the worker
+                // thread observes the latch on its next loop
+                // iteration. Without this, the worker would sit
+                // indefinitely in `Busy` / `Available` while the
+                // child is effectively dead.
+                child_exited.store(true, Ordering::Release);
+                break;
+            }
         }
     }
 }
@@ -842,5 +1410,90 @@ impl PtyConfigSnapshot {
     /// identifier in the worker thread's logs and diagnostic payloads.
     pub fn target_id(&self) -> &str {
         &self.target_member_id
+    }
+}
+
+/// Inline private test block. Covers the two private-only
+/// branches that have no public exerciser path: the fatal
+/// non-`WouldBlock` `Err` arm of `run_reader`'s `read()` loop
+/// (which sets `child_exited`), and the `resolve_pending_raw_failed`
+/// helper (which sends `Failed` + `pty_child_exited` on the
+/// pending raw's `outcome_tx`). Both helpers are crate-private by
+/// design; widening their visibility solely for tests would
+/// introduce escape hatches into the production API. The block
+/// contains exactly one `#[test]` function (per the project rule
+/// for inline private tests).
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{self, Read};
+
+    /// `Read` that returns a fatal non-`WouldBlock` error on every
+    /// `read()` call. Used to drive `run_reader`'s `Err(_)` arm
+    /// (which sets `child_exited`).
+    struct FatalErrReader;
+
+    impl Read for FatalErrReader {
+        fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::other("simulated fatal read"))
+        }
+    }
+
+    #[test]
+    fn lifecycle_internals_compose_correctly() {
+        // Branch 1: `run_reader` with a fatal non-`WouldBlock` Err
+        // sets `child_exited` so the worker's child-exit branch
+        // fires regardless of whether the master closed via EOF or
+        // via a fatal read error.
+        let child_exited = Arc::new(AtomicBool::new(false));
+        let (bytes_tx, _bytes_rx) = mpsc::channel::<Vec<u8>>(256);
+        let shutdown_flag = Arc::new(AtomicBool::new(false));
+        run_reader(
+            Box::new(FatalErrReader),
+            bytes_tx,
+            Arc::new(AtomicU64::new(0)),
+            shutdown_flag,
+            child_exited.clone(),
+        );
+        assert!(
+            child_exited.load(Ordering::Acquire),
+            "fatal reader Err (non-WouldBlock) should set child_exited",
+        );
+
+        // Branch 2: `resolve_pending_raw_failed` sends
+        // `Failed` + `pty_child_exited` on the pending raw's
+        // `outcome_tx` and consumes the slot. The pending raw exists
+        // only briefly between the batch-barrier poll and the next
+        // worker iteration; the group may resolve `raw_interrupted`
+        // and the raw may start before child exit, making the
+        // end-to-end timing inherently nondeterministic. This
+        // deterministic helper-level test is the proof for the
+        // private slot's contract.
+        let (tx, rx) = oneshot::channel::<SingleDeliveryOutcome>();
+        let mut pending_raw = Some(super::super::delivery::PendingRaw {
+            content: "x".to_string(),
+            append_enter: false,
+            outcome_tx: tx,
+        });
+        resolve_pending_raw_failed(&mut pending_raw, "test-session");
+        assert!(
+            pending_raw.is_none(),
+            "pending_raw slot should be consumed by resolve_pending_raw_failed",
+        );
+        let outcome = rx
+            .blocking_recv()
+            .expect("receiver should get the Failed outcome");
+        assert_eq!(outcome.target_session, "test-session");
+        assert!(
+            matches!(outcome.outcome, crate::transports::SendOutcome::Failed),
+            "expected Failed, got {:?}",
+            outcome.outcome,
+        );
+        assert_eq!(
+            outcome.reason_code.as_deref(),
+            Some("pty_child_exited"),
+            "expected reason_code pty_child_exited, got {:?}",
+            outcome.reason_code,
+        );
     }
 }
