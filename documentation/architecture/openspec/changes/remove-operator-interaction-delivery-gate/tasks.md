@@ -23,95 +23,137 @@ is why the delta base matters and why the ordering is fixed, not incidental.
       requirement diff-verified to change only the gate clauses. Nothing further
       required before this change's own archive, which stays sequenced after
       882283b (already true — 882283b is an ancestor of this branch).
+- [ ] 0.2 Downstream archive coupling: the active `add-pty-transport` proposal
+      still carries ~12 `operator_interaction_active` references (its
+      `design.md`, `proposal.md`, `tasks.md`, and both spec deltas) that would
+      RE-ADD the field at its own archive. Owned by the Pty lane (agreed option
+      1): Pty updates that proposal against the post-archive live spec, sequenced
+      AFTER this change archives. Not a blocker for merging this change — only a
+      constraint on archive order between the two.
 
 ## 1. Tmux injection path (`src/tmux/pane.rs`)
 
-- [ ] 1.1 Change `inject_literal_text` to submit via an **unbracketed**
-      `paste-buffer` carrying `\r` instead of `send-keys -t <pane> Enter`
-      (line 225). The body keeps `paste-buffer -d -p` (bracketed) so multi-line
-      content does not submit early.
-- [ ] 1.2 Delete `operator_interaction_active`, `pane_in_mode_active`, and
-      `active_client_key_table` (lines 66-145). They exist only to feed the gate.
-- [ ] 1.3 Confirm no other caller depends on those three functions.
+- [x] 1.1 Change `inject_literal_text` to submit via an **unbracketed**
+      `paste-buffer` carrying `\r` instead of `send-keys -t <pane> Enter`.
+      The body keeps `paste-buffer -d -p` (bracketed) so multi-line content
+      does not submit early. Both paste sites now go through a shared
+      `paste_into_pane` helper with a `PasteMode` flag; the CR paste stays
+      inside the `append_enter` guard so `no_enter=true` injects no submit.
+- [x] 1.2 Delete `operator_interaction_active`, `pane_in_mode_active`, and
+      `active_client_key_table`. They exist only to feed the gate.
+- [x] 1.3 Confirmed no other caller depends on those three functions (only
+      `quiescence_probe.rs` referenced `pane::operator_interaction_active`, now
+      removed with §3.1).
 
 ## 2. Classifier (`src/transports/quiescence.rs`)
 
-- [ ] 2.1 Delete the operator-interaction branch in `quiescence_classify_step`
-      (lines 412-423) and the `delivery_operator_interaction` diagnostic.
-- [ ] 2.2 Delete `WedgeObservation.operator_interaction_active` (line 158).
-- [ ] 2.3 Update the module-level docs: the branch-ordering list (lines 34-42)
-      renumbers, and the "Operator interaction ... indefinitely suppresses"
-      paragraph (lines 50-52) is removed. The `running` branch comment at
-      lines 477-479 references the now-absent guard and must be corrected.
-- [ ] 2.4 Confirm `unbounded_deadline()` retains a legitimate caller. With the
-      gate gone its remaining use is the `prime_timeout_ms = None` path, which
-      is a documented opt-in-to-unbounded — keep it, but verify no path can now
-      park forever without a terminal classification available to it.
+- [x] 2.1 Deleted the operator-interaction branch in `quiescence_classify_step`
+      and the `delivery_operator_interaction` diagnostic.
+- [x] 2.2 Deleted `WedgeObservation.operator_interaction_active` (and its doc).
+- [x] 2.3 Updated the module-level docs: the branch-ordering list renumbers
+      (1-5), the "Operator interaction ... indefinitely suppresses" paragraph is
+      removed, the `running`-branch comment's stale-guard reference is corrected,
+      and the prime-timeout comment's operator-interaction sentence is dropped.
+- [x] 2.4 Confirmed `unbounded_deadline()` retains its legitimate caller (the
+      `prime_deadline = None` fallback `NeedsWait`). No deliverable pane can park
+      forever: a prompt-ready pane resolves `Delivered`, and a wedge-class pane
+      fires `Wedged` via the counter even with no prime deadline. The only
+      remaining unbounded park is the pre-existing `prime_timeout_ms = None` +
+      genuinely-unresponsive-empty-pane case — an explicit opt-in, unchanged by
+      this work, and NOT the deliverable-pane hang the gate produced.
 
 ## 3. Tmux probe (`src/tmux/quiescence_probe.rs`)
 
-- [ ] 3.1 Remove the `operator_interaction_active` trait method (line 93) and
-      its `RealPaneQuiescenceProbe` implementation (lines 162-165).
-- [ ] 3.2 Remove the field population in the `WedgeProbe` adapter
-      (lines 271, 291).
+- [x] 3.1 Removed the `operator_interaction_active` trait method, its
+      `RealPaneQuiescenceProbe` implementation, and the now-unused
+      `pane::operator_interaction_active` import; updated the trait doc (five
+      probe classes → four).
+- [x] 3.2 Removed the field population in the `TmuxAsWedgeProbe` adapter and
+      corrected the adapter doc-comment's `observe()` call description.
 
-## 4. Pty (`src/pty/state.rs`) — OWNED BY THE PTY LANE
+## 4. Pty (`src/pty/state.rs`)
 
-- [ ] 4.1 Pty Specialist deletes the two `operator_interaction_active: false`
-      struct-literal lines (304, 460) as a separate commit **on this branch**,
-      so the shared-field removal and its Pty cleanup merge atomically and no
-      intermediate commit breaks the `--features pty` build. Agreed shape;
-      Backend does not touch `src/pty/**`.
+- [x] 4.1 Deleted the two `operator_interaction_active: false` struct-literal
+      lines. Reassigned from the Pty lane to Backend by operator direction: the
+      relay branch is checked out in Backend's worktree, so it cannot also be
+      checked out in Pty's worktree to land a commit there. Rather than stack a
+      break-then-fix pair, this deletion is **folded into the implementation
+      commit** so no commit on the branch ever removes the shared field while
+      `src/pty/state.rs` still sets it — the `--features pty` build is atomic at
+      every commit. Pty and RG review the result.
 
 ## 5. Tests
 
-- [ ] 5.1 `tests/unit/transports_quiescence.rs` — drop the
-      `operator_interaction_active` struct-literal fields and the
-      suppression-behavior tests.
-- [ ] 5.2 `tests/unit/tmux_transport.rs` — drop the `ScriptedProbe`
-      `operator_interaction_active` method and the `PendingChoiceProbe`
-      canonical sequence; the five canonical sequences become four.
-- [ ] 5.3 NEW regression (unit): a probe reporting a prompt-ready pane resolves
-      `Delivered` on the first quiescent tick, with no suppression branch
-      available to park it. The unit-level statement of "a scrolled pane still
-      gets its message."
-- [ ] 5.4 NEW regression (tmux integration): `inject_literal_text` against a
-      pane placed in copy-mode (`tmux copy-mode -u`) delivers **both** the body
-      and the submit — the child receives the complete line — and
-      `#{pane_in_mode}` still reports `1` afterwards, proving the operator's
-      scroll position survives delivery. **This test must fail against today's
-      `send-keys Enter`**; confirm it does before implementing 1.1, or it is not
-      actually locking the landmine.
-- [ ] 5.5 `tests/integration/relay_delivery_runtime.rs` — migrate the existing
-      contracts the injection change invalidates (do NOT rely on full-suite
-      failures to discover them):
-      - `relay_delivery_sends_submit_in_separate_tmux_command` (fn at :885):
-        asserts one body paste + `send-keys Enter`; update to two paste buffers
-        and distinguish the bracketed body from the unbracketed CR.
-      - `relay_async_delivery_does_not_inject_while_pane_in_mode` (fn at :1042):
-        asserts the removed gate; replace/invert it — a pane in copy-mode now
-        DOES receive delivery. Fold into the 5.4 copy-mode regression rather than
-        duplicate.
-      - `relay_raww_tmux_default_queues_and_appends_enter` (fn at :1101):
-        asserts `send-keys Enter`; update to verify the unbracketed CR paste.
-      - `relay_raww_tmux_no_enter_omits_enter_command` (fn at :1192): keep it
-        proving body-only behavior under the revised mechanism (no CR paste when
-        `no_enter=true`) — this is the regression lock for the
-        `Copy-Mode-Transparent Injection` no_enter carve-out.
-      Check whether the fake-tmux fixture / command-log parsing needs adjustment
-      to identify the second buffer's CR payload distinctly from the body paste.
+- [x] 5.1 `tests/unit/transports_quiescence.rs` — dropped the
+      `operator_interaction_active` struct-literal fields. (No suppression-
+      behavior tests lived in this file; all its tests exercise the Busy
+      branch, which is unaffected.)
+- [x] 5.2 `tests/unit/tmux_transport.rs` — dropped the `ScriptedProbe`
+      `operator_interaction_active` method, the `ProbeObservation`
+      `operator_interaction` field + `with_op_interaction` builder, and the
+      `pending_choice_probe_neither_timeout_nor_wedge` test; module doc now
+      lists four probe classes.
+- [x] 5.3 NEW regression (unit):
+      `prompt_ready_resolves_delivered_under_unbounded_prime` — a prompt-ready
+      probe resolves `Delivered` on the first quiescent tick under
+      `prime_timeout_ms = None`, with no suppression branch available to park
+      it. The unit-level statement of "a scrolled pane still gets its message."
+- [x] 5.4 NEW regression (real-tmux integration):
+      `relay_raww_submits_through_copy_mode_pane` in
+      `tests/integration/relay_delivery_async.rs`. Puts a real tmux pane into
+      copy-mode, dispatches a `Raww` through the public relay path to a child
+      that echoes each submitted line wrapped in `ECHOED[...]`, then asserts the
+      wrapper appears (so the body AND the carriage return both crossed
+      copy-mode and completed the child's `read`) and `#{pane_in_mode}` still
+      reports `1` (the operator's scroll position survives). Built on the
+      existing real-tmux harness in `tests/integration/support/relay_delivery.rs`
+      (`tmux_available`, `TmuxServerGuard`, `spawn_session`,
+      `wait_for_pane_contains`) — no inline seam; skips gracefully when tmux is
+      absent. Confirmed it FAILS against a `send-keys Enter` submit (the pasted
+      body arrives but the wrapper never does, because copy-mode swallows the
+      keypress) and passes on the CR paste. This is the automated lock for the
+      unique behavioral claim.
+
+      (Correction: an earlier draft of this task claimed no real-tmux harness
+      existed and proposed substituting command-shape plus manual coverage. That
+      premise was wrong — the harness above is already used by
+      `relay_delivery_async`, `relay_delivery_prompt`, and `session_relay_look`.
+      The §5.5 fake-tmux contracts still independently lock the command shape;
+      §6.7 remains as end-to-end manual confirmation.)
+- [x] 5.5 `tests/integration/relay_delivery_runtime.rs` — migrated the existing
+      contracts the injection change invalidates. Two shared predicates
+      (`is_body_paste_line` = ` paste-buffer ` + `-t %1` + ` -p `;
+      `is_submit_paste_line` = same but WITHOUT ` -p `) distinguish the
+      bracketed body paste from the unbracketed CR submit in the command log;
+      no fixture change was needed (the CR payload lands in its own
+      `<log>.buffer.<name>` file, read via the existing
+      `read_paste_buffer_content`).
+      - `relay_delivery_sends_submit_in_separate_tmux_command`: now asserts one
+        bracketed body paste, a separate unbracketed CR paste (content `\r`)
+        ordered after the body, and no `send-keys`.
+      - `relay_async_delivery_does_not_inject_while_pane_in_mode` → renamed
+        `relay_async_delivery_injects_even_while_pane_in_mode`: inverted — with
+        `#{pane_in_mode}=1` the delivery now reaches body + submit; asserts no
+        `send-keys`. This is the command-shape copy-mode-transparency lock.
+      - `relay_raww_tmux_default_queues_and_appends_enter`: now asserts the body
+        paste carries the literal text, a separate unbracketed CR paste exists,
+        and no `send-keys`.
+      - `relay_raww_tmux_no_enter_omits_enter_command`: asserts the body paste
+        carries the literal text and NO unbracketed CR submit paste exists — the
+        regression lock for the `Copy-Mode-Transparent Injection` no_enter
+        carve-out.
 
 ## 6. Validation
 
-- [ ] 6.1 `cargo nextest run --locked --config-file
-      .auxiliary/configuration/nextest.toml` — green.
-- [ ] 6.2 `cargo nextest run --locked --config-file
-      .auxiliary/configuration/nextest.toml --features pty` — green (after 4.1).
-- [ ] 6.3 `cargo clippy --all-targets --no-deps -- -D warnings` — silent.
-- [ ] 6.4 `cargo clippy --all-targets --features pty --no-deps -- -D warnings`
+- [x] 6.1 `cargo nextest run --locked --config-file
+      .auxiliary/configuration/nextest.toml` — green (689/689).
+- [x] 6.2 `cargo nextest run --locked --config-file
+      .auxiliary/configuration/nextest.toml --features pty` — green (718/718).
+- [x] 6.3 `cargo clippy --all-targets --no-deps -- -D warnings` — silent.
+- [x] 6.4 `cargo clippy --all-targets --features pty --no-deps -- -D warnings`
       — silent.
-- [ ] 6.5 `cargo fmt --check` — silent.
-- [ ] 6.6 `openspec validate remove-operator-interaction-delivery-gate --strict`
+- [x] 6.5 `cargo fmt --check` — silent.
+- [x] 6.6 `openspec validate remove-operator-interaction-delivery-gate --strict`
       — valid.
 - [ ] 6.7 Manual live validation (operator-scheduled): scroll a live agent's
       pane into copy-mode, send it a message, confirm the message arrives, is
@@ -120,6 +162,8 @@ is why the delta base matters and why the ordering is fixed, not incidental.
 
 ## 7. Documentation
 
-- [ ] 7.1 If any subsystem README describes the operator-interaction gate,
-      update it in the same batch (`src/transports/README.md`,
-      `src/tmux/README.md`).
+- [x] 7.1 Scanned `src/transports/README.md` and `src/tmux/README.md` (and the
+      broader docs tree) for operator-interaction-gate references: none present
+      outside the OpenSpec specs (rewritten by this change's deltas at archive
+      time) and the `add-pty-transport` proposal (Pty-owned, §0.2). No README
+      edits required.

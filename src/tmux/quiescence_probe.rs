@@ -42,8 +42,8 @@ use crate::transports::{
 };
 
 use super::pane::{
-    capture_pane_snapshot, operator_interaction_active, resolve_active_pane_target,
-    resolve_cursor_column, resolve_window_activity_marker, sanitize_diagnostic_text,
+    capture_pane_snapshot, resolve_active_pane_target, resolve_cursor_column,
+    resolve_window_activity_marker, sanitize_diagnostic_text,
 };
 
 const PROMPT_INSPECT_LINES_DEFAULT: usize = 3;
@@ -75,8 +75,8 @@ pub struct PromptReadinessEvaluation {
 /// The real implementation ([`RealPaneQuiescenceProbe`]) wraps tmux queries
 /// against the active pane. Tests inject scripted probes that drive the
 /// three-state classifier deterministically — see the unit tests in
-/// `tests/unit/tmux_transport.rs` for the five probe classes
-/// (unresponsive, wedged, pending-choice, slow-prompt, normal).
+/// `tests/unit/tmux_transport.rs` for the four probe classes
+/// (unresponsive, wedged, slow-prompt, normal).
 ///
 /// `pub` to support the external test surface; the trait is not part of
 /// the public runtime API (no other code outside `src/tmux` consumes it).
@@ -85,12 +85,6 @@ pub trait PaneQuiescenceProbe: Send {
     /// The wait loop calls this twice per quiescence check (with a
     /// `quiet_window` sleep between) and compares results.
     fn next_evaluation(&mut self) -> Result<PromptReadinessEvaluation, String>;
-
-    /// Reports whether operator interaction (copy-mode or active key-table)
-    /// is currently active for the target session. `Some(reason)` when
-    /// active (e.g. `"pane_in_mode"` or `"client_key_table=copy-mode-vi"`),
-    /// `None` otherwise.
-    fn operator_interaction_active(&mut self) -> Result<Option<String>, String>;
 
     /// Resolves the active pane target for the target session (e.g. `%0`).
     /// Used by the wait loop to record the pane on terminal outcomes and to
@@ -157,11 +151,6 @@ impl PaneQuiescenceProbe for RealPaneQuiescenceProbe<'_> {
             snapshot.as_str(),
             self.matcher.as_ref(),
         )
-    }
-
-    fn operator_interaction_active(&mut self) -> Result<Option<String>, String> {
-        let pane_target = resolve_active_pane_target(self.tmux_socket, self.target_session)?;
-        operator_interaction_active(self.tmux_socket, self.target_session, pane_target.as_str())
     }
 
     fn resolve_active_pane(&mut self) -> Result<String, String> {
@@ -242,8 +231,8 @@ impl PaneQuiescenceProbe for RealPaneQuiescenceProbe<'_> {
 /// [`wait_for_quiescent_pane_three_state`]; holds a `&mut` borrow so it
 /// does not own the underlying probe.
 ///
-/// The adapter calls `next_evaluation()` + `operator_interaction_active()`
-/// exactly once per [`observe`](WedgeProbe::observe) call. This keeps each
+/// The adapter calls `next_evaluation()` exactly once per
+/// [`observe`](WedgeProbe::observe) call. This keeps each
 /// quiescence iteration to two `observe()` calls (= two
 /// `next_evaluation()` roundtrips), matching the legacy
 /// `wait_for_quiescent_pane_three_state` call frequency. Scripted test
@@ -268,7 +257,6 @@ impl<'a, P: PaneQuiescenceProbe> TmuxAsWedgeProbe<'a, P> {
 impl<'a, P: PaneQuiescenceProbe> WedgeProbe for TmuxAsWedgeProbe<'a, P> {
     fn observe(&mut self) -> Result<WedgeObservation, String> {
         let evaluation = self.inner.next_evaluation()?;
-        let op_interaction = self.inner.operator_interaction_active()?;
         let pane_target = self.inner.resolve_active_pane()?;
         let activity_generation = self.inner.last_window_activity_marker()?.unwrap_or(0);
         let mismatch = if evaluation.ready {
@@ -288,7 +276,6 @@ impl<'a, P: PaneQuiescenceProbe> WedgeProbe for TmuxAsWedgeProbe<'a, P> {
         Ok(WedgeObservation {
             inspected_tail: evaluation.inspected_block.unwrap_or_default(),
             is_prompt_ready: evaluation.ready,
-            operator_interaction_active: op_interaction.is_some(),
             pane_target: Some(pane_target),
             mismatch,
             activity_generation,

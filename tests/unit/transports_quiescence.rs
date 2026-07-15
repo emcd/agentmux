@@ -30,7 +30,6 @@ fn make_observation(activity_generation: u64, is_prompt_ready: bool) -> WedgeObs
     WedgeObservation {
         inspected_tail: String::new(),
         is_prompt_ready,
-        operator_interaction_active: false,
         pane_target: Some(TEST_PANE.to_string()),
         mismatch: None,
         activity_generation,
@@ -181,6 +180,37 @@ fn delivery_ready_fires_when_ready_and_no_activity_advance() {
     );
 }
 
+/// The classifier has no branch that can indefinitely park a
+/// prompt-ready pane. A prompt-ready observation resolves `Delivered`
+/// on the first quiescent tick even under an unbounded prime deadline
+/// (`prime_timeout_ms = None`) — the configuration that previously,
+/// combined with an operator-copy-mode suppression branch, produced an
+/// effectively-unbounded silent hang. There is no longer any observable
+/// operator state a probe could report that would suppress this
+/// delivery, so a pane scrolled into copy-mode still gets its message.
+#[test]
+fn prompt_ready_resolves_delivered_under_unbounded_prime() {
+    let mut probe = MockProbe::new(make_observation(7, true), make_observation(7, true));
+    let mut state = QuiescenceState::new();
+    let started_at = Instant::now();
+    let result = quiescence_classify_step(
+        &mut probe,
+        &mut state,
+        TEST_TARGET_SESSION,
+        TEST_QUIET_WINDOW,
+        // Unbounded: the exact deadline that paired with the removed
+        // copy-mode gate to hang forever.
+        None,
+        started_at,
+        None,
+        true,
+    );
+    assert!(
+        matches!(result, QuiescenceAction::Done(Ok(ref pane)) if pane == TEST_PANE),
+        "prompt-ready pane must resolve Delivered with no suppression branch to park it, got {result:?}",
+    );
+}
+
 /// Sanity baseline: when activity does NOT advance and the snapshot
 /// is not prompt-ready (and the prime window is bounded short), the
 /// prime-timeout branch fires. This confirms the Busy short-circuit
@@ -240,7 +270,6 @@ fn busy_short_circuit_resets_wedge_counter() {
             // increments — see `mismatch_is_wedge_class`.
             inspected_tail: "non-prompt screen content".to_string(),
             is_prompt_ready: false,
-            operator_interaction_active: false,
             pane_target: Some(TEST_PANE.to_string()),
             mismatch: None,
             activity_generation: activity,
@@ -323,7 +352,6 @@ fn busy_needswait_deadline_is_bounded_by_quiet_window() {
         WedgeObservation {
             inspected_tail: String::new(),
             is_prompt_ready: false,
-            operator_interaction_active: false,
             pane_target: Some(TEST_PANE.to_string()),
             mismatch: None,
             activity_generation: 0,
@@ -331,7 +359,6 @@ fn busy_needswait_deadline_is_bounded_by_quiet_window() {
         WedgeObservation {
             inspected_tail: String::new(),
             is_prompt_ready: true,
-            operator_interaction_active: false,
             pane_target: Some(TEST_PANE.to_string()),
             mismatch: None,
             activity_generation: 1,

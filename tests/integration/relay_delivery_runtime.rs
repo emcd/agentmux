@@ -926,12 +926,13 @@ async fn relay_delivery_sends_submit_in_separate_tmux_command() {
     assert_eq!(results[0].outcome, SendOutcome::Queued);
 
     // Async delivery runs in a background worker; wait for the fake tmux log
-    // to record the trailing Enter send-keys before reaping the relay so the
-    // paste-buffer command sequence is fully observable.
+    // to record the unbracketed carriage-return paste (the submit) before
+    // reaping the relay so the full paste-buffer command sequence is
+    // observable.
     let delivery_deadline = Instant::now() + Duration::from_secs(3);
     loop {
         if fs::read_to_string(&log_file)
-            .map(|log| log.contains("send-keys -t %1 Enter"))
+            .map(|log| log.lines().any(is_submit_paste_line))
             .unwrap_or(false)
         {
             break;
@@ -948,18 +949,22 @@ async fn relay_delivery_sends_submit_in_separate_tmux_command() {
 
     let log = fs::read_to_string(&log_file).expect("read fake tmux log");
     let log_lines: Vec<&str> = log.lines().collect();
-    let paste_indexes: Vec<usize> = log_lines
+    // The body is delivered as a single bracketed paste (`-p`); the submit
+    // is a separate unbracketed paste carrying a bare carriage return. Both
+    // target the pane; only the body count is asserted as exactly-one here
+    // (a chunked large payload would show more than one bracketed paste).
+    let body_indexes: Vec<usize> = log_lines
         .iter()
         .enumerate()
-        .filter(|(_, line)| line.contains(" paste-buffer ") && line.contains("-t %1"))
+        .filter(|(_, line)| is_body_paste_line(line))
         .map(|(index, _)| index)
         .collect();
     assert_eq!(
-        paste_indexes.len(),
+        body_indexes.len(),
         1,
-        "expected exactly one paste-buffer command for large payload, log={log:?}"
+        "expected exactly one bracketed body paste for large payload, log={log:?}"
     );
-    let buffer_content = read_paste_buffer_content(&log_file, log_lines[paste_indexes[0]]);
+    let buffer_content = read_paste_buffer_content(&log_file, log_lines[body_indexes[0]]);
     assert!(
         buffer_content.contains("Message-Id:"),
         "expected pane envelope to include Message-Id header, content={buffer_content:?}"
@@ -992,13 +997,22 @@ async fn relay_delivery_sends_submit_in_separate_tmux_command() {
         !buffer_content.contains("Content-Transfer-Encoding:"),
         "pane envelope must omit per-part transfer encoding header, content={buffer_content:?}"
     );
-    let enter_index = log_lines
+    let submit_index = log_lines
         .iter()
-        .position(|line| line.contains("send-keys -t %1 Enter"))
-        .expect("expected separate Enter send-keys command");
+        .position(|line| is_submit_paste_line(line))
+        .expect("expected separate unbracketed carriage-return paste (the submit)");
     assert!(
-        paste_indexes[0] < enter_index,
-        "expected paste-buffer command before Enter command, log={log:?}"
+        body_indexes[0] < submit_index,
+        "expected body paste before submit paste, log={log:?}"
+    );
+    assert_eq!(
+        read_paste_buffer_content(&log_file, log_lines[submit_index]),
+        "\r",
+        "submit paste must carry a bare carriage return"
+    );
+    assert!(
+        !log.contains("send-keys"),
+        "submit must go through paste-buffer, not send-keys, log={log:?}"
     );
 
     let inscriptions =
@@ -1038,8 +1052,15 @@ async fn relay_delivery_sends_submit_in_separate_tmux_command() {
     );
 }
 
+/// A pane reporting `#{pane_in_mode} = 1` (tmux copy-mode, as a
+/// mouse-wheel scroll leaves it) must NOT block delivery: the classifier
+/// ignores copy-mode, so the message is both pasted and submitted. This
+/// asserts the command shape our code emits under copy-mode — the fake
+/// tmux cannot model paste-through-copy-mode semantics, only the command
+/// sequence; the real-tmux behavior is covered separately in
+/// relay_delivery_async.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn relay_async_delivery_does_not_inject_while_pane_in_mode() {
+async fn relay_async_delivery_injects_even_while_pane_in_mode() {
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
     let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
@@ -1085,15 +1106,35 @@ async fn relay_async_delivery_does_not_inject_while_pane_in_mode() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].outcome, SendOutcome::Queued);
 
-    sleep(Duration::from_millis(500)).await;
+    // Delivery must proceed to the submit despite pane_in_mode=1. Wait for
+    // the unbracketed carriage-return paste; absent the gate removal this
+    // would never appear.
+    let delivery_deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if fs::read_to_string(&log_file)
+            .map(|log| log.lines().any(is_submit_paste_line))
+            .unwrap_or(false)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < delivery_deadline,
+            "delivery did not reach submit while pane_in_mode active"
+        );
+        sleep(Duration::from_millis(20)).await;
+    }
 
     child.start_kill().expect("kill relay");
     let _ = child.wait().await;
 
     let log = fs::read_to_string(&log_file).expect("read fake tmux log");
     assert!(
+        log.lines().any(is_body_paste_line),
+        "body must be pasted even while pane_in_mode active, log={log:?}"
+    );
+    assert!(
         !log.contains("send-keys"),
-        "no send-keys should be injected while pane_in_mode stays active, log={log:?}"
+        "delivery must go through paste-buffer, not send-keys, log={log:?}"
     );
 }
 
@@ -1151,13 +1192,13 @@ async fn relay_raww_tmux_default_queues_and_appends_enter() {
     assert_eq!(request_id.as_deref(), Some("req-raww-default-enter"));
     assert!(message_id.is_some(), "message_id should be present");
 
-    // Raww delivery now runs in a background worker; wait for the trailing Enter
-    // send-keys before reaping the relay so the paste-buffer sequence is fully
-    // observable in the log.
+    // Raww delivery now runs in a background worker; wait for the unbracketed
+    // carriage-return paste (the submit) before reaping the relay so the full
+    // paste-buffer sequence is observable in the log.
     let delivery_deadline = Instant::now() + Duration::from_secs(5);
     loop {
         if fs::read_to_string(&log_file)
-            .map(|log| log.contains("send-keys -t %1 Enter"))
+            .map(|log| log.lines().any(is_submit_paste_line))
             .unwrap_or(false)
         {
             break;
@@ -1173,18 +1214,27 @@ async fn relay_raww_tmux_default_queues_and_appends_enter() {
     let _ = child.wait().await;
 
     let log = fs::read_to_string(&log_file).expect("read fake tmux log");
-    let paste_line = log
+    let body_line = log
         .lines()
-        .find(|line| line.contains(" paste-buffer ") && line.contains("-t %1"))
-        .expect("expected paste-buffer command in fake tmux log");
-    let buffer_content = read_paste_buffer_content(&log_file, paste_line);
+        .find(|line| is_body_paste_line(line))
+        .expect("expected bracketed body paste in fake tmux log");
+    let buffer_content = read_paste_buffer_content(&log_file, body_line);
     assert_eq!(
         buffer_content, "hello from raww",
         "expected paste buffer to carry literal raww text, content={buffer_content:?}"
     );
+    let submit_line = log
+        .lines()
+        .find(|line| is_submit_paste_line(line))
+        .expect("expected unbracketed carriage-return paste for default raww behavior");
+    assert_eq!(
+        read_paste_buffer_content(&log_file, submit_line),
+        "\r",
+        "submit paste must carry a bare carriage return"
+    );
     assert!(
-        log.contains("send-keys -t %1 Enter"),
-        "expected Enter command for default raww behavior, log={log:?}"
+        !log.contains("send-keys"),
+        "submit must go through paste-buffer, not send-keys, log={log:?}"
     );
 }
 
@@ -1240,15 +1290,12 @@ async fn relay_raww_tmux_no_enter_omits_enter_command() {
     assert_eq!(transport, ListedSessionTransport::Tmux);
     assert_eq!(request_id.as_deref(), Some("req-raww-no-enter"));
 
-    // Async delivery: no_enter sends no trailing Enter, so wait for the
+    // Async delivery: no_enter sends no submit, so wait for the body
     // paste-buffer command itself before reaping the relay.
     let delivery_deadline = Instant::now() + Duration::from_secs(5);
     loop {
         if fs::read_to_string(&log_file)
-            .map(|log| {
-                log.lines()
-                    .any(|line| line.contains(" paste-buffer ") && line.contains("-t %1"))
-            })
+            .map(|log| log.lines().any(is_body_paste_line))
             .unwrap_or(false)
         {
             break;
@@ -1260,23 +1307,42 @@ async fn relay_raww_tmux_no_enter_omits_enter_command() {
         sleep(Duration::from_millis(20)).await;
     }
 
+    // Give any (erroneous) submit paste a chance to appear before asserting
+    // its absence.
+    sleep(Duration::from_millis(200)).await;
+
     child.start_kill().expect("kill relay");
     let _ = child.wait().await;
 
     let log = fs::read_to_string(&log_file).expect("read fake tmux log");
-    let paste_line = log
+    let body_line = log
         .lines()
-        .find(|line| line.contains(" paste-buffer ") && line.contains("-t %1"))
-        .expect("expected paste-buffer command in fake tmux log");
-    let buffer_content = read_paste_buffer_content(&log_file, paste_line);
+        .find(|line| is_body_paste_line(line))
+        .expect("expected bracketed body paste in fake tmux log");
+    let buffer_content = read_paste_buffer_content(&log_file, body_line);
     assert_eq!(
         buffer_content, "hello without enter",
         "expected paste buffer to carry literal raww text, content={buffer_content:?}"
     );
     assert!(
-        !log.contains("send-keys -t %1 Enter"),
-        "did not expect Enter command when no_enter=true, log={log:?}"
+        !log.lines().any(is_submit_paste_line),
+        "did not expect a submit carriage-return paste when no_enter=true, log={log:?}"
     );
+    assert!(
+        !log.contains("send-keys"),
+        "no_enter delivery must not emit send-keys, log={log:?}"
+    );
+}
+
+/// A bracketed (`-p`) paste of the message body into the target pane.
+fn is_body_paste_line(line: &str) -> bool {
+    line.contains(" paste-buffer ") && line.contains("-t %1") && line.contains(" -p ")
+}
+
+/// The unbracketed paste carrying the submit carriage return. Distinguished
+/// from the body paste by the absence of the `-p` (bracketed) flag.
+fn is_submit_paste_line(line: &str) -> bool {
+    line.contains(" paste-buffer ") && line.contains("-t %1") && !line.contains(" -p ")
 }
 
 fn read_paste_buffer_content(log_file: &Path, paste_line: &str) -> String {

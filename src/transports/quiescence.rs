@@ -32,24 +32,18 @@
 //! a `delivery_target_active` diagnostic, returning
 //! `QuiescenceAction::NeedsWait`. The pre-classification ordering is
 //!
-//! 1. `operator_interaction_active` check (highest precedence;
-//!    resets wedge counter, returns `NeedsWait`).
-//! 2. Busy short-circuit (the new branch from this change;
-//!    resets wedge counter, emits diagnostic, returns `NeedsWait`).
-//! 3. `delivery_ready` check (terminal: returns `Done(Ok(...))`).
-//! 4. Wedge-counter increment block.
-//! 5. Wedge check.
-//! 6. Prime timeout check.
+//! 1. Busy short-circuit (resets wedge counter, emits diagnostic,
+//!    returns `NeedsWait`).
+//! 2. `delivery_ready` check (terminal: returns `Done(Ok(...))`).
+//! 3. Wedge-counter increment block.
+//! 4. Wedge check.
+//! 5. Prime timeout check.
 //!
 //! Busy fires on a terminal-output-write-marker advance (Tmux:
 //! `#{window_activity}`; Pty: `last_change_atomic`). It does NOT fire
 //! on a child process being busy with zero byte output — that case is
 //! the Class B silent-thinking bug class, filed as a separate
 //! follow-up proposal.
-//!
-//! Operator interaction (copy-mode, active key-table, etc.) indefinitely
-//! suppresses both the unresponsive and the wedged classification. The
-//! prime timer does NOT fire while operator interaction is active.
 //!
 //! ## Wedge-class vs empty-pane
 //!
@@ -149,13 +143,8 @@ pub struct WedgeObservation {
     /// territory).
     pub inspected_tail: String,
     /// Whether the target is currently in a prompt-ready state. The
-    /// state machine's `running` branch returns `Ok` when this is
-    /// `true` and `operator_interaction_active` is `false`.
+    /// state machine's `running` branch returns `Ok` when this is `true`.
     pub is_prompt_ready: bool,
-    /// Whether operator interaction (copy-mode, key-table, etc.) is
-    /// currently active. When `true`, both the prime-timeout and
-    /// wedge-class classifiers are suppressed for this iteration.
-    pub operator_interaction_active: bool,
     /// Active pane target identifier (e.g. Tmux `%0`) used by the
     /// state machine for diagnostic inscriptions. `None` when the
     /// probe does not surface a pane target (e.g. Pty, which has no
@@ -403,25 +392,6 @@ pub fn quiescence_classify_step<W: WedgeProbe>(
     // activity_generation terminal-output-write marker).
     let quiescent = snapshot_before == snapshot_after;
 
-    // --- Operator interaction (highest precedence). -------------------
-    // Copy-mode / active key-table indefinitely suppress all
-    // classification; reset wedge counter on entry so re-entry does
-    // not accumulate ticks. The Busy short-circuit does not override
-    // this — a pane in copy-mode stays in NeedsWait regardless of
-    // any terminal-output-write activity.
-    if snapshot_after.operator_interaction_active {
-        emit_delivery_diagnostic(
-            "delivery_operator_interaction",
-            &json!({
-                "target_session": target_session,
-                "pane_target": snapshot_after.pane_target,
-                "reason": "operator_interaction_active",
-            }),
-        );
-        state.consecutive_quiescent_mismatches = 0;
-        return QuiescenceAction::NeedsWait(prime_deadline.unwrap_or_else(unbounded_deadline));
-    }
-
     // --- Busy short-circuit. ------------------------------------------
     // When the terminal-output-write marker advanced between two
     // consecutive observations, the target is mid-generation: bytes
@@ -474,9 +444,7 @@ pub fn quiescence_classify_step<W: WedgeProbe>(
     // After the Busy short-circuit, so a post-sleep snapshot that
     // matches the prompt regex while activity was advancing during
     // the same quiet_window fires Busy above (returning NeedsWait)
-    // rather than Delivered here. The `operator_interaction_active`
-    // guard previously in this condition is now redundant (the
-    // operator-interaction branch above returns early when set).
+    // rather than Delivered here.
     if snapshot_after.is_prompt_ready {
         emit_delivery_diagnostic(
             "delivery_ready",
@@ -544,8 +512,6 @@ pub fn quiescence_classify_step<W: WedgeProbe>(
     // `Timeout` when the prime window has elapsed AND the pane is
     // NOT showing wedge-class content. Wedge-class content takes
     // the wedge branch above; the pane is stuck, not unresponsive.
-    // Operator interaction (handled earlier) indefinitely suppresses
-    // both classifiers.
     if let Some(deadline) = prime_deadline
         && Instant::now() >= deadline
     {

@@ -6,15 +6,12 @@
 //! real tmux IPC, the probe's state machine is the only seam that can
 //! exercise the wait loop's wedge/timeout/ready branches.
 //!
-//! The five baseline probe classes cover the wedge/prime-timeout
+//! The four baseline probe classes cover the wedge/prime-timeout
 //! behavioral contract:
 //!
 //! - `AlwaysUnresponsiveProbe` — never produces output. Asserts `Timeout`.
 //! - `AlwaysWedgeProbe` — immediately quiesces at a non-prompt state.
 //!   Asserts `Failed` + `reason_code = "pane_wedged"`.
-//! - `PendingChoiceProbe` — quiesces with `operator_interaction_active =
-//!   Some(_)`. Asserts neither timeout nor wedge fire while operator
-//!   interaction is active.
 //! - `SlowPromptProbe` — quiesces at a prompt state after several ticks.
 //!   Asserts `Delivered`.
 //! - `NormalFlowProbe` — produces output then settles at a prompt.
@@ -44,14 +41,13 @@ fn prime_window(timeout_ms: Option<u64>) -> (Option<Instant>, Instant, Option<u6
     )
 }
 
-/// Single observation the probe returns. All three query methods
-/// (`next_evaluation`, `operator_interaction_active`, `resolve_active_pane`)
-/// return values derived from this struct.
+/// Single observation the probe returns. Both query methods
+/// (`next_evaluation`, `resolve_active_pane`) return values derived
+/// from this struct.
 #[derive(Clone, Debug)]
 struct ProbeObservation {
     pane_target: String,
     evaluation: PromptReadinessEvaluation,
-    operator_interaction: Option<String>,
 }
 
 impl ProbeObservation {
@@ -65,7 +61,6 @@ impl ProbeObservation {
                 ),
                 ..Default::default()
             },
-            operator_interaction: None,
         }
     }
 
@@ -79,7 +74,6 @@ impl ProbeObservation {
                 regex_matched: Some(false),
                 ..Default::default()
             },
-            operator_interaction: None,
         }
     }
 
@@ -90,7 +84,6 @@ impl ProbeObservation {
                 ready: true,
                 ..Default::default()
             },
-            operator_interaction: None,
         }
     }
 
@@ -113,13 +106,7 @@ impl ProbeObservation {
                 expected_cursor_column: Some(4),
                 observed_cursor_column: Some(0),
             },
-            operator_interaction: None,
         }
-    }
-
-    fn with_op_interaction(mut self, op: &str) -> Self {
-        self.operator_interaction = Some(op.to_string());
-        self
     }
 }
 
@@ -129,8 +116,8 @@ impl ProbeObservation {
 /// queue is at its tail, `wait_for_change` returns `Err(Timeout)`.
 ///
 /// An optional `abort_after_calls` counter makes `next_evaluation` return
-/// `Err` after N calls, used by `PendingChoiceProbe` to terminate the
-/// wait function without firing wedge or timeout.
+/// `Err` after N calls, used to terminate the wait function at a known
+/// iteration count without firing wedge or timeout.
 struct ScriptedProbe {
     states: VecDeque<ProbeObservation>,
     /// Terminal-output-write marker sequence consumed on every
@@ -216,10 +203,6 @@ impl PaneQuiescenceProbe for ScriptedProbe {
         Ok(self.current().evaluation.clone())
     }
 
-    fn operator_interaction_active(&mut self) -> Result<Option<String>, String> {
-        Ok(self.current().operator_interaction.clone())
-    }
-
     fn resolve_active_pane(&mut self) -> Result<String, String> {
         Ok(self.current().pane_target.clone())
     }
@@ -294,40 +277,6 @@ fn always_wedge_probe_resolves_wedged() {
     assert!(
         matches!(result, Err(DeliveryWaitError::Wedged { .. })),
         "expected Wedged, got {result:?}",
-    );
-}
-
-#[test]
-fn pending_choice_probe_neither_timeout_nor_wedge() {
-    // Pane has `operator_interaction_active` set (a pending tool-approval
-    // choice). Both the unresponsive and the wedged classifications are
-    // indefinitely suppressed. We use `abort_after_calls` to terminate the
-    // wait function with a distinct `Failed` variant, proving neither
-    // Timeout nor Wedged fired during the run.
-    let mut probe = ScriptedProbe::constant(
-        ProbeObservation::stuck_unready().with_op_interaction("pane_in_mode"),
-    )
-    .with_abort_after(20);
-    let result = wait_for_quiescent_pane_three_state(
-        &mut probe,
-        TEST_TARGET_SESSION,
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(30)).0,
-        prime_window(Some(30)).1,
-        prime_window(Some(30)).2,
-        true,
-    );
-    assert!(
-        matches!(result, Err(DeliveryWaitError::Failed { .. })),
-        "expected Failed (from abort), got {result:?}",
-    );
-    assert!(
-        !matches!(result, Err(DeliveryWaitError::Timeout { .. })),
-        "must not fire Timeout while operator interaction is active",
-    );
-    assert!(
-        !matches!(result, Err(DeliveryWaitError::Wedged { .. })),
-        "must not fire Wedged while operator interaction is active",
     );
 }
 

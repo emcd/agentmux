@@ -301,7 +301,6 @@ impl WedgeProbe for PtyQuiescenceProbe {
         Ok(WedgeObservation {
             inspected_tail: response.tail,
             is_prompt_ready,
-            operator_interaction_active: false,
             pane_target: None,
             mismatch,
             activity_generation: self.shared.last_change_atomic.load(Ordering::Acquire),
@@ -457,7 +456,6 @@ impl<'a> WedgeProbe for WorkerTerminalProbe<'a> {
         Ok(WedgeObservation {
             inspected_tail: tail,
             is_prompt_ready,
-            operator_interaction_active: false,
             pane_target: None,
             mismatch,
             activity_generation: self.last_change_atomic.load(Ordering::Acquire),
