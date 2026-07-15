@@ -177,51 +177,112 @@ shared handle.
 
 ### Requirement: Generalized Wedge/Prime State Machine
 
-The system SHALL provide a transport-agnostic wedge detection and prime timeout
-state machine in `src/transports/quiescence.rs`. The state machine SHALL operate
-over a `WedgeProbe` trait that abstracts the transport-specific primitives for
-quiescence detection:
+The system SHALL provide a transport-agnostic wedge detection and prime
+timeout state machine in `src/transports/quiescence.rs`, shared by all
+promptable transports (Tmux, Pty). The state machine SHALL operate over
+a `WedgeProbe` trait that exposes a single-snapshot observation shape:
 
-- `inspect_tail(&self) -> String` — returns the tail of the target's visible
-  state (formatted text or `capture-pane` output, depending on transport) for
-  prompt-readiness matching.
-- `cursor_idle_at(&self, column: u16) -> bool` — whether the target's cursor
-  sits at the configured idle column.
-- `is_settled(&self) -> bool` — whether the target has been quiescent for the
-  configured quiet window.
-- `operator_interaction_active(&self) -> bool` — whether the target is currently
-  engaged with an operator. **Default implementation returns `false`** (Pty
-  semantics; see Pty-specific scenarios in `session-relay`). Tmux adapter
-  overrides to return `true` when copy-mode or key-table is active.
+- `observe(&mut self) -> Result<WedgeObservation, String>` — captures
+  the probe's current state as a single snapshot. The state machine
+  calls this twice per quiescence iteration (before and after the
+  `wait_for_change` round). Implementations read any underlying IPC /
+  state once and return a consistent snapshot.
+- `wait_for_change(&mut self, deadline: Instant) -> Result<(), DeliveryWaitError>`
+  — blocks until the next `observe()` call would differ from the
+  previous one, or the supplied `deadline` elapses. Returns `Ok(())`
+  on observed change; `Err(DeliveryWaitError::Timeout)` on deadline
+  elapsed with no change; `Err(DeliveryWaitError::Failed)` on probe
+  errors. The state machine passes a `deadline` derived from the
+  per-coder `prime_timeout_ms` so the probe honors the same prime
+  window the loop tracks.
 
-The state machine SHALL return the same `DeliveryWaitError::Timeout` and
-`DeliveryWaitError::Wedged` variants already declared in
-`src/transports/contract.rs`. Tmux and Pty SHALL share the state machine; the
-per-transport adapter is the only divergence. The Tmux transport constructs a
-small adapter (`TmuxAsWedgeProbe`) that maps the existing
-`PaneQuiescenceProbe` into the new generalized trait, preserving the 16-probe
-test surface in `tests/unit/tmux_transport.rs` unchanged.
+The single-snapshot shape is intentional: a multi-method trait
+would do 4-8x more work per iteration when the probe side-effects
+on each call, and the existing probe test fixtures'
+`abort_after_calls` counters would trip prematurely. The 16-probe
+test surface in `tests/unit/tmux_transport.rs` uses this two-method
+shape and preserves its `next_evaluation` cadence.
+
+The `WedgeObservation` snapshot SHALL carry these fields (consistent
+across all transports; per-transport probes populate them from their
+native primitives):
+
+- `inspected_tail: String` — the last `inspect_lines` rows formatted
+  for prompt-readiness matching. Empty / whitespace-only indicates
+  an empty pane (Unresponsive territory); non-empty + not
+  prompt-ready indicates a wedge-class mismatch (Wedged territory).
+- `is_prompt_ready: bool` — whether the target is currently
+  prompt-ready. The state machine's `running` branch returns `Ok`
+  when this is `true`.
+- `pane_target: Option<String>` — active pane id (e.g. Tmux `%0`)
+  for diagnostic inscriptions. `None` when the probe does not
+  surface a pane target (e.g. Pty, which has no tmux-style pane
+  id); the state machine omits the field from diagnostics in that
+  case.
+- `mismatch: Option<ReadinessMismatch>` — readiness-mismatch
+  metadata when `is_prompt_ready = false`. The state machine uses
+  `mismatch.reason` for the wedge/prime-timeout `reason` payload,
+  falling back to deriving a generic reason from the inspected tail
+  when `None`.
+- `activity_generation: u64` — terminal-output-write marker
+  populated at observation time. Tmux probes read
+  `#{window_activity}` parsed as a `u64` epoch-seconds value
+  (falling back to `0` when the format is unavailable on the
+  running tmux version). Pty probes read
+  `last_change_atomic.load(Ordering::Acquire)` from `PtyShared`. An
+  advance between two consecutive observations signals that
+  bytes were written to the target during the `quiet_window`,
+  triggering the `Busy` pre-classification (see the
+  `Three-State Delivery Classifier` requirement).
+
+The state machine SHALL return the existing
+`DeliveryWaitError::{Timeout, Wedged}` variants declared in
+`src/transports/contract.rs`. Tmux and Pty SHALL share the state
+machine; the per-transport adapter is the only divergence. The
+Tmux transport constructs a small `TmuxAsWedgeProbe` adapter that
+maps the existing `PaneQuiescenceProbe` into the new generalized
+trait, preserving the 16-probe test surface in
+`tests/unit/tmux_transport.rs` unchanged. The Pty transport
+implements `WedgeProbe` directly in
+`src/pty/state.rs::{PtyQuiescenceProbe, WorkerTerminalProbe}`,
+populating `WedgeObservation` fields from a shared `PtyShared`
+handle.
 
 #### Scenario: Generalized state machine classifies based on probe results
 
-- **WHEN** the shared wedge/prime state machine observes a flush group whose
-  probe reports `is_settled == true` and `cursor_idle_at == false` (prompt-
+- **WHEN** the shared wedge/prime state machine observes a flush
+  group whose probe reports `is_prompt_ready == false` (prompt-
   readiness template does not match the inspected tail)
-- **AND** the probe's `operator_interaction_active` returns `false`
 - **AND** wedge detection is enabled (per-coder config)
 - **THEN** the state machine returns `DeliveryWaitError::Wedged { reason }`
-  after `WEDGE_CONSECUTIVE_TICKS` (3) identical wedge-class evaluations, OR
-  when the prime window has elapsed with a wedge-class mismatch observed
+  after `WEDGE_CONSECUTIVE_TICKS` (3) identical wedge-class
+  evaluations, OR when the prime window has elapsed with a
+  wedge-class mismatch observed
 - **AND** the calling transport maps the error to
   `SendOutcome::Failed` + `reason_code = "pane_wedged"`
 
-#### Scenario: Tmux adapter overrides operator_interaction_active
+#### Scenario: Tmux adapter maps PaneQuiescenceProbe into WedgeProbe::observe
 
-- **WHEN** a Tmux-backed flush group's underlying `PaneQuiescenceProbe`
-  reports an active copy-mode or key-table
-- **THEN** the `TmuxAsWedgeProbe` adapter returns `true` from
-  `operator_interaction_active`
-- **AND** the shared state machine indefinitely suppresses both wedge and
-  prime-timeout classification until the operator interaction clears
+- **WHEN** a Tmux-backed flush group's `TmuxAsWedgeProbe::observe`
+  is called
+- **THEN** the adapter invokes the underlying `PaneQuiescenceProbe`
+  exactly once and packages the result into a `WedgeObservation`
+  whose fields (`inspected_tail`, `is_prompt_ready`, `pane_target`,
+  `mismatch`, `activity_generation`) reflect the live pane state at
+  the moment of the call
 - **AND** the Tmux-side wedge/prime semantics match the merged
-  `tmux-wedge-detection` proposal unchanged
+  `tmux-wedge-detection` and `add-wedge-detection-busy-state`
+  proposals unchanged
+
+> **Re-scoped 2026-07-15 against the post-`remove-operator-
+> interaction-delivery-gate` archive (master `2708884`).** The
+> prior draft described a four-method trait shape
+> (`inspect_tail` / `cursor_idle_at` / `is_settled` /
+> `operator_interaction_active`) that was abandoned during
+> implementation (per the deviation note recorded in
+> `add-pty-transport/tasks.md` §2.2). The shipped two-method
+> shape (`observe` / `wait_for_change`) returns a single
+> `WedgeObservation` snapshot and is `!Send + !Sync`-safe. The
+> `operator_interaction_active` field was retired by
+> `remove-operator-interaction-delivery-gate` along with the
+> upstream copy-mode gate (issues/relay/52).
