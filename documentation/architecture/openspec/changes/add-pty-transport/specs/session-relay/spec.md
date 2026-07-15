@@ -207,32 +207,32 @@ prompt-ready only when the transport reports the cursor at that configured
 column. For Tmux, this is `tmux display-message -p`; for Pty, this is
 `Terminal::cursor_x()`.
 
-Wedge detection defaults to enabled for all coder-backed sessions whose coder
-defines either `[coders.<id>.tmux]` or `[coders.<id>.pty]` (the operator MAY
-opt out per coder via `[coders.<id>.{tmux,pty}].wedge-detection = false`).
-When wedge detection is enabled and the pane settles at a non-prompt-ready
-state with **no operator-interaction signal**, the coder transport SHALL
-classify the flush group as `wedged` rather than waiting indefinitely. The
-wedge detection knob is independent of the prompt-readiness template
-configuration.
+Wedge detection defaults to enabled for both Tmux-backed and Pty-
+backed sessions (the operator MAY opt out per coder via
+`[coders.<id>.{tmux,pty}].wedge-detection = false`). When wedge
+detection is enabled and the pane settles at a non-prompt-ready
+state, the coder transport SHALL classify the flush group as
+`wedged` rather than waiting indefinitely. The wedge detection knob
+is independent of the prompt-readiness template configuration.
 
-**Operator-interaction semantics differ between transports:**
+The wedge classifier is the same `Wedged` outcome for both Tmux
+and Pty: `SendOutcome::Failed` + `reason_code = "pane_wedged"`
+after `WEDGE_CONSECUTIVE_TICKS` (3) identical wedge-class
+evaluations, OR when the prime window has elapsed with a wedge-
+class mismatch observed. Per-transport knobs and Pty-specific
+wedge scenarios live under the `Pty Wedged State Detection`
+requirement; per-transport knobs live under the cross-cutting
+`Pty Prime Timeout` requirement.
 
-- For **Tmux** (existing): `operator_interaction_active` reports `true` when
-  the tmux session is in copy-mode or has a non-default key-table. Active
-  operator interaction indefinitely suppresses both wedge and prime-timeout
-  classification. (See the merged `tmux-wedge-detection` proposal.)
-- For **Pty** (new in `add-pty-transport`): there is no operator-attached TUI;
-  `operator_interaction_active` is always `false`. The wedge and prime-timeout
-  classifiers are never suppressed by operator interaction. The Pty wedge
-  state machine has two terminal states (`running` and `wedged-or-
-  unresponsive`), not three.
-
-This is a meaningful simplification of the spec for Pty, NOT a regression —
-the operator-interaction concept was a defensive mechanism for a multi-actor
-terminal topology (operator + agent) that Pty does not have (relay-tui
-viewing is read-only `look` snapshots; `agentmux raww` is an envelope write
-that does not change prompt-readiness state).
+> **Re-scoped 2026-07-15 against the post-`remove-operator-
+> interaction-delivery-gate` archive (master `2708884`).** The
+> prior draft included a per-transport "Operator-interaction
+> semantics differ between transports" subsection + three
+> `operator_interaction_active`-conditional scenarios (Tmux
+> silence, Pty always-false, Pty-doesn't-consult). All three
+> are obsolete after the upstream copy-mode gate was retired
+> (issues/relay/52). Pty wedge scenarios moved to the `Pty
+> Wedged State Detection` ADDED requirement.
 
 #### Scenario: Deliver when prompt-readiness template matches
 
@@ -272,41 +272,33 @@ that does not change prompt-readiness state).
 #### Scenario: Time out when quiescent pane never becomes prompt-ready
 
 - **WHEN** target member has a prompt-readiness template
-- **AND** `[coders.<id>.tmux].prime-timeout-ms` (Tmux) or
-  `[coders.<id>.pty].prime-timeout-ms` (Pty) is set to a finite millisecond
-  value
+- **AND** `[coders.<id>.{tmux,pty}].prime-timeout-ms` is set to a
+  finite millisecond value
 - **AND** pane output never begins flowing within the prime window
-- **AND** for Tmux: `operator_interaction_active` is `None`
-- **AND** for Pty: `operator_interaction_active` is always `false`
-- **THEN** the transport resolves the flush group as `SendOutcome::Timeout`
+- **THEN** the transport resolves the flush group as
+  `SendOutcome::Timeout`
 - **AND** relay does not inject the message
 
-#### Scenario: Classify as wedged when settled pane is not prompt-ready (Tmux, default-on)
+#### Scenario: Classify as wedged when settled pane is not prompt-ready (default-on)
 
 - **WHEN** target member has a prompt-readiness template
-- **AND** the coder defines `[coders.<id>.tmux]` with `wedge-detection`
-  not disabled (it defaults to enabled)
+- **AND** the coder defines `[coders.<id>.tmux]` or
+  `[coders.<id>.pty]` with `wedge-detection` not disabled (it
+  defaults to enabled)
 - **AND** pane output reaches quiescence
 - **AND** template matching conditions are not true
-- **AND** `operator_interaction_active` is `None` for the Tmux target
-- **THEN** the Tmux transport resolves the flush group as
+- **THEN** the coder transport resolves the flush group as
   `SendOutcome::Failed` with `reason_code = "pane_wedged"`
 - **AND** relay does not inject the message
 
-#### Scenario: Classify as wedged when settled pane is not prompt-ready (Pty, default-on)
+#### Scenario: Deliver to a pane the operator has scrolled into copy-mode
 
-- **WHEN** target member has a prompt-readiness template
-- **AND** the coder defines `[coders.<id>.pty]` with `wedge-detection`
-  not disabled (it defaults to enabled)
-- **AND** pane output reaches quiescence (via the shared wedge/prime state
-  machine's probe-driven `is_settled` check)
-- **AND** template matching conditions are not true (the prompt regex does
-  not match `Formatter::format_alloc(Format::Plain)`'s tail text)
-- **THEN** the Pty transport resolves the flush group as
-  `SendOutcome::Failed` with `reason_code = "pane_wedged"`
-- **AND** relay does not inject the message
-- **AND** the Pty wedge detector does NOT consult any
-  `operator_interaction_active` signal because none exists for Pty
+- **WHEN** the target pane is in tmux copy-mode (for example, the
+  operator scrolled it with the mouse wheel)
+- **AND** the pane's live content is prompt-ready
+- **THEN** relay injects the message
+- **AND** the pane remains in copy-mode with the operator's scroll
+  position undisturbed
 
 #### Scenario: Wedge detection opt-out preserves prior behavior
 
@@ -436,11 +428,14 @@ proposal:
   delivery task begins the quiescence wait for a flush group.
 - The prime timer SHALL NOT reset on coalesce-during-wait when new envelopes
   are absorbed into the flush group during the prime window.
-- The prime timer SHALL NOT fire while `operator_interaction_active` reports
-  an active signal. **For Pty, this is always `false`**, so the prime timer
-  is never suppressed on this ground; the existing operator-interaction
-  suppression clause is preserved in the spec for Tmux and has no Pty-side
-  effect.
+- The prime timer SHALL fire when the prime window has elapsed with no
+  observable output from the target, regardless of any rendering-state
+  signal; Pty has no operator-interaction concept that suppresses
+  classification (the upstream copy-mode gate was retired by
+  `remove-operator-interaction-delivery-gate`, archived 2026-07-15).
+  Copy-mode and other rendering states do not impede injection or
+  affect what `cursor_x` and `capture-pane`-style probes report; the
+  prime timer always measures observable output, not rendering state.
 
 When the prime timer fires for a Pty target (no observable output within the
 prime window), the Pty transport SHALL resolve every sender in the flush group
@@ -486,11 +481,12 @@ A wedge detection SHALL fire when wedge detection is enabled and the Pty
 transport observes, during the quiescence wait for a flush group:
 
 - the pane output has been quiescent for at least one quiet window (probe
-  `is_settled()` returns `true`)
+  `observe()` returns `is_prompt_ready = false` and the
+  `activity_generation` field has not advanced since the previous
+  observation)
 - the prompt-readiness template does NOT match the inspected pane tail
   (formatter `format_alloc(Format::Plain)` tail text does not match
   `prompt_regex`)
-- `operator_interaction_active` returns `false` (always for Pty)
 
 When wedge detection fires, the Pty transport SHALL resolve every sender in
 the flush group with `SendOutcome::Failed` and `reason_code = "pane_wedged"`.
