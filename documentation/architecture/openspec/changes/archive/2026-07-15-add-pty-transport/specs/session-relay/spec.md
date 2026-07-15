@@ -439,8 +439,21 @@ proposal:
 
 When the prime timer fires for a Pty target (no observable output within the
 prime window), the Pty transport SHALL resolve every sender in the flush group
-with `SendOutcome::Timeout`. The relay worker SHALL propagate that outcome to
-the MCP/CLI caller as a distinct timeout result, not collapsed into `Failed`.
+with `SendOutcome::Timeout`. The `Timeout` outcome SHALL remain a distinct
+terminal outcome and SHALL NOT be collapsed into `Failed`. The accept-time
+async response for the originating send remains `queued`; the terminal
+`Timeout` resolution is recorded per `Async Delivery Observability` and is
+not returned to the synchronous caller.
+
+> **Spec-alignment note (2026-07-16):** the prior wording
+> "The relay worker SHALL propagate that outcome to the MCP/CLI caller"
+> was an un-implemented in-band caller-propagation clause that was
+> mirrored from the Tmux Prime Timeout requirement; it is removed from
+> the Pty Prime Timeout delta for symmetry. The
+> `Timeout`-distinct-from-`Failed` invariant is preserved as the
+> shipped Pty behavior; an async sender-receipt surface for `Timeout`
+> (and `Wedged` / `dropped_on_shutdown`) is not in Pty's surface
+> today.
 
 #### Scenario: Pty prime timeout fires on unresponsive target
 
@@ -535,10 +548,10 @@ sessions, applied as the `cols` and `rows` TOML keys under the per-coder
 - `rows = 40`
 
 The Pty transport SHALL spawn the child under a `portable_pty` master sized to
-these dimensions and SHALL call `Terminal::resize(cols, rows, 0, 0)` once at
-startup. The transport SHALL read these values at startup only; runtime resize
-(via a future `agentmux resize <session> <cols> <rows>` command) is out of
-scope for `add-pty-transport` and deferred to a follow-up proposal.
+these dimensions and construct `libghostty_vt::Terminal::new(TerminalOptions
+{ cols, rows, max_scrollback: 10_000 })` with the same dimensions. Runtime
+resize (via a future `agentmux resize <session> <cols> <rows>` command) is
+out of scope for `add-pty-transport` and deferred to a follow-up proposal.
 
 `look()` SHALL return `LookSnapshotPayload::Lines { snapshot_lines }` from
 `Formatter::format_alloc(Format::Plain)` truncated to the consumer's
@@ -548,19 +561,27 @@ that the relay-tui consumer's viewport match the Pty-backed session's grid
 dimensions; multi-viewer dimension reconciliation is out of scope for
 `add-pty-transport` and deferred to a follow-up proposal.
 
+> **Spec-alignment note (2026-07-16, Pty archive):** the prior wording
+> "SHALL call `Terminal::resize(cols, rows, 0, 0)` once at startup" is
+> removed; the shipped Pty transport constructs the terminal at the
+> configured dimensions and never calls `Terminal::resize`. The
+> `cols` / `rows` keys continue to drive the `portable_pty` master size
+> + the initial `TerminalOptions`. A future proposal may add a runtime
+> resize path if needed.
+
 #### Scenario: Pty spawns at per-coder default dims
 
 - **WHEN** the bundle config does not set `[coders.<id>.pty].cols` or `.rows`
   (or sets them to the default values)
 - **THEN** the Pty transport spawns the child under a 120 x 40 PTY master
-- **AND** `Terminal::resize(120, 40, 0, 0)` is called once at startup
+- **AND** constructs `libghostty_vt::Terminal` with `cols = 120, rows = 40`
 
 #### Scenario: Pty honors explicit per-coder dims
 
 - **WHEN** the bundle config sets `[coders.<id>.pty].cols = 200` and
   `.rows = 60`
 - **THEN** the Pty transport spawns the child under a 200 x 60 PTY master
-- **AND** `Terminal::resize(200, 60, 0, 0)` is called once at startup
+- **AND** constructs `libghostty_vt::Terminal` with `cols = 200, rows = 60`
 
 #### Scenario: Pty rejects zero-dimension config
 

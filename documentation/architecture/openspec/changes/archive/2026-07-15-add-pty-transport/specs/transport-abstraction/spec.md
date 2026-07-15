@@ -122,8 +122,11 @@ reader thread, and one delivery task. Because all `libghostty_vt` types are
 `!Send + !Sync`, the terminal SHALL live on the delivery thread and be reached
 from other threads (the relay worker for `mailw`/`raww` dispatch is
 non-blocking — the transport enqueues onto an internal `mpsc::Sender`; the look
-path is the only direct cross-thread accessor) through an `Arc<Mutex<PtyState>>`
-shared handle.
+path is the only direct cross-thread accessor) through a `SnapshotRequest`
+channel whose receiver lives on the worker thread. The reader thread feeds
+PTY output bytes through `bytes_tx` into the worker, which applies them to
+the terminal and advances the `last_change_atomic` shared with
+`PtyQuiescenceProbe`.
 
 #### Scenario: Pty startup spawns the child PTY and installs effect handlers
 
@@ -139,9 +142,12 @@ shared handle.
   installs the canonical effect handlers (`on_pty_write`, `on_size`,
   `on_device_attributes`, `on_xtversion`, `on_title_changed`)
 - **AND** spawns the reader thread and the delivery task
-- **AND** publishes `WorkerReadinessState::Available` via
-  `set_worker_readiness`
-- **AND** returns `TransportStatus { readiness: Ready }`
+- **AND** the worker thread publishes `WorkerReadinessState::Available`
+  AFTER successful `Terminal::new` + handler installation, then signals the
+  init handshake so `startup_inner` returns `TransportStatus::Ready`
+- **AND** if `Terminal::new` fails, the worker signals the init handshake
+  with the error and `startup_inner` returns `TransportError` (the relay-side
+  guard then publishes `WorkerReadinessState::Unavailable`)
 
 #### Scenario: Pty mailw enqueues and resolves via delivery task
 
@@ -155,25 +161,55 @@ shared handle.
   quiescence via the shared wedge/prime state machine, and resolves the
   outcome future with the corresponding `SingleDeliveryOutcome`
 
-#### Scenario: Pty look returns formatter text + cursor via shared handle
+#### Scenario: Pty look renders formatter text + cursor via snapshot channel
 
 - **WHEN** the relay calls `OutputView::look` on the `PtyOutputView` returned
   by `give_output`
-- **THEN** the look implementation locks the shared `PtyState` mutex, recreates
-  the formatter from `&terminal`, calls `format_alloc(Format::Plain)`, splits
-  the result on `\n`, takes the last `mode.lines.unwrap_or(40)` rows, and
-  reads the cursor position via `terminal.cursor_x()` / `cursor_y()`
-- **AND** returns `LookSnapshotPayload::Lines { snapshot_lines }`
+- **THEN** the look implementation sends a `SnapshotRequest` through the
+  `snapshot_tx` channel; the worker thread receives it, recreates the
+  formatter from `&terminal`, calls `format_alloc(Format::Plain)`, splits the
+  result on `\n`, takes the last `mode.lines.unwrap_or(40)` rows, and reads
+  the cursor position via `terminal.cursor_x()` / `terminal.cursor_y()`;
+  replies on the oneshot with a `SnapshotResponse` carrying the rendered tail
+  and cursor coordinates
+- **AND** the look implementation returns
+  `LookSnapshotPayload::Lines { snapshot_lines }`
 
-#### Scenario: Pty shutdown closes PTY master and reaps child
+#### Scenario: Pty shutdown kills the child before joining transport threads
 
 - **WHEN** the relay calls `TransportImpl::Pty(t).shutdown()`
 - **THEN** the transport publishes `WorkerReadinessState::Unavailable`
-- **AND** closes the PTY master (causing the reader thread to exit)
-- **AND** sends SIGTERM to the child, waits a short grace period, then
-  SIGKILL if the child has not exited
-- **AND** reaps the child via `child.wait()`
-- **AND** drops the shared `PtyState`, releasing the terminal and render state
+- **AND** sets `shutdown_flag = true` so the worker thread observes
+  the shutdown on its next loop iteration and exits cleanly
+- **AND** calls `child.kill()` followed by `child.wait()` on the child
+  handle the transport itself holds, BEFORE joining the reader
+  thread or the worker thread
+- **AND** joins the reader thread handle
+- **AND** joins the worker thread handle
+- **AND** clears the relay's reference handles (`write_tx`,
+  `bytes_tx`, child / reader / worker thread handles); the
+  transport itself owns `self.shared` until the `PtyTransport`
+  is dropped
+- **AND** for a direct long-running silent child (one that did
+  not spawn descendants inheriting the PTY slave fd), `shutdown`
+  completes without waiting for the child's natural exit — the
+  child is killed before any join. The regression test
+  `pty_transport_shutdown_returns_within_bound_for_live_silent_child`
+  asserts this direct-child case (5 s upper bound with a strict
+  < 1 s expectation) as evidence of the implemented behavior.
+
+> **Spec-alignment note (2026-07-16):** the live contract is
+> deliberately scoped to the direct-child path the implementation
+> controls. The `child.kill()` + `child.wait()` sequence is
+> sequenced BEFORE the reader + worker joins, so the direct-child
+> case completes without waiting for the child's natural exit.
+> The implementation does NOT enforce a universal bound: a child
+> that spawned descendants inheriting the PTY slave fd (or any
+> external process keeping the slave open) is outside the
+> transport's control and is not part of the contract. The
+> `pty_transport_shutdown_returns_within_bound_for_live_silent_child`
+> test exercises the direct-child path; descendant-held slave fds
+> are outside the bounded guarantee.
 
 ### Requirement: Generalized Wedge/Prime State Machine
 

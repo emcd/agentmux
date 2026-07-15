@@ -280,12 +280,19 @@
       `src/relay/`. Mirror ACP's wiring:
       - `Initializing` (briefly, between worker spawn and first
         effect-handler registration).
-      - `Available` on successful `startup`.
+      - `Available` on successful `startup` (after `Terminal::new`
+        + handler install, via the init-result handshake).
       - `Busy` while a flush group is in flight (delivery task
         owns the writer).
       - `Unavailable` on `SendOutcome::Failed` with
-        `reason_code = "pane_wedged"`, or on child exit.
-      - `Recovering` on respawn-after-child-exit.
+        `reason_code = "pane_wedged"`, or on child exit
+        (latched: once observed, the worker does NOT return to
+        `Available` until restart).
+      - `Recovering` on respawn-after-child-exit **deferred** —
+        requires a respawn monitor that does not yet exist on Pty;
+        the live `WorkerReadinessState` enum retains the variant
+        for ACP + future Pty use; the emission path lands with the
+        bootstrap-side wiring follow-up (`todos/pty/3`).
 
 ## 9. Unit tests
 

@@ -31,9 +31,16 @@ A coder-backed `[[sessions]]` entry SHALL carry:
 - required `coder` reference (must resolve to a `[[coders]]` entry)
 - optional `coder-session-id`
 
-The session's transport (tmux pane injection vs. ACP worker delivery) SHALL be
-derived from the referenced coder's descriptor (`[coders.tmux]` vs.
-`[coders.acp]`); the session entry SHALL NOT restate the transport.
+The session's transport SHALL be derived from the referenced coder's
+descriptor:
+
+- `[coders.tmux]` → Tmux-backed coder delivery (existing)
+- `[coders.acp]` → ACP-backed coder delivery (existing)
+- `[coders.pty]` → Pty-backed coder delivery via libghostty-vt + portable-pty
+  (new in `add-pty-transport`)
+
+The session entry SHALL NOT restate the transport; the coder descriptor is
+authoritative.
 
 A coder-less `[[sessions]]` entry SHALL declare exactly one `[sessions.ui]` or
 `[sessions.pubsub]` marker subtable, which SHALL carry no required fields
@@ -48,6 +55,7 @@ Coder definitions SHALL include target descriptors in `coders.toml`:
   - exactly one target descriptor table:
     - `[coders.tmux]`
     - `[coders.acp]`
+    - `[coders.pty]`
 
 Descriptor fields SHALL be:
 
@@ -62,6 +70,15 @@ Descriptor fields SHALL be:
   - for `channel = "stdio"`: required `command`
   - for `channel = "http"`: required `url`; optional `headers` entries
     (`name`, `value`)
+- `[coders.pty]` (new in `add-pty-transport`):
+  - required `initial-command`
+  - required `resume-command`
+  - optional `prompt-regex`
+  - optional `prompt-inspect-lines`
+  - optional `prompt-idle-column`
+  - optional `cols` (default 120) and `rows` (default 40)
+  - optional `prime-timeout-ms`
+  - optional `wedge-detection` (default `true`)
 
 ACP lifecycle selection constraints:
 
@@ -71,6 +88,17 @@ ACP lifecycle selection constraints:
   `session/new` for that session.
 - if ACP `session/load` fails, runtime SHALL fail that session and SHALL NOT
   silently fall back to `session/new`.
+
+Pty and Tmux lifecycle selection constraints:
+
+- if a coder-backed session includes `coder-session-id` and the coder defines
+  `[coders.pty]` (Pty) or `[coders.tmux]` (Tmux), the runtime SHALL construct
+  the resume command by substituting `{coder-session-id}` into the
+  `resume-command` template.
+- if the coder-backed session omits `coder-session-id`, the runtime SHALL
+  use the `initial-command` template.
+- if the template substitution leaves an unresolved placeholder, the
+  validator SHALL reject the configuration during load.
 
 Routing and delivery SHALL use session `id` values.
 Bundle identity SHALL be derived from bundle filename (`<bundle-id>.toml`).
@@ -92,6 +120,17 @@ Bundle identity SHALL be derived from bundle filename (`<bundle-id>.toml`).
 - **THEN** the system loads configuration successfully
 - **AND** the session is routed via the ACP transport
 
+#### Scenario: Load valid Pty-backed session configuration
+
+- **WHEN** bundle and coders files use `format-version = 1`
+- **AND** a session entry declares a flat `coder` reference
+- **AND** the referenced coder defines `[coders.pty]` with
+  `initial-command` and `resume-command`
+- **THEN** the system loads configuration successfully
+- **AND** the session is routed via the Pty transport
+- **AND** the Pty transport spawns the child under a portable-pty master
+  sized to the per-coder `cols` and `rows` (defaults 120 x 40)
+
 #### Scenario: Reject session with neither coder nor marker
 
 - **WHEN** a bundle session entry declares no `coder` reference and no
@@ -103,6 +142,13 @@ Bundle identity SHALL be derived from bundle filename (`<bundle-id>.toml`).
 - **WHEN** a bundle session entry declares a `coder` reference and also a
   `[sessions.ui]` or `[sessions.pubsub]` marker subtable
 - **THEN** relay rejects configuration with a structured config error
+
+#### Scenario: Reject coder declaring both Pty and Tmux target descriptors
+
+- **WHEN** a `[[coders]]` entry declares both `[coders.pty]` and
+  `[coders.tmux]` subtables
+- **THEN** the validator rejects the configuration with a structured config
+  error
 
 ### Requirement: Bundle Reconciliation
 
@@ -171,6 +217,8 @@ delivery time using session type from config:
 
 - `tmux` sessions: prompt-injection/quiescence delivery path
 - `acp` sessions: ACP worker delivery path
+- `pty` sessions: native PTY delivery path via libghostty-vt + portable-pty
+  (new in `add-pty-transport`)
 - `ui` sessions: stream push event delivery path
 - `pubsub` sessions: embedded callback delivery path
 
@@ -190,11 +238,14 @@ Session `name` remains informational metadata only and is not send-routable.
 - **WHEN** a caller sends a message to target `session_id`
 - **THEN** the system routes to that session using its configured session type
 - **AND** resolves the appropriate delivery endpoint for that type
+- **AND** the resolution distinguishes `tmux`, `acp`, `pty`, `ui`, and `pubsub`
+  delivery endpoints
 
 #### Scenario: Reject configured name alias as explicit send target
 
-- **WHEN** a caller sends using a session `name` value as explicit target
-- **THEN** relay rejects the target as unresolvable
+- **WHEN** a caller sends a message to a configured `name` alias rather than
+  the canonical `session_id`
+- **THEN** the relay rejects the request with a validation error
 
 ### Requirement: JSON Send Envelope
 
@@ -383,26 +434,41 @@ A prompt-readiness template SHALL support:
 - `input_idle_cursor_column` (optional)
 
 `prompt_regex` SHALL be evaluated against a multiline string built from the
-inspected non-empty tail lines of pane output.
+inspected non-empty tail lines of pane output. The "pane output" source is
+transport-specific: Tmux reads from `capture-pane`; Pty reads from
+`Formatter::format_alloc(Format::Plain)` via the `PtyOutputView` look path.
 
 When `input_idle_cursor_column` is configured, relay SHALL treat the target as
-prompt-ready only when tmux reports `cursor_x` at that configured column.
+prompt-ready only when the transport reports the cursor at that configured
+column. For Tmux, this is `tmux display-message -p`; for Pty, this is
+`Terminal::cursor_x()`.
 
-Prompt-readiness SHALL be evaluated against the target pane's live content.
-`capture-pane` and `cursor_x` report the pane's underlying grid rather than any
-copy-mode overlay, so prompt-readiness — and therefore every classification
-derived from it — is unaffected by whether an operator has scrolled the pane
-into copy-mode. The `input_idle_cursor_column` guard remains the mechanism for
-"do not inject while the user is mid-keystroke"; it reads live cursor state and
-is independent of copy-mode.
+Wedge detection defaults to enabled for both Tmux-backed and Pty-
+backed sessions (the operator MAY opt out per coder via
+`[coders.<id>.{tmux,pty}].wedge-detection = false`). When wedge
+detection is enabled and the pane settles at a non-prompt-ready
+state, the coder transport SHALL classify the flush group as
+`wedged` rather than waiting indefinitely. The wedge detection knob
+is independent of the prompt-readiness template configuration.
 
-Wedge detection defaults to enabled for all Tmux-backed sessions (the
-operator MAY opt out per coder via
-`[coders.<id>.tmux].wedge-detection = false`). When wedge detection is
-enabled and the pane settles at a non-prompt-ready state, the Tmux
-transport SHALL classify the flush group as `wedged` rather than waiting
-indefinitely. The wedge detection knob is independent of the
-prompt-readiness template configuration.
+The wedge classifier is the same `Wedged` outcome for both Tmux
+and Pty: `SendOutcome::Failed` + `reason_code = "pane_wedged"`
+after `WEDGE_CONSECUTIVE_TICKS` (3) identical wedge-class
+evaluations, OR when the prime window has elapsed with a wedge-
+class mismatch observed. Per-transport knobs and Pty-specific
+wedge scenarios live under the `Pty Wedged State Detection`
+requirement; per-transport knobs live under the cross-cutting
+`Pty Prime Timeout` requirement.
+
+> **Re-scoped 2026-07-15 against the post-`remove-operator-
+> interaction-delivery-gate` archive (master `2708884`).** The
+> prior draft included a per-transport "Operator-interaction
+> semantics differ between transports" subsection + three
+> `operator_interaction_active`-conditional scenarios (Tmux
+> silence, Pty always-false, Pty-doesn't-consult). All three
+> are obsolete after the upstream copy-mode gate was retired
+> (issues/relay/52). Pty wedge scenarios moved to the `Pty
+> Wedged State Detection` ADDED requirement.
 
 #### Scenario: Deliver when prompt-readiness template matches
 
@@ -423,7 +489,7 @@ prompt-readiness template configuration.
   `input_idle_cursor_column`
 - **AND** pane output is quiescent
 - **AND** `prompt_regex` matches inspected pane tail text
-- **AND** tmux-reported `cursor_x` equals configured
+- **AND** the transport-reported cursor position equals configured
   `input_idle_cursor_column`
 - **THEN** relay injects the message
 
@@ -433,46 +499,47 @@ prompt-readiness template configuration.
   `input_idle_cursor_column`
 - **AND** pane output is quiescent
 - **AND** `prompt_regex` matches inspected pane tail text
-- **AND** tmux-reported `cursor_x` differs from configured
+- **AND** the transport-reported cursor position differs from configured
   `input_idle_cursor_column`
 - **THEN** relay does not inject the message
 - **AND** relay continues waiting until wedge detection fires (when
   enabled), prime timeout fires (when enabled), or relay shuts down
 
-#### Scenario: Deliver to a pane the operator has scrolled into copy-mode
+#### Scenario: Time out when quiescent pane never becomes prompt-ready
 
-- **WHEN** the target pane is in tmux copy-mode (for example, the operator
-  scrolled it with the mouse wheel)
-- **AND** the pane's live content is prompt-ready
-- **THEN** relay injects the message
-- **AND** the pane remains in copy-mode with the operator's scroll position
-  undisturbed
+- **WHEN** target member has a prompt-readiness template
+- **AND** `[coders.<id>.{tmux,pty}].prime-timeout-ms` is set to a
+  finite millisecond value
+- **AND** pane output never begins flowing within the prime window
+- **THEN** the transport resolves the flush group as
+  `SendOutcome::Timeout`
+- **AND** relay does not inject the message
 
 #### Scenario: Classify as wedged when settled pane is not prompt-ready (default-on)
 
 - **WHEN** target member has a prompt-readiness template
-- **AND** `[coders.<id>.tmux].wedge-detection` is not disabled (it
+- **AND** the coder defines `[coders.<id>.tmux]` or
+  `[coders.<id>.pty]` with `wedge-detection` not disabled (it
   defaults to enabled)
 - **AND** pane output reaches quiescence
 - **AND** template matching conditions are not true
-- **THEN** the Tmux transport resolves the flush group as
+- **THEN** the coder transport resolves the flush group as
   `SendOutcome::Failed` with `reason_code = "pane_wedged"`
 - **AND** relay does not inject the message
 
-#### Scenario: Classify as unresponsive when prime window elapses
+#### Scenario: Deliver to a pane the operator has scrolled into copy-mode
 
-- **WHEN** target member has a prompt-readiness template
-- **AND** `[coders.<id>.tmux].prime-timeout-ms` is set to a finite
-  millisecond value
-- **AND** pane output never begins flowing within the prime window
-- **THEN** the Tmux transport resolves the flush group as
-  `SendOutcome::Timeout`
-- **AND** relay does not inject the message
+- **WHEN** the target pane is in tmux copy-mode (for example, the
+  operator scrolled it with the mouse wheel)
+- **AND** the pane's live content is prompt-ready
+- **THEN** relay injects the message
+- **AND** the pane remains in copy-mode with the operator's scroll
+  position undisturbed
 
 #### Scenario: Wedge detection opt-out preserves prior behavior
 
 - **WHEN** target member has a prompt-readiness template
-- **AND** `[coders.<id>.tmux].wedge-detection = false`
+- **AND** `[coders.<id>.{tmux,pty}].wedge-detection = false`
 - **AND** pane output reaches quiescence
 - **AND** template matching conditions are not true
 - **THEN** relay continues waiting until the pane becomes
@@ -3142,7 +3209,7 @@ stored as fields on the entry:
 - `can_be_written` — the session can be targeted by `raww` (its transport
   supports raw input injection)
 - `can_stream_output` — the session's transport natively produces live
-  output chunks (ACP and PTY stream output natively; Tmux requires periodic
+  output chunks (ACP and Pty stream output natively; Tmux requires periodic
   polling)
 - `can_give_choices` — the session's transport can surface choice requests
   (the transport produces ACP-style option arrays for operator/UI resolution).
@@ -3166,9 +3233,11 @@ targets.
 | `Ui`      | false          | false           | false              | false              |
 | `Pubsub`  | false          | false           | false              | false              |
 
-The `Pty` row is normative and forward-looking: no `Pty` session type exists in
-the current implementation, but it remains the expected long-term replacement
-for tmux-backed prompt injection.
+The `Pty` row is normative: Pty is a populated transport (per
+`add-pty-transport`) and a coder-backed session whose coder defines
+`[coders.<id>.pty]` derives `SessionType::Pty` with this capability row.
+Bundle entries with `[coders.<id>.pty]` participate in `look` and `raww`
+operations under the same capability checks as Tmux-backed entries.
 
 `can_stream_output` is advertised on registration; streaming look semantics that
 consume it are deferred to a follow-on proposal.
@@ -3195,13 +3264,13 @@ targets and relay-wide targets.
 #### Scenario: Permit look against session with can_be_looked true
 
 - **WHEN** a `look` request resolves to a target whose `SessionType` derives
-  `can_be_looked = true`
+  `can_be_looked = true` (Tmux, ACP, or Pty)
 - **THEN** relay proceeds to authorization policy evaluation
 
 #### Scenario: Permit raww against session with can_be_written true
 
 - **WHEN** a `raww` request resolves to a target whose `SessionType` derives
-  `can_be_written = true`
+  `can_be_written = true` (Tmux, ACP, or Pty)
 - **THEN** relay proceeds to authorization policy evaluation
 
 #### Scenario: ACP session advertises can_give_choices true
@@ -3212,6 +3281,11 @@ targets and relay-wide targets.
 #### Scenario: Tmux session advertises can_give_choices false
 
 - **WHEN** a Tmux-backed session registers with the relay
+- **THEN** its entry's `SessionType` derives `can_give_choices = false`
+
+#### Scenario: Pty session advertises can_give_choices false
+
+- **WHEN** a Pty-backed session registers with the relay
 - **THEN** its entry's `SessionType` derives `can_give_choices = false`
 
 ### Requirement: Unified Namespace-Keyed Session Registry
@@ -3751,4 +3825,191 @@ child's ability to receive input, do not affect what `capture-pane` and
 - **THEN** the body is delivered as bracketed paste
 - **AND** the target treats the embedded newlines as literal content rather
   than as submit keystrokes
+
+### Requirement: Pty Prime Timeout
+
+The system SHALL surface a config-surfaced prime timeout knob for Pty-backed
+sessions, applied as the `prime-timeout-ms` TOML key under the per-coder
+`[coders.<id>.pty]` table (no `pty-` prefix; the table itself namespaces the
+key). The knob SHALL bound the time the Pty transport waits, during the
+quiescence wait for a flush group, for the target to produce observable output
+before classifying the flush group as `unresponsive`. The knob is **opt-in**:
+when absent or `None`, the Pty transport preserves the unbounded behavior
+inherited from the shared wedge/prime state machine.
+
+The Pty prime timeout SHALL be communicated from the relay to the Pty transport
+through the same generic `DeliveryEnvelope.prime_timeout_ms: Option<u64>` field
+introduced by `tmux-wedge-detection`. The relay populates this field from
+`[coders.<id>.pty].prime-timeout-ms` at envelope construction time. The field
+is generic across transports: the relay does not know which transport will
+consume it; ACP's wedge-companion proposal populates the same field for ACP
+sessions.
+
+The prime timer semantics for Pty follow the merged `tmux-wedge-detection`
+proposal:
+
+- The prime timer SHALL start at the moment the Pty transport's internal
+  delivery task begins the quiescence wait for a flush group.
+- The prime timer SHALL NOT reset on coalesce-during-wait when new envelopes
+  are absorbed into the flush group during the prime window.
+- The prime timer SHALL fire when the prime window has elapsed with no
+  observable output from the target, regardless of any rendering-state
+  signal; Pty has no operator-interaction concept that suppresses
+  classification (the upstream copy-mode gate was retired by
+  `remove-operator-interaction-delivery-gate`, archived 2026-07-15).
+  Copy-mode and other rendering states do not impede injection or
+  affect what `cursor_x` and `capture-pane`-style probes report; the
+  prime timer always measures observable output, not rendering state.
+
+When the prime timer fires for a Pty target (no observable output within the
+prime window), the Pty transport SHALL resolve every sender in the flush group
+with `SendOutcome::Timeout`. The `Timeout` outcome SHALL remain a distinct
+terminal outcome and SHALL NOT be collapsed into `Failed`. The accept-time
+async response for the originating send remains `queued`; the terminal
+`Timeout` resolution is recorded per `Async Delivery Observability` and is
+not returned to the synchronous caller.
+
+> **Spec-alignment note (2026-07-16):** the prior wording
+> "The relay worker SHALL propagate that outcome to the MCP/CLI caller"
+> was an un-implemented in-band caller-propagation clause that was
+> mirrored from the Tmux Prime Timeout requirement; it is removed from
+> the Pty Prime Timeout delta for symmetry. The
+> `Timeout`-distinct-from-`Failed` invariant is preserved as the
+> shipped Pty behavior; an async sender-receipt surface for `Timeout`
+> (and `Wedged` / `dropped_on_shutdown`) is not in Pty's surface
+> today.
+
+#### Scenario: Pty prime timeout fires on unresponsive target
+
+- **WHEN** the bundle config sets `[coders.<id>.pty].prime-timeout-ms` to a
+  finite millisecond value
+- **AND** the Pty transport's internal delivery task begins the quiescence
+  wait for a flush group
+- **AND** the target produces no observable output before the prime window
+  elapses
+- **THEN** every sender in the flush group receives `SendOutcome::Timeout`
+- **AND** no message is injected into the PTY
+
+#### Scenario: Pty prime timeout defaults preserve unbounded behavior
+
+- **WHEN** the bundle config does not set
+  `[coders.<id>.pty].prime-timeout-ms` (or sets it to `None`)
+- **THEN** the Pty transport does not classify any flush group as
+  `unresponsive`
+- **AND** the only terminal failure modes for a flush group are `Failed` +
+  `reason_code = "pane_wedged"` (when wedge detection is enabled, the
+  default) and `Shutdown`
+
+### Requirement: Pty Wedged State Detection
+
+The system SHALL surface a config-surfaced wedge detection knob for Pty-backed
+sessions, applied as the `wedge-detection` boolean TOML key under the per-coder
+`[coders.<id>.pty]` table. The knob SHALL classify a settled, non-prompt-ready
+pane as `wedged` via the shared wedge/prime state machine in
+`src/transports/quiescence.rs`.
+
+Wedge detection defaults to **enabled** (`true`) for Pty, matching the merged
+`tmux-wedge-detection` rationale (cost of a silently-wedged pane is higher
+than cost of a false-positive wedge). Operators MAY opt out by setting
+`[coders.<id>.pty].wedge-detection = false`. The opt-out preserves the
+unbounded-wait behavior.
+
+A wedge detection SHALL fire when wedge detection is enabled and the Pty
+transport observes, during the quiescence wait for a flush group:
+
+- the pane output has been quiescent for at least one quiet window (probe
+  `observe()` returns `is_prompt_ready = false` and the
+  `activity_generation` field has not advanced since the previous
+  observation)
+- the prompt-readiness template does NOT match the inspected pane tail
+  (formatter `format_alloc(Format::Plain)` tail text does not match
+  `prompt_regex`)
+
+When wedge detection fires, the Pty transport SHALL resolve every sender in
+the flush group with `SendOutcome::Failed` and `reason_code = "pane_wedged"`.
+The classification SHALL be sticky: once the flush group is classified as
+wedged, the transport SHALL NOT re-evaluate across coalesce iterations.
+Per-message wedge deadlines within a flush group are out of scope.
+
+#### Scenario: Pty wedge fires on settled non-prompt-ready pane (default-on)
+
+- **WHEN** the bundle config does not set
+  `[coders.<id>.pty].wedge-detection` (or sets it to `true`)
+- **AND** the Pty transport's quiescence wait observes the pane becomes
+  quiescent
+- **AND** the prompt-readiness template does not match the inspected pane
+  tail (read via `Formatter::format_alloc(Format::Plain)`)
+- **THEN** every sender in the flush group receives `SendOutcome::Failed`
+  with `reason_code = "pane_wedged"`
+- **AND** no message is injected into the PTY
+
+#### Scenario: Pty wedge detection opt-out preserves unbounded behavior
+
+- **WHEN** the bundle config sets `[coders.<id>.pty].wedge-detection = false`
+- **THEN** the Pty transport continues to wait past quiescence until the
+  pane becomes prompt-ready or the relay shuts down
+- **AND** the only terminal failure modes for the flush group are `Timeout`
+  (if prime timeout is enabled and fires) and `Shutdown`
+
+#### Scenario: Pty wedge is sticky across coalesce iterations
+
+- **WHEN** the Pty transport's quiescence wait classifies a flush group as
+  `wedged`
+- **AND** new envelopes are absorbed into the flush group via
+  coalesce-during-wait before the wedge classification propagates
+- **THEN** every sender in the enlarged flush group receives the same wedge
+  outcome (`Failed` + `reason_code = "pane_wedged"`)
+- **AND** the transport does NOT re-evaluate wedge state across coalesce
+  iterations
+
+### Requirement: Pty Default Per-Coder Dimensions
+
+The system SHALL provide per-coder default grid dimensions for Pty-backed
+sessions, applied as the `cols` and `rows` TOML keys under the per-coder
+`[coders.<id>.pty]` table. Both keys default to:
+
+- `cols = 120`
+- `rows = 40`
+
+The Pty transport SHALL spawn the child under a `portable_pty` master sized to
+these dimensions and construct `libghostty_vt::Terminal::new(TerminalOptions
+{ cols, rows, max_scrollback: 10_000 })` with the same dimensions. Runtime
+resize (via a future `agentmux resize <session> <cols> <rows>` command) is
+out of scope for `add-pty-transport` and deferred to a follow-up proposal.
+
+`look()` SHALL return `LookSnapshotPayload::Lines { snapshot_lines }` from
+`Formatter::format_alloc(Format::Plain)` truncated to the consumer's
+`LookMode.lines`. The terminal's actual grid may be any size (post-resize or
+post-reflow); the consumer asks for what it wants. There is no requirement
+that the relay-tui consumer's viewport match the Pty-backed session's grid
+dimensions; multi-viewer dimension reconciliation is out of scope for
+`add-pty-transport` and deferred to a follow-up proposal.
+
+> **Spec-alignment note (2026-07-16, Pty archive):** the prior wording
+> "SHALL call `Terminal::resize(cols, rows, 0, 0)` once at startup" is
+> removed; the shipped Pty transport constructs the terminal at the
+> configured dimensions and never calls `Terminal::resize`. The
+> `cols` / `rows` keys continue to drive the `portable_pty` master size
+> + the initial `TerminalOptions`. A future proposal may add a runtime
+> resize path if needed.
+
+#### Scenario: Pty spawns at per-coder default dims
+
+- **WHEN** the bundle config does not set `[coders.<id>.pty].cols` or `.rows`
+  (or sets them to the default values)
+- **THEN** the Pty transport spawns the child under a 120 x 40 PTY master
+- **AND** constructs `libghostty_vt::Terminal` with `cols = 120, rows = 40`
+
+#### Scenario: Pty honors explicit per-coder dims
+
+- **WHEN** the bundle config sets `[coders.<id>.pty].cols = 200` and
+  `.rows = 60`
+- **THEN** the Pty transport spawns the child under a 200 x 60 PTY master
+- **AND** constructs `libghostty_vt::Terminal` with `cols = 200, rows = 60`
+
+#### Scenario: Pty rejects zero-dimension config
+
+- **WHEN** the bundle config sets `[coders.<id>.pty].cols = 0` or `.rows = 0`
+- **THEN** the validator rejects the configuration with a structured config
+  error during load
 
