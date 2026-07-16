@@ -1223,6 +1223,7 @@ fn pty_transport_mailw_during_raww_wait_is_not_dropped() {
         choice_decider_sessions: Vec::new(),
         quiet_window: Duration::from_millis(50),
         prime_timeout_ms: Some(2000),
+        is_receipt: false,
     };
     let mailw_outcome = transport.mailw(envelope);
 
@@ -2420,6 +2421,7 @@ fn pty_transport_wedge_publishes_unavailable_via_mirror() {
         choice_decider_sessions: Vec::new(),
         quiet_window: Duration::from_millis(50),
         prime_timeout_ms: Some(2000),
+        is_receipt: false,
     };
 
     let outcome_rx = transport.mailw(envelope);

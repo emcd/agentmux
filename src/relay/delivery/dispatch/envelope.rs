@@ -16,6 +16,7 @@
 //! here so the transport builder is self-contained.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -181,26 +182,41 @@ fn noop_tmux_chooser() -> Chooser {
 /// `AcpTargetConfiguration.prime_timeout_ms` for ACP sessions
 /// (`[coders.<id>.acp].prime-timeout-ms`). Each transport consumes the same
 /// generic envelope field; no transport-prefixed envelope field is introduced.
+///
+/// For terminal-outcome receipts addressed to an ACP sender the envelope's
+/// `quiet_window` is forced to zero, satisfying the
+/// "receipt-bypasses-quiescence" invariant on ACP. ACP ignores `quiet_window`
+/// today, but the construction is explicit at the relay so the invariant
+/// holds regardless of whether the ACP transport starts honoring it in a
+/// future change. Receipts addressed to Tmux/Pty senders keep the default
+/// async quiet-window so the per-transport quiescence behavior is unchanged
+/// for those senders.
 pub(super) fn build_coder_envelope(
     task: &AsyncDeliveryTask,
     message: DeliveryMessage,
 ) -> DeliveryEnvelope {
-    let prime_timeout_ms = match resolve_target_member(task) {
+    let (prime_timeout_ms, target_is_acp) = match resolve_target_member(task) {
         Ok(Some(member)) => match &member.target {
-            TargetConfiguration::Tmux(tmux_target) => tmux_target.prime_timeout_ms,
-            TargetConfiguration::Acp(acp_target) => acp_target.prime_timeout_ms,
-            TargetConfiguration::Pty(pty_target) => pty_target.prime_timeout_ms,
-            TargetConfiguration::Ui | TargetConfiguration::Pubsub => None,
+            TargetConfiguration::Tmux(tmux_target) => (tmux_target.prime_timeout_ms, false),
+            TargetConfiguration::Acp(acp_target) => (acp_target.prime_timeout_ms, true),
+            TargetConfiguration::Pty(pty_target) => (pty_target.prime_timeout_ms, false),
+            TargetConfiguration::Ui | TargetConfiguration::Pubsub => (None, false),
         },
-        _ => None,
+        _ => (None, false),
+    };
+    let quiet_window = if task.is_receipt && target_is_acp {
+        Duration::ZERO
+    } else {
+        task.quiescence.quiet_window
     };
     DeliveryEnvelope {
         message_id: task.message_id.clone(),
         message,
         append_enter: true,
         choice_decider_sessions: task.choice_decider_sessions.clone(),
-        quiet_window: task.quiescence.quiet_window,
+        quiet_window,
         prime_timeout_ms,
+        is_receipt: task.is_receipt,
     }
 }
 
@@ -407,6 +423,7 @@ pub(super) fn build_ui_envelope(task: &AsyncDeliveryTask) -> DeliveryEnvelope {
         choice_decider_sessions: task.choice_decider_sessions.clone(),
         quiet_window: task.quiescence.quiet_window,
         prime_timeout_ms: None,
+        is_receipt: task.is_receipt,
     }
 }
 
