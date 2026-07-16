@@ -29,11 +29,15 @@ choice-decider sessions on receipts, `DeliveryEnvelope.is_receipt` propagation
 through `build_coder_envelope`/`build_ui_envelope`, and the `src/acp/README.md`
 receipt-rendering section. Reviewed and approved by Reviewer General.
 
+Phase 2 (Pty portion) landed at `4fa89a0` (merged `7716815`): the pty-write
+receipt marker line and the `src/pty/README.md` section — see the dedicated
+write-up below.
+
 Still deferred (not blocking; the core is unbroken and functional):
-- **2.3 Tmux/Pty portions + 5.1b Tmux/Pty portions** — explicit Tmux/Pty
-  receipt marker line via the existing pane-envelope renderer, and the
-  matching transport README updates. Route to the Pty specialist (Tmux has no
-  dedicated specialist lane currently — open question).
+- **2.3 Tmux portion + 5.1b Tmux portion** — the same receipt marker line for
+  Tmux pane rendering, and the matching transport README update. No
+  Tmux-specialist lane exists currently; this is an open question for the
+  operator rather than a dispatchable task today.
 - **4.4 dedicated non-recursion test** — non-recursion is enforced structurally
   (the `is_receipt` gate is the first check at the single spawn site) and is
   exercised at runtime by the delivered receipt in the regression test; a
@@ -102,11 +106,8 @@ Deferred (not in the Pty slice):
 - **2.3 Tmux marker line** — the same `RECEIPT_MARKER` line for tmux pane
   rendering. No Tmux-specialist lane exists currently; flag back to
   Coordinator/operator separately rather than silently dropping it.
-- **2.3 ACP rendering** — the flush-barrier / zero quiet-window / no
-  choice-decider behaviors the ACP transport must implement for receipts.
-  Route to the ACP specialist.
-- **5.1b ACP / Tmux README updates** — matching transport READMEs for the
-  ACP and Tmux receipt-rendering polish.
+- **5.1b Tmux README update** — the matching transport README for the Tmux
+  receipt-rendering polish.
 - **4.4 dedicated non-recursion test** — non-recursion is enforced
   structurally (the `is_receipt` gate is the first check at the single spawn
   site) and is exercised at runtime by the delivered receipt in the
