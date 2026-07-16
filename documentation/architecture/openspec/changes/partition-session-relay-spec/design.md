@@ -3,7 +3,7 @@
 ## Context
 
 `openspec/specs/session-relay/spec.md` was the single OpenSpec capability
-spec for the relay operation surface -- the largest live capability (94
+spec for the relay operation surface -- the largest live capability (97
 requirements) and the destination for the majority of archived changes.
 Reviewers comparing or extending related clauses had to scan all 3771
 lines; the 3000-line separation between the async-only submit requirement
@@ -12,7 +12,7 @@ self-contradiction slip through review. Length hides defects.
 
 ## Goal
 
-Reorganize the 94 requirements into capability-scoped sibling specs without
+Reorganize the 97 requirements into capability-scoped sibling specs without
 altering their normative content. Each reviewer of a future change should
 be able to read the relevant partition spec (typically 7-27 requirements)
 instead of scanning the full file.
@@ -24,7 +24,7 @@ instead of scanning the full file.
   documenting the partition index is a meta-requirement about the spec
   itself, not the relay domain).
 - No deletion of any requirement (per `## REMOVED Requirements` semantics;
-  all 94 are relocated, none retired).
+  all 97 are relocated, none retired).
 - No change to the OpenSpec change schema or workflow.
 - No compression or deduplication of requirement text in this pass. The
   dispatch says compress, but in-scope compression would change semantics;
@@ -81,12 +81,17 @@ punctuation drift.
 
 ### D5 -- Atomic active-change migration
 
-Seven active OpenSpec changes (`add-container-sandboxing`,
-`add-do-action-tool`, `add-pty-transport`,
+Six active OpenSpec changes (`add-container-sandboxing`,
+`add-do-action-tool`,
 `add-about-surface-and-description-fields`, `deliver-async-terminal-outcomes`
 [relay/53], `embeddable-runtime-api`, `add-e2e-test-harness`) have delta
-specs at `<change>/specs/session-relay/spec.md`. Without atomic migration,
-those delta spec paths are stale as soon as this change lands on master,
+specs at `<change>/specs/session-relay/spec.md`. (`add-pty-transport`
+was the seventh; it archived at `774f116` between this change's
+base `44d59dd` and the rebased base `392de8b`, so its delta spec
+now lives at `archive/2026-07-15-add-pty-transport/specs/`. Its 3
+ADDED requirements are part of the 97-requirement session-relay
+base; no migration needed.) Without atomic migration,
+the six active delta spec paths are stale as soon as this change lands on master,
 and a later archive by any of those changes would attempt to apply the
 delta to the now-empty session-relay hub -- breaking or, worse, silently
 repopulating the hub with the moved requirements.
@@ -106,7 +111,7 @@ Rationale:
 - The OpenSpec `opsx-sync` workflow expects delta specs to add/remove
   requirements in the main spec. With the live specs already split, a
   normal `openspec archive partition-session-relay-spec` would attempt to
-  ADD the 94 requirements to the partition specs (which already have them)
+  ADD the 97 requirements to the partition specs (which already have them)
   and fail with `already exists` errors.
 - The split is a one-time refactor; the delta specs in
   `<change>/specs/` are kept as descriptive documentation of the move but

@@ -2,24 +2,29 @@
 
 ## Why
 
-`openspec/specs/session-relay/spec.md` is 3771 lines containing 94 normative
-requirements spanning addressing, delivery, transport, authorization, look,
-stream events, choice, bundle lifecycle, and environment variables. The length
-actively hides defects: the `issues/relay/53` near-miss (async-only submit at
-L338-344 vs synchronous-propagation clause at L3347-3351) survived review
+`openspec/specs/session-relay/spec.md` is 4032 lines at master `392de8b`
+containing 97 base requirements (94 from `44d59dd` plus 3 ADDED by
+`add-pty-transport` archive at `774f116`: Pty Prime Timeout, Pty Wedged State
+Detection, Pty Default Per-Coder Dimensions) spanning addressing, delivery,
+transport, authorization, look, stream events, choice, bundle lifecycle, and
+environment variables. The length requirements spanning addressing, delivery,
+transport, authorization, look, stream events, choice, bundle lifecycle, and
+environment variables. The length actively hides defects: the `issues/relay/53`
+near-miss (async-only submit at L338-344 vs synchronous-propagation clause at
+L3347-3351) survived review
 because nothing forced a cross-check between clauses ~3000 lines apart. Long
 single-file specs accumulate redundancy and latent contradictions.
 
 Per the dispatch (`todos/general/31`, allocated to 0.10.0 housekeeping /
 tech-debt), the spec is partitioned by capability into 8 sibling specs under
 `openspec/specs/`. Each requirement moves verbatim: byte-for-byte text
-preservation across all 94 blocks (sha256-verified). The original
+preservation across all 97 blocks (sha256-verified). The original
 `session-relay/spec.md` becomes a hub file: a partition index + archive-order
 safety notes + a single new hub requirement documenting the split.
 
 ## What Changes
 
-- **Remove** all 94 requirements from `openspec/specs/session-relay/spec.md`.
+- **Remove** all 97 requirements from `openspec/specs/session-relay/spec.md`.
 - **Add** 1 hub requirement to `openspec/specs/session-relay/spec.md`:
   **`Session-Relay Specification Partition Index`** -- documents the
   partition structure and the path-migration obligation for active OpenSpec
@@ -31,7 +36,7 @@ safety notes + a single new hub requirement documenting the split.
     semantics, target resolution, list payloads, raww target resolution.
   - `delivery-quiescence` (7 requirements) -- send envelope, async queue
     lifecycle, terminal outcomes, ack semantics, relay/53 receipt.
-  - `transport-contracts` (23 requirements) -- per-transport execution
+  - `transport-contracts` (26 requirements) -- per-transport execution
     contracts (tmux, ACP, raww execution/input, Pty timeouts/wedge,
     ACP lifecycle mechanics, ACP transport error, transport capability,
     ACP/transport timeouts, copy-mode-transparent injection). Cross-cutting
@@ -56,7 +61,7 @@ The `runtime-api` partition is a future capability owned by the active
 `embeddable-runtime-api` change. Its 10 ADDED requirements will create
 `openspec/specs/runtime-api/spec.md` when that change archives; this
 partition change does not pre-create the live spec.
-- **Migrate** 7 active OpenSpec changes' delta spec paths from
+- **Migrate** 6 active OpenSpec changes' delta spec paths from
   `<change>/specs/session-relay/spec.md` to `<change>/specs/<partition>/
   spec.md`, atomically as part of this change. Each delta file is split
   per-requirement across the partitions its requirements target.
@@ -65,7 +70,7 @@ partition change does not pre-create the live spec.
   `transport-contracts` to match the new partition locations of Tmux Prime
   Timeout, Tmux Wedged State Detection, and Copy-Mode-Transparent Injection.
 
-All 94 moved requirements are reproduced **byte-for-byte** from the
+All 97 moved requirements are reproduced **byte-for-byte** from the
 pre-split text (verified via sha256 in
 `.auxiliary/scribbles/verify_split_v3.py`). The requirement title, body,
 and `#### Scenario:` blocks are unchanged.
@@ -73,10 +78,11 @@ and `#### Scenario:` blocks are unchanged.
 ## Impact
 
 - **Affected specs:**
-  - `session-relay` -- REMOVED 94, ADDED 1 (hub index).
+  - `session-relay` -- REMOVED 97, ADDED 1 (hub index).
   - `addressing-routing`, `delivery-quiescence`, `transport-contracts`,
-    `authorization-scope`, `look-and-stream-events`, `bundle-lifecycle`,
-    `environment-variables` -- ADDED their assigned requirements (verbatim).
+    `authorization-scope`, `look-and-stream-events`, `choice-decisions`,
+    `bundle-lifecycle`, `environment-variables` -- ADDED their assigned
+    requirements (verbatim).
   - `runtime-api` -- not affected; the live spec is created on
     `embeddable-runtime-api` archive.
   - `transport-abstraction` -- cross-references updated (3 lines).
@@ -87,13 +93,11 @@ and `#### Scenario:` blocks are unchanged.
   this change):
   - `add-container-sandboxing` -- 4 ADDED requirements split across
     `addressing-routing` and `environment-variables`.
-  - `add-do-action-tool` -- 4 ADDED requirements split across
-    `authorization-scope` and `transport-contracts`.
-  - `add-pty-transport` -- 4 MODIFIED + 3 ADDED requirements split across
-    `addressing-routing` and `transport-contracts`.
-  - `add-about-surface-and-description-fields` -- 4 ADDED requirements split
-    across `addressing-routing`, `transport-contracts`, and
-    `authorization-scope`.
+   - `add-do-action-tool` -- 4 ADDED requirements split across
+     `authorization-scope` and `transport-contracts`.
+   - `add-about-surface-and-description-fields` -- 4 ADDED requirements split
+     across `addressing-routing`, `transport-contracts`, and
+     `authorization-scope`.
   - `deliver-async-terminal-outcomes` (relay/53) -- 1 ADDED + 2 MODIFIED
     requirements split across `delivery-quiescence` and `transport-contracts`.
   - `embeddable-runtime-api` -- delta spec path migrated from
@@ -103,6 +107,19 @@ and `#### Scenario:` blocks are unchanged.
     ADD).
   - `add-e2e-test-harness` -- 1 MODIFIED requirement placed in
     `bundle-lifecycle`.
+
+  Note: `add-pty-transport` (the seventh change in the original
+  seven-change set) archived at `774f116` between this change's
+  base `44d59dd` and the rebased base `392de8b`. Its delta spec
+  now lives at `archive/2026-07-15-add-pty-transport/specs/`;
+  its 3 ADDED requirements (Pty Prime Timeout, Pty Wedged State
+  Detection, Pty Default Per-Coder Dimensions) are part of the
+  97-requirement session-relay base. The `transport-contracts`
+  partition now holds 26 requirements (23 base + 3 Pty), with
+  Pty's content placed alongside the Tmux cousins. No active-change
+  migration needed for add-pty-transport: the change is already
+  archived.
+
 - **Archive workflow:** this change applies the split directly to live
   specs rather than relying on the delta specs to do so at archive time.
   The delta specs in `<change>/specs/` are kept as descriptive documentation
