@@ -141,6 +141,17 @@ async fn run_async_delivery_worker(
 
     loop {
         if shutdown_requested() {
+            // Close this worker to new sends BEFORE draining. Another worker
+            // resolving a non-delivered outcome during its own shutdown routes a
+            // terminal-outcome receipt here via `try_existing_worker`; once the
+            // entry is marked closing, such a send bounces and is dropped
+            // best-effort rather than being accepted into a receiver we will no
+            // longer poll (an accept-after-drain race that would silently lose the
+            // receipt and its terminal inscription). The entry stays registered so
+            // the shutdown-barrier worker count still counts this still-draining
+            // worker; the final unregister below drops it. Anything already queued
+            // before this point is still drained.
+            super::super::async_worker::close_worker(&key);
             shutdown_drain(
                 transport.as_mut(),
                 &mut inflight,

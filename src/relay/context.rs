@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::configuration::BundleConfiguration;
+use crate::configuration::{BundleConfiguration, BundleMember};
 
 use super::identity::IdentityIntrospectRights;
 use super::{DeliveryPayloadMode, delivery::QuiescenceOptions};
@@ -73,4 +73,30 @@ pub(super) struct AsyncDeliveryTask {
     pub(super) payload_mode: DeliveryPayloadMode,
     pub(super) append_enter: bool,
     pub(super) choice_decider_sessions: Vec<String>,
+    /// True when this task *is* a terminal-outcome receipt (a relay-originated
+    /// notice delivered back to an original sender). It gates non-recursion at
+    /// the single terminal-resolution site: a receipt's own terminal outcome
+    /// never spawns a receipt of its own.
+    pub(super) is_receipt: bool,
+    /// Return route to the original sender for a terminal-outcome receipt: the
+    /// sender's real bundle member (its true transport) and runtime directory,
+    /// resolved from the sender's HOME bundle at send time. `None` for a
+    /// non-bundle sender (`GLOBAL`/`RELAY`, served instead by the UI
+    /// `delivery_outcome` stream frame), for raw-input delivery, and for
+    /// receipt tasks themselves. Built from the sender's context, never the
+    /// target's, so a cross-bundle receipt routes to the sender's own
+    /// transport rather than misrouting to the target's.
+    pub(super) sender_return_route: Option<SenderReturnRoute>,
+}
+
+/// The sender's own delivery context, carried on a delivery task so a
+/// non-delivered terminal outcome can be routed back to the sender as a
+/// terminal-outcome receipt. Holds the sender's *real* bundle member — with its
+/// true [`TargetConfiguration`](crate::configuration::TargetConfiguration), not
+/// the synthetic Tmux stub `SenderIdentity::to_bundle_member` produces — so the
+/// receipt renders and delivers through the sender's actual transport.
+#[derive(Clone, Debug)]
+pub(super) struct SenderReturnRoute {
+    pub(super) member: BundleMember,
+    pub(super) runtime_directory: PathBuf,
 }

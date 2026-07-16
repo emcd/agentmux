@@ -12,7 +12,7 @@ use crate::configuration::{BundleMember, TargetConfiguration};
 use super::super::super::{AsyncDeliveryTask, RelayError};
 use crate::acp::state::ACP_STARTUP_PRIME_TIMEOUT_MS;
 
-use super::super::async_worker::{get_worker_failure, get_worker_readiness};
+use super::super::async_worker::{WorkerDispatch, get_worker_failure, get_worker_readiness};
 use super::worker::{AcpWorkerBootstrap, spawn_async_delivery_worker};
 use crate::transports::{WorkerFailureReason, WorkerReadinessState};
 
@@ -163,8 +163,16 @@ fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
         ));
     }
     match super::super::async_worker::try_existing_worker(&key, task)? {
-        None => Ok(()),
-        Some(task) => {
+        WorkerDispatch::Accepted => Ok(()),
+        WorkerDispatch::Closing(task) => {
+            // The target's worker is draining for relay shutdown. Record the drop
+            // on the observability floor and stop; spawning here would resurrect a
+            // worker mid-shutdown and clobber the closing registry entry the
+            // shutdown barrier still counts (an accept-after-drain regression).
+            super::super::async_worker::complete_task_on_shutdown(&task);
+            Ok(())
+        }
+        WorkerDispatch::Missing(task) => {
             // ACP workers are pre-created during startup and never lazily created
             // here. Reaching the new-worker path with an ACP task means its worker
             // has gone away, so report it unavailable rather than spin up a
@@ -192,5 +200,139 @@ fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
             super::super::async_worker::register_worker(key, sender, pending, false);
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // The enqueue path's `Closing` arm is crate-private and unreachable through any
+    // public interface without a live relay shutdown. This inline test registers a
+    // closing target worker and drives `enqueue_delivery_task` against it, observing
+    // that the raced task is dropped as a `DroppedOnShutdown` receipt to the
+    // sender's worker while the closing entry is retained and fed nothing — no
+    // replacement worker is spawned over it. One `#[test]`, no widened visibility.
+    use super::super::super::async_worker::{
+        build_worker_key, close_worker, register_worker, unregister_worker, worker_exists,
+    };
+    use super::*;
+    use crate::configuration::{BundleConfiguration, BundleMember, TargetConfiguration};
+    use crate::relay::delivery::QuiescenceOptions;
+    use crate::relay::{DeliveryPayloadMode, SCHEMA_VERSION, SenderReturnRoute};
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+
+    fn tmux_member(id: &str) -> BundleMember {
+        BundleMember {
+            id: id.to_string(),
+            name: Some(id.to_string()),
+            working_directory: None,
+            target: TargetConfiguration::Tmux(crate::configuration::TmuxTargetConfiguration {
+                start_command: format!("run-{id}"),
+                prompt_readiness: None,
+                prime_timeout_ms: None,
+                wedge_detection: true,
+            }),
+            coder_session_id: None,
+            policy_id: None,
+            environment: Vec::new(),
+        }
+    }
+
+    /// A Send racing relay shutdown whose target worker is already draining
+    /// (`closing`) is dropped as `DroppedOnShutdown`, not spawned into a replacement
+    /// worker that would clobber the closing registry entry the shutdown barrier
+    /// still counts. The dropped task surfaces to the sender as a receipt; the
+    /// closing worker is fed nothing and stays registered.
+    #[test]
+    fn enqueue_drops_task_targeting_a_closing_worker() {
+        let target_namespace = "enqueue-target-ns";
+        let target_runtime = "/enqueue-target-rt";
+        let target_session = "enqueue-target-sess";
+        let sender_namespace = "enqueue-sender-ns";
+        let sender_runtime = "/enqueue-sender-rt";
+        let sender_member_id = "enqueue-sender-mem";
+
+        // A registered, closing target worker; enqueue must not feed it.
+        let target_key =
+            build_worker_key(target_namespace, Path::new(target_runtime), target_session);
+        let (target_tx, mut target_rx) = tokio_mpsc::unbounded_channel::<AsyncDeliveryTask>();
+        register_worker(
+            target_key.clone(),
+            target_tx,
+            Arc::new(AtomicUsize::new(0)),
+            false,
+        );
+        close_worker(&target_key);
+
+        // A live sender worker: the DroppedOnShutdown receipt should land here.
+        let sender_key = build_worker_key(
+            sender_namespace,
+            Path::new(sender_runtime),
+            sender_member_id,
+        );
+        let (sender_tx, mut sender_rx) = tokio_mpsc::unbounded_channel::<AsyncDeliveryTask>();
+        register_worker(
+            sender_key.clone(),
+            sender_tx,
+            Arc::new(AtomicUsize::new(0)),
+            false,
+        );
+
+        let task = AsyncDeliveryTask {
+            bundle: BundleConfiguration {
+                schema_version: SCHEMA_VERSION.to_string(),
+                bundle_name: target_namespace.to_string(),
+                autostart: false,
+                groups: Vec::new(),
+                members: Vec::new(),
+            },
+            sender_namespace: sender_namespace.to_string(),
+            sender: tmux_member(sender_member_id),
+            authenticated_identity: None,
+            on_behalf_of: None,
+            all_target_sessions: Vec::new(),
+            target_session: target_session.to_string(),
+            message: "body".to_string(),
+            message_id: "orig-message-id".to_string(),
+            quiescence: QuiescenceOptions::for_async(None),
+            runtime_directory: PathBuf::from(target_runtime),
+            payload_mode: DeliveryPayloadMode::EnvelopeMessage,
+            append_enter: true,
+            choice_decider_sessions: Vec::new(),
+            is_receipt: false,
+            sender_return_route: Some(SenderReturnRoute {
+                member: tmux_member(sender_member_id),
+                runtime_directory: PathBuf::from(sender_runtime),
+            }),
+        };
+
+        enqueue_delivery_task(task).expect("enqueue returns Ok when the target worker is closing");
+
+        // The closing worker is retained and was fed nothing: no replacement worker
+        // spawned or registered over the closing entry.
+        assert!(
+            worker_exists(&target_key).expect("registry lock"),
+            "the closing worker entry is retained"
+        );
+        assert!(
+            target_rx.try_recv().is_err(),
+            "the closing worker must not be fed the raced task"
+        );
+
+        // The raced task resolved DroppedOnShutdown, surfaced to the sender as a
+        // receipt through the sender's own worker.
+        let receipt = sender_rx
+            .try_recv()
+            .expect("the dropped task yields a DroppedOnShutdown receipt to the sender");
+        assert!(receipt.is_receipt);
+        assert!(
+            receipt.message.contains("dropped on relay shutdown"),
+            "receipt reports the dropped-on-shutdown outcome: {}",
+            receipt.message
+        );
+
+        unregister_worker(&target_key);
+        unregister_worker(&sender_key);
     }
 }

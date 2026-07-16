@@ -430,6 +430,11 @@ fn execute_raww(
         payload_mode: DeliveryPayloadMode::RawInput,
         append_enter: !no_enter,
         choice_decider_sessions,
+        // Raw input is out of terminal-outcome-receipt scope: its sender is an
+        // operator/UI session served by the `delivery_outcome` stream frame, not
+        // a coder receipt. No return route, and it is never itself a receipt.
+        is_receipt: false,
+        sender_return_route: None,
     };
 
     // Both transports enqueue onto a per-target async worker; `enqueue_async_delivery`

@@ -23,8 +23,8 @@ use super::super::routing::{
 use super::super::{
     AsyncDeliveryTask, DeliveryPayloadMode, GLOBAL_NAMESPACE, PeerConnectionManager,
     RELAY_NAMESPACE, RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
-    SendOutcome, SendRequestContext, SendResult, bare_session_id, canonical_session_id, map_config,
-    relay_error,
+    SendOutcome, SendRequestContext, SendResult, SenderReturnRoute, bare_session_id,
+    canonical_session_id, map_config, relay_error,
 };
 use super::routed::{load_home_context, run_target_operation};
 use super::sender::{SenderIdentity, resolve_sender_in_namespace};
@@ -167,6 +167,19 @@ fn handle_send(
     let authenticated_identity =
         principal.and_then(|principal| principal.authenticated_identity.clone());
 
+    // Return route for a terminal-outcome receipt: the sender's *real* home-bundle
+    // member (its true transport) plus the sender bundle's runtime directory. Built
+    // from the sender's home context, never a target's, so a non-delivered outcome
+    // routes a receipt back through the sender's own transport. `None` for a
+    // relay-wide sender (`GLOBAL`/`RELAY`), which has no home bundle and — when a
+    // UI operator — is served by the existing `delivery_outcome` stream frame.
+    let sender_return_route = resolve_sender_return_route(
+        home_bundle.as_ref(),
+        sender.session_id.as_str(),
+        home_namespace,
+        bundle_catalog,
+    );
+
     emit_inscription(
         "relay.send.request",
         &json!({
@@ -234,6 +247,7 @@ fn handle_send(
                     sender: &sender,
                     authenticated_identity,
                     on_behalf_of,
+                    sender_return_route,
                     message: message.as_str(),
                     home_namespace,
                     request_id,
@@ -243,6 +257,35 @@ fn handle_send(
             )
         },
     )
+}
+
+/// Resolves the sender's own delivery context so a non-delivered terminal
+/// outcome can be routed back to it as a terminal-outcome receipt. Returns the
+/// sender's *real* home-bundle member (its true transport, not the synthetic
+/// `SenderIdentity::to_bundle_member` Tmux stub) plus the sender bundle's runtime
+/// directory. `None` when the sender has no home bundle (`GLOBAL`/`RELAY`) or is
+/// not a configured bundle member (a registered UI session): those senders learn
+/// terminal outcomes through the `delivery_outcome` stream frame, not a coder
+/// receipt.
+fn resolve_sender_return_route(
+    home_bundle: Option<&BundleConfiguration>,
+    sender_session: &str,
+    home_namespace: &str,
+    bundle_catalog: &BundleCatalog,
+) -> Option<SenderReturnRoute> {
+    let member = home_bundle?
+        .members
+        .iter()
+        .find(|member| member.id == sender_session)?
+        .clone();
+    let runtime_directory = bundle_catalog
+        .lookup(home_namespace)?
+        .runtime_directory
+        .clone();
+    Some(SenderReturnRoute {
+        member,
+        runtime_directory,
+    })
 }
 
 /// Builds the config-free [`ResolvedRoute`] for a `Send`: `resolve_send_route`
@@ -322,6 +365,9 @@ struct SendExecutionContext<'a> {
     /// Origin attribution for a peer-forwarded (ingress) send; carried into each
     /// delivered envelope and the response. `None` for a locally-originated send.
     on_behalf_of: Option<String>,
+    /// Return route to the sender for a terminal-outcome receipt; cloned onto each
+    /// delivery task. `None` for a relay-wide sender with no home bundle.
+    sender_return_route: Option<SenderReturnRoute>,
     message: &'a str,
     home_namespace: &'a str,
     request_id: Option<String>,
@@ -344,6 +390,7 @@ fn execute_send(
         sender,
         authenticated_identity,
         on_behalf_of,
+        sender_return_route,
         message,
         home_namespace,
         request_id,
@@ -393,6 +440,8 @@ fn execute_send(
                 payload_mode: DeliveryPayloadMode::EnvelopeMessage,
                 append_enter: true,
                 choice_decider_sessions: group.choice_decider_sessions.clone(),
+                is_receipt: false,
+                sender_return_route: sender_return_route.clone(),
             };
             enqueue_async_delivery(task)?;
             emit_inscription(
