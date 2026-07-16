@@ -33,23 +33,34 @@ Phase 2 (Pty portion) landed at `4fa89a0` (merged `7716815`): the pty-write
 receipt marker line and the `src/pty/README.md` section — see the dedicated
 write-up below.
 
-Still deferred (not blocking; the core is unbroken and functional):
-- **2.3 Tmux portion + 5.1b Tmux portion** — the same receipt marker line for
-  Tmux pane rendering, and the matching transport README update. No
-  Tmux-specialist lane exists currently; this is an open question for the
-  operator rather than a dispatchable task today.
-- **4.4 dedicated non-recursion test** — non-recursion is enforced structurally
-  (the `is_receipt` gate is the first check at the single spawn site) and is
-  exercised at runtime by the delivered receipt in the regression test; a
-  standalone assertion is deferred because a *non-delivered* receipt cannot be
-  constructed end-to-end without wedging the very sender pane the assertion reads.
+Phase 2 (Tmux portion) included in the current Tmux slice (one-off
+scope stretch on the `pty` branch, no dedicated Tmux-specialist lane):
+the pane-text receipt marker line via the `pub render_paste_text`
+helper, the matching `tests/unit/tmux_transport.rs` test, and the new
+`src/tmux/README.md` — see the dedicated write-up below. Coordinator
+can add the post-merge hash in its reconciliation, as happened for
+ACP (`6fbfb36` via `f6d94a4`) and Pty (`4fa89a0` via `7716815`).
+
+Archive-blocking (gates §0 per the §0 gate above):
+
+- **4.4 dedicated non-recursion test** — non-recursion is enforced
+  structurally (the `is_receipt` gate is the first check at the single spawn
+  site) and is exercised at runtime by the delivered receipt in the regression
+  test; a standalone assertion is deferred because a *non-delivered* receipt
+  cannot be constructed end-to-end without wedging the very sender pane the
+  assertion reads. Must ship before §0 archive per the §0 gate (sections 1-4
+  must merge before archive).
+
+Follow-ups (non-blocking; do NOT gate §0):
+
 - **Full cross-bundle receipt e2e (review follow-up)** — a real
-  sender-bundle -> wedging-target-in-another-bundle test over `serve_connection`
-  with a two-bundle catalog and two tmux runtimes. Deferred: the sender-route
-  invariant it would prove is now locked by a narrower unit test (below); the
-  full end-to-end harness (first to weave `serve_connection`'s multi-bundle
-  catalog with real tmux panes across two runtimes) is a later, heavier add.
-- **§0 archive** — gated until all phases ship.
+  sender-bundle -> wedging-target-in-another-bundle test over
+  `serve_connection` with a two-bundle catalog and two tmux runtimes.
+  Out of scope of this change; lands in a separate, later proposal cycle.
+
+§0 archive itself waits on **4.4** (per the gate above), not on
+"all phases ship" — the e2e follow-up is explicitly outside the
+gate.
 
 Review round 2 (Reviewer General on `677f879`): the closing-vs-missing
 conflation [medium] is fixed here. `try_existing_worker` now returns a typed
@@ -102,22 +113,54 @@ timing, no `#[ignore]`). New `src/pty/README.md` documents the receipt
 rendering, the Pty module layout, and the `--term-protocol` smoke-binary
 flag from the recent add-pty-terminal-protocol-config work.
 
-Deferred (not in the Pty slice):
-- **2.3 Tmux marker line** — the same `RECEIPT_MARKER` line for tmux pane
-  rendering. No Tmux-specialist lane exists currently; flag back to
-  Coordinator/operator separately rather than silently dropping it.
-- **5.1b Tmux README update** — the matching transport README for the Tmux
-  receipt-rendering polish.
+## Implementation status (Phase 2 — Tmux one-off scope stretch)
+
+Tmux portion of task 2.3 (marker-line rendering for the receipt's pane-text
+output) and task 5.1b (the matching transport README) landed on the `pty`
+branch as a one-off scope stretch — no dedicated Tmux-specialist lane
+exists, so this slice was done by the Pty specialist on Coordinator's
+dispatch. The marker line `--- agentmux terminal-outcome receipt ---` is
+the same literal as the Pty transport uses (`RECEIPT_MARKER` in
+`src/tmux/transport.rs`); the per-envelope rendering helper
+`render_paste_text` is `pub` so the marker emission can be tested
+directly without tmux IPC. `paste_group` (the pane-write chokepoint that
+batches envelopes into token-budget-bounded prompts) calls
+`render_paste_text` for each envelope in the coalesced group; receipts
+get the marker line included in the rendered text so the token-budget
+batching and paste-budget counts stay consistent with the actual pane
+bytes. Each receipt in a coalesced group gets its own marker line;
+peer envelopes that coalesce beside a receipt render unchanged.
+Detection is the typed `DeliveryEnvelope.is_receipt` field (no
+Tmux-side sender-identity inference). External test
+`tmux_transport_render_paste_text_emits_receipt_marker_for_receipt_only`
+in `tests/unit/tmux_transport.rs` mirrors the Pty equivalent (no real
+tmux, no timing, no `#[ignore]`). New `src/tmux/README.md` documents
+the module layout, the receipt rendering, and cross-references into
+the transport contract, the relay-side chokepoint, and the Pty
+sibling README.
+
+Archive-blocking (gates §0 per the §0 gate above; not in the Pty slice
+or the Tmux one-off scope stretch):
+
 - **4.4 dedicated non-recursion test** — non-recursion is enforced
   structurally (the `is_receipt` gate is the first check at the single spawn
-  site) and is exercised at runtime by the delivered receipt in the
-  regression test; a standalone assertion is deferred because a
-  *non-delivered* receipt cannot be constructed end-to-end without wedging
-  the very sender pane the assertion reads.
+  site) and is exercised at runtime by the delivered receipt in the regression
+  test; a standalone assertion is deferred because a *non-delivered* receipt
+  cannot be constructed end-to-end without wedging the very sender pane the
+  assertion reads. Must ship before §0 archive per the §0 gate (sections 1-4
+  must merge before archive).
+
+Follow-ups (non-blocking; do NOT gate §0; not in the Pty slice or the
+Tmux one-off scope stretch):
+
 - **Full cross-bundle receipt e2e (review follow-up)** — a real
   sender-bundle -> wedging-target-in-another-bundle test over
   `serve_connection` with a two-bundle catalog and two tmux runtimes.
-- **§0 archive** — gated until all phases ship.
+  Out of scope of this change; lands in a separate, later proposal cycle.
+
+§0 archive itself waits on **4.4** (per the gate above), not on
+"all phases ship" — the e2e follow-up is explicitly outside the
+gate.
 
 ## 1. Spec deltas
 
@@ -151,14 +194,18 @@ Deferred (not in the Pty slice):
       `delivered` outcome. Build the receipt's delivery task from the SENDER's
       bundle + runtime directory (the sender's home bundle for a cross-bundle
       send), NOT the target's — otherwise a cross-bundle receipt misroutes.
-- [ ] 2.3 Render the receipt per transport: Tmux (pane), ACP (turn), Pty (pty
+- [x] 2.3 Render the receipt per transport: Tmux (pane), ACP (turn), Pty (pty
       write). The UI transport already emits the sender `delivery_outcome` frame
       via `emit_sender_delivery_outcome_event`; reconcile it as the UI rendering
       of the receipt. ACP-specific: the receipt must be a flush barrier (do not
       coalesce with peer traffic in the flush group), bypass quiescence
       (zero quiet-window; informational, no follow-on expected), and carry no
       choice-decider sessions. Tmux/Pty: render via the existing pane-envelope
-      renderer plus a receipt marker line for human visibility.
+      renderer plus a receipt marker line for human visibility. (ACP landed at
+      `6fbfb36` via `f6d94a4`; Pty at `4fa89a0` via `7716815`;
+      Tmux in the current slice. The UI path is
+      the existing `delivery_outcome` stream frame and was always the UI rendering
+      of the receipt.)
 - [x] 2.4 Enforce non-recursion at the single relay-side spawn site via the
       §2.1 marker: spawn a receipt only when the resolving delivery is itself not
       a receipt and the outcome is non-delivered; a receipt's own outcome records
@@ -196,8 +243,11 @@ Deferred (not in the Pty slice):
 - [x] 5.1a Update `src/relay/README.md` for the terminal-outcome receipt, its
       relay-side spawn/route/drop mechanics, and the `queued`-is-not-success
       contract.
-- [ ] 5.1b Update the transport READMEs for the receipt's per-transport
-      rendering (deferred with 2.3 — the transport-rendering phase).
+- [x] 5.1b Update the transport READMEs for the receipt's per-transport
+      rendering. (ACP landed at `6fbfb36` via `f6d94a4`: `src/acp/README.md`
+      receipt-rendering section. Pty at `4fa89a0` via `7716815`: new
+      `src/pty/README.md`. Tmux in the current slice: new
+      `src/tmux/README.md`.)
 - [x] 5.2 Run `openspec validate deliver-async-terminal-outcomes --strict`.
 - [x] 5.3 Run `cargo fmt --check`.
 - [x] 5.4 Run `cargo clippy --all-targets --no-deps -- -D warnings`.

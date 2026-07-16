@@ -838,3 +838,68 @@ fn timeout_outcome_maps_to_prime_timeout_reason_code() {
         Some("delivery_prime_timeout"),
     );
 }
+
+/// The Tmux transport's per-envelope paste rendering prepends a marker
+/// line to every receipt envelope (`DeliveryEnvelope.is_receipt == true`)
+/// so the receiving agent can distinguish a terminal-outcome receipt
+/// from a peer message at a glance. The marker is included in the
+/// rendered text so the token-budget batching and paste-budget counts
+/// stay consistent with the actual pane bytes. Peer envelopes render
+/// unchanged. Mirrors the Pty equivalent
+/// `pty_transport_start_envelope_group_emits_receipt_marker_for_receipt_only`
+/// in `tests/unit/pty_transport.rs`.
+#[test]
+fn tmux_transport_render_paste_text_emits_receipt_marker_for_receipt_only() {
+    use agentmux::envelope::AddressIdentity;
+    use agentmux::tmux::render_paste_text;
+    use agentmux::transports::{DeliveryEnvelope, DeliveryMessage};
+
+    const RECEIPT_MARKER_LINE: &str = "--- agentmux terminal-outcome receipt ---\n";
+
+    fn make_envelope(is_receipt: bool) -> DeliveryEnvelope {
+        DeliveryEnvelope {
+            message_id: format!("msg-{}", if is_receipt { "receipt" } else { "peer" }),
+            message: DeliveryMessage {
+                body: "test body".to_string(),
+                created_at: "2026-07-16T00:00:00Z".to_string(),
+                namespace: "test-ns".to_string(),
+                sender: AddressIdentity {
+                    session_name: "alpha@test-ns".to_string(),
+                    display_name: None,
+                },
+                target: AddressIdentity {
+                    session_name: "target@test-ns".to_string(),
+                    display_name: None,
+                },
+                cc: Vec::new(),
+                authenticated_identity: None,
+                on_behalf_of: None,
+            },
+            append_enter: true,
+            choice_decider_sessions: Vec::new(),
+            quiet_window: std::time::Duration::from_millis(50),
+            prime_timeout_ms: None,
+            is_receipt,
+        }
+    }
+
+    // Receipt envelope: marker line is emitted immediately before the
+    // rendered pane text (which starts with `--<boundary>\n`).
+    let receipt_text = render_paste_text(&make_envelope(true));
+    assert!(
+        receipt_text.starts_with(RECEIPT_MARKER_LINE),
+        "receipt envelope must be preceded by the marker line; got: {receipt_text:?}"
+    );
+    let after_marker = &receipt_text[RECEIPT_MARKER_LINE.len()..];
+    assert!(
+        after_marker.starts_with("--"),
+        "marker must be immediately before the envelope text; got: {after_marker:?}"
+    );
+
+    // Peer envelope: marker line is absent.
+    let peer_text = render_paste_text(&make_envelope(false));
+    assert!(
+        !peer_text.contains(RECEIPT_MARKER_LINE),
+        "peer envelope must not include the marker line; got: {peer_text:?}"
+    );
+}
