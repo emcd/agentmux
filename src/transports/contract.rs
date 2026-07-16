@@ -561,6 +561,14 @@ pub struct DeliveryEnvelope {
     /// governs the post-quiescence prompt-readiness wait; this field bounds
     /// only the prime window.
     pub prime_timeout_ms: Option<u64>,
+    /// True when this envelope carries a terminal-outcome receipt (a
+    /// relay/system-originated notice back to the original sender for a
+    /// non-delivered outcome). Carried on the envelope so per-transport
+    /// rendering polish (e.g. ACP's flush-barrier behavior) can branch on it
+    /// without re-deriving from the message body. The relay's delivery
+    /// mechanics are receipt-agnostic; this flag is a per-transport hint,
+    /// not a dispatch concern. `false` for ordinary peer messages.
+    pub is_receipt: bool,
 }
 
 /// Structured, transport-neutral message data sufficient for any transport to

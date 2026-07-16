@@ -178,3 +178,77 @@ authorized `selected` or `cancelled` decision, the session or worker
 terminates, or a hard terminal cancellation condition fires. The
 ACP prime timeout field is a turn-wait bound, not a choice-decision
 lifecycle bound; the two surfaces are independent.
+
+## Terminal-outcome receipt rendering
+
+A terminal-outcome receipt (a relay/system-originated informational
+turn back to the original sender for a queued message whose delivery
+later resolved to `failed`, `timeout`, or `dropped_on_shutdown`; see
+`src/relay/README.md` for the relay-side spawn/route/drop mechanics)
+carries a per-envelope `is_receipt: bool` marker on `DeliveryEnvelope`
+and is rendered by the ACP transport as its own turn with three
+shape-specific behaviors:
+
+- **Flush barrier.** A receipt is never absorbed into a peer-traffic
+  flush group, and it never coalesces with surrounding peer envelopes.
+  When a receipt is the head of the internal write channel the
+  transport submits it as a singleton turn (no inner absorb loop runs);
+  when a receipt arrives mid-batch the transport flushes the pending
+  peer batch first and then submits the receipt alone on its own turn.
+  The agent always observes a receipt on a turn by itself, separated
+  from any peer message that may be queued beside it.
+- **Zero quiet-window on ACP receivers.** The relay's
+  `build_coder_envelope` zeros `quiet_window` on the envelope when the
+  receipt's resolved target transport is ACP, satisfying the
+  "receipt bypasses quiescence" invariant at the envelope seam. ACP
+  ignores `quiet_window` today, but the construction is explicit at
+  the relay so the invariant holds regardless of whether the ACP
+  transport starts honoring it in a future change. Receipts addressed
+  to Tmux/Pty senders keep the default async quiet-window, so the
+  per-transport quiescence behavior is unchanged for those senders;
+  the ACP-only zero keeps the invariant ACP-scoped.
+- **Empty choice-decider sessions.** A receipt task carries
+  `choice_decider_sessions: Vec::new()`. The relay therefore does not
+  authorize any UI session to decide a choice raised on the receipt
+  turn: if the agent does raise a `session/request_permission` while
+  processing the receipt, the chooser enqueues the choice with no
+  authorized deciders and the choice request remains pending until a
+  terminal cancellation condition fires (relay shutdown, worker
+  respawn invalidation, or session teardown). `submit_envelope_turn`
+  installs a permission handler whenever `ctx.chooser` is present,
+  regardless of the decider list — the receipt's empty deciders affect
+  authorization, not handler creation. The handler is the
+  `acp-permission-resolver` thread, not a quiet path; an agent that
+  raises a permission request on a receipt turn still pays the
+  resolver-thread cost and that thread remains occupied (blocked on the
+  chooser's no-decider queue) until the request is cancelled. The
+  agent does not receive a quick outcome; it sees the turn itself
+  stall on the in-flight permission request. Receipt authors should
+  write receipt bodies that prompt the agent for a textual
+  acknowledgement, not a tool call.
+
+The receipt still rides through the bounded prime wait
+(`prime_timeout_ms` from the sender's
+`[coders.<id>.acp].prime-timeout-ms` if configured, else unbounded),
+runs through `submit_envelope_turn` like any other turn, and surfaces
+its terminal outcome through the same `SingleDeliveryOutcome` channel
+every other delivery uses. Non-recursion is enforced at the relay's
+single terminal-resolution spawn site; the ACP transport never has
+to know about it.
+
+`submit_singleton_envelope` is the helper that encapsulates the
+flush-barrier semantics for the receipt's own turn submission; it is
+a thin wrapper around `flush_envelope_group` over a one-element batch
+plus the post-turn respawn signal. The barrier decision (when to
+isolate a receipt from peer traffic) lives one level up, in
+`plan_inner_actions`, which `acp_delivery_task` calls once per head.
+The plan returns a `DeliveryPlan` (peers to absorb into the in-flight
+batch plus a single `BoundaryAction` — return-to-outer-loop, submit
+receipt singleton, or submit raw). `execute_delivery_plan` applies
+the plan against the live transport; the plan itself is pure over
+its closures (`pull_next`, `is_receipt_envelope`, `is_raw_write_item`,
+`should_stop`), which is what makes it testable without spinning up
+the delivery task's blocking submit path. The inline
+`delivery_plan_tests` module exercises the receipt and raw barrier
+rules deterministically and observes each plan's queue remainder so
+the test's continuation matches production.
