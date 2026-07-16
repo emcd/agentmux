@@ -213,6 +213,52 @@ transport adapter whose purpose is to mimic the socket protocol.
 - **AND** no private socket frame or in-process socket-like adapter is required
 
 
+### Requirement: Controlled Delivery Runtime Integration
+
+The embeddable runtime SHALL provide a transport-neutral delivery execution and
+observation boundary. An embedder SHALL be able to supply a delivery executor
+that receives resolved public delivery input and returns typed delivery outcomes.
+An embedder SHALL be able to observe typed delivery lifecycle outcomes without
+parsing relay logs or private transport frames.
+
+Agentmux SHALL retain ownership of delivery task construction, worker
+registration, receipt generation, outcome correlation, and shutdown gating. The
+public runtime contract SHALL NOT expose internal delivery-task fields, worker
+registry entries, individual worker-close functions, or terminal-outcome
+completion functions for callers to invoke or mutate directly.
+
+The public runtime handle SHALL support controlled shutdown. Once shutdown has
+begun, dispatch through public handlers SHALL NOT create or resurrect delivery
+workers outside the runtime's shutdown gate, and relay-authored terminal
+dispositions SHALL remain observable through the public lifecycle boundary.
+
+#### Scenario: Embedded executor drives a deterministic outcome
+
+- **GIVEN** an embedded host supplies a transport-neutral delivery executor
+- **WHEN** a public dispatch handler resolves and submits a delivery
+- **THEN** the executor receives resolved public delivery input rather than an
+  internal worker task
+- **AND** returns a typed delivery outcome through the runtime-owned completion
+  path
+- **AND** the host can observe the relay-authored lifecycle outcome
+
+#### Scenario: Controlled shutdown preserves runtime invariants
+
+- **GIVEN** an embedded host begins controlled runtime shutdown
+- **WHEN** dispatch races with delivery-worker drain
+- **THEN** the runtime does not create or resurrect a worker outside its shutdown
+  gate
+- **AND** records the relay-authored terminal disposition for affected delivery
+- **AND** exposes that disposition through the public lifecycle observer
+
+#### Scenario: Public integration does not expose worker internals
+
+- **WHEN** an embedder integrates a delivery executor or lifecycle observer
+- **THEN** it does not receive mutable worker registry access
+- **AND** it does not construct internal delivery tasks
+- **AND** it does not directly close workers or complete task outcomes
+
+
 ### Requirement: Content-Type Envelope Discrimination
 
 The system SHALL use `Content-Type` as the envelope discriminator.

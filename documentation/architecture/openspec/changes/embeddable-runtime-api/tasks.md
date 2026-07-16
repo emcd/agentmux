@@ -25,6 +25,12 @@
       `application/x-agentmux-ext+json` recognition.
 - [ ] 1.9 Add bounded `accept_ack` pending-correlation cleanup for content types
       that require accept acknowledgement.
+- [ ] 1.10 Define a public transport-neutral delivery executor contract over
+      resolved delivery input and typed outcomes. Keep internal delivery task
+      fields, worker registry entries, and outcome-completion functions private.
+- [ ] 1.11 Add typed delivery lifecycle observation and controlled shutdown to
+      the public runtime handle. The runtime must retain worker registration,
+      receipt generation, correlation, and shutdown-gate invariants.
 
 ## 2. Testing
 
@@ -44,6 +50,12 @@
       extension Content-Type discrimination.
 - [ ] 2.7 Add ACK timeout tests proving `accept_ack_timeout` records a terminal
       disposition and removes pending correlation state.
+- [ ] 2.8 Add deterministic public-runtime tests using an injected delivery
+      executor to drive delivered, failed, timed-out, and shutdown-drop outcomes
+      without a live tmux or relay socket pipeline.
+- [ ] 2.9 Add public-runtime shutdown-race tests proving dispatch cannot
+      resurrect delivery workers after shutdown begins and observers receive the
+      relay-authored terminal disposition.
 
 ## 3. Validation
 
