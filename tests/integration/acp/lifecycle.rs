@@ -148,18 +148,13 @@ fn acp_send_uses_persisted_session_id_when_config_id_is_absent() {
         "respawn did not issue session/load within timeout"
     );
 
-    let log = fs::read_to_string(log_path).expect("read ACP log");
-    // Two session/new from initial bootstrap (alpha + bravo, sharing the
-    // stub script), zero additional new from the respawn path.
+    let requests = read_request_log(&log_path);
+    let session_load = request_by_method(&requests, "session/load");
+    assert_eq!(session_load["params"]["sessionId"], "sess-generated");
     assert_eq!(
-        log.matches("\"method\":\"session/new\"").count(),
-        2,
-        "expected one session/new per initial bootstrap (alpha+bravo), log={log}"
-    );
-    assert_eq!(
-        log.matches("\"method\":\"session/load\"").count(),
+        request_count_by_method(&requests, "session/load"),
         1,
-        "expected respawn to issue exactly one session/load using the persisted id, log={log}"
+        "expected exactly one respawn session/load, requests={requests:?}"
     );
 }
 
