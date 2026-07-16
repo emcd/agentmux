@@ -164,8 +164,28 @@ exported from `src/relay/mod.rs`.
     transport-type gate — and collects the resolved `OutcomeFuture`s. The
     blocking IO, quiescence/coalesce waits, ACP bootstrap/respawn, and readiness
     mirroring all live inside the transports now; the loop never names an ACP type.
-  - `async_worker.rs`: worker registry (tokio mpsc senders) and shutdown
-    drain helpers.
+  - `async_worker.rs`: worker registry (tokio mpsc senders), shutdown
+    drain helpers, and the terminal-outcome resolution site
+    (`complete_task_outcome`). This single chokepoint records the `relay.log`
+    observability floor for every terminal outcome and, for a *non-delivered*
+    one (`Failed` incl. `pane_wedged`, `Timeout`, `DroppedOnShutdown`),
+    best-effort delivers a **terminal-outcome receipt** back to the original
+    sender. The receipt is a relay/system-originated (`relay@RELAY`) envelope
+    naming the original `message_id`, target, outcome, and any `reason_code`,
+    routed through the sender's *own* transport by the normal delivery pipeline
+    — so the sender learns of a non-delivery through its pane/turn rather than
+    only from `relay.log`. It is built from the sender's home-bundle member and
+    runtime directory (`AsyncDeliveryTask::sender_return_route`), never the
+    target's, and routed with `try_existing_worker` so it reaches only an
+    already-live sender worker and is dropped (not spawned, persisted, or
+    retried) when the sender is not routable. `try_existing_worker` returns a
+    typed `WorkerDispatch` (`Accepted` / `Missing` / `Closing`) so the enqueue
+    path treats a worker draining for shutdown (`Closing`) as a drop rather than
+    spawning a fresh worker that would clobber the closing registry entry the
+    shutdown barrier still counts. A `delivered` outcome produces no
+    receipt. Receipts are non-recursive: the `is_receipt` marker gates the spawn
+    site so a receipt's own outcome never spawns another. A UI-class sender is
+    unaffected — it still receives the `delivery_outcome` stream frame.
   - `choice_state.rs`: process-local choices queue (in-memory only; no persisted
     state) and the ACP chooser closure that captures `choices_pending_max`.
   - `observability.rs`: in-process pub/sub for the per-target worker-readiness
