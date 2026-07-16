@@ -33,13 +33,12 @@ Phase 2 (Pty portion) landed at `4fa89a0` (merged `7716815`): the pty-write
 receipt marker line and the `src/pty/README.md` section — see the dedicated
 write-up below.
 
-Phase 2 (Tmux portion) included in the current Tmux slice (one-off
-scope stretch on the `pty` branch, no dedicated Tmux-specialist lane):
-the pane-text receipt marker line via the `pub render_paste_text`
-helper, the matching `tests/unit/tmux_transport.rs` test, and the new
-`src/tmux/README.md` — see the dedicated write-up below. Coordinator
-can add the post-merge hash in its reconciliation, as happened for
-ACP (`6fbfb36` via `f6d94a4`) and Pty (`4fa89a0` via `7716815`).
+Phase 2 (Tmux portion) landed at `e51ac17` (merged `58c434a`): the
+pane-text receipt marker line via the `pub render_paste_text` helper,
+the matching `tests/unit/tmux_transport.rs` test, and the new
+`src/tmux/README.md` — one-off scope stretch on the `pty` branch, no
+dedicated Tmux-specialist lane. Reviewed and approved by Reviewer
+General across three rounds. See the dedicated write-up below.
 
 Archive-blocking (gates §0 per the §0 gate above):
 
@@ -203,7 +202,7 @@ gate.
       choice-decider sessions. Tmux/Pty: render via the existing pane-envelope
       renderer plus a receipt marker line for human visibility. (ACP landed at
       `6fbfb36` via `f6d94a4`; Pty at `4fa89a0` via `7716815`;
-      Tmux in the current slice. The UI path is
+      Tmux at `e51ac17` via `58c434a`. The UI path is
       the existing `delivery_outcome` stream frame and was always the UI rendering
       of the receipt.)
 - [x] 2.4 Enforce non-recursion at the single relay-side spawn site via the
@@ -246,7 +245,7 @@ gate.
 - [x] 5.1b Update the transport READMEs for the receipt's per-transport
       rendering. (ACP landed at `6fbfb36` via `f6d94a4`: `src/acp/README.md`
       receipt-rendering section. Pty at `4fa89a0` via `7716815`: new
-      `src/pty/README.md`. Tmux in the current slice: new
+      `src/pty/README.md`. Tmux at `e51ac17` via `58c434a`: new
       `src/tmux/README.md`.)
 - [x] 5.2 Run `openspec validate deliver-async-terminal-outcomes --strict`.
 - [x] 5.3 Run `cargo fmt --check`.
