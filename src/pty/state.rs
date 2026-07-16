@@ -32,7 +32,7 @@
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -118,11 +118,19 @@ pub struct SnapshotResponse {
 /// `vt_write` batch; polled by the probe's `wait_for_change` to detect
 /// new terminal output), and the snapshot-request sender (the
 /// receiver lives in [`PtyState`] on the worker thread).
+///
+/// `child_exited` is set by the reader thread when it sees EOF on the
+/// PTY master (which signals that the spawned child has exited or
+/// the master has otherwise closed). The worker thread polls this
+/// flag on each iteration; once observed, the worker latches the
+/// child-exited condition and refuses to publish `Available` again
+/// (terminal `WorkerReadinessState::Unavailable` until restart).
 #[derive(Clone)]
 pub struct PtyShared {
     pub config: PtyConfigSnapshot,
     pub last_change_atomic: Arc<AtomicU64>,
     pub snapshot_tx: mpsc::Sender<SnapshotRequest>,
+    pub child_exited: Arc<AtomicBool>,
 }
 
 /// Worker-thread-local state for a single Pty target. Holds the

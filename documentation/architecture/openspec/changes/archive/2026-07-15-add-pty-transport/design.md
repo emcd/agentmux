@@ -249,11 +249,22 @@ v1 config knobs under `[coders.<id>.pty]`:
 - `rows` (default 40)
 
 Pty spawns the child at those dims. `portable_pty` handles the
-Winsize struct; we call `terminal.resize(cols, rows, 0, 0)` once
-at startup with the same numbers. `look()` returns
-`LookSnapshotPayload::Lines { snapshot_lines }` from
-`Formatter::format_alloc(Format::Plain)`, truncated to the
+Winsize struct: the configured `PtySize` is supplied to
+`openpty` (which sizes the master + slave pair at open time);
+`portable_pty` then propagates the dimensions to the slave's
+`TIOCSWINSZ` ioctl when the child is spawned via `spawn_command`.
+`look()` returns `LookSnapshotPayload::Lines { snapshot_lines }`
+from `Formatter::format_alloc(Format::Plain)`, truncated to the
 consumer's `LookMode.lines` (existing field).
+
+> **Spec-alignment note (2026-07-16):** the prior text said
+> "we call `terminal.resize(cols, rows, 0, 0)` once at startup";
+> the shipped implementation does NOT call `terminal.resize`
+> (the terminal is constructed at the configured dimensions via
+> `Terminal::new(TerminalOptions { cols, rows, max_scrollback:
+> 10_000 })` and the PTY pair's Winsize is set at openpty /
+> spawn time). The resize path is reserved for a future
+> `agentmux resize <session> <cols> <rows>` command.
 
 Runtime resize is NOT in v1. There is no operator-facing
 `agentmux resize <session> <cols> <rows>` command. If we add it
@@ -338,8 +349,8 @@ Alternatives considered:
 The Pty transport owns:
 
 - One `libghostty_vt::Terminal<'static, 'static>` (must live on a
-  single thread; the `Arc<Mutex<PtyState>>` shared state covers
-  the cross-thread look path).
+  single thread; the cross-thread look path goes through a
+  `SnapshotRequest` channel whose receiver lives on the worker).
 - One `portable_pty::PtyPair` master.
 - One reader thread that loops on `pty_master.read() → channel →
   terminal.vt_write()`.
@@ -355,24 +366,61 @@ are sync on the trait surface (no `.await`) and enqueue onto an
 internal `mpsc::Sender<DeliveryCommand>`. The delivery task
 drains the channel and produces terminal output.
 
-The `Arc<Mutex<PtyState>>` shared state is the cross-thread
-coordination point for `look()`. The look path locks the mutex,
-recreates the formatter from `&terminal`, calls
-`format_alloc`, reads cursor, releases the mutex. The terminal
-is borrowed immutably during this call; the delivery task is
-either waiting on quiescence (not touching the terminal) or
-feeding bytes into it (acquires the mutex briefly).
+The shipped cross-thread coordination point for `look()` is a
+`SnapshotRequest` channel (the receiver lives on the worker
+thread; the look path sends a request, the worker renders the
+snapshot from the live terminal and replies on a oneshot).
+The look path never touches the terminal directly. The reader
+thread forwards raw bytes through `bytes_tx` to the worker,
+which applies them to the terminal and advances
+`last_change_atomic` (shared with `PtyQuiescenceProbe`). The
+`PtyShared` struct carries the cross-thread state (`config`,
+`last_change_atomic`, `snapshot_tx` sender, `child_exited`).
 
-`Arc<Mutex<PtyState>>` is borrowed from `headless-terminal`'s
-`internal/session/session.go`, which solves the exact same
-"single-threaded libghostty-vt terminal, multi-threaded Go
-goroutines" coordination problem with a single mutex.
+> **Spec-alignment note (2026-07-16, Pty archive):** the
+> proposal-draft design originally specified
+> `Arc<Mutex<PtyState>>` with the look path locking the mutex
+> directly. The shipped implementation uses a snapshot-request
+> channel instead because:
+> - `libghostty_vt::Terminal` exposes no safe way to lock
+>   terminal state across threads without an Arc<Mutex<>>
+>   wrapper, AND the worker thread that owns the terminal is
+>   the only thread that can render snapshots — putting the
+>   rendering on the worker (via the channel) avoids
+>   serializing terminal access with a mutex held across
+>   blocking I/O (which the libghostty-vt FFI doesn't allow).
+> - The reader thread and the look path both produce
+>   cross-thread input for the worker; channelizing both makes
+>   the worker the single owner of all terminal mutations.
+
+> The original `Alternatives considered` block (mutex path vs
+> message-passing) was rewritten below to reflect the shipped
+> design choice (message-passing) and the rejected mutex
+> path's specific concerns.
 
 The Pty worker populates the existing `WorkerReadinessState`
 surface in `transport-abstraction`: `Available` on successful
 `startup`, `Busy` while a flush group is in flight,
-`Unavailable` on transport-failure outcomes, `Recovering` when
-the transport is respawned after a child exit.
+`Unavailable` on transport-failure outcomes (incl. wedge-class
+resolutions) and on child exit. `Recovering` is NOT emitted by
+this implementation today — it requires a respawn monitor that
+the Pty transport does not yet have; the variant is preserved
+in the live enum for future use, and the respawn-monitor follow-up
+will add the emission path (deferred to the bootstrap-side
+wiring follow-up).
+
+> **Scope-amendment note (2026-07-16, Pty archive):** the prior text
+> "`Recovering` when the transport is respawned after a child exit"
+> described a transition this implementation cannot emit (no
+> respawn monitor exists yet). The `WorkerReadinessState` enum
+> retains `Recovering` for ACP + future Pty use; only the Pty
+> emission claim is removed. The `Unavailable`-on-child-exit
+> half of the latched-condition contract IS implemented (the worker
+> observes EOF on the PTY master via `PtyShared.child_exited`,
+> publishes `Unavailable`, abandons any in-flight delivery with a
+> `pty_child_exited` `Failed` outcome, drains queued commands with
+> the same `Failed` outcome, and refuses to publish `Available`
+> again until restart).
 
 Alternatives considered:
 
@@ -380,10 +428,15 @@ Alternatives considered:
   expose a separate API for look. Rejected: this would require a
   new mechanism for the look path to access terminal state and
   would diverge from the existing `OutputView` shape.
-- Use a message-passing protocol for look (look requests routed
-  through the delivery task). Rejected: doubles the look latency
-  and adds a backpressure concern. The mutex path is fine because
-  look is rare and brief.
+- Ship the original `Arc<Mutex<PtyState>>` design with the
+  look path locking the mutex directly. Rejected: required
+  the look path to acquire the terminal's mutex across the
+  blocking `format_alloc` call, which serializes look
+  throughput against any other code path that needs the
+  terminal (the delivery task's wait-step snapshot path). The
+  snapshot-channel design lets the worker own the terminal
+  exclusively and serve both the wait-step probe and the look
+  path from the same thread.
 
 ### Decision: Coder config layout — parallel tables, no per-call override
 
@@ -436,9 +489,11 @@ behavioral divergence across delivery attempts to the same target.
   document the network-free escape hatches for CI; defer the
   vendored-artifact pipeline to post-cutover.
 - **`!Send + !Sync` constraint.** All `libghostty_vt` types must
-  live on a single thread; cross-thread coordination requires a
-  mutex. Mitigation: use the `Arc<Mutex<PtyState>>` pattern from
-  `headless-terminal`, validated by the POC.
+  live on a single thread; cross-thread coordination requires
+  message passing. Mitigation: a `SnapshotRequest` channel whose
+  receiver lives on the worker thread; the look path sends a
+  request, the worker renders the snapshot from the live
+  terminal and replies on a oneshot, validated by the POC.
 - **Network I/O at build time.** The vendored build clones ghostty
   from GitHub. Mitigation: `GHOSTTY_SOURCE_DIR` override; doc'd in
   the README.

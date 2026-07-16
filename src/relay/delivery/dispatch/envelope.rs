@@ -112,7 +112,31 @@ pub(super) fn build_worker_transport(
                     term_protocol: crate::configuration::TermProtocol::default(),
                 },
             };
-            let mut transport = TransportImpl::pty(target_member.clone(), pty_config);
+            // Mirror ACP's `MirrorStateFn` pattern (see
+            // `build_acp_driver_services` above): the relay constructs
+            // the closure closing over
+            // `set_worker_readiness(namespace, runtime_directory,
+            // target_session, state)`. The transport holds an opaque
+            // `Arc<dyn Fn>` so `src/pty` does not import `crate::relay`.
+            // The transport uses the closure to publish
+            // `Initializing` / `Available` / `Busy` / `Unavailable`
+            // transitions into the relay's global worker-state
+            // registry at its lifecycle points.
+            let pty_mirror_state: crate::pty::PtyMirrorStateFn = {
+                let namespace = task.bundle.bundle_name.clone();
+                let runtime_directory = task.runtime_directory.clone();
+                let target_session = target_member.id.clone();
+                Arc::new(move |state| {
+                    set_worker_readiness(
+                        namespace.as_str(),
+                        runtime_directory.as_path(),
+                        target_session.as_str(),
+                        state,
+                    );
+                })
+            };
+            let mut transport =
+                TransportImpl::pty(target_member.clone(), pty_config, Some(pty_mirror_state));
             let context = StartupContext {
                 namespace: task.bundle.bundle_name.clone(),
                 runtime_directory: task.runtime_directory.clone(),
