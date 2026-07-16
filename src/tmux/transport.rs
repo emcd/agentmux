@@ -53,6 +53,34 @@ const TMUX_TARGET_UNAVAILABLE_CODE: &str = "tmux_target_unavailable";
 /// relay worker without unbounded growth; the delivery task drains continuously.
 const WRITE_CHANNEL_CAPACITY: usize = 256;
 
+/// Marker line written immediately before a terminal-outcome receipt's
+/// pane text so the receiving agent can distinguish a relay/system
+/// status update from a peer message at a glance. Reuses the same
+/// literal as the Pty transport (`src/pty/delivery.rs`) for
+/// cross-transport consistency.
+const RECEIPT_MARKER: &str = "--- agentmux terminal-outcome receipt ---";
+
+/// Renders one envelope's pane text for tmux paste. Receipt envelopes
+/// (`DeliveryEnvelope.is_receipt`) get a leading marker line so the
+/// receiving agent can distinguish a relay/system status update from
+/// a peer message at a glance. The marker is included in the
+/// rendered text so the token-budget batching and paste-budget counts
+/// stay consistent with the actual pane bytes.
+///
+/// Detection uses the typed `DeliveryEnvelope.is_receipt` field the
+/// relay's terminal-resolution chokepoint propagates from
+/// `AsyncDeliveryTask.is_receipt`; no Tmux-side sender identity
+/// inference. Receipts are non-recursive at the relay-side chokepoint;
+/// the Tmux transport does not enforce or check that invariant.
+pub fn render_paste_text(envelope: &DeliveryEnvelope) -> String {
+    let body = envelope.message.render_pane_envelope(&envelope.message_id);
+    if envelope.is_receipt {
+        format!("{RECEIPT_MARKER}\n{body}")
+    } else {
+        body
+    }
+}
+
 /// Outcome sender half: the delivery task resolves this when the write reaches
 /// a terminal state.
 type OutcomeSender = oneshot::Sender<SingleDeliveryOutcome>;
@@ -617,9 +645,12 @@ fn paste_group(
     // Render each structured message into pane-envelope text, then split the
     // contiguous group into token-budget-bounded prompts. A lone envelope over
     // budget forms its own prompt; envelope order is preserved across prompts.
+    // Receipt envelopes get a leading marker line (see `render_paste_text`)
+    // included in the rendered text so the token-budget batching and
+    // paste-budget counts stay consistent with the actual pane bytes.
     let rendered: Vec<String> = group
         .iter()
-        .map(|(envelope, _)| envelope.message.render_pane_envelope(&envelope.message_id))
+        .map(|(envelope, _)| render_paste_text(envelope))
         .collect();
     let budget_groups = batch_envelope_groups(&rendered, batch_settings);
 

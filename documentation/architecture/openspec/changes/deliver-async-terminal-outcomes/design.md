@@ -88,9 +88,12 @@ choice: a dedicated variant is more type-safe, a flag is less churn).
 The receipt-emission decision lives in the **relay**, not the transports. The
 relay's terminal-resolution point is the single chokepoint: it spawns a receipt
 only when the resolving delivery is itself NOT a receipt and its outcome is
-non-delivered. Transports stay receipt-agnostic — they render whatever envelope
-the relay hands them (§2.3) with no receipt-vs-peer awareness. That single
-spawn-site check is the whole enforcement.
+non-delivered. That single spawn-site check is the whole non-recursion
+enforcement. Coder transports MAY inspect the typed `DeliveryEnvelope.is_receipt`
+flag the relay populates to apply per-transport rendering polish (e.g., ACP's
+flush-barrier behavior, Pty's leading marker line, Tmux's pane-text marker
+inclusion before token-budget batching), but receipt emission and the
+non-recursion invariant remain solely the relay's concern.
 
 A receipt is itself a delivery. Its own terminal outcome SHALL NOT spawn another
 receipt — receipts are non-receipted — or a wedged/failed receipt would loop
