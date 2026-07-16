@@ -76,6 +76,48 @@ entry `closing` before draining so a late terminal-outcome receipt bounces
 the entry stays counted for the shutdown barrier until the final unregister. The
 two follow-up tests above remain.
 
+## Implementation status (Phase 2 — Pty specialist slice)
+
+Pty portion of task 2.3 (marker-line rendering for the receipt's pane-envelope
+output) and task 5.1b (the matching transport README) landed on the `pty`
+branch after RG review. The marker line `--- agentmux terminal-outcome
+receipt ---` is emitted immediately before every receipt envelope in
+`start_envelope_group`'s PTY-write loop, inside the same `writer.lock()` +
+`write_all` block so the marker and the envelope are contiguous
+(non-interleaved) under the writer lock. Detection is the typed
+`DeliveryEnvelope.is_receipt` field the relay's terminal-resolution
+chokepoint propagates from `AsyncDeliveryTask.is_receipt` via
+`build_coder_envelope` — no Pty-side sender-identity inference (the earlier
+`relay@RELAY` check was unsafe because `@RELAY` is the peer-relay principal
+namespace and any peer with id `relay` would have been falsely flagged).
+External test `pty_transport_start_envelope_group_emits_receipt_marker_for_receipt_only`
+in `tests/unit/pty_transport.rs` drives `Delivery::start_envelope_group`
+end-to-end against an in-memory writer and a minimal `PtyShared`, asserting
+marker placement for receipts and absence for peers (no child process, no
+timing, no `#[ignore]`). New `src/pty/README.md` documents the receipt
+rendering, the Pty module layout, and the `--term-protocol` smoke-binary
+flag from the recent add-pty-terminal-protocol-config work.
+
+Deferred (not in the Pty slice):
+- **2.3 Tmux marker line** — the same `RECEIPT_MARKER` line for tmux pane
+  rendering. No Tmux-specialist lane exists currently; flag back to
+  Coordinator/operator separately rather than silently dropping it.
+- **2.3 ACP rendering** — the flush-barrier / zero quiet-window / no
+  choice-decider behaviors the ACP transport must implement for receipts.
+  Route to the ACP specialist.
+- **5.1b ACP / Tmux README updates** — matching transport READMEs for the
+  ACP and Tmux receipt-rendering polish.
+- **4.4 dedicated non-recursion test** — non-recursion is enforced
+  structurally (the `is_receipt` gate is the first check at the single spawn
+  site) and is exercised at runtime by the delivered receipt in the
+  regression test; a standalone assertion is deferred because a
+  *non-delivered* receipt cannot be constructed end-to-end without wedging
+  the very sender pane the assertion reads.
+- **Full cross-bundle receipt e2e (review follow-up)** — a real
+  sender-bundle -> wedging-target-in-another-bundle test over
+  `serve_connection` with a two-bundle catalog and two tmux runtimes.
+- **§0 archive** — gated until all phases ship.
+
 ## 1. Spec deltas
 
 - [x] 1.1 ADD `Asynchronous Terminal-Outcome Receipt`: relay-originated receipt
