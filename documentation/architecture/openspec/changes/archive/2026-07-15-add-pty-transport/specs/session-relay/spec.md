@@ -1,191 +1,5 @@
 ## MODIFIED Requirements
 
-### Requirement: Bundle Membership Configuration
-
-The system SHALL let operators define bundle membership in per-bundle TOML
-files with kebab-case keys:
-
-- `bundles/<bundle-id>.toml`
-
-Each bundle file SHALL include:
-
-- `format-version` (supported value for this schema: `1`)
-- `[[sessions]]` entries with:
-  - `id`
-  - optional `name` (human-readable recipient name)
-  - `directory`
-  - exactly one session shape: a coder-backed shape (a flat `coder` reference,
-    with optional `coder-session-id`) or a coder-less shape (exactly one
-    `[sessions.ui]` or `[sessions.pubsub]` marker subtable)
-
-Session membership invariants SHALL remain enforced:
-
-- session `id` values are unique within one bundle
-- optional session `name` values are unique within one bundle when present
-
-A coder-backed `[[sessions]]` entry SHALL carry:
-
-- required `coder` reference (must resolve to a `[[coders]]` entry)
-- optional `coder-session-id`
-
-The session's transport SHALL be derived from the referenced coder's
-descriptor:
-
-- `[coders.tmux]` → Tmux-backed coder delivery (existing)
-- `[coders.acp]` → ACP-backed coder delivery (existing)
-- `[coders.pty]` → Pty-backed coder delivery via libghostty-vt + portable-pty
-  (new in `add-pty-transport`)
-
-The session entry SHALL NOT restate the transport; the coder descriptor is
-authoritative.
-
-A coder-less `[[sessions]]` entry SHALL declare exactly one `[sessions.ui]` or
-`[sessions.pubsub]` marker subtable, which SHALL carry no required fields
-(empty body is valid). A coder-less entry SHALL NOT carry a `coder` or
-`coder-session-id` field.
-
-Coder definitions SHALL include target descriptors in `coders.toml`:
-
-- `format-version` (supported value for this schema: `1`)
-- `[[coders]]` entries with:
-  - `id`
-  - exactly one target descriptor table:
-    - `[coders.tmux]`
-    - `[coders.acp]`
-    - `[coders.pty]`
-
-Descriptor fields SHALL be:
-
-- `[coders.tmux]`:
-  - required `initial-command`
-  - required `resume-command`
-  - optional `prompt-regex`
-  - optional `prompt-inspect-lines`
-  - optional `prompt-idle-column`
-- `[coders.acp]`:
-  - required `channel` (`stdio` | `http`)
-  - for `channel = "stdio"`: required `command`
-  - for `channel = "http"`: required `url`; optional `headers` entries
-    (`name`, `value`)
-- `[coders.pty]` (new in `add-pty-transport`):
-  - required `initial-command`
-  - required `resume-command`
-  - optional `prompt-regex`
-  - optional `prompt-inspect-lines`
-  - optional `prompt-idle-column`
-  - optional `cols` (default 120) and `rows` (default 40)
-  - optional `prime-timeout-ms`
-  - optional `wedge-detection` (default `true`)
-
-ACP lifecycle selection constraints:
-
-- if ACP-backed session includes `coder-session-id`, runtime SHALL call
-  `session/load` for that session.
-- if ACP-backed session omits `coder-session-id`, runtime SHALL call
-  `session/new` for that session.
-- if ACP `session/load` fails, runtime SHALL fail that session and SHALL NOT
-  silently fall back to `session/new`.
-
-Pty and Tmux lifecycle selection constraints:
-
-- if a coder-backed session includes `coder-session-id` and the coder defines
-  `[coders.pty]` (Pty) or `[coders.tmux]` (Tmux), the runtime SHALL construct
-  the resume command by substituting `{coder-session-id}` into the
-  `resume-command` template.
-- if the coder-backed session omits `coder-session-id`, the runtime SHALL
-  use the `initial-command` template.
-- if the template substitution leaves an unresolved placeholder, the
-  validator SHALL reject the configuration during load.
-
-Routing and delivery SHALL use session `id` values.
-Bundle identity SHALL be derived from bundle filename (`<bundle-id>.toml`).
-
-#### Scenario: Load valid tmux-backed session configuration
-
-- **WHEN** bundle and coders files use `format-version = 1`
-- **AND** a session entry declares a flat `coder` reference
-- **AND** the referenced coder defines `[coders.tmux]`
-- **THEN** the system loads configuration successfully
-- **AND** the session is routed via the tmux transport
-
-#### Scenario: Load valid ACP-backed session configuration
-
-- **WHEN** bundle and coders files use `format-version = 1`
-- **AND** a session entry declares a flat `coder` reference with
-  `coder-session-id`
-- **AND** the referenced coder defines `[coders.acp]` with `channel = "stdio"`
-- **THEN** the system loads configuration successfully
-- **AND** the session is routed via the ACP transport
-
-#### Scenario: Load valid Pty-backed session configuration
-
-- **WHEN** bundle and coders files use `format-version = 1`
-- **AND** a session entry declares a flat `coder` reference
-- **AND** the referenced coder defines `[coders.pty]` with
-  `initial-command` and `resume-command`
-- **THEN** the system loads configuration successfully
-- **AND** the session is routed via the Pty transport
-- **AND** the Pty transport spawns the child under a portable-pty master
-  sized to the per-coder `cols` and `rows` (defaults 120 x 40)
-
-#### Scenario: Reject session with neither coder nor marker
-
-- **WHEN** a bundle session entry declares no `coder` reference and no
-  `[sessions.ui]` or `[sessions.pubsub]` marker subtable
-- **THEN** relay rejects configuration with a structured config error
-
-#### Scenario: Reject session declaring both coder and marker
-
-- **WHEN** a bundle session entry declares a `coder` reference and also a
-  `[sessions.ui]` or `[sessions.pubsub]` marker subtable
-- **THEN** relay rejects configuration with a structured config error
-
-#### Scenario: Reject coder declaring both Pty and Tmux target descriptors
-
-- **WHEN** a `[[coders]]` entry declares both `[coders.pty]` and
-  `[coders.tmux]` subtables
-- **THEN** the validator rejects the configuration with a structured config
-  error
-
-### Requirement: Session Routing Primitive
-
-The system SHALL expose session ids as the routing primitive for message
-delivery.
-The system SHALL resolve each target session to its delivery endpoint at
-delivery time using session type from config:
-
-- `tmux` sessions: prompt-injection/quiescence delivery path
-- `acp` sessions: ACP worker delivery path
-- `pty` sessions: native PTY delivery path via libghostty-vt + portable-pty
-  (new in `add-pty-transport`)
-- `ui` sessions: stream push event delivery path
-- `pubsub` sessions: embedded callback delivery path
-
-The system SHALL support directed delivery to one or more explicitly selected
-target sessions.
-
-For send explicit targets, relay SHALL accept only canonical target identifiers
-in `session@bundle` form or bare `session_id` values that resolve unambiguously
-within the sending bundle.
-
-Relay SHALL NOT resolve configured bundle session `name` values as send-target
-aliases.
-Session `name` remains informational metadata only and is not send-routable.
-
-#### Scenario: Resolve session target for direct send by session type
-
-- **WHEN** a caller sends a message to target `session_id`
-- **THEN** the system routes to that session using its configured session type
-- **AND** resolves the appropriate delivery endpoint for that type
-- **AND** the resolution distinguishes `tmux`, `acp`, `pty`, `ui`, and `pubsub`
-  delivery endpoints
-
-#### Scenario: Reject configured name alias as explicit send target
-
-- **WHEN** a caller sends a message to a configured `name` alias rather than
-  the canonical `session_id`
-- **THEN** the relay rejects the request with a validation error
-
 ### Requirement: Prompt-Readiness Template Gating
 
 The system SHALL support optional per-member prompt-readiness templates that
@@ -309,6 +123,7 @@ requirement; per-transport knobs live under the cross-cutting
 - **THEN** relay continues waiting until the pane becomes
   prompt-ready, prime timeout fires (if enabled), or relay shuts
   down
+
 
 ### Requirement: Transport Capability Contract
 
@@ -476,6 +291,7 @@ not returned to the synchronous caller.
   `reason_code = "pane_wedged"` (when wedge detection is enabled, the
   default) and `Shutdown`
 
+
 ### Requirement: Pty Wedged State Detection
 
 The system SHALL surface a config-surfaced wedge detection knob for Pty-backed
@@ -537,6 +353,7 @@ Per-message wedge deadlines within a flush group are out of scope.
   outcome (`Failed` + `reason_code = "pane_wedged"`)
 - **AND** the transport does NOT re-evaluate wedge state across coalesce
   iterations
+
 
 ### Requirement: Pty Default Per-Coder Dimensions
 

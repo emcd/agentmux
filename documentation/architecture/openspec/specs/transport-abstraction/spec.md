@@ -502,7 +502,7 @@ during iterations in which the activity signal was also quiesced;
 this is an implicit guard from Busy returning early at step 1.
 
 The `unresponsive` and `wedged` classifiers SHALL each be config-surfaced
-per the per-transport spec (see `session-relay` Tmux Prime Timeout and
+per the per-transport spec (see `transport-contracts` Tmux Prime Timeout and
 Tmux Wedged State Detection requirements for the Tmux surface).
 
 - The Tmux `unresponsive` classifier SHALL be **opt-in**: absent or
@@ -518,7 +518,7 @@ Tmux Wedged State Detection requirements for the Tmux surface).
 No operator-observable rendering state on the Tmux transport — copy-mode or
 a non-`root` client key-table — SHALL suppress, defer, or otherwise gate any
 classification. Such states do not change what `capture-pane` or `cursor_x`
-report and do not impede injection (see the `session-relay`
+report and do not impede injection (see the `transport-contracts`
 `Copy-Mode-Transparent Injection` requirement), so they are not delivery
 preconditions. A quiescence wait SHALL always progress toward one of its
 terminal classifications; the classifier SHALL NOT hold a flush group in a

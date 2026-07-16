@@ -27,6 +27,7 @@ NOT maintain a separate relay semantics path beside the embeddable API.
 - **THEN** the same relay runtime semantics used by the standalone relay server
   are applied in-process
 
+
 ### Requirement: Public Dispatch Handler Contract
 
 The system SHALL provide public typed dispatch handlers for relay operations.
@@ -49,6 +50,7 @@ Hello, request, or response frames.
 - **THEN** the handler requires relay-verified principal context
 - **AND** sender or requester fields in the operation payload are not accepted as
   proof of authority
+
 
 ### Requirement: Identity Descriptor and Verified Context Separation
 
@@ -95,6 +97,7 @@ dispatch handlers.
 - **AND** no Agentmux-managed credential file or `socket-trust` fallback is
   required
 
+
 ### Requirement: Configurable Embedded Runtime Roots
 
 The system SHALL accept caller-configured runtime roots.
@@ -121,6 +124,7 @@ behavior, or standalone-relay-only root behavior when embedded.
 - **WHEN** the standalone relay server initializes its public relay runtime
 - **THEN** it supplies resolved configuration root and state root values through
   the same runtime initialization contract used by embedded hosts
+
 
 ### Requirement: Public Principal Provisioning Boundary
 
@@ -165,6 +169,7 @@ host-held in-memory credential material.
 - **AND** the agent is not required to read an Agentmux-managed credential file
 - **AND** the agent is not required to use `socket-trust`
 
+
 ### Requirement: Transport Parity Over Public Handlers
 
 The system SHALL isolate relay semantics from transport mechanics.
@@ -192,6 +197,7 @@ principal provisioning semantics.
 - **THEN** each surface returns the same relay-authored authorization outcome
   for that principal and operation
 
+
 ### Requirement: No In-Process Transport Adapter Requirement
 
 The system SHALL allow in-process hosts to call public relay handlers directly.
@@ -205,6 +211,7 @@ transport adapter whose purpose is to mimic the socket protocol.
 - **WHEN** it submits a relay operation
 - **THEN** it calls the public handler directly
 - **AND** no private socket frame or in-process socket-like adapter is required
+
 
 ### Requirement: Content-Type Envelope Discrimination
 
@@ -241,6 +248,7 @@ defined by this requirement.
 - **AND** extension registration, schema, discovery, and submit rules remain
   governed by a follow-up proposal
 
+
 ### Requirement: Topology-Independent Relay Semantics
 
 The system SHALL preserve topology-independent relay semantics.
@@ -266,6 +274,7 @@ ACK behavior, and typed error vocabulary.
 - **WHEN** the host submits relay operations through a transport adapter
 - **THEN** relay authority and outcomes match the equivalent in-process
   embedding case
+
 
 ### Requirement: Accept ACK Timeout Cleanup
 
