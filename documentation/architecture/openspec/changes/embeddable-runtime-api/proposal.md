@@ -31,6 +31,9 @@ the embeddable runtime, not a special implementation path beside it.
   hosts and dynamic agents.
 - Define explicit `accept_ack` timeout and stale-correlation cleanup behavior
   for content types that require an accept ACK.
+- Define a transport-neutral delivery execution and observation seam so
+  embedders can control runtime lifecycle and deterministic harnesses can drive
+  delivery outcomes without exposing worker-registry internals.
 
 ## Non-Goals
 
@@ -42,17 +45,21 @@ the embeddable runtime, not a special implementation path beside it.
   assertion topology.
 - No public Rust API exposure for private socket Hello/request/response wire
   frame structs.
+- No public exposure of invariant-sensitive delivery internals such as worker
+  registry entries, internal delivery-task fields, worker-close functions, or
+  terminal-outcome completion functions.
 
 ## Impact
 
 - Affected specs:
-  - `session-relay`
+  - `runtime-api`
 - Affected code:
   - relay public dispatch and handler modules
   - standalone relay host startup and socket connection handling
   - MCP, CLI, and stdio relay client/adapter paths
   - relay identity verification/provisioning call boundaries
   - envelope model and ACK correlation handling
+  - delivery execution, observation, and runtime shutdown boundaries
 - Source design notes:
   - `designs/relay-api/1` is the embedding-boundary source of truth
   - `designs/api/2` supplies public dispatch, transport parity, Content-Type,

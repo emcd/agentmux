@@ -24,6 +24,8 @@ the same public runtime boundary in-process.
 - Add `Content-Type` as the canonical envelope payload discriminator.
 - Specify ACK correlation cleanup so transport-accepted work cannot leave stale
   pending state when `accept_ack` never arrives.
+- Provide a coherent delivery execution, observation, and lifecycle boundary
+  for embedders, alternate hosts, diagnostics, and deterministic test harnesses.
 
 ## Non-Goals
 
@@ -32,6 +34,8 @@ the same public runtime boundary in-process.
 - No application-domain authorization requirements.
 - No cross-relay trust or discovery topology.
 - No public contract for private socket wire frames.
+- No direct public contract for worker-registry entries, internal delivery-task
+  fields, worker-close functions, or terminal-outcome completion functions.
 
 ## Decisions
 
@@ -57,6 +61,15 @@ the same public runtime boundary in-process.
   keeping `text/plain` behavior compatible with existing message delivery.
 - Decision: content types that require `accept_ack` must have a bounded timeout
   and must clear pending correlation state when the timeout fires.
+- Decision: the runtime owns delivery task construction, worker registration,
+  receipt generation, correlation, and shutdown gating. Embedders may inject a
+  transport-neutral delivery executor that receives resolved public delivery
+  input and returns typed outcomes, and may subscribe to typed delivery lifecycle
+  observations.
+- Decision: the public runtime handle supports ordinary handler dispatch and a
+  controlled shutdown lifecycle. Dispatch and observation remain at the runtime
+  contract level; callers do not directly enqueue internal tasks, mutate the
+  worker registry, close individual workers, or complete outcomes.
 
 ## Risks / Trade-offs
 
@@ -69,6 +82,10 @@ the same public runtime boundary in-process.
 - `Content-Type` support creates space for Proposal B but does not by itself
   define extension registration. Keep extension-specific behavior out until the
   follow-up proposal.
+- An injectable executor can become a test hook disguised as API if it mirrors
+  private worker machinery. Mitigate by exposing resolved delivery input and
+  typed outcomes that are independently useful to alternate transports and
+  hosts, while keeping registry and task invariants inside the runtime.
 
 ## Migration Plan
 
@@ -86,6 +103,10 @@ the same public runtime boundary in-process.
 6. Add ACK pending-state timeout cleanup for content types that require
    `accept_ack`.
 7. Add parity tests covering standalone socket use and in-process handler use.
+8. Add a transport-neutral delivery executor, lifecycle observer, and controlled
+   runtime shutdown contract without publishing worker-registry internals.
+9. Add deterministic tests that drive delivery outcomes and shutdown races
+   through that public runtime contract.
 
 ## Open Questions
 
