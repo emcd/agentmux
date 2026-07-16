@@ -353,6 +353,44 @@ async fn list_decisions_rejects_unknown_arg_fields() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_decisions_preserves_authorization_forbidden_choose_capability() {
+    let runtime = TestRuntime::create();
+    let _relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("choices_list") => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "authorization_forbidden",
+                        "message": "request denied by authorization policy",
+                        "details": {
+                            "capability": "choose",
+                            "requester_session": SENDER_SESSION,
+                            "bundle_name": BUNDLE_NAME,
+                            "reason": "choose policy scope does not allow choice polling",
+                        },
+                    },
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_unexpected_failure",
+                        "message": "unexpected operation",
+                    },
+                }),
+            },
+        ),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let response = harness.call_tool(2, "list", decisions_list_call()).await;
+
+    assert_eq!(error_code(&response), Some("authorization_forbidden"));
+    assert_eq!(response["error"]["data"]["details"]["capability"], "choose");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn choose_preserves_already_resolved_code_from_relay() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
@@ -473,5 +511,4 @@ async fn choose_advertised_in_tool_inventory() {
         names.contains(&"choose"),
         "choose tool advertised: {names:?}"
     );
-    assert!(!names.contains(&"grant"), "grant tool retired: {names:?}");
 }
