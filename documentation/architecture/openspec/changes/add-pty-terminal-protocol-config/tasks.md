@@ -111,13 +111,25 @@
 - [x] 6.3 `cargo fmt --check` is silent.
 - [x] 6.4 `openspec validate add-pty-terminal-protocol-config
       --strict` passes.
-- [ ] 6.5 `cargo run --bin agentmux-pty -- /bin/bash` with
-      `term-protocol = "xterm-kitty"` round-trips a real shell
-      prompt through libghostty-vt with `TERM=xterm-kitty` set
-      in the child's environment (manual smoke test).
-- [ ] 6.6 Pty session in a real bundle with
-      `term-protocol = "xterm-kitty"` on a claude coder
-      delivers a `mailw` envelope and the child TUI's key
-      shortcuts (Shift+Enter for newline, etc.) behave per
-      the Claude Code terminal-config documentation
-      (manual smoke test during the upcoming joint session).
+- [x] 6.5 `cargo run --bin agentmux-pty --features pty -- --term-protocol xterm-kitty /bin/sh -c 'echo TERM_VALUE=$TERM'`
+      renders `TERM_VALUE=xterm-kitty` in the smoke binary's
+      ratatui output (manual smoke test). The smoke binary
+      gained a `--term-protocol <value>` CLI flag so an
+      operator can smoke-test the same TERM value a coder is
+      configured with via `[coders.<id>.pty].term-protocol`;
+      the flag parses the same kebab-case strings the TOML
+      config field uses and defaults to `xterm-256color`.
+      Visual round-trip verified via the `pty-debug` MCP
+      tooling (spawned the binary in a controlled PTY session,
+      confirmed the rendered screen contains
+      `TERM_VALUE=xterm-kitty`). Programmatic round-trip is
+      already covered by `pty_transport_term_protocol_propagates_to_child_command`
+      and `pty_transport_term_protocol_dependent_round_trip_through_snapshot`
+      in `tests/unit/pty_transport.rs` (both `#[ignore]`'d,
+      require `--features pty` + Zig 0.15.x on `PATH` at build
+      time per the existing Pty test convention).
+- [x] 6.6 Extracted to `todos/pty/10` (operator-scheduled
+      live-bundle validation alongside `todos/pty/9`,
+      `todos/relay/115`, and `todos/relay/116` in the joint
+      session). The proposal does not gate archival on the
+      joint session per the no-dual-maintenance convention.

@@ -15,11 +15,14 @@
 //! portable-pty and do not invoke Zig. The bin target name uses a
 //! hyphen; the Cargo binary is named `agentmux-pty`.
 //!
-//! Note: this smoke binary hardcodes `TERM=xterm-256color` and
-//! `COLORTERM=truecolor` because it has no per-coder configuration
-//! surface. The relay-owned per-coder `term-protocol` selection lives
-//! in `PtyTransport::startup`; this binary intentionally does not
-//! exercise that path.
+//! Note: this smoke binary accepts a `--term-protocol <value>` CLI
+//! flag (defaulting to `xterm-256color`) so an operator can smoke-test
+//! the same TERM value a coder is configured with via
+//! `[coders.<id>.pty].term-protocol`. The flag parses the same
+//! kebab-case strings the TOML config field uses. The `COLORTERM`
+//! env var stays hardcoded to `truecolor` — configurability is out
+//! of scope per the `add-pty-terminal-protocol-config` proposal
+//! design.
 //!
 //! ```bash
 //! cargo build --features pty --bin agentmux-pty
@@ -41,6 +44,8 @@ use std::{
     thread,
     time::Duration,
 };
+
+use agentmux::configuration::TermProtocol;
 
 use anyhow::{Context, Result, anyhow};
 use crossterm::{
@@ -87,9 +92,10 @@ impl PtyMaster {
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (program, program_args, cwd) = parse_args(&args)?;
+    let (program, program_args, cwd, term_protocol) = parse_args(&args)?;
     eprintln!(
-        "agentmux-pty: cols={COLS} rows={ROWS} cmd={program:?} args={program_args:?} cwd={cwd:?}"
+        "agentmux-pty: cols={COLS} rows={ROWS} term={} cmd={program:?} args={program_args:?} cwd={cwd:?}",
+        term_protocol.as_env_var()
     );
 
     let pty_system = native_pty_system();
@@ -109,7 +115,7 @@ fn main() -> Result<()> {
     if let Some(dir) = &cwd {
         cmd.cwd(dir);
     }
-    cmd.env("TERM", "xterm-256color");
+    cmd.env("TERM", term_protocol.as_env_var());
     cmd.env("COLORTERM", "truecolor");
 
     let mut child = pair
@@ -227,15 +233,23 @@ fn main() -> Result<()> {
     run_result
 }
 
-fn parse_args(args: &[String]) -> Result<(String, Vec<String>, Option<PathBuf>)> {
+fn parse_args(args: &[String]) -> Result<(String, Vec<String>, Option<PathBuf>, TermProtocol)> {
     let mut program: Option<String> = None;
     let mut program_args: Vec<String> = Vec::new();
     let mut cwd: Option<PathBuf> = None;
+    let mut term_protocol: Option<TermProtocol> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "-C" | "--cwd" => {
                 cwd = args.get(i + 1).map(PathBuf::from);
+                i += 2;
+            }
+            "--term-protocol" => {
+                let value = args
+                    .get(i + 1)
+                    .ok_or_else(|| anyhow!("--term-protocol requires a value"))?;
+                term_protocol = Some(parse_term_protocol(value)?);
                 i += 2;
             }
             other => {
@@ -249,7 +263,34 @@ fn parse_args(args: &[String]) -> Result<(String, Vec<String>, Option<PathBuf>)>
         }
     }
     let program = program.unwrap_or_else(|| "/bin/bash".to_string());
-    Ok((program, program_args, cwd))
+    Ok((
+        program,
+        program_args,
+        cwd,
+        term_protocol.unwrap_or_default(),
+    ))
+}
+
+/// Parses a kebab-case `term-protocol` CLI value into the
+/// [`TermProtocol`] enum. Mirrors the serde renames on the enum
+/// variants (`xterm-256color`, `xterm-kitty`, `alacritty`, `foot`,
+/// `wezterm`, `screen-256color`); any other value returns an error so
+/// a typo does not silently select an unintended TERM.
+fn parse_term_protocol(value: &str) -> Result<TermProtocol> {
+    Ok(match value {
+        "xterm-256color" => TermProtocol::Xterm256Color,
+        "xterm-kitty" => TermProtocol::XtermKitty,
+        "alacritty" => TermProtocol::Alacritty,
+        "foot" => TermProtocol::Foot,
+        "wezterm" => TermProtocol::WezTerm,
+        "screen-256color" => TermProtocol::Screen256Color,
+        other => {
+            return Err(anyhow!(
+                "invalid --term-protocol {other:?}; expected one of: \
+                 xterm-256color, xterm-kitty, alacritty, foot, wezterm, screen-256color"
+            ));
+        }
+    })
 }
 
 fn run_loop(
