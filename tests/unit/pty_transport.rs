@@ -2564,3 +2564,128 @@ fn recv_bounded_for(
         }
     }
 }
+
+/// Drives `Delivery::start_envelope_group` directly with an in-memory
+/// writer and a minimal `PtyShared`, returning whatever bytes the call
+/// wrote to the writer. The test surface this exercises is the
+/// per-envelope PTY-write loop in `start_envelope_group`, including the
+/// receipt marker line for `is_receipt = true` envelopes.
+#[cfg(feature = "pty")]
+fn run_start_envelope_group_capture(envelope: agentmux::transports::DeliveryEnvelope) -> Vec<u8> {
+    use std::io::Write;
+
+    use agentmux::pty::delivery::Delivery;
+    use agentmux::pty::transport::DeliveryCommand;
+
+    /// Shared-by-clone sink that captures every `write_all` byte.
+    struct VecWriter(Arc<Mutex<Vec<u8>>>);
+    impl Write for VecWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("vec-writer sink mutex poisoned")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let sink: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    let writer: Arc<Mutex<Box<dyn Write + Send>>> =
+        Arc::new(Mutex::new(Box::new(VecWriter(Arc::clone(&sink)))));
+
+    // Empty write channel: `start_envelope_group` drains `write_rx` once and
+    // sees Err immediately, so the only envelope in the coalesced group is
+    // the one we pass in.
+    let (_write_tx, mut write_rx) = mpsc::channel::<DeliveryCommand>(16);
+
+    let script = Arc::new(Mutex::new(VecDeque::from([ready_snapshot()])));
+    let (shared, _handle) = make_pty_shared(script, Some(10_000), false, None, None);
+
+    let (outcome_tx, _outcome_rx) =
+        tokio::sync::oneshot::channel::<agentmux::transports::SingleDeliveryOutcome>();
+
+    let delivery = match Delivery::start_envelope_group(
+        Box::new(envelope),
+        outcome_tx,
+        &mut write_rx,
+        &writer,
+        &shared,
+        TEST_TARGET_SESSION,
+    ) {
+        Ok(delivery) => delivery,
+        Err(_) => panic!("start_envelope_group must succeed against an in-memory writer"),
+    };
+
+    // The Delivery owns the coalesced group; dropping it releases the
+    // outcome sender and any state the run holds. The writer bytes are
+    // already captured by VecWriter's per-call extend.
+    drop(delivery);
+    sink.lock().expect("vec-writer sink mutex poisoned").clone()
+}
+
+/// The Pty transport's per-envelope write loop prepends a marker line to
+/// every receipt envelope (`DeliveryEnvelope.is_receipt == true`) so the
+/// receiving agent can distinguish a terminal-outcome receipt from a peer
+/// message at a glance, and writes the marker + envelope contiguously
+/// under the same writer lock so the two cannot be interleaved with
+/// another write on the same Pty master. Peer envelopes render unchanged.
+#[cfg(feature = "pty")]
+#[test]
+fn pty_transport_start_envelope_group_emits_receipt_marker_for_receipt_only() {
+    use agentmux::envelope::AddressIdentity;
+    use agentmux::transports::{DeliveryEnvelope, DeliveryMessage};
+
+    const RECEIPT_MARKER_LINE: &str = "--- agentmux terminal-outcome receipt ---\n";
+
+    fn make_envelope(is_receipt: bool) -> DeliveryEnvelope {
+        DeliveryEnvelope {
+            message_id: format!("msg-{}", if is_receipt { "receipt" } else { "peer" }),
+            message: DeliveryMessage {
+                body: "test body".to_string(),
+                created_at: "2026-07-16T00:00:00Z".to_string(),
+                namespace: "test-ns".to_string(),
+                sender: AddressIdentity {
+                    session_name: "alpha@test-ns".to_string(),
+                    display_name: None,
+                },
+                target: AddressIdentity {
+                    session_name: "target@test-ns".to_string(),
+                    display_name: None,
+                },
+                cc: Vec::new(),
+                authenticated_identity: None,
+                on_behalf_of: None,
+            },
+            append_enter: true,
+            choice_decider_sessions: Vec::new(),
+            quiet_window: Duration::from_millis(50),
+            prime_timeout_ms: None,
+            is_receipt,
+        }
+    }
+
+    // Receipt envelope: marker line is emitted immediately before the
+    // rendered pane envelope (which starts with `--<boundary>\n`).
+    let receipt_bytes = run_start_envelope_group_capture(make_envelope(true));
+    let receipt_str = std::str::from_utf8(&receipt_bytes).expect("utf-8 written bytes");
+    assert!(
+        receipt_str.starts_with(RECEIPT_MARKER_LINE),
+        "receipt envelope must be preceded by the marker line; got: {receipt_str:?}"
+    );
+    let after_marker = &receipt_str[RECEIPT_MARKER_LINE.len()..];
+    assert!(
+        after_marker.starts_with("--"),
+        "marker must be immediately before the envelope text; got: {after_marker:?}"
+    );
+
+    // Peer envelope: marker line is absent.
+    let peer_bytes = run_start_envelope_group_capture(make_envelope(false));
+    let peer_str = std::str::from_utf8(&peer_bytes).expect("utf-8 written bytes");
+    assert!(
+        !peer_str.contains(RECEIPT_MARKER_LINE),
+        "peer envelope must not include the marker line; got: {peer_str:?}"
+    );
+}

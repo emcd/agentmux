@@ -45,6 +45,11 @@ const QUIET_WINDOW: Duration = Duration::from_millis(50);
 /// requests) between polls.
 pub const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
+/// Marker line written immediately before a terminal-outcome receipt's
+/// pane envelope so the receiving agent can distinguish a relay/system
+/// status update from a peer message at a glance.
+const RECEIPT_MARKER: &str = "--- agentmux terminal-outcome receipt ---";
+
 /// A `Raw` command waiting to be processed by the next delivery.
 /// Held on the worker between iterations when a batch barrier was
 /// hit (either during coalesce-before-wait or during the wait).
@@ -341,13 +346,22 @@ impl Delivery {
                 Err(_) => break,
             }
         }
-        // Write all envelopes to the PTY master.
+        // Write all envelopes to the PTY master. Receipt envelopes get a
+        // leading marker line so the receiving agent can distinguish a
+        // terminal-outcome receipt from a peer message at a glance. The
+        // marker and the envelope are written under the same writer lock
+        // so the two cannot be interleaved with another write on the
+        // same Pty master.
         for (envelope, _) in group.iter() {
             let text = envelope.message.render_pane_envelope(&envelope.message_id);
             let write_result = (|| -> std::io::Result<()> {
                 let mut g = writer
                     .lock()
                     .map_err(|_| std::io::Error::other("pty writer mutex poisoned"))?;
+                if envelope.is_receipt {
+                    g.write_all(RECEIPT_MARKER.as_bytes())?;
+                    g.write_all(b"\n")?;
+                }
                 g.write_all(text.as_bytes())?;
                 g.write_all(b"\n")?;
                 Ok(())
