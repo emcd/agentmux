@@ -11,8 +11,9 @@
       `embeddable-runtime-api`. The live spec is created when that
       change archives, not by this partition change. Per BE BLOCKER 1
       re-review.)
-- [x] 1.5 Verify all 94 requirement blocks byte-for-byte (sha256 in
-      `.auxiliary/scribbles/verify_split_v3.py`).
+- [x] 1.5 Verify all 97 requirement blocks byte-for-byte (sha256 in
+      `.auxiliary/scribbles/verify_split_v3.py` against
+      `.auxiliary/temporary/master-session-relay-spec.md` as the source).
 - [x] 1.6 Run `openspec validate --all --strict`.
 
 ## 2. Cross-spec reference updates
@@ -34,8 +35,11 @@ requirement target. Per-change mappings in `agentmux:todos/general/31`.
       (3) + `environment-variables` (1).
 - [x] 3.2 `add-do-action-tool`: 4 ADDED across `authorization-scope` (2)
       + `transport-contracts` (2).
-- [x] 3.3 `add-pty-transport`: 4 MODIFIED + 3 ADDED across
-      `addressing-routing` (2 MOD) + `transport-contracts` (2 MOD + 3 ADD).
+- [x] 3.3 (Withdrawn -- `add-pty-transport` archived at `774f116` between
+      base `44d59dd` and the rebased base `392de8b`. Its delta spec
+      lives at `archive/2026-07-15-add-pty-transport/specs/`; its 3
+      live ADDED requirements are part of the 97-requirement
+      session-relay base, now in the `transport-contracts` partition.)
 - [x] 3.4 `add-about-surface-and-description-fields`: 4 ADDED across
       `addressing-routing` (1) + `transport-contracts` (2) +
       `authorization-scope` (1).
@@ -47,15 +51,16 @@ requirement target. Per-change mappings in `agentmux:todos/general/31`.
       live `runtime-api` spec is not pre-created; opsx-sync creates it
       on archive.
 - [x] 3.7 `add-e2e-test-harness`: 1 MODIFIED into `bundle-lifecycle`.
-- [x] 3.8 Update `agentmux:todos/general/31` with the 7-change mapping
-      for owner-side rebasing before archive.
+- [x] 3.8 Update `agentmux:todos/general/31` with the 6-change active
+      mapping (and the add-pty-transport archived note) for owner-side
+      rebasing before archive.
 
 ## 4. Tracking + documentation
 
-- [x] 4.1 Update `agentmux:todos/general/31` with the 7-change mapping
-      and partition decisions. (`runtime-api` is no longer a partition
-      created by this change -- it is a future capability owned by
-      `embeddable-runtime-api`.)
+- [x] 4.1 Update `agentmux:todos/general/31` with the 6-change active
+      mapping (and the add-pty-transport archived note) and partition
+      decisions. (`runtime-api` is no longer a partition created by this
+      change -- it is a future capability owned by `embeddable-runtime-api`.)
 - [x] 4.2 Note relay/53 archive-order relocations (ADDED
       Asynchronous Terminal-Outcome Receipt + 2 MODIFIED) in the
       session-relay hub.
@@ -68,7 +73,9 @@ requirement target. Per-change mappings in `agentmux:todos/general/31`.
 
 - [x] 5.1 BE (AuxBE) initial review at `cd3c206` -- 2 BLOCKERs + 2
       MEDIUMs + 2 LOWs, all addressed in this amendment.
-- [ ] 5.2 BE re-review (post-amendment commit).
+- [x] 5.2 BE re-review (post-amendment commit). Signoff received at `f9d98ca`
+      (round 7, formatting-only reflow of proposal.md Why paragraph to
+      79 columns; BE confirmed no remaining findings).
 - [ ] 5.3 Archive the change with `--skip-specs`:
       `openspec archive partition-session-relay-spec -y --skip-specs`
       (live specs already have the split applied; deltas in
