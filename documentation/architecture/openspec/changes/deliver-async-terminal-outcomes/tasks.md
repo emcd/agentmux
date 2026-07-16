@@ -23,11 +23,17 @@ Phase 1 landed the relay-side core: the receipt marker + sender return route on
 and drop-if-not-routable integration tests. Receipts already render and deliver
 through every coder transport generically (proven by the tmux regression test).
 
-Deferred to later phases (not blocking; the core is unbroken and functional):
-- **2.3 transport-rendering polish + 5.1b transport READMEs** — ACP flush-barrier
-  / zero quiet-window / empty choice-decider, an explicit Tmux/Pty receipt marker
-  line, and the matching transport README updates. Route to the ACP and Pty
-  specialists.
+Phase 2 (ACP portion) landed at `6fbfb36` (merged `f6d94a4`): flush-barrier
+turn rendering, zero quiet-window for receipts resolved to ACP targets, empty
+choice-decider sessions on receipts, `DeliveryEnvelope.is_receipt` propagation
+through `build_coder_envelope`/`build_ui_envelope`, and the `src/acp/README.md`
+receipt-rendering section. Reviewed and approved by Reviewer General.
+
+Still deferred (not blocking; the core is unbroken and functional):
+- **2.3 Tmux/Pty portions + 5.1b Tmux/Pty portions** — explicit Tmux/Pty
+  receipt marker line via the existing pane-envelope renderer, and the
+  matching transport README updates. Route to the Pty specialist (Tmux has no
+  dedicated specialist lane currently — open question).
 - **4.4 dedicated non-recursion test** — non-recursion is enforced structurally
   (the `is_receipt` gate is the first check at the single spawn site) and is
   exercised at runtime by the delivered receipt in the regression test; a
