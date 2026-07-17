@@ -759,15 +759,16 @@ pub(super) fn emit_sender_delivery_outcome_event(
 
 #[cfg(test)]
 mod tests {
-    // The receipt spawn/dispatch at the terminal-resolution chokepoint
-    // (`complete_task_outcome` -> `deliver_terminal_outcome_receipt`) is
-    // crate-private, and its sender-vs-target routing has no public exerciser
-    // short of the real-tmux send pipeline. This inline test drives the chokepoint
-    // directly and observes the receipt landing on a worker registered at the
-    // SENDER's key while a worker registered at the target's key receives nothing —
-    // proving the receipt is built from `sender_return_route` and keyed to the
-    // sender's namespace/runtime/member rather than the target's, the invariant the
-    // cross-bundle case depends on. One `#[test]`, no widened visibility.
+    // These tests drive the terminal-resolution chokepoint
+    // (`complete_task_outcome` -> `deliver_terminal_outcome_receipt`) directly and
+    // observe the routed receipt — or its deliberate absence — on registered worker
+    // channels. The chokepoint is crate-private and no public seam can isolate its
+    // sender-route and non-recursion behavior: the only end-to-end exerciser is the
+    // real-tmux send pipeline, and asserting the *absence* of a receipt there would
+    // require reading the very sender pane the failing (non-delivered) case wedges.
+    // `terminal_outcome_receipt_routes_to_sender_worker_not_target` proves the
+    // receipt is keyed to `sender_return_route`;
+    // `a_receipt_outcome_spawns_no_second_receipt` proves the non-recursion gate.
     use super::*;
 
     fn tmux_member(id: &str) -> BundleMember {
@@ -898,5 +899,89 @@ mod tests {
 
         unregister_worker(&sender_key);
         unregister_worker(&target_key);
+    }
+
+    /// A receipt's own terminal outcome spawns no further receipt (non-recursion).
+    /// The sender worker is live and routable and the outcome is non-delivered — so
+    /// the ONLY thing that keeps a second receipt off its channel is the
+    /// `is_receipt` gate at the single spawn site. Without that gate a receipt for a
+    /// receipt would land here.
+    #[test]
+    fn a_receipt_outcome_spawns_no_second_receipt() {
+        let sender_namespace = "recursion-sender-ns";
+        let sender_runtime = "/recursion-sender-rt";
+        let sender_member_id = "recursion-sender-mem";
+
+        // A live, routable sender worker: if a receipt were (wrongly) spawned for
+        // this already-a-receipt task, it would route here and the assertion below
+        // would catch it.
+        let sender_key = build_worker_key(
+            sender_namespace,
+            Path::new(sender_runtime),
+            sender_member_id,
+        );
+        let (sender_tx, mut sender_rx) =
+            tokio::sync::mpsc::unbounded_channel::<AsyncDeliveryTask>();
+        register_worker(
+            sender_key.clone(),
+            sender_tx,
+            Arc::new(AtomicUsize::new(0)),
+            false,
+        );
+
+        // The resolving delivery is itself a receipt (`is_receipt: true`) that
+        // resolves to a non-delivered outcome — the case that, but for the gate,
+        // would recurse.
+        let task = AsyncDeliveryTask {
+            bundle: BundleConfiguration {
+                schema_version: SCHEMA_VERSION.to_string(),
+                bundle_name: sender_namespace.to_string(),
+                autostart: false,
+                groups: Vec::new(),
+                members: Vec::new(),
+            },
+            sender_namespace: sender_namespace.to_string(),
+            sender: relay_system_sender_member(),
+            authenticated_identity: None,
+            on_behalf_of: None,
+            all_target_sessions: Vec::new(),
+            target_session: sender_member_id.to_string(),
+            message: "receipt body".to_string(),
+            message_id: "receipt-message-id".to_string(),
+            quiescence: crate::relay::delivery::QuiescenceOptions::for_async(None),
+            runtime_directory: PathBuf::from(sender_runtime),
+            payload_mode: DeliveryPayloadMode::EnvelopeMessage,
+            append_enter: true,
+            choice_decider_sessions: Vec::new(),
+            is_receipt: true,
+            sender_return_route: Some(SenderReturnRoute {
+                member: tmux_member(sender_member_id),
+                runtime_directory: PathBuf::from(sender_runtime),
+            }),
+        };
+
+        complete_task_outcome(
+            &task,
+            Ok(SendResult {
+                target_session: sender_member_id.to_string(),
+                message_id: "receipt-message-id".to_string(),
+                outcome: SendOutcome::Failed,
+                reason_code: Some("pane_wedged".to_string()),
+                reason: Some("sender pane wedged".to_string()),
+                details: None,
+            }),
+        );
+
+        assert!(
+            matches!(
+                sender_rx.try_recv(),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+            ),
+            "a receipt's own non-delivered outcome must not spawn a second receipt; \
+             the sender channel must stay connected and empty (a Disconnected here \
+             would mean the worker was never live, voiding the proof)"
+        );
+
+        unregister_worker(&sender_key);
     }
 }

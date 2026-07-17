@@ -40,15 +40,23 @@ the matching `tests/unit/tmux_transport.rs` test, and the new
 dedicated Tmux-specialist lane. Reviewed and approved by Reviewer
 General across three rounds. See the dedicated write-up below.
 
-Archive-blocking (gates §0 per the §0 gate above):
+Archive-blocking (per the §0 gate above) — now cleared:
 
-- **4.4 dedicated non-recursion test** — non-recursion is enforced
-  structurally (the `is_receipt` gate is the first check at the single spawn
-  site) and is exercised at runtime by the delivered receipt in the regression
-  test; a standalone assertion is deferred because a *non-delivered* receipt
-  cannot be constructed end-to-end without wedging the very sender pane the
-  assertion reads. Must ship before §0 archive per the §0 gate (sections 1-4
-  must merge before archive).
+- **4.4 dedicated non-recursion test** — LANDED. An inline behavioral test,
+  `async_worker.rs::a_receipt_outcome_spawns_no_second_receipt`, registers a
+  live, routable sender worker, drives `complete_task_outcome` with a task that
+  is itself a receipt (`is_receipt: true`) resolving to a non-delivered outcome,
+  and asserts nothing lands on the sender's channel — isolating the `is_receipt`
+  gate at the single spawn site as the sole reason no second receipt spawns. The
+  end-to-end route stays infeasible (a non-delivered receipt cannot be built
+  without wedging the very sender pane the assertion reads), so this drives the
+  crate-private chokepoint synchronously like the round-2 proofs. The operator
+  granted a narrow inline-eligibility waiver (a second `#[test]` in the block,
+  and a path the real-tmux pipeline also exercises). Relocating both behavioral
+  tests to an external harness — once the embeddable-runtime work lands a public
+  delivery/lifecycle API — is tracked here and in the issues/relay/53 seam list;
+  the Rust comment itself stays timeless per the code-comment standard. With 4.4
+  landed, all of sections 1-4 have shipped and §0 archive is unblocked.
 
 Follow-ups (non-blocking; do NOT gate §0):
 
@@ -57,9 +65,8 @@ Follow-ups (non-blocking; do NOT gate §0):
   `serve_connection` with a two-bundle catalog and two tmux runtimes.
   Out of scope of this change; lands in a separate, later proposal cycle.
 
-§0 archive itself waits on **4.4** (per the gate above), not on
-"all phases ship" — the e2e follow-up is explicitly outside the
-gate.
+With 4.4 landed, the §0 implementation gate is cleared; the cross-bundle
+e2e follow-up remains explicitly outside it.
 
 Review round 2 (Reviewer General on `677f879`): the closing-vs-missing
 conflation [medium] is fixed here. `try_existing_worker` now returns a typed
@@ -138,16 +145,12 @@ the module layout, the receipt rendering, and cross-references into
 the transport contract, the relay-side chokepoint, and the Pty
 sibling README.
 
-Archive-blocking (gates §0 per the §0 gate above; not in the Pty slice
-or the Tmux one-off scope stretch):
+Archive-blocking — now cleared:
 
-- **4.4 dedicated non-recursion test** — non-recursion is enforced
-  structurally (the `is_receipt` gate is the first check at the single spawn
-  site) and is exercised at runtime by the delivered receipt in the regression
-  test; a standalone assertion is deferred because a *non-delivered* receipt
-  cannot be constructed end-to-end without wedging the very sender pane the
-  assertion reads. Must ship before §0 archive per the §0 gate (sections 1-4
-  must merge before archive).
+- **4.4 dedicated non-recursion test** — LANDED (BE relay-side slice, not in the
+  Pty slice or the Tmux one-off scope stretch); see the write-up under the Phase 1
+  status above. With 4.4 landed, all of sections 1-4 have shipped and §0 archive is
+  unblocked.
 
 Follow-ups (non-blocking; do NOT gate §0; not in the Pty slice or the
 Tmux one-off scope stretch):
@@ -157,9 +160,8 @@ Tmux one-off scope stretch):
   `serve_connection` with a two-bundle catalog and two tmux runtimes.
   Out of scope of this change; lands in a separate, later proposal cycle.
 
-§0 archive itself waits on **4.4** (per the gate above), not on
-"all phases ship" — the e2e follow-up is explicitly outside the
-gate.
+With 4.4 landed, the §0 implementation gate is cleared; the cross-bundle
+e2e follow-up remains explicitly outside it.
 
 ## 1. Spec deltas
 
@@ -185,7 +187,9 @@ gate.
       delivery target, the terminal outcome, and any `reason_code`, distinct from
       a peer `incoming_message`. It carries a marker (a boolean flag or a
       dedicated message variant — implementer's call) that the relay-side
-      terminal-resolution point checks; transports stay receipt-agnostic.
+      terminal-resolution point checks. Receipt emission and non-recursion stay
+      relay-owned; coder transports may inspect the typed marker
+      (`DeliveryEnvelope.is_receipt`) solely for transport-specific rendering.
 - [x] 2.2 At the async worker's terminal-resolution point, for a non-delivered
       outcome (`failed` incl. `pane_wedged`, `timeout`, `dropped_on_shutdown`),
       enqueue a receipt addressed to the original sender and route it through the
@@ -232,7 +236,7 @@ gate.
       `relay.log`.
 - [x] 4.3 A non-delivered outcome for a sender that is not routable drops the
       receipt (no persistence/retry) yet is still recorded in `relay.log`.
-- [ ] 4.4 A receipt does not itself produce a receipt (non-recursion).
+- [x] 4.4 A receipt does not itself produce a receipt (non-recursion).
 - [x] 4.5 The receipt is keyed by the original `message_id` and names the delivery
       target and `reason_code`, so the sender can correlate it to its accept-time
       `queued` result; the receipt is relay/system-originated, not a peer message.
