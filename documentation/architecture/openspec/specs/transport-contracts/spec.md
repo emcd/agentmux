@@ -902,10 +902,12 @@ prime timer SHALL NOT be held off indefinitely on the basis of a rendering
 signal the relay cannot bound.
 
 When the prime timer fires (no observable output within the prime
-window), the Tmux transport SHALL
-resolve every sender in the flush group with `SendOutcome::Timeout`.
-The relay worker SHALL propagate that outcome to the MCP/CLI caller
-as a distinct timeout result, not collapsed into `Failed`.
+window), the Tmux transport SHALL resolve every sender in the flush group
+with `SendOutcome::Timeout`. The `Timeout` outcome SHALL remain a distinct
+terminal outcome and SHALL NOT be collapsed into `Failed`. As a non-delivered
+outcome it SHALL be surfaced to the sender through the Asynchronous
+Terminal-Outcome Receipt and recorded per Async Delivery Observability; it SHALL
+NOT be returned in the synchronous accept-time response.
 
 #### Scenario: Prime timeout fires on unresponsive target
 
