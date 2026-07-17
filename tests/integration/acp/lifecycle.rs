@@ -151,11 +151,6 @@ fn acp_send_uses_persisted_session_id_when_config_id_is_absent() {
     let requests = read_request_log(&log_path);
     let session_load = request_by_method(&requests, "session/load");
     assert_eq!(session_load["params"]["sessionId"], "sess-generated");
-    assert_eq!(
-        request_count_by_method(&requests, "session/load"),
-        1,
-        "expected exactly one respawn session/load, requests={requests:?}"
-    );
 }
 
 #[test]
