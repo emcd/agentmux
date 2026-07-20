@@ -1,3 +1,5 @@
+use crate::runtime::error::RuntimeError;
+
 use super::{
     AppState, FocusField, ScreenMode, ToCompletionState, current_recipient_token_context,
     matching_recipient_candidates,
@@ -22,17 +24,26 @@ impl AppState {
         self.message_cursor_preferred_column = None;
     }
 
-    pub fn toggle_mode(&mut self) {
+    pub fn toggle_mode(&mut self) -> Result<(), RuntimeError> {
         self.mode = match self.mode {
             ScreenMode::Communication => ScreenMode::Interaction,
             ScreenMode::Interaction => ScreenMode::Communication,
         };
-        // Entering Interaction without an active session leaves the operator on
-        // an empty target header with nothing to write to. Auto-open the unified
-        // picker (session column) so a target can be chosen immediately.
-        if self.mode == ScreenMode::Interaction && self.look_target.is_none() {
-            self.open_picker();
+        if self.mode == ScreenMode::Interaction {
+            if self.look_target.is_none() {
+                // Entering Interaction without an active session leaves the
+                // operator on an empty target header with nothing to write to.
+                // Auto-open the unified picker (session column) so a target can
+                // be chosen immediately.
+                self.open_picker();
+            } else {
+                // Re-entering Interaction with a target already selected must
+                // re-capture the look snapshot: otherwise the pane shows the
+                // buffer frozen from a prior visit rather than current pane state.
+                self.refresh_look_snapshot()?;
+            }
         }
+        Ok(())
     }
 
     pub fn insert_character(&mut self, character: char) {

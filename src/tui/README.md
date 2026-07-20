@@ -173,6 +173,11 @@ auto-opens it.
   - Interaction mode: open the Interaction screen for the selected identity,
     running a synchronous relay `Look` so the look pane is populated with
     recent session history before the Write input takes focus,
+- Interaction look-pane freshness: re-entering an already-targeted Interaction
+  pane (`toggle_mode` -> `refresh_look_snapshot`) re-captures the look snapshot
+  so the pane reflects current session state instead of the buffer frozen from a
+  prior visit; re-capture preserves snapshot scroll and surfaces a relay failure
+  to the operator,
 - picker last-selected persistence: the most recently committed session target
   (Communication insert or Interaction open) is tracked by session name in
   `last_selected_recipient`; when the picker reopens or the recipient list

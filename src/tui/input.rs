@@ -49,8 +49,7 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
     }
 
     if key.code == KeyCode::F(4) {
-        state.toggle_mode();
-        return Ok(());
+        return state.toggle_mode();
     }
 
     if key.code == KeyCode::F(5) {
@@ -274,7 +273,7 @@ fn handle_picker_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeE
         }
         KeyCode::F(4) => {
             state.close_picker();
-            state.toggle_mode();
+            state.toggle_mode()?;
         }
         KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right => {
             state.toggle_picker_focus();
@@ -308,7 +307,7 @@ fn handle_events_overlay_key(state: &mut AppState, key: KeyEvent) -> Result<(), 
         }
         KeyCode::F(4) => {
             state.toggle_events_overlay();
-            state.toggle_mode();
+            state.toggle_mode()?;
         }
         KeyCode::F(5) => {
             state.toggle_events_overlay();
@@ -332,7 +331,7 @@ fn handle_help_overlay_key(state: &mut AppState, key: KeyEvent) -> Result<(), Ru
         }
         KeyCode::F(4) => {
             state.toggle_help_overlay();
-            state.toggle_mode();
+            state.toggle_mode()?;
         }
         KeyCode::F(5) => {
             state.toggle_help_overlay();

@@ -580,9 +580,10 @@ fn f4_into_interaction_without_target_auto_opens_picker() {
 fn f4_into_interaction_with_target_does_not_auto_open_picker() {
     let mut state = make_state();
     state.set_interaction_target("master");
-    state
-        .dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE))
-        .expect("f4 should switch to interaction");
+    // Entering Interaction with a target re-captures the look snapshot; the relay
+    // is unavailable in tests, so that refresh errors, but the mode still switches
+    // and — unlike the no-target case — the picker does not auto-open.
+    let _ = state.dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE));
     assert_eq!(state.mode(), WorkbenchMode::Interaction);
     assert!(!state.picker_open());
 }
@@ -592,9 +593,10 @@ fn interaction_region_swaps_between_raww_and_choice_pane() {
     let mut state = make_state();
     state.set_recipients(&["master"]);
     state.set_interaction_target("master");
-    state
-        .dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE))
-        .expect("f4 should switch to interaction");
+    // The entry look refresh errors against the dead relay; the mode still
+    // switches, which is all this test needs to exercise the region swap.
+    let _ = state.dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE));
+    assert_eq!(state.mode(), WorkbenchMode::Interaction);
 
     assert!(
         state.interaction_shows_raww(),
@@ -1124,4 +1126,34 @@ fn choice_requested(
             "requested_details": { "options": options },
         }),
     )
+}
+
+#[test]
+fn reentering_interaction_with_a_target_refreshes_the_look_snapshot() {
+    let mut state = make_state();
+    state.set_interaction_target("acp");
+    // Entering Interaction with an existing target re-captures the look snapshot.
+    // With no relay reachable in tests the refresh surfaces the relay-unavailable
+    // outcome, proving entry attempts a look instead of showing a buffer frozen
+    // from a prior visit.
+    let result = state.dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE));
+    match result {
+        Err(RuntimeError::Validation { code, .. }) => assert_eq!(code, "relay_unavailable"),
+        Err(RuntimeError::Io { source, .. }) => {
+            assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied)
+        }
+        other => panic!("unexpected result: {other:?}"),
+    }
+}
+
+#[test]
+fn entering_interaction_without_a_target_opens_picker_without_a_look_attempt() {
+    let mut state = make_state();
+    // With no target yet, F4 opens the picker to choose one and must not attempt
+    // a look (no relay round trip, hence no error).
+    state
+        .dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE))
+        .expect("f4 opens picker without a look attempt");
+    assert!(state.picker_open());
+    assert_eq!(state.mode(), WorkbenchMode::Interaction);
 }

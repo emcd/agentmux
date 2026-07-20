@@ -48,14 +48,9 @@ impl AppState {
                 snapshot,
                 ..
             } => {
-                let (look_snapshot_format, look_snapshot_lines, look_snapshot_entries) =
-                    overlay_snapshot_from_payload(snapshot);
                 self.last_selected_recipient = Some(target_session.clone());
                 self.set_interaction_target(target_session.clone());
-                self.look_captured_at = Some(captured_at);
-                self.look_snapshot_format = Some(look_snapshot_format);
-                self.look_snapshot_lines = look_snapshot_lines;
-                self.look_snapshot_entries = look_snapshot_entries;
+                self.store_look_snapshot(captured_at, snapshot);
                 self.close_picker();
                 self.enter_interaction_mode();
                 self.push_status(None, format!("look captured target={target_session}"));
@@ -68,6 +63,51 @@ impl AppState {
                 format!("relay returned unexpected response variant: {other:?}"),
             )),
         }
+    }
+
+    /// Re-captures the look snapshot for the active interaction target, replacing
+    /// the overlay buffer in place. The interaction target is unchanged, so the
+    /// operator's scroll position is preserved. With no target selected there is
+    /// nothing to refresh. Errors are propagated so the caller (entering
+    /// Interaction on an existing target) can surface a relay failure.
+    pub fn refresh_look_snapshot(&mut self) -> Result<(), RuntimeError> {
+        let Some(target) = self.look_target.clone() else {
+            return Ok(());
+        };
+
+        let response = self.request_relay(&RelayRequest::Look {
+            requester_session: self.sender_session.clone(),
+            target_session: target,
+            lines: self.look_lines.map(|value| value as usize),
+            offset: None,
+        })?;
+
+        match response {
+            RelayResponse::Look {
+                captured_at,
+                snapshot,
+                ..
+            } => {
+                self.store_look_snapshot(captured_at, snapshot);
+                Ok(())
+            }
+            RelayResponse::Error { error } => Err(map_relay_error(error)),
+            other => Err(RuntimeError::validation(
+                "internal_unexpected_failure",
+                format!("relay returned unexpected response variant: {other:?}"),
+            )),
+        }
+    }
+
+    /// Stores a captured look payload into the overlay buffer fields, leaving the
+    /// interaction target and overlay scroll position untouched.
+    fn store_look_snapshot(&mut self, captured_at: String, snapshot: LookSnapshotPayload) {
+        let (look_snapshot_format, look_snapshot_lines, look_snapshot_entries) =
+            overlay_snapshot_from_payload(snapshot);
+        self.look_captured_at = Some(captured_at);
+        self.look_snapshot_format = Some(look_snapshot_format);
+        self.look_snapshot_lines = look_snapshot_lines;
+        self.look_snapshot_entries = look_snapshot_entries;
     }
 
     pub fn dispatch_raww_from_interaction(&mut self) -> Result<(), RuntimeError> {

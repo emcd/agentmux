@@ -580,6 +580,11 @@ When an interaction target is selected, the look snapshot pane SHALL render
 the same payload semantics as the current Look workflow (tmux line snapshot
 or ACP structured entries) for that target.
 
+On entering `Interaction` with an interaction target already selected, the TUI
+SHALL re-capture that target's look snapshot rather than render the buffer
+frozen from a prior visit. Re-capture SHALL preserve the operator's snapshot
+scroll position and SHALL surface a relay failure to the operator.
+
 #### Scenario: Interaction mode with no target auto-opens the picker
 
 - **WHEN** operator switches to `Interaction` and no target is selected
@@ -591,6 +596,12 @@ or ACP structured entries) for that target.
 
 - **WHEN** `Interaction` mode has active target `acp`
 - **THEN** the look snapshot pane renders the snapshot payload for `acp`
+
+#### Scenario: Re-entering Interaction refreshes the look snapshot
+
+- **WHEN** operator re-enters `Interaction` with a previously selected target
+- **THEN** the TUI re-captures that target's look snapshot before rendering
+  rather than showing the buffer from the prior visit
 
 ### Requirement: Picker Session Selection Actions
 
