@@ -3,12 +3,14 @@ use std::path::PathBuf;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 
 use agentmux::{
+    relay::{RelayStreamEvent, SendOutcome, SendResult},
     runtime::error::RuntimeError,
     tui::{
         TuiLaunchOptions,
         workbench::{Workbench, WorkbenchField, WorkbenchMode, WorkbenchPickerColumn},
     },
 };
+use serde_json::json;
 
 fn make_state() -> Workbench {
     Workbench::new(TuiLaunchOptions {
@@ -348,6 +350,8 @@ fn f4_toggles_screen_mode() {
 #[test]
 fn f4_preserves_per_mode_drafts_across_switches() {
     let mut state = make_state();
+    state.set_focus(WorkbenchField::To);
+    state.insert_text("user");
     state.set_focus(WorkbenchField::Message);
     state.insert_text("hello");
 
@@ -370,6 +374,11 @@ fn f4_preserves_per_mode_drafts_across_switches() {
         .dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE))
         .expect("f4 should switch back to communication");
     assert_eq!(state.message_field(), "hello");
+    assert_eq!(
+        state.to_field(),
+        "user",
+        "the To draft must survive a mode round trip"
+    );
 
     state
         .dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE))
@@ -872,4 +881,247 @@ fn bundle_picker_enter_with_no_available_bundles_returns_validation_error() {
         }
         other => panic!("unexpected result: {other:?}"),
     }
+}
+
+// The receiving UI session address the relay stamps on the envelope
+// `target_session` of `incoming_message` and `choices.*` events pushed to this
+// session (matches `make_state`). `delivery_outcome` envelopes instead name the
+// delivery target, so those tests build the target address directly.
+const UI_ADDRESS: &str = "tui@agentmux";
+
+/// Builds a relay stream event with the given envelope target and payload,
+/// mirroring the wire shape the relay emits (see `RelayStreamEvent`).
+fn stream_event(
+    event_type: &str,
+    target_session: &str,
+    payload: serde_json::Value,
+) -> RelayStreamEvent {
+    RelayStreamEvent {
+        event_type: event_type.to_string(),
+        target_session: target_session.to_string(),
+        created_at: String::new(),
+        payload,
+    }
+}
+
+#[test]
+fn chat_history_paging_moves_in_viewport_line_units() {
+    let mut state = make_state();
+    state.set_chat_history_viewport_height(4);
+    state.set_chat_history_total_lines(10);
+
+    state.scroll_chat_history_page_up();
+    assert_eq!(state.chat_history_scroll(), 4);
+
+    state.scroll_chat_history_page_up();
+    assert_eq!(state.chat_history_scroll(), 6);
+
+    state.scroll_chat_history_page_down();
+    assert_eq!(state.chat_history_scroll(), 2);
+
+    state.snap_chat_history_to_latest();
+    assert_eq!(state.chat_history_scroll(), 0);
+}
+
+#[test]
+fn write_draft_cursor_position_survives_a_mode_round_trip() {
+    let mut state = make_state();
+    // Enter Interaction (no target auto-opens the picker; dismiss it so typing
+    // lands in the Write input) and type a draft.
+    state
+        .dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE))
+        .expect("f4 to interaction");
+    state
+        .dispatch_event(key_event(KeyCode::Esc, KeyModifiers::NONE))
+        .expect("esc closes the auto-opened picker");
+    for character in "echo".chars() {
+        state
+            .dispatch_event(key_event(KeyCode::Char(character), KeyModifiers::NONE))
+            .expect("raww typing should be handled");
+    }
+    // Move the Write cursor into the middle of the draft: "ec|ho".
+    state
+        .dispatch_event(key_event(KeyCode::Left, KeyModifiers::NONE))
+        .expect("left moves the write cursor");
+    state
+        .dispatch_event(key_event(KeyCode::Left, KeyModifiers::NONE))
+        .expect("left moves the write cursor");
+
+    // Round-trip through Communication and back.
+    state
+        .dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE))
+        .expect("f4 to communication");
+    state
+        .dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE))
+        .expect("f4 back to interaction");
+    state
+        .dispatch_event(key_event(KeyCode::Esc, KeyModifiers::NONE))
+        .expect("esc closes the auto-opened picker");
+
+    // The preserved cursor inserts mid-draft, proving both the draft and its
+    // cursor index survived the round trip.
+    state
+        .dispatch_event(key_event(KeyCode::Char('X'), KeyModifiers::NONE))
+        .expect("raww typing should be handled");
+    assert_eq!(state.raww_draft(), "ecXho");
+}
+
+#[test]
+fn incoming_message_ids_are_deduplicated() {
+    let mut state = make_state();
+    let event = stream_event(
+        "incoming_message",
+        UI_ADDRESS,
+        json!({ "message_id": "msg-1", "sender_session": "relay", "body": "hello" }),
+    );
+    state.record_stream_events(&[event.clone(), event]);
+
+    assert_eq!(state.chat_history_bodies(), vec!["hello"]);
+    assert_eq!(state.event_history_len(), 1);
+}
+
+#[test]
+fn terminal_delivery_outcome_clears_pending_message() {
+    let mut state = make_state();
+    state.record_chat_events(&[queued_send("user", "msg-1")]);
+    assert_eq!(state.pending_deliveries_count(), 1);
+
+    // A `delivery_outcome` envelope targets the delivery recipient (`user`), not
+    // this UI; reconciliation keys off the payload `message_id`.
+    state.record_stream_events(&[stream_event(
+        "delivery_outcome",
+        "user@agentmux",
+        json!({ "message_id": "msg-1", "phase": "delivered", "outcome": "success" }),
+    )]);
+    assert_eq!(state.pending_deliveries_count(), 0);
+}
+
+#[test]
+fn queued_result_does_not_readd_pending_after_terminal_outcome_first() {
+    let mut state = make_state();
+    state.record_stream_events(&[stream_event(
+        "delivery_outcome",
+        "user@agentmux",
+        json!({ "message_id": "msg-1", "phase": "delivered", "outcome": "success" }),
+    )]);
+    assert_eq!(state.pending_deliveries_count(), 0);
+
+    state.record_chat_events(&[queued_send("user", "msg-1")]);
+    assert_eq!(state.pending_deliveries_count(), 0);
+}
+
+#[test]
+fn choice_snapshot_and_replayed_request_keep_a_single_row() {
+    let mut state = make_state();
+    state.record_stream_events(&[stream_event(
+        "choices.snapshot",
+        UI_ADDRESS,
+        json!({ "pending_count": 1, "choice_request_ids": ["perm-1"] }),
+    )]);
+    assert_eq!(state.pending_choice_request_ids(), vec!["perm-1"]);
+
+    // A subsequent request for the same id hydrates the snapshot placeholder in
+    // place, and a duplicate delivery of that request must not add a second row.
+    let requested = choice_requested(
+        "msg-1",
+        "perm-1",
+        "acp@agentmux",
+        &["allow-once", "reject-once"],
+    );
+    state.record_stream_events(&[requested.clone(), requested]);
+
+    let pending = state.pending_choices();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].choice_request_id, "perm-1");
+    assert_eq!(pending[0].message_id.as_deref(), Some("msg-1"));
+    assert_eq!(pending[0].target_session.as_deref(), Some("acp@agentmux"));
+    assert_eq!(pending[0].requested_kind.as_deref(), Some("approval"));
+    assert_eq!(pending[0].option_ids, vec!["allow-once", "reject-once"]);
+}
+
+#[test]
+fn resolved_choice_removes_the_pending_request() {
+    let mut state = make_state();
+    state.record_stream_events(&[choice_requested(
+        "msg-1",
+        "perm-1",
+        "acp@agentmux",
+        &["allow-once"],
+    )]);
+    assert_eq!(state.pending_choice_request_ids(), vec!["perm-1"]);
+
+    state.record_stream_events(&[stream_event(
+        "choices.resolved",
+        UI_ADDRESS,
+        json!({ "choice_request_id": "perm-1", "outcome": "selected" }),
+    )]);
+    assert!(state.pending_choice_request_ids().is_empty());
+}
+
+#[test]
+fn look_choice_resolution_without_pending_request_is_validation_error() {
+    let mut state = make_state();
+    state.set_interaction_target("acp");
+
+    match state.resolve_selected_look_choice_selected() {
+        Err(RuntimeError::Validation { code, .. }) => {
+            assert_eq!(code, "validation_unknown_choice_request");
+        }
+        other => panic!("unexpected result: {other:?}"),
+    }
+    match state.resolve_selected_look_choice_cancelled() {
+        Err(RuntimeError::Validation { code, .. }) => {
+            assert_eq!(code, "validation_unknown_choice_request");
+        }
+        other => panic!("unexpected result: {other:?}"),
+    }
+}
+
+#[test]
+fn look_pending_choices_are_filtered_to_the_active_target() {
+    let mut state = make_state();
+    state.record_stream_events(&[choice_requested("msg-1", "perm-1", "acp@agentmux", &[])]);
+    state.record_stream_events(&[choice_requested("msg-2", "perm-2", "relay@agentmux", &[])]);
+    // The stored choice target is the canonical payload id, so the active
+    // interaction target is matched in the same canonical form.
+    state.set_interaction_target("acp@agentmux");
+
+    assert_eq!(state.look_pending_choice_request_ids(), vec!["perm-1"]);
+}
+
+/// A queued `SendResult`, as the relay returns for an accepted async send.
+fn queued_send(target_session: &str, message_id: &str) -> SendResult {
+    SendResult {
+        target_session: target_session.to_string(),
+        message_id: message_id.to_string(),
+        outcome: SendOutcome::Queued,
+        reason_code: None,
+        reason: None,
+        details: None,
+    }
+}
+
+/// A `choices.requested` event in wire shape: the envelope targets this UI
+/// session, while the canonical choice target lives in the payload.
+fn choice_requested(
+    message_id: &str,
+    choice_request_id: &str,
+    canonical_target: &str,
+    option_ids: &[&str],
+) -> RelayStreamEvent {
+    let options = option_ids
+        .iter()
+        .map(|option_id| json!({ "option_id": option_id }))
+        .collect::<Vec<_>>();
+    stream_event(
+        "choices.requested",
+        UI_ADDRESS,
+        json!({
+            "message_id": message_id,
+            "choice_request_id": choice_request_id,
+            "target_session": canonical_target,
+            "requested_kind": "approval",
+            "requested_details": { "options": options },
+        }),
+    )
 }

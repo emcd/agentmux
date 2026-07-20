@@ -2,7 +2,7 @@
 
 use crossterm::event::Event;
 
-use crate::relay::RelayStreamEvent;
+use crate::relay::{RelayStreamEvent, SendResult};
 use crate::runtime::error::RuntimeError;
 
 use super::{
@@ -31,6 +31,17 @@ pub enum WorkbenchMode {
 pub enum WorkbenchPickerColumn {
     Bundles,
     Sessions,
+}
+
+/// Read-only projection of a pending choice row for the workbench/test surface,
+/// mirroring the internal `PendingChoiceEntry` without exposing it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkbenchPendingChoice {
+    pub choice_request_id: String,
+    pub message_id: Option<String>,
+    pub target_session: Option<String>,
+    pub requested_kind: Option<String>,
+    pub option_ids: Vec<String>,
 }
 
 pub struct Workbench {
@@ -245,5 +256,93 @@ impl Workbench {
             .iter()
             .map(|entry| entry.choice_request_id.as_str())
             .collect()
+    }
+
+    pub fn scroll_chat_history_page_down(&mut self) {
+        self.state.scroll_chat_history_page_down();
+    }
+
+    pub fn snap_chat_history_to_latest(&mut self) {
+        self.state.snap_chat_history_to_latest();
+    }
+
+    /// Chat-history entry bodies in list order (front-most first).
+    pub fn chat_history_bodies(&self) -> Vec<&str> {
+        self.state
+            .chat_history
+            .iter()
+            .map(|entry| entry.body.as_str())
+            .collect()
+    }
+
+    /// Number of recorded activity-log events.
+    pub fn event_history_len(&self) -> usize {
+        self.state.event_history.len()
+    }
+
+    /// Count of outstanding (not-yet-terminal) delivery acknowledgements.
+    pub fn pending_deliveries_count(&self) -> usize {
+        self.state.pending_deliveries_count()
+    }
+
+    /// Read-only projection of the pending-choices list for detailed inspection.
+    pub fn pending_choices(&self) -> Vec<WorkbenchPendingChoice> {
+        self.state
+            .pending_choices
+            .iter()
+            .map(|entry| WorkbenchPendingChoice {
+                choice_request_id: entry.choice_request_id.clone(),
+                message_id: entry.message_id.clone(),
+                target_session: entry.target_session.clone(),
+                requested_kind: entry.requested_kind.clone(),
+                option_ids: entry
+                    .options
+                    .iter()
+                    .map(|option| option.option_id.clone())
+                    .collect(),
+            })
+            .collect()
+    }
+
+    /// Pending-choice ids filtered to the active interaction target, as the
+    /// Interaction pane's choice list presents them.
+    pub fn look_pending_choice_request_ids(&self) -> Vec<&str> {
+        self.state
+            .look_pending_choices()
+            .into_iter()
+            .map(|entry| entry.choice_request_id.as_str())
+            .collect()
+    }
+
+    /// Resolves the selected look choice as a selection, discarding the internal
+    /// request payload so only the success/validation outcome is observable.
+    pub fn resolve_selected_look_choice_selected(&mut self) -> Result<(), RuntimeError> {
+        self.state.resolve_selected_look_choice_selected()
+    }
+
+    /// Resolves the selected look choice as a cancellation, discarding the
+    /// internal request payload so only the success/validation outcome shows.
+    pub fn resolve_selected_look_choice_cancelled(&mut self) -> Result<(), RuntimeError> {
+        self.state.resolve_selected_look_choice_cancelled()
+    }
+
+    /// Feeds relay stream events through the real ingestion path
+    /// (`record_stream_events`), the single seam TUI-integration tests use to
+    /// drive `incoming_message`, `delivery_outcome`, and `choices.*` handling.
+    /// Callers must build each `RelayStreamEvent` with the envelope/payload
+    /// attribution that event type actually carries: `incoming_message` and
+    /// `choices.*` stamp the receiving UI session in the envelope `target_session`
+    /// and carry the canonical peer/target in the payload, whereas
+    /// `delivery_outcome` names the delivery target in the envelope and carries
+    /// no payload target.
+    pub fn record_stream_events(&mut self, events: &[RelayStreamEvent]) {
+        self.state.record_stream_events(events);
+    }
+
+    /// Records send results through the real chat-event path
+    /// (`record_chat_events`), arming pending-delivery tracking keyed by
+    /// `message_id` exactly as a live `Send` response would.
+    pub fn record_chat_events(&mut self, results: &[SendResult]) {
+        self.state.record_chat_events(results);
     }
 }

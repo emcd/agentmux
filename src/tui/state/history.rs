@@ -168,7 +168,7 @@ impl AppState {
         true
     }
 
-    pub(super) fn record_chat_events(&mut self, results: &[SendResult]) {
+    pub(in crate::tui) fn record_chat_events(&mut self, results: &[SendResult]) {
         let mut accepted_count = 0usize;
         for result in results {
             match result.outcome {

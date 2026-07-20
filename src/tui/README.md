@@ -84,7 +84,13 @@ auto-opens it.
 - `target.rs`
   - recipient parsing/autocomplete and look-target resolution helpers.
 - `workbench.rs`
-  - launch option plumbing from CLI command layer.
+  - the public `Workbench` facade over the internal `AppState`: launch-option
+    plumbing plus the event-driven integration boundary for tests. It exposes
+    `dispatch_event`, focus/field/mode accessors, the relay-event ingestion
+    seams (`record_stream_events`, `record_chat_events`), and read-only
+    projections (e.g. `WorkbenchPendingChoice`, `pending_choices`). Callers
+    drive it with contract-faithful inputs; the projections are a test/inspection
+    boundary, not general domain APIs.
 
 ## Behavior
 
