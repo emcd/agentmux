@@ -13,7 +13,8 @@ shared by relay and MCP hosts.
   - resolves bundle/session association for MCP + CLI workflows,
   - supports precedence: CLI flags > local overrides > auto-discovery.
 - `tui_session.rs`
-  - resolves TUI session/bundle selection from CLI + `tui.toml` defaults,
+  - resolves TUI session selection from CLI + `users.toml` defaults, and
+    browsing-bundle selection from CLI + `ui.toml` defaults,
   - validates selected TUI session policy references.
 - `bootstrap.rs`
   - relay socket bind and runtime lock acquisition.
@@ -55,13 +56,16 @@ Supported keys:
 
 Per-worktree TUI session overrides are loaded from:
 
-- `.auxiliary/configuration/agentmux/overrides/tui.toml`
+- `.auxiliary/configuration/agentmux/overrides/users.toml`
 
 Supported keys:
 
-- `default-bundle`
 - `default-session`
 - `[[sessions]]`
+
+The override is identity-only. UI-surface defaults (`default-bundle`) live in
+`ui.toml`, which is read from the configuration root only and has no per-worktree
+override.
 
 ## Bootstrap Notes
 

@@ -51,7 +51,6 @@ fn write_tui_configuration(root: &std::path::Path, policy: &str) {
         root.join("users.toml"),
         format!(
             r#"
-default-bundle = "party"
 default-session = "user@GLOBAL"
 
 [[sessions]]
@@ -70,7 +69,6 @@ fn write_tui_configuration_with_session_id(root: &std::path::Path, policy: &str,
         root.join("users.toml"),
         format!(
             r#"
-default-bundle = "party"
 default-session = "{session_id}"
 
 [[sessions]]

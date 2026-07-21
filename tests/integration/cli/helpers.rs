@@ -231,10 +231,16 @@ pub(super) fn write_tui_configuration(
     default_session: Option<&str>,
     sessions: &[(&str, &str, Option<&str>)],
 ) {
-    let mut body = String::new();
+    // default-bundle is a UI-surface default: it lives in ui.toml, not the
+    // users.toml identity/policy file.
     if let Some(default_bundle) = default_bundle {
-        body.push_str(format!("default-bundle = \"{default_bundle}\"\n").as_str());
+        fs::write(
+            config_root.join("ui.toml"),
+            format!("default-bundle = \"{default_bundle}\"\n"),
+        )
+        .expect("write ui config");
     }
+    let mut body = String::new();
     if let Some(default_session) = default_session {
         body.push_str(
             format!(

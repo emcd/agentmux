@@ -204,11 +204,16 @@ pub(super) struct RawBundleFile {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub(super) struct RawUsersFile {
     #[serde(default)]
-    pub(super) default_bundle: Option<String>,
-    #[serde(default)]
     pub(super) default_session: Option<String>,
     #[serde(default)]
     pub(super) sessions: Vec<RawUsersSession>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub(super) struct RawUiFile {
+    #[serde(default)]
+    pub(super) default_bundle: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

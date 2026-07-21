@@ -114,12 +114,12 @@ auto-opens it.
 - async send workflow with local pending tracking and terminal outcome updates,
 - session identity precedence:
   - `--as-session`
-  - `default-session` from active `tui.toml` configuration
+  - `default-session` from active `users.toml` configuration
   - no association fallback,
 - bundle precedence (interactive launch does not require a bundle; a fresh
   install ships none, and the operator picks one in the picker):
   - `--bundle`
-  - `default-bundle` from active `users.toml` configuration
+  - `default-bundle` from active `ui.toml` configuration
   - the first available bundle, else an empty browsing context,
 - delivery outcome vocabulary:
   - `accepted`, `success`, `timeout`, `failed`,

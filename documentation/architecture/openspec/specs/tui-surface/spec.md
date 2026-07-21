@@ -203,13 +203,13 @@ configuration with deterministic precedence:
 Sender/session resolution:
 
 1. CLI `--as-session` when provided
-2. `default-session` from active TUI configuration
+2. `default-session` from `users.toml`
 3. fail-fast `validation_unknown_session`
 
 Browsing bundle resolution:
 
 1. CLI `--bundle` when provided
-2. `default-bundle` from active TUI configuration
+2. `default-bundle` from `ui.toml`
 3. first available configured bundle
 4. empty browsing context when no bundle is available
 
@@ -230,14 +230,14 @@ If selected session references unknown policy, startup SHALL fail fast with
 #### Scenario: Resolve TUI startup from global defaults
 
 - **WHEN** operator starts TUI without explicit selectors
-- **AND** active TUI configuration defines `default-bundle` and
+- **AND** `ui.toml` defines `default-bundle` and `users.toml` defines
   `default-session`
 - **THEN** TUI resolves startup identity from those defaults
 
 #### Scenario: Allow startup without bundle default
 
 - **WHEN** operator starts TUI without `--bundle`
-- **AND** active TUI configuration does not define `default-bundle`
+- **AND** `ui.toml` does not define `default-bundle`
 - **THEN** TUI resolves the browsing bundle from the first available configured
   bundle
 - **AND** if no bundle is available, TUI starts with an empty browsing context
@@ -245,7 +245,7 @@ If selected session references unknown policy, startup SHALL fail fast with
 #### Scenario: Fail when required session selector is absent
 
 - **WHEN** operator starts TUI without `--as-session`
-- **AND** active TUI configuration does not define `default-session`
+- **AND** `users.toml` does not define `default-session`
 - **THEN** startup fails with `validation_unknown_session`
 
 #### Scenario: Reject default session with unknown policy

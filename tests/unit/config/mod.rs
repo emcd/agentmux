@@ -6,3 +6,4 @@ mod environment;
 mod group;
 mod session;
 mod tui;
+mod ui;

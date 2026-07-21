@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::{BUNDLE_EXTENSION, BUNDLES_DIRECTORY, CODERS_FILE, POLICIES_FILE, USERS_FILE};
+use super::{BUNDLE_EXTENSION, BUNDLES_DIRECTORY, CODERS_FILE, POLICIES_FILE, UI_FILE, USERS_FILE};
 
 /// Resolves path to shared coder definitions.
 pub fn coders_configuration_path(configuration_root: &Path) -> PathBuf {
@@ -24,6 +24,11 @@ pub fn bundle_configuration_path(configuration_root: &Path, bundle_name: &str) -
 /// Resolves path to global user configuration file (`users.toml`).
 pub fn tui_configuration_path(configuration_root: &Path) -> PathBuf {
     configuration_root.join(USERS_FILE)
+}
+
+/// Resolves path to UI-surface configuration file (`ui.toml`).
+pub fn ui_configuration_path(configuration_root: &Path) -> PathBuf {
+    configuration_root.join(UI_FILE)
 }
 
 /// Resolves path to authorization policy presets file.

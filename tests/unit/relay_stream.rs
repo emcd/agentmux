@@ -124,7 +124,6 @@ fn write_tui_configuration(configuration_root: &Path, policy: &str, bundle_name:
         configuration_root.join("users.toml"),
         format!(
             r#"
-default-bundle = "{bundle_name}"
 default-session = "{global_id}"
 
 [[sessions]]
