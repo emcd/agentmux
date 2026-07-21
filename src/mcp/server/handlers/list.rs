@@ -322,6 +322,7 @@ impl McpServer {
             startup_failure_count,
             recent_startup_failures,
             principals: list_sessions_from_bundle_configuration(bundle),
+            principals_partial: None,
         }
     }
 }
@@ -339,6 +340,7 @@ fn synthesize_empty_global_bundle() -> ListedBundle {
         startup_failure_count: 0,
         recent_startup_failures: Vec::new(),
         principals: Vec::new(),
+        principals_partial: None,
     }
 }
 

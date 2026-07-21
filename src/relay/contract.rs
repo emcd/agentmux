@@ -170,6 +170,21 @@ pub struct ListedBundle {
     pub startup_failure_count: usize,
     pub recent_startup_failures: Vec<StartupFailureRecord>,
     pub principals: Vec<ListedSession>,
+    /// Set to `Some(true)` only when a cross-relay principal-scoped ingress grant
+    /// exposed a strict subset of the namespace's principals, so a caller can
+    /// distinguish a scope-limited subset from a complete listing. A complete
+    /// listing omits it (`None`, never `Some(false)`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principals_partial: Option<bool>,
+}
+
+/// One configured outbound peer alias in a `list.relays` discovery response.
+///
+/// Only the local alias is exposed. Socket addresses, `connect-as` identities,
+/// credential paths, and credentials are never discovery output.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ListedRelay {
+    pub alias: String,
 }
 
 /// Per-target delivery result for one `send` request.
@@ -335,6 +350,30 @@ pub enum RelayRequest {
     IdentityIntrospect {
         target_session: String,
     },
+    /// Enumerate this relay's locally configured outbound peer aliases. Never
+    /// forwarded and never dials a peer: it is origin-only routing-table
+    /// discovery over the normalized `[[peers]]` configuration.
+    ListRelays,
+    /// Discover namespaces on this relay or, when `relay` names a configured
+    /// outbound peer, on that peer. The requester is the authenticated Hello
+    /// principal (never a spoofable wire field): the origin authorizes its `list`
+    /// control, then forwards a request with `relay` cleared (a peer therefore
+    /// never re-forwards); the receiving relay derives namespaces from its own
+    /// bundle catalog and `GLOBAL` registry, filtered by the peer's ingress scope.
+    DiscoverNamespaces {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        relay: Option<String>,
+    },
+    /// Discover principals in one concrete `namespace` on the configured outbound
+    /// peer named by `relay`. Local (no-relay) principal listing keeps using
+    /// `List`; this variant is the cross-relay path only. The origin authorizes
+    /// the authenticated requester then forwards with `relay` cleared; the
+    /// receiving relay applies ingress-scope filtering over its own catalog.
+    DiscoverPrincipals {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        relay: Option<String>,
+        namespace: String,
+    },
 }
 
 /// Relay response protocol.
@@ -458,6 +497,18 @@ pub enum RelayResponse {
         /// True when the introspected session presented a store-backed
         /// credential; false for socket-trust sessions.
         verified: bool,
+    },
+    ListRelays {
+        schema_version: String,
+        relays: Vec<ListedRelay>,
+    },
+    DiscoverNamespaces {
+        schema_version: String,
+        namespaces: Vec<String>,
+    },
+    DiscoverPrincipals {
+        schema_version: String,
+        bundles: Vec<ListedBundle>,
     },
     Error {
         error: RelayError,

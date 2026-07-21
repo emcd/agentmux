@@ -409,11 +409,19 @@ fn prepare_relay_host(
             .map(|hosted| (hosted.paths.clone(), hosted.hosting_intent)),
     );
     let pre_hello_idle_timeout = relay_pre_hello_idle_timeout();
+    // Configured outbound peer aliases, read from the normalized `[[peers]]`
+    // entries so `list.relays` enumerates the routing table without dialing.
+    let relay_aliases = relay_configuration
+        .peers
+        .iter()
+        .map(|peer| peer.alias.clone())
+        .collect::<Vec<_>>();
     let serve_context = ConnectionServeContext::new(
         roots.configuration_root.clone(),
         roots.state_root.clone(),
         catalog,
         peer_connection_manager,
+        relay_aliases,
         relay_configuration.require_session_credentials,
         pre_hello_idle_timeout,
     );

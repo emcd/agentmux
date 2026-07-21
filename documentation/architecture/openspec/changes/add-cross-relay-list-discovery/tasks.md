@@ -28,32 +28,32 @@
 
 ## 3. Relay discovery contracts and dispatch
 
-- [ ] 3.1 Add relay request/response contracts for configured relay aliases,
+- [x] 3.1 Add relay request/response contracts for configured relay aliases,
       namespaces, and forwarded namespace/principal discovery.
-- [ ] 3.2 Ensure forwarded discovery requests carry neither an origin-local
+- [x] 3.2 Ensure forwarded discovery requests carry neither an origin-local
       relay alias nor `on_behalf_of`, preventing transitive forwarding and
       attribution ambiguity.
-- [ ] 3.3 Extend `ListedBundle` with optional
+- [x] 3.3 Extend `ListedBundle` with optional
       `principals_partial: Option<bool>`; use `Some(true)` only for filtered
       subsets and `None` for complete listings.
-- [ ] 3.4 Add relay-wide connection-layer and `src/relay/mod.rs` dispatch for
+- [x] 3.4 Add relay-wide connection-layer and `src/relay/mod.rs` dispatch for
       configured relay listing and cross-relay discovery.
-- [ ] 3.5 Implement local relay alias enumeration without dialing peers or
+- [x] 3.5 Implement local relay alias enumeration without dialing peers or
       exposing address, `connect-as`, or credential details; iterate normalized
       `RelayRuntimeConfiguration.peers` aliases directly rather than querying
       `PeerConnectionManager`.
-- [ ] 3.6 Implement local namespace enumeration from the bundle catalog and
+- [x] 3.6 Implement local namespace enumeration from the bundle catalog and
       `GLOBAL` view under the requester's `list` authorization.
-- [ ] 3.7 Reuse the canonical listed-bundle builder in
+- [x] 3.7 Reuse the canonical listed-bundle builder in
       `src/relay/handlers/listing.rs` for local and filtered foreign principal
       responses; do not duplicate readiness/state folding in discovery.
-- [ ] 3.8 Reject list scopes narrower than `all` in the new origin dispatch
+- [x] 3.8 Reject list scopes narrower than `all` in the new origin dispatch
       entries before any peer lookup or dial.
-- [ ] 3.9 Extend `PeerConnectionManager` to forward namespace/principal
+- [x] 3.9 Extend `PeerConnectionManager` to forward namespace/principal
       discovery using existing lazy dial and error classification.
-- [ ] 3.10 Implement receiving-relay discovery over only its local catalog and
+- [x] 3.10 Implement receiving-relay discovery over only its local catalog and
       registry, reusing `RouteAuthorization::Ingress`/`scope_permits` semantics.
-- [ ] 3.11 Emit `relay.discovery.*` request/success/relay_error/
+- [x] 3.11 Emit `relay.discovery.*` request/success/relay_error/
       unexpected_response/io_error inscriptions across discovery dispatch.
 
 ## 4. Authorization and validation tests

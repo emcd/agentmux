@@ -338,6 +338,7 @@ fn synthesize_unreachable_bundle(
                 ready: false,
             })
             .collect::<Vec<_>>(),
+        principals_partial: None,
     }
 }
 

@@ -77,9 +77,12 @@ pub(in crate::relay) fn handle_request(
         }
         RelayRequest::NewPeer { .. }
         | RelayRequest::ChangePsk { .. }
-        | RelayRequest::IdentityIntrospect { .. } => Err(relay_error(
+        | RelayRequest::IdentityIntrospect { .. }
+        | RelayRequest::ListRelays
+        | RelayRequest::DiscoverNamespaces { .. }
+        | RelayRequest::DiscoverPrincipals { .. } => Err(relay_error(
             "internal_unexpected_request",
-            "relay-wide identity request reached the per-bundle dispatcher",
+            "relay-wide request reached the per-bundle dispatcher",
             None,
         )),
     }
@@ -126,6 +129,7 @@ pub(in crate::relay) fn handle_global_list() -> RelayResponse {
             startup_failure_count: 0,
             recent_startup_failures: Vec::new(),
             principals: sessions,
+            principals_partial: None,
         },
     }
 }
@@ -267,7 +271,10 @@ fn normalize_request_identities(request: RelayRequest, namespace: &str) -> Relay
         | RelayRequest::ChoicesList
         | RelayRequest::NewPeer { .. }
         | RelayRequest::ChangePsk { .. }
-        | RelayRequest::IdentityIntrospect { .. }) => request,
+        | RelayRequest::IdentityIntrospect { .. }
+        | RelayRequest::ListRelays
+        | RelayRequest::DiscoverNamespaces { .. }
+        | RelayRequest::DiscoverPrincipals { .. }) => request,
     }
 }
 

@@ -21,7 +21,8 @@ mod resolution;
 
 pub(in crate::relay) use checks::{
     RelayActionFamily, RouteAuthorization, authorize_choose, authorize_choose_for_list,
-    authorize_relay_action, authorize_route, authorize_updown, reject_cross_relay_ingress,
+    authorize_discovery_origin, authorize_relay_action, authorize_route, authorize_updown,
+    reject_cross_relay_ingress, requester_list_reaches_all,
 };
 pub(in crate::relay) use context::AuthorizationContext;
 pub(in crate::relay) use loading::load_authorization_context;

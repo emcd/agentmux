@@ -27,9 +27,9 @@ use super::stream::{
 };
 use super::{
     IdentityIntrospectRights, PeerConnectionManager, RelayError, RelayRequest, RelayResponse,
-    RequestPrincipal, SCHEMA_VERSION, dispatch_identity_admin, dispatch_identity_introspect,
-    dispatch_list, dispatch_look, dispatch_raww, dispatch_request, dispatch_send, handlers,
-    relay_error,
+    RequestPrincipal, SCHEMA_VERSION, dispatch_discovery, dispatch_identity_admin,
+    dispatch_identity_introspect, dispatch_list, dispatch_look, dispatch_raww, dispatch_request,
+    dispatch_send, handlers, relay_error,
 };
 
 /// Free-fn helpers used by `serve_connection_frames`: namespace routing,
@@ -222,6 +222,10 @@ pub struct ConnectionServeContext {
     state_root: PathBuf,
     bundle_catalog: BundleCatalog,
     peer_connection_manager: Arc<PeerConnectionManager>,
+    /// This relay's configured outbound peer aliases, sorted, read from the
+    /// normalized `[[peers]]` configuration at startup. `list.relays` enumerates
+    /// them directly rather than dialing or querying the connection manager.
+    relay_aliases: Arc<Vec<String>>,
     require_session_credentials: bool,
     pre_hello_idle_timeout: Duration,
 }
@@ -235,14 +239,19 @@ impl ConnectionServeContext {
         state_root: PathBuf,
         bundle_catalog: BundleCatalog,
         peer_connection_manager: Arc<PeerConnectionManager>,
+        relay_aliases: Vec<String>,
         require_session_credentials: bool,
         pre_hello_idle_timeout: Duration,
     ) -> Self {
+        let mut relay_aliases = relay_aliases;
+        relay_aliases.sort();
+        relay_aliases.dedup();
         Self {
             configuration_root,
             state_root,
             bundle_catalog,
             peer_connection_manager,
+            relay_aliases: Arc::new(relay_aliases),
             require_session_credentials,
             pre_hello_idle_timeout,
         }
@@ -849,6 +858,50 @@ async fn serve_connection_frames(
                                 Some(principal),
                                 &bundle_catalog,
                                 peer_connection_manager.as_ref(),
+                            )
+                        })
+                        .await
+                    };
+                    write_stream_frame_to_writer(
+                        writer,
+                        OutgoingFrame::Response {
+                            request_id: request_id.as_deref(),
+                            response: &response,
+                        },
+                    )?;
+                    continue;
+                }
+                // Relay-wide discovery (`list.relays`, `list.namespaces`,
+                // cross-relay `list.principals`) is not a bundle-subject
+                // operation: it reads the configured peer aliases and this relay's
+                // own catalog/registry and forwards foreign discovery through the
+                // peer connection manager. The requester is its authenticated
+                // principal, so it bypasses the bundle-routing path below.
+                if matches!(
+                    request,
+                    RelayRequest::ListRelays
+                        | RelayRequest::DiscoverNamespaces { .. }
+                        | RelayRequest::DiscoverPrincipals { .. }
+                ) {
+                    let principal = RequestPrincipal {
+                        session_id: active_registration.requester_session_id().to_string(),
+                        authenticated_identity: authenticated_identity.clone(),
+                        introspect_rights: introspect_rights.clone(),
+                        ingress_scope: ingress_scope.clone(),
+                    };
+                    let response = {
+                        let configuration_root = Arc::clone(&configuration_root);
+                        let bundle_catalog = bundle_catalog.clone();
+                        let peer_connection_manager = Arc::clone(peer_connection_manager);
+                        let relay_aliases = Arc::clone(&context.relay_aliases);
+                        dispatch_on_blocking_pool(move || {
+                            dispatch_discovery(
+                                request,
+                                &configuration_root,
+                                principal,
+                                &bundle_catalog,
+                                peer_connection_manager.as_ref(),
+                                relay_aliases.as_slice(),
                             )
                         })
                         .await

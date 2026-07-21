@@ -112,6 +112,46 @@ pub(in crate::relay) fn authorize_relay_action(
     ))
 }
 
+/// Whether `requester_principal_id`'s configured `list` control reaches the
+/// `all` tier — relay-wide list visibility.
+///
+/// Gates cross-relay discovery (which needs `all`) and also decides local
+/// namespace-discovery visibility: a requester below `all` sees only its home
+/// namespace and `GLOBAL`, while an `all` requester sees every configured
+/// bundle namespace.
+pub(in crate::relay) fn requester_list_reaches_all(
+    configuration_root: &Path,
+    requester_principal_id: &str,
+) -> Result<bool, RelayError> {
+    let controls = resolve_relay_principal_controls(configuration_root, requester_principal_id)?;
+    Ok(controls.list.allows(PolicyScope::All))
+}
+
+/// Authorizes the origin side of cross-relay discovery (relay-alias enumeration
+/// and foreign namespace/principal discovery) before any peer lookup or dial.
+///
+/// Configured peer aliases and foreign discovery are relay-wide cross-boundary
+/// routing information, so the requester's `list` control must hold the `all`
+/// tier; a bundle/namespace-relative `home` scope confers no authority beyond
+/// the requester's own namespace.
+pub(in crate::relay) fn authorize_discovery_origin(
+    configuration_root: &Path,
+    requester_principal_id: &str,
+) -> Result<(), RelayError> {
+    if requester_list_reaches_all(configuration_root, requester_principal_id)? {
+        return Ok(());
+    }
+    Err(authorization_forbidden(
+        "list",
+        requester_principal_id,
+        "",
+        "cross-relay discovery requires the all scope for the list control",
+        None,
+        None,
+        None,
+    ))
+}
+
 /// Uniform, fully data-driven authorization for the target operations
 /// (`look`, `send`, `list`, `raww`).
 ///

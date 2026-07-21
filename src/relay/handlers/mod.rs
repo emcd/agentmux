@@ -7,6 +7,7 @@
 //! root only wires submodules and re-exports the relay-facing API.
 
 mod choices;
+mod discovery;
 mod dispatch;
 mod identity;
 mod listing;
@@ -16,6 +17,9 @@ mod routed;
 mod send;
 mod sender;
 
+pub(in crate::relay) use discovery::{
+    DiscoveryContext, handle_discover_namespaces, handle_discover_principals, handle_list_relays,
+};
 pub(in crate::relay) use dispatch::{
     build_identity_snapshot_event, emit_choices_snapshot_for_ui_registration, handle_global_list,
     handle_identity_admin_request, handle_identity_introspect, handle_request,
