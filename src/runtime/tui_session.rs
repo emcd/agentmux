@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::configuration::{
     ConfigurationError, TuiConfiguration, load_policy_ids, load_tui_configuration,
-    load_tui_configuration_file,
+    load_tui_configuration_file, load_ui_configuration,
 };
 
 use super::error::RuntimeError;
@@ -44,7 +44,8 @@ pub fn load_active_tui_configuration(
 ///
 /// Resolution order:
 /// 1. explicit `--bundle` and `--as-session`
-/// 2. `default-bundle` and `default-session` from active TUI configuration
+/// 2. `default-bundle` from active `ui.toml`, `default-session` from active
+///    `users.toml`
 /// 3. fail-fast validation errors
 ///
 /// # Errors
@@ -58,7 +59,8 @@ pub fn resolve_tui_session_identity(
     explicit_session: Option<&str>,
 ) -> Result<ResolvedTuiSession, RuntimeError> {
     let configuration = load_active_tui_configuration(configuration_root, workspace_root)?;
-    let bundle_name = resolve_bundle_name(configuration.as_ref(), explicit_bundle)?;
+    let ui_default_bundle = load_ui_default_bundle(configuration_root)?;
+    let bundle_name = resolve_bundle_name(ui_default_bundle.as_deref(), explicit_bundle)?;
     finish_tui_session(
         configuration_root,
         configuration.as_ref(),
@@ -74,7 +76,7 @@ pub fn resolve_tui_session_identity(
 /// [`resolve_tui_session_identity`], which requires one. The interactive TUI, by
 /// contrast, launches without requiring a configured `default-bundle`: the
 /// operator selects a bundle in the picker. The browsing bundle is taken from
-/// `explicit_bundle`, then the configured `default-bundle`, then
+/// `explicit_bundle`, then the `ui.toml` `default-bundle`, then
 /// `fallback_bundle` (e.g. the first available bundle), and is left empty when
 /// none resolve. The session/policy identity is still resolved strictly.
 ///
@@ -90,8 +92,12 @@ pub fn resolve_tui_launch_identity(
     fallback_bundle: Option<&str>,
 ) -> Result<ResolvedTuiSession, RuntimeError> {
     let configuration = load_active_tui_configuration(configuration_root, workspace_root)?;
-    let bundle_name =
-        resolve_browsing_bundle(configuration.as_ref(), explicit_bundle, fallback_bundle);
+    let ui_default_bundle = load_ui_default_bundle(configuration_root)?;
+    let bundle_name = resolve_browsing_bundle(
+        ui_default_bundle.as_deref(),
+        explicit_bundle,
+        fallback_bundle,
+    );
     finish_tui_session(
         configuration_root,
         configuration.as_ref(),
@@ -122,22 +128,34 @@ fn finish_tui_session(
     })
 }
 
+/// Loads the `ui.toml` `default-bundle` from the configuration root.
+///
+/// `ui.toml` is root-only: unlike `users.toml`, it does not honor a
+/// debug/testing override file, so surface defaults never leak from a
+/// per-worktree override. A missing file resolves to `None`.
+///
+/// # Errors
+///
+/// Returns `RuntimeError` when `ui.toml` exists but is malformed.
+fn load_ui_default_bundle(configuration_root: &Path) -> Result<Option<String>, RuntimeError> {
+    Ok(load_ui_configuration(configuration_root)
+        .map_err(|source| map_configuration_error(source, "load UI configuration"))?
+        .and_then(|configuration| configuration.default_bundle))
+}
+
 fn resolve_bundle_name(
-    configuration: Option<&TuiConfiguration>,
+    default_bundle: Option<&str>,
     explicit_bundle: Option<&str>,
 ) -> Result<String, RuntimeError> {
     if let Some(bundle_name) = explicit_bundle.and_then(normalize) {
         return Ok(bundle_name.to_string());
     }
-    if let Some(bundle_name) = configuration
-        .and_then(|configuration| configuration.default_bundle.as_deref())
-        .and_then(normalize)
-    {
+    if let Some(bundle_name) = default_bundle.and_then(normalize) {
         return Ok(bundle_name.to_string());
     }
     Err(RuntimeError::validation(
         "validation_unknown_bundle",
-        "bundle is required via --bundle or users.toml default-bundle".to_string(),
+        "bundle is required via --bundle or ui.toml default-bundle".to_string(),
     ))
 }
 
@@ -145,20 +163,16 @@ fn resolve_bundle_name(
 ///
 /// Unlike [`resolve_bundle_name`], an absent bundle is not an error: the TUI
 /// launches with an empty browsing context and the operator picks a bundle in
-/// the picker. Precedence is `explicit_bundle`, then the configured
+/// the picker. Precedence is `explicit_bundle`, then the `ui.toml`
 /// `default-bundle`, then `fallback_bundle`, then empty.
 fn resolve_browsing_bundle(
-    configuration: Option<&TuiConfiguration>,
+    default_bundle: Option<&str>,
     explicit_bundle: Option<&str>,
     fallback_bundle: Option<&str>,
 ) -> String {
     explicit_bundle
         .and_then(normalize)
-        .or_else(|| {
-            configuration
-                .and_then(|configuration| configuration.default_bundle.as_deref())
-                .and_then(normalize)
-        })
+        .or_else(|| default_bundle.and_then(normalize))
         .or_else(|| fallback_bundle.and_then(normalize))
         .map(str::to_string)
         .unwrap_or_default()

@@ -12,6 +12,7 @@ const BUNDLES_DIRECTORY: &str = "bundles";
 const CODERS_FILE: &str = "coders.toml";
 const POLICIES_FILE: &str = "policies.toml";
 const USERS_FILE: &str = "users.toml";
+const UI_FILE: &str = "ui.toml";
 const RELAY_FILE: &str = "relay.toml";
 const EXAMPLE_BUNDLE_FILE: &str = "example.toml";
 
@@ -32,6 +33,10 @@ const USERS_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/data/configuration/users.toml"
 ));
+const UI_TEMPLATE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/data/configuration/ui.toml"
+));
 const RELAY_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/data/configuration/relay.toml"
@@ -49,6 +54,10 @@ pub fn ensure_starter_configuration_layout(configuration_root: &Path) -> Result<
     ensure_template_file(&configuration_root.join(CODERS_FILE), CODERS_TEMPLATE)?;
     ensure_template_file(&configuration_root.join(POLICIES_FILE), POLICIES_TEMPLATE)?;
     ensure_template_file(&configuration_root.join(USERS_FILE), USERS_TEMPLATE)?;
+    // ui.toml scaffolds as a fully-commented all-defaults file (like relay.toml):
+    // it documents the UI-surface keys (`default-bundle`) without activating any,
+    // and a missing/empty ui.toml simply means no configured UI-surface defaults.
+    ensure_template_file(&configuration_root.join(UI_FILE), UI_TEMPLATE)?;
     // The relay.toml template is fully commented, so it scaffolds as an
     // all-defaults (effectively empty) file: it documents the schema without
     // activating any control, and the relay loads it as the documented defaults.

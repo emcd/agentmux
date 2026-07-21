@@ -11,7 +11,7 @@
 use std::{env, fs};
 
 use crate::{
-    configuration::bundles_configuration_directory,
+    configuration::{ConfigurationError, bundles_configuration_directory, load_ui_configuration},
     relay::{RelayError, load_relay_runtime_configuration, preflight_bundle_configuration},
     runtime::{association::WorkspaceContext, error::RuntimeError},
 };
@@ -41,6 +41,12 @@ pub(super) fn run_agentmux_check(arguments: &[String]) -> Result<(), RuntimeErro
     // same artifact up front. The shared loader keeps check and startup in step.
     load_relay_runtime_configuration(&roots.configuration_root, None, None)
         .map_err(preflight_error_to_runtime)?;
+
+    // Validate ui.toml alongside relay.toml at the config-root level: a
+    // malformed UI-surface config should fail pre-flight with its path and
+    // field detail, matching how the TUI/CLI reject it when loading surface
+    // defaults. An absent or valid ui.toml is a no-op.
+    load_ui_configuration(&roots.configuration_root).map_err(configuration_error_to_runtime)?;
 
     let bundle_names = match parsed.bundle_id.as_deref() {
         Some(bundle_id) => vec![bundle_id.to_string()],
@@ -144,6 +150,20 @@ fn discover_bundle_names(
 /// structured `details` (file path, offending field, policy id, control, …).
 /// The shared `map_relay_error` drops `details`, which would gut the whole point
 /// of the check — field-level diagnostics — so this command renders them inline.
+/// Maps a configuration load error onto a runtime validation error, preserving
+/// the offending file path and message so the pre-flight report stays
+/// field-level. Used for config-root artifacts (like `ui.toml`) that load
+/// through the configuration module rather than the relay pre-flight path.
+fn configuration_error_to_runtime(error: ConfigurationError) -> RuntimeError {
+    match error {
+        ConfigurationError::InvalidConfiguration { path, message } => RuntimeError::validation(
+            "validation_invalid_arguments",
+            format!("invalid configuration {}: {}", path.display(), message),
+        ),
+        other => RuntimeError::validation("validation_invalid_arguments", other.to_string()),
+    }
+}
+
 fn preflight_error_to_runtime(error: RelayError) -> RuntimeError {
     let RelayError {
         code,

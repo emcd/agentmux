@@ -103,7 +103,6 @@ send = "all"
         configuration_root.join("users.toml"),
         format!(
             r#"
-default-bundle = "example"
 default-session = "{global_id}"
 
 [[sessions]]

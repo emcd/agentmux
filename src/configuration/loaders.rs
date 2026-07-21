@@ -12,11 +12,11 @@ use super::{
     },
     paths::{
         bundle_configuration_path, coders_configuration_path, policies_configuration_path,
-        tui_configuration_path,
+        tui_configuration_path, ui_configuration_path,
     },
     raw::{
-        Coder, CoderTarget, RawBundleFile, RawCoder, RawCodersFile, RawPoliciesFile, RawUsersFile,
-        RawUsersSession,
+        Coder, CoderTarget, RawBundleFile, RawCoder, RawCodersFile, RawPoliciesFile, RawUiFile,
+        RawUsersFile, RawUsersSession,
     },
     targets::{
         build_session_target, select_marker_session_type, validate_acp_target,
@@ -24,7 +24,7 @@ use super::{
     },
     types::{
         BundleConfiguration, BundleGroupMembership, BundleMember, NameValueEntry, TuiConfiguration,
-        TuiSession,
+        TuiSession, UiConfiguration,
     },
 };
 
@@ -164,12 +164,6 @@ pub fn load_tui_configuration_file(
         }
     })?;
 
-    let default_bundle = parsed
-        .default_bundle
-        .as_deref()
-        .map(normalize_field)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string);
     let default_session = parsed
         .default_session
         .as_deref()
@@ -180,10 +174,45 @@ pub fn load_tui_configuration_file(
     let sessions = validate_tui_sessions(parsed.sessions, path)?;
 
     Ok(Some(TuiConfiguration {
-        default_bundle,
         default_session,
         sessions,
     }))
+}
+
+/// Loads UI-surface configuration from `<config-root>/ui.toml`.
+///
+/// UI-surface defaults (currently `default-bundle`) are read-only operator
+/// preferences, kept separate from the `users.toml` identity/policy file. A
+/// missing `ui.toml` resolves to `Ok(None)` (no configured defaults); a
+/// malformed file fails fast with a structured error naming the path.
+///
+/// # Errors
+///
+/// Returns `ConfigurationError` when the file exists but is malformed.
+pub fn load_ui_configuration(
+    configuration_root: &Path,
+) -> Result<Option<UiConfiguration>, ConfigurationError> {
+    let path = ui_configuration_path(configuration_root);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = fs::read_to_string(&path)
+        .map_err(|source| ConfigurationError::io(format!("read {}", path.display()), source))?;
+    let parsed = toml::from_str::<RawUiFile>(&raw).map_err(|source| {
+        ConfigurationError::InvalidConfiguration {
+            path: path.clone(),
+            message: source.to_string(),
+        }
+    })?;
+
+    let default_bundle = parsed
+        .default_bundle
+        .as_deref()
+        .map(normalize_field)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+
+    Ok(Some(UiConfiguration { default_bundle }))
 }
 
 /// Loads known policy preset identifiers from `<config-root>/policies.toml`.

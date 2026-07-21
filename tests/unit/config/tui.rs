@@ -12,7 +12,6 @@ fn loads_global_tui_configuration() {
     fs::write(
         root.join("users.toml"),
         r#"
-default-bundle = "agentmux"
 default-session = "user@GLOBAL"
 
 [[sessions]]
@@ -28,7 +27,6 @@ policy = "default"
     let loaded = load_tui_configuration(&root)
         .expect("load tui configuration")
         .expect("existing config");
-    assert_eq!(loaded.default_bundle.as_deref(), Some("agentmux"));
     assert_eq!(loaded.default_session.as_deref(), Some("user@GLOBAL"));
     assert_eq!(loaded.sessions.len(), 1);
     assert_eq!(loaded.sessions[0].id, "user@GLOBAL");
@@ -43,7 +41,6 @@ fn normalizes_bare_session_ids_to_global_form() {
     fs::write(
         root.join("users.toml"),
         r#"
-default-bundle = "agentmux"
 default-session = "user"
 
 [[sessions]]

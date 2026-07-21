@@ -182,6 +182,65 @@ fn check_configuration_reports_invalid_relay_toml_without_bundles() {
     );
 }
 
+// A malformed ui.toml is reported at the config-root level, like relay.toml,
+// even when no bundles exist: UI-surface config validation runs up front so a
+// bad ui.toml fails pre-flight rather than only at TUI/CLI startup.
+#[test]
+fn check_configuration_reports_invalid_ui_toml_without_bundles() {
+    let temporary = TempDir::new().expect("temporary");
+    let (config_root, state_root) = config_and_state(&temporary);
+    fs::write(config_root.join("ui.toml"), "unknown-key = \"oops\"\n").expect("write ui.toml");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "check",
+            "configuration",
+            "--config-directory",
+            config_root.to_str().expect("config root utf8"),
+            "--state-directory",
+            state_root.to_str().expect("state root utf8"),
+        ])
+        .output()
+        .expect("run agentmux check configuration");
+
+    assert!(!output.status.success(), "command should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("ui.toml"),
+        "stderr should name the offending ui.toml file: {stderr}"
+    );
+    assert!(
+        !stderr.contains("no bundle configurations found"),
+        "ui.toml validation must run before the no-bundles check: {stderr}"
+    );
+}
+
+#[test]
+fn check_configuration_accepts_valid_ui_toml() {
+    let temporary = TempDir::new().expect("temporary");
+    let (config_root, state_root) = config_and_state(&temporary);
+    write_bundle_configuration(&config_root, "alpha", None, &["a"]);
+    fs::write(config_root.join("ui.toml"), "default-bundle = \"alpha\"\n").expect("write ui.toml");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "check",
+            "configuration",
+            "--config-directory",
+            config_root.to_str().expect("config root utf8"),
+            "--state-directory",
+            state_root.to_str().expect("state root utf8"),
+        ])
+        .output()
+        .expect("run agentmux check configuration");
+
+    assert!(
+        output.status.success(),
+        "valid ui.toml should not fail pre-flight: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn check_configuration_rejects_unknown_subcommand() {
     let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))

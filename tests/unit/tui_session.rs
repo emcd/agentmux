@@ -26,6 +26,14 @@ fn write_users(configuration_root: &std::path::Path, body: &str) {
     fs::write(configuration_root.join("users.toml"), body).expect("write users.toml");
 }
 
+fn write_ui(configuration_root: &std::path::Path, default_bundle: &str) {
+    fs::write(
+        configuration_root.join("ui.toml"),
+        format!("default-bundle = \"{default_bundle}\"\n"),
+    )
+    .expect("write ui.toml");
+}
+
 #[test]
 fn resolves_explicit_bundle_and_session_selector() {
     let temporary = TempDir::new().expect("temporary");
@@ -33,7 +41,6 @@ fn resolves_explicit_bundle_and_session_selector() {
     write_users(
         temporary.path(),
         r#"
-default-bundle = "bundle-default"
 default-session = "user@GLOBAL"
 
 [[sessions]]
@@ -58,13 +65,13 @@ policy = "default"
 }
 
 #[test]
-fn resolves_defaults_when_selectors_are_omitted() {
+fn resolves_default_bundle_from_ui_toml_when_selectors_are_omitted() {
     let temporary = TempDir::new().expect("temporary");
     write_policies(temporary.path(), &["default"]);
+    write_ui(temporary.path(), "agentmux");
     write_users(
         temporary.path(),
         r#"
-default-bundle = "agentmux"
 default-session = "user@GLOBAL"
 
 [[sessions]]
@@ -100,7 +107,12 @@ policy = "default"
 
     let error = resolve_tui_session_identity(temporary.path(), temporary.path(), None, None)
         .expect_err("missing default bundle should fail");
-    assert!(error.to_string().contains("validation_unknown_bundle"));
+    let rendered = error.to_string();
+    assert!(rendered.contains("validation_unknown_bundle"));
+    assert!(
+        rendered.contains("ui.toml default-bundle"),
+        "strict error should name ui.toml as the default-bundle source: {rendered}"
+    );
 }
 
 #[test]
@@ -158,13 +170,13 @@ policy = "default"
 }
 
 #[test]
-fn launch_prefers_configured_default_bundle_over_fallback() {
+fn launch_prefers_ui_default_bundle_over_fallback() {
     let temporary = TempDir::new().expect("temporary");
     write_policies(temporary.path(), &["default"]);
+    write_ui(temporary.path(), "configured");
     write_users(
         temporary.path(),
         r#"
-default-bundle = "configured"
 default-session = "user@GLOBAL"
 
 [[sessions]]
@@ -213,8 +225,6 @@ fn rejects_unknown_session_selector() {
     write_users(
         temporary.path(),
         r#"
-default-bundle = "agentmux"
-
 [[sessions]]
 id = "user@GLOBAL"
 policy = "default"
@@ -237,10 +247,10 @@ policy = "default"
 fn rejects_session_with_unknown_policy_reference() {
     let temporary = TempDir::new().expect("temporary");
     write_policies(temporary.path(), &["default"]);
+    write_ui(temporary.path(), "agentmux");
     write_users(
         temporary.path(),
         r#"
-default-bundle = "agentmux"
 default-session = "user@GLOBAL"
 
 [[sessions]]
@@ -262,7 +272,6 @@ fn loads_local_override_in_debug_builds() {
     write_users(
         temporary.path(),
         r#"
-default-bundle = "agentmux"
 default-session = "normal@GLOBAL"
 
 [[sessions]]
@@ -279,7 +288,6 @@ policy = "default"
     fs::write(
         override_directory.join("users.toml"),
         r#"
-default-bundle = "agentmux"
 default-session = "override@GLOBAL"
 
 [[sessions]]
@@ -303,5 +311,57 @@ policy = "default"
         assert_eq!(default_session.as_deref(), Some("override@GLOBAL"));
     } else {
         assert_eq!(default_session.as_deref(), Some("normal@GLOBAL"));
+    }
+}
+
+/// The debug `overrides/users.toml` override swaps identity (`default-session`)
+/// only; `ui.toml` is root-only, so the browsing bundle still resolves from the
+/// configuration-root `ui.toml` even when an override file is present. (O1
+/// root-only decision.)
+#[test]
+fn override_swaps_identity_but_not_the_ui_default_bundle() {
+    let temporary = TempDir::new().expect("temporary");
+    write_policies(temporary.path(), &["default"]);
+    write_ui(temporary.path(), "root-bundle");
+    write_users(
+        temporary.path(),
+        r#"
+default-session = "normal@GLOBAL"
+
+[[sessions]]
+id = "normal@GLOBAL"
+policy = "default"
+
+[sessions.ui]
+"#,
+    );
+    let override_directory = temporary
+        .path()
+        .join(".auxiliary/configuration/agentmux/overrides");
+    fs::create_dir_all(&override_directory).expect("create override directory");
+    fs::write(
+        override_directory.join("users.toml"),
+        r#"
+default-session = "override@GLOBAL"
+
+[[sessions]]
+id = "override@GLOBAL"
+policy = "default"
+
+[sessions.ui]
+"#,
+    )
+    .expect("write override file");
+
+    let resolved =
+        resolve_tui_launch_identity(temporary.path(), temporary.path(), None, None, None)
+            .expect("resolve launch identity");
+    // Browsing bundle always comes from the root ui.toml, override or not.
+    assert_eq!(resolved.namespace, "root-bundle");
+    // Identity honors the debug override only in debug builds.
+    if cfg!(debug_assertions) {
+        assert_eq!(resolved.session_id, "override@GLOBAL");
+    } else {
+        assert_eq!(resolved.session_id, "normal@GLOBAL");
     }
 }

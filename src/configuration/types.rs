@@ -330,15 +330,25 @@ pub struct TuiSession {
     pub session_type: SessionType,
 }
 
-/// Global user configuration loaded from `users.toml`.
+/// Global user identity/policy configuration loaded from `users.toml`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct TuiConfiguration {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_bundle: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_session: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sessions: Vec<TuiSession>,
+}
+
+/// UI-surface operational defaults loaded from `ui.toml`.
+///
+/// Distinct from identity/policy (`users.toml`): `ui.toml` holds operator
+/// surface preferences. Today that is only the default browsing bundle; the
+/// file is designed to grow additional surface keys (theme, default screen
+/// mode) later without mixing them into the identity file.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct UiConfiguration {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_bundle: Option<String>,
 }
 
 impl TuiConfiguration {

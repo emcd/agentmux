@@ -1,5 +1,5 @@
-# global user sessions
-# default-bundle = "example"
+# global user identity and policy
+# UI-surface defaults such as default-bundle live in ui.toml, not here.
 default-session = 'user@GLOBAL'
 
 # Global user `id` values are canonical `session@GLOBAL` identities.

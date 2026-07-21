@@ -221,15 +221,17 @@ Association resolution:
 - `list sessions` and `host mcp` use association auto-discovery fallback:
   - bundle from Git common-dir owner name,
   - session from worktree top-level directory name,
-- `send` and `tui` use global TUI session selectors:
-  - `--bundle` or `default-bundle`,
-  - `--as-session` or `default-session`,
-  - fail-fast validation when selectors are missing or unknown.
+- `send` and `tui` use global session/surface selectors:
+  - `--bundle`, else `default-bundle` from `ui.toml`,
+  - `--as-session`, else `default-session` from `users.toml`,
+  - one-shot `send` fails fast when the bundle is missing or unknown;
+    interactive `tui` falls back to the first available bundle (or an empty
+    browsing context).
 
 TUI session identity resolution:
 
 - `--as-session` selector
-- active `tui.toml` defaults (`default-session`)
+- `default-session` from active `users.toml`
 - no association fallback for TUI/send
 
 ## Configuration
@@ -262,11 +264,11 @@ cross-namespace scope.
 
 Global TUI session configuration:
 
-- normal config file: `<config-root>/tui.toml`
-- keys:
-  - `default-bundle`
+- identity/policy file: `<config-root>/users.toml`
   - `default-session`
   - `[[sessions]]` with `id`, optional `name`, and `policy`
+- UI-surface file: `<config-root>/ui.toml`
+  - `default-bundle`
 
 Starter files are generated when missing:
 
@@ -274,7 +276,8 @@ Starter files are generated when missing:
 - `<config-root>/bundles/example.toml`
 - `<config-root>/policies.toml`
 - `<config-root>/users.toml`
-- `<config-root>/tui.toml`
+- `<config-root>/ui.toml`
+- `<config-root>/relay.toml`
 
 ### Example `coders.toml`
 
