@@ -84,7 +84,13 @@ auto-opens it.
 - `target.rs`
   - recipient parsing/autocomplete and look-target resolution helpers.
 - `workbench.rs`
-  - launch option plumbing from CLI command layer.
+  - the public `Workbench` facade over the internal `AppState`: launch-option
+    plumbing plus the event-driven integration boundary for tests. It exposes
+    `dispatch_event`, focus/field/mode accessors, the relay-event ingestion
+    seams (`record_stream_events`, `record_chat_events`), and read-only
+    projections (e.g. `WorkbenchPendingChoice`, `pending_choices`). Callers
+    drive it with contract-faithful inputs; the projections are a test/inspection
+    boundary, not general domain APIs.
 
 ## Behavior
 
@@ -167,6 +173,11 @@ auto-opens it.
   - Interaction mode: open the Interaction screen for the selected identity,
     running a synchronous relay `Look` so the look pane is populated with
     recent session history before the Write input takes focus,
+- Interaction look-pane freshness: re-entering an already-targeted Interaction
+  pane (`toggle_mode` -> `refresh_look_snapshot`) re-captures the look snapshot
+  so the pane reflects current session state instead of the buffer frozen from a
+  prior visit; re-capture preserves snapshot scroll and surfaces a relay failure
+  to the operator,
 - picker last-selected persistence: the most recently committed session target
   (Communication insert or Interaction open) is tracked by session name in
   `last_selected_recipient`; when the picker reopens or the recipient list
