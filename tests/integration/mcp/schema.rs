@@ -98,3 +98,53 @@ async fn help_command_schemas_are_free_of_null_unions() {
         "help args_schema null-unions break MiMo tool-call serialization: {offenders:?}"
     );
 }
+
+/// Every meta-tool `command` selector advertises a flat string enum
+/// (`type="string"` plus `enum`), not a tagged or `oneOf` schema, so weaker
+/// tool-call constructors receive a valid-subcommand signal directly in the
+/// advertised MCP input schema.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn meta_tool_command_schemas_are_flat_string_enums() {
+    let runtime = TestRuntime::create();
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let response = harness.list_tools(2).await;
+    let tools = response["result"]["tools"]
+        .as_array()
+        .expect("tool list array");
+
+    let expected: [(&str, &[&str]); 4] = [
+        ("list", &["principals", "namespaces", "relays", "decisions"]),
+        ("updown", &["up", "down"]),
+        ("new", &["peer"]),
+        ("change", &["psk"]),
+    ];
+
+    for (tool_name, values) in expected {
+        let command = tools
+            .iter()
+            .find(|tool| tool.get("name").and_then(Value::as_str) == Some(tool_name))
+            .and_then(|tool| tool.get("inputSchema"))
+            .and_then(|schema| schema.get("properties"))
+            .and_then(|properties| properties.get("command"))
+            .unwrap_or_else(|| panic!("tool '{tool_name}' missing command schema"));
+        assert_eq!(
+            command.get("type").and_then(Value::as_str),
+            Some("string"),
+            "tool '{tool_name}' command must be a flat string type: {command}"
+        );
+        let advertised = command
+            .get("enum")
+            .and_then(Value::as_array)
+            .map(|entries| entries.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+            .unwrap_or_else(|| panic!("tool '{tool_name}' command missing enum array: {command}"));
+        assert_eq!(
+            advertised, values,
+            "tool '{tool_name}' command enum mismatch"
+        );
+        assert!(
+            command.get("oneOf").is_none() && command.get("anyOf").is_none(),
+            "tool '{tool_name}' command must not be a tagged/oneOf schema: {command}"
+        );
+    }
+}

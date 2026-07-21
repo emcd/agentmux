@@ -26,10 +26,42 @@ pub(super) const TOOL_CHANGE: &str = "change";
 pub(super) const CHANGE_COMMAND_PSK: &str = "psk";
 pub(super) const NAMESPACE_AGENTMUX: &str = "agentmux";
 
+/// Renders a meta-tool `command` selector as a flat JSON Schema string enum.
+///
+/// The owning field stays a lenient `String` so unsupported values reach the
+/// handler's dispatch and surface as `validation_invalid_params` rather than
+/// failing early as a serde deserialize error; only the advertised schema is
+/// constrained. The doc-comment description on each field is merged on top of
+/// the schema returned here.
+fn command_enum_schema(values: &[&str]) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "string",
+        "enum": values,
+    })
+}
+
+fn list_command_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    command_enum_schema(&["principals", "namespaces", "relays", "decisions"])
+}
+
+fn updown_command_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    command_enum_schema(&["up", "down"])
+}
+
+fn new_command_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    command_enum_schema(&["peer"])
+}
+
+fn change_command_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    command_enum_schema(&["psk"])
+}
+
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub(super) struct ListParams {
-    /// List command selector. Allowed values: `principals`, `decisions`.
+    /// List command selector. Allowed values: `principals`, `namespaces`,
+    /// `relays`, `decisions`.
+    #[schemars(schema_with = "list_command_schema")]
     pub(super) command: String,
     /// Command-scoped arguments.
     #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
@@ -152,6 +184,7 @@ pub(super) struct ChooseParams {
 #[schemars(deny_unknown_fields)]
 pub(super) struct UpdownParams {
     /// Updown subcommand selector. Required; allowed values: `up`, `down`.
+    #[schemars(schema_with = "updown_command_schema")]
     pub(super) command: String,
     /// Command-scoped arguments.
     #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
@@ -176,6 +209,7 @@ pub(super) struct UpdownArgs {
 #[schemars(deny_unknown_fields)]
 pub(super) struct NewParams {
     /// New subcommand selector. Required; allowed value: `peer`.
+    #[schemars(schema_with = "new_command_schema")]
     pub(super) command: String,
     /// Command-scoped arguments.
     #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
@@ -213,6 +247,7 @@ pub(super) struct NewPeerArgs {
 #[schemars(deny_unknown_fields)]
 pub(super) struct ChangeParams {
     /// Change subcommand selector. Required; allowed value: `psk`.
+    #[schemars(schema_with = "change_command_schema")]
     pub(super) command: String,
     /// Command-scoped arguments.
     #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]

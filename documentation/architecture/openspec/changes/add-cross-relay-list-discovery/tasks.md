@@ -1,13 +1,13 @@
 ## 1. MCP command schemas
 
-- [ ] 1.1 Replace `ListParams.command` with a serde/schemars enum containing
+- [x] 1.1 Replace `ListParams.command` with a serde/schemars enum containing
       `principals`, `namespaces`, `relays`, and `decisions`.
-- [ ] 1.2 Replace `UpdownParams.command`, `NewParams.command`, and
+- [x] 1.2 Replace `UpdownParams.command`, `NewParams.command`, and
       `ChangeParams.command` with serde/schemars enums for their supported
       values.
-- [ ] 1.3 Preserve existing validation behavior for missing/unknown commands and
+- [x] 1.3 Preserve existing validation behavior for missing/unknown commands and
       unknown fields.
-- [ ] 1.4 Test that all four command schemas render as flat string enums
+- [x] 1.4 Test that all four command schemas render as flat string enums
       (`type="string"` plus `enum`), not tagged or `oneOf` schemas.
 
 ## 2. MCP discovery surface
