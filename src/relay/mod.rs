@@ -445,6 +445,46 @@ pub(in crate::relay) fn dispatch_raww(
     }
 }
 
+/// Dispatches a relay-wide discovery request (`list.relays`, `list.namespaces`,
+/// cross-relay `list.principals`). Relay-wide like identity admin: it reads the
+/// configured peer aliases and this relay's own catalog/`GLOBAL` registry, and
+/// forwards foreign discovery through the peer connection manager. The requester
+/// is identified by its authenticated `principal`, never a wire field, so no
+/// bound bundle is threaded here.
+pub(in crate::relay) fn dispatch_discovery(
+    request: RelayRequest,
+    configuration_root: &Path,
+    principal: RequestPrincipal,
+    bundle_catalog: &BundleCatalog,
+    peer_connection_manager: &PeerConnectionManager,
+    configured_relay_aliases: &[String],
+) -> RelayResponse {
+    let context = handlers::DiscoveryContext {
+        configuration_root,
+        bundle_catalog,
+        peer_connection_manager,
+        configured_relay_aliases,
+    };
+    let result = match request {
+        RelayRequest::ListRelays => handlers::handle_list_relays(&context, &principal),
+        RelayRequest::DiscoverNamespaces { relay } => {
+            handlers::handle_discover_namespaces(&context, &principal, relay)
+        }
+        RelayRequest::DiscoverPrincipals { relay, namespace } => {
+            handlers::handle_discover_principals(&context, &principal, relay, namespace)
+        }
+        _ => Err(relay_error(
+            "internal_unexpected_request",
+            "non-discovery request routed to the discovery dispatcher",
+            None,
+        )),
+    };
+    match result {
+        Ok(value) => value,
+        Err(error) => RelayResponse::Error { error },
+    }
+}
+
 /// Dispatches a relay-wide identity administration request (`new peer`,
 /// `change psk`), which mutates the relay-level principal store and has no
 /// bundle context. `requester_principal_id` is the full claimed identity of the

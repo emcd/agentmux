@@ -171,6 +171,140 @@ async fn list_rejects_reserved_namespace_tokens() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_principals_foreign_rejects_non_concrete_namespace() {
+    let runtime = TestRuntime::create();
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    // A relay selector requires one concrete namespace: an omitted namespace and
+    // a "*" fan-out token are both rejected before relay submission.
+    let missing_namespace = harness
+        .call_tool(
+            2,
+            "list",
+            list_principals_call(Map::from_iter([(
+                "relay".to_string(),
+                Value::String("west".to_string()),
+            )])),
+        )
+        .await;
+    assert_eq!(
+        error_code(&missing_namespace),
+        Some("validation_invalid_params")
+    );
+
+    let star_namespace = harness
+        .call_tool(
+            3,
+            "list",
+            list_principals_call(Map::from_iter([
+                ("relay".to_string(), Value::String("west".to_string())),
+                ("namespace".to_string(), Value::String("*".to_string())),
+            ])),
+        )
+        .await;
+    assert_eq!(
+        error_code(&star_namespace),
+        Some("validation_invalid_params")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_rejects_malformed_foreign_relay_selectors() {
+    let runtime = TestRuntime::create();
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    // An empty/whitespace or "*" relay selector is rejected for both principal
+    // and namespace discovery.
+    for (index, relay) in ["", "   ", "*"].iter().enumerate() {
+        let principals = harness
+            .call_tool(
+                2 + index as i64,
+                "list",
+                list_principals_call(Map::from_iter([
+                    ("relay".to_string(), Value::String((*relay).to_string())),
+                    ("namespace".to_string(), Value::String("myapp".to_string())),
+                ])),
+            )
+            .await;
+        assert_eq!(
+            error_code(&principals),
+            Some("validation_invalid_params"),
+            "principals relay={relay:?} should be rejected"
+        );
+
+        let namespaces = harness
+            .call_tool(
+                20 + index as i64,
+                "list",
+                Map::from_iter([
+                    (
+                        "command".to_string(),
+                        Value::String("namespaces".to_string()),
+                    ),
+                    (
+                        "args".to_string(),
+                        Value::Object(Map::from_iter([(
+                            "relay".to_string(),
+                            Value::String((*relay).to_string()),
+                        )])),
+                    ),
+                ]),
+            )
+            .await;
+        assert_eq!(
+            error_code(&namespaces),
+            Some("validation_invalid_params"),
+            "namespaces relay={relay:?} should be rejected"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unassociated_server_rejects_discovery_with_unknown_sender() {
+    let runtime = TestRuntime::create();
+    // A relay-wide server has no sender session and no relay stream. Every
+    // relay-backed discovery path must surface the typed unknown-sender error
+    // ahead of any relay contact, not an internal failure from the absent stream.
+    let mut harness = McpHarness::spawn_unassociated(&runtime).await;
+
+    let relays = harness
+        .call_tool(
+            2,
+            "list",
+            Map::from_iter([("command".to_string(), Value::String("relays".to_string()))]),
+        )
+        .await;
+    assert_eq!(error_code(&relays), Some("validation_unknown_sender"));
+
+    let namespaces = harness
+        .call_tool(
+            3,
+            "list",
+            Map::from_iter([(
+                "command".to_string(),
+                Value::String("namespaces".to_string()),
+            )]),
+        )
+        .await;
+    assert_eq!(error_code(&namespaces), Some("validation_unknown_sender"));
+
+    let foreign_principals = harness
+        .call_tool(
+            4,
+            "list",
+            list_principals_call(Map::from_iter([
+                ("relay".to_string(), Value::String("west".to_string())),
+                ("namespace".to_string(), Value::String("myapp".to_string())),
+            ])),
+        )
+        .await;
+    assert_eq!(
+        error_code(&foreign_principals),
+        Some("validation_unknown_sender")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn list_rejects_missing_or_invalid_command() {
     let runtime = TestRuntime::create();
     let mut harness = McpHarness::spawn(&runtime).await;

@@ -6,8 +6,9 @@ use serde_json::json;
 use super::errors::validation_tool_error;
 use super::params::{
     CHOOSE_OUTCOME_CANCELLED, CHOOSE_OUTCOME_SELECTED, ChangeParams, ChangePskArgs, ChooseParams,
-    HelpParams, LOOK_LINES_MAX, LOOK_LINES_MIN, ListArgs, ListDecisionsArgs, ListParams,
-    LookParams, NewParams, NewPeerArgs, RawwParams, SendParams, UpdownArgs, UpdownParams,
+    HelpParams, LOOK_LINES_MAX, LOOK_LINES_MIN, ListArgs, ListDecisionsArgs, ListNamespacesArgs,
+    ListParams, ListRelaysArgs, LookParams, NewParams, NewPeerArgs, RawwParams, SendParams,
+    UpdownArgs, UpdownParams,
 };
 
 pub(super) fn validate_list_params(params: &ListParams) -> Result<(), McpError> {
@@ -45,20 +46,70 @@ pub(super) fn validate_change_psk_args(args: &ChangePskArgs) -> Result<(), McpEr
 
 pub(super) fn validate_list_principals_args(args: &ListArgs) -> Result<(), McpError> {
     validate_unknown_fields("list principals command", Some("args"), &args.extra_fields)?;
-    if let Some(namespace) = args
+    let namespace = args
         .namespace
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-        && matches!(namespace, "ALL" | "EXTERNAL" | "RELAY")
+        .filter(|value| !value.is_empty());
+    match args.relay.as_deref().map(str::trim) {
+        // Foreign principal discovery: a concrete namespace is required and the
+        // relay selector must name a configured peer alias.
+        Some(relay) => {
+            if relay.is_empty() || relay == "*" {
+                return Err(validation_tool_error(
+                    "validation_invalid_params",
+                    "relay must be a configured peer alias, not empty or \"*\"",
+                    Some(json!({"relay": args.relay})),
+                ));
+            }
+            let Some(namespace) = namespace else {
+                return Err(validation_tool_error(
+                    "validation_invalid_params",
+                    "namespace is required and must name one concrete namespace when relay is set",
+                    Some(json!({"relay": relay})),
+                ));
+            };
+            if namespace == "*" || matches!(namespace, "ALL" | "EXTERNAL" | "RELAY") {
+                return Err(validation_tool_error(
+                    "validation_invalid_params",
+                    "foreign namespace must name one concrete namespace, not \"*\" or a reserved token",
+                    Some(json!({"namespace": namespace})),
+                ));
+            }
+            Ok(())
+        }
+        // Local principal listing keeps its existing selector semantics.
+        None => {
+            if let Some(namespace) = namespace
+                && matches!(namespace, "ALL" | "EXTERNAL" | "RELAY")
+            {
+                return Err(validation_tool_error(
+                    "validation_invalid_params",
+                    "namespace must be a bundle name, \"GLOBAL\", or \"*\"",
+                    Some(json!({"namespace": namespace})),
+                ));
+            }
+            Ok(())
+        }
+    }
+}
+
+pub(super) fn validate_list_namespaces_args(args: &ListNamespacesArgs) -> Result<(), McpError> {
+    validate_unknown_fields("list namespaces command", Some("args"), &args.extra_fields)?;
+    if let Some(relay) = args.relay.as_deref().map(str::trim)
+        && (relay.is_empty() || relay == "*")
     {
         return Err(validation_tool_error(
             "validation_invalid_params",
-            "namespace must be a bundle name, \"GLOBAL\", or \"*\"",
-            Some(json!({"namespace": namespace})),
+            "relay must be a configured peer alias, not empty or \"*\"",
+            Some(json!({"relay": args.relay})),
         ));
     }
     Ok(())
+}
+
+pub(super) fn validate_list_relays_args(args: &ListRelaysArgs) -> Result<(), McpError> {
+    validate_unknown_fields("list relays command", Some("args"), &args.extra_fields)
 }
 
 pub(super) fn validate_list_decisions_args(args: &ListDecisionsArgs) -> Result<(), McpError> {

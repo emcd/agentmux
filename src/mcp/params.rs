@@ -24,12 +24,46 @@ pub(super) const TOOL_NEW: &str = "new";
 pub(super) const NEW_COMMAND_PEER: &str = "peer";
 pub(super) const TOOL_CHANGE: &str = "change";
 pub(super) const CHANGE_COMMAND_PSK: &str = "psk";
+pub(super) const LIST_COMMAND_NAMESPACES: &str = "namespaces";
+pub(super) const LIST_COMMAND_RELAYS: &str = "relays";
 pub(super) const NAMESPACE_AGENTMUX: &str = "agentmux";
+
+/// Renders a meta-tool `command` selector as a flat JSON Schema string enum.
+///
+/// The owning field stays a lenient `String` so unsupported values reach the
+/// handler's dispatch and surface as `validation_invalid_params` rather than
+/// failing early as a serde deserialize error; only the advertised schema is
+/// constrained. The doc-comment description on each field is merged on top of
+/// the schema returned here.
+fn command_enum_schema(values: &[&str]) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "string",
+        "enum": values,
+    })
+}
+
+fn list_command_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    command_enum_schema(&["principals", "namespaces", "relays", "decisions"])
+}
+
+fn updown_command_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    command_enum_schema(&["up", "down"])
+}
+
+fn new_command_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    command_enum_schema(&["peer"])
+}
+
+fn change_command_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    command_enum_schema(&["psk"])
+}
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub(super) struct ListParams {
-    /// List command selector. Allowed values: `principals`, `decisions`.
+    /// List command selector. Allowed values: `principals`, `namespaces`,
+    /// `relays`, `decisions`.
+    #[schemars(schema_with = "list_command_schema")]
     pub(super) command: String,
     /// Command-scoped arguments.
     #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
@@ -57,13 +91,45 @@ pub(super) struct HelpParams {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub(super) struct ListArgs {
-    /// Listing scope selector. Omitted/null selects the associated/home bundle;
-    /// a bundle name selects that bundle; `GLOBAL` selects relay-wide
-    /// principals; `*` fans out across all namespaces.
+    /// Listing scope selector. When `relay` is absent: omitted/null selects the
+    /// associated/home bundle; a bundle name selects that bundle; `GLOBAL`
+    /// selects relay-wide principals; `*` fans out across all namespaces. When
+    /// `relay` is set, this must name one concrete foreign namespace (`*` and
+    /// reserved tokens are rejected).
     #[serde(default)]
     #[schemars(with = "String")]
     pub(super) namespace: Option<String>,
+    /// Optional configured outbound peer alias. When set, principal discovery is
+    /// forwarded to that foreign relay and `namespace` is required; when absent,
+    /// listing is local.
+    #[serde(default)]
+    #[schemars(with = "String")]
+    pub(super) relay: Option<String>,
     /// Unknown fields captured for explicit validation.
+    #[serde(flatten, default)]
+    #[schemars(skip)]
+    pub(super) extra_fields: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub(super) struct ListNamespacesArgs {
+    /// Optional configured outbound peer alias. When set, namespace discovery is
+    /// forwarded to that foreign relay; when absent, discovery is local.
+    #[serde(default)]
+    #[schemars(with = "String")]
+    pub(super) relay: Option<String>,
+    /// Unknown fields captured for explicit validation.
+    #[serde(flatten, default)]
+    #[schemars(skip)]
+    pub(super) extra_fields: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub(super) struct ListRelaysArgs {
+    /// Unknown fields captured for explicit validation. Relay enumeration takes
+    /// no arguments.
     #[serde(flatten, default)]
     #[schemars(skip)]
     pub(super) extra_fields: BTreeMap<String, Value>,
@@ -152,6 +218,7 @@ pub(super) struct ChooseParams {
 #[schemars(deny_unknown_fields)]
 pub(super) struct UpdownParams {
     /// Updown subcommand selector. Required; allowed values: `up`, `down`.
+    #[schemars(schema_with = "updown_command_schema")]
     pub(super) command: String,
     /// Command-scoped arguments.
     #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
@@ -176,6 +243,7 @@ pub(super) struct UpdownArgs {
 #[schemars(deny_unknown_fields)]
 pub(super) struct NewParams {
     /// New subcommand selector. Required; allowed value: `peer`.
+    #[schemars(schema_with = "new_command_schema")]
     pub(super) command: String,
     /// Command-scoped arguments.
     #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
@@ -213,6 +281,7 @@ pub(super) struct NewPeerArgs {
 #[schemars(deny_unknown_fields)]
 pub(super) struct ChangeParams {
     /// Change subcommand selector. Required; allowed value: `psk`.
+    #[schemars(schema_with = "change_command_schema")]
     pub(super) command: String,
     /// Command-scoped arguments.
     #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]

@@ -39,6 +39,7 @@ use uuid::Uuid;
 
 mod choices;
 mod cross_relay;
+mod discovery;
 mod on_behalf_of;
 mod registration;
 mod ui_delivery;
@@ -176,6 +177,7 @@ fn run_serve_connection(
             state_root,
             bundle_catalog,
             peer_connection_manager,
+            Vec::new(),
             false,
             Duration::from_secs(2),
         );
@@ -497,6 +499,7 @@ fn run_serve_connection_with_peers(
             state_root,
             bundle_catalog,
             peer_connection_manager,
+            peers.iter().map(|peer| peer.alias.clone()).collect(),
             false,
             Duration::from_secs(2),
         );

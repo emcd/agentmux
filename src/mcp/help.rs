@@ -5,7 +5,8 @@ use serde_json::json;
 use super::errors::validation_tool_error;
 use super::params::{
     CHANGE_COMMAND_PSK, CHOOSE_OUTCOME_SELECTED, ChangePskArgs, ChooseParams, HelpParams,
-    LIST_COMMAND_DECISIONS, LIST_COMMAND_PRINCIPALS, ListArgs, ListDecisionsArgs, LookParams,
+    LIST_COMMAND_DECISIONS, LIST_COMMAND_NAMESPACES, LIST_COMMAND_PRINCIPALS, LIST_COMMAND_RELAYS,
+    ListArgs, ListDecisionsArgs, ListNamespacesArgs, ListRelaysArgs, LookParams,
     NAMESPACE_AGENTMUX, NEW_COMMAND_PEER, NewPeerArgs, RawwParams, SendParams, TOOL_CHANGE,
     TOOL_CHOOSE, TOOL_HELP, TOOL_LIST, TOOL_LOOK, TOOL_NEW, TOOL_RAWW, TOOL_SEND, TOOL_UPDOWN,
     UPDOWN_COMMAND_DOWN, UPDOWN_COMMAND_UP, UpdownArgs,
@@ -18,7 +19,7 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
             "namespace": NAMESPACE_AGENTMUX,
             "shape_hints": [
                 "Call help with query='list', 'updown', 'new', or 'change' for meta-tool command lists.",
-                "Call help with query='list.principals', 'list.decisions', 'updown.up', 'updown.down', 'new.peer', or 'change.psk' for command args schemas.",
+                "Call help with query='list.principals', 'list.namespaces', 'list.relays', 'list.decisions', 'updown.up', 'updown.down', 'new.peer', or 'change.psk' for command args schemas.",
                 "Call help with query='send', 'look', 'raww', or 'choose' for exact tool args schemas."
             ],
             "tools": [
@@ -44,7 +45,15 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
             "commands": [
                 {
                     "command": "list.principals",
-                    "description": "List principals for one namespace or fan out across namespaces."
+                    "description": "List principals for one namespace or fan out across namespaces; with a relay alias, discover principals in one concrete foreign namespace."
+                },
+                {
+                    "command": "list.namespaces",
+                    "description": "Discover namespaces on the local relay or, with a relay alias, on one configured foreign relay."
+                },
+                {
+                    "command": "list.relays",
+                    "description": "Enumerate the local relay's configured outbound peer aliases."
                 },
                 {
                     "command": "list.decisions",
@@ -67,6 +76,30 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
                 "tool": TOOL_LIST,
                 "params": {
                     "command": LIST_COMMAND_PRINCIPALS,
+                    "args": {}
+                }
+            }),
+        )),
+        "list.namespaces" => Ok(command_help(
+            "list.namespaces",
+            "Discover namespaces on the local relay or, with a relay alias, on one configured foreign relay.",
+            json_schema_for::<ListNamespacesArgs>(),
+            json!({
+                "tool": TOOL_LIST,
+                "params": {
+                    "command": LIST_COMMAND_NAMESPACES,
+                    "args": {}
+                }
+            }),
+        )),
+        "list.relays" => Ok(command_help(
+            "list.relays",
+            "Enumerate the local relay's configured outbound peer aliases.",
+            json_schema_for::<ListRelaysArgs>(),
+            json!({
+                "tool": TOOL_LIST,
+                "params": {
+                    "command": LIST_COMMAND_RELAYS,
                     "args": {}
                 }
             }),
@@ -240,7 +273,7 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
         )),
         _ => Err(validation_tool_error(
             "validation_invalid_params",
-            "unknown help query; try empty query, 'agentmux', 'list', 'list.principals', 'list.decisions', 'send', 'look', 'raww', 'choose', 'updown', 'updown.up', 'updown.down', 'new', 'new.peer', 'change', or 'change.psk'",
+            "unknown help query; try empty query, 'agentmux', 'list', 'list.principals', 'list.namespaces', 'list.relays', 'list.decisions', 'send', 'look', 'raww', 'choose', 'updown', 'updown.up', 'updown.down', 'new', 'new.peer', 'change', or 'change.psk'",
             Some(json!({"query": query})),
         )),
     }

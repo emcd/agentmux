@@ -449,6 +449,7 @@ fn run_serve_connection_with_slot(
             state_root,
             bundle_catalog,
             peer_connection_manager,
+            Vec::new(),
             require_session_credentials,
             TEST_PRE_HELLO_IDLE_TIMEOUT,
         );

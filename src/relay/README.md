@@ -70,7 +70,10 @@ exported from `src/relay/mod.rs`.
     (`authorize_route`): the requester's controls are always resolved in the
     dispatch (home) bundle and the maximum required tier across the route's
     targets is checked against the requester's configured scope for the
-    operation's capability.
+    operation's capability. Also exposes the discovery origin gate
+    (`requester_list_reaches_all` / `authorize_discovery_origin`): the requester's
+    `list` control must reach `all` before any cross-relay discovery lookup or
+    peer dial.
 - `handlers.rs`
   - request dispatcher plus chat/look/raww handlers. `Send` and `Look` build a
     `ResolvedRoute` and authorize through the shared spine: a peer-bundle target
@@ -88,6 +91,13 @@ exported from `src/relay/mod.rs`.
     `change psk` rotation. Operates on the relay-level principal store with no
     bundle context; dispatched via `dispatch_identity_admin` before the
     per-bundle routing path in `connection.rs`.
+- `handlers/discovery.rs`
+  - relay-wide cross-relay discovery: configured relay-alias enumeration
+    (`ListRelays`), and namespace/principal discovery (`DiscoverNamespaces` /
+    `DiscoverPrincipals`) served locally or forwarded one hop to a configured
+    peer. Dispatched via `dispatch_discovery` from `connection.rs` alongside
+    identity administration, with no bundle context. See Cross-Relay
+    Discovery under Runtime Behavior Notes for the trust boundaries.
 - `lifecycle.rs`
   - runtime reconcile/shutdown helpers for managed sessions, plus
     `preflight_bundle_configuration` — a read-only validation of a bundle's
@@ -411,6 +421,58 @@ exported from `src/relay/mod.rs`.
   and read only relative to `authenticated_identity`. Raw input (`Raww`) has no
   delivered attribution envelope, so `on_behalf_of` rides the wire for symmetry
   but is not surfaced on delivery.
+
+### Cross-Relay Discovery
+
+- Discovery answers the operator's "what can I address across relays?" question
+  for cross-relay `Send`/`Raww`. It is **relay-wide**, dispatched at the
+  connection layer (`dispatch_discovery`) like identity administration rather
+  than through a bundle's `handle_request`, and covers three shapes:
+  - `ListRelays` — enumerate this relay's configured outbound peer aliases
+    (normalized `RelayRuntimeConfiguration.peers`), sorted and deduped. It reads
+    configuration directly and **never dials** a peer, and never discloses
+    address, `connect-as`, or credential detail — only the alias.
+  - `DiscoverNamespaces` / `DiscoverPrincipals` — served locally when no
+    `relay` selector is present, or forwarded a single hop when it is.
+- **Two trust boundaries** gate foreign (forwarded) discovery, mirroring the
+  cross-relay `Send` split:
+  1. *Origin authorization.* Before any lookup or dial, the origin gate
+     (`authorize_discovery_origin`) requires the requesting principal's `list`
+     control to reach `all`; a narrower scope is rejected
+     `authorization_forbidden` before the peer is contacted. The requester
+     identity is the authenticated Hello principal (canonical
+     `full_requester_principal_id`), never a wire field.
+  2. *Receiving-relay ingress.* A forwarded request arrives with its `relay`
+     selector cleared (no transitive re-forwarding) and **no** `on_behalf_of`,
+     and the receiving relay derives every result from its own bundle catalog +
+     `GLOBAL` registry, filtered by the authenticated peer principal's
+     registered ingress `scope` via `scope_permits` — the same
+     `RouteAuthorization::Ingress` deny-by-default authority that gates
+     forwarded `Send`/`Raww`. An absent scope yields `authorization_forbidden`.
+- **No existence disclosure across the boundary.** A namespace the peer's scope
+  does not cover is omitted rather than reported as forbidden-because-present,
+  and a concrete out-of-scope namespace returns `authorization_forbidden`
+  without confirming the namespace exists. Foreign bundle/namespace ids derive
+  solely from the receiving relay's catalog/registry and are never rewritten or
+  injected by the origin request.
+- **Partial marker.** When ingress scope narrows a bundle to an exact-principal
+  subset (rather than a whole-namespace grant), the receiving relay stamps
+  `principals_partial=Some(true)` on that `ListedBundle` via
+  `build_scoped_namespace_bundle`; a complete listing leaves it `None`. The
+  builder reuses the canonical `build_listed_bundle` (extracted in
+  `handlers/listing.rs`) and then retains only scope-permitted principals, so
+  readiness/state folding is not duplicated in discovery. A subset listing also
+  **suppresses every bundle-level diagnostic** (`hosted`/`state`/`startup_health`
+  and the startup-failure history/count): those describe namespace-wide state
+  outside the grant and would otherwise leak out-of-scope session ids, reasons,
+  and failure details. A subset view is addressing-only.
+- **`GLOBAL` discovery.** `GLOBAL` is registry-backed, not a catalog bundle, so
+  foreign `GLOBAL` principal discovery builds its listing from the unified
+  registry (`list_namespace_sessions`) scope-filtered by the peer's ingress
+  scope, rather than the bundle-configuration path — consistent with `GLOBAL`
+  namespace discovery, which advertises it from the same registry.
+- Discovery dispatch emits `relay.discovery.*` request / success / relay_error /
+  unexpected_response / io_error inscriptions.
 
 ### Delivery
 

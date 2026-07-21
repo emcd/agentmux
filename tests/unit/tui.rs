@@ -210,6 +210,7 @@ fn listed_bundle(
             transport: ListedSessionTransport::Tmux,
             ready: true,
         }],
+        principals_partial: None,
     }
 }
 

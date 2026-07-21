@@ -311,6 +311,37 @@ impl McpHarness {
         harness
     }
 
+    /// Spawns a relay-wide (unassociated) MCP server: no `--bundle` or
+    /// `--session-name`, so it carries no sender session and holds no relay
+    /// stream. Used to prove relay-backed paths surface a typed
+    /// `validation_unknown_sender` rather than an internal failure.
+    pub(crate) async fn spawn_unassociated(runtime: &TestRuntime) -> Self {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_agentmux"));
+        command
+            .arg("host")
+            .arg("mcp")
+            .arg("--config-directory")
+            .arg(&runtime.config_root)
+            .arg("--state-directory")
+            .arg(&runtime.state_root)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+
+        let mut child = command
+            .spawn()
+            .expect("spawn unassociated agentmux host mcp");
+        let stdin = child.stdin.take().expect("take mcp stdin");
+        let stdout = child.stdout.take().expect("take mcp stdout");
+        let mut harness = Self {
+            child,
+            stdin,
+            stdout: tokio::io::BufReader::new(stdout),
+        };
+        harness.initialize().await;
+        harness
+    }
+
     async fn initialize(&mut self) {
         let initialize =
             rmcp::model::InitializeRequest::new(rmcp::model::InitializeRequestParams::new(

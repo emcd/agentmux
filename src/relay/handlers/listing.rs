@@ -176,6 +176,39 @@ fn execute_list(
     tmux_socket: &Path,
     requester_session_id: &str,
 ) -> Result<RelayResponse, RelayError> {
+    let bundle = build_listed_bundle(enumerate_bundle, enumerate_runtime_directory, tmux_socket)?;
+    emit_inscription(
+        "relay.list.response",
+        &json!({
+            "namespace": bundle.id,
+            "requester_session": requester_session_id,
+            "hosted": bundle.hosted,
+            "state": bundle.state,
+            "startup_health": bundle.startup_health,
+            "startup_failure_count": bundle.startup_failure_count,
+            "principal_count": bundle.principals.len(),
+        }),
+    );
+    Ok(RelayResponse::List {
+        schema_version: SCHEMA_VERSION.to_string(),
+        bundle,
+    })
+}
+
+/// Builds the canonical listed-bundle payload for `enumerate_bundle`, folding
+/// per-session readiness and bundle startup state.
+///
+/// The single builder for a bundle's list projection: the routed `List` execute
+/// stage wraps it into a `RelayResponse::List`, and cross-relay principal
+/// discovery reuses it and then scope-filters the returned `principals` — so
+/// discovery never re-derives readiness or state folding. The returned bundle
+/// always carries `principals_partial: None`; a filtered caller sets the marker
+/// itself after trimming principals.
+pub(in crate::relay) fn build_listed_bundle(
+    enumerate_bundle: &BundleConfiguration,
+    enumerate_runtime_directory: &Path,
+    tmux_socket: &Path,
+) -> Result<ListedBundle, RelayError> {
     let sessions = enumerate_bundle
         .members
         .iter()
@@ -210,35 +243,18 @@ fn execute_list(
         list_bundle_state(configured_session_count, ready_session_count);
     let hosted = ready_session_count > 0;
 
-    let response = RelayResponse::List {
-        schema_version: SCHEMA_VERSION.to_string(),
-        bundle: ListedBundle {
-            id: enumerate_bundle.bundle_name.clone(),
-            hosted,
-            state,
-            startup_health,
-            state_reason_code,
-            state_reason,
-            startup_failure_count,
-            recent_startup_failures,
-            principals: sessions,
-        },
-    };
-    if let RelayResponse::List { bundle, .. } = &response {
-        emit_inscription(
-            "relay.list.response",
-            &json!({
-                "namespace": bundle.id,
-                "requester_session": requester_session_id,
-                "hosted": bundle.hosted,
-                "state": bundle.state,
-                "startup_health": bundle.startup_health,
-                "startup_failure_count": bundle.startup_failure_count,
-                "principal_count": bundle.principals.len(),
-            }),
-        );
-    }
-    Ok(response)
+    Ok(ListedBundle {
+        id: enumerate_bundle.bundle_name.clone(),
+        hosted,
+        state,
+        startup_health,
+        state_reason_code,
+        state_reason,
+        startup_failure_count,
+        recent_startup_failures,
+        principals: sessions,
+        principals_partial: None,
+    })
 }
 
 fn session_ready_for_list(

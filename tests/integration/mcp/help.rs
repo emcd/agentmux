@@ -47,6 +47,54 @@ async fn help_list_query_returns_meta_tool_command_catalog() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn help_list_catalog_and_discovery_schemas_advertise_relay_and_namespace() {
+    let runtime = TestRuntime::create();
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    // The list catalog advertises the discovery commands.
+    let catalog = decode_tool_payload(&harness.call_tool(2, "help", help_call(Some("list"))).await);
+    let commands = catalog["commands"].as_array().expect("commands array");
+    for expected in ["list.namespaces", "list.relays"] {
+        assert!(
+            commands.iter().any(|entry| entry["command"] == expected),
+            "list catalog includes {expected}: {commands:?}"
+        );
+    }
+
+    // list.namespaces marks `relay` optional and takes no other properties.
+    let namespaces = decode_tool_payload(
+        &harness
+            .call_tool(3, "help", help_call(Some("list.namespaces")))
+            .await,
+    );
+    assert_eq!(namespaces["invoke"]["params"]["command"], "namespaces");
+    assert!(namespaces["args_schema"]["properties"]["relay"].is_object());
+    assert!(namespaces["args_schema"]["properties"]["namespace"].is_null());
+
+    // list.relays takes no arguments.
+    let relays = decode_tool_payload(
+        &harness
+            .call_tool(4, "help", help_call(Some("list.relays")))
+            .await,
+    );
+    assert_eq!(relays["invoke"]["params"]["command"], "relays");
+    assert!(
+        relays["args_schema"]["properties"]
+            .as_object()
+            .is_none_or(serde_json::Map::is_empty)
+    );
+
+    // list.principals advertises both the namespace and the added relay selector.
+    let principals = decode_tool_payload(
+        &harness
+            .call_tool(5, "help", help_call(Some("list.principals")))
+            .await,
+    );
+    assert!(principals["args_schema"]["properties"]["namespace"].is_object());
+    assert!(principals["args_schema"]["properties"]["relay"].is_object());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn help_list_decisions_query_returns_args_schema() {
     let runtime = TestRuntime::create();
     let mut harness = McpHarness::spawn(&runtime).await;

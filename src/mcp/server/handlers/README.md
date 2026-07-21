@@ -43,7 +43,7 @@ The `McpServer` import path is `crate::mcp::server::McpServer`
 
 | File | Tool | Meta-commands | Maps to |
 | --- | --- | --- | --- |
-| `list.rs` | `list` | `principals`, `decisions` | `RelayRequest::List`, `RelayRequest::ChoicesList` |
+| `list.rs` | `list` | `principals`, `namespaces`, `relays`, `decisions` | `RelayRequest::List`, `RelayRequest::DiscoverPrincipals`, `RelayRequest::DiscoverNamespaces`, `RelayRequest::ListRelays`, `RelayRequest::ChoicesList` |
 | `help.rs` | `help` | — | `crate::mcp::help::help_tool` |
 | `send.rs` | `send` | — | `RelayRequest::Send` |
 | `look.rs` | `look` | — | `RelayRequest::Look` |
@@ -71,6 +71,14 @@ tool-specific quirks:
   `GLOBAL` bundle on relay-unavailable), and the
   `synthesize_down_bundle` / `synthesize_empty_global_bundle`
   constructors. Always appends a `GLOBAL` view to the response.
+  Also owns the discovery branches: `list_principals` early-returns
+  to `list_foreign_principals` when `args.relay` is set, and
+  `list_namespaces` / `list_relays` submit
+  `RelayRequest::DiscoverNamespaces` / `DiscoverPrincipals` /
+  `ListRelays`. Foreign responses echo the origin-local `relay` alias
+  (omitted on the local path) and preserve any `principals_partial`
+  flag the relay stamps. See `src/mcp/README.md`, Cross-Relay
+  Discovery.
 - `send.rs` — calls `qualify_send_targets` after sender resolution
   (so an unidentified sender fails as `validation_unknown_sender`
   regardless of target shape). The qualified target list is what
