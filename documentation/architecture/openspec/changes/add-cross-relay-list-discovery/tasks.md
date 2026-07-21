@@ -12,19 +12,19 @@
 
 ## 2. MCP discovery surface
 
-- [ ] 2.1 Extend `ListArgs` with optional `relay`; preserve local namespace
+- [x] 2.1 Extend `ListArgs` with optional `relay`; preserve local namespace
       semantics when it is absent and require one concrete namespace when set.
-- [ ] 2.2 Add command-scoped argument types for `list.relays` and
+- [x] 2.2 Add command-scoped argument types for `list.relays` and
       `list.namespaces`, with optional `relay` only on namespace discovery.
-- [ ] 2.3 Add `help` catalog/query support and exact schemas for `list.relays`,
+- [x] 2.3 Add `help` catalog/query support and exact schemas for `list.relays`,
       `list.namespaces`, and the updated `list.principals`.
-- [ ] 2.4 Implement handler branches for relay and namespace discovery and the
+- [x] 2.4 Implement handler branches for relay and namespace discovery and the
       foreign principal path.
-- [ ] 2.5 Emit `mcp.tool.list.relays.*`, `mcp.tool.list.namespaces.*`, and
+- [x] 2.5 Emit `mcp.tool.list.relays.*`, `mcp.tool.list.namespaces.*`, and
       `mcp.tool.list.principals.*` request/success/relay_error/
       unexpected_response/io_error inscriptions as applicable (five lifecycle
       channels per command).
-- [ ] 2.6 Preserve `list.decisions` and local `list.principals` behavior.
+- [x] 2.6 Preserve `list.decisions` and local `list.principals` behavior.
 
 ## 3. Relay discovery contracts and dispatch
 

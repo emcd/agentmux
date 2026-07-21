@@ -24,6 +24,8 @@ pub(super) const TOOL_NEW: &str = "new";
 pub(super) const NEW_COMMAND_PEER: &str = "peer";
 pub(super) const TOOL_CHANGE: &str = "change";
 pub(super) const CHANGE_COMMAND_PSK: &str = "psk";
+pub(super) const LIST_COMMAND_NAMESPACES: &str = "namespaces";
+pub(super) const LIST_COMMAND_RELAYS: &str = "relays";
 pub(super) const NAMESPACE_AGENTMUX: &str = "agentmux";
 
 /// Renders a meta-tool `command` selector as a flat JSON Schema string enum.
@@ -89,13 +91,45 @@ pub(super) struct HelpParams {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub(super) struct ListArgs {
-    /// Listing scope selector. Omitted/null selects the associated/home bundle;
-    /// a bundle name selects that bundle; `GLOBAL` selects relay-wide
-    /// principals; `*` fans out across all namespaces.
+    /// Listing scope selector. When `relay` is absent: omitted/null selects the
+    /// associated/home bundle; a bundle name selects that bundle; `GLOBAL`
+    /// selects relay-wide principals; `*` fans out across all namespaces. When
+    /// `relay` is set, this must name one concrete foreign namespace (`*` and
+    /// reserved tokens are rejected).
     #[serde(default)]
     #[schemars(with = "String")]
     pub(super) namespace: Option<String>,
+    /// Optional configured outbound peer alias. When set, principal discovery is
+    /// forwarded to that foreign relay and `namespace` is required; when absent,
+    /// listing is local.
+    #[serde(default)]
+    #[schemars(with = "String")]
+    pub(super) relay: Option<String>,
     /// Unknown fields captured for explicit validation.
+    #[serde(flatten, default)]
+    #[schemars(skip)]
+    pub(super) extra_fields: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub(super) struct ListNamespacesArgs {
+    /// Optional configured outbound peer alias. When set, namespace discovery is
+    /// forwarded to that foreign relay; when absent, discovery is local.
+    #[serde(default)]
+    #[schemars(with = "String")]
+    pub(super) relay: Option<String>,
+    /// Unknown fields captured for explicit validation.
+    #[serde(flatten, default)]
+    #[schemars(skip)]
+    pub(super) extra_fields: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub(super) struct ListRelaysArgs {
+    /// Unknown fields captured for explicit validation. Relay enumeration takes
+    /// no arguments.
     #[serde(flatten, default)]
     #[schemars(skip)]
     pub(super) extra_fields: BTreeMap<String, Value>,

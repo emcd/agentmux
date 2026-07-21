@@ -19,13 +19,15 @@ use crate::mcp::errors::{
     map_runtime_error, validation_tool_error,
 };
 use crate::mcp::params::{
-    LIST_COMMAND_DECISIONS, LIST_COMMAND_PRINCIPALS, LIST_SESSIONS_SCHEMA_VERSION, ListArgs,
-    ListDecisionsArgs, ListParams,
+    LIST_COMMAND_DECISIONS, LIST_COMMAND_NAMESPACES, LIST_COMMAND_PRINCIPALS, LIST_COMMAND_RELAYS,
+    LIST_SESSIONS_SCHEMA_VERSION, ListArgs, ListDecisionsArgs, ListNamespacesArgs, ListParams,
+    ListRelaysArgs,
 };
 use crate::mcp::server::McpServer;
 use crate::mcp::validation::{
     is_relay_unavailable_error, parse_meta_tool_args, validate_list_decisions_args,
-    validate_list_params, validate_list_principals_args,
+    validate_list_namespaces_args, validate_list_params, validate_list_principals_args,
+    validate_list_relays_args,
 };
 use crate::relay::{
     ListedBundle, ListedBundleState, ListedSession, RelayRequest, RelayResponse,
@@ -48,10 +50,12 @@ impl McpServer {
         let command = params.command.trim();
         match command {
             LIST_COMMAND_PRINCIPALS => self.list_principals(&params),
+            LIST_COMMAND_NAMESPACES => self.list_namespaces(&params),
+            LIST_COMMAND_RELAYS => self.list_relays(&params),
             LIST_COMMAND_DECISIONS => self.list_decisions(&params),
             other => Err(validation_tool_error(
                 "validation_invalid_params",
-                "command must be \"principals\" or \"decisions\"",
+                "command must be \"principals\", \"namespaces\", \"relays\", or \"decisions\"",
                 Some(json!({"command": other})),
             )),
         }
@@ -69,6 +73,16 @@ impl McpServer {
             )
         })?;
         validate_list_principals_args(&parsed_args)?;
+        // A relay selector forwards principal discovery to a configured peer;
+        // validation has guaranteed a concrete namespace and a non-empty alias.
+        if let Some(relay) = parsed_args
+            .relay
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return self.list_foreign_principals(relay, &parsed_args);
+        }
         let requester_session = self
             .state
             .configuration
@@ -199,6 +213,143 @@ impl McpServer {
         }
     }
 
+    /// Forwards principal discovery to a configured foreign relay. The relay
+    /// engine authorizes the requester's `list` control and applies the peer's
+    /// ingress scope; this layer echoes the origin-local `relay` selector back to
+    /// the caller and passes peer-authored bundles through unchanged.
+    fn list_foreign_principals(
+        &self,
+        relay: &str,
+        parsed_args: &ListArgs,
+    ) -> Result<CallToolResult, McpError> {
+        self.require_sender_session()?;
+        let namespace = parsed_args
+            .namespace
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .expect("foreign principal discovery validated a concrete namespace");
+        emit_inscription(
+            "mcp.tool.list.principals.request",
+            &json!({"relay": relay, "namespace": namespace}),
+        );
+        let request = RelayRequest::DiscoverPrincipals {
+            relay: Some(relay.to_string()),
+            namespace: namespace.to_string(),
+        };
+        match self.request_relay(&request) {
+            Ok(RelayResponse::DiscoverPrincipals {
+                schema_version,
+                bundles,
+            }) => {
+                let bundle_count = bundles.len();
+                let response = json!({
+                    "schema_version": schema_version,
+                    "relay": relay,
+                    "bundles": bundles,
+                });
+                emit_inscription(
+                    "mcp.tool.list.principals.success",
+                    &json!({"relay": relay, "namespace": namespace, "bundle_count": bundle_count}),
+                );
+                Ok(CallToolResult::success(vec![Content::json(response)?]))
+            }
+            Ok(other) => Err(self.map_nonsuccess_relay_response("mcp.tool.list.principals", other)),
+            Err(source) => {
+                Err(self.map_relay_stream_failure("mcp.tool.list.principals.io_error", source))
+            }
+        }
+    }
+
+    fn list_namespaces(&self, params: &ListParams) -> Result<CallToolResult, McpError> {
+        let args =
+            parse_meta_tool_args::<ListNamespacesArgs>(params.args.clone()).map_err(|reason| {
+                validation_tool_error(
+                    "validation_invalid_params",
+                    "invalid args for list namespaces command",
+                    Some(json!({
+                        "reason": reason,
+                        "hint": "pass args as a JSON object; use help query 'list.namespaces' for exact schema",
+                    })),
+                )
+            })?;
+        validate_list_namespaces_args(&args)?;
+        self.require_sender_session()?;
+        let relay = args
+            .relay
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        emit_inscription("mcp.tool.list.namespaces.request", &json!({"relay": relay}));
+        let request = RelayRequest::DiscoverNamespaces {
+            relay: relay.map(str::to_string),
+        };
+        match self.request_relay(&request) {
+            Ok(RelayResponse::DiscoverNamespaces {
+                schema_version,
+                namespaces,
+            }) => {
+                let namespace_count = namespaces.len();
+                // Foreign responses echo the selected relay; local responses omit
+                // it (per the discovery contract).
+                let mut response = json!({
+                    "schema_version": schema_version,
+                    "namespaces": namespaces,
+                });
+                if let Some(relay) = relay {
+                    response["relay"] = json!(relay);
+                }
+                emit_inscription(
+                    "mcp.tool.list.namespaces.success",
+                    &json!({"relay": relay, "namespace_count": namespace_count}),
+                );
+                Ok(CallToolResult::success(vec![Content::json(response)?]))
+            }
+            Ok(other) => Err(self.map_nonsuccess_relay_response("mcp.tool.list.namespaces", other)),
+            Err(source) => {
+                Err(self.map_relay_stream_failure("mcp.tool.list.namespaces.io_error", source))
+            }
+        }
+    }
+
+    fn list_relays(&self, params: &ListParams) -> Result<CallToolResult, McpError> {
+        let args = parse_meta_tool_args::<ListRelaysArgs>(params.args.clone()).map_err(|reason| {
+            validation_tool_error(
+                "validation_invalid_params",
+                "invalid args for list relays command",
+                Some(json!({
+                    "reason": reason,
+                    "hint": "pass args as a JSON object; use help query 'list.relays' for exact schema",
+                })),
+            )
+        })?;
+        validate_list_relays_args(&args)?;
+        self.require_sender_session()?;
+        emit_inscription("mcp.tool.list.relays.request", &json!({}));
+        let request = RelayRequest::ListRelays;
+        match self.request_relay(&request) {
+            Ok(RelayResponse::ListRelays {
+                schema_version,
+                relays,
+            }) => {
+                let relay_count = relays.len();
+                let response = json!({
+                    "schema_version": schema_version,
+                    "relays": relays,
+                });
+                emit_inscription(
+                    "mcp.tool.list.relays.success",
+                    &json!({"relay_count": relay_count}),
+                );
+                Ok(CallToolResult::success(vec![Content::json(response)?]))
+            }
+            Ok(other) => Err(self.map_nonsuccess_relay_response("mcp.tool.list.relays", other)),
+            Err(source) => {
+                Err(self.map_relay_stream_failure("mcp.tool.list.relays.io_error", source))
+            }
+        }
+    }
+
     fn list_sessions_single_bundle(
         &self,
         bundle_name: &str,
@@ -280,6 +431,24 @@ impl McpServer {
                 Err(self.map_relay_stream_failure("mcp.tool.list.global.io_error", source))
             }
         }
+    }
+
+    /// Guards a relay-backed discovery path on a configured sender session,
+    /// mapping an unassociated MCP server to the same typed
+    /// `validation_unknown_sender` the local `list.principals` path returns
+    /// rather than letting the absent relay stream surface as an internal
+    /// failure. Discovery is relay-wide (the relay authorizes the authenticated
+    /// Hello principal, not this field), but an unassociated server has no relay
+    /// stream to reach, so the request cannot succeed.
+    fn require_sender_session(&self) -> Result<(), McpError> {
+        if self.state.configuration.sender_session.is_none() {
+            return Err(validation_tool_error(
+                "validation_unknown_sender",
+                "sender session is not configured for this MCP server",
+                None,
+            ));
+        }
+        Ok(())
     }
 
     fn home_bundle_name(&self) -> Option<&str> {
