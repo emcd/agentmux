@@ -58,30 +58,30 @@
 
 ## 4. Authorization and validation tests
 
-- [ ] 4.1 Schema: `list.command` advertises all four enum values and command help
+- [x] 4.1 Schema: `list.command` advertises all four enum values and command help
       marks `relay`/`namespace` required or optional as specified.
-- [ ] 4.2 Local: `list.relays` returns sorted aliases without dialing and returns
+- [x] 4.2 Local: `list.relays` returns sorted aliases without dialing and returns
       an empty array when no peers are configured.
-- [ ] 4.3 Local: `list.namespaces` reflects only namespaces permitted by the
+- [x] 4.3 Local: `list.namespaces` reflects only namespaces permitted by the
       requester's `list` scope.
-- [ ] 4.4 Foreign: origin requester needs `list` scope `all` before the peer is
+- [x] 4.4 Foreign: origin requester needs `list` scope `all` before the peer is
       contacted.
-- [ ] 4.5 Foreign: absent peer ingress scope returns `authorization_forbidden`.
-- [ ] 4.6 Foreign: namespace scope exposes complete principals and exact-principal
+- [x] 4.5 Foreign: absent peer ingress scope returns `authorization_forbidden`.
+- [x] 4.6 Foreign: namespace scope exposes complete principals and exact-principal
       scope exposes a subset with `principals_partial=true`.
-- [ ] 4.7 Foreign: a namespace-scoped grant for an empty namespace omits that
+- [x] 4.7 Foreign: a namespace-scoped grant for an empty namespace omits that
       namespace and returns an empty namespace list without existence disclosure.
-- [ ] 4.8 Foreign: an out-of-scope concrete namespace returns
+- [x] 4.8 Foreign: an out-of-scope concrete namespace returns
       `authorization_forbidden` without namespace-existence disclosure.
-- [ ] 4.9 Foreign: unknown alias, no configured peers, missing credential, and
+- [x] 4.9 Foreign: unknown alias, no configured peers, missing credential, and
       unreachable/authentication failure preserve their typed errors.
-- [ ] 4.10 Foreign: peer validation/authorization errors propagate unchanged and
+- [x] 4.10 Foreign: peer validation/authorization errors propagate unchanged and
       foreign bundle ids are not rewritten or synthesized.
-- [ ] 4.11 Foreign: returned namespace ids derive from the receiving relay's
+- [x] 4.11 Foreign: returned namespace ids derive from the receiving relay's
       local catalog/registry and cannot be injected by the origin request.
-- [ ] 4.12 Wire: forwarded discovery contains neither the origin `relay` selector
+- [x] 4.12 Wire: forwarded discovery contains neither the origin `relay` selector
       nor `on_behalf_of` and cannot trigger an onward peer lookup.
-- [ ] 4.13 Validation: foreign principal listing rejects omitted, empty, `*`, and
+- [x] 4.13 Validation: foreign principal listing rejects omitted, empty, `*`, and
       unsupported reserved namespaces; foreign relay selectors reject empty and
       `*` for both namespace and principal discovery.
 

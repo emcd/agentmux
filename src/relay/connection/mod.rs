@@ -883,8 +883,11 @@ async fn serve_connection_frames(
                         | RelayRequest::DiscoverNamespaces { .. }
                         | RelayRequest::DiscoverPrincipals { .. }
                 ) {
+                    // Discovery authorization resolves the requester's controls
+                    // relay-wide, so it needs the full canonical `<id>@<namespace>`
+                    // principal id — a bundle session's stored id is bundle-local.
                     let principal = RequestPrincipal {
-                        session_id: active_registration.requester_session_id().to_string(),
+                        session_id: full_requester_principal_id(active_registration),
                         authenticated_identity: authenticated_identity.clone(),
                         introspect_rights: introspect_rights.clone(),
                         ingress_scope: ingress_scope.clone(),

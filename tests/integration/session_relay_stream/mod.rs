@@ -39,6 +39,7 @@ use uuid::Uuid;
 
 mod choices;
 mod cross_relay;
+mod discovery;
 mod on_behalf_of;
 mod registration;
 mod ui_delivery;
