@@ -154,22 +154,9 @@ When a commit completes an OpenSpec task or requirement, update the relevant Ope
 
 ## Notebook Conventions
 
-### Handoff Notes
-
-- Use `coordination/<component>` as the active handoff lane for each owner
-  (for example `coordination/relay`, `coordination/mcp`, `coordination/tui`).
-- Keep one rolling handoff note per component and update it in place instead of
-  creating a new note for each checkpoint.
-- Use `coordination/general` for coordinator-wide state and cross-component
-  snapshots.
-- Minimize handoff churn: prefer updates for meaningful lane-state changes and
-  pre-compaction checkpoints, not routine micro-status noise.
-- Handoff content: a brief summary of recent accomplishments and a current
-  agenda. Always replace the note body (never append) so it stays one
-  screenful — a growing checkpoint log is an anti-pattern.
-- For cross-component notes, apply multiple `#component-*` tags.
-- Prefer pruning stale/superseded coordination checkpoints while preserving the
-  current per-component handoff context.
+**Read this section before writing or updating a handoff note.**
+@documentation/agents/notebook.md's Handoff Hygiene section covers
+per-component handoff naming, update triggers, and content shape.
 
 ## Team Org
 

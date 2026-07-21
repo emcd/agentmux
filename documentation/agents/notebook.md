@@ -49,8 +49,7 @@ Use consistent tags for discoverability:
 - When an idea promotes to a formal OpenSpec proposal, delete or archive the notebook draft so the OpenSpec file is the canonical record.
 - Example component names include `engine`, `mcp`, `tui`, `web`, `handbook`, and `data-models`.
 - This project should define and document its specific component-folder conventions in the **Project Notes** section.
-- For cross-component work, prefer `coordination/general` and use multiple `#component-*` tags.
-- For per-component rolling handoffs, prefer `coordination/<component>` (one stable note updated at checkpoints).
+- For cross-component work, prefer `coordination/general` and use multiple `#component-*` tags. See Handoff Hygiene below for per-component rolling handoffs.
 - Keep notebook lifecycle hygiene:
     - prune completed todos quickly,
     - keep only active/near-term coordination checkpoints,
@@ -64,6 +63,8 @@ Use consistent tags for discoverability:
 - For each active OpenSpec proposal, keep **exactly one** linked `nb` todo as the tracking anchor (with proposal reference), rather than duplicating full task trees in both systems.
 
 ## Handoff Hygiene
-- Keep rolling handoff notes stable and update in place, separate from OpenSpec proposal content.
-- Do not repurpose or overwrite rolling handoff notes with proposal content.
+- Use `coordination/<component>` as the active handoff lane for each owner (for example `coordination/relay`, `coordination/mcp`, `coordination/tui`). Use `coordination/general` for coordinator-wide state and cross-component snapshots.
+- Keep one rolling handoff note per component and update it in place instead of creating a new note for each checkpoint, separate from OpenSpec proposal content. Do not repurpose or overwrite rolling handoff notes with proposal content.
 - Handoff content should be a brief summary of recent accomplishments and the current agenda. Replace the note body rather than appending so the handoff stays one screenful; a growing checkpoint log is an anti-pattern.
+- For cross-component notes, apply multiple `#component-*` tags. Prefer pruning stale/superseded coordination checkpoints while preserving the current per-component handoff context.
+- **Updates are conditional, not routine.** Update only when (a) another lane or the Coordinator needs visibility into a state change that isn't otherwise discoverable (git log, nb todo/issue status, OpenSpec `tasks.md`), or (b) the session is genuinely ending — not merely compacting — such that the next pickup may be a cold session rather than a continuation of this one. In-session compaction already produces an automatic continuity summary for that same session's own next turn; approaching compaction is not by itself a reason to update a handoff note.
