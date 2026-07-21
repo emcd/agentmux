@@ -281,8 +281,10 @@ fn map_relay_error(error: RelayError) -> RuntimeError {
     // Without the explicit `authorization_forbidden` arm a relay-enforced
     // permission denial collapses into a generic IO status with no code, even
     // though the spec requires it to surface terminally with its code intact.
-    // Every other (internal) code stays a generic IO error so unexpected relay
-    // internals do not leak a code the surface would treat as actionable.
+    // Every other (internal) code stays an IO status so unexpected relay
+    // internals do not leak a code the surface would treat as actionable — but
+    // the code is retained in the diagnostic message so the real cause is not
+    // collapsed into one opaque string.
     if error.code.starts_with("validation_")
         || error.code == "relay_unavailable"
         || error.code == "authorization_forbidden"
@@ -291,7 +293,7 @@ fn map_relay_error(error: RelayError) -> RuntimeError {
     }
     RuntimeError::io(
         error.message,
-        io::Error::other("relay returned internal error"),
+        io::Error::other(format!("relay error {}", error.code)),
     )
 }
 

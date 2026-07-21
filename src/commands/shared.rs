@@ -163,9 +163,12 @@ pub(super) fn map_relay_error(error: RelayError) -> RuntimeError {
     if error.code.starts_with("validation_") || error.code == "authorization_forbidden" {
         return RuntimeError::validation(error.code, message);
     }
+    // An internal relay code stays an IO status (not an actionable validation
+    // code), but carry the code into the diagnostic so the real cause survives
+    // instead of collapsing every internal failure into one opaque string.
     RuntimeError::io(
         message,
-        std::io::Error::other("relay returned internal error"),
+        std::io::Error::other(format!("relay error {}", error.code)),
     )
 }
 
