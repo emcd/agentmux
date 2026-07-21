@@ -140,7 +140,7 @@ fn refresh_preserves_authorization_forbidden_code() {
 }
 
 #[test]
-fn refresh_flattens_noncanonical_code_to_generic_io() {
+fn refresh_flattens_noncanonical_code_to_io_but_retains_the_code() {
     let (_guard, socket) = temporary_socket_path();
     let listener = UnixListener::bind(&socket).expect("bind stub relay");
     let server = serve_list_error(listener, "relay_internal_unexpected");
@@ -152,7 +152,14 @@ fn refresh_flattens_noncanonical_code_to_generic_io() {
 
     assert!(
         matches!(error, RuntimeError::Io { .. }),
-        "a non-canonical relay code must flatten to a generic IO status, got {error:?}",
+        "a non-canonical relay code must stay an IO status (not an actionable code), got {error:?}",
+    );
+    // The IO status must still name the real relay code so the cause is not
+    // collapsed into one opaque "internal error" string for every failure.
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("relay_internal_unexpected"),
+        "the surfaced IO status must retain the relay code as the diagnostic cause: {rendered}",
     );
 
     server.join().expect("join stub relay");

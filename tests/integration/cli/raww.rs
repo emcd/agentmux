@@ -171,6 +171,72 @@ fn raww_surfaces_unknown_target_from_relay() {
 }
 
 #[test]
+fn raww_retains_relay_code_for_internal_error() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration(
+        &config_root,
+        "agentmux",
+        Some(&["dev"]),
+        &["alpha", "bravo"],
+    );
+    write_tui_configuration(
+        &config_root,
+        Some("agentmux"),
+        Some("user"),
+        &[("user", "default", Some("Operator"))],
+    );
+    let workspace_root = temporary.path().join("workspace");
+    fs::create_dir_all(&workspace_root).expect("create workspace");
+
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux").expect("bundle paths");
+    ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
+    // A non-canonical (internal) relay code stays an IO status, but the surfaced
+    // diagnostic must still name the real code rather than collapsing every
+    // internal failure into one opaque "internal error" string.
+    let relay_thread = spawn_fake_relay_once(
+        &RelayRuntimePaths::resolve(&state_root).relay_socket,
+        RelayResponse::Error {
+            error: RelayError {
+                code: "relay_internal_unexpected".to_string(),
+                message: "relay hit an unexpected internal fault".to_string(),
+                details: None,
+            },
+        },
+        Arc::new(Mutex::new(Vec::<Value>::new())),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .current_dir(&workspace_root)
+        .args([
+            "raww",
+            "bravo",
+            "--text",
+            "echo test",
+            "--config-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .output()
+        .expect("run raww against internal relay error");
+    relay_thread.join().expect("join fake relay thread");
+    assert!(!output.status.success(), "command should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("relay_internal_unexpected"),
+        "internal relay code must survive in the surfaced diagnostic: {stderr}"
+    );
+}
+
+#[test]
 fn raww_rejects_unknown_explicit_session_without_association_fallback() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = temporary.path().join("config");
