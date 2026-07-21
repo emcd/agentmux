@@ -69,5 +69,5 @@
 
 ## 6. Specs
 
-- [ ] 6.1 On archive, add the `ui-surface-configuration` spec and apply the
+- [x] 6.1 On archive, add the `ui-surface-configuration` spec and apply the
       `cli-surface`, `tui-surface`, and `runtime-bootstrap` deltas to `specs/`.

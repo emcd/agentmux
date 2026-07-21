@@ -512,25 +512,28 @@ Reconnect logic SHALL preserve identity-ownership hardening behavior:
 ### Requirement: TUI Sender Association Resolution
 
 The runtime SHALL resolve sender identity for `agentmux tui` and
-session-selected `agentmux send` invocations using global `tui.toml`
-configuration with deterministic precedence.
+session-selected `agentmux send` invocations using global `users.toml`
+identity configuration and `ui.toml` UI-surface defaults with deterministic
+precedence.
 
 Sender/session resolution SHALL be:
 
-1. explicit CLI `--session` when present
-2. `default-session` from active global `tui.toml`
+1. explicit CLI `--as-session` when present
+2. `default-session` from active global `users.toml`
 3. fail-fast `validation_unknown_session`
 
-Bundle resolution for `agentmux tui` SHALL be:
+Bundle resolution for interactive `agentmux tui` SHALL be lenient — the operator
+selects a browsing bundle in the picker, so an absent default is not an error:
 
 1. explicit CLI `--bundle` when present
-2. `default-bundle` from active global `tui.toml`
-3. fail-fast `validation_unknown_bundle`
+2. `default-bundle` from active `ui.toml`
+3. first available configured bundle
+4. empty browsing context when no bundle is available
 
 Bundle resolution for session-selected `agentmux send` SHALL be:
 
 1. explicit CLI `--bundle` when present
-2. `default-bundle` from active global `tui.toml`
+2. `default-bundle` from active `ui.toml`
 3. fail-fast `validation_unknown_bundle`
 
 Association-derived sender fallback SHALL NOT be used for these surfaces.
@@ -542,25 +545,27 @@ If selected session references unknown policy, runtime SHALL fail with
 
 #### Scenario: Resolve sender and bundle from explicit selectors
 
-- **WHEN** invocation includes `--bundle agentmux --session user`
+- **WHEN** invocation includes `--bundle agentmux --as-session user`
 - **THEN** runtime resolves bundle `agentmux` and sender from session `user`
 
 #### Scenario: Resolve sender and bundle from global defaults
 
 - **WHEN** invocation omits selectors
-- **AND** `tui.toml` provides `default-bundle` and `default-session`
+- **AND** `ui.toml` provides `default-bundle` and `users.toml` provides
+  `default-session`
 - **THEN** runtime resolves bundle/session from those defaults
 
-#### Scenario: Reject startup when default bundle is missing
+#### Scenario: Fall back to an available bundle when tui default is missing
 
 - **WHEN** `agentmux tui` omits `--bundle`
-- **AND** `default-bundle` is absent in `tui.toml`
-- **THEN** runtime returns `validation_unknown_bundle`
+- **AND** `default-bundle` is absent in `ui.toml`
+- **THEN** runtime resolves the browsing bundle from the first available
+  configured bundle, or an empty browsing context when none is available
 
 #### Scenario: Reject send when default bundle is missing
 
 - **WHEN** `agentmux send` omits `--bundle`
-- **AND** `default-bundle` is absent in `tui.toml`
+- **AND** `default-bundle` is absent in `ui.toml`
 - **THEN** runtime returns `validation_unknown_bundle`
 
 ### Requirement: TUI Sender Configuration Files
@@ -573,7 +578,6 @@ The runtime SHALL support global user session configuration at:
 
 Supported fields SHALL use kebab-case and include:
 
-- `default-bundle` (optional)
 - `default-session` (optional)
 - `[[sessions]]` entries with:
   - required `id` (in `session@GLOBAL` canonical form)
@@ -581,6 +585,9 @@ Supported fields SHALL use kebab-case and include:
     operators) or `[sessions.pubsub]` (embedded agents)
   - optional `name`
   - optional `policy`
+
+`users.toml` is the identity and policy file; UI-surface operational defaults
+such as `default-bundle` live in `ui.toml` (see `ui-surface-configuration`).
 
 Global user sessions are coder-less by construction; a `coder` reference is
 not accepted in `users.toml` entries.

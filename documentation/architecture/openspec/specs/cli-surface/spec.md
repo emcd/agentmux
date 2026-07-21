@@ -411,16 +411,18 @@ context:
 - optional `--as-session <session-selector>`
 - optional `--bundle <bundle-id>`
 
-Bundle selection SHALL resolve as:
+Bundle selection for interactive `agentmux tui` SHALL be lenient — the operator
+picks a browsing bundle in the picker, so an absent default is not an error:
 
 1. explicit `--bundle`
-2. `default-bundle` from global `tui.toml`
-3. fail-fast `validation_unknown_bundle`
+2. `default-bundle` from `ui.toml`
+3. first available configured bundle
+4. empty browsing context when no bundle is available
 
 Session selection SHALL resolve as:
 
 1. explicit `--as-session`
-2. `default-session` from global `tui.toml`
+2. `default-session` from `users.toml`
 3. fail-fast `validation_unknown_session`
 
 Resolved TUI session SHALL provide canonical wire `id` for relay
@@ -434,14 +436,22 @@ operations in that process.
 #### Scenario: Launch TUI from config defaults
 
 - **WHEN** operator runs `agentmux tui` without `--bundle` and `--as-session`
-- **AND** `tui.toml` has `default-bundle` and `default-session`
+- **AND** `ui.toml` defines `default-bundle` and `users.toml` defines
+  `default-session`
 - **THEN** startup resolves both values from config defaults
 
 #### Scenario: Reject missing default session when selector is omitted
 
 - **WHEN** operator runs `agentmux tui` without `--as-session`
-- **AND** `default-session` is absent from `tui.toml`
+- **AND** `default-session` is absent from `users.toml`
 - **THEN** CLI fails fast with `validation_unknown_session`
+
+#### Scenario: Fall back to an available bundle when tui default is absent
+
+- **WHEN** operator runs `agentmux tui` without `--bundle`
+- **AND** `default-bundle` is absent from `ui.toml`
+- **THEN** startup resolves the browsing bundle from the first available
+  configured bundle, or an empty browsing context when none is available
 
 ### Requirement: Bundle Lifecycle Command Surface
 
@@ -572,13 +582,13 @@ transport-neutral `--prime-timeout-ms` is reintroduced — see
 Send bundle resolution SHALL be:
 
 1. explicit `--bundle`
-2. `default-bundle` from global `tui.toml`
+2. `default-bundle` from `ui.toml`
 3. fail-fast `validation_unknown_bundle`
 
 Send session resolution SHALL be:
 
 1. explicit `--as-session`
-2. `default-session` from global `tui.toml`
+2. `default-session` from `users.toml`
 3. fail-fast `validation_unknown_session`
 
 Resolved session `id` SHALL be used as send caller identity before
@@ -593,20 +603,20 @@ relay dispatch.
 #### Scenario: Send with default session fallback
 
 - **WHEN** an operator runs `agentmux send --target mcp --message "hi"`
-- **AND** `default-bundle` is defined in `tui.toml`
-- **AND** `default-session` is defined in `tui.toml`
+- **AND** `default-bundle` is defined in `ui.toml`
+- **AND** `default-session` is defined in `users.toml`
 - **THEN** send caller identity resolves from that default session
 
 #### Scenario: Reject missing default bundle for send
 
 - **WHEN** an operator runs `agentmux send --as-session user --target mcp --message "hi"`
-- **AND** `default-bundle` is absent from `tui.toml`
+- **AND** `default-bundle` is absent from `ui.toml`
 - **THEN** CLI rejects invocation with `validation_unknown_bundle`
 
 #### Scenario: Reject unknown explicit session selector
 
 - **WHEN** an operator runs `agentmux send --bundle agentmux --as-session missing --target mcp --message "hi"`
-- **AND** `tui.toml` has no matching `[[sessions]]` selector
+- **AND** `users.toml` has no matching `[[sessions]]` selector
 - **THEN** CLI rejects invocation with `validation_unknown_session`
 
 ### Requirement: List Sessions Command Surface
