@@ -19,6 +19,7 @@ Use consistent tags for discoverability:
 - **Task Type**: `#task-<type>` (e.g., `#task-design`, `#task-bug`)
 - **Status**: `#status-<state>` (e.g., `#status-in-progress`, `#status-review`)
 - **Coordination**: `#handoff`, `#coordination`
+- **Milestone**: `#milestone-<version>` (e.g., `#milestone-0-9-0`, hyphens not dots) marks an item's release allocation. This is the sole source of truth for milestone membership — milestone notes (`coordination/general/16`, `/18`, ...) hold narrative only and must not restate item-by-item lists. Query membership with `nb_list(tags: ["milestone-0-9-0"])`; see `procedures/general/1` in the notebook for the full convention and rationale. Exception: OpenSpec proposal ids (`add-*`) can't carry nb tags, so their milestone allocation stays in the relevant milestone note's prose.
 - **Assignment**: Avoid owner tags (for example `#llm-*`) for task ownership. Use lane/folder ownership and explicit owner text in the note body when needed.
 
 ## Common Patterns
