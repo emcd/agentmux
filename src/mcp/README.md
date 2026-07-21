@@ -5,10 +5,15 @@ This module implements the MCP stdio server for `agentmux`.
 ## Responsibilities
 
 - Advertise and handle MCP tools:
-  - `list` (requires `command="principals"` or `command="decisions"`; for
-    `principals`, `args.namespace` selects the scope: omitted/home bundle, a
-    bundle name, `GLOBAL`, or `*` for fan-out; `decisions` lists the bundle's
-    pending ACP choice queue)
+  - `list` (requires `command="principals"`, `command="namespaces"`,
+    `command="relays"`, or `command="decisions"`; for `principals`,
+    `args.namespace` selects the scope: omitted/home bundle, a bundle name,
+    `GLOBAL`, or `*` for fan-out, and an optional `args.relay` forwards the
+    lookup to one configured foreign relay — foreign listing requires a
+    concrete `args.namespace`; `namespaces` enumerates local namespaces or,
+    with an optional `args.relay`, one configured foreign relay's; `relays`
+    enumerates locally configured outbound relay aliases without dialing them;
+    `decisions` lists the bundle's pending ACP choice queue)
   - `help`
   - `look`
   - `choose` (submit an ACP-native choice decision)
@@ -104,6 +109,14 @@ This module implements the MCP stdio server for `agentmux`.
      wire-envelope namespace and surfaces a synthetic empty `Down`
      bundle when the relay is unavailable. A `GLOBAL` view is appended
      to the response regardless of the requested namespace.
+   - `list` (`command="namespaces"`) -> `RelayStreamSession`
+     (`RelayRequest::DiscoverNamespaces`); with `args.relay` set the
+     origin-local alias rides the request so the relay forwards to that peer.
+   - `list` (`command="relays"`) -> `RelayStreamSession`
+     (`RelayRequest::ListRelays`)
+   - `list` (`command="principals"`, `args.relay` set) -> `RelayStreamSession`
+     (`RelayRequest::DiscoverPrincipals`) for foreign discovery, in place of
+     the local `RelayRequest::List` path.
    - `list` (`command="decisions"`) -> `RelayStreamSession`
      (`RelayRequest::ChoicesList`)
    - `look` -> `RelayStreamSession` (`RelayRequest::Look`)
@@ -185,6 +198,36 @@ This module implements the MCP stdio server for `agentmux`.
   `new.peer` / `change.psk` grant. A bundle-relative `home` grant is
   insufficient. The MCP server's own identity must therefore carry
   an operator policy for these tools to succeed.
+
+## Cross-Relay Discovery
+
+- Three `list` commands expose the discovery surface operators need to
+  construct foreign `<session>@<bundle>!<alias>` targets for cross-relay
+  `send` / `raww`:
+  - `list.relays` enumerates the locally configured outbound relay aliases
+    (from `relay.toml` `[[peers]]`) in sorted order. It never dials a peer and
+    never exposes address, `connect-as`, or credential detail — only the alias
+    the local relay uses. Returns an empty array when no peers are configured.
+  - `list.namespaces` enumerates namespaces on the local relay, or — with
+    `args.relay` set to a configured alias — forwards a single hop to that peer
+    and returns the namespaces its ingress scope permits.
+  - `list.principals` with `args.relay` set forwards principal discovery to
+    that peer for a required concrete `args.namespace` (no `*`, reserved, or
+    empty namespace). Without `args.relay` it keeps its existing local
+    semantics.
+- These commands ride the MCP server's relay stream like every other tool, but
+  the relay dispatches them relay-wide (like identity administration) rather
+  than through a bundle. The MCP layer performs no authorization: both the
+  origin `list`-scope check and the receiving relay's ingress filtering happen
+  on the relay (see `src/relay/README.md`, Cross-Relay Discovery).
+- Foreign `list.principals` responses may carry `principals_partial=true` on a
+  bundle whose principal set was narrowed by the peer's ingress scope, so a
+  caller can tell a scope-filtered subset from a complete listing. The MCP
+  server passes the flag through unchanged (omitted, not `null`, when absent).
+- Each command emits the standard five lifecycle inscriptions
+  (`mcp.tool.list.relays.*`, `mcp.tool.list.namespaces.*`,
+  `mcp.tool.list.principals.*`: request / success / relay_error /
+  unexpected_response / io_error).
 
 ## Key Types
 

@@ -87,9 +87,9 @@
 
 ## 5. Documentation and validation
 
-- [ ] 5.1 Update `src/mcp/README.md`, `src/mcp/server/handlers/README.md`, and
+- [x] 5.1 Update `src/mcp/README.md`, `src/mcp/server/handlers/README.md`, and
       `src/relay/README.md` for the discovery commands and trust boundaries.
-- [ ] 5.2 Run `openspec validate add-cross-relay-list-discovery --strict`.
-- [ ] 5.3 Run `cargo fmt --check`.
-- [ ] 5.4 Run `cargo clippy -- -D warnings`.
-- [ ] 5.5 Run `cargo nextest run --locked --config-file .auxiliary/configuration/nextest.toml`.
+- [x] 5.2 Run `openspec validate add-cross-relay-list-discovery --strict`.
+- [x] 5.3 Run `cargo fmt --check`.
+- [x] 5.4 Run `cargo clippy -- -D warnings`.
+- [x] 5.5 Run `cargo nextest run --locked --config-file .auxiliary/configuration/nextest.toml`.
