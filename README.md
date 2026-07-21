@@ -149,10 +149,10 @@ for the full development workflow.
     config files for runtime add/remove/modify unless `--no-watch` is set.
 - MCP host:
   - Command: `agentmux host mcp`
-  - Responsibility: expose MCP tools (`list`, `help`, `look`, `send`) and forward
-    requests to relay.
+  - Responsibility: expose MCP tools (`list`, `help`, `look`, `choose`,
+    `updown`, `new`, `change`, `raww`, `send`) and forward requests to relay.
 - Operator CLI:
-  - Commands: `agentmux list sessions`, `agentmux look`, `agentmux raww`,
+  - Commands: `agentmux list principals`, `agentmux look`, `agentmux raww`,
     `agentmux send`, `agentmux tui`
   - Responsibility: direct local inspection, message delivery, and interactive
     coordination flows with relay auto-start fallback for `agentmux tui`.
@@ -163,13 +163,16 @@ logs.
 ## CLI Surface
 
 ```text
-agentmux host relay [--no-autostart] [--no-watch]
+agentmux host relay [--no-autostart] [--require-credentials] [--no-watch]
 agentmux host mcp [--bundle NAME] [--session-name NAME]
 agentmux up (<bundle-id> | --group GROUP)
 agentmux down (<bundle-id> | --group GROUP)
-agentmux list sessions [--bundle NAME|--all] [--as-session NAME] [--json]
+agentmux list principals [--namespace NAME|GLOBAL|*] [--as-session NAME] [--json]
 agentmux look <target-session> [--bundle NAME] [--as-session NAME] [--lines N]
 agentmux raww <target-session> --text TEXT [--no-enter] [--bundle NAME] [--as-session NAME] [--json]
+agentmux new peer <principal-id> [--scope SCOPE] [--output PATH] [--bundle NAME] [--as-session NAME] [--json]
+agentmux change psk <principal-id> [--bundle NAME] [--as-session NAME] [--json]
+agentmux check configuration [<bundle-id>]
 agentmux tui [--bundle NAME] [--as-session NAME] [--lines N]
 agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--request-id ID] [--bundle NAME] [--as-session NAME] [--json]
 ```
@@ -189,10 +192,20 @@ For shared runtime flags and operational details, see
 The MCP server advertises:
 
 - `help`: return tool/command help and JSON argument schemas.
-- `list`: meta-tool for session listing (`command="sessions"`).
+- `list`: meta-tool for relay discovery; requires a `command` — `principals`
+  (session listing, with `args.namespace` scoping the lookup), `namespaces`,
+  `relays`, or `decisions` (the bundle's pending ACP choice queue).
 - `look`: capture a read-only session snapshot from a target session.
+- `choose`: submit an ACP-native choice decision; gated on the `choose` policy
+  capability.
+- `updown`: administer the associated bundle's runtime (`command="up"` /
+  `command="down"`).
+- `new`: register a peer principal and mint its PSK (`command="peer"`).
+- `change`: rotate a principal's PSK (`command="psk"`).
 - `raww`: write raw text directly to one target session.
 - `send`: deliver to explicit targets or broadcast.
+
+See [src/mcp/README.md](src/mcp/README.md) for detailed MCP command semantics.
 
 Delivery behavior:
 
@@ -218,7 +231,7 @@ Typical topology:
 
 Association resolution:
 
-- `list sessions` and `host mcp` use association auto-discovery fallback:
+- `list principals` and `host mcp` use association auto-discovery fallback:
   - bundle from Git common-dir owner name,
   - session from worktree top-level directory name,
 - `send` and `tui` use global session/surface selectors:
