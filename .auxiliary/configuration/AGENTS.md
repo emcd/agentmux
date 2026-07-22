@@ -160,7 +160,7 @@ per-component handoff naming, update triggers, and content shape.
 
 ## Team Org
 
-Team roster, lane ownership, merge policy, coordinator and specialist responsibilities, and OpenSpec multi-agent workflow live in `coordination/general/14`.
+Team roster, lane ownership, merge policy, review routing, coordinator and specialist responsibilities, and OpenSpec multi-agent workflow live in `coordination/general/14`.
 
 ## Procedures
 
