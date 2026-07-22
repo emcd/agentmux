@@ -22,8 +22,11 @@ impl McpServer {
     ) -> Result<CallToolResult, McpError> {
         // 1. validate_X_request(&params)?
         // 2. emit_inscription("mcp.tool.X.request", ...)?
-        // 3. resolve requester_session from self.state.configuration.sender_session
-        //    (or surface validation_unknown_sender if the MCP server is unassociated)
+        // 3. resolve requester_session via self.require_associated_sender_session()
+        //    (surfaces validation_unassociated_server if the MCP server is
+        //    unassociated; relay-wide tools that need no sender value call
+        //    self.require_association() or lean on the map_relay_stream_failure
+        //    chokepoint instead)
         // 4. build a RelayRequest
         // 5. self.request_relay(&request) -> match on RelayResponse:
         //    - success variant -> map to JSON, emit "mcp.tool.X.success"
@@ -80,7 +83,7 @@ tool-specific quirks:
   flag the relay stamps. See `src/mcp/README.md`, Cross-Relay
   Discovery.
 - `send.rs` — calls `qualify_send_targets` after sender resolution
-  (so an unidentified sender fails as `validation_unknown_sender`
+  (so an unassociated server fails as `validation_unassociated_server`
   regardless of target shape). The qualified target list is what
   rides the relay.
 - `look.rs` — does not qualify `target_session`; the caller must

@@ -21,7 +21,10 @@ use crate::relay::{RelayRequest, RelayResponse, RelayStreamSession};
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::paths::{BundleRuntimePaths, RelayRuntimePaths};
 
-use crate::mcp::errors::{internal_tool_error, map_relay_error, map_relay_request_failure};
+use crate::mcp::errors::{
+    UNASSOCIATED_SERVER_REMEDY, internal_tool_error, map_relay_error, map_relay_request_failure,
+    unassociated_server_error,
+};
 
 /// Configuration provided when booting MCP stdio service.
 #[derive(Clone, Debug)]
@@ -156,17 +159,49 @@ impl McpServer {
         source: std::io::Error,
     ) -> rmcp::ErrorData {
         emit_inscription(event, &json!({"error": source.to_string()}));
-        if self.state.configuration.associated_bundle_paths.is_some() {
+        if self.is_associated() {
             let relay_paths = RelayRuntimePaths::resolve(&self.state.configuration.state_root);
             return map_relay_request_failure(&relay_paths.relay_socket, source);
         }
-        internal_tool_error(
-            "internal_unexpected_failure",
-            "relay stream is unavailable for unassociated MCP server",
-            Some(json!({
-                "cause": source.to_string(),
-            })),
-        )
+        // The stream is absent because the server is unassociated, not because a
+        // present relay failed; report the actionable startup contract so a
+        // caller can self-correct instead of seeing an internal fault.
+        unassociated_server_error()
+    }
+
+    /// Whether the server holds a live relay stream. True only when both a sender
+    /// session and an associated bundle are configured, mirroring the
+    /// `relay_stream` construction in `new`; this is the real precondition every
+    /// relay-backed tool shares.
+    fn is_associated(&self) -> bool {
+        self.state.configuration.sender_session.is_some()
+            && self.state.configuration.associated_bundle_paths.is_some()
+    }
+
+    /// Guards a relay-backed path that needs only an associated relay stream, not
+    /// the sender value: the relay-wide `list` discovery commands. Returns the
+    /// canonical unassociated-server error so the failure precedes any relay
+    /// contact rather than surfacing later as a stream fault.
+    pub(super) fn require_association(&self) -> Result<(), rmcp::ErrorData> {
+        if self.is_associated() {
+            Ok(())
+        } else {
+            Err(unassociated_server_error())
+        }
+    }
+
+    /// Resolves the sender session value for a handler that needs it (`send`,
+    /// `look`, `raww`, local `list.principals`), rejecting an unassociated server
+    /// with the same canonical error. Association requires both the sender session
+    /// and a bundle, so a partial configuration is unassociated by definition.
+    pub(super) fn require_associated_sender_session(&self) -> Result<String, rmcp::ErrorData> {
+        match (
+            self.state.configuration.sender_session.as_ref(),
+            self.state.configuration.associated_bundle_paths.as_ref(),
+        ) {
+            (Some(session), Some(_)) => Ok(session.clone()),
+            _ => Err(unassociated_server_error()),
+        }
     }
 
     pub(super) fn associated_namespace(&self) -> Option<&str> {
@@ -176,13 +211,50 @@ impl McpServer {
             .as_ref()
             .map(|paths| paths.bundle_name.as_str())
     }
+
+    /// A factual snapshot of the server's association, surfaced in `help` output
+    /// so a caller can discover an unassociated server before invoking a
+    /// relay-backed tool.
+    pub(super) fn association_status(&self) -> serde_json::Value {
+        if self.is_associated() {
+            json!({
+                "associated": true,
+                "namespace": self.associated_namespace(),
+                "session": self.state.configuration.sender_session,
+            })
+        } else {
+            json!({
+                "associated": false,
+                "remedy": UNASSOCIATED_SERVER_REMEDY,
+            })
+        }
+    }
 }
 
 #[tool_handler(router = self.tool_router)]
 impl rmcp::ServerHandler for McpServer {
     fn get_info(&self) -> ServerInfo {
+        const BASE: &str = "agentmux MCP server for tmux-backed multi-agent coordination.";
+        let instructions = if self.is_associated() {
+            format!(
+                "{BASE} Associated with session '{session}' in namespace '{namespace}'.",
+                session = self
+                    .state
+                    .configuration
+                    .sender_session
+                    .as_deref()
+                    .unwrap_or_default(),
+                namespace = self.associated_namespace().unwrap_or_default(),
+            )
+        } else {
+            format!(
+                "{BASE} This server is unassociated (no bundle/session); relay-backed \
+                 tools fail with validation_unassociated_server. Start it with \
+                 `{UNASSOCIATED_SERVER_REMEDY}`."
+            )
+        };
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_instructions("agentmux MCP server for tmux-backed multi-agent coordination.")
+            .with_instructions(instructions)
     }
 }
 

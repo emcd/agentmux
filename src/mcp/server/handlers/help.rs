@@ -25,6 +25,7 @@ impl McpServer {
         validate_help_request(&params)?;
         Ok(CallToolResult::success(vec![Content::json(help_tool(
             params,
+            self.association_status(),
         )?)?]))
     }
 }

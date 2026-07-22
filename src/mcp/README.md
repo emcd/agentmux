@@ -88,18 +88,19 @@ This module implements the MCP stdio server for `agentmux`.
    `look`, etc.) before any relay work begins.
 4. The per-tool handler in `src/mcp/server/handlers/<tool>.rs` emits a
    `mcp.tool.<tool>.request` inscription, resolves the requester session
-   from `McpState.configuration.sender_session` (or surfaces
-   `validation_unknown_sender` if the MCP server is unassociated), and
-   builds a `RelayRequest`.
+   via `require_associated_sender_session` (or surfaces
+   `validation_unassociated_server` if the MCP server is unassociated),
+   and builds a `RelayRequest`.
 5. `send`, `look`, and `raww` qualify their targets through the shared
    `qualify_target` helper, filling in the `@<namespace>` suffix the relay
    requires: a target that already carries `@<namespace>` passes through
    verbatim (so a `<session>@<peer-bundle>` target still reaches a peer
-   bundle); a bare target is qualified with the MCP server's bound bundle;
-   a bare target on a relay-wide (unassociated) MCP server has no namespace
-   to borrow and is rejected as `validation_unqualified_target` rather than
-   silently borrowing one. (`send` qualifies its whole target list via
-   `qualify_send_targets`, which maps `qualify_target` over each entry.)
+   bundle); a bare target is qualified with the MCP server's bound bundle.
+   Qualification runs only after the step-4 association precheck, so on an
+   unassociated server the call is already rejected with
+   `validation_unassociated_server` and never reaches qualification.
+   (`send` qualifies its whole target list via `qualify_send_targets`,
+   which maps `qualify_target` over each entry.)
 6. Request is forwarded as a relay contract:
    - `list` (`command="principals"`) -> `RelayStreamSession`
      (`RelayRequest::List`). For `args.namespace="*"` the MCP server
@@ -138,10 +139,13 @@ This module implements the MCP stdio server for `agentmux`.
    `map_relay_error`; any other variant triggers
    `internal_unexpected_failure` with the `response` shape preserved
    in the details. IO errors are routed through
-   `map_relay_stream_failure`, which emits the typed
+   `map_relay_stream_failure`, which branches on association: an
+   associated server maps a genuine relay IO failure to the typed
    `relay_timeout` / `relay_unavailable` / `internal_unexpected_failure`
-   codes with the relay socket path and the `io_error_kind` in the
-   details.
+   codes (with the relay socket path and `io_error_kind` in the
+   details), while an unassociated server — whose absent stream is the
+   cause — returns the validation-shaped `validation_unassociated_server`
+   instead.
 
 ## Bundle Updown
 
@@ -299,8 +303,11 @@ This module implements the MCP stdio server for `agentmux`.
     `is_relay_timeout_error`).
 - `help.rs`
   - help catalog responses and generated JSON schemas. Composed at
-    runtime by `help_tool(params)` and surfaced through the `help`
-    MCP tool.
+    runtime by `help_tool(params, association)` and surfaced through
+    the `help` MCP tool; the top-level catalog carries an
+    `association` block (associated namespace/session, or the
+    unassociated remedy) so a caller can discover an unassociated
+    server before invoking a relay-backed tool.
 - `errors.rs`
   - relay / configuration / runtime error mapping and MCP error
     payload helpers. The MCP error payload shape is
@@ -323,11 +330,22 @@ This module implements the MCP stdio server for `agentmux`.
   `option_id` is rejected with `validation_invalid_params`; caller
   -supplied sender-identity fields (`decided_by`, `ui_session_id`,
   `operator_session_id`) are rejected as unknown parameters.
-- `send`, `look`, and `raww` enforce target qualification via the shared
-  `qualify_target` helper (`send` maps it over its target list as
-  `qualify_send_targets`): a bare target on a relay-wide (unassociated) MCP
-  server is rejected with `validation_unqualified_target` rather than
-  silently borrowing a namespace.
+- `send`, `look`, and `raww` qualify a bare target with the MCP server's
+  bound bundle via the shared `qualify_target` helper (`send` maps it over
+  its target list as `qualify_send_targets`). Qualification runs after the
+  association precheck, so an unassociated server is already rejected with
+  `validation_unassociated_server` (below) before a bare target could reach
+  qualification.
+- A relay-backed tool called on an unassociated MCP server (one
+  started without a resolvable bundle+session, so `relay_stream` is
+  `None`) is rejected with one validation-shaped
+  `validation_unassociated_server` error carrying
+  `{reason: "unassociated_server", remedy}`. Both the early
+  `require_associated_sender_session` / `require_association` prechecks
+  and the `map_relay_stream_failure` chokepoint route through
+  `errors::unassociated_server_error`, so every relay-backed tool
+  speaks one language instead of the former
+  `validation_unknown_sender` / `internal_unexpected_failure` split.
 - Help schemas set `additionalProperties=false` for documented
   request shapes.
 - MCP does not perform shadow authorization checks.

@@ -279,10 +279,11 @@ Caller-supplied sender-like payload fields SHALL NOT override that principal.
 - **THEN** the system resolves sender identity from MCP server association
 - **AND** uses that sender session identity for delivery metadata
 
-#### Scenario: Reject unbound sender identity
+#### Scenario: Reject send on unassociated server
 
-- **WHEN** the MCP server instance has no valid session association
-- **THEN** the system rejects the request with `validation_unknown_sender`
+- **WHEN** the MCP server instance has no bundle+session association
+- **THEN** the system rejects the `send` request with
+  `validation_unassociated_server`
 
 ### Requirement: Send Response Contract
 
@@ -338,6 +339,24 @@ For `authorization_forbidden`, `details` SHALL include:
 
 Validation failures SHALL be returned before authorization denials.
 
+Every relay-backed tool (`list` principals/namespaces/relays/decisions, `send`,
+`look`, `raww`, `choose`, `updown`, `new`, `change`) requires the MCP server to
+be associated with a bundle and session. A call on an unassociated server (one
+that holds no relay stream) SHALL be rejected before any relay contact with a
+validation-shaped error coded `validation_unassociated_server`, whose `details`
+SHALL carry a canonical `reason` of `unassociated_server` and a `remedy` naming
+the command that starts an associated server. `help` is the sole
+association-independent tool and SHALL remain callable regardless of
+association.
+
+#### Scenario: Reject relay-backed tool on unassociated server
+
+- **WHEN** any relay-backed tool is invoked on an MCP server with no
+  bundle+session association
+- **THEN** the tool returns error code `validation_unassociated_server`
+- **AND** `details` include `reason = "unassociated_server"` and a `remedy`
+  string
+
 #### Scenario: Unknown bundle error
 
 - **WHEN** a caller references a bundle that does not exist
@@ -389,10 +408,10 @@ The system SHALL expose a read-only MCP inspection tool named `look`.
 
 A bare `target_session` is qualified to the MCP server's bound bundle before the
 relay call; a target that already carries an `@<bundle>` suffix is forwarded
-verbatim (so a peer-bundle target reaches that bundle). A bare target on a
-relay-wide (unassociated) MCP server is rejected with
-`validation_unqualified_target`. Cross-bundle resolution and authorization are
-performed by the relay and surfaced unchanged.
+verbatim (so a peer-bundle target reaches that bundle). A `look` call on an
+unassociated server is rejected with `validation_unassociated_server` (per the
+Error Object Contract) before qualification runs. Cross-bundle resolution and
+authorization are performed by the relay and surfaced unchanged.
 
 #### Scenario: Advertise look tool
 
@@ -797,10 +816,10 @@ MCP `raww` request fields SHALL be:
 
 A bare `target_session` SHALL be qualified to the MCP server's bound bundle
 before the relay call; a target that already carries an `@<namespace>` suffix is
-forwarded verbatim. A bare target on a relay-wide (unassociated) MCP server SHALL
-be rejected with `validation_unqualified_target`. Routing context for `raww` SHALL
-then be inferred from the target's `@<namespace>` suffix. No explicit `namespace`
-parameter is accepted.
+forwarded verbatim. A `raww` call on an unassociated server SHALL be rejected
+with `validation_unassociated_server` (per the Error Object Contract) before
+qualification runs. Routing context for `raww` SHALL then be inferred from the
+target's `@<namespace>` suffix. No explicit `namespace` parameter is accepted.
 
 `raww` requests SHALL reject caller-supplied sender-like identity fields with
 `validation_invalid_params`.

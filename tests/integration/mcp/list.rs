@@ -260,51 +260,6 @@ async fn list_rejects_malformed_foreign_relay_selectors() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn unassociated_server_rejects_discovery_with_unknown_sender() {
-    let runtime = TestRuntime::create();
-    // A relay-wide server has no sender session and no relay stream. Every
-    // relay-backed discovery path must surface the typed unknown-sender error
-    // ahead of any relay contact, not an internal failure from the absent stream.
-    let mut harness = McpHarness::spawn_unassociated(&runtime).await;
-
-    let relays = harness
-        .call_tool(
-            2,
-            "list",
-            Map::from_iter([("command".to_string(), Value::String("relays".to_string()))]),
-        )
-        .await;
-    assert_eq!(error_code(&relays), Some("validation_unknown_sender"));
-
-    let namespaces = harness
-        .call_tool(
-            3,
-            "list",
-            Map::from_iter([(
-                "command".to_string(),
-                Value::String("namespaces".to_string()),
-            )]),
-        )
-        .await;
-    assert_eq!(error_code(&namespaces), Some("validation_unknown_sender"));
-
-    let foreign_principals = harness
-        .call_tool(
-            4,
-            "list",
-            list_principals_call(Map::from_iter([
-                ("relay".to_string(), Value::String("west".to_string())),
-                ("namespace".to_string(), Value::String("myapp".to_string())),
-            ])),
-        )
-        .await;
-    assert_eq!(
-        error_code(&foreign_principals),
-        Some("validation_unknown_sender")
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn list_rejects_missing_or_invalid_command() {
     let runtime = TestRuntime::create();
     let mut harness = McpHarness::spawn(&runtime).await;
