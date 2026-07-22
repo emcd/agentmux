@@ -279,6 +279,7 @@ pub(crate) struct McpHarness {
     child: tokio::process::Child,
     stdin: tokio::process::ChildStdin,
     stdout: tokio::io::BufReader<tokio::process::ChildStdout>,
+    instructions: String,
 }
 
 impl McpHarness {
@@ -306,6 +307,7 @@ impl McpHarness {
             child,
             stdin,
             stdout: tokio::io::BufReader::new(stdout),
+            instructions: String::new(),
         };
         harness.initialize().await;
         harness
@@ -314,7 +316,7 @@ impl McpHarness {
     /// Spawns a relay-wide (unassociated) MCP server: no `--bundle` or
     /// `--session-name`, so it carries no sender session and holds no relay
     /// stream. Used to prove relay-backed paths surface a typed
-    /// `validation_unknown_sender` rather than an internal failure.
+    /// `validation_unassociated_server` rather than an internal failure.
     pub(crate) async fn spawn_unassociated(runtime: &TestRuntime) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_agentmux"));
         command
@@ -337,6 +339,7 @@ impl McpHarness {
             child,
             stdin,
             stdout: tokio::io::BufReader::new(stdout),
+            instructions: String::new(),
         };
         harness.initialize().await;
         harness
@@ -358,12 +361,22 @@ impl McpHarness {
             response.get("result").is_some(),
             "initialize response must contain result: {response}"
         );
+        self.instructions = response["result"]["instructions"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
 
         let initialized = rmcp::model::InitializedNotification::default();
         self.send(rmcp::model::ClientJsonRpcMessage::notification(
             initialized.into(),
         ))
         .await;
+    }
+
+    /// The `instructions` string the server returned at `initialize`, captured
+    /// from `ServerHandler::get_info`. Empty when the server sent none.
+    pub(crate) fn instructions(&self) -> &str {
+        &self.instructions
     }
 
     pub(crate) async fn list_tools(&mut self, id: i64) -> Value {

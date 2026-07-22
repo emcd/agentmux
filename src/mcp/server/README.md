@@ -44,10 +44,17 @@ creating a cycle through the server module.
 `McpConfiguration` is provided once at startup. `McpServer::new()`
 materializes the `RelayStreamSession` when both `sender_session` and
 `associated_bundle_paths` are configured; otherwise the
-`relay_stream` slot stays `None` and the per-tool handlers surface
-`validation_unknown_sender` (for tools that require a sender) or
-`relay_unavailable` (for IO failures, classified by
-`validation::is_relay_unavailable_error`).
+`relay_stream` slot stays `None`. That single precondition —
+`relay_stream.is_some()`, equivalently association of both fields — is
+what every relay-backed tool needs, so an unassociated server rejects
+each of them with one actionable, validation-shaped
+`validation_unassociated_server` error (built by
+`errors::unassociated_server_error`, reached via the early
+`require_associated_sender_session` / `require_association` prechecks
+and the `map_relay_stream_failure` chokepoint). Genuine IO failures on
+an associated server still classify as
+`relay_timeout` / `relay_unavailable` / `internal_unexpected_failure`
+via `validation::is_relay_unavailable_error`.
 
 The `Arc<McpState>` is shared across all per-tool handler
 invocations on the same `McpServer` instance, so a single server
@@ -63,6 +70,9 @@ target (which would conflict with the cached registration under
 
 `#[tool_handler(router = self.tool_router)]` reads the composed
 `ToolRouter<Self>` field rather than recomputing the per-call
-dispatch table. The `ServerInfo` advertises tool support plus the
-canonical `agentmux MCP server for tmux-backed multi-agent
-coordination.` instruction string.
+dispatch table. The `ServerInfo` advertises tool support plus an
+association-specific instruction string: the base `agentmux MCP server
+for tmux-backed multi-agent coordination.` line, extended with the
+associated namespace/session when associated, or the
+`validation_unassociated_server` remedy when not, so a client sees the
+server's association at `initialize` time.

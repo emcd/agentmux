@@ -83,19 +83,7 @@ impl McpServer {
         {
             return self.list_foreign_principals(relay, &parsed_args);
         }
-        let requester_session = self
-            .state
-            .configuration
-            .sender_session
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| {
-                validation_tool_error(
-                    "validation_unknown_sender",
-                    "sender session is not configured for this MCP server",
-                    None,
-                )
-            })?;
+        let requester_session = self.require_associated_sender_session()?;
         let namespace = parsed_args
             .namespace
             .as_ref()
@@ -222,7 +210,7 @@ impl McpServer {
         relay: &str,
         parsed_args: &ListArgs,
     ) -> Result<CallToolResult, McpError> {
-        self.require_sender_session()?;
+        self.require_association()?;
         let namespace = parsed_args
             .namespace
             .as_deref()
@@ -274,7 +262,7 @@ impl McpServer {
                 )
             })?;
         validate_list_namespaces_args(&args)?;
-        self.require_sender_session()?;
+        self.require_association()?;
         let relay = args
             .relay
             .as_deref()
@@ -324,7 +312,7 @@ impl McpServer {
             )
         })?;
         validate_list_relays_args(&args)?;
-        self.require_sender_session()?;
+        self.require_association()?;
         emit_inscription("mcp.tool.list.relays.request", &json!({}));
         let request = RelayRequest::ListRelays;
         match self.request_relay(&request) {
@@ -431,24 +419,6 @@ impl McpServer {
                 Err(self.map_relay_stream_failure("mcp.tool.list.global.io_error", source))
             }
         }
-    }
-
-    /// Guards a relay-backed discovery path on a configured sender session,
-    /// mapping an unassociated MCP server to the same typed
-    /// `validation_unknown_sender` the local `list.principals` path returns
-    /// rather than letting the absent relay stream surface as an internal
-    /// failure. Discovery is relay-wide (the relay authorizes the authenticated
-    /// Hello principal, not this field), but an unassociated server has no relay
-    /// stream to reach, so the request cannot succeed.
-    fn require_sender_session(&self) -> Result<(), McpError> {
-        if self.state.configuration.sender_session.is_none() {
-            return Err(validation_tool_error(
-                "validation_unknown_sender",
-                "sender session is not configured for this MCP server",
-                None,
-            ));
-        }
-        Ok(())
     }
 
     fn home_bundle_name(&self) -> Option<&str> {

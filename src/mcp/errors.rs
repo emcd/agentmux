@@ -128,6 +128,29 @@ pub(super) fn map_relay_request_failure(socket_path: &Path, source: std::io::Err
     )
 }
 
+/// Canonical remedy string for an unassociated MCP server: the command that
+/// starts the server bound to a bundle and session so its relay stream exists.
+pub(super) const UNASSOCIATED_SERVER_REMEDY: &str =
+    "agentmux host mcp --bundle <name> --session-name <id>";
+
+/// Builds the validation-shaped error every relay-backed tool returns when the
+/// server has no resolvable bundle+session association. The relay stream each
+/// tool needs is constructed only when both are present, so a single actionable
+/// contract — server association — is the caller's remedy, shared by the early
+/// prechecks and the `map_relay_stream_failure` chokepoint.
+pub(super) fn unassociated_server_error() -> McpError {
+    validation_tool_error(
+        "validation_unassociated_server",
+        "MCP server is not associated with a bundle and session; start it with \
+         `agentmux host mcp --bundle <name> --session-name <id>`, or run it from \
+         an associated bundle worktree so discovery can resolve them.",
+        Some(json!({
+            "reason": "unassociated_server",
+            "remedy": UNASSOCIATED_SERVER_REMEDY,
+        })),
+    )
+}
+
 pub(super) fn validation_tool_error(
     code: &str,
     message: &str,

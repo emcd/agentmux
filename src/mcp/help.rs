@@ -12,11 +12,15 @@ use super::params::{
     UPDOWN_COMMAND_DOWN, UPDOWN_COMMAND_UP, UpdownArgs,
 };
 
-pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpError> {
+pub(super) fn help_tool(
+    params: HelpParams,
+    association: serde_json::Value,
+) -> Result<serde_json::Value, McpError> {
     let query = params.query.as_deref().map(str::trim).unwrap_or_default();
     match query {
         "" | NAMESPACE_AGENTMUX => Ok(json!({
             "namespace": NAMESPACE_AGENTMUX,
+            "association": association,
             "shape_hints": [
                 "Call help with query='list', 'updown', 'new', or 'change' for meta-tool command lists.",
                 "Call help with query='list.principals', 'list.namespaces', 'list.relays', 'list.decisions', 'updown.up', 'updown.down', 'new.peer', or 'change.psk' for command args schemas.",

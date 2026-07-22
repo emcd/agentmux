@@ -141,7 +141,7 @@ async fn mcp_initializes_without_active_bundle_context() {
     let send_response = harness.call_tool(3, "send", send_arguments).await;
     assert_eq!(
         send_response["error"]["data"]["code"],
-        Value::String("validation_unknown_sender".to_string())
+        Value::String("validation_unassociated_server".to_string())
     );
 }
 

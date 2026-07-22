@@ -11,7 +11,6 @@ use serde_json::{Value, json};
 use crate::relay::{RelayRequest, RelayResponse};
 use crate::runtime::inscriptions::emit_inscription;
 
-use crate::mcp::errors::validation_tool_error;
 use crate::mcp::params::SendParams;
 use crate::mcp::server::McpServer;
 use crate::mcp::validation::{qualify_send_targets, validate_send_request};
@@ -37,22 +36,10 @@ impl McpServer {
                 "message_length": params.message.len(),
             }),
         );
-        let requester_session = self
-            .state
-            .configuration
-            .sender_session
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| {
-                validation_tool_error(
-                    "validation_unknown_sender",
-                    "sender session is not configured for this MCP server",
-                    None,
-                )
-            })?;
+        let requester_session = self.require_associated_sender_session()?;
         // Fill in the namespace the relay now requires on every target. Done
-        // after sender resolution so an unidentified sender fails as
-        // `validation_unknown_sender` regardless of target shape.
+        // after sender resolution so an unassociated server fails as
+        // `validation_unassociated_server` regardless of target shape.
         let targets = qualify_send_targets(&params.targets, self.associated_namespace())?;
 
         let request = RelayRequest::Send {
