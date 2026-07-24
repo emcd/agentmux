@@ -34,6 +34,10 @@ pub(super) fn run_agentmux_new(arguments: &[String]) -> Result<(), RuntimeError>
         parsed.session_selector.as_deref(),
     )?;
     let relay_paths = RelayRuntimePaths::resolve(&roots.state_root);
+    let destination = shared::resolve_credential_destination(
+        parsed.output_path.as_deref(),
+        parsed.write_to_config,
+    )?;
 
     let response = request_relay(
         &relay_paths.relay_socket,
@@ -42,7 +46,7 @@ pub(super) fn run_agentmux_new(arguments: &[String]) -> Result<(), RuntimeError>
         &RelayRequest::NewPeer {
             principal_id: parsed.principal_id.clone(),
             scope: parsed.scope.clone(),
-            output_path: parsed.output_path.clone(),
+            destination,
         },
     )
     .map_err(|source| shared::map_relay_request_failure(&relay_paths.relay_socket, source))?;
@@ -53,7 +57,7 @@ pub(super) fn run_agentmux_new(arguments: &[String]) -> Result<(), RuntimeError>
             principal_id,
             principal_type,
             psk,
-            output_path,
+            written_path,
             config_snippet,
         } => {
             if parsed.output_json {
@@ -62,7 +66,7 @@ pub(super) fn run_agentmux_new(arguments: &[String]) -> Result<(), RuntimeError>
                     "principal_id": principal_id,
                     "principal_type": principal_type,
                     "psk": psk,
-                    "output_path": output_path,
+                    "written_path": written_path,
                     "config_snippet": config_snippet,
                 });
                 println!(
@@ -76,7 +80,7 @@ pub(super) fn run_agentmux_new(arguments: &[String]) -> Result<(), RuntimeError>
                 );
             } else {
                 println!("principal_id={principal_id} principal_type={principal_type}");
-                match (psk.as_deref(), output_path.as_deref()) {
+                match (psk.as_deref(), written_path.as_deref()) {
                     (Some(value), _) => println!("psk={value}"),
                     (None, Some(path)) => println!("psk written to {path}"),
                     (None, None) => {}
@@ -110,6 +114,7 @@ fn parse_new_arguments(arguments: &[String]) -> Result<NewPeerArguments, Runtime
     let mut principal_id: Option<String> = None;
     let mut scope: Option<String> = None;
     let mut output_path: Option<String> = None;
+    let mut write_to_config = false;
     let mut bundle_name: Option<String> = None;
     let mut session_selector: Option<String> = None;
     let mut output_json = false;
@@ -125,6 +130,7 @@ fn parse_new_arguments(arguments: &[String]) -> Result<NewPeerArguments, Runtime
             "--output" => {
                 output_path = Some(shared::take_value(arguments, &mut index, "--output")?)
             }
+            "--write-config" => write_to_config = true,
             "--bundle" | "--bundle-name" => {
                 bundle_name = Some(shared::take_value(arguments, &mut index, "--bundle")?)
             }
@@ -161,6 +167,7 @@ fn parse_new_arguments(arguments: &[String]) -> Result<NewPeerArguments, Runtime
         principal_id,
         scope,
         output_path,
+        write_to_config,
         bundle_name,
         session_selector,
         output_json,
@@ -170,6 +177,6 @@ fn parse_new_arguments(arguments: &[String]) -> Result<NewPeerArguments, Runtime
 
 pub(super) fn print_new_help() {
     println!(
-        "Usage: agentmux new peer <principal_id> [--scope SCOPE] [--output PATH] [--bundle NAME] [--as-session NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux new peer <principal_id> [--scope SCOPE] [--output PATH | --write-config] [--bundle NAME] [--as-session NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }

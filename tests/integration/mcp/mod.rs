@@ -1,4 +1,5 @@
 mod choices;
+mod credential_admin;
 mod help;
 pub(crate) mod helpers;
 mod list;

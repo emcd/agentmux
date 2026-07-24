@@ -384,6 +384,59 @@ fn spawn_relay_connection_with_catalog(
     (client_stream, join_handle)
 }
 
+// Builds one shared serving context the way production does (constructed once,
+// then reused across every accepted connection), so multiple concurrent
+// connections share the relay-scope identity-admin serialization lock carried on
+// the `Arc`-backed context. `spawn_relay_connection`, by contrast, builds a
+// fresh context per connection and cannot exercise cross-connection
+// serialization.
+fn shared_serve_context(
+    configuration_root: &Path,
+    state_root: &Path,
+    catalog: BundleCatalog,
+) -> std::sync::Arc<agentmux::relay::ConnectionServeContext> {
+    let peer_connection_manager = std::sync::Arc::new(
+        agentmux::relay::PeerConnectionManager::from_configuration(state_root, &[]),
+    );
+    std::sync::Arc::new(agentmux::relay::ConnectionServeContext::new(
+        configuration_root.to_path_buf(),
+        state_root.to_path_buf(),
+        catalog,
+        peer_connection_manager,
+        Vec::new(),
+        false,
+        TEST_PRE_HELLO_IDLE_TIMEOUT,
+    ))
+}
+
+// Serves one connection against a shared context (see `shared_serve_context`),
+// so several such connections run concurrently against the same relay state and
+// serialization lock.
+fn spawn_relay_connection_on_context(
+    context: std::sync::Arc<agentmux::relay::ConnectionServeContext>,
+) -> (UnixStream, thread::JoinHandle<()>) {
+    let (server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
+    let join_handle = thread::spawn(move || {
+        server_stream
+            .set_nonblocking(true)
+            .expect("set server stream nonblocking");
+        let runtime = TokioRuntimeBuilder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("build multi-thread runtime");
+        runtime
+            .block_on(async move {
+                let stream =
+                    tokio::net::UnixStream::from_std(server_stream).expect("adopt server stream");
+                let worker_slot = ConnectionDrainCoordinator::new().register_worker();
+                serve_connection(stream, &context, worker_slot).await
+            })
+            .expect("serve connection");
+    });
+    (client_stream, join_handle)
+}
+
 // Bridges a synchronous unit test to the async `serve_connection`. Each
 // connection gets its own two-worker tokio runtime so the writer task can
 // observe its write timeout while the connection task is in a tight

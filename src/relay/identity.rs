@@ -3,6 +3,7 @@ use std::{
     fs, io,
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use base64::Engine;
@@ -14,11 +15,33 @@ use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::{GLOBAL_SESSION_SUFFIX, RelayError, relay_error};
+use crate::runtime::paths::{is_valid_bundle_name, session_identity_psk_path};
+
+use super::{CredentialDestination, GLOBAL_SESSION_SUFFIX, RelayError, relay_error};
 
 const PSK_BYTE_LENGTH: usize = 32;
 const PRINCIPAL_FILE_MODE: u32 = 0o600;
 const PRINCIPAL_STORE_FORMAT_VERSION: u32 = 1;
+/// Upper bound on a `config`-destination session-id component, mirroring
+/// `configuration::SESSION_ID_LENGTH_MAX` (kept in sync manually since that
+/// constant is crate-private to the configuration module).
+const CONFIG_SESSION_ID_LENGTH_MAX: usize = 31;
+
+/// Process-unique nonce source for temp-file names, so a staged store or
+/// credential temp never collides with a concurrent or stale artifact.
+static TEMP_FILE_NONCE: AtomicU64 = AtomicU64::new(0);
+
+/// Builds a per-attempt-unique sibling temp path for `final_path`. Combining the
+/// pid with a monotonic nonce keeps two concurrent writers (and any stale
+/// crash-left artifact) from ever selecting the same temp name, so a
+/// `create_new` open can safely refuse a pre-existing file.
+fn unique_temp_path(final_path: &Path, tag: &str) -> PathBuf {
+    let nonce = TEMP_FILE_NONCE.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let mut name = final_path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".{pid}.{nonce}.{tag}.tmp"));
+    final_path.with_file_name(name)
+}
 
 /// Returns the canonical `session@namespace` identity for a session id.
 ///
@@ -251,26 +274,40 @@ impl PrincipalStore {
                 })),
             )
         })?;
-        let tmp_path = self.path.with_extension("json.tmp");
+        // Stage into a per-attempt-unique sibling (`create_new`, so a stale or
+        // concurrent temp can never be reused) and enforce mode BEFORE the
+        // rename, so the atomic rename is the single, last fallible step. A
+        // failure after publication (e.g. a post-rename chmod) would otherwise
+        // report an error while the new store is already durable, defeating the
+        // handlers' rollback.
+        let tmp_path = unique_temp_path(&self.path, "store");
         {
             let mut options = fs::OpenOptions::new();
             options
-                .create(true)
-                .truncate(true)
+                .create_new(true)
                 .write(true)
                 .mode(PRINCIPAL_FILE_MODE);
             let mut file = options
                 .open(&tmp_path)
                 .map_err(|source| self.io_error("open temp", source))?;
-            io::Write::write_all(&mut file, &serialized)
-                .map_err(|source| self.io_error("write temp", source))?;
-            file.sync_all()
-                .map_err(|source| self.io_error("sync temp", source))?;
+            if let Err(source) =
+                io::Write::write_all(&mut file, &serialized).and_then(|()| file.sync_all())
+            {
+                let _ = fs::remove_file(&tmp_path);
+                return Err(self.io_error("write temp", source));
+            }
         }
-        fs::rename(&tmp_path, &self.path)
-            .map_err(|source| self.io_error("rename store", source))?;
-        fs::set_permissions(&self.path, fs::Permissions::from_mode(PRINCIPAL_FILE_MODE))
-            .map_err(|source| self.io_error("set mode 0600", source))?;
+        if let Err(source) =
+            fs::set_permissions(&tmp_path, fs::Permissions::from_mode(PRINCIPAL_FILE_MODE))
+        {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(self.io_error("set mode 0600", source));
+        }
+        // Commit point: nothing fallible runs after this rename.
+        fs::rename(&tmp_path, &self.path).map_err(|source| {
+            let _ = fs::remove_file(&tmp_path);
+            self.io_error("rename store", source)
+        })?;
         Ok(())
     }
 
@@ -297,78 +334,284 @@ pub(crate) fn generate_psk() -> String {
     base64::engine::general_purpose::STANDARD_NO_PAD.encode(bytes)
 }
 
-/// Writes `psk` to an operator-supplied absolute `path` with mode 0600.
-///
-/// The relay refuses to follow symlinks (`O_NOFOLLOW`) and does not create
-/// parent directories: the target's parent must already exist. These
-/// constraints prevent a `--output` argument from being redirected through a
-/// symlink or silently materializing an unexpected directory tree.
-pub(crate) fn write_psk_output_file(path: &Path, psk: &str) -> Result<(), RelayError> {
-    if !path.is_absolute() {
-        return Err(relay_error(
-            "validation_invalid_output_path",
-            "credential output path must be absolute",
-            Some(json!({ "path": path.display().to_string() })),
-        ));
-    }
-    let Some(parent) = path.parent() else {
-        return Err(relay_error(
-            "validation_invalid_output_path",
-            "credential output path has no parent directory",
-            Some(json!({ "path": path.display().to_string() })),
-        ));
-    };
-    if !parent.is_dir() {
-        return Err(relay_error(
-            "validation_invalid_output_path",
-            "credential output parent directory does not exist",
-            Some(json!({
-                "path": path.display().to_string(),
-                "parent": parent.display().to_string(),
-            })),
-        ));
-    }
-    let mut options = fs::OpenOptions::new();
-    options
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .mode(PRINCIPAL_FILE_MODE)
-        .custom_flags(libc::O_NOFOLLOW);
-    let mut file = options.open(path).map_err(|source| {
-        relay_error(
-            "validation_invalid_output_path",
-            "failed to write credential output file",
-            Some(json!({
-                "path": path.display().to_string(),
-                "cause": source.to_string(),
-            })),
-        )
-    })?;
-    io::Write::write_all(&mut file, psk.as_bytes()).map_err(|source| {
-        relay_error(
-            "internal_credential_write",
-            "failed to write credential output file",
-            Some(json!({
-                "path": path.display().to_string(),
-                "cause": source.to_string(),
-            })),
-        )
-    })?;
-    // Re-assert mode in case a pre-existing file's permissions differed.
-    fs::set_permissions(path, fs::Permissions::from_mode(PRINCIPAL_FILE_MODE)).map_err(
-        |source| {
+/// A validated credential destination, resolved to a concrete sink before any
+/// principal-store mutation so a rejected destination registers or rotates
+/// nothing.
+pub(crate) enum StagedCredentialSink {
+    /// Return the PSK in the response.
+    Response,
+    /// Write the PSK to `path`. `create_parents` is set only for relay-owned
+    /// `config` paths; caller-named `path` sinks require a pre-existing parent.
+    File { path: PathBuf, create_parents: bool },
+}
+
+/// A credential written to a temp sibling, awaiting the atomic rename that
+/// publishes it. The write lands before the store commit; the rename runs after
+/// it, so a store failure discards the staged file and leaves the prior
+/// credential (if any) intact.
+pub(crate) struct PendingCredentialWrite {
+    tmp_path: PathBuf,
+    final_path: PathBuf,
+}
+
+impl PendingCredentialWrite {
+    /// Atomically publishes the staged credential and returns the written path.
+    ///
+    /// The temp file's mode is enforced at staging time (before this call), so
+    /// the rename is the single, last fallible step — no post-publication work
+    /// can report an error after the credential is already in place.
+    pub(crate) fn commit(self) -> Result<String, RelayError> {
+        fs::rename(&self.tmp_path, &self.final_path).map_err(|source| {
+            let _ = fs::remove_file(&self.tmp_path);
             relay_error(
                 "internal_credential_write",
-                "failed to set credential output file mode",
+                "failed to finalize credential file",
                 Some(json!({
-                    "path": path.display().to_string(),
+                    "path": self.final_path.display().to_string(),
                     "cause": source.to_string(),
                 })),
             )
-        },
-    )?;
-    Ok(())
+        })?;
+        Ok(self.final_path.display().to_string())
+    }
+
+    /// Discards the staged temp file without publishing it.
+    pub(crate) fn abort(self) {
+        let _ = fs::remove_file(&self.tmp_path);
+    }
+}
+
+/// Validates `destination` and resolves it to a concrete sink without writing
+/// anything or touching the store. `principal_type` and `principal_id` gate and
+/// derive the `config` credential path.
+pub(crate) fn stage_credential_sink(
+    destination: &CredentialDestination,
+    principal_type: PrincipalType,
+    principal_id: &str,
+    state_root: &Path,
+) -> Result<StagedCredentialSink, RelayError> {
+    match destination {
+        CredentialDestination::Response => Ok(StagedCredentialSink::Response),
+        CredentialDestination::Path { path } => {
+            let path = validate_output_path(Path::new(path))?;
+            Ok(StagedCredentialSink::File {
+                path,
+                create_parents: false,
+            })
+        }
+        CredentialDestination::Config => {
+            let path = resolve_config_credential_path(principal_type, principal_id, state_root)?;
+            Ok(StagedCredentialSink::File {
+                path,
+                create_parents: true,
+            })
+        }
+    }
+}
+
+/// Writes `psk` to the sink's temp sibling (0600, `O_NOFOLLOW`, fsync), creating
+/// parent directories only for relay-owned config paths. Returns `None` for the
+/// response sink (nothing to publish).
+pub(crate) fn write_pending_credential(
+    sink: &StagedCredentialSink,
+    psk: &str,
+) -> Result<Option<PendingCredentialWrite>, RelayError> {
+    let StagedCredentialSink::File {
+        path,
+        create_parents,
+    } = sink
+    else {
+        return Ok(None);
+    };
+    if *create_parents && let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| {
+            relay_error(
+                "internal_credential_write",
+                "failed to create credential directory",
+                Some(json!({
+                    "path": parent.display().to_string(),
+                    "cause": source.to_string(),
+                })),
+            )
+        })?;
+        let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
+    }
+    // `create_new` (O_EXCL) guarantees we materialize a fresh 0600 file rather
+    // than truncating a stale sibling whose looser permissions would briefly
+    // hold the raw PSK; `O_NOFOLLOW` refuses a symlinked temp.
+    let tmp_path = unique_temp_path(path, "cred");
+    let mut options = fs::OpenOptions::new();
+    options
+        .create_new(true)
+        .write(true)
+        .mode(PRINCIPAL_FILE_MODE)
+        .custom_flags(libc::O_NOFOLLOW);
+    let file = options.open(&tmp_path).map_err(|source| {
+        relay_error(
+            "internal_credential_write",
+            "failed to open credential temp file",
+            Some(json!({
+                "path": tmp_path.display().to_string(),
+                "cause": source.to_string(),
+            })),
+        )
+    })?;
+    // Enforce exactly 0600 before the secret is written, then publish via the
+    // rename commit point, so no fallible permission step follows publication.
+    if let Err(source) =
+        fs::set_permissions(&tmp_path, fs::Permissions::from_mode(PRINCIPAL_FILE_MODE))
+    {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(relay_error(
+            "internal_credential_write",
+            "failed to set credential temp file mode",
+            Some(json!({
+                "path": tmp_path.display().to_string(),
+                "cause": source.to_string(),
+            })),
+        ));
+    }
+    let mut file = file;
+    let write_result =
+        io::Write::write_all(&mut file, psk.as_bytes()).and_then(|()| file.sync_all());
+    if let Err(source) = write_result {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(relay_error(
+            "internal_credential_write",
+            "failed to write credential temp file",
+            Some(json!({
+                "path": tmp_path.display().to_string(),
+                "cause": source.to_string(),
+            })),
+        ));
+    }
+    Ok(Some(PendingCredentialWrite {
+        tmp_path,
+        final_path: path.clone(),
+    }))
+}
+
+/// Validates a caller-named `path` sink: it must be absolute, have a file name,
+/// have an existing parent directory, and not be a symlinked target. Parent
+/// directories are never created for a caller-named path.
+fn validate_output_path(path: &Path) -> Result<PathBuf, RelayError> {
+    if !path.is_absolute() {
+        return Err(invalid_output_path(
+            path,
+            "credential output path must be absolute",
+        ));
+    }
+    if path.file_name().is_none() {
+        return Err(invalid_output_path(
+            path,
+            "credential output path has no file name",
+        ));
+    }
+    let Some(parent) = path.parent() else {
+        return Err(invalid_output_path(
+            path,
+            "credential output path has no parent directory",
+        ));
+    };
+    if !parent.is_dir() {
+        return Err(invalid_output_path(
+            path,
+            "credential output parent directory does not exist",
+        ));
+    }
+    // Preserve the no-follow contract: writing through a symlinked target is
+    // refused. The temp+rename publish never opens the final path directly, so
+    // this lstat check is the enforcement point for the caller-named sink.
+    if let Ok(metadata) = fs::symlink_metadata(path)
+        && metadata.file_type().is_symlink()
+    {
+        return Err(invalid_output_path(
+            path,
+            "credential output path is a symlink",
+        ));
+    }
+    Ok(path.to_path_buf())
+}
+
+/// Derives the relay-owned canonical credential path for a `config` sink.
+///
+/// Only session principals have a relay-owned credential location; peer-relay,
+/// user, and application principals do not, so `config` is rejected for them.
+/// The `<id>@<namespace>` components become filesystem path segments, so each is
+/// checked against a safe-segment grammar to keep a crafted principal id from
+/// escaping the state root.
+fn resolve_config_credential_path(
+    principal_type: PrincipalType,
+    principal_id: &str,
+    state_root: &Path,
+) -> Result<PathBuf, RelayError> {
+    if principal_type != PrincipalType::Session {
+        return Err(relay_error(
+            "validation_config_destination_unsupported",
+            "config credential destination is only supported for session principals",
+            Some(json!({
+                "principal_id": principal_id,
+                "principal_type": principal_type.as_str(),
+            })),
+        ));
+    }
+    let Some((session_id, bundle_name)) = split_principal_id(principal_id) else {
+        return Err(relay_error(
+            "validation_invalid_principal_id",
+            "principal_id is not in <id>@<namespace> form",
+            Some(json!({ "principal_id": principal_id })),
+        ));
+    };
+    // Enforce the real identity grammar, not merely path-safety: a config
+    // destination must name an identity a configured session could actually own.
+    // The session-id grammar (leading ASCII alpha, then alphanumeric/`-`/`_`)
+    // and the namespace grammar both exclude `/`, `.`, and `..`, so this also
+    // subsumes traversal rejection.
+    if !is_valid_session_component(session_id) || !is_valid_namespace_component(bundle_name) {
+        return Err(relay_error(
+            "validation_invalid_principal_id",
+            "principal id components are not a valid session identity for a config destination",
+            Some(json!({ "principal_id": principal_id })),
+        ));
+    }
+    Ok(session_identity_psk_path(
+        state_root,
+        bundle_name,
+        session_id,
+    ))
+}
+
+/// True when `session_id` matches the configured session-id grammar
+/// (`configuration::fields::validate_session_id`): non-empty, first character
+/// ASCII alphabetic, remaining characters ASCII alphanumeric / `-` / `_`, within
+/// the length bound. Rejects ids no configured session could own (e.g. `1worker`,
+/// `worker.name`) and, by construction, `.` / `..` / path separators.
+fn is_valid_session_component(session_id: &str) -> bool {
+    let mut characters = session_id.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    first.is_ascii_alphabetic()
+        && characters
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+        && session_id.len() <= CONFIG_SESSION_ID_LENGTH_MAX
+}
+
+/// True when `namespace` is a valid bundle name usable as a path segment: it
+/// satisfies the canonical bundle-name grammar (which permits `.`, so real
+/// dotted bundle names like `team.one` are accepted) but is not a traversal-only
+/// `.` / `..` segment. The grammar already excludes `/`, so this cannot escape
+/// the state root.
+fn is_valid_namespace_component(namespace: &str) -> bool {
+    is_valid_bundle_name(namespace) && namespace != "." && namespace != ".."
+}
+
+fn invalid_output_path(path: &Path, message: &str) -> RelayError {
+    relay_error(
+        "validation_invalid_output_path",
+        message,
+        Some(json!({ "path": path.display().to_string() })),
+    )
 }
 
 /// Returns true when a record's `expires_at` is absent-free but at or before

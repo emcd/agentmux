@@ -148,7 +148,7 @@ pub(in crate::relay) fn handle_identity_admin_request(
         RelayRequest::NewPeer {
             principal_id,
             scope,
-            output_path,
+            destination,
         } => identity::handle_new_peer(
             configuration_root,
             state_root,
@@ -156,14 +156,18 @@ pub(in crate::relay) fn handle_identity_admin_request(
             identity::NewPeerRequestContext {
                 principal_id,
                 scope,
-                output_path,
+                destination,
             },
         ),
-        RelayRequest::ChangePsk { principal_id } => identity::handle_change_psk(
+        RelayRequest::ChangePsk {
+            principal_id,
+            destination,
+        } => identity::handle_change_psk(
             configuration_root,
             state_root,
             requester_principal_id,
             principal_id,
+            destination,
         ),
         _ => Err(relay_error(
             "internal_unexpected_request",

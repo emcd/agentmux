@@ -109,6 +109,7 @@ pub(super) struct NewPeerArguments {
     pub(super) principal_id: String,
     pub(super) scope: Option<String>,
     pub(super) output_path: Option<String>,
+    pub(super) write_to_config: bool,
     pub(super) bundle_name: Option<String>,
     pub(super) session_selector: Option<String>,
     pub(super) output_json: bool,
@@ -118,6 +119,8 @@ pub(super) struct NewPeerArguments {
 #[derive(Clone, Debug)]
 pub(super) struct ChangePskArguments {
     pub(super) principal_id: String,
+    pub(super) output_path: Option<String>,
+    pub(super) write_to_config: bool,
     pub(super) bundle_name: Option<String>,
     pub(super) session_selector: Option<String>,
     pub(super) output_json: bool,

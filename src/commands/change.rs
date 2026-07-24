@@ -34,6 +34,10 @@ pub(super) fn run_agentmux_change(arguments: &[String]) -> Result<(), RuntimeErr
         parsed.session_selector.as_deref(),
     )?;
     let relay_paths = RelayRuntimePaths::resolve(&roots.state_root);
+    let destination = shared::resolve_credential_destination(
+        parsed.output_path.as_deref(),
+        parsed.write_to_config,
+    )?;
 
     let response = request_relay(
         &relay_paths.relay_socket,
@@ -41,6 +45,7 @@ pub(super) fn run_agentmux_change(arguments: &[String]) -> Result<(), RuntimeErr
         resolved_session.session_id.as_str(),
         &RelayRequest::ChangePsk {
             principal_id: parsed.principal_id.clone(),
+            destination,
         },
     )
     .map_err(|source| shared::map_relay_request_failure(&relay_paths.relay_socket, source))?;
@@ -50,12 +55,14 @@ pub(super) fn run_agentmux_change(arguments: &[String]) -> Result<(), RuntimeErr
             schema_version,
             principal_id,
             psk,
+            written_path,
         } => {
             if parsed.output_json {
                 let payload = json!({
                     "schema_version": schema_version,
                     "principal_id": principal_id,
                     "psk": psk,
+                    "written_path": written_path,
                 });
                 println!(
                     "{}",
@@ -68,7 +75,11 @@ pub(super) fn run_agentmux_change(arguments: &[String]) -> Result<(), RuntimeErr
                 );
             } else {
                 println!("principal_id={principal_id}");
-                println!("psk={psk}");
+                match (psk.as_deref(), written_path.as_deref()) {
+                    (Some(value), _) => println!("psk={value}"),
+                    (None, Some(path)) => println!("psk written to {path}"),
+                    (None, None) => {}
+                }
             }
             Ok(())
         }
@@ -95,6 +106,8 @@ fn parse_change_arguments(arguments: &[String]) -> Result<ChangePskArguments, Ru
     }
 
     let mut principal_id: Option<String> = None;
+    let mut output_path: Option<String> = None;
+    let mut write_to_config = false;
     let mut bundle_name: Option<String> = None;
     let mut session_selector: Option<String> = None;
     let mut output_json = false;
@@ -106,6 +119,10 @@ fn parse_change_arguments(arguments: &[String]) -> Result<ChangePskArguments, Ru
             continue;
         }
         match arguments[index].as_str() {
+            "--output" => {
+                output_path = Some(shared::take_value(arguments, &mut index, "--output")?)
+            }
+            "--write-config" => write_to_config = true,
             "--bundle" | "--bundle-name" => {
                 bundle_name = Some(shared::take_value(arguments, &mut index, "--bundle")?)
             }
@@ -140,6 +157,8 @@ fn parse_change_arguments(arguments: &[String]) -> Result<ChangePskArguments, Ru
     };
     Ok(ChangePskArguments {
         principal_id,
+        output_path,
+        write_to_config,
         bundle_name,
         session_selector,
         output_json,
@@ -149,6 +168,6 @@ fn parse_change_arguments(arguments: &[String]) -> Result<ChangePskArguments, Ru
 
 pub(super) fn print_change_help() {
     println!(
-        "Usage: agentmux change psk <principal_id> [--bundle NAME] [--as-session NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux change psk <principal_id> [--output PATH | --write-config] [--bundle NAME] [--as-session NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }

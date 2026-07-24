@@ -17,12 +17,12 @@ use crate::relay::context::RequestPrincipal;
 use crate::relay::identity::{
     IdentityIntrospectRights, PrincipalRecord, PrincipalStore, PrincipalType,
     classify_principal_id, generate_psk, hash_token_sha256, scope_permits, split_principal_id,
-    write_psk_output_file,
+    stage_credential_sink, write_pending_credential,
 };
 use crate::relay::stream::{
     RelayStreamEvent, notify_trusted_hosts_of_revocation, revoke_streams_for_identity,
 };
-use crate::relay::{RelayError, RelayResponse, SCHEMA_VERSION, relay_error};
+use crate::relay::{CredentialDestination, RelayError, RelayResponse, SCHEMA_VERSION, relay_error};
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::paths::{peer_relay_psk_path, principal_store_path, session_identity_psk_path};
 
@@ -30,11 +30,17 @@ use crate::runtime::paths::{peer_relay_psk_path, principal_store_path, session_i
 pub(in crate::relay) struct NewPeerRequestContext {
     pub(in crate::relay) principal_id: String,
     pub(in crate::relay) scope: Option<String>,
-    pub(in crate::relay) output_path: Option<String>,
+    pub(in crate::relay) destination: CredentialDestination,
 }
 
-/// Registers a new principal: generates a PSK, stores its hash, and returns the
-/// raw PSK plus a config snippet (or writes the PSK to `output_path`).
+/// Registers a new principal: generates a PSK, stores its hash, and either
+/// returns the raw PSK or writes it to the requested credential destination
+/// (a caller-named path or the principal's canonical config path).
+///
+/// The destination is validated and the credential written to a temp sibling
+/// before the store is committed, so a rejected or unwritable destination
+/// registers nothing; the temp file is published with an atomic rename after
+/// the commit, and a failed rename rolls the just-inserted record back out.
 pub(in crate::relay) fn handle_new_peer(
     configuration_root: &Path,
     state_root: &Path,
@@ -60,8 +66,15 @@ pub(in crate::relay) fn handle_new_peer(
             Some(serde_json::json!({ "principal_id": context.principal_id })),
         ));
     }
+    let sink = stage_credential_sink(
+        &context.destination,
+        principal_type,
+        context.principal_id.as_str(),
+        state_root,
+    )?;
     let psk = generate_psk();
     let credential_hash = hash_token_sha256(psk.as_str());
+    let pending = write_pending_credential(&sink, psk.as_str())?;
     store.insert(PrincipalRecord {
         principal_id: context.principal_id.clone(),
         principal_type,
@@ -70,23 +83,40 @@ pub(in crate::relay) fn handle_new_peer(
         expires_at: None,
         metadata: Default::default(),
     });
-    store.persist()?;
+    if let Err(error) = store.persist() {
+        if let Some(pending) = pending {
+            pending.abort();
+        }
+        return Err(error);
+    }
 
     let config_snippet =
         build_config_snippet(principal_type, context.principal_id.as_str(), state_root);
-    let (returned_psk, written_path) = match context.output_path.as_deref() {
-        Some(output_path) => {
-            write_psk_output_file(Path::new(output_path), psk.as_str())?;
-            (None, Some(output_path.to_string()))
-        }
+    let (returned_psk, written_path) = match pending {
         None => (Some(psk), None),
+        Some(pending) => match pending.commit() {
+            Ok(path) => (None, Some(path)),
+            Err(error) => {
+                // The rename failed after the store commit: remove the record we
+                // just inserted so no principal lingers without a credential
+                // file, then surface the write failure. `persist` is atomic
+                // (old store intact on failure), so a rollback failure means the
+                // new hash is still published with no usable credential -- do not
+                // swallow it.
+                store.remove_by_principal_id(context.principal_id.as_str());
+                if let Err(rollback) = store.persist() {
+                    return Err(credential_rollback_failed(error, rollback));
+                }
+                return Err(error);
+            }
+        },
     };
     Ok(RelayResponse::NewPeer {
         schema_version: SCHEMA_VERSION.to_string(),
         principal_id: context.principal_id,
         principal_type: principal_type.as_str().to_string(),
         psk: returned_psk,
-        output_path: written_path,
+        written_path,
         config_snippet,
     })
 }
@@ -101,6 +131,7 @@ pub(in crate::relay) fn handle_change_psk(
     state_root: &Path,
     requester_principal_id: &str,
     principal_id: String,
+    destination: CredentialDestination,
 ) -> Result<RelayResponse, RelayError> {
     authorize_relay_action(
         configuration_root,
@@ -117,18 +148,54 @@ pub(in crate::relay) fn handle_change_psk(
             Some(serde_json::json!({ "principal_id": principal_id })),
         ));
     };
+    // Validate and stage the destination before any store mutation so a rejected
+    // destination neither rotates the credential nor revokes the live session.
+    let sink = stage_credential_sink(
+        &destination,
+        existing.principal_type,
+        principal_id.as_str(),
+        state_root,
+    )?;
     let psk = generate_psk();
     let credential_hash = hash_token_sha256(psk.as_str());
+    let pending = write_pending_credential(&sink, psk.as_str())?;
     store.remove_by_principal_id(principal_id.as_str());
     store.insert(PrincipalRecord {
         principal_id: principal_id.clone(),
         principal_type: existing.principal_type,
         credential_hash,
-        scope: existing.scope,
-        expires_at: existing.expires_at,
-        metadata: existing.metadata,
+        scope: existing.scope.clone(),
+        expires_at: existing.expires_at.clone(),
+        metadata: existing.metadata.clone(),
     });
-    store.persist()?;
+    if let Err(error) = store.persist() {
+        // The on-disk store is written atomically, so a persist failure leaves
+        // the prior credential intact; discard the staged write and do not
+        // revoke anything.
+        if let Some(pending) = pending {
+            pending.abort();
+        }
+        return Err(error);
+    }
+    let written_path = match pending {
+        None => None,
+        Some(pending) => match pending.commit() {
+            Ok(path) => Some(path),
+            Err(error) => {
+                // The rename failed after the store commit: restore the prior
+                // record so the unchanged config file still authenticates, and
+                // leave live connections untouched. A rollback-persist failure
+                // would leave the rotated hash published without a usable
+                // credential, so surface it rather than swallowing it.
+                store.remove_by_principal_id(principal_id.as_str());
+                store.insert(existing);
+                if let Err(rollback) = store.persist() {
+                    return Err(credential_rollback_failed(error, rollback));
+                }
+                return Err(error);
+            }
+        },
+    };
 
     // Revoke any live connection still holding the rotated credential. The
     // store update alone keeps an already-authenticated session alive until it
@@ -170,10 +237,16 @@ pub(in crate::relay) fn handle_change_psk(
         }),
     );
 
+    let returned_psk = if written_path.is_some() {
+        None
+    } else {
+        Some(psk)
+    };
     Ok(RelayResponse::ChangePsk {
         schema_version: SCHEMA_VERSION.to_string(),
         principal_id,
-        psk,
+        psk: returned_psk,
+        written_path,
     })
 }
 
@@ -296,6 +369,21 @@ fn classify_target_principal(principal_id: &str) -> Result<PrincipalType, RelayE
             Some(serde_json::json!({ "principal_id": principal_id })),
         )
     })
+}
+
+/// Builds the error for the double-fault case where a credential publish failed
+/// *and* the compensating store rollback also failed. The store may now hold a
+/// hash with no usable credential, so the failure is surfaced (carrying both
+/// underlying codes) rather than discarded.
+fn credential_rollback_failed(write_error: RelayError, rollback_error: RelayError) -> RelayError {
+    relay_error(
+        "internal_credential_rollback_failed",
+        "credential publish failed and the principal-store rollback also failed; the store may be inconsistent",
+        Some(serde_json::json!({
+            "write_error": write_error.code,
+            "rollback_error": rollback_error.code,
+        })),
+    )
 }
 
 /// Builds a human-facing snippet describing where the new credential is read

@@ -494,7 +494,15 @@ pub(in crate::relay) fn dispatch_identity_admin(
     configuration_root: &Path,
     state_root: &Path,
     requester_principal_id: &str,
+    identity_admin_lock: &std::sync::Mutex<()>,
 ) -> RelayResponse {
+    // Serialize the whole load/stage/persist/rename transaction at relay scope.
+    // Recover from a poisoned lock rather than propagating: a prior panic must
+    // not wedge all future credential administration. Held across the blocking
+    // transaction below (this runs on the blocking pool).
+    let _guard = identity_admin_lock
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     match handlers::handle_identity_admin_request(
         request,
         configuration_root,

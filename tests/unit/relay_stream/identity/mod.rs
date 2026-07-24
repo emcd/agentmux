@@ -37,6 +37,7 @@ use tempfile::TempDir;
 
 use super::*;
 
+mod concurrency;
 mod expires;
 mod hello;
 mod introspect;
@@ -106,6 +107,51 @@ fn operator_request(
     let read_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     let operator = global_user_id(bundle_name);
+    send_json(
+        &mut client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "principal_id": operator,
+            "identity_token": "socket-trust",
+        }),
+    );
+    let ack = read_json(&mut reader);
+    assert_eq!(
+        ack["frame"], "hello_ack",
+        "operator hello not acked: {ack:?}"
+    );
+    send_json(
+        &mut client,
+        json!({
+            "frame": "request",
+            "request_id": "admin-1",
+            "request": request,
+        }),
+    );
+    let mut response = read_json(&mut reader);
+    while response["frame"] != "response" {
+        response = read_json(&mut reader);
+    }
+    shutdown_stream(&client, "shutdown operator stream");
+    join.join().expect("join operator relay thread");
+    response
+}
+
+/// Connects as `operator` over a connection served by `context`, submits one
+/// relay-admin request, and returns the response frame. Unlike
+/// [`operator_request`], every call shares `context` (and thus the relay-scope
+/// identity-admin serialization lock), so concurrent callers exercise the real
+/// cross-connection transaction ordering. Each concurrent caller must present a
+/// distinct `operator` id, or the second Hello collides on the identity claim.
+fn operator_request_on_context(
+    context: &std::sync::Arc<agentmux::relay::ConnectionServeContext>,
+    operator: &str,
+    request: Value,
+) -> Value {
+    let (mut client, join) = spawn_relay_connection_on_context(std::sync::Arc::clone(context));
+    let read_stream = client.try_clone().expect("clone stream");
+    let mut reader = BufReader::new(read_stream);
     send_json(
         &mut client,
         json!({

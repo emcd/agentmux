@@ -218,7 +218,7 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
             "commands": [
                 {
                     "command": "new.peer",
-                    "description": "Generate a PSK for a principal_id and return it (or write it to an output path)."
+                    "description": "Generate a PSK for a principal_id and return it, or write it to an output path or the principal's config (write_to_config)."
                 }
             ],
             "invoke": {
@@ -231,7 +231,7 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
         })),
         "new.peer" => Ok(command_help(
             "new.peer",
-            "Generate a PSK for a principal_id and return it (or write it to an output path).",
+            "Generate a PSK for a principal_id and return it, or write it to an output path or the principal's config (write_to_config).",
             json_schema_for::<NewPeerArgs>(),
             json!({
                 "tool": TOOL_NEW,
@@ -248,7 +248,7 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
             "commands": [
                 {
                     "command": "change.psk",
-                    "description": "Generate a new PSK for an existing principal_id and return it."
+                    "description": "Generate a new PSK for an existing principal_id and return it, or write it to an output path or the principal's config (write_to_config)."
                 }
             ],
             "invoke": {
@@ -261,7 +261,7 @@ pub(super) fn help_tool(params: HelpParams) -> Result<serde_json::Value, McpErro
         })),
         "change.psk" => Ok(command_help(
             "change.psk",
-            "Generate a new PSK for an existing principal_id and return it.",
+            "Generate a new PSK for an existing principal_id and return it, or write it to an output path or the principal's config (write_to_config).",
             json_schema_for::<ChangePskArgs>(),
             json!({
                 "tool": TOOL_CHANGE,

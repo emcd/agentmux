@@ -267,10 +267,16 @@ pub(super) struct NewPeerArgs {
     #[schemars(with = "String")]
     pub(super) scope: Option<String>,
     /// Optional absolute path; when present the PSK is written there instead of
-    /// being returned in the response.
+    /// being returned in the response. Mutually exclusive with `write_to_config`.
     #[serde(default)]
     #[schemars(with = "String")]
     pub(super) output_path: Option<String>,
+    /// When true, the relay writes the PSK to the principal's canonical config
+    /// path (session principals only) and omits it from the response. Mutually
+    /// exclusive with `output_path`.
+    #[serde(default)]
+    #[schemars(with = "bool")]
+    pub(super) write_to_config: Option<bool>,
     /// Unknown fields captured for explicit validation.
     #[serde(flatten, default)]
     #[schemars(skip)]
@@ -300,6 +306,17 @@ pub(super) struct ChangePskArgs {
     #[serde(default)]
     #[schemars(with = "String")]
     pub(super) principal_id: Option<String>,
+    /// Optional absolute path; when present the rotated PSK is written there
+    /// instead of being returned. Mutually exclusive with `write_to_config`.
+    #[serde(default)]
+    #[schemars(with = "String")]
+    pub(super) output_path: Option<String>,
+    /// When true, the relay writes the rotated PSK to the principal's canonical
+    /// config path (session principals only) and omits it from the response.
+    /// Mutually exclusive with `output_path`.
+    #[serde(default)]
+    #[schemars(with = "bool")]
+    pub(super) write_to_config: Option<bool>,
     /// Unknown fields captured for explicit validation.
     #[serde(flatten, default)]
     #[schemars(skip)]
