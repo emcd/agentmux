@@ -352,12 +352,19 @@ fn env_directory(variable_name: &str) -> Option<PathBuf> {
     })
 }
 
-fn validate_bundle_name(bundle_name: &str) -> Result<(), RuntimeError> {
-    let valid = !bundle_name.is_empty()
+/// The canonical bundle-name grammar: non-empty and limited to ASCII
+/// alphanumeric, `-`, `_`, or `.`. This is the single source of truth for what
+/// a bundle namespace may contain; callers that also join the name into a path
+/// segment must additionally reject the traversal-only `.` / `..` segments.
+pub(crate) fn is_valid_bundle_name(bundle_name: &str) -> bool {
+    !bundle_name.is_empty()
         && bundle_name.chars().all(|character| {
             character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
-        });
-    if valid {
+        })
+}
+
+fn validate_bundle_name(bundle_name: &str) -> Result<(), RuntimeError> {
+    if is_valid_bundle_name(bundle_name) {
         return Ok(());
     }
     Err(RuntimeError::InvalidBundleName {

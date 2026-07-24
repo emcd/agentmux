@@ -284,15 +284,44 @@ exported from `src/relay/mod.rs`.
   the teardown signal fires, so a reconnect presenting the rotated credential is
   not wedged into an identity-claim conflict against the dying connection.
 - Credential administration is relay-wide, not bundle-scoped. `new peer`
-  (`RelayRequest::NewPeer`) generates a PSK, stores its SHA-256 hash, and
-  returns the raw value once — or writes it to an operator-supplied absolute
-  path (refusing symlinks via `O_NOFOLLOW`, requiring an existing parent, mode
-  0600). `change psk` (`RelayRequest::ChangePsk`) rotates an existing
-  principal's hash in place. Both authorize the requester relay-wide: the
-  caller's policy preset (resolved from a session member's `policy_id` or a
-  `@GLOBAL` operator's TUI-config policy) must grant `new.peer` / `change.psk`
-  at the `all` tier — bundle-relative `home` scope is insufficient,
-  and application/relay principals are denied fail-closed.
+  (`RelayRequest::NewPeer`) generates a PSK and stores its SHA-256 hash;
+  `change psk` (`RelayRequest::ChangePsk`) rotates an existing principal's hash
+  in place. Both carry a `CredentialDestination` selector that routes the raw
+  value to exactly one sink:
+  - **Response** (default): return the raw PSK once in the response.
+  - **Path** (`output_path` / `--output`): write to the caller-named absolute
+    path — refusing symlinks via `O_NOFOLLOW`, requiring an existing parent,
+    mode 0600 — and omit the PSK from the response
+    (`validation_invalid_output_path` on a bad path).
+  - **Config** (`write_to_config` / `--write-config`): write to the principal's
+    relay-owned canonical credential path
+    (`<state-root>/bundles/<b>/sessions/<s>/identity.psk`) and omit the PSK from
+    the response. Config is derivable only for **session** principals, whose
+    location the relay owns; relay/user/application principals are rejected with
+    `validation_config_destination_unsupported`, and a `principal_id` whose
+    components are not a valid session identity (the configured session-id
+    grammar plus the canonical bundle-name grammar — dotted bundle names allowed,
+    but the traversal-only `.`/`..` segments and separators rejected) is rejected
+    with `validation_invalid_principal_id` before any path is
+    derived. (A relay peer's `peers/<alias>.psk` is the
+    *outbound* credential keyed by this relay's local alias, independent of the
+    inbound `connect_as` a `new peer <id>@RELAY` registers — so it is
+    deliberately not a Config target.)
+  The destination is validated and staged (unique 0600 temp sibling, fsync)
+  *before* the store is mutated, and — for `change psk` — the live-connection
+  revocation fires only *after* the sink commits. A rejected or failed
+  destination never mutates the store or revokes a connection. Both the store
+  and credential writes publish via an atomic rename whose mode is enforced on
+  the temp *before* the rename, so the rename is the single commit point with no
+  fallible step after it; a post-commit rename failure rolls the store change
+  back (and surfaces `internal_credential_rollback_failed` if the rollback write
+  also fails). Identity-admin store transactions are serialized at relay scope,
+  so concurrent `new peer` / `change psk` calls cannot interleave store persists
+  and credential renames. Both authorize the requester
+  relay-wide: the caller's policy preset (resolved from a session member's
+  `policy_id` or a `@GLOBAL` operator's TUI-config policy) must grant
+  `new.peer` / `change.psk` at the `all` tier — bundle-relative `home` scope is
+  insufficient, and application/relay principals are denied fail-closed.
 
 ### Cross-bundle routing and the uniform authorization model
 

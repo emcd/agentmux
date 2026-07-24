@@ -190,12 +190,19 @@ This module implements the MCP stdio server for `agentmux`.
 
 - The `new` tool (`command="peer"`) registers a principal and mints
   its PSK: the relay generates the PSK, stores only its SHA-256 hash,
-  and returns the raw value once (or, with `args.output_path`, writes
-  it to that absolute path and omits it from the response). `args.scope`
-  is recorded on the principal (set for `@RELAY` / `@EXTERNAL`).
+  and routes the raw value through a credential destination. By default
+  it is returned once in the response; `args.output_path` writes it to
+  that absolute path and `args.write_to_config` writes it to the
+  principal's relay-owned config location, either of which omits it from
+  the response. `output_path` and `write_to_config` are mutually
+  exclusive — the adapter rejects both-set with `validation_invalid_params`
+  before issuing a relay request. `write_to_config` is honored only for
+  session principals. `args.scope` is recorded on the principal (set for
+  `@RELAY` / `@EXTERNAL`).
 - The `change` tool (`command="psk"`) rotates an existing principal's
-  PSK and returns the new value; Slice 1 is a store update only
-  (no revocation dispatch).
+  PSK, returning it or writing it via the same `output_path` /
+  `write_to_config` destination selector, and revokes live connections
+  holding the prior credential once the destination commits.
 - Both are relay-wide operations: they ride the MCP server's relay
   stream, and the relay authorizes the connection's principal
   against its policy preset relay-wide, requiring an `all`

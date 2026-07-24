@@ -3,7 +3,7 @@
 
 use std::io::BufReader;
 
-use agentmux::runtime::paths::BundleRuntimePaths;
+use agentmux::runtime::paths::{BundleRuntimePaths, session_identity_psk_path};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -67,6 +67,203 @@ fn change_psk_rotates_credential() {
         rejected["response"]["error"]["code"],
         "validation_unrecognized_credential"
     );
+}
+
+// `change psk` with the `config` destination writes the rotated PSK to the
+// session's relay-owned canonical `identity.psk` (mode 0600), omits it from the
+// response, and the rotated credential authenticates while the old one is
+// rejected.
+#[test]
+fn change_psk_config_writes_session_identity_and_omits_psk() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "ident_change_config";
+    let configuration_root = write_identity_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let principal_id = format!("alpha@{bundle_name}");
+
+    let original_psk = register_peer(
+        &configuration_root,
+        &bundle_paths,
+        bundle_name,
+        &principal_id,
+        None,
+    );
+
+    let rotation = operator_request(
+        &configuration_root,
+        &bundle_paths,
+        bundle_name,
+        json!({
+            "operation": "change_psk",
+            "principal_id": principal_id,
+            "destination": {"kind": "config"},
+        }),
+    );
+    assert_eq!(
+        rotation["response"]["kind"], "change_psk",
+        "change psk config rejected: {rotation:?}"
+    );
+
+    let canonical = session_identity_psk_path(&state_root, bundle_name, "alpha");
+    assert_eq!(
+        rotation["response"]["written_path"],
+        canonical.to_string_lossy().as_ref(),
+        "response must report the relay-owned canonical path"
+    );
+    assert!(
+        rotation["response"]["psk"].is_null(),
+        "psk must be omitted when written to config"
+    );
+
+    let mode = std::fs::metadata(&canonical)
+        .expect("stat rotated config credential")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600, "config credential must be owner-only (0600)");
+    let rotated_psk = std::fs::read_to_string(&canonical).expect("read rotated config credential");
+    assert!(
+        !rotated_psk.is_empty(),
+        "rotated credential must be non-empty"
+    );
+    assert_ne!(rotated_psk, original_psk, "rotation must mint a new psk");
+
+    let accepted = hello_first_frame(
+        &configuration_root,
+        &bundle_paths,
+        &principal_id,
+        &rotated_psk,
+        true,
+    );
+    assert_eq!(
+        accepted["frame"], "hello_ack",
+        "rotated config credential must authenticate: {accepted:?}"
+    );
+
+    let rejected = hello_first_frame(
+        &configuration_root,
+        &bundle_paths,
+        &principal_id,
+        &original_psk,
+        false,
+    );
+    assert_eq!(
+        rejected["response"]["error"]["code"], "validation_unrecognized_credential",
+        "old credential must be rejected after rotation: {rejected:?}"
+    );
+}
+
+// `change psk` with `config` is rejected for a non-session (peer relay)
+// principal whose credential location is not relay-owned, and the rejected
+// attempt neither rotates the stored hash nor revokes: the original credential
+// still authenticates afterward.
+#[test]
+fn change_psk_config_rejected_for_relay_principal_leaves_credential_unrotated() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "ident_change_config_relay";
+    let configuration_root = write_identity_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let principal_id = "peer1@RELAY";
+
+    let original_psk = register_peer(
+        &configuration_root,
+        &bundle_paths,
+        bundle_name,
+        principal_id,
+        Some(bundle_name),
+    );
+
+    let rejected = operator_request(
+        &configuration_root,
+        &bundle_paths,
+        bundle_name,
+        json!({
+            "operation": "change_psk",
+            "principal_id": principal_id,
+            "destination": {"kind": "config"},
+        }),
+    );
+    assert_eq!(
+        rejected["response"]["kind"], "error",
+        "config on a relay principal must reject: {rejected:?}"
+    );
+    assert_eq!(
+        rejected["response"]["error"]["code"],
+        "validation_config_destination_unsupported"
+    );
+
+    // The rejected rotation must not have replaced the stored hash: the original
+    // credential still authenticates.
+    let accepted = hello_first_frame(
+        &configuration_root,
+        &bundle_paths,
+        principal_id,
+        &original_psk,
+        true,
+    );
+    assert_eq!(
+        accepted["frame"], "hello_ack",
+        "original credential must survive a rejected rotation: {accepted:?}"
+    );
+    assert_eq!(accepted["principal_id"], principal_id);
+}
+
+// `change psk --output` whose publishing rename fails after the store commit
+// (the target path is an existing directory) rolls the store back to the prior
+// record: the original credential still authenticates and no revocation fires
+// (the revoke step is unreachable past the failed commit).
+#[test]
+fn change_psk_output_finalization_failure_leaves_credential_unrotated() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "ident_change_finalization";
+    let configuration_root = write_identity_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let principal_id = format!("alpha@{bundle_name}");
+
+    let original_psk = register_peer(
+        &configuration_root,
+        &bundle_paths,
+        bundle_name,
+        &principal_id,
+        None,
+    );
+
+    let output_path = temporary.path().join("occupied.psk");
+    std::fs::create_dir_all(&output_path).expect("create directory at output path");
+    let response = operator_request(
+        &configuration_root,
+        &bundle_paths,
+        bundle_name,
+        json!({
+            "operation": "change_psk",
+            "principal_id": principal_id,
+            "destination": {"kind": "path", "path": output_path.to_string_lossy()},
+        }),
+    );
+    assert_eq!(
+        response["response"]["kind"], "error",
+        "finalization failure must surface an error: {response:?}"
+    );
+
+    // Rollback restored the prior record: the original credential still
+    // authenticates, so the rotation did not take effect.
+    let accepted = hello_first_frame(
+        &configuration_root,
+        &bundle_paths,
+        &principal_id,
+        &original_psk,
+        true,
+    );
+    assert_eq!(
+        accepted["frame"], "hello_ack",
+        "original credential must survive a failed rotation: {accepted:?}"
+    );
+    assert_eq!(accepted["principal_id"], principal_id);
 }
 
 // 2.11 `change psk` on a principal with a live, store-backed session ->

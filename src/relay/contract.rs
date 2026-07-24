@@ -279,6 +279,30 @@ pub struct BundleTransitionEntry {
     pub reason: Option<String>,
 }
 
+/// Where the relay delivers a minted or rotated PSK.
+///
+/// A single sink selector so the mutually-exclusive delivery modes cannot be
+/// combined on the wire: exactly one of "return it", "write it to a
+/// caller-named path", or "write it to the relay's canonical path" holds. The
+/// two file sinks omit the raw PSK from the response and report `written_path`
+/// instead.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CredentialDestination {
+    /// Return the raw PSK in the response (default).
+    #[default]
+    Response,
+    /// Write the PSK to a caller-named absolute `path` and omit it from the
+    /// response. The relay refuses a symlinked target and will not create
+    /// parent directories.
+    Path { path: String },
+    /// Write the PSK to the relay-owned canonical credential path the principal
+    /// reads at Hello, and omit it from the response. Defined only for session
+    /// principals; the relay rejects it for other principal types because their
+    /// credential location is not relay-owned.
+    Config,
+}
+
 /// Relay request protocol.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "operation", rename_all = "snake_case")]
@@ -342,10 +366,12 @@ pub enum RelayRequest {
         #[serde(default)]
         scope: Option<String>,
         #[serde(default)]
-        output_path: Option<String>,
+        destination: CredentialDestination,
     },
     ChangePsk {
         principal_id: String,
+        #[serde(default)]
+        destination: CredentialDestination,
     },
     IdentityIntrospect {
         target_session: String,
@@ -466,18 +492,25 @@ pub enum RelayResponse {
         schema_version: String,
         principal_id: String,
         principal_type: String,
-        /// Raw PSK; omitted when the credential was written to `output_path`.
+        /// Raw PSK; omitted when the credential was written to a file sink.
         #[serde(skip_serializing_if = "Option::is_none")]
         psk: Option<String>,
-        /// Absolute path the PSK was written to; present only with `--output`.
+        /// Absolute path the PSK was written to; present only for the `path`
+        /// and `config` credential destinations.
         #[serde(skip_serializing_if = "Option::is_none")]
-        output_path: Option<String>,
+        written_path: Option<String>,
         config_snippet: String,
     },
     ChangePsk {
         schema_version: String,
         principal_id: String,
-        psk: String,
+        /// Raw PSK; omitted when the credential was written to a file sink.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        psk: Option<String>,
+        /// Absolute path the PSK was written to; present only for the `path`
+        /// and `config` credential destinations.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        written_path: Option<String>,
     },
     IdentityIntrospect {
         schema_version: String,

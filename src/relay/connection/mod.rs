@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     io,
     path::{Path, PathBuf},
-    sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard},
     time::Duration,
 };
 
@@ -228,6 +228,14 @@ pub struct ConnectionServeContext {
     relay_aliases: Arc<Vec<String>>,
     require_session_credentials: bool,
     pre_hello_idle_timeout: Duration,
+    /// Relay-scope mutex serializing identity-admin (`new peer` / `change psk`)
+    /// store transactions. Each admin op runs a load/stage/persist/rename
+    /// sequence on the blocking pool against the on-disk principal store; without
+    /// serialization two concurrent ops could interleave store persists and
+    /// credential renames, publishing a credential whose PSK no longer matches
+    /// the stored hash or losing an unrelated registration. Shared across every
+    /// cloned per-connection context via the `Arc`.
+    identity_admin_lock: Arc<Mutex<()>>,
 }
 
 impl ConnectionServeContext {
@@ -254,6 +262,7 @@ impl ConnectionServeContext {
             relay_aliases: Arc::new(relay_aliases),
             require_session_credentials,
             pre_hello_idle_timeout,
+            identity_admin_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -655,12 +664,14 @@ async fn serve_connection_frames(
                     let response = {
                         let configuration_root = Arc::clone(&configuration_root);
                         let state_root = Arc::clone(&state_root);
+                        let identity_admin_lock = Arc::clone(&context.identity_admin_lock);
                         dispatch_on_blocking_pool(move || {
                             dispatch_identity_admin(
                                 request,
                                 &configuration_root,
                                 &state_root,
                                 requester_principal_id.as_str(),
+                                &identity_admin_lock,
                             )
                         })
                         .await

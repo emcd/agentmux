@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     configuration::{BundleGroupMembership, ConfigurationError, RESERVED_GROUP_ALL},
-    relay::RelayError,
+    relay::{CredentialDestination, RelayError},
     runtime::{
         association::{McpAssociationOverrides, WorkspaceContext},
         error::RuntimeError,
@@ -106,6 +106,30 @@ pub(super) fn take_value(
         });
     };
     Ok(value.to_string())
+}
+
+/// Folds the mutually-exclusive `--output` / `--write-config` credential sink
+/// flags into a relay `CredentialDestination`, rejecting the case where both are
+/// supplied. Shared by `new peer` and `change psk`.
+pub(super) fn resolve_credential_destination(
+    output_path: Option<&str>,
+    write_to_config: bool,
+) -> Result<CredentialDestination, RuntimeError> {
+    // Presence — not emptiness — drives mutual exclusion: a supplied `--output`
+    // (even empty) conflicts with `--write-config`, and an empty path is
+    // forwarded for the relay to reject as `validation_invalid_output_path`
+    // rather than silently degrading to Response.
+    match (output_path, write_to_config) {
+        (Some(_), true) => Err(RuntimeError::validation(
+            "validation_invalid_params",
+            "--output and --write-config are mutually exclusive".to_string(),
+        )),
+        (Some(path), false) => Ok(CredentialDestination::Path {
+            path: path.to_string(),
+        }),
+        (None, true) => Ok(CredentialDestination::Config),
+        (None, false) => Ok(CredentialDestination::Response),
+    }
 }
 
 pub(super) fn map_reconcile_error(source: RelayError) -> RuntimeError {

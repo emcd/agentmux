@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use rmcp::ErrorData as McpError;
 use serde_json::json;
 
+use crate::relay::CredentialDestination;
+
 use super::errors::validation_tool_error;
 use super::params::{
     CHOOSE_OUTCOME_CANCELLED, CHOOSE_OUTCOME_SELECTED, ChangeParams, ChangePskArgs, ChooseParams,
@@ -26,6 +28,32 @@ pub(super) fn validate_updown_params(params: &UpdownParams) -> Result<(), McpErr
 pub(super) fn validate_updown_args(args: &UpdownArgs, command: &str) -> Result<(), McpError> {
     let context = format!("updown {command} command");
     validate_unknown_fields(context.as_str(), Some("args"), &args.extra_fields)
+}
+
+/// Folds the mutually-exclusive `output_path` / `write_to_config` credential
+/// sink arguments into a relay `CredentialDestination`, rejecting the case where
+/// both are supplied. Shared by `new peer` and `change psk`.
+pub(super) fn resolve_credential_destination(
+    output_path: Option<&str>,
+    write_to_config: bool,
+) -> Result<CredentialDestination, McpError> {
+    // Presence — not emptiness — drives mutual exclusion: an explicitly supplied
+    // (even empty) `output_path` conflicts with `write_to_config`, and an empty
+    // Path is forwarded for the relay to reject as
+    // `validation_invalid_output_path` rather than silently degrading to
+    // Response.
+    match (output_path, write_to_config) {
+        (Some(_), true) => Err(validation_tool_error(
+            "validation_invalid_params",
+            "output_path and write_to_config are mutually exclusive",
+            None,
+        )),
+        (Some(path), false) => Ok(CredentialDestination::Path {
+            path: path.to_string(),
+        }),
+        (None, true) => Ok(CredentialDestination::Config),
+        (None, false) => Ok(CredentialDestination::Response),
+    }
 }
 
 pub(super) fn validate_new_params(params: &NewParams) -> Result<(), McpError> {

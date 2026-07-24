@@ -1089,12 +1089,38 @@ The system SHALL expose a meta-tool `new` that registers a principal credential.
 - `principal_id` (required, `<id>@<namespace>`)
 - `scope` (optional)
 - `output_path` (optional, absolute path)
+- `write_to_config` (optional, boolean)
 
-The relay SHALL generate the PSK, persist only its SHA-256 hash, and return the
-raw PSK once. When `output_path` is provided, the relay SHALL write the PSK to
-that path and omit it from the response. `new` is a relay-wide operation: the
-relay SHALL authorize the connection principal against an `all`-scoped
-`new.peer` grant, and a bundle-relative `home` grant SHALL be insufficient.
+`output_path` and `write_to_config` SHALL be mutually exclusive; a request
+supplying both SHALL be rejected with `validation_invalid_params` before any
+relay request is issued.
+
+The relay SHALL generate the PSK, persist only its SHA-256 hash, and route the
+raw value to one of three credential destinations:
+
+- **Response** (default, when neither option is set): the relay SHALL return the
+  raw PSK once in the response.
+- **Path** (`output_path` set): the relay SHALL write the PSK to that path and
+  omit it from the response. The path MUST be absolute, its parent MUST already
+  exist, and the target MUST NOT be a symlink; a path failing these
+  preconditions SHALL be rejected with `validation_invalid_output_path`.
+- **Config** (`write_to_config` set): the relay SHALL write the PSK to the
+  principal's relay-owned canonical credential path and omit it from the
+  response. Config is derivable only for **session** principals, whose
+  credential location the relay owns; the relay SHALL reject Config for relay,
+  user, or application principals with
+  `validation_config_destination_unsupported`. Before deriving any path the
+  relay SHALL reject a `principal_id` whose components are not a valid session
+  identity — the configured session-id grammar for the id and the canonical
+  bundle-name grammar for the namespace (which permits dotted names but rejects
+  the traversal-only `.`/`..` segments and path separators) — with
+  `validation_invalid_principal_id`.
+
+The relay SHALL validate and stage the selected destination before mutating the
+principal store; a rejected or failed destination SHALL NOT register the
+principal. `new` is a relay-wide operation: the relay SHALL authorize the
+connection principal against an `all`-scoped `new.peer` grant, and a
+bundle-relative `home` grant SHALL be insufficient.
 
 #### Scenario: Advertise new tool
 
@@ -1105,7 +1131,21 @@ relay SHALL authorize the connection principal against an `all`-scoped
 
 - **WHEN** a caller invokes `new` with `command="peer"` and a `principal_id`
 - **THEN** the relay registers the principal and returns the minted PSK
-- **AND** omits the raw PSK from the response when `output_path` was provided
+- **AND** omits the raw PSK from the response when `output_path` or
+  `write_to_config` selected a file destination
+
+#### Scenario: Reject config destination for a non-session principal
+
+- **WHEN** a caller invokes `new` with `write_to_config` for a principal whose
+  type is not session
+- **THEN** the relay returns `validation_config_destination_unsupported`
+- **AND** does not register the principal
+
+#### Scenario: Reject mutually exclusive credential destinations
+
+- **WHEN** a caller supplies both `output_path` and `write_to_config`
+- **THEN** the request is rejected with `validation_invalid_params`
+- **AND** no relay request is issued
 
 ### Requirement: MCP New Success Payload Contract
 
@@ -1115,8 +1155,9 @@ Successful `new` responses SHALL include:
 - `principal_id`
 - `principal_type`
 - `config_snippet`
-- `psk` (present unless the PSK was written to `output_path`)
-- `output_path` (present only when the PSK was written to a path)
+- `psk` (present only when the credential destination was Response)
+- `written_path` (present only when the PSK was written to a file — the caller
+  path for a Path destination, or the relay-owned canonical path for Config)
 
 #### Scenario: Return minted credential payload for new peer
 
@@ -1131,11 +1172,22 @@ principal's PSK. `change` SHALL require `command="psk"`.
 `change psk` request `args` SHALL be:
 
 - `principal_id` (required, `<id>@<namespace>`)
+- `output_path` (optional, absolute path)
+- `write_to_config` (optional, boolean)
 
-The relay SHALL generate a new PSK for the existing principal and return it.
-`change` is a relay-wide operation: the relay SHALL authorize the connection
-principal against an `all`-scoped `change.psk` grant, and a bundle-relative
-`home` grant SHALL be insufficient.
+`output_path` and `write_to_config` SHALL be mutually exclusive; a request
+supplying both SHALL be rejected with `validation_invalid_params` before any
+relay request is issued.
+
+The relay SHALL generate a new PSK for the existing principal and apply the same
+credential-destination selector as `new peer` (Response by default, Path for
+`output_path`, Config for `write_to_config`), with identical session-only Config
+derivation, path preconditions, and safe-segment validation. The relay SHALL
+stage and commit the destination before revoking live connections that hold the
+prior credential; a rejected or failed destination SHALL NOT rotate the PSK or
+revoke any connection. `change` is a relay-wide operation: the relay SHALL
+authorize the connection principal against an `all`-scoped `change.psk` grant,
+and a bundle-relative `home` grant SHALL be insufficient.
 
 #### Scenario: Advertise change tool
 
@@ -1146,6 +1198,14 @@ principal against an `all`-scoped `change.psk` grant, and a bundle-relative
 
 - **WHEN** a caller invokes `change` with `command="psk"` and a `principal_id`
 - **THEN** the relay rotates the principal's PSK and returns the new value
+- **AND** omits the raw PSK from the response when a file destination was
+  selected
+
+#### Scenario: Rejected destination leaves the credential unrotated
+
+- **WHEN** a `change psk` request selects a destination the relay rejects
+- **THEN** the relay returns the corresponding validation error
+- **AND** does not rotate the PSK or revoke any live connection
 
 ### Requirement: MCP Change Success Payload Contract
 
@@ -1153,7 +1213,8 @@ Successful `change` responses SHALL include:
 
 - `schema_version`
 - `principal_id`
-- `psk`
+- `psk` (present only when the credential destination was Response)
+- `written_path` (present only when the PSK was written to a file)
 
 #### Scenario: Return rotated credential payload for change psk
 
