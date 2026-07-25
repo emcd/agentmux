@@ -209,7 +209,7 @@ auto-opens it.
   - ACP targets: structured entry rendering by canonical kinds
     (`user`, `agent`, `cognition`, `invocation`, `result`, `update`),
 - chat history viewport for sent/received messages,
-- send workflow via relay `chat`,
+- send workflow via relay `send`,
 - look workflow via relay `look`,
 - raw write workflow via relay `raww`,
 - stable rendering for validation/runtime error codes,
@@ -229,7 +229,9 @@ auto-opens it.
 
 ## Stream and State Notes
 
-- TUI connects as relay stream client class `ui`.
+- TUI identifies itself to the relay by `principal_id`
+  (a `<session>@<namespace>` string); the relay does not gate
+  stream clients on a class field.
 - Stream event dedupe is keyed by stable identifiers in app state to avoid
   duplicate status/event lines after reconnect.
 - `accepted` is process-local; terminal outcomes come from relay completion
