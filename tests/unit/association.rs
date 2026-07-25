@@ -3,8 +3,9 @@ use std::{path::PathBuf, process::Command};
 use agentmux::{
     configuration::BundleConfiguration,
     runtime::association::{
-        McpAssociationCli, McpAssociationOverrides, WorkspaceContext, load_local_mcp_overrides,
-        resolve_association, resolve_sender_session, validate_sender_session,
+        AssociationCandidates, McpAssociationCli, McpAssociationEnvironment,
+        McpAssociationOverrides, WorkspaceContext, load_local_mcp_overrides, resolve_association,
+        resolve_sender_session, validate_sender_session,
     },
 };
 use tempfile::TempDir;
@@ -104,32 +105,104 @@ fn bundle_with_directories(
     }
 }
 
-#[test]
-fn resolves_auto_association_from_git_context() {
-    let workspace = context(
-        "/home/me/src/WORKTREES/agentmux/relay",
-        "/home/me/src/WORKTREES/agentmux/relay",
-        Some("/home/me/src/WORKTREES/agentmux/relay"),
-        Some("/home/me/src/agentmux/.git"),
-    );
-    let resolved =
-        resolve_association(&McpAssociationCli::default(), None, &workspace).expect("association");
-    assert_eq!(resolved.bundle_name, "agentmux");
-    assert_eq!(resolved.session_name, "relay");
+/// Association identities carried by the injected bring-up environment.
+fn injected(bundle: Option<&str>, session: Option<&str>) -> McpAssociationEnvironment {
+    McpAssociationEnvironment {
+        bundle_name: bundle.map(ToString::to_string),
+        session_name: session.map(ToString::to_string),
+    }
 }
 
 #[test]
-fn resolves_auto_association_from_non_git_context() {
-    let workspace = context(
-        "/home/me/src/project-alpha",
-        "/home/me/src/project-alpha",
+fn nothing_supplied_resolves_to_nothing() {
+    // Absence is recorded, never guessed. Filesystem inference produced an
+    // answer that was plausible and wrong, which is the defect this replaces.
+    let candidates = resolve_association(
+        &McpAssociationCli::default(),
+        &McpAssociationEnvironment::default(),
         None,
         None,
     );
-    let resolved =
-        resolve_association(&McpAssociationCli::default(), None, &workspace).expect("association");
-    assert_eq!(resolved.bundle_name, "project-alpha");
-    assert_eq!(resolved.session_name, "project-alpha");
+    assert_eq!(candidates, AssociationCandidates::default());
+}
+
+#[test]
+fn injected_environment_outranks_the_overlay_and_default_bundle() {
+    let overrides = McpAssociationOverrides {
+        bundle_name: Some("overlay-bundle".to_string()),
+        session_name: Some("overlay-session".to_string()),
+    };
+    let candidates = resolve_association(
+        &McpAssociationCli::default(),
+        &injected(Some("injected-bundle"), Some("injected-session")),
+        Some(&overrides),
+        Some("default-bundle"),
+    );
+    assert_eq!(candidates.bundle_name.as_deref(), Some("injected-bundle"));
+    assert_eq!(candidates.session_name.as_deref(), Some("injected-session"));
+}
+
+#[test]
+fn explicit_flags_outrank_the_injected_environment() {
+    let candidates = resolve_association(
+        &McpAssociationCli {
+            bundle_name: Some("cli-bundle".to_string()),
+            session_name: Some("cli-session".to_string()),
+        },
+        &injected(Some("injected-bundle"), Some("injected-session")),
+        None,
+        Some("default-bundle"),
+    );
+    assert_eq!(candidates.bundle_name.as_deref(), Some("cli-bundle"));
+    assert_eq!(candidates.session_name.as_deref(), Some("cli-session"));
+}
+
+#[test]
+fn overlay_outranks_default_bundle() {
+    let overrides = McpAssociationOverrides {
+        bundle_name: Some("overlay-bundle".to_string()),
+        session_name: None,
+    };
+    let candidates = resolve_association(
+        &McpAssociationCli::default(),
+        &McpAssociationEnvironment::default(),
+        Some(&overrides),
+        Some("default-bundle"),
+    );
+    assert_eq!(candidates.bundle_name.as_deref(), Some("overlay-bundle"));
+}
+
+#[test]
+fn default_bundle_applies_when_no_higher_tier_resolves() {
+    // The tier that lets generated client configuration seed a bundle without
+    // impersonating invocation intent.
+    let candidates = resolve_association(
+        &McpAssociationCli::default(),
+        &McpAssociationEnvironment::default(),
+        None,
+        Some("default-bundle"),
+    );
+    assert_eq!(candidates.bundle_name.as_deref(), Some("default-bundle"));
+    assert_eq!(candidates.session_name, None);
+}
+
+#[test]
+fn blank_values_are_absent_rather_than_present_and_empty() {
+    let overrides = McpAssociationOverrides {
+        bundle_name: Some("overlay-bundle".to_string()),
+        session_name: None,
+    };
+    let candidates = resolve_association(
+        &McpAssociationCli {
+            bundle_name: Some("   ".to_string()),
+            session_name: Some(String::new()),
+        },
+        &McpAssociationEnvironment::default(),
+        Some(&overrides),
+        None,
+    );
+    assert_eq!(candidates.bundle_name.as_deref(), Some("overlay-bundle"));
+    assert_eq!(candidates.session_name, None);
 }
 
 #[test]
@@ -183,17 +256,18 @@ fn applies_cli_precedence_over_local_overrides() {
         bundle_name: Some("override-bundle".to_string()),
         session_name: Some("override-session".to_string()),
     };
-    let resolved = resolve_association(
+    let candidates = resolve_association(
         &McpAssociationCli {
             bundle_name: Some("cli-bundle".to_string()),
             session_name: Some("cli-session".to_string()),
         },
+        &McpAssociationEnvironment::default(),
         Some(&overrides),
-        &workspace,
-    )
-    .expect("association");
-    assert_eq!(resolved.bundle_name, "cli-bundle");
-    assert_eq!(resolved.session_name, "cli-session");
+        None,
+    );
+    assert_eq!(candidates.bundle_name.as_deref(), Some("cli-bundle"));
+    assert_eq!(candidates.session_name.as_deref(), Some("cli-session"));
+    let _ = &workspace;
 }
 
 #[test]
@@ -325,7 +399,7 @@ fn rejects_ambiguous_sender_when_directory_matches_multiple_members() {
 }
 
 #[test]
-fn discovers_bundle_and_session_from_real_git_worktree() {
+fn linked_worktree_resolves_the_common_dir_owner_repository_root() {
     let temporary = TempDir::new().expect("temporary");
     let project_root = temporary.path().join("agentmux");
     std::fs::create_dir_all(&project_root).expect("create project root");
@@ -362,10 +436,20 @@ fn discovers_bundle_and_session_from_real_git_worktree() {
         ],
     );
 
+    // Association no longer derives anything from Git. What remains is the
+    // repository root feeding repository-local state and inscriptions, and it
+    // must resolve to the common-dir *owner* rather than the linked worktree, so
+    // every worktree of a checkout shares one relay rather than starting its own.
     let discovered = WorkspaceContext::discover(&worktree_root).expect("discover workspace");
-    let bundle_name = discovered.auto_bundle_name().expect("auto bundle");
-    let session_name = discovered.auto_session_name().expect("auto session");
-
-    assert_eq!(bundle_name, "agentmux");
-    assert_eq!(session_name, "relay");
+    let repository_root = discovered
+        .debug_repository_root()
+        .expect("linked worktree must resolve a repository root");
+    assert_eq!(
+        repository_root
+            .canonicalize()
+            .expect("canonicalize resolved"),
+        project_root
+            .canonicalize()
+            .expect("canonicalize project root"),
+    );
 }

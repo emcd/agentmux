@@ -11,7 +11,11 @@ shared by relay and MCP hosts.
   - enforces ownership and secure directory permissions.
 - `association.rs`
   - resolves bundle/session association for MCP + CLI workflows,
-  - supports precedence: CLI flags > local overrides > auto-discovery.
+  - bundle precedence: `--bundle` > injected environment > overlay >
+    `--default-bundle`,
+  - session precedence: `--session-name` > injected environment > overlay >
+    working-directory match against declared member directories,
+  - resolves to nothing rather than guessing when no tier supplies an identity.
 - `tui_session.rs`
   - resolves TUI session selection from CLI + `users.toml` defaults, and
     browsing-bundle selection from CLI + `ui.toml` defaults,

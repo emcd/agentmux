@@ -9,7 +9,8 @@ use std::{
 use serde::Deserialize;
 
 use crate::configuration::{
-    BundleConfiguration, ConfigurationError, effective_configuration_path,
+    BUNDLE_ENVIRONMENT_VARIABLE, BundleConfiguration, ConfigurationError,
+    SESSION_ENVIRONMENT_VARIABLE, effective_configuration_path,
     infer_sender_from_working_directory,
 };
 
@@ -66,49 +67,6 @@ impl WorkspaceContext {
         })
     }
 
-    /// Auto-discovers bundle name from Git common-dir parent basename,
-    /// falling back to current-directory basename.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when name cannot be derived.
-    pub fn auto_bundle_name(&self) -> Result<String, RuntimeError> {
-        if let Some(common_dir) = self.git_common_dir.as_ref() {
-            let parent = common_dir.parent().ok_or_else(|| {
-                RuntimeError::validation(
-                    "validation_unknown_bundle",
-                    format!(
-                        "cannot derive bundle name from git common-dir {}",
-                        common_dir.display()
-                    ),
-                )
-            })?;
-            return basename(parent, "validation_unknown_bundle", "bundle");
-        }
-        basename(
-            &self.current_directory,
-            "validation_unknown_bundle",
-            "bundle",
-        )
-    }
-
-    /// Auto-discovers session name from worktree top-level basename, falling
-    /// back to current-directory basename.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when name cannot be derived.
-    pub fn auto_session_name(&self) -> Result<String, RuntimeError> {
-        if let Some(top_level) = self.git_top_level.as_ref() {
-            return basename(top_level, "validation_unknown_sender", "session");
-        }
-        basename(
-            &self.current_directory,
-            "validation_unknown_sender",
-            "session",
-        )
-    }
-
     /// Resolves the repository root used for debug local state/config defaults.
     ///
     /// Uses the Git common-dir owner repository root when available (for
@@ -149,13 +107,6 @@ struct McpAssociationOverrideFile {
     session_name: Option<String>,
 }
 
-/// Fully resolved MCP association identities.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ResolvedAssociation {
-    pub bundle_name: String,
-    pub session_name: String,
-}
-
 /// Loads optional per-worktree MCP override file.
 ///
 /// # Errors
@@ -189,35 +140,83 @@ pub fn load_local_mcp_overrides(
     }))
 }
 
-/// Resolves bundle and session identity with precedence:
-/// CLI > local override > auto-discovery.
+/// Association identities carried by the injected bring-up environment.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct McpAssociationEnvironment {
+    pub bundle_name: Option<String>,
+    pub session_name: Option<String>,
+}
+
+impl McpAssociationEnvironment {
+    /// Reads the injected context from the process environment.
+    ///
+    /// Blank values normalize to absent here, at the single point the
+    /// environment enters the process, so no consumer has to decide separately
+    /// whether a blank value counts as present.
+    #[must_use]
+    pub fn from_process_environment() -> Self {
+        Self {
+            bundle_name: std::env::var(BUNDLE_ENVIRONMENT_VARIABLE)
+                .ok()
+                .and_then(normalize_string),
+            session_name: std::env::var(SESSION_ENVIRONMENT_VARIABLE)
+                .ok()
+                .and_then(normalize_string),
+        }
+    }
+}
+
+/// Bundle and session identities as far as they resolve, each independently
+/// optional.
 ///
-/// # Errors
+/// Absence is a recorded condition rather than a failure. A relay-wide server
+/// with no bundle is legitimate, and a misconfigured one should report its cause
+/// where the agent will see it rather than erase its tool surface at startup.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AssociationCandidates {
+    pub bundle_name: Option<String>,
+    pub session_name: Option<String>,
+}
+
+/// Resolves association identity by precedence, each tier ranked by how
+/// deployment-specific its source is.
 ///
-/// Returns validation errors when identities cannot be derived.
+/// Bundle: `--bundle` > injected environment > overlay file > `--default-bundle`.
+/// Session: `--session-name` > injected environment > overlay file, with the
+/// working-directory match against declared member directories applied later by
+/// the caller, once the bundle configuration is loaded.
+///
+/// `--default-bundle` sits *below* the injected environment so generated client
+/// configuration can seed a bundle without impersonating invocation intent.
+/// `--bundle` sits above it and still asserts that intent.
+#[must_use]
 pub fn resolve_association(
     cli: &McpAssociationCli,
+    environment: &McpAssociationEnvironment,
     local_overrides: Option<&McpAssociationOverrides>,
-    workspace: &WorkspaceContext,
-) -> Result<ResolvedAssociation, RuntimeError> {
+    default_bundle: Option<&str>,
+) -> AssociationCandidates {
     let bundle_name = cli
         .bundle_name
         .clone()
-        .or_else(|| local_overrides.and_then(|overrides| overrides.bundle_name.clone()))
         .and_then(normalize_string)
-        .map(Ok)
-        .unwrap_or_else(|| workspace.auto_bundle_name())?;
+        .or_else(|| environment.bundle_name.clone())
+        .or_else(|| local_overrides.and_then(|overrides| overrides.bundle_name.clone()))
+        .or_else(|| {
+            default_bundle
+                .map(ToString::to_string)
+                .and_then(normalize_string)
+        });
     let session_name = cli
         .session_name
         .clone()
-        .or_else(|| local_overrides.and_then(|overrides| overrides.session_name.clone()))
         .and_then(normalize_string)
-        .map(Ok)
-        .unwrap_or_else(|| workspace.auto_session_name())?;
-    Ok(ResolvedAssociation {
+        .or_else(|| environment.session_name.clone())
+        .or_else(|| local_overrides.and_then(|overrides| overrides.session_name.clone()));
+    AssociationCandidates {
         bundle_name,
         session_name,
-    })
+    }
 }
 
 /// Validates that resolved sender exists as bundle member.
@@ -315,20 +314,6 @@ fn normalize_path(current_directory: &Path, path: &Path) -> PathBuf {
         return path.to_path_buf();
     }
     current_directory.join(path)
-}
-
-fn basename(path: &Path, code: &str, noun: &str) -> Result<String, RuntimeError> {
-    let value = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .and_then(normalize_str);
-    if let Some(value) = value {
-        return Ok(value.to_string());
-    }
-    Err(RuntimeError::validation(
-        code,
-        format!("cannot derive {noun} name from {}", path.display()),
-    ))
 }
 
 fn normalize_string(value: String) -> Option<String> {

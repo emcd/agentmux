@@ -21,13 +21,11 @@ use agentmux::runtime::{
 };
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
-use tokio::process::Command;
 
 use super::mocks::{
     FakeRelay, McpHarness, decode_tool_payload, hook_git_environment, write_bundle_configuration,
     write_bundle_configuration_with_directories,
 };
-use crate::support::process::strip_bring_up_context;
 
 #[test]
 fn concurrent_bootstrap_spawns_single_relay() {
@@ -147,7 +145,7 @@ async fn mcp_initializes_without_active_bundle_context() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mcp_explicit_unknown_bundle_still_fails_startup() {
+async fn mcp_unknown_bundle_starts_green_and_reports_at_tool_time() {
     let temporary = TempDir::new().expect("temporary");
     let root = temporary.path().to_path_buf();
     let workspace = root.join("outside");
@@ -156,34 +154,42 @@ async fn mcp_explicit_unknown_bundle_still_fails_startup() {
     fs::create_dir_all(&workspace).expect("create workspace");
     write_bundle_configuration(&config_root, "party", &["alpha"]);
 
-    let mut command = Command::new(env!("CARGO_BIN_EXE_agentmux"));
-    command
-        .current_dir(&workspace)
-        .arg("host")
-        .arg("mcp")
-        .arg("--bundle-name")
-        .arg("missing")
-        .arg("--configuration-directory")
-        .arg(config_root.to_str().expect("utf8 config path"))
-        .arg("--state-directory")
-        .arg(state_root.to_str().expect("utf8 state path"));
-    strip_bring_up_context(&mut command);
-    let output = command.output().await.expect("run agentmux host mcp");
-    assert!(
-        !output.status.success(),
-        "explicit unknown bundle should fail startup, stdout={}, stderr={}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+    // Failing startup would erase the advertised tool inventory, which some
+    // harnesses never recover from, and bury the cause in a log the agent does
+    // not read. The server starts and reports the fault where it can be acted on.
+    let mut harness = McpHarness::spawn_with_environment(
+        &workspace,
+        &[
+            "--bundle-name",
+            "missing",
+            "--configuration-directory",
+            config_root.to_str().expect("utf8 config path"),
+            "--state-directory",
+            state_root.to_str().expect("utf8 state path"),
+        ],
+        &[],
+    )
+    .await;
+
+    let help_response = harness.call_tool(2, "help", Map::new()).await;
+    assert_eq!(decode_tool_payload(&help_response)["namespace"], "agentmux");
+
+    let mut arguments = Map::new();
+    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments.insert(
+        "targets".to_string(),
+        Value::Array(vec![Value::String("alpha".to_string())]),
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("validation_unknown_bundle"),
-        "expected validation_unknown_bundle in stderr: {stderr}"
+    arguments.insert("broadcast".to_string(), Value::Bool(false));
+    let response = harness.call_tool(3, "send", arguments).await;
+    assert_eq!(
+        response["error"]["data"]["code"],
+        Value::String("validation_unassociated_server".to_string())
     );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mcp_auto_discovers_association_from_non_git_cwd() {
+async fn mcp_associates_from_the_injected_bring_up_environment() {
     let temporary = TempDir::new().expect("temporary");
     let root = temporary.path().to_path_buf();
     let workspace = root.join("relay");
@@ -220,7 +226,12 @@ async fn mcp_auto_discovers_association_from_non_git_cwd() {
         ),
     );
 
-    let git_environment = hook_git_environment();
+    // The channel through which bring-up states the identity it is starting,
+    // end to end: configuration load stamps it, the transport applies it, and
+    // this subprocess consumes it instead of inferring one from the filesystem.
+    let mut environment = hook_git_environment();
+    environment.push(("AGENTMUX_BUNDLE".to_string(), "relay".to_string()));
+    environment.push(("AGENTMUX_SESSION".to_string(), "relay".to_string()));
     let mut harness = McpHarness::spawn_with_environment(
         &workspace,
         &[
@@ -229,7 +240,7 @@ async fn mcp_auto_discovers_association_from_non_git_cwd() {
             "--state-directory",
             state_root.to_str().expect("utf8 state path"),
         ],
-        &git_environment,
+        &environment,
     )
     .await;
 
@@ -250,7 +261,7 @@ async fn mcp_auto_discovers_association_from_non_git_cwd() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mcp_falls_back_to_directory_match_when_auto_sender_is_not_member() {
+async fn mcp_resolves_session_by_matching_declared_member_directories() {
     let temporary = TempDir::new().expect("temporary");
     let root = temporary.path().to_path_buf();
     let workspace = root.join("master");
@@ -293,10 +304,16 @@ async fn mcp_falls_back_to_directory_match_when_auto_sender_is_not_member() {
         ),
     );
 
+    // Bundle from the default tier, session from nothing at all: the working
+    // directory is matched against the directories the bundle file already
+    // declares. That is declarative rather than inferential -- unlike the
+    // deleted filesystem guess, it cannot produce a plausible wrong answer.
     let git_environment = hook_git_environment();
     let mut harness = McpHarness::spawn_with_environment(
         &workspace,
         &[
+            "--default-bundle",
+            "master",
             "--configuration-directory",
             config_root.to_str().expect("utf8 config path"),
             "--state-directory",

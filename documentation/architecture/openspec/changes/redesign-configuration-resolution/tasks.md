@@ -62,18 +62,18 @@
 
 ## 4. Association resolution
 
-- [ ] 4.1 Add `--default-bundle` in the default tier, below the injected
+- [x] 4.1 Add `--default-bundle` in the default tier, below the injected
   environment
-- [ ] 4.2 Reorder the bundle ladder: `--bundle` > injected environment > overlay
+- [x] 4.2 Reorder the bundle ladder: `--bundle` > injected environment > overlay
   > `--default-bundle`
-- [ ] 4.3 Reorder the session ladder: `--session-name` > injected environment >
+- [x] 4.3 Reorder the session ladder: `--session-name` > injected environment >
   overlay > working-directory match
-- [ ] 4.4 Normalize blank injected values to absent at the point the environment
+- [x] 4.4 Normalize blank injected values to absent at the point the environment
   is read, so every consumer sees one answer
-- [ ] 4.5 Delete Git-derived bundle auto-discovery
-- [ ] 4.6 Delete Git-derived session auto-discovery, promoting the
+- [x] 4.5 Delete Git-derived bundle auto-discovery
+- [x] 4.6 Delete Git-derived session auto-discovery, promoting the
   working-directory match from fallback to primary
-- [ ] 4.7 Record an unresolved association with its cause instead of failing
+- [x] 4.7 Record an unresolved association with its cause instead of failing
 
 ## 5. Startup fault tolerance
 
@@ -97,9 +97,9 @@
 - [ ] 5.9 Keep relay reachability out of the retained fault set: a complete
   operational context is `Ready` even when the relay is unreachable, and
   reachability continues to surface per request as `relay_unavailable`
-- [ ] 5.10 Delete the explicit-versus-implicit association classification, which
+- [x] 5.10 Delete the explicit-versus-implicit association classification, which
   exists only to choose between failing and starting unassociated
-- [ ] 5.11 Invert the existing tests asserting that an unknown bundle fails
+- [x] 5.11 Invert the existing tests asserting that an unknown bundle fails
   startup
 
 ## 6. Git usage reduction, bounded by the retained state provenance

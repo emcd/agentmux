@@ -64,6 +64,10 @@ pub(super) struct BundleArguments {
 #[derive(Clone, Debug, Default)]
 pub(super) struct McpHostArguments {
     pub(super) bundle_name: Option<String>,
+    /// Bundle supplied in the *default* tier, below the injected bring-up
+    /// environment. Exists so generated client configuration can seed a bundle
+    /// without impersonating invocation intent, which `--bundle` asserts.
+    pub(super) default_bundle: Option<String>,
     pub(super) session_name: Option<String>,
     pub(super) runtime: RuntimeArguments,
 }
@@ -245,7 +249,7 @@ fn print_agentmux_help() {
         "  host relay [--no-autostart] [--require-credentials] [--no-watch] [--configuration-directory PATH] ",
         "[--state-directory PATH] [--inscriptions-directory PATH|",
         "--logs-directory PATH] [--repository-root PATH] [--discover-local-configuration]\n",
-        "  host mcp [--bundle NAME] [--session-name NAME] ",
+        "  host mcp [--bundle NAME] [--default-bundle NAME] [--session-name NAME] ",
         "[--configuration-directory PATH] [--state-directory PATH] ",
         "[--inscriptions-directory PATH|--logs-directory PATH] ",
         "[--repository-root PATH] [--discover-local-configuration]\n",

@@ -18,6 +18,6 @@ pub(super) fn print_host_relay_help() {
 
 pub(super) fn print_host_mcp_help() {
     println!(
-        "Usage: agentmux host mcp [--bundle NAME] [--session-name NAME] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH] [--discover-local-configuration]"
+        "Usage: agentmux host mcp [--bundle NAME] [--default-bundle NAME] [--session-name NAME] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH] [--discover-local-configuration]"
     );
 }

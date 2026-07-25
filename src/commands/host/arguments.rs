@@ -54,6 +54,13 @@ pub(super) fn parse_host_mcp_arguments(
             "--bundle" | "--bundle-name" => {
                 parsed.bundle_name = Some(shared::take_value(arguments, &mut index, "--bundle")?);
             }
+            "--default-bundle" => {
+                parsed.default_bundle = Some(shared::take_value(
+                    arguments,
+                    &mut index,
+                    "--default-bundle",
+                )?);
+            }
             "--session-name" => {
                 parsed.session_name =
                     Some(shared::take_value(arguments, &mut index, "--session-name")?);
