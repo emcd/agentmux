@@ -9,6 +9,6 @@
 mod handlers;
 mod service;
 
-pub use service::McpConfiguration;
 pub(crate) use service::McpServer;
 pub use service::run;
+pub use service::{McpConfiguration, McpReadiness, McpStartupFault};

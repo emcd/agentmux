@@ -166,16 +166,56 @@ impl McpAssociationEnvironment {
     }
 }
 
+/// Which precedence tier supplied an association identity.
+///
+/// Recorded so an operator can tell the tier they intended from the tier that
+/// actually won. The injected environment is the one tier whose delivery depends
+/// on an agent harness passing it through to a grandchild process; a resolution
+/// that silently fell to a lower tier is otherwise indistinguishable from one
+/// that never needed it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AssociationSource {
+    CommandLine,
+    Environment,
+    Overlay,
+    DefaultBundle,
+    WorkingDirectory,
+}
+
+impl AssociationSource {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CommandLine => "command-line",
+            Self::Environment => "environment",
+            Self::Overlay => "overlay",
+            Self::DefaultBundle => "default-bundle",
+            Self::WorkingDirectory => "working-directory",
+        }
+    }
+}
+
+/// An association identity together with the tier which supplied it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssociationCandidate {
+    pub value: String,
+    pub source: AssociationSource,
+}
+
 /// Bundle and session identities as far as they resolve, each independently
 /// optional.
 ///
 /// Absence is a recorded condition rather than a failure. A relay-wide server
 /// with no bundle is legitimate, and a misconfigured one should report its cause
 /// where the agent will see it rather than erase its tool surface at startup.
+///
+/// Absence is *not* interchangeable with an unresolvable value: presence carries
+/// operator intent, so a supplied identity which does not resolve is a fault
+/// rather than an invitation to try a lower tier.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AssociationCandidates {
-    pub bundle_name: Option<String>,
-    pub session_name: Option<String>,
+    pub bundle: Option<AssociationCandidate>,
+    pub session: Option<AssociationCandidate>,
 }
 
 /// Resolves association identity by precedence, each tier ranked by how
@@ -196,27 +236,48 @@ pub fn resolve_association(
     local_overrides: Option<&McpAssociationOverrides>,
     default_bundle: Option<&str>,
 ) -> AssociationCandidates {
-    let bundle_name = cli
-        .bundle_name
-        .clone()
-        .and_then(normalize_string)
-        .or_else(|| environment.bundle_name.clone())
-        .or_else(|| local_overrides.and_then(|overrides| overrides.bundle_name.clone()))
+    let bundle = candidate(cli.bundle_name.clone(), AssociationSource::CommandLine)
         .or_else(|| {
-            default_bundle
-                .map(ToString::to_string)
-                .and_then(normalize_string)
+            candidate(
+                environment.bundle_name.clone(),
+                AssociationSource::Environment,
+            )
+        })
+        .or_else(|| {
+            candidate(
+                local_overrides.and_then(|overrides| overrides.bundle_name.clone()),
+                AssociationSource::Overlay,
+            )
+        })
+        .or_else(|| {
+            candidate(
+                default_bundle.map(ToString::to_string),
+                AssociationSource::DefaultBundle,
+            )
         });
-    let session_name = cli
-        .session_name
-        .clone()
+    let session = candidate(cli.session_name.clone(), AssociationSource::CommandLine)
+        .or_else(|| {
+            candidate(
+                environment.session_name.clone(),
+                AssociationSource::Environment,
+            )
+        })
+        .or_else(|| {
+            candidate(
+                local_overrides.and_then(|overrides| overrides.session_name.clone()),
+                AssociationSource::Overlay,
+            )
+        });
+    AssociationCandidates { bundle, session }
+}
+
+/// Pairs a tier's value with that tier, dropping it when the tier supplied
+/// nothing. Blank normalizes to absent so a tier cannot claim a turn with an
+/// empty string.
+fn candidate(value: Option<String>, source: AssociationSource) -> Option<AssociationCandidate> {
+    value
         .and_then(normalize_string)
-        .or_else(|| environment.session_name.clone())
-        .or_else(|| local_overrides.and_then(|overrides| overrides.session_name.clone()));
-    AssociationCandidates {
-        bundle_name,
-        session_name,
-    }
+        .map(|value| AssociationCandidate { value, source })
 }
 
 /// Validates that resolved sender exists as bundle member.
@@ -244,40 +305,32 @@ pub fn validate_sender_session(
     ))
 }
 
-/// Resolves sender session from candidate name with working-directory fallback.
+/// Resolves the sender session from a candidate, or from the working directory
+/// when no tier supplied one.
 ///
-/// First tries direct session membership. If candidate is not configured,
-/// attempts to infer sender from the current working directory by matching
-/// bundle member `directory` paths.
+/// A supplied candidate is validated against bundle membership and nothing else.
+/// The working-directory match is the tier that applies in the *absence* of a
+/// candidate, so letting an unresolvable candidate fall into it would let a typo
+/// authenticate as whichever member happens to own the current directory --
+/// identity resolved by inference where it was in fact declared.
+///
+/// `Ok(None)` reports a legitimately unassociated server: nothing was supplied
+/// and the working directory matched no member.
 ///
 /// # Errors
 ///
-/// Returns `validation_unknown_sender` when no sender can be resolved or when
-/// working-directory inference is ambiguous.
+/// Returns `validation_unknown_sender` when a supplied candidate names no
+/// member, or when the working directory matches more than one.
 pub fn resolve_sender_session(
     bundle: &BundleConfiguration,
-    candidate_session_name: &str,
+    candidate_session_name: Option<&str>,
     working_directory: &Path,
-) -> Result<String, RuntimeError> {
-    if let Ok(session_name) = validate_sender_session(bundle, candidate_session_name) {
-        return Ok(session_name);
+) -> Result<Option<String>, RuntimeError> {
+    if let Some(candidate_session_name) = candidate_session_name {
+        return validate_sender_session(bundle, candidate_session_name).map(Some);
     }
-
-    let inferred = infer_sender_from_working_directory(bundle, working_directory)
-        .map_err(map_sender_inference_error)?;
-    if let Some(inferred) = inferred {
-        return Ok(inferred);
-    }
-
-    Err(RuntimeError::validation(
-        "validation_unknown_sender",
-        format!(
-            "session '{}' is not configured in bundle '{}' and working directory '{}' did not match any configured session directory",
-            candidate_session_name,
-            bundle.bundle_name,
-            working_directory.display()
-        ),
-    ))
+    infer_sender_from_working_directory(bundle, working_directory)
+        .map_err(map_sender_inference_error)
 }
 
 fn run_git(directory: &Path, arguments: &[&str]) -> Option<String> {

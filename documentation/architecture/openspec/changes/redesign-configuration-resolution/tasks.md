@@ -77,24 +77,24 @@
 
 ## 5. Startup fault tolerance
 
-- [ ] 5.1 Introduce an explicit readiness state holding either a ready context or
+- [x] 5.1 Introduce an explicit readiness state holding either a ready context or
   a retained startup fault
-- [ ] 5.2 Convert root, configuration, association, and runtime security faults
+- [x] 5.2 Convert root, configuration, association, and runtime security faults
   into retained faults after `host mcp` is identifiable. Relay reachability is
   excluded: it is evaluated per request at tool time
-- [ ] 5.3 Defer `host mcp` argument validation, using no partially parsed values
+- [x] 5.3 Defer `host mcp` argument validation, using no partially parsed values
   and never falling through from malformed higher-level intent
-- [ ] 5.4 Keep protocol initialization, tool listing, schemas, and `help` green
+- [x] 5.4 Keep protocol initialization, tool listing, schemas, and `help` green
   in every readiness state
-- [ ] 5.5 Validate each tool request on its own terms before consulting the
+- [x] 5.5 Validate each tool request on its own terms before consulting the
   readiness guard
-- [ ] 5.6 Surface the retained cause with actionable detail in tool errors
-- [ ] 5.7 Snapshot the retained fault until process restart
-- [ ] 5.8 Retain the MCP list synthetic home-bundle fallback unchanged, including
+- [x] 5.6 Surface the retained cause with actionable detail in tool errors
+- [x] 5.7 Snapshot the retained fault until process restart
+- [x] 5.8 Retain the MCP list synthetic home-bundle fallback unchanged, including
   when the relay is unreachable. It is a deliberate exception to
   `relay_unavailable`, distinct from a retained startup fault, and is now
   cross-referenced normatively from Relay Connectivity Handling
-- [ ] 5.9 Keep relay reachability out of the retained fault set: a complete
+- [x] 5.9 Keep relay reachability out of the retained fault set: a complete
   operational context is `Ready` even when the relay is unreachable, and
   reachability continues to surface per request as `relay_unavailable`
 - [x] 5.10 Delete the explicit-versus-implicit association classification, which

@@ -3,12 +3,23 @@ use std::{path::PathBuf, process::Command};
 use agentmux::{
     configuration::BundleConfiguration,
     runtime::association::{
-        AssociationCandidates, McpAssociationCli, McpAssociationEnvironment,
-        McpAssociationOverrides, WorkspaceContext, load_local_mcp_overrides, resolve_association,
-        resolve_sender_session, validate_sender_session,
+        AssociationCandidate, AssociationCandidates, AssociationSource, McpAssociationCli,
+        McpAssociationEnvironment, McpAssociationOverrides, WorkspaceContext,
+        load_local_mcp_overrides, resolve_association, resolve_sender_session,
+        validate_sender_session,
     },
 };
 use tempfile::TempDir;
+
+/// The resolved value, dropping the tier that supplied it.
+fn named(candidate: Option<&AssociationCandidate>) -> Option<&str> {
+    candidate.map(|candidate| candidate.value.as_str())
+}
+
+/// The tier that supplied a resolved value.
+fn sourced(candidate: Option<&AssociationCandidate>) -> Option<AssociationSource> {
+    candidate.map(|candidate| candidate.source)
+}
 
 fn run_git(directory: &std::path::Path, arguments: &[&str]) {
     let output = Command::new("git")
@@ -138,8 +149,16 @@ fn injected_environment_outranks_the_overlay_and_default_bundle() {
         Some(&overrides),
         Some("default-bundle"),
     );
-    assert_eq!(candidates.bundle_name.as_deref(), Some("injected-bundle"));
-    assert_eq!(candidates.session_name.as_deref(), Some("injected-session"));
+    assert_eq!(named(candidates.bundle.as_ref()), Some("injected-bundle"));
+    assert_eq!(named(candidates.session.as_ref()), Some("injected-session"));
+    assert_eq!(
+        sourced(candidates.bundle.as_ref()),
+        Some(AssociationSource::Environment)
+    );
+    assert_eq!(
+        sourced(candidates.session.as_ref()),
+        Some(AssociationSource::Environment)
+    );
 }
 
 #[test]
@@ -153,8 +172,12 @@ fn explicit_flags_outrank_the_injected_environment() {
         None,
         Some("default-bundle"),
     );
-    assert_eq!(candidates.bundle_name.as_deref(), Some("cli-bundle"));
-    assert_eq!(candidates.session_name.as_deref(), Some("cli-session"));
+    assert_eq!(named(candidates.bundle.as_ref()), Some("cli-bundle"));
+    assert_eq!(named(candidates.session.as_ref()), Some("cli-session"));
+    assert_eq!(
+        sourced(candidates.bundle.as_ref()),
+        Some(AssociationSource::CommandLine)
+    );
 }
 
 #[test]
@@ -169,7 +192,11 @@ fn overlay_outranks_default_bundle() {
         Some(&overrides),
         Some("default-bundle"),
     );
-    assert_eq!(candidates.bundle_name.as_deref(), Some("overlay-bundle"));
+    assert_eq!(named(candidates.bundle.as_ref()), Some("overlay-bundle"));
+    assert_eq!(
+        sourced(candidates.bundle.as_ref()),
+        Some(AssociationSource::Overlay)
+    );
 }
 
 #[test]
@@ -182,8 +209,12 @@ fn default_bundle_applies_when_no_higher_tier_resolves() {
         None,
         Some("default-bundle"),
     );
-    assert_eq!(candidates.bundle_name.as_deref(), Some("default-bundle"));
-    assert_eq!(candidates.session_name, None);
+    assert_eq!(named(candidates.bundle.as_ref()), Some("default-bundle"));
+    assert_eq!(
+        sourced(candidates.bundle.as_ref()),
+        Some(AssociationSource::DefaultBundle)
+    );
+    assert_eq!(candidates.session, None);
 }
 
 #[test]
@@ -201,8 +232,8 @@ fn blank_values_are_absent_rather_than_present_and_empty() {
         Some(&overrides),
         None,
     );
-    assert_eq!(candidates.bundle_name.as_deref(), Some("overlay-bundle"));
-    assert_eq!(candidates.session_name, None);
+    assert_eq!(named(candidates.bundle.as_ref()), Some("overlay-bundle"));
+    assert_eq!(candidates.session, None);
 }
 
 #[test]
@@ -265,8 +296,8 @@ fn applies_cli_precedence_over_local_overrides() {
         Some(&overrides),
         None,
     );
-    assert_eq!(candidates.bundle_name.as_deref(), Some("cli-bundle"));
-    assert_eq!(candidates.session_name.as_deref(), Some("cli-session"));
+    assert_eq!(named(candidates.bundle.as_ref()), Some("cli-bundle"));
+    assert_eq!(named(candidates.session.as_ref()), Some("cli-session"));
     let _ = &workspace;
 }
 
@@ -339,7 +370,7 @@ fn rejects_unknown_sender_membership() {
 }
 
 #[test]
-fn resolves_sender_from_working_directory_when_candidate_is_unknown() {
+fn resolves_sender_from_working_directory_when_no_candidate_is_supplied() {
     let temporary = TempDir::new().expect("temporary");
     let relay_directory = temporary.path().join("relay");
     let other_directory = temporary.path().join("other");
@@ -351,12 +382,12 @@ fn resolves_sender_from_working_directory_when_candidate_is_unknown() {
     ]);
 
     let resolved =
-        resolve_sender_session(&bundle, "relay", relay_directory.as_path()).expect("resolve");
-    assert_eq!(resolved, "master");
+        resolve_sender_session(&bundle, None, relay_directory.as_path()).expect("resolve");
+    assert_eq!(resolved.as_deref(), Some("master"));
 }
 
 #[test]
-fn rejects_unknown_sender_when_directory_does_not_match_any_member() {
+fn refuses_a_supplied_candidate_which_names_no_member() {
     let temporary = TempDir::new().expect("temporary");
     let relay_directory = temporary.path().join("relay");
     let other_directory = temporary.path().join("other");
@@ -367,16 +398,33 @@ fn rejects_unknown_sender_when_directory_does_not_match_any_member() {
         ("other", other_directory.as_path()),
     ]);
 
-    let unknown_directory = temporary.path().join("unknown");
-    std::fs::create_dir_all(&unknown_directory).expect("create unknown directory");
-    let err = resolve_sender_session(&bundle, "relay", unknown_directory.as_path())
-        .expect_err("unknown sender should fail");
+    // The working directory *does* match `master`. Accepting it here would let a
+    // mistyped selector authenticate as whichever member owns the directory,
+    // reintroducing identity by inference one tier below the Git guessing this
+    // ladder replaced.
+    let err = resolve_sender_session(&bundle, Some("relay"), relay_directory.as_path())
+        .expect_err("a supplied candidate naming no member must be refused");
     assert!(err.to_string().contains("validation_unknown_sender"));
     assert!(
-        err.to_string()
-            .contains("did not match any configured session directory"),
-        "unexpected error: {err}"
+        !err.to_string().contains("master"),
+        "refusal must not name the member it declined to become: {err}"
     );
+}
+
+#[test]
+fn reports_no_sender_when_nothing_supplied_and_no_directory_matches() {
+    let temporary = TempDir::new().expect("temporary");
+    let relay_directory = temporary.path().join("relay");
+    std::fs::create_dir_all(&relay_directory).expect("create relay directory");
+    let bundle = bundle_with_directories(&[("master", relay_directory.as_path())]);
+
+    let unknown_directory = temporary.path().join("unknown");
+    std::fs::create_dir_all(&unknown_directory).expect("create unknown directory");
+    // Nothing was supplied, so nothing was mistaken: an unassociated server is a
+    // legitimate outcome rather than a fault.
+    let resolved =
+        resolve_sender_session(&bundle, None, unknown_directory.as_path()).expect("resolve");
+    assert_eq!(resolved, None);
 }
 
 #[test]
@@ -389,7 +437,7 @@ fn rejects_ambiguous_sender_when_directory_matches_multiple_members() {
         ("shadow", relay_directory.as_path()),
     ]);
 
-    let err = resolve_sender_session(&bundle, "relay", relay_directory.as_path())
+    let err = resolve_sender_session(&bundle, None, relay_directory.as_path())
         .expect_err("ambiguous sender should fail");
     assert!(err.to_string().contains("validation_unknown_sender"));
     assert!(

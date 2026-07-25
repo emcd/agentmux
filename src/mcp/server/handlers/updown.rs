@@ -62,6 +62,10 @@ impl McpServer {
         command: &str,
         request: RelayRequest,
     ) -> Result<CallToolResult, McpError> {
+        // After every validation for the selected command and before any
+        // inscription or relay work: a malformed request reports its own
+        // fault even while a startup fault is retained.
+        self.require_ready()?;
         let event_prefix = format!("mcp.tool.updown.{command}");
         let request_event = format!("{event_prefix}.request");
         let success_event = format!("{event_prefix}.success");
