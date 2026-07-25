@@ -35,7 +35,7 @@ fn tui_rejects_default_session_with_unknown_policy() {
     let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
         .args([
             "tui",
-            "--config-directory",
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),

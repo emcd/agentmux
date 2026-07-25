@@ -1,14 +1,33 @@
-use std::fs;
+use std::{fs, path::Path};
 
-use agentmux::runtime::starter::ensure_starter_configuration_layout;
+use agentmux::runtime::{
+    paths::{ConfigurationRootSource, RuntimeRoots},
+    starter::ensure_starter_configuration_layout,
+};
 use tempfile::TempDir;
+
+/// Roots naming `configuration_root`, presented as resolved from the default
+/// tier so hydration applies.
+fn defaulted_roots(configuration_root: &Path) -> RuntimeRoots {
+    roots_from(configuration_root, ConfigurationRootSource::Default)
+}
+
+fn roots_from(configuration_root: &Path, source: ConfigurationRootSource) -> RuntimeRoots {
+    RuntimeRoots {
+        configuration_root: configuration_root.to_path_buf(),
+        state_root: configuration_root.join("state"),
+        inscriptions_root: configuration_root.join("inscriptions"),
+        configuration_root_source: source,
+    }
+}
 
 #[test]
 fn creates_starter_configuration_files_when_missing() {
     let temporary = TempDir::new().expect("temporary");
     let configuration_root = temporary.path().join("config");
 
-    ensure_starter_configuration_layout(&configuration_root).expect("starter layout");
+    ensure_starter_configuration_layout(&defaulted_roots(&configuration_root))
+        .expect("starter layout");
 
     let coders = configuration_root.join("coders.toml");
     let policies = configuration_root.join("policies.toml");
@@ -81,7 +100,8 @@ fn preserves_existing_configuration_files() {
     fs::write(&relay, "watch-bundles = false\n# custom relay\n").expect("write relay");
     fs::write(&example_bundle, "format-version = 1\n# custom bundle\n").expect("write bundle");
 
-    ensure_starter_configuration_layout(&configuration_root).expect("starter layout");
+    ensure_starter_configuration_layout(&defaulted_roots(&configuration_root))
+        .expect("starter layout");
 
     let coders_text = fs::read_to_string(coders).expect("read coders.toml");
     assert_eq!(coders_text, "format-version = 1\n# custom coders\n");
@@ -106,7 +126,8 @@ fn skips_example_seed_when_bundles_directory_already_has_toml() {
     let operator_bundle = configuration_root.join("bundles/production.toml");
     fs::write(&operator_bundle, "format-version = 1\n# operator bundle\n").expect("write bundle");
 
-    ensure_starter_configuration_layout(&configuration_root).expect("starter layout");
+    ensure_starter_configuration_layout(&defaulted_roots(&configuration_root))
+        .expect("starter layout");
 
     let example_bundle = configuration_root.join("bundles/example.toml");
     assert!(
@@ -115,4 +136,51 @@ fn skips_example_seed_when_bundles_directory_already_has_toml() {
     );
     let operator_text = fs::read_to_string(&operator_bundle).expect("read operator bundle");
     assert_eq!(operator_text, "format-version = 1\n# operator bundle\n");
+}
+
+#[test]
+fn refuses_to_scaffold_an_explicitly_named_root() {
+    let temporary = TempDir::new().expect("temporary");
+    let configuration_root = temporary.path().join("named-but-absent");
+
+    for source in [
+        ConfigurationRootSource::CommandLine,
+        ConfigurationRootSource::Environment,
+        ConfigurationRootSource::Discovered,
+    ] {
+        let error = ensure_starter_configuration_layout(&roots_from(&configuration_root, source))
+            .expect_err("naming an absent root should fault rather than scaffold");
+        assert!(
+            error
+                .to_string()
+                .contains("configuration root does not exist"),
+            "unexpected error for {source:?}: {error}"
+        );
+        assert!(
+            !configuration_root.exists(),
+            "{source:?} root must not be created"
+        );
+    }
+}
+
+#[test]
+fn leaves_an_existing_explicitly_named_root_unscaffolded() {
+    let temporary = TempDir::new().expect("temporary");
+    let configuration_root = temporary.path().join("config");
+    fs::create_dir_all(&configuration_root).expect("create configuration root");
+
+    ensure_starter_configuration_layout(&roots_from(
+        &configuration_root,
+        ConfigurationRootSource::CommandLine,
+    ))
+    .expect("existing named root is accepted");
+
+    assert!(
+        !configuration_root.join("coders.toml").exists(),
+        "a named root must never gain starter files"
+    );
+    assert!(
+        !configuration_root.join("bundles").exists(),
+        "a named root must never gain a bundles directory"
+    );
 }

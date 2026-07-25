@@ -7,6 +7,7 @@ use std::{
 };
 
 use super::error::RuntimeError;
+use super::paths::RuntimeRoots;
 
 const BUNDLES_DIRECTORY: &str = "bundles";
 const CODERS_FILE: &str = "coders.toml";
@@ -44,10 +45,30 @@ const RELAY_TEMPLATE: &str = include_str!(concat!(
 
 /// Ensures starter configuration files exist without overwriting user config.
 ///
+/// Hydration applies only to a root resolved from the default tier. A root the
+/// operator named — by flag, environment, or discovery — is never scaffolded:
+/// answering "you named a root that is not there" with a fresh empty deployment
+/// makes the mistake look like success. Taking the resolved roots rather than a
+/// bare path is what keeps that gate from being bypassed at a call site.
+///
 /// # Errors
 ///
-/// Returns `RuntimeError` when directories or template files cannot be created.
-pub fn ensure_starter_configuration_layout(configuration_root: &Path) -> Result<(), RuntimeError> {
+/// Returns `RuntimeError` when directories or template files cannot be created,
+/// or when a non-default root does not exist.
+pub fn ensure_starter_configuration_layout(roots: &RuntimeRoots) -> Result<(), RuntimeError> {
+    let configuration_root = roots.configuration_root.as_path();
+    if !roots.configuration_root_source.permits_hydration() {
+        if !configuration_root.is_dir() {
+            return Err(RuntimeError::validation(
+                "validation_configuration_root_absent",
+                format!(
+                    "configuration root does not exist: {}",
+                    configuration_root.display()
+                ),
+            ));
+        }
+        return Ok(());
+    }
     ensure_directory(configuration_root)?;
     let bundles_directory = configuration_root.join(BUNDLES_DIRECTORY);
     ensure_directory(&bundles_directory)?;

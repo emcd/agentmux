@@ -294,7 +294,7 @@ impl McpHarness {
             .arg(BUNDLE_NAME)
             .arg("--session-name")
             .arg(SENDER_SESSION)
-            .arg("--config-directory")
+            .arg("--configuration-directory")
             .arg(&runtime.config_root)
             .arg("--state-directory")
             .arg(&runtime.state_root)
@@ -325,7 +325,7 @@ impl McpHarness {
         command
             .arg("host")
             .arg("mcp")
-            .arg("--config-directory")
+            .arg("--configuration-directory")
             .arg(&runtime.config_root)
             .arg("--state-directory")
             .arg(&runtime.state_root)

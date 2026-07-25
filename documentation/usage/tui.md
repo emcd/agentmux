@@ -20,7 +20,7 @@ Startup behavior:
 - `agentmux tui` attempts relay auto-start when the resolved relay socket is
   unavailable.
 - Auto-start uses the same resolved runtime roots as the active TUI launch
-  (`--config-directory`, `--state-directory`, `--inscriptions-directory`).
+  (`--configuration-directory`, `--state-directory`, `--inscriptions-directory`).
 
 Relay lifecycle:
 

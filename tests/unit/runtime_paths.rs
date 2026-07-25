@@ -1,8 +1,8 @@
 use agentmux::runtime::paths::{
-    BundleRuntimePaths, RelayRuntimePaths, RuntimeRootOverrides, RuntimeRoots,
-    agentmux_source_checkout_root, debug_repository_configuration_root,
-    debug_repository_inscriptions_root, debug_repository_state_root,
-    ensure_bundle_runtime_directory, tmux_socket_path_for_runtime_directory,
+    BundleRuntimePaths, ConfigurationRootSource, RelayRuntimePaths, RuntimeRootOverrides,
+    RuntimeRoots, agentmux_source_checkout_root, debug_repository_inscriptions_root,
+    debug_repository_state_root, ensure_bundle_runtime_directory, local_configuration_root,
+    tmux_socket_path_for_runtime_directory,
 };
 use tempfile::TempDir;
 
@@ -93,8 +93,8 @@ fn resolves_debug_repository_state_root() {
 }
 
 #[test]
-fn resolves_debug_repository_configuration_root() {
-    let root = debug_repository_configuration_root(std::path::Path::new("/repo"));
+fn resolves_local_configuration_root() {
+    let root = local_configuration_root(std::path::Path::new("/repo"));
     assert_eq!(
         root,
         std::path::Path::new("/repo/.auxiliary/configuration/agentmux")
@@ -162,6 +162,7 @@ fn resolves_roots_from_explicit_overrides() {
         state_root: Some("/state".into()),
         inscriptions_root: Some("/inscriptions".into()),
         repository_root: None,
+        discover_local_configuration: false,
     };
     let roots = RuntimeRoots::resolve(&overrides).expect("roots should resolve");
     assert_eq!(
@@ -172,6 +173,10 @@ fn resolves_roots_from_explicit_overrides() {
     assert_eq!(
         roots.inscriptions_root,
         std::path::Path::new("/inscriptions")
+    );
+    assert_eq!(
+        roots.configuration_root_source,
+        ConfigurationRootSource::CommandLine
     );
 }
 
@@ -190,5 +195,182 @@ fn derives_tmux_socket_from_runtime_directory() {
     assert_eq!(
         tmux_socket,
         std::path::Path::new("/state/root/bundles/party-alpha/tmux.sock")
+    );
+}
+
+/// Builds overrides naming no root, so resolution falls to the tiers below the
+/// command line.
+fn discovery_overrides(discover: bool) -> RuntimeRootOverrides {
+    RuntimeRootOverrides {
+        configuration_root: None,
+        state_root: Some("/state".into()),
+        inscriptions_root: Some("/inscriptions".into()),
+        repository_root: None,
+        discover_local_configuration: discover,
+    }
+}
+
+/// Clears every environment variable feeding configuration-root resolution, so
+/// a test observes the tier it is exercising rather than the developer's shell.
+///
+/// Safe because nextest runs each test in its own process.
+fn clear_configuration_environment() {
+    unsafe {
+        std::env::remove_var("AGENTMUX_CONFIGURATION_DIRECTORY");
+        std::env::remove_var("XDG_CONFIG_HOME");
+    }
+}
+
+/// Lays out `<root>/repo/nested/deep`, planting a configuration root marker at
+/// each requested ancestor. Returns the canonicalized deep directory.
+fn write_discovery_tree(temporary: &TempDir, markers: &[&str]) -> std::path::PathBuf {
+    let deep = temporary.path().join("repo/nested/deep");
+    std::fs::create_dir_all(&deep).expect("create deep directory");
+    for marker in markers {
+        let ancestor = temporary.path().join(marker);
+        std::fs::create_dir_all(local_configuration_root(&ancestor)).expect("create marker");
+    }
+    deep.canonicalize().expect("canonicalize deep directory")
+}
+
+#[test]
+fn configuration_root_resolves_from_environment_when_no_flag() {
+    clear_configuration_environment();
+    unsafe {
+        std::env::set_var("AGENTMUX_CONFIGURATION_DIRECTORY", "/from-environment");
+    }
+
+    let roots = RuntimeRoots::resolve(&discovery_overrides(false)).expect("roots should resolve");
+    assert_eq!(
+        roots.configuration_root,
+        std::path::Path::new("/from-environment")
+    );
+    assert_eq!(
+        roots.configuration_root_source,
+        ConfigurationRootSource::Environment
+    );
+}
+
+#[test]
+fn explicit_flag_outranks_environment() {
+    clear_configuration_environment();
+    unsafe {
+        std::env::set_var("AGENTMUX_CONFIGURATION_DIRECTORY", "/from-environment");
+    }
+
+    let mut overrides = discovery_overrides(false);
+    overrides.configuration_root = Some("/from-flag".into());
+    let roots = RuntimeRoots::resolve(&overrides).expect("roots should resolve");
+    assert_eq!(roots.configuration_root, std::path::Path::new("/from-flag"));
+    assert_eq!(
+        roots.configuration_root_source,
+        ConfigurationRootSource::CommandLine
+    );
+}
+
+#[test]
+fn discovery_is_inert_unless_requested() {
+    clear_configuration_environment();
+    unsafe {
+        std::env::set_var("XDG_CONFIG_HOME", "/xdg");
+    }
+    let temporary = TempDir::new().expect("temporary");
+    let deep = write_discovery_tree(&temporary, &["repo"]);
+    std::env::set_current_dir(&deep).expect("enter deep directory");
+
+    let roots = RuntimeRoots::resolve(&discovery_overrides(false)).expect("roots should resolve");
+    assert_eq!(
+        roots.configuration_root,
+        std::path::Path::new("/xdg/agentmux")
+    );
+    assert_eq!(
+        roots.configuration_root_source,
+        ConfigurationRootSource::Default
+    );
+}
+
+#[test]
+fn discovery_selects_the_nearest_ancestor() {
+    clear_configuration_environment();
+    let temporary = TempDir::new().expect("temporary");
+    let deep = write_discovery_tree(&temporary, &["repo", "repo/nested"]);
+    std::env::set_current_dir(&deep).expect("enter deep directory");
+
+    let roots = RuntimeRoots::resolve(&discovery_overrides(true)).expect("roots should resolve");
+    let expected = local_configuration_root(&temporary.path().join("repo/nested"))
+        .canonicalize()
+        .expect("canonicalize expected root");
+    assert_eq!(roots.configuration_root, expected);
+    assert_eq!(
+        roots.configuration_root_source,
+        ConfigurationRootSource::Discovered
+    );
+}
+
+#[test]
+fn discovery_walks_past_ancestors_without_a_marker() {
+    clear_configuration_environment();
+    let temporary = TempDir::new().expect("temporary");
+    let deep = write_discovery_tree(&temporary, &["repo"]);
+    std::env::set_current_dir(&deep).expect("enter deep directory");
+
+    let roots = RuntimeRoots::resolve(&discovery_overrides(true)).expect("roots should resolve");
+    let expected = local_configuration_root(&temporary.path().join("repo"))
+        .canonicalize()
+        .expect("canonicalize expected root");
+    assert_eq!(roots.configuration_root, expected);
+}
+
+#[test]
+fn discovery_falls_through_when_no_ancestor_qualifies() {
+    clear_configuration_environment();
+    unsafe {
+        std::env::set_var("XDG_CONFIG_HOME", "/xdg");
+    }
+    let temporary = TempDir::new().expect("temporary");
+    let deep = write_discovery_tree(&temporary, &[]);
+    std::env::set_current_dir(&deep).expect("enter deep directory");
+
+    let roots = RuntimeRoots::resolve(&discovery_overrides(true)).expect("roots should resolve");
+    assert_eq!(
+        roots.configuration_root,
+        std::path::Path::new("/xdg/agentmux")
+    );
+    assert_eq!(
+        roots.configuration_root_source,
+        ConfigurationRootSource::Default
+    );
+}
+
+#[test]
+fn repository_root_no_longer_selects_the_configuration_root() {
+    // It retains its state and inscriptions role; only the configuration-root
+    // role is gone. Asserted without a build-profile guard, because
+    // configuration-root resolution no longer varies by profile.
+    clear_configuration_environment();
+    unsafe {
+        std::env::set_var("XDG_CONFIG_HOME", "/xdg");
+    }
+    let temporary = TempDir::new().expect("temporary");
+    let repository_root = temporary.path().join("repo");
+    std::fs::create_dir_all(local_configuration_root(&repository_root))
+        .expect("create repository configuration root");
+
+    let overrides = RuntimeRootOverrides {
+        configuration_root: None,
+        state_root: None,
+        inscriptions_root: None,
+        repository_root: Some(repository_root.clone()),
+        discover_local_configuration: false,
+    };
+    let roots = RuntimeRoots::resolve(&overrides).expect("roots should resolve");
+    assert_eq!(
+        roots.configuration_root,
+        std::path::Path::new("/xdg/agentmux"),
+        "repository root must not supply the configuration root"
+    );
+    assert_eq!(
+        roots.state_root,
+        debug_repository_state_root(&repository_root)
     );
 }

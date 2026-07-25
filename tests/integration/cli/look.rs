@@ -57,7 +57,7 @@ fn look_returns_canonical_json_payload() {
         .args([
             "look",
             "bravo",
-            "--config-directory",
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),
@@ -139,7 +139,7 @@ fn look_preserves_additive_acp_freshness_fields_in_machine_output() {
         .args([
             "look",
             "bravo",
-            "--config-directory",
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),
@@ -230,7 +230,7 @@ fn look_preserves_structured_acp_entries_in_machine_output() {
         .args([
             "look",
             "bravo",
-            "--config-directory",
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),
@@ -266,6 +266,11 @@ fn look_rejects_unknown_bundle_when_selected_bundle_is_unconfigured() {
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
     fs::create_dir_all(&workspace_root).expect("create workspace root");
+    // An explicitly supplied configuration root is never scaffolded, so the
+    // fixture supplies what the load path needs. A configured bundle is written
+    // deliberately: the request below names a different one, which is what makes
+    // it unknown.
+    write_bundle_configuration(&config_root, "agentmux", None, &["bravo"]);
     write_tui_configuration(
         &config_root,
         Some("agentmux"),
@@ -280,7 +285,7 @@ fn look_rejects_unknown_bundle_when_selected_bundle_is_unconfigured() {
             "bravo",
             "--bundle",
             "other-bundle",
-            "--config-directory",
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),
@@ -341,7 +346,7 @@ fn look_surfaces_authorization_forbidden_from_relay() {
         .args([
             "look",
             "bravo",
-            "--config-directory",
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),

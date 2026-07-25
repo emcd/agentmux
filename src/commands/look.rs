@@ -27,7 +27,7 @@ pub(super) fn run_agentmux_look(arguments: &[String]) -> Result<(), RuntimeError
         .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
     let workspace = WorkspaceContext::discover(&current_directory)?;
     let roots = shared::resolve_roots(&parsed.runtime, &workspace, None)?;
-    ensure_starter_configuration_layout(&roots.configuration_root)?;
+    ensure_starter_configuration_layout(&roots)?;
     let resolved_session = resolve_tui_session_identity(
         &roots.configuration_root,
         &workspace.workspace_root,
@@ -173,6 +173,6 @@ fn parse_look_arguments(arguments: &[String]) -> Result<LookArguments, RuntimeEr
 
 pub(super) fn print_look_help() {
     println!(
-        "Usage: agentmux look <target-session> [--bundle NAME] [--as-session NAME] [--lines N] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux look <target-session> [--bundle NAME] [--as-session NAME] [--lines N] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH] [--discover-local-configuration]"
     );
 }

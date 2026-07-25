@@ -55,7 +55,7 @@ fn up_and_down_report_idempotent_transitions() {
             "host",
             "relay",
             "--no-autostart",
-            "--config-directory",
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),
@@ -73,7 +73,7 @@ fn up_and_down_report_idempotent_transitions() {
         .args([
             "up",
             "alpha",
-            "--config-directory",
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),
@@ -93,7 +93,7 @@ fn up_and_down_report_idempotent_transitions() {
         .args([
             "up",
             "alpha",
-            "--config-directory",
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),
@@ -116,7 +116,7 @@ fn up_and_down_report_idempotent_transitions() {
         .args([
             "down",
             "alpha",
-            "--config-directory",
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),
@@ -135,7 +135,7 @@ fn up_and_down_report_idempotent_transitions() {
         .args([
             "down",
             "alpha",
-            "--config-directory",
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),
@@ -175,7 +175,7 @@ fn down_reports_relay_unavailable_when_relay_is_not_running() {
         .args([
             "down",
             "alpha",
-            "--config-directory",
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),
@@ -216,7 +216,7 @@ fn up_rejects_caller_whose_policy_lacks_updown() {
             "host",
             "relay",
             "--no-autostart",
-            "--config-directory",
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),
@@ -234,7 +234,7 @@ fn up_rejects_caller_whose_policy_lacks_updown() {
         .args([
             "up",
             "alpha",
-            "--config-directory",
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),
@@ -281,7 +281,7 @@ fn up_succeeds_for_operator_policy_with_updown_capability() {
             "host",
             "relay",
             "--no-autostart",
-            "--config-directory",
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),
@@ -299,7 +299,7 @@ fn up_succeeds_for_operator_policy_with_updown_capability() {
         .args([
             "up",
             "alpha",
-            "--config-directory",
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),
@@ -350,7 +350,7 @@ fn host_relay_summary_json_omits_group_name() {
         .args([
             "host",
             "relay",
-            "--config-directory",
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),

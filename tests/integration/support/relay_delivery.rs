@@ -650,7 +650,7 @@ pub(crate) fn spawn_relay_with_fake_tmux_and_env(
     command
         .arg("host")
         .arg("relay")
-        .arg("--config-directory")
+        .arg("--configuration-directory")
         .arg(config_root)
         .arg("--state-directory")
         .arg(state_root)

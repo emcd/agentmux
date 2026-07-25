@@ -37,7 +37,7 @@ pub(super) async fn run_mcp_host(arguments: McpHostArguments) -> Result<(), Runt
             overrides.bundle_name.is_some() || overrides.session_name.is_some()
         });
     let roots = shared::resolve_roots(&arguments.runtime, &workspace, local_overrides.as_ref())?;
-    ensure_starter_configuration_layout(&roots.configuration_root)?;
+    ensure_starter_configuration_layout(&roots)?;
     let mut associated_bundle_name = None::<String>;
     let mut sender_session = None::<String>;
     let mut startup_association_reason = None::<String>;

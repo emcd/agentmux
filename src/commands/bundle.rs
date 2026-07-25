@@ -29,7 +29,7 @@ pub(super) fn run_bundle_command(
     let workspace = WorkspaceContext::discover(&current_directory)?;
     let local_overrides = load_local_mcp_overrides(&workspace.workspace_root)?;
     let roots = shared::resolve_roots(&parsed.runtime, &workspace, local_overrides.as_ref())?;
-    ensure_starter_configuration_layout(&roots.configuration_root)?;
+    ensure_starter_configuration_layout(&roots)?;
 
     let selected_bundles = resolve_selected_bundles(&roots.configuration_root, &parsed.selector)?;
     let relay_paths = RelayRuntimePaths::resolve(&roots.state_root);
@@ -88,13 +88,13 @@ pub(super) fn run_bundle_command(
 
 pub(super) fn print_up_help() {
     println!(
-        "Usage: agentmux up (<bundle-id> | --group GROUP) [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux up (<bundle-id> | --group GROUP) [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH] [--discover-local-configuration]"
     );
 }
 
 pub(super) fn print_down_help() {
     println!(
-        "Usage: agentmux down (<bundle-id> | --group GROUP) [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux down (<bundle-id> | --group GROUP) [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH] [--discover-local-configuration]"
     );
 }
 

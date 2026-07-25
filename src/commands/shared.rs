@@ -21,11 +21,11 @@ pub(super) fn parse_runtime_flag(
     runtime: &mut RuntimeArguments,
 ) -> Result<bool, RuntimeError> {
     match arguments[*index].as_str() {
-        "--config-directory" => {
+        "--configuration-directory" => {
             runtime.configuration_root = Some(PathBuf::from(take_value(
                 arguments,
                 index,
-                "--config-directory",
+                "--configuration-directory",
             )?));
             Ok(true)
         }
@@ -53,6 +53,10 @@ pub(super) fn parse_runtime_flag(
             )?));
             Ok(true)
         }
+        "--discover-local-configuration" => {
+            runtime.discover_local_configuration = true;
+            Ok(true)
+        }
         _ => Ok(false),
     }
 }
@@ -74,6 +78,7 @@ pub(super) fn resolve_roots(
             .repository_root
             .clone()
             .or_else(|| workspace.debug_repository_root()),
+        discover_local_configuration: runtime.discover_local_configuration,
     })
 }
 

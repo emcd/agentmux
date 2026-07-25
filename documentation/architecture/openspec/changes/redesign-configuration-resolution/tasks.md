@@ -17,20 +17,20 @@
 
 ## 2. Configuration root resolution
 
-- [ ] 2.1 Rename `--config-directory` to `--configuration-directory` with no
+- [x] 2.1 Rename `--config-directory` to `--configuration-directory` with no
   compatibility alias, updating every call site and test
-- [ ] 2.2 Implement the root ladder: CLI > `AGENTMUX_CONFIGURATION_DIRECTORY` >
+- [x] 2.2 Implement the root ladder: CLI > `AGENTMUX_CONFIGURATION_DIRECTORY` >
   discovery > XDG/home, with explicit tiers replacing rather than extending
-- [ ] 2.3 Remove build-profile gating from configuration-root resolution
-- [ ] 2.4 Add the opt-in discovery flag, default off: nearest-ancestor walk for a
+- [x] 2.3 Remove build-profile gating from configuration-root resolution
+- [x] 2.4 Add the opt-in discovery flag, default off: nearest-ancestor walk for a
   directory that is itself a configuration root, canonicalizing paths, with no
   dependency on Git metadata or package manifests
-- [ ] 2.5 Report the selected root on a diagnostic channel when discovery runs
-- [ ] 2.6 Remove `--repository-root`'s configuration-root role, leaving its state
+- [x] 2.5 Report the selected root on a diagnostic channel when discovery runs
+- [x] 2.6 Remove `--repository-root`'s configuration-root role, leaving its state
   and inscriptions roles to the deferred work
-- [ ] 2.7 Restrict starter hydration to defaulted roots; an explicitly supplied
+- [x] 2.7 Restrict starter hydration to defaulted roots; an explicitly supplied
   root that does not exist becomes a recorded fault rather than scaffolding
-- [ ] 2.8 Leave state and inscriptions root gating untouched, and record why in
+- [x] 2.8 Leave state and inscriptions root gating untouched, and record why in
   the code so it is not mistaken for an oversight
 
 ## 3. Overlay resolution

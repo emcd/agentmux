@@ -170,7 +170,7 @@ fn host_relay_watcher_loads_new_bundle_file_at_runtime() {
         .args([
             "host",
             "relay",
-            "--config-directory",
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),
@@ -247,7 +247,7 @@ fn host_relay_watcher_loads_non_autostart_bundle_held_without_starting() {
         .args([
             "host",
             "relay",
-            "--config-directory",
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),
@@ -333,7 +333,7 @@ fn host_relay_watcher_unloads_removed_bundle_file_at_runtime() {
         .args([
             "host",
             "relay",
-            "--config-directory",
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),
@@ -411,7 +411,7 @@ fn host_relay_watcher_reloads_modified_bundle_file_at_runtime() {
         .args([
             "host",
             "relay",
-            "--config-directory",
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),
@@ -496,7 +496,7 @@ fn host_relay_watcher_preserves_down_intent_across_file_edit() {
         .args([
             "host",
             "relay",
-            "--config-directory",
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),
@@ -517,7 +517,7 @@ fn host_relay_watcher_preserves_down_intent_across_file_edit() {
         .args([
             "down",
             "alpha",
-            "--config-directory",
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),
@@ -598,7 +598,7 @@ fn host_relay_watcher_holds_non_autostart_bundle_on_file_edit() {
         .args([
             "host",
             "relay",
-            "--config-directory",
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),
@@ -678,7 +678,7 @@ fn host_relay_no_watch_flag_disables_runtime_reconcile() {
             "host",
             "relay",
             "--no-watch",
-            "--config-directory",
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),
@@ -746,7 +746,7 @@ fn host_relay_watch_bundles_false_from_relay_toml_disables_reconcile() {
         .args([
             "host",
             "relay",
-            "--config-directory",
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),

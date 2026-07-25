@@ -26,7 +26,7 @@ fn check_configuration_accepts_valid_bundle() {
             "check",
             "configuration",
             "alpha",
-            "--config-directory",
+            "--configuration-directory",
             config_root.to_str().expect("config root utf8"),
             "--state-directory",
             state_root.to_str().expect("state root utf8"),
@@ -55,7 +55,7 @@ fn check_configuration_validates_all_bundles_when_no_id() {
         .args([
             "check",
             "configuration",
-            "--config-directory",
+            "--configuration-directory",
             config_root.to_str().expect("config root utf8"),
             "--state-directory",
             state_root.to_str().expect("state root utf8"),
@@ -99,7 +99,7 @@ codex-session-id = "a"
             "check",
             "configuration",
             "alpha",
-            "--config-directory",
+            "--configuration-directory",
             config_root.to_str().expect("config root utf8"),
             "--state-directory",
             state_root.to_str().expect("state root utf8"),
@@ -128,7 +128,7 @@ fn check_configuration_reports_no_bundles() {
         .args([
             "check",
             "configuration",
-            "--config-directory",
+            "--configuration-directory",
             config_root.to_str().expect("config root utf8"),
             "--state-directory",
             state_root.to_str().expect("state root utf8"),
@@ -162,7 +162,7 @@ fn check_configuration_reports_invalid_relay_toml_without_bundles() {
         .args([
             "check",
             "configuration",
-            "--config-directory",
+            "--configuration-directory",
             config_root.to_str().expect("config root utf8"),
             "--state-directory",
             state_root.to_str().expect("state root utf8"),
@@ -195,7 +195,7 @@ fn check_configuration_reports_invalid_ui_toml_without_bundles() {
         .args([
             "check",
             "configuration",
-            "--config-directory",
+            "--configuration-directory",
             config_root.to_str().expect("config root utf8"),
             "--state-directory",
             state_root.to_str().expect("state root utf8"),
@@ -226,7 +226,7 @@ fn check_configuration_accepts_valid_ui_toml() {
         .args([
             "check",
             "configuration",
-            "--config-directory",
+            "--configuration-directory",
             config_root.to_str().expect("config root utf8"),
             "--state-directory",
             state_root.to_str().expect("state root utf8"),

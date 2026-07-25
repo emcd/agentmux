@@ -119,7 +119,7 @@ async fn mcp_initializes_without_active_bundle_context() {
     let mut harness = McpHarness::spawn_with_environment(
         &workspace,
         &[
-            "--config-directory",
+            "--configuration-directory",
             config_root.to_str().expect("utf8 config path"),
             "--state-directory",
             state_root.to_str().expect("utf8 state path"),
@@ -163,7 +163,7 @@ async fn mcp_explicit_unknown_bundle_still_fails_startup() {
         .arg("mcp")
         .arg("--bundle-name")
         .arg("missing")
-        .arg("--config-directory")
+        .arg("--configuration-directory")
         .arg(config_root.to_str().expect("utf8 config path"))
         .arg("--state-directory")
         .arg(state_root.to_str().expect("utf8 state path"));
@@ -224,7 +224,7 @@ async fn mcp_auto_discovers_association_from_non_git_cwd() {
     let mut harness = McpHarness::spawn_with_environment(
         &workspace,
         &[
-            "--config-directory",
+            "--configuration-directory",
             config_root.to_str().expect("utf8 config path"),
             "--state-directory",
             state_root.to_str().expect("utf8 state path"),
@@ -297,7 +297,7 @@ async fn mcp_falls_back_to_directory_match_when_auto_sender_is_not_member() {
     let mut harness = McpHarness::spawn_with_environment(
         &workspace,
         &[
-            "--config-directory",
+            "--configuration-directory",
             config_root.to_str().expect("utf8 config path"),
             "--state-directory",
             state_root.to_str().expect("utf8 state path"),
@@ -372,7 +372,7 @@ async fn mcp_uses_repository_root_debug_state_override() {
             "party",
             "--session-name",
             "alpha",
-            "--config-directory",
+            "--configuration-directory",
             config_root.to_str().expect("utf8 config path"),
             "--repository-root",
             repository_root.to_str().expect("utf8 repository path"),
