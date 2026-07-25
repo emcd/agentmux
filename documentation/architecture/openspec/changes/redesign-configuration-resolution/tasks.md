@@ -35,30 +35,30 @@
 
 ## 3. Overlay resolution
 
-- [ ] 3.1 Rename the `overrides/` directory to `overlay/`
-- [ ] 3.2 Implement the shared effective-file lookup over
+- [x] 3.1 Rename the `overrides/` directory to `overlay/`
+- [x] 3.2 Implement the shared effective-file lookup over
   `[root/overlay/P, root/P]` selecting the first existing regular file
-- [ ] 3.3 Make a malformed overlay file a fault that does not fall through to the
+- [x] 3.3 Make a malformed overlay file a fault that does not fall through to the
   base file
-- [ ] 3.4 Union bundle definition directories by identifier, overlay shadowing
+- [x] 3.4 Union bundle definition directories by identifier, overlay shadowing
   base
-- [ ] 3.5 Preserve each path-valued field's existing resolution base, and add
+- [x] 3.5 Preserve each path-valued field's existing resolution base, and add
   tests proving a field supplied by an overlay file resolves identically to the
   same field supplied by a base file. This change introduces no new resolution
   base and alters no existing one
-- [ ] 3.6 Re-anchor the association file and `users.toml` beneath the
+- [x] 3.6 Re-anchor the association file and `users.toml` beneath the
   configuration root, removing their build-profile gating and their bespoke
   per-file lookup
-- [ ] 3.7 Make `ui.toml` overlay-aware, replacing its root-only behavior
-- [ ] 3.8 Remove the association file's configuration-root field and its
+- [x] 3.7 Make `ui.toml` overlay-aware, replacing its root-only behavior
+- [x] 3.8 Remove the association file's configuration-root field and its
   circular role
-- [ ] 3.9 Route every relay, TUI, CLI, and preflight loader through the shared
+- [x] 3.9 Route every relay, TUI, CLI, and preflight loader through the shared
   lookup
-- [ ] 3.10 Watch both physical layers and reconcile against the effective union:
+- [x] 3.10 Watch both physical layers and reconcile against the effective union:
   overlay creation shadowing a base bundle reloads, overlay deletion revealing a
   base reloads rather than unloads, an edit to a shadowed base file is inert, and
   only disappearance from the union unloads
-- [ ] 3.11 Confirm starter hydration writes only to the base root
+- [x] 3.11 Confirm starter hydration writes only to the base root
 
 ## 4. Association resolution
 

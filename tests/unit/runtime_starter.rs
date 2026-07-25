@@ -78,6 +78,14 @@ fn creates_starter_configuration_files_when_missing() {
     let bundle_text = fs::read_to_string(example_bundle).expect("read example bundle");
     assert!(bundle_text.contains("format-version = 1"));
     assert!(bundle_text.contains("[[sessions]]"));
+
+    // Hydration writes to the base root only. Scaffolding an overlay would
+    // create a layer the operator never asked for, which then shadows the very
+    // files hydration just wrote.
+    assert!(
+        !configuration_root.join("overlay").exists(),
+        "hydration must not create an overlay directory"
+    );
 }
 
 #[test]
@@ -136,6 +144,29 @@ fn skips_example_seed_when_bundles_directory_already_has_toml() {
     );
     let operator_text = fs::read_to_string(&operator_bundle).expect("read operator bundle");
     assert_eq!(operator_text, "format-version = 1\n# operator bundle\n");
+}
+
+#[test]
+fn skips_example_seed_when_only_the_overlay_supplies_bundles() {
+    let temporary = TempDir::new().expect("temporary");
+    let configuration_root = temporary.path().join("config");
+    let overlay_bundles = configuration_root.join("overlay/bundles");
+    fs::create_dir_all(&overlay_bundles).expect("create overlay bundle dir");
+    fs::write(
+        overlay_bundles.join("production.toml"),
+        "format-version = 1\n# operator bundle\n",
+    )
+    .expect("write overlay bundle");
+
+    ensure_starter_configuration_layout(&defaulted_roots(&configuration_root))
+        .expect("starter layout");
+
+    // Bundles union across layers, so seeding beside an overlay definition would
+    // add a live bundle the operator never wrote.
+    assert!(
+        !configuration_root.join("bundles/example.toml").exists(),
+        "expected example.toml to stay unseeded when the overlay supplies a bundle"
+    );
 }
 
 #[test]

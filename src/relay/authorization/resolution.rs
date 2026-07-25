@@ -9,8 +9,9 @@ use serde_json::json;
 use crate::{
     configuration::{
         BundleConfiguration, BundleMember, load_bundle_configuration, load_tui_configuration,
+        policies_configuration_path,
     },
-    relay::{POLICIES_FILE, RelayError, relay_error},
+    relay::{RelayError, relay_error},
 };
 
 use super::super::identity::{PrincipalType, classify_principal_id, split_principal_id};
@@ -128,7 +129,7 @@ pub(super) fn resolve_relay_principal_controls(
             let Some(member) = bundle.members.iter().find(|member| member.id == session_id) else {
                 return Ok(conservative_default);
             };
-            let policies_path = configuration_root.join(POLICIES_FILE);
+            let policies_path = policies_configuration_path(configuration_root);
             resolve_session_policy_controls(
                 member,
                 &presets,

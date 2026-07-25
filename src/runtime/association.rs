@@ -9,12 +9,16 @@ use std::{
 use serde::Deserialize;
 
 use crate::configuration::{
-    BundleConfiguration, ConfigurationError, infer_sender_from_working_directory,
+    BundleConfiguration, ConfigurationError, effective_configuration_path,
+    infer_sender_from_working_directory,
 };
 
 use super::error::RuntimeError;
 
-const OVERRIDE_FILE_PATH: &str = ".auxiliary/configuration/agentmux/overrides/mcp.toml";
+/// Logical artifact holding per-tree association overrides. Resolved through
+/// the configuration overlay like every other configuration file, so an overlay
+/// copy shadows a base copy.
+const ASSOCIATION_FILE: &str = "mcp.toml";
 
 /// Git and workspace context used for association auto-discovery.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -134,8 +138,6 @@ pub struct McpAssociationOverrides {
     pub bundle_name: Option<String>,
     #[serde(default)]
     pub session_name: Option<String>,
-    #[serde(default)]
-    pub config_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -145,8 +147,6 @@ struct McpAssociationOverrideFile {
     bundle_name: Option<String>,
     #[serde(default)]
     session_name: Option<String>,
-    #[serde(default)]
-    config_root: Option<PathBuf>,
 }
 
 /// Fully resolved MCP association identities.
@@ -162,9 +162,9 @@ pub struct ResolvedAssociation {
 ///
 /// Returns validation errors for malformed override file content.
 pub fn load_local_mcp_overrides(
-    workspace_root: &Path,
+    configuration_root: &Path,
 ) -> Result<Option<McpAssociationOverrides>, RuntimeError> {
-    let path = workspace_root.join(OVERRIDE_FILE_PATH);
+    let path = effective_configuration_path(configuration_root, ASSOCIATION_FILE);
     if !path.exists() {
         return Ok(None);
     }
@@ -183,7 +183,10 @@ pub fn load_local_mcp_overrides(
             ),
         )
     })?;
-    Ok(Some(normalize_overrides(parsed, workspace_root)))
+    Ok(Some(McpAssociationOverrides {
+        bundle_name: parsed.bundle_name.and_then(normalize_string),
+        session_name: parsed.session_name.and_then(normalize_string),
+    }))
 }
 
 /// Resolves bundle and session identity with precedence:
@@ -294,28 +297,6 @@ fn run_git(directory: &Path, arguments: &[&str]) -> Option<String> {
         return None;
     }
     normalize_string(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-fn normalize_overrides(
-    parsed: McpAssociationOverrideFile,
-    workspace_root: &Path,
-) -> McpAssociationOverrides {
-    let config_root = parsed.config_root.and_then(|path| {
-        if path.as_os_str().is_empty() {
-            return None;
-        }
-        let normalized = if path.is_absolute() {
-            path
-        } else {
-            workspace_root.join(path)
-        };
-        Some(normalized)
-    });
-    McpAssociationOverrides {
-        bundle_name: parsed.bundle_name.and_then(normalize_string),
-        session_name: parsed.session_name.and_then(normalize_string),
-        config_root,
-    }
 }
 
 fn repository_root_from_git_common_dir(common_dir: &Path) -> Option<PathBuf> {

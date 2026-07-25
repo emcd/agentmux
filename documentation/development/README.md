@@ -69,12 +69,15 @@ their build host.
 - OpenSpec specs:
   `documentation/architecture/openspec/specs/`
 
-## Local Override Paths (Development)
+## Local Override Paths
 
-These are primarily for local debug/testing workflows and should not be treated
-as end-user defaults:
+Per-tree overrides live in the overlay directory of the resolved configuration
+root, and apply in every build profile:
 
-- MCP association override:
-  `.auxiliary/configuration/agentmux/overrides/mcp.toml`
-- TUI session override:
-  `.auxiliary/configuration/agentmux/overrides/tui.toml`
+- MCP association override: `<configuration-root>/overlay/mcp.toml`
+- TUI session override: `<configuration-root>/overlay/users.toml`
+
+To point a development invocation at a repository-local configuration root
+without editing generated MCP client arguments, pass
+`--discover-local-configuration`; it selects the nearest ancestor holding
+`.auxiliary/configuration/agentmux`.

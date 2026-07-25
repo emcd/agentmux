@@ -5,14 +5,14 @@ use std::{
 };
 
 use super::{
-    BUNDLE_SCHEMA_VERSION, BUNDLES_DIRECTORY, ConfigurationError, POLICIES_SCHEMA_VERSION,
+    BUNDLE_SCHEMA_VERSION, ConfigurationError, POLICIES_SCHEMA_VERSION,
     fields::{
         canonicalize_best_effort, normalize_field, normalize_global_session_id,
         validate_bundle_groups, validate_format_version, validate_session_id,
     },
     paths::{
-        bundle_configuration_path, coders_configuration_path, policies_configuration_path,
-        tui_configuration_path, ui_configuration_path,
+        bundle_configuration_path, coders_configuration_path, effective_bundle_definitions,
+        policies_configuration_path, tui_configuration_path, ui_configuration_path,
     },
     raw::{
         Coder, CoderTarget, RawBundleFile, RawCoder, RawCodersFile, RawPoliciesFile, RawUiFile,
@@ -36,28 +36,12 @@ use super::{
 pub fn load_bundle_group_memberships(
     configuration_root: &Path,
 ) -> Result<Vec<BundleGroupMembership>, ConfigurationError> {
-    let bundles_directory = configuration_root.join(BUNDLES_DIRECTORY);
-    if !bundles_directory.exists() {
-        return Ok(Vec::new());
-    }
-    let mut bundle_names = fs::read_dir(&bundles_directory)
-        .map_err(|source| {
-            ConfigurationError::io(
-                format!("read bundle directory {}", bundles_directory.display()),
-                source,
-            )
-        })?
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| entry.path().file_name().map(ToOwned::to_owned))
-        .filter_map(|name| name.to_str().map(ToOwned::to_owned))
-        .filter(|name| name.ends_with(".toml"))
-        .filter_map(|name| name.strip_suffix(".toml").map(ToOwned::to_owned))
-        .collect::<Vec<_>>();
-    bundle_names.sort_unstable();
-
-    let mut memberships = Vec::with_capacity(bundle_names.len());
-    for bundle_name in bundle_names {
-        let bundle_path = bundle_configuration_path(configuration_root, &bundle_name);
+    let definitions = effective_bundle_definitions(configuration_root);
+    let mut memberships = Vec::with_capacity(definitions.len());
+    // Keyed by identifier and ordered by it, so an overlay-only bundle is
+    // enumerated and an overlay definition shadowing a base one is enumerated
+    // once, at its overlay path.
+    for (bundle_name, bundle_path) in definitions {
         let bundle_raw = fs::read_to_string(&bundle_path).map_err(|source| {
             ConfigurationError::io(format!("read {}", bundle_path.display()), source)
         })?;

@@ -69,32 +69,27 @@ the same relay-wide socket, locks, ready sentinel, principal store, and peer
 credentials. Runtime instances replace it; until then the configuration root and
 the state root resolve by different rules on purpose.
 
-## Association Override File
+## Overridable Files
 
-Per-worktree overrides are loaded from:
+Every configuration file resolves through the overlay, so overriding one is the
+same operation regardless of which file it is:
 
-- `.auxiliary/configuration/agentmux/overrides/mcp.toml`
+| Logical artifact | Effective lookup |
+|---|---|
+| `mcp.toml` (association) | `<root>/overlay/mcp.toml`, then `<root>/mcp.toml` |
+| `users.toml` (TUI identity) | `<root>/overlay/users.toml`, then `<root>/users.toml` |
+| `ui.toml` (surface defaults) | `<root>/overlay/ui.toml`, then `<root>/ui.toml` |
+| `bundles/<id>.toml` | overlay entry shadows base entry of the same id |
 
-Supported keys:
+`mcp.toml` supports `bundle_name` and `session_name`. It no longer carries a
+configuration-root field: the file lives *under* the configuration root, so
+letting it select that root made the lookup circular. Roots resolve first, and
+the file is read from the resolved root.
 
-- `bundle_name`
-- `session_name`
-- `config_root`
-
-## TUI Session Override File
-
-Per-worktree TUI session overrides are loaded from:
-
-- `.auxiliary/configuration/agentmux/overrides/users.toml`
-
-Supported keys:
-
-- `default-session`
-- `[[sessions]]`
-
-The override is identity-only. UI-surface defaults (`default-bundle`) live in
-`ui.toml`, which is read from the configuration root only and has no per-worktree
-override.
+Layering is whole-file replacement, not deep merge — "what is in effect" stays
+answerable by naming one file. Bundle *directories* are the exception and union
+by identifier, since replacing the directory wholesale would force an overlay
+redefining one bundle to restate every other one.
 
 ## Bootstrap Notes
 

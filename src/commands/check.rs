@@ -8,17 +8,18 @@
 //! offending file path plus field-level detail. The check is read-only — it
 //! never scaffolds or mutates configuration.
 
-use std::{env, fs};
+use std::env;
 
 use crate::{
-    configuration::{ConfigurationError, bundles_configuration_directory, load_ui_configuration},
+    configuration::{
+        ConfigurationError, bundles_configuration_directory, effective_bundle_definitions,
+        load_ui_configuration,
+    },
     relay::{RelayError, load_relay_runtime_configuration, preflight_bundle_configuration},
     runtime::{association::WorkspaceContext, error::RuntimeError},
 };
 
 use super::{CheckArguments, shared};
-
-const BUNDLE_FILE_SUFFIX: &str = ".toml";
 
 pub(super) fn run_agentmux_check(arguments: &[String]) -> Result<(), RuntimeError> {
     if arguments
@@ -33,7 +34,7 @@ pub(super) fn run_agentmux_check(arguments: &[String]) -> Result<(), RuntimeErro
     let current_directory = env::current_dir()
         .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
     let workspace = WorkspaceContext::discover(&current_directory)?;
-    let roots = shared::resolve_roots(&parsed.runtime, &workspace, None)?;
+    let roots = shared::resolve_roots(&parsed.runtime, &workspace)?;
 
     // Validate relay-level configuration before bundle discovery, so a malformed,
     // unknown-field, wrong-type, or invalid-peer relay.toml is reported even when
@@ -50,7 +51,7 @@ pub(super) fn run_agentmux_check(arguments: &[String]) -> Result<(), RuntimeErro
 
     let bundle_names = match parsed.bundle_id.as_deref() {
         Some(bundle_id) => vec![bundle_id.to_string()],
-        None => discover_bundle_names(&roots.configuration_root)?,
+        None => discover_bundle_names(&roots.configuration_root),
     };
     if bundle_names.is_empty() {
         return Err(RuntimeError::validation(
@@ -119,31 +120,17 @@ fn parse_check_arguments(arguments: &[String]) -> Result<CheckArguments, Runtime
     Ok(parsed)
 }
 
-/// Enumerates bundle ids from `<config-root>/bundles/*.toml`. Returns an empty
-/// list (not an error) when the directory is absent, mirroring the relay's own
-/// discovery so an unconfigured root reports "no bundles" rather than failing on
-/// a missing directory.
-fn discover_bundle_names(
-    configuration_root: &std::path::Path,
-) -> Result<Vec<String>, RuntimeError> {
-    let bundles_directory = bundles_configuration_directory(configuration_root);
-    if !bundles_directory.exists() {
-        return Ok(Vec::new());
-    }
-    let mut bundle_names = fs::read_dir(&bundles_directory)
-        .map_err(|source| {
-            RuntimeError::io(
-                format!("read bundle directory {}", bundles_directory.display()),
-                source,
-            )
-        })?
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| entry.path().file_name().map(ToOwned::to_owned))
-        .filter_map(|name| name.to_str().map(ToOwned::to_owned))
-        .filter_map(|name| name.strip_suffix(BUNDLE_FILE_SUFFIX).map(ToOwned::to_owned))
-        .collect::<Vec<_>>();
-    bundle_names.sort_unstable();
-    Ok(bundle_names)
+/// Enumerates bundle ids from the effective bundle set, which unions the
+/// overlay and base directories with overlay entries shadowing base entries.
+///
+/// Returns an empty list (not an error) when neither directory is present,
+/// mirroring the relay's own discovery so an unconfigured root reports "no
+/// bundles" rather than failing on a missing directory. Validating the union is
+/// what makes this command validate what the relay would actually load.
+fn discover_bundle_names(configuration_root: &std::path::Path) -> Vec<String> {
+    effective_bundle_definitions(configuration_root)
+        .into_keys()
+        .collect()
 }
 
 /// Maps a relay pre-flight error onto a runtime error while preserving the

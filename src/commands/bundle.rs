@@ -6,11 +6,8 @@ use crate::{
     configuration::{load_bundle_configuration, load_bundle_group_memberships},
     relay::{RelayRequest, RelayResponse, request_relay},
     runtime::{
-        association::{WorkspaceContext, load_local_mcp_overrides},
-        error::RuntimeError,
-        paths::RelayRuntimePaths,
-        starter::ensure_starter_configuration_layout,
-        tui_session::resolve_tui_session_identity,
+        association::WorkspaceContext, error::RuntimeError, paths::RelayRuntimePaths,
+        starter::ensure_starter_configuration_layout, tui_session::resolve_tui_session_identity,
     },
 };
 
@@ -27,8 +24,7 @@ pub(super) fn run_bundle_command(
     let current_directory = env::current_dir()
         .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
     let workspace = WorkspaceContext::discover(&current_directory)?;
-    let local_overrides = load_local_mcp_overrides(&workspace.workspace_root)?;
-    let roots = shared::resolve_roots(&parsed.runtime, &workspace, local_overrides.as_ref())?;
+    let roots = shared::resolve_roots(&parsed.runtime, &workspace)?;
     ensure_starter_configuration_layout(&roots)?;
 
     let selected_bundles = resolve_selected_bundles(&roots.configuration_root, &parsed.selector)?;
@@ -37,7 +33,6 @@ pub(super) fn run_bundle_command(
     for bundle_name in selected_bundles {
         let resolved_operator = resolve_tui_session_identity(
             &roots.configuration_root,
-            &workspace.workspace_root,
             Some(bundle_name.as_str()),
             None,
         )?;

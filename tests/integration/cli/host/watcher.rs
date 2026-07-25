@@ -469,6 +469,96 @@ fn host_relay_watcher_reloads_modified_bundle_file_at_runtime() {
     assert_eq!(after["principal_id"], "a@alpha");
 }
 
+// An overlay definition appearing over a byte-identical base — and later being
+// removed to reveal it again — changes which file supplies the identifier
+// without changing a single content byte. Both transitions must reload, since
+// the relay now tracks a different file for edits and deletions.
+#[test]
+fn host_relay_watcher_reloads_when_a_byte_identical_overlay_appears_and_is_removed() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        Some(&["dev"]),
+        &["a"],
+        Some(true),
+    );
+    let overlay_bundles = config_root.join("overlay/bundles");
+    fs::create_dir_all(&overlay_bundles).expect("create overlay bundles");
+    let base_bundle = config_root.join("bundles/alpha.toml");
+    let overlay_bundle = overlay_bundles.join("alpha.toml");
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "--configuration-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay");
+    wait_for_relay_ready(&state_root, "alpha");
+    assert_bundle_watch_started(&inscriptions_root);
+
+    let (_appearance_stream, mut appearance_reader, appearance_hello) =
+        relay_hello_keepalive(&state_root, "a@alpha", "socket-trust");
+    fs::copy(&base_bundle, &overlay_bundle).expect("copy base bundle into the overlay");
+    let appearance_eviction = expect_watcher_signal(
+        read_next_frame(&mut appearance_reader),
+        "overlay appearance reload eviction frame",
+        &inscriptions_root,
+    );
+    let after_appearance =
+        poll_hello_first_frame(&state_root, "a@alpha", "socket-trust", |frame| {
+            frame["frame"] == "hello_ack"
+        });
+
+    let (_removal_stream, mut removal_reader, removal_hello) =
+        relay_hello_keepalive(&state_root, "a@alpha", "socket-trust");
+    fs::remove_file(&overlay_bundle).expect("remove the overlay bundle");
+    let removal_eviction = expect_watcher_signal(
+        read_next_frame(&mut removal_reader),
+        "overlay removal reload eviction frame",
+        &inscriptions_root,
+    );
+    let after_removal = poll_hello_first_frame(&state_root, "a@alpha", "socket-trust", |frame| {
+        frame["frame"] == "hello_ack"
+    });
+
+    shutdown_relay_if_present(&state_root, "alpha");
+    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
+        .expect("wait for agentmux host relay");
+    assert!(output.status.success(), "command should succeed");
+
+    assert_eq!(appearance_hello["frame"], "hello_ack");
+    assert_eq!(
+        appearance_eviction["response"]["error"]["code"], "runtime_bundle_reloaded",
+        "an overlay appearing over identical base content must reload: {appearance_eviction:?}"
+    );
+    assert_eq!(after_appearance["frame"], "hello_ack");
+    assert_eq!(removal_hello["frame"], "hello_ack");
+    assert_eq!(
+        removal_eviction["response"]["error"]["code"], "runtime_bundle_reloaded",
+        "removing an overlay to reveal identical base content must reload: {removal_eviction:?}"
+    );
+    assert_eq!(after_removal["frame"], "hello_ack");
+}
+
 // A bundle the operator explicitly took down via `down` is not silently brought
 // back up when its configuration file is edited: the watcher absorbs the new
 // fingerprint and records `relay.bundle.reload_suppressed_downed` instead of

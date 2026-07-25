@@ -6,15 +6,14 @@ use std::{
     path::Path,
 };
 
+use crate::configuration::{
+    BUNDLES_DIRECTORY, CODERS_FILE, POLICIES_FILE, RELAY_FILE, UI_FILE, USERS_FILE,
+    effective_bundle_definitions,
+};
+
 use super::error::RuntimeError;
 use super::paths::RuntimeRoots;
 
-const BUNDLES_DIRECTORY: &str = "bundles";
-const CODERS_FILE: &str = "coders.toml";
-const POLICIES_FILE: &str = "policies.toml";
-const USERS_FILE: &str = "users.toml";
-const UI_FILE: &str = "ui.toml";
-const RELAY_FILE: &str = "relay.toml";
 const EXAMPLE_BUNDLE_FILE: &str = "example.toml";
 
 const CODERS_TEMPLATE: &str = include_str!(concat!(
@@ -83,48 +82,19 @@ pub fn ensure_starter_configuration_layout(roots: &RuntimeRoots) -> Result<(), R
     // all-defaults (effectively empty) file: it documents the schema without
     // activating any control, and the relay loads it as the documented defaults.
     ensure_template_file(&configuration_root.join(RELAY_FILE), RELAY_TEMPLATE)?;
-    if !bundles_directory_has_toml(&bundles_directory)? {
+    // The example bundle is a first-run sample, not durable config: it seeds
+    // only when the operator has supplied no bundles of their own, so deleting
+    // it after setup does not re-seed it on the next start. Bundles union
+    // across layers, which makes an overlay definition operator configuration
+    // exactly as a base one is — seeding beside it would add a live bundle to
+    // the effective set that the operator never wrote.
+    if effective_bundle_definitions(configuration_root).is_empty() {
         ensure_template_file(
             &bundles_directory.join(EXAMPLE_BUNDLE_FILE),
             BUNDLE_TEMPLATE,
         )?;
     }
     Ok(())
-}
-
-/// Reports whether the bundles directory already holds operator bundle config.
-///
-/// The example bundle is a first-run sample, not durable config: it seeds only
-/// when the operator has supplied no bundles of their own. Any `.toml` file in
-/// the directory — including a renamed or hand-authored bundle — counts as real
-/// configuration and suppresses the seed, so deleting `example.toml` after
-/// setup does not re-seed it on the next start.
-fn bundles_directory_has_toml(bundles_directory: &Path) -> Result<bool, RuntimeError> {
-    let entries = fs::read_dir(bundles_directory).map_err(|source| {
-        RuntimeError::io(
-            format!("read bundles directory {}", bundles_directory.display()),
-            source,
-        )
-    })?;
-    for entry in entries {
-        let entry = entry.map_err(|source| {
-            RuntimeError::io(
-                format!(
-                    "read bundles directory entry under {}",
-                    bundles_directory.display()
-                ),
-                source,
-            )
-        })?;
-        if entry
-            .path()
-            .extension()
-            .is_some_and(|extension| extension == "toml")
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 fn ensure_directory(path: &Path) -> Result<(), RuntimeError> {

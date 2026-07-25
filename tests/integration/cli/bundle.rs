@@ -326,6 +326,106 @@ fn up_succeeds_for_operator_policy_with_updown_capability() {
     assert!(host_output.status.success(), "host should succeed");
 }
 
+/// An overlay `policies.toml` must govern the decision the relay actually
+/// enforces, not merely the presets `check` validates. Base policy grants
+/// `updown` and the overlay withholds it, so a permitted outcome here means
+/// authorization consulted a document the operator believed they had replaced.
+#[test]
+fn overlay_policies_govern_relay_authorization() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(false));
+    let overlay = config_root.join("overlay");
+    fs::create_dir_all(&overlay).expect("create overlay");
+    fs::write(
+        overlay.join("policies.toml"),
+        r#"
+format-version = 1
+default = "default"
+
+[[policies]]
+id = "default"
+
+[policies.controls]
+find = "self"
+list = "all"
+look = "self"
+send = "home"
+
+[[policies]]
+id = "operator"
+
+[policies.controls]
+find = "self"
+choose = "home"
+list = "all"
+look = "all"
+raww = "home"
+send = "all"
+updown = "none"
+"#,
+    )
+    .expect("write overlay policies config");
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let host_child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "--no-autostart",
+            "--configuration-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay --no-autostart");
+    wait_for_relay_ready(&state_root, "alpha");
+
+    let attempt = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "up",
+            "alpha",
+            "--configuration-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .output()
+        .expect("run up under overlay policies");
+    assert!(
+        !attempt.status.success(),
+        "overlay policy withholding updown should forbid up; stdout={} stderr={}",
+        String::from_utf8_lossy(&attempt.stdout),
+        String::from_utf8_lossy(&attempt.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&attempt.stderr);
+    assert!(
+        stderr.contains("authorization_forbidden"),
+        "expected authorization_forbidden in stderr, got: {stderr}"
+    );
+
+    shutdown_relay_if_present(&state_root, "alpha");
+    let host_output =
+        process::wait_with_output_bounded(host_child, process::HARNESS_CHILD_WAIT_DEFAULT)
+            .expect("wait for relay host");
+    assert!(host_output.status.success(), "host should succeed");
+}
+
 #[test]
 fn host_relay_summary_json_omits_group_name() {
     let temporary = TempDir::new().expect("temporary");

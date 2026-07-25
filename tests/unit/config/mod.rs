@@ -5,6 +5,7 @@ mod bundle;
 mod coder;
 mod environment;
 mod group;
+mod overlay;
 mod session;
 mod tui;
 mod ui;

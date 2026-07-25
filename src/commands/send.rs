@@ -30,11 +30,10 @@ pub(super) fn run_agentmux_send(arguments: &[String]) -> Result<(), RuntimeError
     let current_directory = env::current_dir()
         .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
     let workspace = WorkspaceContext::discover(&current_directory)?;
-    let roots = shared::resolve_roots(&parsed.runtime, &workspace, None)?;
+    let roots = shared::resolve_roots(&parsed.runtime, &workspace)?;
     ensure_starter_configuration_layout(&roots)?;
     let resolved_session = resolve_tui_session_identity(
         &roots.configuration_root,
-        &workspace.workspace_root,
         parsed.bundle_name.as_deref(),
         parsed.session_selector.as_deref(),
     )?;

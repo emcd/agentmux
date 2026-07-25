@@ -182,7 +182,6 @@ fn applies_cli_precedence_over_local_overrides() {
     let overrides = McpAssociationOverrides {
         bundle_name: Some("override-bundle".to_string()),
         session_name: Some("override-session".to_string()),
-        config_root: None,
     };
     let resolved = resolve_association(
         &McpAssociationCli {
@@ -198,34 +197,51 @@ fn applies_cli_precedence_over_local_overrides() {
 }
 
 #[test]
-fn loads_local_override_file_and_normalizes_relative_config_root() {
+fn loads_association_file_from_the_configuration_root() {
     let temporary = TempDir::new().expect("temporary");
-    let root = temporary.path();
-    let override_directory = root.join(".auxiliary/configuration/agentmux/overrides");
-    std::fs::create_dir_all(&override_directory).expect("create override dir");
+    let configuration_root = temporary.path();
     std::fs::write(
-        override_directory.join("mcp.toml"),
-        "bundle_name = 'agentmux'\nsession_name = 'relay'\nconfig_root = '../shared-config'\n",
+        configuration_root.join("mcp.toml"),
+        "bundle_name = 'agentmux'\nsession_name = 'relay'\n",
     )
-    .expect("write override");
+    .expect("write association file");
 
-    let loaded = load_local_mcp_overrides(root).expect("load overrides");
+    let loaded = load_local_mcp_overrides(configuration_root).expect("load overrides");
     let Some(loaded) = loaded else {
-        panic!("expected override file");
+        panic!("expected association file");
     };
     assert_eq!(loaded.bundle_name.as_deref(), Some("agentmux"));
     assert_eq!(loaded.session_name.as_deref(), Some("relay"));
-    assert_eq!(loaded.config_root, Some(root.join("../shared-config")));
+}
+
+#[test]
+fn association_overlay_shadows_the_base_file() {
+    let temporary = TempDir::new().expect("temporary");
+    let configuration_root = temporary.path();
+    std::fs::create_dir_all(configuration_root.join("overlay")).expect("create overlay");
+    std::fs::write(
+        configuration_root.join("mcp.toml"),
+        "bundle_name = 'base-bundle'\n",
+    )
+    .expect("write base association file");
+    std::fs::write(
+        configuration_root.join("overlay/mcp.toml"),
+        "bundle_name = 'overlay-bundle'\n",
+    )
+    .expect("write overlay association file");
+
+    let loaded = load_local_mcp_overrides(configuration_root)
+        .expect("load overrides")
+        .expect("expected association file");
+    assert_eq!(loaded.bundle_name.as_deref(), Some("overlay-bundle"));
 }
 
 #[test]
 fn rejects_malformed_local_override_file() {
     let temporary = TempDir::new().expect("temporary");
     let root = temporary.path();
-    let override_directory = root.join(".auxiliary/configuration/agentmux/overrides");
-    std::fs::create_dir_all(&override_directory).expect("create override dir");
     std::fs::write(
-        override_directory.join("mcp.toml"),
+        root.join("mcp.toml"),
         "bundle_name = 'agentmux'\nunknown_field = 1\n",
     )
     .expect("write override");

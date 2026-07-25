@@ -26,18 +26,20 @@ pub(super) async fn run_mcp_host(arguments: McpHostArguments) -> Result<(), Runt
     let current_directory = env::current_dir()
         .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
     let workspace = WorkspaceContext::discover(&current_directory)?;
-    let local_overrides = load_local_mcp_overrides(&workspace.workspace_root)?;
     let association_cli = McpAssociationCli {
         bundle_name: arguments.bundle_name.clone(),
         session_name: arguments.session_name.clone(),
     };
+    // Roots resolve before the association file is read, because that file now
+    // lives under the configuration root rather than selecting it.
+    let roots = shared::resolve_roots(&arguments.runtime, &workspace)?;
+    ensure_starter_configuration_layout(&roots)?;
+    let local_overrides = load_local_mcp_overrides(&roots.configuration_root)?;
     let association_is_explicit = association_cli.bundle_name.is_some()
         || association_cli.session_name.is_some()
         || local_overrides.as_ref().is_some_and(|overrides| {
             overrides.bundle_name.is_some() || overrides.session_name.is_some()
         });
-    let roots = shared::resolve_roots(&arguments.runtime, &workspace, local_overrides.as_ref())?;
-    ensure_starter_configuration_layout(&roots)?;
     let mut associated_bundle_name = None::<String>;
     let mut sender_session = None::<String>;
     let mut startup_association_reason = None::<String>;

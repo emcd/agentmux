@@ -34,7 +34,7 @@ pub(super) fn run_agentmux_tui(arguments: &[String]) -> Result<(), RuntimeError>
     let current_directory = env::current_dir()
         .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
     let workspace = WorkspaceContext::discover(&current_directory)?;
-    let roots = shared::resolve_roots(&parsed.runtime, &workspace, None)?;
+    let roots = shared::resolve_roots(&parsed.runtime, &workspace)?;
     ensure_starter_configuration_layout(&roots)?;
     // The interactive TUI does not require a default bundle to launch: a fresh
     // install ships no `default-bundle` (and the example bundle is empty), so an
@@ -48,7 +48,6 @@ pub(super) fn run_agentmux_tui(arguments: &[String]) -> Result<(), RuntimeError>
         .collect::<Vec<_>>();
     let resolved_session = resolve_tui_launch_identity(
         &roots.configuration_root,
-        &workspace.workspace_root,
         parsed.bundle_name.as_deref(),
         parsed.session_selector.as_deref(),
         available_bundles.first().map(String::as_str),
