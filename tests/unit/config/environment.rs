@@ -6,7 +6,7 @@
 
 use tempfile::TempDir;
 
-use agentmux::configuration::{BundleMember, load_bundle_configuration};
+use agentmux::configuration::{BringUpContext, BundleMember, load_bundle_configuration};
 
 use super::helpers::*;
 
@@ -100,12 +100,16 @@ fn distinct_names_union_across_levels() {
     assert_eq!(value_of(member, "ONLY_CODER"), Some("c"));
     assert_eq!(value_of(member, "ONLY_BUNDLE"), Some("b"));
     assert_eq!(value_of(member, "ONLY_SESSION"), Some("s"));
-    // SHARED collapses to a single entry; four distinct names total.
-    assert_eq!(member.environment.len(), 4);
+    // SHARED collapses to a single entry: four distinct declared names, plus
+    // the bring-up context stamped after them.
+    assert_eq!(
+        member.environment.len(),
+        4 + BringUpContext::VARIABLE_NAMES.len()
+    );
     // Declaration order is deterministic: first-appearance position is kept
-    // (coder names, then new bundle names, then new session names).
-    let names: Vec<&str> = member
-        .environment
+    // (coder names, then new bundle names, then new session names). The stamped
+    // context trails the declared layers and is asserted separately.
+    let names: Vec<&str> = member.environment[..4]
         .iter()
         .map(|entry| entry.name.as_str())
         .collect();
@@ -246,7 +250,8 @@ coder = "acp"
 
     let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
     assert_eq!(value_of(&loaded.members[0], "PER_SESSION"), Some("yes"));
-    assert!(loaded.members[1].environment.is_empty());
+    // Member b carries the stamped context but none of a's declared entries.
+    assert_eq!(value_of(&loaded.members[1], "PER_SESSION"), None);
 }
 
 #[test]

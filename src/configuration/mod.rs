@@ -18,10 +18,11 @@ pub use paths::{
     policies_configuration_path, tui_configuration_path, ui_configuration_path,
 };
 pub use types::{
-    AcpChannel, AcpTargetConfiguration, BundleConfiguration, BundleGroupMembership, BundleMember,
-    NameValueEntry, PromptReadinessTemplate, PtyTargetConfiguration, RESERVED_GROUP_ALL,
-    SessionType, TargetConfiguration, TermProtocol, TmuxTargetConfiguration, TuiConfiguration,
-    TuiSession, UiConfiguration,
+    AcpChannel, AcpTargetConfiguration, BUNDLE_ENVIRONMENT_VARIABLE, BringUpContext,
+    BundleConfiguration, BundleGroupMembership, BundleMember, NameValueEntry,
+    PromptReadinessTemplate, PtyTargetConfiguration, RESERVED_GROUP_ALL,
+    SESSION_ENVIRONMENT_VARIABLE, SessionType, TargetConfiguration, TermProtocol,
+    TmuxTargetConfiguration, TuiConfiguration, TuiSession, UiConfiguration,
 };
 
 pub(super) const BUNDLE_SCHEMA_VERSION: u32 = 1;

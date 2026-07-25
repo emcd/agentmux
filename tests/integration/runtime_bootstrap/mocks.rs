@@ -35,6 +35,8 @@ use tokio::{
     process::Command,
 };
 
+use crate::support::process::strip_bring_up_context;
+
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 type RelayResponder = Arc<dyn Fn(&Value) -> Value + Send + Sync>;
@@ -215,6 +217,9 @@ impl McpHarness {
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+        // Dropped before the caller's entries, so `environment` remains the
+        // single source of what this child observes.
+        strip_bring_up_context(&mut command);
         for (key, value) in environment {
             command.env(key, value);
         }

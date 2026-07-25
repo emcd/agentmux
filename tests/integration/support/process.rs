@@ -5,6 +5,33 @@ use std::{
     time::{Duration, Instant},
 };
 
+use agentmux::configuration::BringUpContext;
+
+/// Removes inherited bring-up context from a test child's environment.
+///
+/// Configuration load stamps that context onto every agent-spawning member, so
+/// a developer running this suite from an Agentmux-launched coder carries a
+/// real identity in the test process environment, and every child spawned from
+/// it inherits that identity. A `host mcp` child inheriting one resolves
+/// association against the developer's bundle rather than the fixture's, so a
+/// test covering absent or discovered association resolves a bundle which does
+/// not exist under its temporary configuration root. That outcome depends on
+/// who runs the suite and from where, which is precisely what a test result
+/// must not depend on.
+///
+/// Call this before applying any test-supplied entries, so a child observes
+/// context only where a test sets it deliberately. Keyed off the crate's own
+/// enumeration, so extending the context cannot silently desync the sanitizer
+/// from what the loader stamps.
+pub(crate) fn strip_bring_up_context(
+    command: &mut tokio::process::Command,
+) -> &mut tokio::process::Command {
+    for name in BringUpContext::VARIABLE_NAMES {
+        command.env_remove(name);
+    }
+    command
+}
+
 /// Default budget for waiting on a test-spawned child to exit. Sized
 /// so that even on heavily loaded CI a stuck child fails the test
 /// quickly rather than hanging the suite. On timeout, the child is

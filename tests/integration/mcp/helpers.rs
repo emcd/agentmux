@@ -18,6 +18,8 @@ use tokio::{
     process::Command,
 };
 
+use crate::support::process::strip_bring_up_context;
+
 pub(crate) const READ_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const BUNDLE_NAME: &str = "party";
 pub(crate) const SENDER_SESSION: &str = "alpha";
@@ -299,6 +301,7 @@ impl McpHarness {
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null());
+        strip_bring_up_context(&mut command);
 
         let mut child = command.spawn().expect("spawn agentmux host mcp");
         let stdin = child.stdin.take().expect("take mcp stdin");
@@ -329,6 +332,9 @@ impl McpHarness {
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null());
+        // Unassociated is the whole point of this harness: inherited context
+        // would silently associate it and void the test.
+        strip_bring_up_context(&mut command);
 
         let mut child = command
             .spawn()

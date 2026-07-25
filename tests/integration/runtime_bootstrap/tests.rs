@@ -27,6 +27,7 @@ use super::mocks::{
     FakeRelay, McpHarness, decode_tool_payload, hook_git_environment, write_bundle_configuration,
     write_bundle_configuration_with_directories,
 };
+use crate::support::process::strip_bring_up_context;
 
 #[test]
 fn concurrent_bootstrap_spawns_single_relay() {
@@ -155,7 +156,8 @@ async fn mcp_explicit_unknown_bundle_still_fails_startup() {
     fs::create_dir_all(&workspace).expect("create workspace");
     write_bundle_configuration(&config_root, "party", &["alpha"]);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_agentmux"));
+    command
         .current_dir(&workspace)
         .arg("host")
         .arg("mcp")
@@ -164,10 +166,9 @@ async fn mcp_explicit_unknown_bundle_still_fails_startup() {
         .arg("--config-directory")
         .arg(config_root.to_str().expect("utf8 config path"))
         .arg("--state-directory")
-        .arg(state_root.to_str().expect("utf8 state path"))
-        .output()
-        .await
-        .expect("run agentmux host mcp");
+        .arg(state_root.to_str().expect("utf8 state path"));
+    strip_bring_up_context(&mut command);
+    let output = command.output().await.expect("run agentmux host mcp");
     assert!(
         !output.status.success(),
         "explicit unknown bundle should fail startup, stdout={}, stderr={}",

@@ -1,18 +1,18 @@
 ## 1. Bring-up context substrate
 
-- [ ] 1.1 Add the context environment variable constants in `configuration`, so
+- [x] 1.1 Add the context environment variable constants in `configuration`, so
   `runtime` consumes them without a `configuration` to `runtime` back-edge
-- [ ] 1.2 Stamp context onto each coder-backed member's merged environment at
+- [x] 1.2 Stamp context onto each coder-backed member's merged environment at
   configuration load, upsert-if-absent, skipped for `ui`/`pubsub` members
-- [ ] 1.3 Shape the stamp as general context propagation rather than a fixed
+- [x] 1.3 Shape the stamp as general context propagation rather than a fixed
   bundle/session pair, so the deferred runtime-instance work can extend it
-- [ ] 1.4 Add a shared test helper that strips inherited context from any
+- [x] 1.4 Add a shared test helper that strips inherited context from any
   spawned test child, applied before test-supplied entries, at every
   `host mcp` launch seam
-- [ ] 1.5 Loader tests: two members in different bundles sharing a default
+- [x] 1.5 Loader tests: two members in different bundles sharing a default
   environment each carry their own context; operator-declared values preserved;
   coder-less members skipped
-- [ ] 1.6 Verify the suite is green both with a clean environment and with
+- [x] 1.6 Verify the suite is green both with a clean environment and with
   context set in the parent process
 
 ## 2. Configuration root resolution

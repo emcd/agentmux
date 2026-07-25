@@ -23,8 +23,8 @@ use super::{
         validate_environment_entries, validate_pty_target, validate_tmux_target,
     },
     types::{
-        BundleConfiguration, BundleGroupMembership, BundleMember, NameValueEntry, TuiConfiguration,
-        TuiSession, UiConfiguration,
+        BringUpContext, BundleConfiguration, BundleGroupMembership, BundleMember, NameValueEntry,
+        TuiConfiguration, TuiSession, UiConfiguration,
     },
 };
 
@@ -385,11 +385,23 @@ fn validate_loaded_configuration(
             .and_then(|coder_id| coders.get(coder_id))
             .map(|coder| coder.environment.as_slice())
             .unwrap_or_default();
-        let environment = merge_environment(
+        let mut environment = merge_environment(
             coder_environment,
             &bundle_file.environment,
             &session.environment,
         );
+        // Stamped after the operator-declared layers merge, so an
+        // operator-declared entry of the same name survives. Targets which
+        // spawn no agent carry no context, since nothing would inherit it.
+        if target.spawns_agent() {
+            stamp_context_environment(
+                &mut environment,
+                &BringUpContext {
+                    bundle_name: expected_bundle_name,
+                    session_id,
+                },
+            );
+        }
 
         members.push(BundleMember {
             id: session_id.to_string(),
@@ -558,4 +570,20 @@ fn merge_environment(
         }
     }
     merged
+}
+
+/// Upserts-if-absent each entry of a bring-up `context` into a member's merged
+/// spawn `environment`. An operator-declared entry of the same name is left
+/// untouched, so declaring one of these names in configuration overrides what
+/// bring-up would otherwise supply.
+fn stamp_context_environment(environment: &mut Vec<NameValueEntry>, context: &BringUpContext<'_>) {
+    for (name, value) in context.environment_entries() {
+        if environment.iter().any(|entry| entry.name == name) {
+            continue;
+        }
+        environment.push(NameValueEntry {
+            name: name.to_string(),
+            value: value.to_string(),
+        });
+    }
 }
