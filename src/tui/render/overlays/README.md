@@ -1,0 +1,68 @@
+# TUI Render Overlays
+
+This directory holds the modal overlays drawn on top of the main
+pane by `src/tui/render/frame.rs`. Each overlay is a single
+`render_<name>_overlay` function invoked once per redraw when its
+open flag is set on `AppState`.
+
+The overlay surfaces are governed by `openspec/specs/tui-surface/spec.md`
+(Communication/Interaction mode interactions, picker behavior, and
+event-overlay visibility).
+
+## Directory layout
+
+- `mod.rs`
+  - Pure directory module: only `pub(super) mod` declarations for the
+    three overlay files. No re-exports; `frame.rs` imports each
+    render function by name
+    (`use super::overlays::{events::render_events_overlay,
+    help::render_help_overlay, picker::render_picker_overlay};` —
+    `frame.rs:12-13`).
+- `picker.rs`
+  - Unified bundle+session picker overlay. Side-by-side columns
+    (bundles on the left, the active bundle's sessions on the right)
+    with a column-scoped filter and per-row readiness styling.
+    Opens focused on the session column via `F2` and on the bundle
+    column via `F5`. The bundle column drives active-bundle
+    switching; selecting a different bundle closes the picker
+    overlay and rebinds the active bundle context in the same
+    window. Bundle status header is one line of `key=value`
+    summary (`bundle.hosted`, `bundle.state`, `bundle.startup_health`,
+    reason code) plus capped per-session startup failure lines
+    (header `startup_failure_count` carries the true total; see
+    `STARTUP_FAILURE_PICKER_MAX_LINES`).
+- `events.rs`
+  - Events overlay. Two stacked panes: pending choices (target,
+    kind, `enqueued_at`) and a delivery-events log. Used by `F3`
+    from either workbench mode.
+- `help.rs`
+  - Help overlay. Two-column keybinding reference covering modes,
+    Communication-mode editing, Interaction-mode actions, and
+    picker navigation. Triggered by `F1` from anywhere.
+
+## Open / close protocol
+
+Each overlay's open flag is owned by `AppState` (`help_overlay_open`,
+`picker_open`, `events_overlay_open`) and is toggled by the
+`src/tui/state/compose/` helpers. The render layer only reads
+these flags. Opening an overlay clears the other two open flags
+before flipping its own:
+
+- `open_picker_focused` (`state/compose/pickers.rs:17`) clears
+  `events_overlay_open` and `help_overlay_open`.
+- `toggle_events_overlay` (`state/compose/pickers.rs:63`) calls
+  `close_picker` and clears `help_overlay_open`.
+- `toggle_help_overlay` (`state/compose/pickers.rs:72`) calls
+  `close_picker` and clears `events_overlay_open`.
+
+These three helpers are the only paths that open an overlay.
+
+## Cross-cutting invariants
+
+- Overlays are drawn in `help` → `picker` → `events` order on top
+  of the per-mode main pane; painter's algorithm means a later
+  overlay paints over an earlier one.
+- Each overlay begins with `frame.render_widget(Clear, popup)` to
+  wipe any underlying content within its popup area.
+- The picker overlay is the only overlay that paints scrollable
+  list content; the others render a static layout.
