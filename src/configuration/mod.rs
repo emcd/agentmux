@@ -5,6 +5,7 @@ mod fields;
 mod loaders;
 mod paths;
 mod raw;
+mod roots;
 mod targets;
 mod types;
 
@@ -19,6 +20,7 @@ pub use paths::{
     effective_configuration_path, policies_configuration_path, relay_configuration_path,
     tui_configuration_path, ui_configuration_path,
 };
+pub use roots::{ConfigurationRoots, ConfigurationRootsError, LAYER_SEPARATOR};
 pub use types::{
     AcpChannel, AcpTargetConfiguration, BUNDLE_ENVIRONMENT_VARIABLE, BringUpContext,
     BundleConfiguration, BundleGroupMembership, BundleMember, NameValueEntry,
