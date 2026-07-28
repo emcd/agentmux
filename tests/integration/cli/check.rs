@@ -16,6 +16,82 @@ fn config_and_state(temporary: &TempDir) -> (std::path::PathBuf, std::path::Path
 }
 
 #[test]
+fn check_configuration_rejects_a_supplied_layer_that_does_not_exist() {
+    // The failure this guards is silent, not loud: the base layer is entirely
+    // valid, so without a layer-existence check the command validates it, exits
+    // zero, and reports the deployment healthy while every override the operator
+    // wrote is inert. Pre-flight is the command run to catch exactly that.
+    let temporary = TempDir::new().expect("temporary");
+    let (config_root, state_root) = config_and_state(&temporary);
+    write_bundle_configuration(&config_root, "alpha", None, &["a"]);
+    let absent_override = temporary.path().join("override-typo");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "check",
+            "configuration",
+            "--configuration-directory",
+            absent_override.to_str().expect("override utf8"),
+            "--configuration-directory",
+            config_root.to_str().expect("config root utf8"),
+            "--state-directory",
+            state_root.to_str().expect("state root utf8"),
+        ])
+        .output()
+        .expect("run agentmux check configuration");
+
+    assert!(
+        !output.status.success(),
+        "a missing supplied layer must fault rather than resolve from the layers below it; \
+         stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("validation_configuration_root_absent"),
+        "expected validation_configuration_root_absent, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("override-typo"),
+        "the reported path must name the layer at fault: {stderr}"
+    );
+}
+
+#[test]
+fn check_configuration_accepts_a_layer_list_whose_layers_all_exist() {
+    // The companion to the test above: the existence check must not reject a
+    // legitimate multi-layer list, including a layer that contributes no bundles.
+    let temporary = TempDir::new().expect("temporary");
+    let (config_root, state_root) = config_and_state(&temporary);
+    write_bundle_configuration(&config_root, "alpha", None, &["a"]);
+    let override_layer = temporary.path().join("override");
+    fs::create_dir_all(&override_layer).expect("create override layer");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "check",
+            "configuration",
+            "--configuration-directory",
+            override_layer.to_str().expect("override utf8"),
+            "--configuration-directory",
+            config_root.to_str().expect("config root utf8"),
+            "--state-directory",
+            state_root.to_str().expect("state root utf8"),
+        ])
+        .output()
+        .expect("run agentmux check configuration");
+
+    assert!(
+        output.status.success(),
+        "an existing empty layer must not fault: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("ok: alpha"), "unexpected stdout: {stdout}");
+}
+
+#[test]
 fn check_configuration_accepts_valid_bundle() {
     let temporary = TempDir::new().expect("temporary");
     let (config_root, state_root) = config_and_state(&temporary);

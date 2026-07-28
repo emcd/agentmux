@@ -1,10 +1,8 @@
 //! TUI session configuration discovery and precedence resolution.
 
-use std::path::Path;
-
 use crate::configuration::{
-    ConfigurationError, TuiConfiguration, load_policy_ids, load_tui_configuration,
-    load_ui_configuration,
+    ConfigurationError, ConfigurationRoots, TuiConfiguration, load_policy_ids,
+    load_tui_configuration, load_ui_configuration,
 };
 
 use super::error::RuntimeError;
@@ -23,7 +21,7 @@ pub struct ResolvedTuiSession {
 
 /// Loads active TUI configuration.
 ///
-/// Per-tree overrides arrive through the configuration overlay like every other
+/// Overrides arrive through the configuration layers like every other
 /// configuration file, rather than through a bespoke lookup rooted at the
 /// working tree. That lookup was gated on build profile, so this override was
 /// inert in release builds while its sibling in the same directory was not.
@@ -32,9 +30,9 @@ pub struct ResolvedTuiSession {
 ///
 /// Returns `RuntimeError` when configuration files are malformed.
 pub fn load_active_tui_configuration(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
 ) -> Result<Option<TuiConfiguration>, RuntimeError> {
-    load_tui_configuration(configuration_root)
+    load_tui_configuration(configuration_roots)
         .map_err(|source| map_configuration_error(source, "load TUI configuration"))
 }
 
@@ -51,15 +49,15 @@ pub fn load_active_tui_configuration(
 /// Returns validation errors for missing selectors, unknown sessions, and
 /// unknown policy references.
 pub fn resolve_tui_session_identity(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     explicit_bundle: Option<&str>,
     explicit_session: Option<&str>,
 ) -> Result<ResolvedTuiSession, RuntimeError> {
-    let configuration = load_active_tui_configuration(configuration_root)?;
-    let ui_default_bundle = load_ui_default_bundle(configuration_root)?;
+    let configuration = load_active_tui_configuration(configuration_roots)?;
+    let ui_default_bundle = load_ui_default_bundle(configuration_roots)?;
     let bundle_name = resolve_bundle_name(ui_default_bundle.as_deref(), explicit_bundle)?;
     finish_tui_session(
-        configuration_root,
+        configuration_roots,
         configuration.as_ref(),
         bundle_name,
         explicit_session,
@@ -82,20 +80,20 @@ pub fn resolve_tui_session_identity(
 /// Returns validation errors for missing/unknown sessions and unknown policy
 /// references — never for an absent bundle.
 pub fn resolve_tui_launch_identity(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     explicit_bundle: Option<&str>,
     explicit_session: Option<&str>,
     fallback_bundle: Option<&str>,
 ) -> Result<ResolvedTuiSession, RuntimeError> {
-    let configuration = load_active_tui_configuration(configuration_root)?;
-    let ui_default_bundle = load_ui_default_bundle(configuration_root)?;
+    let configuration = load_active_tui_configuration(configuration_roots)?;
+    let ui_default_bundle = load_ui_default_bundle(configuration_roots)?;
     let bundle_name = resolve_browsing_bundle(
         ui_default_bundle.as_deref(),
         explicit_bundle,
         fallback_bundle,
     );
     finish_tui_session(
-        configuration_root,
+        configuration_roots,
         configuration.as_ref(),
         bundle_name,
         explicit_session,
@@ -106,7 +104,7 @@ pub fn resolve_tui_launch_identity(
 /// and lenient bundle-resolution entry points, then assembles the result around
 /// an already-resolved `bundle_name`.
 fn finish_tui_session(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     configuration: Option<&TuiConfiguration>,
     bundle_name: String,
     explicit_session: Option<&str>,
@@ -114,7 +112,7 @@ fn finish_tui_session(
     let selector = resolve_session_selector(configuration, explicit_session)?;
     let selected = resolve_selected_session(configuration, selector.as_str())?;
     validate_sender_shape(selected.id.as_str())?;
-    validate_selected_policy(configuration_root, selected.policy.as_str())?;
+    validate_selected_policy(configuration_roots, selected.policy.as_str())?;
     Ok(ResolvedTuiSession {
         namespace: bundle_name,
         session_selector: selector,
@@ -124,17 +122,18 @@ fn finish_tui_session(
     })
 }
 
-/// Loads the `ui.toml` `default-bundle` from the configuration root.
+/// Loads the `ui.toml` `default-bundle` from the configuration layers.
 ///
-/// Resolved through the configuration overlay like every other configuration
-/// file, so a per-tree overlay can supply surface defaults. A missing file
-/// resolves to `None`.
+/// Resolved through the layer list like every other configuration file, so an
+/// earlier layer can supply surface defaults. A missing file resolves to `None`.
 ///
 /// # Errors
 ///
 /// Returns `RuntimeError` when `ui.toml` exists but is malformed.
-fn load_ui_default_bundle(configuration_root: &Path) -> Result<Option<String>, RuntimeError> {
-    Ok(load_ui_configuration(configuration_root)
+fn load_ui_default_bundle(
+    configuration_roots: &ConfigurationRoots,
+) -> Result<Option<String>, RuntimeError> {
+    Ok(load_ui_configuration(configuration_roots)
         .map_err(|source| map_configuration_error(source, "load UI configuration"))?
         .and_then(|configuration| configuration.default_bundle))
 }
@@ -212,10 +211,10 @@ fn resolve_selected_session<'a>(
 }
 
 fn validate_selected_policy(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     policy_id: &str,
 ) -> Result<(), RuntimeError> {
-    let policy_ids = load_policy_ids(configuration_root)
+    let policy_ids = load_policy_ids(configuration_roots)
         .map_err(|source| map_configuration_error(source, "load policy presets"))?;
     if policy_ids.contains(policy_id) {
         return Ok(());

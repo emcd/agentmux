@@ -1,3 +1,4 @@
+use agentmux::configuration::ConfigurationRoots;
 use std::{
     io::{BufRead, BufReader, Write},
     os::unix::{io::AsRawFd, net::UnixStream},
@@ -47,7 +48,7 @@ mod robustness;
 #[path = "relay_stream/routing/mod.rs"]
 mod routing;
 
-fn write_bundle_configuration(temporary: &TempDir, bundle_name: &str) -> PathBuf {
+fn write_bundle_configuration(temporary: &TempDir, bundle_name: &str) -> ConfigurationRoots {
     let configuration_root = temporary.path().join("config");
     let bundles_directory = configuration_root.join("bundles");
     std::fs::create_dir_all(&bundles_directory).expect("create bundles directory");
@@ -101,7 +102,7 @@ coder = "shell"
 "#,
     )
     .expect("write bundle configuration");
-    configuration_root
+    ConfigurationRoots::single(configuration_root)
 }
 
 // Derives a short, unique `@GLOBAL` operator id from a (per-test unique) bundle
@@ -118,10 +119,14 @@ fn global_user_id(bundle_name: &str) -> String {
 
 // Writes a TUI configuration declaring one `@GLOBAL` operator whose id is unique
 // per test (see `global_user_id`).
-fn write_tui_configuration(configuration_root: &Path, policy: &str, bundle_name: &str) {
+fn write_tui_configuration(
+    configuration_roots: &ConfigurationRoots,
+    policy: &str,
+    bundle_name: &str,
+) {
     let global_id = global_user_id(bundle_name);
     std::fs::write(
-        configuration_root.join("users.toml"),
+        configuration_roots.base_layer().join("users.toml"),
         format!(
             r#"
 default-session = "{global_id}"
@@ -137,9 +142,9 @@ policy = "{policy}"
     .expect("write users configuration");
 }
 
-fn write_policies_with_choose(configuration_root: &Path, choose: &str) {
+fn write_policies_with_choose(configuration_roots: &ConfigurationRoots, choose: &str) {
     std::fs::write(
-        configuration_root.join("policies.toml"),
+        configuration_roots.base_layer().join("policies.toml"),
         format!(
             r#"
 format-version = 1
@@ -163,9 +168,9 @@ send = "home"
 // Overwrites the policy artifact so the `default` preset's `send` control uses
 // the given scope, leaving the other controls at workable defaults. Cross-bundle
 // send requires `all`; `home` permits only same-bundle delivery.
-fn write_policies_with_send(configuration_root: &Path, send: &str) {
+fn write_policies_with_send(configuration_roots: &ConfigurationRoots, send: &str) {
     std::fs::write(
-        configuration_root.join("policies.toml"),
+        configuration_roots.base_layer().join("policies.toml"),
         format!(
             r#"
 format-version = 1
@@ -189,9 +194,9 @@ send = "{send}"
 // the given scope. A relay-wide (`@GLOBAL`) principal reaching a bundle is
 // cross-namespace, so `all` is required there; `home` permits only
 // same-bundle raww.
-fn write_policies_with_raww(configuration_root: &Path, raww: &str) {
+fn write_policies_with_raww(configuration_roots: &ConfigurationRoots, raww: &str) {
     std::fs::write(
-        configuration_root.join("policies.toml"),
+        configuration_roots.base_layer().join("policies.toml"),
         format!(
             r#"
 format-version = 1
@@ -215,9 +220,9 @@ send = "home"
 // Overwrites the policy artifact so the `default` preset's `list` control uses
 // the given scope. Cross-bundle list requires `all`; `home` permits only
 // same-bundle enumeration.
-fn write_policies_with_list(configuration_root: &Path, list: &str) {
+fn write_policies_with_list(configuration_roots: &ConfigurationRoots, list: &str) {
     std::fs::write(
-        configuration_root.join("policies.toml"),
+        configuration_roots.base_layer().join("policies.toml"),
         format!(
             r#"
 format-version = 1
@@ -287,19 +292,19 @@ fn read_until_event_type(reader: &mut BufReader<UnixStream>, event_type: &str) -
 }
 
 fn spawn_relay_connection(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
 ) -> (UnixStream, thread::JoinHandle<()>) {
-    spawn_relay_connection_with_enforcement(configuration_root, bundle_paths, false)
+    spawn_relay_connection_with_enforcement(configuration_roots, bundle_paths, false)
 }
 
 fn spawn_relay_connection_with_enforcement(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     require_session_credentials: bool,
 ) -> (UnixStream, thread::JoinHandle<()>) {
     let (server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
-    let root = configuration_root.to_path_buf();
+    let root = configuration_roots.clone();
     let state_root = bundle_paths.state_root.clone();
     let catalog = single_bundle_catalog(bundle_paths);
     let join_handle = thread::spawn(move || {
@@ -327,8 +332,8 @@ fn multi_bundle_catalog(bundle_paths: &[BundleRuntimePaths]) -> BundleCatalog {
 // target. Cross-bundle delivery to a UI session is observable on a registered
 // relay stream (unlike a tmux member, which needs a live pane), so this backs
 // the cross-namespace fan-out delivery assertions.
-fn write_ui_bundle(configuration_root: &Path, bundle_name: &str) {
-    let bundles_directory = configuration_root.join("bundles");
+fn write_ui_bundle(configuration_roots: &ConfigurationRoots, bundle_name: &str) {
+    let bundles_directory = configuration_roots.base_layer().join("bundles");
     std::fs::write(
         bundles_directory.join(format!("{bundle_name}.toml")),
         r#"
@@ -350,8 +355,8 @@ directory = "/tmp"
 // (`can_be_looked`/`can_be_written` = true), so a cross-bundle request reaches
 // the authorization stage — the gate fires pre-authorization and would
 // otherwise short-circuit a UI peer before the policy outcome is observable.
-fn write_tmux_bundle(configuration_root: &Path, bundle_name: &str) {
-    let bundles_directory = configuration_root.join("bundles");
+fn write_tmux_bundle(configuration_roots: &ConfigurationRoots, bundle_name: &str) {
+    let bundles_directory = configuration_roots.base_layer().join("bundles");
     std::fs::write(
         bundles_directory.join(format!("{bundle_name}.toml")),
         r#"
@@ -370,12 +375,12 @@ coder = "shell"
 // Spawns a connection served against an explicit (typically multi-bundle)
 // catalog, so a Send can fan out to peer bundles the connection is not bound to.
 fn spawn_relay_connection_with_catalog(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     state_root: &Path,
     catalog: BundleCatalog,
 ) -> (UnixStream, thread::JoinHandle<()>) {
     let (server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
-    let root = configuration_root.to_path_buf();
+    let root = configuration_roots.clone();
     let state = state_root.to_path_buf();
     let join_handle = thread::spawn(move || {
         run_serve_connection_with_enforcement(server_stream, root, state, catalog, false)
@@ -391,7 +396,7 @@ fn spawn_relay_connection_with_catalog(
 // fresh context per connection and cannot exercise cross-connection
 // serialization.
 fn shared_serve_context(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     state_root: &Path,
     catalog: BundleCatalog,
 ) -> std::sync::Arc<agentmux::relay::ConnectionServeContext> {
@@ -399,7 +404,7 @@ fn shared_serve_context(
         agentmux::relay::PeerConnectionManager::from_configuration(state_root, &[]),
     );
     std::sync::Arc::new(agentmux::relay::ConnectionServeContext::new(
-        configuration_root.to_path_buf(),
+        configuration_roots.clone(),
         state_root.to_path_buf(),
         catalog,
         peer_connection_manager,
@@ -444,13 +449,13 @@ fn spawn_relay_connection_on_context(
 // reader yields). Matches the production runtime flavor.
 fn run_serve_connection(
     server_stream: UnixStream,
-    configuration_root: PathBuf,
+    configuration_roots: ConfigurationRoots,
     state_root: PathBuf,
     bundle_catalog: BundleCatalog,
 ) -> Result<(), std::io::Error> {
     run_serve_connection_with_enforcement(
         server_stream,
-        configuration_root,
+        configuration_roots,
         state_root,
         bundle_catalog,
         false,
@@ -459,14 +464,14 @@ fn run_serve_connection(
 
 fn run_serve_connection_with_enforcement(
     server_stream: UnixStream,
-    configuration_root: PathBuf,
+    configuration_roots: ConfigurationRoots,
     state_root: PathBuf,
     bundle_catalog: BundleCatalog,
     require_session_credentials: bool,
 ) -> Result<(), std::io::Error> {
     run_serve_connection_with_slot(
         server_stream,
-        configuration_root,
+        configuration_roots,
         state_root,
         bundle_catalog,
         require_session_credentials,
@@ -479,7 +484,7 @@ fn run_serve_connection_with_enforcement(
 // drain report from outside the connection thread.
 fn run_serve_connection_with_slot(
     server_stream: UnixStream,
-    configuration_root: PathBuf,
+    configuration_roots: ConfigurationRoots,
     state_root: PathBuf,
     bundle_catalog: BundleCatalog,
     require_session_credentials: bool,
@@ -498,7 +503,7 @@ fn run_serve_connection_with_slot(
             agentmux::relay::PeerConnectionManager::from_configuration(&state_root, &[]),
         );
         let serve_context = agentmux::relay::ConnectionServeContext::new(
-            configuration_root,
+            configuration_roots,
             state_root,
             bundle_catalog,
             peer_connection_manager,
@@ -549,11 +554,11 @@ fn shutdown_stream(stream: &UnixStream, context: &str) {
 fn stream_request_before_hello_is_rejected() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_before_hello";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let (mut client_stream, join_handle) =
-        spawn_relay_connection(&configuration_root, &bundle_paths);
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
 
@@ -580,11 +585,11 @@ fn stream_request_before_hello_is_rejected() {
 fn stream_hello_acknowledges_and_allows_request() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_allow_request";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let (mut client_stream, join_handle) =
-        spawn_relay_connection(&configuration_root, &bundle_paths);
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
 
@@ -626,17 +631,17 @@ fn stream_hello_acknowledges_and_allows_request() {
 fn duplicate_live_hello_claim_is_rejected_with_identity_conflict() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_reconnect";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
 
     let (mut first_client, first_handle) =
-        spawn_relay_connection(&configuration_root, &bundle_paths);
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let first_read_stream = first_client.try_clone().expect("clone first stream");
     let mut first_reader = BufReader::new(first_read_stream);
 
     let (mut second_client, second_handle) =
-        spawn_relay_connection(&configuration_root, &bundle_paths);
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let second_read_stream = second_client.try_clone().expect("clone second stream");
     let mut second_reader = BufReader::new(second_read_stream);
 
@@ -699,12 +704,12 @@ fn duplicate_live_hello_claim_is_rejected_with_identity_conflict() {
 fn hello_claim_is_accepted_after_prior_owner_disconnects() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_reconnect_after_disconnect";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
 
     let (mut first_client, first_handle) =
-        spawn_relay_connection(&configuration_root, &bundle_paths);
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let first_read_stream = first_client.try_clone().expect("clone first stream");
     let mut first_reader = BufReader::new(first_read_stream);
 
@@ -723,7 +728,7 @@ fn hello_claim_is_accepted_after_prior_owner_disconnects() {
     first_handle.join().expect("join first relay thread");
 
     let (mut second_client, second_handle) =
-        spawn_relay_connection(&configuration_root, &bundle_paths);
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let second_read_stream = second_client.try_clone().expect("clone second stream");
     let mut second_reader = BufReader::new(second_read_stream);
     send_json(

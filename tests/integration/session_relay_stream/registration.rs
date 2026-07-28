@@ -14,11 +14,11 @@ use super::*;
 fn relay_accepts_hello_for_configured_bundle_member() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_operator_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots = write_operator_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
-    let (mut client, handle) = spawn_relay_stream(&configuration_root, &bundle_paths);
+    let (mut client, handle) = spawn_relay_stream(&configuration_roots, &bundle_paths);
     let reader_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(reader_stream);
 

@@ -15,7 +15,7 @@ use tokio::{
 };
 
 use crate::{
-    configuration::SessionType,
+    configuration::{ConfigurationRoots, SessionType},
     runtime::{inscriptions::emit_inscription, paths::BundleRuntimePaths},
 };
 
@@ -218,7 +218,7 @@ impl BundleCatalog {
 /// the shared handles.
 #[derive(Clone, Debug)]
 pub struct ConnectionServeContext {
-    configuration_root: PathBuf,
+    configuration_roots: ConfigurationRoots,
     state_root: PathBuf,
     bundle_catalog: BundleCatalog,
     peer_connection_manager: Arc<PeerConnectionManager>,
@@ -243,7 +243,7 @@ impl ConnectionServeContext {
     /// is cloned per accepted connection.
     #[must_use]
     pub fn new(
-        configuration_root: PathBuf,
+        configuration_roots: ConfigurationRoots,
         state_root: PathBuf,
         bundle_catalog: BundleCatalog,
         peer_connection_manager: Arc<PeerConnectionManager>,
@@ -255,7 +255,7 @@ impl ConnectionServeContext {
         relay_aliases.sort();
         relay_aliases.dedup();
         Self {
-            configuration_root,
+            configuration_roots,
             state_root,
             bundle_catalog,
             peer_connection_manager,
@@ -266,11 +266,11 @@ impl ConnectionServeContext {
         }
     }
 
-    /// Configuration root the catalog was built against, used by the serve phase
-    /// to spawn per-configuration-directory watchers without holding a `RuntimeRoots`.
+    /// Configuration layers the catalog was built against, used by the serve
+    /// phase to spawn watchers without holding a `RuntimeRoots`.
     #[must_use]
-    pub fn configuration_root(&self) -> &Path {
-        &self.configuration_root
+    pub fn configuration_roots(&self) -> &ConfigurationRoots {
+        &self.configuration_roots
     }
 
     /// State root the catalog was built against; carried alongside the
@@ -431,7 +431,7 @@ async fn serve_connection_frames(
     // Shared-ownership copies of the root paths so each request dispatch can be
     // moved onto the blocking pool (`'static + Send`) without re-copying the
     // path data per request.
-    let configuration_root: Arc<Path> = Arc::from(context.configuration_root.as_path());
+    let configuration_roots = Arc::new(context.configuration_roots.clone());
     let state_root: Arc<Path> = Arc::from(context.state_root.as_path());
     let mut bound_bundle: Option<BundleRuntimePaths> = None;
     // Verified principal_id of the connection, set on a store-backed Hello and
@@ -506,7 +506,7 @@ async fn serve_connection_frames(
         match frame {
             IncomingFrame::Hello(hello) => {
                 let binding = match resolve_hello_binding(
-                    &configuration_root,
+                    &configuration_roots,
                     &state_root,
                     bundle_catalog,
                     require_session_credentials,
@@ -569,7 +569,7 @@ async fn serve_connection_frames(
                 )?;
                 if binding.session_type == SessionType::Ui
                     && let Err(error) = emit_registration_choices_snapshots(
-                        &configuration_root,
+                        &configuration_roots,
                         bundle_catalog,
                         &binding,
                     )
@@ -662,13 +662,13 @@ async fn serve_connection_frames(
                 ) {
                     let requester_principal_id = full_requester_principal_id(active_registration);
                     let response = {
-                        let configuration_root = Arc::clone(&configuration_root);
+                        let configuration_roots = Arc::clone(&configuration_roots);
                         let state_root = Arc::clone(&state_root);
                         let identity_admin_lock = Arc::clone(&context.identity_admin_lock);
                         dispatch_on_blocking_pool(move || {
                             dispatch_identity_admin(
                                 request,
-                                &configuration_root,
+                                &configuration_roots,
                                 &state_root,
                                 requester_principal_id.as_str(),
                                 &identity_admin_lock,
@@ -760,11 +760,11 @@ async fn serve_connection_frames(
                         .clone()
                         .unwrap_or_else(|| enumerate_paths.clone());
                     let response = {
-                        let configuration_root = Arc::clone(&configuration_root);
+                        let configuration_roots = Arc::clone(&configuration_roots);
                         dispatch_on_blocking_pool(move || {
                             dispatch_list(
                                 request,
-                                &configuration_root,
+                                &configuration_roots,
                                 &dispatch_paths,
                                 &enumerate_paths,
                             )
@@ -793,14 +793,14 @@ async fn serve_connection_frames(
                         ingress_scope: ingress_scope.clone(),
                     };
                     let response = {
-                        let configuration_root = Arc::clone(&configuration_root);
+                        let configuration_roots = Arc::clone(&configuration_roots);
                         let bound_bundle = bound_bundle.clone();
                         let bundle_catalog = bundle_catalog.clone();
                         let peer_connection_manager = Arc::clone(peer_connection_manager);
                         dispatch_on_blocking_pool(move || {
                             dispatch_send(
                                 request,
-                                &configuration_root,
+                                &configuration_roots,
                                 bound_bundle.as_ref(),
                                 Some(principal),
                                 &bundle_catalog,
@@ -826,13 +826,13 @@ async fn serve_connection_frames(
                         ingress_scope: ingress_scope.clone(),
                     };
                     let response = {
-                        let configuration_root = Arc::clone(&configuration_root);
+                        let configuration_roots = Arc::clone(&configuration_roots);
                         let bound_bundle = bound_bundle.clone();
                         let bundle_catalog = bundle_catalog.clone();
                         dispatch_on_blocking_pool(move || {
                             dispatch_look(
                                 request,
-                                &configuration_root,
+                                &configuration_roots,
                                 bound_bundle.as_ref(),
                                 Some(principal),
                                 &bundle_catalog,
@@ -857,14 +857,14 @@ async fn serve_connection_frames(
                         ingress_scope: ingress_scope.clone(),
                     };
                     let response = {
-                        let configuration_root = Arc::clone(&configuration_root);
+                        let configuration_roots = Arc::clone(&configuration_roots);
                         let bound_bundle = bound_bundle.clone();
                         let bundle_catalog = bundle_catalog.clone();
                         let peer_connection_manager = Arc::clone(peer_connection_manager);
                         dispatch_on_blocking_pool(move || {
                             dispatch_raww(
                                 request,
-                                &configuration_root,
+                                &configuration_roots,
                                 bound_bundle.as_ref(),
                                 Some(principal),
                                 &bundle_catalog,
@@ -904,14 +904,14 @@ async fn serve_connection_frames(
                         ingress_scope: ingress_scope.clone(),
                     };
                     let response = {
-                        let configuration_root = Arc::clone(&configuration_root);
+                        let configuration_roots = Arc::clone(&configuration_roots);
                         let bundle_catalog = bundle_catalog.clone();
                         let peer_connection_manager = Arc::clone(peer_connection_manager);
                         let relay_aliases = Arc::clone(&context.relay_aliases);
                         dispatch_on_blocking_pool(move || {
                             dispatch_discovery(
                                 request,
-                                &configuration_root,
+                                &configuration_roots,
                                 principal,
                                 &bundle_catalog,
                                 peer_connection_manager.as_ref(),
@@ -957,12 +957,12 @@ async fn serve_connection_frames(
                     ingress_scope: ingress_scope.clone(),
                 };
                 let response = {
-                    let configuration_root = Arc::clone(&configuration_root);
+                    let configuration_roots = Arc::clone(&configuration_roots);
                     let bundle_catalog = bundle_catalog.clone();
                     dispatch_on_blocking_pool(move || {
                         dispatch_request(
                             request,
-                            &configuration_root,
+                            &configuration_roots,
                             &bundle_paths.bundle_name,
                             &bundle_paths.runtime_directory,
                             Some(principal),

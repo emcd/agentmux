@@ -1,3 +1,4 @@
+use agentmux::configuration::ConfigurationRoots;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -35,7 +36,7 @@ impl Drop for TmuxServerGuard {
     }
 }
 
-fn write_tmux_bundle(root: &Path, bundle_name: &str) -> PathBuf {
+fn write_tmux_bundle(root: &Path, bundle_name: &str) -> ConfigurationRoots {
     let config_root = root.join("config");
     let bundles = config_root.join("bundles");
     fs::create_dir_all(&bundles).expect("create bundles directory");
@@ -83,10 +84,14 @@ coder = "shell"
 "#
     );
     fs::write(bundles.join(format!("{bundle_name}.toml")), body).expect("write bundle config");
-    config_root
+    ConfigurationRoots::single(config_root)
 }
 
-fn list_bundle(config_root: &Path, bundle_name: &str, runtime_directory: &Path) -> RelayResponse {
+fn list_bundle(
+    config_root: &ConfigurationRoots,
+    bundle_name: &str,
+    runtime_directory: &Path,
+) -> RelayResponse {
     handle_request(
         RelayRequest::List {
             requester_session: Some("alpha".to_string()),

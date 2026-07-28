@@ -1,11 +1,11 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::{
-    configuration::{BundleConfiguration, load_bundle_configuration},
+    configuration::{BundleConfiguration, ConfigurationRoots, load_bundle_configuration},
     runtime::inscriptions::emit_inscription,
 };
 
@@ -37,7 +37,7 @@ use super::sender::{SenderIdentity, resolve_sender_in_namespace};
 pub(in crate::relay) fn handle_send_routed(
     home_namespace: &str,
     request: RelayRequest,
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_catalog: &BundleCatalog,
     principal: Option<&RequestPrincipal>,
     peer_connection_manager: Option<&PeerConnectionManager>,
@@ -69,7 +69,7 @@ pub(in crate::relay) fn handle_send_routed(
             quiet_window_ms,
             on_behalf_of,
         },
-        configuration_root,
+        configuration_roots,
         bundle_catalog,
         principal,
         peer_connection_manager,
@@ -79,7 +79,7 @@ pub(in crate::relay) fn handle_send_routed(
 fn handle_send(
     home_namespace: &str,
     request: SendRequestContext,
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_catalog: &BundleCatalog,
     principal: Option<&RequestPrincipal>,
     peer_connection_manager: Option<&PeerConnectionManager>,
@@ -101,7 +101,7 @@ fn handle_send(
     // home bundle; `GLOBAL`/`RELAY` are relay-wide and carry no bundle. The home
     // authorization context (operator policy, or the bundle's policy) is derived
     // from it.
-    let (home_bundle, authorization) = load_home_context(home_namespace, configuration_root)?;
+    let (home_bundle, authorization) = load_home_context(home_namespace, configuration_roots)?;
     let SendRequestContext {
         request_id,
         requester_session,
@@ -238,7 +238,7 @@ fn handle_send(
             }
             Ok(route)
         },
-        |route| prepare_send(route, &authorization, configuration_root, bundle_catalog),
+        |route| prepare_send(route, &authorization, configuration_roots, bundle_catalog),
         |route, groups| {
             execute_send(
                 route,
@@ -336,7 +336,7 @@ fn resolve_send_route_or_broadcast(
 fn prepare_send(
     route: &ResolvedRoute,
     authorization: &AuthorizationContext,
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_catalog: &BundleCatalog,
 ) -> Result<Vec<DeliveryGroup>, RelayError> {
     let local_targets = route
@@ -347,7 +347,7 @@ fn prepare_send(
         .collect::<Vec<_>>();
     assemble_delivery_groups(
         authorization,
-        configuration_root,
+        configuration_roots,
         bundle_catalog,
         &local_targets,
     )
@@ -695,7 +695,7 @@ enum BundleGroupError {
 /// synthetic `GLOBAL` group.
 fn assemble_delivery_groups(
     home_authorization: &AuthorizationContext,
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_catalog: &BundleCatalog,
     route_targets: &[RouteTarget],
 ) -> Result<Vec<DeliveryGroup>, RelayError> {
@@ -725,7 +725,7 @@ fn assemble_delivery_groups(
         let namespace = target.namespace.as_str();
         match ensure_bundle_group(
             namespace,
-            configuration_root,
+            configuration_roots,
             bundle_catalog,
             &mut group_order,
             &mut groups_by_bundle,
@@ -823,7 +823,7 @@ fn push_target(
 /// it into `validation_unknown_target`.
 fn ensure_bundle_group(
     namespace: &str,
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_catalog: &BundleCatalog,
     group_order: &mut Vec<String>,
     groups_by_bundle: &mut HashMap<String, DeliveryGroup>,
@@ -834,9 +834,9 @@ fn ensure_bundle_group(
     let Some(paths) = bundle_catalog.lookup(namespace) else {
         return Err(BundleGroupError::UnknownBundle);
     };
-    let bundle = load_bundle_configuration(configuration_root, namespace)
+    let bundle = load_bundle_configuration(configuration_roots, namespace)
         .map_err(|error| BundleGroupError::Relay(map_config(error)))?;
-    let authorization = load_authorization_context(configuration_root, Some(&bundle))
+    let authorization = load_authorization_context(configuration_roots, Some(&bundle))
         .map_err(BundleGroupError::Relay)?;
     let choice_decider_sessions = choose_authorized_ui_sessions(&authorization, &bundle);
     group_order.push(namespace.to_string());

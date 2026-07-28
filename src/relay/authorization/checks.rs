@@ -4,12 +4,10 @@
 //! scope the policies file configures for the capability, never per operation
 //! here.
 
-use std::path::Path;
-
 use serde_json::{Value, json};
 
 use crate::{
-    configuration::BundleConfiguration,
+    configuration::{BundleConfiguration, ConfigurationRoots},
     relay::{RelayError, relay_error},
 };
 
@@ -85,12 +83,12 @@ impl RelayActionFamily {
 /// `all`. A bundle/namespace-relative `home` scope is insufficient
 /// because it confers no authority beyond the requester's own namespace.
 pub(in crate::relay) fn authorize_relay_action(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     requester_principal_id: &str,
     family: RelayActionFamily,
     action: &str,
 ) -> Result<(), RelayError> {
-    let controls = resolve_relay_principal_controls(configuration_root, requester_principal_id)?;
+    let controls = resolve_relay_principal_controls(configuration_roots, requester_principal_id)?;
     let scope_map = match family {
         RelayActionFamily::New => &controls.new_controls,
         RelayActionFamily::Change => &controls.change_controls,
@@ -120,10 +118,10 @@ pub(in crate::relay) fn authorize_relay_action(
 /// namespace and `GLOBAL`, while an `all` requester sees every configured
 /// bundle namespace.
 pub(in crate::relay) fn requester_list_reaches_all(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     requester_principal_id: &str,
 ) -> Result<bool, RelayError> {
-    let controls = resolve_relay_principal_controls(configuration_root, requester_principal_id)?;
+    let controls = resolve_relay_principal_controls(configuration_roots, requester_principal_id)?;
     Ok(controls.list.allows(PolicyScope::All))
 }
 
@@ -135,10 +133,10 @@ pub(in crate::relay) fn requester_list_reaches_all(
 /// tier; a bundle/namespace-relative `home` scope confers no authority beyond
 /// the requester's own namespace.
 pub(in crate::relay) fn authorize_discovery_origin(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     requester_principal_id: &str,
 ) -> Result<(), RelayError> {
-    if requester_list_reaches_all(configuration_root, requester_principal_id)? {
+    if requester_list_reaches_all(configuration_roots, requester_principal_id)? {
         return Ok(());
     }
     Err(authorization_forbidden(

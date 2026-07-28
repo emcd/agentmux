@@ -42,53 +42,83 @@ const RELAY_TEMPLATE: &str = include_str!(concat!(
     "/data/configuration/relay.toml"
 ));
 
+/// Validates that every operator-supplied configuration layer exists.
+///
+/// Read-only, which is what lets the pre-flight command share it with the
+/// hydrating path: `check configuration` must validate the same layer list the
+/// relay would load without scaffolding anything, and it is the one command that
+/// cannot call [`ensure_starter_configuration_layout`] for exactly that reason.
+///
+/// Every supplied layer is checked, not just one. A typo in any of them would
+/// otherwise resolve silently from the layers around it, which is the demotion
+/// naming a root exists to prevent — and it stays silent through enumeration,
+/// since an unreadable bundles directory contributes nothing rather than
+/// faulting.
+///
+/// A defaulted list is exempt: that root is the one hydration is permitted to
+/// create.
+///
+/// # Errors
+///
+/// Returns `RuntimeError` when a supplied layer does not exist.
+pub fn validate_supplied_configuration_layers(roots: &RuntimeRoots) -> Result<(), RuntimeError> {
+    if roots.configuration_root_source.permits_hydration() {
+        return Ok(());
+    }
+    for layer in roots.configuration_roots.layers() {
+        if !layer.is_dir() {
+            return Err(RuntimeError::validation(
+                "validation_configuration_root_absent",
+                format!("configuration layer does not exist: {}", layer.display()),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Ensures starter configuration files exist without overwriting user config.
 ///
-/// Hydration applies only to a root resolved from the default tier. A root the
-/// operator named — by flag, environment, or discovery — is never scaffolded:
-/// answering "you named a root that is not there" with a fresh empty deployment
-/// makes the mistake look like success. Taking the resolved roots rather than a
-/// bare path is what keeps that gate from being bypassed at a call site.
+/// Hydration applies only to a layer list resolved from the default tier, which
+/// is a single layer. A list the operator supplied — by flag or environment —
+/// is never scaffolded: answering "you named a layer that is not there" with a
+/// fresh empty deployment makes the mistake look like success. Taking the
+/// resolved roots rather than a bare path is what keeps that gate from being
+/// bypassed at a call site.
 ///
 /// # Errors
 ///
 /// Returns `RuntimeError` when directories or template files cannot be created,
-/// or when a non-default root does not exist.
+/// or when a supplied layer does not exist.
 pub fn ensure_starter_configuration_layout(roots: &RuntimeRoots) -> Result<(), RuntimeError> {
-    let configuration_root = roots.configuration_root.as_path();
+    validate_supplied_configuration_layers(roots)?;
+    let configuration_roots = &roots.configuration_roots;
     if !roots.configuration_root_source.permits_hydration() {
-        if !configuration_root.is_dir() {
-            return Err(RuntimeError::validation(
-                "validation_configuration_root_absent",
-                format!(
-                    "configuration root does not exist: {}",
-                    configuration_root.display()
-                ),
-            ));
-        }
         return Ok(());
     }
-    ensure_directory(configuration_root)?;
-    let bundles_directory = configuration_root.join(BUNDLES_DIRECTORY);
+    // Only a defaulted list reaches here, and a defaulted list is a single
+    // layer, so there is no ambiguity about which layer hydration writes to.
+    let base = configuration_roots.base_layer();
+    ensure_directory(base)?;
+    let bundles_directory = base.join(BUNDLES_DIRECTORY);
     ensure_directory(&bundles_directory)?;
-    ensure_template_file(&configuration_root.join(CODERS_FILE), CODERS_TEMPLATE)?;
-    ensure_template_file(&configuration_root.join(POLICIES_FILE), POLICIES_TEMPLATE)?;
-    ensure_template_file(&configuration_root.join(USERS_FILE), USERS_TEMPLATE)?;
+    ensure_template_file(&base.join(CODERS_FILE), CODERS_TEMPLATE)?;
+    ensure_template_file(&base.join(POLICIES_FILE), POLICIES_TEMPLATE)?;
+    ensure_template_file(&base.join(USERS_FILE), USERS_TEMPLATE)?;
     // ui.toml scaffolds as a fully-commented all-defaults file (like relay.toml):
     // it documents the UI-surface keys (`default-bundle`) without activating any,
     // and a missing/empty ui.toml simply means no configured UI-surface defaults.
-    ensure_template_file(&configuration_root.join(UI_FILE), UI_TEMPLATE)?;
+    ensure_template_file(&base.join(UI_FILE), UI_TEMPLATE)?;
     // The relay.toml template is fully commented, so it scaffolds as an
     // all-defaults (effectively empty) file: it documents the schema without
     // activating any control, and the relay loads it as the documented defaults.
-    ensure_template_file(&configuration_root.join(RELAY_FILE), RELAY_TEMPLATE)?;
+    ensure_template_file(&base.join(RELAY_FILE), RELAY_TEMPLATE)?;
     // The example bundle is a first-run sample, not durable config: it seeds
     // only when the operator has supplied no bundles of their own, so deleting
     // it after setup does not re-seed it on the next start. Bundles union
-    // across layers, which makes an overlay definition operator configuration
-    // exactly as a base one is — seeding beside it would add a live bundle to
-    // the effective set that the operator never wrote.
-    if effective_bundle_definitions(configuration_root).is_empty() {
+    // across layers, which makes a definition in any layer operator
+    // configuration exactly as a base one is — seeding beside it would add a
+    // live bundle to the effective set that the operator never wrote.
+    if effective_bundle_definitions(configuration_roots).is_empty() {
         ensure_template_file(
             &bundles_directory.join(EXAMPLE_BUNDLE_FILE),
             BUNDLE_TEMPLATE,

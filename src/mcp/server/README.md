@@ -60,8 +60,8 @@ context, because MCP negotiates tool inventory at `initialize`: failing
 startup erases the advertised surface rather than degrading it, and some
 harnesses never recover from tools disappearing. `unavailable_error()`
 therefore reports the **retained cause** (`errors::startup_fault_error`,
-carrying the original code so an absent configuration root is
-distinguishable from a malformed overlay) when one exists, and the
+carrying the original code so an absent configuration layer is
+distinguishable from a malformed file) when one exists, and the
 generic `validation_unassociated_server` remedy when the server is
 merely unassociated. The fault is snapshotted at startup and never
 recomputed.

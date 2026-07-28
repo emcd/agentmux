@@ -11,10 +11,11 @@ shared by relay and MCP hosts.
   - enforces ownership and secure directory permissions.
 - `association.rs`
   - resolves bundle/session association for MCP + CLI workflows,
-  - bundle precedence: `--bundle` > injected environment > overlay >
-    `--default-bundle`,
-  - session precedence: `--session-name` > injected environment > overlay >
-    working-directory match against declared member directories,
+  - bundle precedence: `--bundle` > injected environment > effective association
+    file > `--default-bundle`,
+  - session precedence: `--session-name` > injected environment > effective
+    association file > working-directory match against declared member
+    directories,
   - resolves to nothing rather than guessing when no tier supplies an identity.
 - `tui_session.rs`
   - resolves TUI session selection from CLI + `users.toml` defaults, and
@@ -46,25 +47,26 @@ shared by relay and MCP hosts.
 
 ## Root Resolution
 
-The configuration root resolves by precedence, each tier ranked by how
+The configuration **layer list** resolves by precedence, each tier ranked by how
 deployment-specific its source is:
 
-1. `--configuration-directory`
-2. `AGENTMUX_CONFIGURATION_DIRECTORY`
-3. nearest-ancestor discovery, only with `--discover-local-configuration`
-4. `$XDG_CONFIG_HOME/agentmux`, else `~/.config/agentmux`
+1. `--configuration-directory`, repeatable; each occurrence appends one layer
+2. `AGENTMUX_CONFIGURATION_DIRECTORY`, a `:`-separated list in the same order
+3. `$XDG_CONFIG_HOME/agentmux`, else `~/.config/agentmux` — a single layer
 
-Tiers 1 and 2 **replace** the root; they do not extend a search list, so a root
-supplied explicitly never falls through to another one for a file it does not
-define. Resolution does not vary by build profile.
+Tiers 1 and 2 **replace** the list; they do not extend it, so a supplied list is
+closed and never falls through to a root the operator did not name. Within a
+list the **first** layer wins, matching every other Unix search path. Tier 3
+resolves as a single-layer list, so one lookup path serves every tier.
+Resolution does not vary by build profile.
 
-Discovery walks the canonicalized working directory and its ancestors for
-`<ancestor>/.auxiliary/configuration/agentmux`, nearest winning, and reports its
-selection on stderr — never stdout, which `host mcp` uses for the protocol.
+A path containing `:` cannot be expressed through the environment form; the
+repeatable flag is the escape hatch. An empty element is rejected in either
+form rather than read as the working directory.
 
-Starter hydration applies only to a root from tier 4. A root named by flag,
-environment, or discovery is never scaffolded; when it does not exist, that is a
-fault rather than a reason to create one.
+Starter hydration applies only to a list from tier 3, which is a single layer. A
+list supplied by flag or environment is never scaffolded; when one of its layers
+does not exist, that is a fault rather than a reason to create one.
 
 The **state** and **inscriptions** roots deliberately keep their build-profile
 gating and their Git-derived repository-root provenance. That gating is
@@ -94,24 +96,24 @@ builds it always answers `None`.
 
 ## Overridable Files
 
-Every configuration file resolves through the overlay, so overriding one is the
-same operation regardless of which file it is:
+Every configuration file resolves through the same layer list, so overriding one
+is the same operation regardless of which file it is. For layers `[A, B]`:
 
 | Logical artifact | Effective lookup |
 |---|---|
-| `mcp.toml` (association) | `<root>/overlay/mcp.toml`, then `<root>/mcp.toml` |
-| `users.toml` (TUI identity) | `<root>/overlay/users.toml`, then `<root>/users.toml` |
-| `ui.toml` (surface defaults) | `<root>/overlay/ui.toml`, then `<root>/ui.toml` |
-| `bundles/<id>.toml` | overlay entry shadows base entry of the same id |
+| `mcp.toml` (association) | `A/mcp.toml`, then `B/mcp.toml` |
+| `users.toml` (TUI identity) | `A/users.toml`, then `B/users.toml` |
+| `ui.toml` (surface defaults) | `A/ui.toml`, then `B/ui.toml` |
+| `bundles/<id>.toml` | `A`'s entry shadows `B`'s entry of the same id |
 
 `mcp.toml` supports `bundle_name` and `session_name`. It no longer carries a
-configuration-root field: the file lives *under* the configuration root, so
-letting it select that root made the lookup circular. Roots resolve first, and
-the file is read from the resolved root.
+configuration-root field: the file lives *under* a configuration layer, so
+letting it select the layers made the lookup circular. Roots resolve first, and
+the file is read from the resolved list.
 
 Layering is whole-file replacement, not deep merge — "what is in effect" stays
 answerable by naming one file. Bundle *directories* are the exception and union
-by identifier, since replacing the directory wholesale would force an overlay
+by identifier, since replacing the directory wholesale would force a layer
 redefining one bundle to restate every other one.
 
 ## Bootstrap Notes

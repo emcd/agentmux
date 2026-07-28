@@ -26,10 +26,8 @@
 //! dispatcher, and the `register_peer` / `hello_first_frame` pairs)
 //! live in this hub. Cluster-specific helpers live with their cluster.
 
-use std::{
-    io::BufReader,
-    path::{Path, PathBuf},
-};
+use agentmux::configuration::ConfigurationRoots;
+use std::{io::BufReader, path::PathBuf};
 
 use agentmux::runtime::paths::BundleRuntimePaths;
 use serde_json::{Value, json};
@@ -49,10 +47,10 @@ mod send_attribution;
 /// Writes a configuration whose operator preset grants `new.peer`/`change.psk`
 /// at `all`, with a `@GLOBAL` operator declared in the TUI configuration so
 /// relay-wide credential administration authorizes.
-fn write_identity_configuration(temporary: &TempDir, bundle_name: &str) -> PathBuf {
-    let configuration_root = write_bundle_configuration(temporary, bundle_name);
+fn write_identity_configuration(temporary: &TempDir, bundle_name: &str) -> ConfigurationRoots {
+    let configuration_roots = write_bundle_configuration(temporary, bundle_name);
     std::fs::write(
-        configuration_root.join("policies.toml"),
+        configuration_roots.base_layer().join("policies.toml"),
         r#"
 format-version = 1
 default = "default"
@@ -83,8 +81,8 @@ psk = "all"
 "#,
     )
     .expect("write operator policies configuration");
-    write_tui_configuration(&configuration_root, "operator", bundle_name);
-    configuration_root
+    write_tui_configuration(&configuration_roots, "operator", bundle_name);
+    configuration_roots
 }
 
 /// Path to the relay-level principal store under a bundle's state root.
@@ -98,12 +96,12 @@ fn principal_store_file(bundle_paths: &BundleRuntimePaths) -> PathBuf {
 /// Connects as the `@GLOBAL` operator, submits one relay-admin request, and
 /// returns the response frame. The connection is closed before returning.
 fn operator_request(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     bundle_name: &str,
     request: Value,
 ) -> Value {
-    let (mut client, join) = spawn_relay_connection(configuration_root, bundle_paths);
+    let (mut client, join) = spawn_relay_connection(configuration_roots, bundle_paths);
     let read_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     let operator = global_user_id(bundle_name);
@@ -185,7 +183,7 @@ fn operator_request_on_context(
 
 /// Registers `principal_id` via `new peer` and returns the issued PSK.
 fn register_peer(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     bundle_name: &str,
     principal_id: &str,
@@ -195,7 +193,7 @@ fn register_peer(
     if let Some(scope) = scope {
         request["scope"] = Value::String(scope.to_string());
     }
-    let response = operator_request(configuration_root, bundle_paths, bundle_name, request);
+    let response = operator_request(configuration_roots, bundle_paths, bundle_name, request);
     assert_eq!(
         response["response"]["kind"], "new_peer",
         "new peer rejected: {response:?}"
@@ -210,14 +208,14 @@ fn register_peer(
 /// (a `hello_ack` on success, or an error `response` on rejection). The
 /// connection is closed before returning.
 fn hello_first_frame(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     principal_id: &str,
     identity_token: &str,
     require_session_credentials: bool,
 ) -> Value {
     let (mut client, join) = spawn_relay_connection_with_enforcement(
-        configuration_root,
+        configuration_roots,
         bundle_paths,
         require_session_credentials,
     );

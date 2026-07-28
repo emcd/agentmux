@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::{
-    configuration::load_bundle_group_memberships,
+    configuration::{ConfigurationRoots, load_bundle_group_memberships},
     runtime::{
         bootstrap::{BootstrapOptions, SpawnedRelay, bootstrap_relay, resolve_relay_program},
         error::RuntimeError,
@@ -39,13 +39,13 @@ pub(super) fn run_agentmux_tui(arguments: &[String]) -> Result<(), RuntimeError>
     // eager bundle load here would crash startup (issues/tui/11, issues/runtime/3).
     // Resolve available bundles first and seed the browsing context from the
     // first one when no bundle is configured; the operator picks from there.
-    let available_bundles = load_bundle_group_memberships(&roots.configuration_root)
+    let available_bundles = load_bundle_group_memberships(&roots.configuration_roots)
         .map_err(shared::map_bundle_load_error)?
         .into_iter()
         .map(|membership| membership.bundle_name)
         .collect::<Vec<_>>();
     let resolved_session = resolve_tui_launch_identity(
-        &roots.configuration_root,
+        &roots.configuration_roots,
         parsed.bundle_name.as_deref(),
         parsed.session_selector.as_deref(),
         available_bundles.first().map(String::as_str),
@@ -113,7 +113,7 @@ fn parse_tui_arguments(arguments: &[String]) -> Result<TuiArguments, RuntimeErro
 
 pub(super) fn print_tui_help() {
     println!(
-        "Usage: agentmux tui [--bundle NAME] [--as-session NAME] [--lines N] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH] [--discover-local-configuration]"
+        "Usage: agentmux tui [--bundle NAME] [--as-session NAME] [--lines N] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }
 
@@ -128,7 +128,7 @@ fn ensure_tui_relay_available(
     paths: &RelayRuntimePaths,
 ) -> Result<Option<SpawnedRelay>, RuntimeError> {
     let relay_program = resolve_relay_program()?;
-    let configuration_root = roots.configuration_root.clone();
+    let configuration_roots = roots.configuration_roots.clone();
     let state_root = roots.state_root.clone();
     let inscriptions_root = roots.inscriptions_root.clone();
     let relay_command = relay_program.clone();
@@ -139,7 +139,7 @@ fn ensure_tui_relay_available(
     let outcome = bootstrap_relay(paths, BootstrapOptions::default(), move || {
         let child = spawn_relay_host_for_tui(
             relay_command.clone(),
-            configuration_root.clone(),
+            configuration_roots.clone(),
             state_root.clone(),
             inscriptions_root.clone(),
         )?;
@@ -168,16 +168,19 @@ fn ensure_tui_relay_available(
 
 fn spawn_relay_host_for_tui(
     relay_program: PathBuf,
-    configuration_root: PathBuf,
+    configuration_roots: ConfigurationRoots,
     state_root: PathBuf,
     inscriptions_root: PathBuf,
 ) -> Result<Child, RuntimeError> {
     let mut command = Command::new(&relay_program);
+    command.arg("host").arg("relay");
+    // One occurrence per layer, in list order. Passing only one layer would
+    // hand the relay a different configuration from the TUI that spawned it,
+    // and the two would disagree about which bundles exist.
+    for layer in configuration_roots.layers() {
+        command.arg("--configuration-directory").arg(layer);
+    }
     command
-        .arg("host")
-        .arg("relay")
-        .arg("--configuration-directory")
-        .arg(configuration_root)
         .arg("--state-directory")
         .arg(state_root)
         .arg("--inscriptions-directory")

@@ -6,7 +6,7 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::{
     acp::state::ACP_LOOK_PRIME_TIMEOUT_MS,
-    configuration::BundleConfiguration,
+    configuration::{BundleConfiguration, ConfigurationRoots},
     relay::{LookFreshness, LookSnapshotPayload, LookSnapshotSource},
     runtime::inscriptions::emit_inscription,
     transports::{LookMode, LookSnapshotPayload as TransportLookSnapshotPayload, TransportError},
@@ -47,7 +47,7 @@ pub(in crate::relay) fn handle_look_routed(
     home_namespace: &str,
     home_runtime_directory: Option<&Path>,
     request: RelayRequest,
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_catalog: &BundleCatalog,
     principal: Option<&RequestPrincipal>,
 ) -> Result<RelayResponse, RelayError> {
@@ -85,7 +85,7 @@ pub(in crate::relay) fn handle_look_routed(
 
     // The requester is identified and authorized in its home namespace (operator
     // policy for `GLOBAL`, or the bundle's policy), never a borrowed target bundle.
-    let (home_bundle, authorization) = load_home_context(home_namespace, configuration_root)?;
+    let (home_bundle, authorization) = load_home_context(home_namespace, configuration_roots)?;
     let requester_session = bare_session_id(requester_session.as_str(), home_namespace);
     let requester = resolve_sender_in_namespace(
         home_bundle.as_ref(),
@@ -118,7 +118,7 @@ pub(in crate::relay) fn handle_look_routed(
                 home_namespace,
                 home_bundle.as_ref(),
                 home_runtime_directory,
-                configuration_root,
+                configuration_roots,
                 bundle_catalog,
             )
         },
@@ -146,7 +146,7 @@ fn prepare_look(
     home_namespace: &str,
     home_bundle: Option<&BundleConfiguration>,
     home_runtime_directory: Option<&Path>,
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_catalog: &BundleCatalog,
 ) -> Result<LookPrepared, RelayError> {
     let target_route = &route.targets[0];
@@ -180,7 +180,7 @@ fn prepare_look(
         home_bundle,
         home_runtime_directory,
         target_namespace,
-        configuration_root,
+        configuration_roots,
         bundle_catalog,
     )?;
     let Some(member) = bundle

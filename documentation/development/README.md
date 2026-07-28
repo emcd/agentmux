@@ -69,15 +69,29 @@ their build host.
 - OpenSpec specs:
   `documentation/architecture/openspec/specs/`
 
-## Local Override Paths
+## Configuration Layers
 
-Per-tree overrides live in the overlay directory of the resolved configuration
-root, and apply in every build profile:
+Overrides live in their own configuration root, named ahead of the shared one.
+`--configuration-directory` is repeatable and the **first** occurrence wins, so
+an override layer goes first:
 
-- MCP association override: `<configuration-root>/overlay/mcp.toml`
-- TUI session override: `<configuration-root>/overlay/users.toml`
+```
+agentmux host relay \
+  --configuration-directory ~/agentmux-config/rnd \
+  --configuration-directory ~/agentmux-config/base
+```
 
-To point a development invocation at a repository-local configuration root
-without editing generated MCP client arguments, pass
-`--discover-local-configuration`; it selects the nearest ancestor holding
-`.auxiliary/configuration/agentmux`.
+`AGENTMUX_CONFIGURATION_DIRECTORY` takes the same list `:`-separated, in the
+same order. A path containing `:` is unrepresentable there; use the flag.
+
+Every file resolves through the list, so a `mcp.toml`, `users.toml`, or
+`ui.toml` in the first layer supplies that file entirely. Layering applies in
+every build profile.
+
+A supplied list is closed: no root outside it is consulted, so a typo faults
+instead of silently resolving a different deployment.
+
+**Migration.** An `overlay/` subdirectory is no longer consulted. Move it to a
+sibling directory and name it as the first layer. Because the base
+configuration is still valid and loads cleanly, forgetting this step fails
+silently — the overrides simply stop applying.

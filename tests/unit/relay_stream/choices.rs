@@ -7,11 +7,11 @@ fn choice_decision_rejects_submitter_without_choose_capability() {
     // resolves to the default policy, which omits `choose`.
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_non_choose";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let (mut client_stream, join_handle) =
-        spawn_relay_connection(&configuration_root, &bundle_paths);
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
 
@@ -64,12 +64,12 @@ fn choice_decision_rejects_submitter_without_choose_capability() {
 fn choice_decision_denial_uses_choose_capability() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_choose_capability";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default", bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_roots, "default", bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let (mut client_stream, join_handle) =
-        spawn_relay_connection(&configuration_root, &bundle_paths);
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
 
@@ -119,12 +119,12 @@ fn choice_decision_denial_uses_choose_capability() {
 fn choice_decision_rejects_empty_option_id() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_empty_option";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default", bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_roots, "default", bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let (mut client_stream, join_handle) =
-        spawn_relay_connection(&configuration_root, &bundle_paths);
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
 
@@ -175,12 +175,12 @@ fn choice_decision_rejects_empty_option_id() {
 fn choice_decision_rejects_selected_without_option_id() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_selected_missing_option";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default", bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_roots, "default", bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let (mut client_stream, join_handle) =
-        spawn_relay_connection(&configuration_root, &bundle_paths);
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
 
@@ -230,12 +230,12 @@ fn choice_decision_rejects_selected_without_option_id() {
 fn choice_decision_rejects_cancelled_with_option_id() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_cancelled_with_option";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default", bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_roots, "default", bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let (mut client_stream, join_handle) =
-        spawn_relay_connection(&configuration_root, &bundle_paths);
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
 
@@ -286,9 +286,9 @@ fn choice_decision_rejects_cancelled_with_option_id() {
 fn choices_snapshot_then_replay_carries_option_metadata() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_snapshot_options";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default", bundle_name);
-    write_policies_with_choose(&configuration_root, "home");
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_roots, "default", bundle_name);
+    write_policies_with_choose(&configuration_roots, "home");
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     seed_choices_queue_with_options(
@@ -297,7 +297,7 @@ fn choices_snapshot_then_replay_carries_option_metadata() {
     );
 
     let (mut client_stream, join_handle) =
-        spawn_relay_connection(&configuration_root, &bundle_paths);
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
 
@@ -349,9 +349,9 @@ fn choices_snapshot_then_replay_carries_option_metadata() {
 fn choice_request_persists_across_authorized_ui_reconnect() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_persists";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default", bundle_name);
-    write_policies_with_choose(&configuration_root, "home");
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_roots, "default", bundle_name);
+    write_policies_with_choose(&configuration_roots, "home");
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     seed_choices_queue(
@@ -368,7 +368,7 @@ fn choice_request_persists_across_authorized_ui_reconnect() {
     });
 
     let (mut first_client, first_handle) =
-        spawn_relay_connection(&configuration_root, &bundle_paths);
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let first_read = first_client.try_clone().expect("clone first stream");
     let mut first_reader = BufReader::new(first_read);
     send_json(&mut first_client, hello_frame.clone());
@@ -387,7 +387,7 @@ fn choice_request_persists_across_authorized_ui_reconnect() {
     thread::sleep(RELAY_CONNECTION_CLEANUP_BUDGET);
 
     let (mut second_client, second_handle) =
-        spawn_relay_connection(&configuration_root, &bundle_paths);
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let second_read = second_client.try_clone().expect("clone second stream");
     let mut second_reader = BufReader::new(second_read);
     send_json(&mut second_client, hello_frame);
@@ -409,9 +409,9 @@ fn choice_request_persists_across_authorized_ui_reconnect() {
 fn choices_pick_selected_emits_resolved_event_with_option_id() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_selected_emit";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default", bundle_name);
-    write_policies_with_choose(&configuration_root, "home");
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_roots, "default", bundle_name);
+    write_policies_with_choose(&configuration_roots, "home");
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     seed_choices_queue(
@@ -421,7 +421,7 @@ fn choices_pick_selected_emits_resolved_event_with_option_id() {
     );
 
     let (mut client_stream, join_handle) =
-        spawn_relay_connection(&configuration_root, &bundle_paths);
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(
@@ -480,9 +480,9 @@ fn choices_pick_selected_emits_resolved_event_with_option_id() {
 fn choices_pick_cancelled_emits_resolved_event_with_reason_code() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_cancelled_emit";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default", bundle_name);
-    write_policies_with_choose(&configuration_root, "home");
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_roots, "default", bundle_name);
+    write_policies_with_choose(&configuration_roots, "home");
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     seed_choices_queue(
@@ -492,7 +492,7 @@ fn choices_pick_cancelled_emits_resolved_event_with_reason_code() {
     );
 
     let (mut client_stream, join_handle) =
-        spawn_relay_connection(&configuration_root, &bundle_paths);
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(
@@ -548,11 +548,11 @@ fn choices_pick_cancelled_emits_resolved_event_with_reason_code() {
 fn choices_pending_max_out_of_range_is_rejected() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choices_pending_max_invalid";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default", bundle_name);
-    write_policies_with_choose(&configuration_root, "home");
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_roots, "default", bundle_name);
+    write_policies_with_choose(&configuration_roots, "home");
     std::fs::write(
-        configuration_root.join("relay.toml"),
+        configuration_roots.base_layer().join("relay.toml"),
         r#"
 [choices]
 pending-max = 10000
@@ -563,7 +563,7 @@ pending-max = 10000
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
 
     let (mut client_stream, join_handle) =
-        spawn_relay_connection(&configuration_root, &bundle_paths);
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
 
@@ -600,9 +600,9 @@ pending-max = 10000
 fn choices_pick_selected_rejects_unknown_option_id() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_unknown_option";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default", bundle_name);
-    write_policies_with_choose(&configuration_root, "home");
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_roots, "default", bundle_name);
+    write_policies_with_choose(&configuration_roots, "home");
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     seed_choices_queue(
@@ -611,7 +611,7 @@ fn choices_pick_selected_rejects_unknown_option_id() {
         "allow-once",
     );
     let (mut client_stream, join_handle) =
-        spawn_relay_connection(&configuration_root, &bundle_paths);
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
 

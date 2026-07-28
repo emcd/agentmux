@@ -1,3 +1,4 @@
+use agentmux::configuration::ConfigurationRoots;
 use std::{
     fs,
     os::unix::fs::PermissionsExt,
@@ -84,7 +85,7 @@ pub(crate) fn write_bundle_configuration(
     root: &Path,
     bundle_name: &str,
     sessions: &[&str],
-) -> PathBuf {
+) -> ConfigurationRoots {
     let coders = vec![CoderSpec {
         id: "default".to_string(),
         initial_command: "sh -lc 'exec sleep 45'".to_string(),
@@ -151,7 +152,7 @@ pub(crate) fn write_bundle_configuration_members(
     bundle_name: &str,
     coders: &[CoderSpec],
     sessions: &[SessionSpec],
-) -> PathBuf {
+) -> ConfigurationRoots {
     let config_root = root.join("config");
     let bundles = config_root.join("bundles");
     fs::create_dir_all(&bundles).expect("create bundles directory");
@@ -218,7 +219,7 @@ send = "home"
     }
     fs::write(bundles.join(format!("{bundle_name}.toml")), bundle_toml)
         .expect("write bundle config");
-    config_root
+    ConfigurationRoots::single(config_root)
 }
 
 /// Writes a bundle with one tmux coder session and one bare `pubsub`-marker
@@ -230,7 +231,7 @@ pub(crate) fn write_bundle_with_pubsub_member(
     bundle_name: &str,
     tmux_session: &str,
     pubsub_session: &str,
-) -> PathBuf {
+) -> ConfigurationRoots {
     let coders = vec![CoderSpec {
         id: "default".to_string(),
         initial_command: "sh -lc 'exec sleep 45'".to_string(),
@@ -265,6 +266,7 @@ pub(crate) fn write_bundle_with_pubsub_member(
     );
     fs::write(
         config_root
+            .base_layer()
             .join("bundles")
             .join(format!("{bundle_name}.toml")),
         bundle_toml,
@@ -282,7 +284,7 @@ pub(crate) fn write_bundle_configuration_with_environment(
     bundle_name: &str,
     session: &str,
     environment: &[(&str, &str)],
-) -> PathBuf {
+) -> ConfigurationRoots {
     let coders = vec![CoderSpec {
         id: "default".to_string(),
         initial_command: "sh -lc 'exec sleep 45'".to_string(),
@@ -315,6 +317,7 @@ pub(crate) fn write_bundle_configuration_with_environment(
     );
     fs::write(
         config_root
+            .base_layer()
             .join("bundles")
             .join(format!("{bundle_name}.toml")),
         bundle_toml,
@@ -342,7 +345,7 @@ pub(crate) fn write_acp_hang_bundle_configuration(
     stub_path: &Path,
     log_file: &Path,
     pid_file: &Path,
-) -> PathBuf {
+) -> ConfigurationRoots {
     write_acp_hang_stub(stub_path);
     let config_root = root.join("config");
     let bundles = config_root.join("bundles");
@@ -403,7 +406,7 @@ send = "home"
     }
     fs::write(bundles.join(format!("{bundle_name}.toml")), bundle_toml)
         .expect("write bundle config");
-    config_root
+    ConfigurationRoots::single(config_root)
 }
 
 /// Writes a minimal stdio ACP agent stub that hangs on `session/prompt`.
@@ -623,7 +626,7 @@ esac
 
 pub(crate) fn spawn_relay_with_fake_tmux(
     bundle_name: &str,
-    config_root: &Path,
+    config_root: &ConfigurationRoots,
     state_root: &Path,
     inscriptions_root: &Path,
     fake_tmux_script: &Path,
@@ -640,18 +643,19 @@ pub(crate) fn spawn_relay_with_fake_tmux(
 
 pub(crate) fn spawn_relay_with_fake_tmux_and_env(
     _bundle_name: &str,
-    config_root: &Path,
+    config_root: &ConfigurationRoots,
     state_root: &Path,
     inscriptions_root: &Path,
     fake_tmux_script: &Path,
     environment: &[(&str, &str)],
 ) -> Child {
     let mut command = Command::new(env!("CARGO_BIN_EXE_agentmux"));
+    command.arg("host").arg("relay");
+    // One occurrence per layer, matching how the flag is declared.
+    for layer in config_root.layers() {
+        command.arg("--configuration-directory").arg(layer);
+    }
     command
-        .arg("host")
-        .arg("relay")
-        .arg("--configuration-directory")
-        .arg(config_root)
         .arg("--state-directory")
         .arg(state_root)
         .arg("--inscriptions-directory")

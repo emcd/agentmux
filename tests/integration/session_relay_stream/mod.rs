@@ -17,6 +17,7 @@
 //! JSON line codec, and the ingress peer store fixtures) live in this
 //! hub. Cluster-specific helpers live with their cluster.
 
+use agentmux::configuration::ConfigurationRoots;
 use std::{
     io::{BufRead, BufReader, ErrorKind, Write},
     os::unix::net::{UnixListener, UnixStream},
@@ -46,14 +47,14 @@ mod ui_delivery;
 
 fn dispatch_request(
     request: RelayRequest,
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
     runtime_directory: &Path,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
-    handle_request(request, configuration_root, bundle_name, runtime_directory)
+    handle_request(request, configuration_roots, bundle_name, runtime_directory)
 }
 
-fn write_bundle_configuration(temporary: &TempDir, bundle_name: &str) -> PathBuf {
+fn write_bundle_configuration(temporary: &TempDir, bundle_name: &str) -> ConfigurationRoots {
     let configuration_root = temporary.path().join("config");
     let bundles_directory = configuration_root.join("bundles");
     std::fs::create_dir_all(&bundles_directory).expect("create bundles directory");
@@ -134,15 +135,15 @@ coder = "shell"
 "#,
     )
     .expect("write bundle configuration");
-    configuration_root
+    ConfigurationRoots::single(configuration_root)
 }
 
 fn spawn_relay_stream(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
 ) -> (UnixStream, thread::JoinHandle<()>) {
     let (server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
-    let root = configuration_root.to_path_buf();
+    let root = configuration_roots.clone();
     let state_root = bundle_paths.state_root.clone();
     let catalog = BundleCatalog::from_paths([bundle_paths.clone()]);
     let handle = thread::spawn(move || {
@@ -155,7 +156,7 @@ fn spawn_relay_stream(
 // owning a dedicated current-thread tokio runtime per connection.
 fn run_serve_connection(
     server_stream: UnixStream,
-    configuration_root: PathBuf,
+    configuration_roots: ConfigurationRoots,
     state_root: PathBuf,
     bundle_catalog: BundleCatalog,
 ) -> Result<(), std::io::Error> {
@@ -173,7 +174,7 @@ fn run_serve_connection(
             agentmux::relay::PeerConnectionManager::from_configuration(&state_root, &[]),
         );
         let serve_context = agentmux::relay::ConnectionServeContext::new(
-            configuration_root,
+            configuration_roots,
             state_root,
             bundle_catalog,
             peer_connection_manager,
@@ -291,9 +292,12 @@ fn hello_payload(bundle_name: &str, session_id: &str) -> Value {
 // Writes the standard configuration plus a configured (non-`@GLOBAL`) `display`
 // UI member, so a send can target a configured UI session whose UI stream may
 // register after the first delivery.
-fn write_bundle_configuration_with_ui_member(temporary: &TempDir, bundle_name: &str) -> PathBuf {
-    let configuration_root = write_bundle_configuration(temporary, bundle_name);
-    let bundles_directory = configuration_root.join("bundles");
+fn write_bundle_configuration_with_ui_member(
+    temporary: &TempDir,
+    bundle_name: &str,
+) -> ConfigurationRoots {
+    let configuration_roots = write_bundle_configuration(temporary, bundle_name);
+    let bundles_directory = configuration_roots.base_layer().join("bundles");
     std::fs::write(
         bundles_directory.join(format!("{bundle_name}.toml")),
         r#"
@@ -314,10 +318,13 @@ directory = "/tmp"
 "#,
     )
     .expect("rewrite bundle configuration with ui member");
-    configuration_root
+    configuration_roots
 }
 
-fn write_operator_bundle_configuration(temporary: &TempDir, bundle_name: &str) -> PathBuf {
+fn write_operator_bundle_configuration(
+    temporary: &TempDir,
+    bundle_name: &str,
+) -> ConfigurationRoots {
     let configuration_root = temporary.path().join("config");
     let bundles_directory = configuration_root.join("bundles");
     std::fs::create_dir_all(&bundles_directory).expect("create bundles directory");
@@ -383,12 +390,15 @@ coder = "shell"
 "#,
     )
     .expect("write bundle configuration");
-    configuration_root
+    ConfigurationRoots::single(configuration_root)
 }
 
 // Bundle whose member `alpha` holds `send = all`, so it may address a cross-relay
 // (always all-tier) target. Otherwise a minimal single-member tmux bundle.
-fn write_cross_relay_bundle_configuration(temporary: &TempDir, bundle_name: &str) -> PathBuf {
+fn write_cross_relay_bundle_configuration(
+    temporary: &TempDir,
+    bundle_name: &str,
+) -> ConfigurationRoots {
     let configuration_root = temporary.path().join("config");
     let bundles_directory = configuration_root.join("bundles");
     std::fs::create_dir_all(&bundles_directory).expect("create bundles directory");
@@ -436,7 +446,7 @@ coder = "shell"
 "#,
     )
     .expect("write bundle configuration");
-    configuration_root
+    ConfigurationRoots::single(configuration_root)
 }
 
 // Writes the outbound PSK for `alias` at `<state-root>/peers/<alias>.psk`, where
@@ -453,14 +463,14 @@ fn write_peer_credential(state_root: &Path, alias: &str, psk: &str) {
 // and `peer_socket` is the peer's Unix socket. So a cross-relay Send is really
 // dialed and forwarded rather than reported unavailable.
 fn spawn_relay_stream_with_peer(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     alias: &str,
     connect_as: &str,
     peer_socket: &Path,
 ) -> (UnixStream, thread::JoinHandle<()>) {
     let (server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
-    let root = configuration_root.to_path_buf();
+    let root = configuration_roots.clone();
     let state_root = bundle_paths.state_root.clone();
     let catalog = BundleCatalog::from_paths([bundle_paths.clone()]);
     let peers = vec![agentmux::relay::PeerConfiguration {
@@ -477,7 +487,7 @@ fn spawn_relay_stream_with_peer(
 
 fn run_serve_connection_with_peers(
     server_stream: UnixStream,
-    configuration_root: PathBuf,
+    configuration_roots: ConfigurationRoots,
     state_root: PathBuf,
     bundle_catalog: BundleCatalog,
     peers: Vec<agentmux::relay::PeerConfiguration>,
@@ -495,7 +505,7 @@ fn run_serve_connection_with_peers(
             agentmux::relay::PeerConnectionManager::from_configuration(&state_root, &peers),
         );
         let serve_context = agentmux::relay::ConnectionServeContext::new(
-            configuration_root,
+            configuration_roots,
             state_root,
             bundle_catalog,
             peer_connection_manager,
@@ -561,14 +571,14 @@ fn spawn_answering_peer(socket_path: &Path, response: Value) -> mpsc::Receiver<V
 // returns the decoded `send` response's `results` array plus the request frame
 // the stub peer observed. Shared by the delivered/ingress-denied cases.
 fn forward_cross_relay_send(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     bundle_name: &str,
     peer_socket: &Path,
     observed: mpsc::Receiver<Value>,
 ) -> (Vec<Value>, Value) {
     forward_cross_relay_send_with_hello(
-        configuration_root,
+        configuration_roots,
         bundle_paths,
         peer_socket,
         observed,
@@ -581,14 +591,14 @@ fn forward_cross_relay_send(
 // forwarded Send carries an `on_behalf_of` attribution, alongside the default
 // socket-trust origin (which omits it).
 fn forward_cross_relay_send_with_hello(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     peer_socket: &Path,
     observed: mpsc::Receiver<Value>,
     requester_hello: Value,
 ) -> (Vec<Value>, Value) {
     let (mut client, handle) = spawn_relay_stream_with_peer(
-        configuration_root,
+        configuration_roots,
         bundle_paths,
         "peer",
         "origin-relay",
@@ -686,12 +696,12 @@ fn write_authenticated_session_store(state_root: &Path, principal_id: &str) {
 // Hellos as `principal_id` (a peer relay) with its registered PSK, submits one
 // request, and returns the decoded response frame.
 fn ingress_request_response(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     principal_id: &str,
     request: Value,
 ) -> Value {
-    let (mut client, handle) = spawn_relay_stream(configuration_root, bundle_paths);
+    let (mut client, handle) = spawn_relay_stream(configuration_roots, bundle_paths);
     let reader_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(reader_stream);
     send_json(
@@ -722,13 +732,13 @@ fn ingress_request_response(
 
 // Convenience wrapper: forwards an ingress Send to a single `target`.
 fn ingress_send_response(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     principal_id: &str,
     target: &str,
 ) -> Value {
     ingress_request_response(
-        configuration_root,
+        configuration_roots,
         bundle_paths,
         principal_id,
         json!({

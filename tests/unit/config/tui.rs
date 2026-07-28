@@ -1,3 +1,4 @@
+use agentmux::configuration::ConfigurationRoots;
 use std::fs;
 
 use tempfile::TempDir;
@@ -24,7 +25,7 @@ policy = "default"
     )
     .expect("write users.toml");
 
-    let loaded = load_tui_configuration(&root)
+    let loaded = load_tui_configuration(&ConfigurationRoots::single(&root))
         .expect("load tui configuration")
         .expect("existing config");
     assert_eq!(loaded.default_session.as_deref(), Some("user@GLOBAL"));
@@ -53,7 +54,7 @@ policy = "default"
     )
     .expect("write users.toml");
 
-    let loaded = load_tui_configuration(&root)
+    let loaded = load_tui_configuration(&ConfigurationRoots::single(&root))
         .expect("load tui configuration")
         .expect("existing config");
     assert_eq!(loaded.default_session.as_deref(), Some("user@GLOBAL"));
@@ -84,7 +85,8 @@ policy = "default"
     )
     .expect("write users.toml");
 
-    let error = load_tui_configuration(&root).expect_err("duplicate selector should fail");
+    let error = load_tui_configuration(&ConfigurationRoots::single(&root))
+        .expect_err("duplicate selector should fail");
     assert!(error.to_string().contains("duplicate users session id"));
 }
 
@@ -93,7 +95,8 @@ fn ignores_missing_tui_configuration() {
     let temporary = TempDir::new().expect("temporary");
     let root = temporary.path().join("config");
     fs::create_dir_all(&root).expect("create config root");
-    let loaded = load_tui_configuration(&root).expect("load tui config");
+    let loaded =
+        load_tui_configuration(&ConfigurationRoots::single(&root)).expect("load tui config");
     assert!(loaded.is_none(), "missing file should be ignored");
 }
 
@@ -120,7 +123,8 @@ policy = "default"
     )
     .expect("write users.toml");
 
-    let error = load_tui_configuration(&root).expect_err("duplicate selector should fail");
+    let error = load_tui_configuration(&ConfigurationRoots::single(&root))
+        .expect_err("duplicate selector should fail");
     assert!(error.to_string().contains("duplicate users session id"));
 }
 
@@ -155,7 +159,7 @@ send = "none"
     )
     .expect("write policies.toml");
 
-    let loaded = load_policy_ids(&root).expect("load policy ids");
+    let loaded = load_policy_ids(&ConfigurationRoots::single(&root)).expect("load policy ids");
     assert!(loaded.contains("default"));
     assert!(loaded.contains("restricted"));
 }

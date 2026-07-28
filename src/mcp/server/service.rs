@@ -17,6 +17,7 @@ use rmcp::{
 };
 use serde_json::json;
 
+use crate::configuration::ConfigurationRoots;
 use crate::relay::{RelayRequest, RelayResponse, RelayStreamSession};
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::paths::{BundleRuntimePaths, RelayRuntimePaths};
@@ -71,7 +72,10 @@ impl From<std::io::Error> for RelayCallError {
 /// Configuration provided when booting MCP stdio service.
 #[derive(Clone, Debug)]
 pub struct McpConfiguration {
-    pub configuration_root: PathBuf,
+    /// `None` when the process faulted before roots resolved. Every path that
+    /// reads them is behind the readiness gate, so the absence is unreachable
+    /// rather than something callers work around.
+    pub configuration_roots: Option<ConfigurationRoots>,
     pub state_root: PathBuf,
     pub associated_bundle_paths: Option<BundleRuntimePaths>,
     pub sender_session: Option<String>,
@@ -255,6 +259,22 @@ impl McpServer {
         }
     }
 
+    /// The resolved configuration layers, or the fault that kept them from
+    /// resolving.
+    ///
+    /// Roots are absent only on the branch that faulted before resolution, and
+    /// that branch is `Unavailable`, so this reports the original fault rather
+    /// than inventing one about missing roots.
+    pub(super) fn require_configuration_roots(
+        &self,
+    ) -> Result<&ConfigurationRoots, rmcp::ErrorData> {
+        self.state
+            .configuration
+            .configuration_roots
+            .as_ref()
+            .ok_or_else(|| self.unavailable_error())
+    }
+
     /// Whether the server holds a live relay stream. True only when both a sender
     /// session and an associated bundle are configured, mirroring the
     /// `relay_stream` construction in `new`; this is the real precondition every
@@ -281,6 +301,12 @@ impl McpServer {
     /// canonical unassociated-server error so the failure precedes any relay
     /// contact rather than surfacing later as a stream fault.
     pub(super) fn require_association(&self) -> Result<(), rmcp::ErrorData> {
+        // Readiness first. A retained fault outranks association state, and
+        // checking it here rather than at the relay boundary keeps it ahead of
+        // the configuration I/O some handlers perform on the way there — a
+        // loader error would otherwise surface first and mask the fault that
+        // caused it.
+        self.require_ready()?;
         if self.is_associated() {
             Ok(())
         } else {
@@ -293,6 +319,7 @@ impl McpServer {
     /// with the same canonical error. Association requires both the sender session
     /// and a bundle, so a partial configuration is unassociated by definition.
     pub(super) fn require_associated_sender_session(&self) -> Result<String, rmcp::ErrorData> {
+        self.require_ready()?;
         match (
             self.state.configuration.sender_session.as_ref(),
             self.state.configuration.associated_bundle_paths.as_ref(),

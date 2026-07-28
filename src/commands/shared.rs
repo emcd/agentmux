@@ -4,7 +4,9 @@ use std::{
 };
 
 use crate::{
-    configuration::{BundleGroupMembership, ConfigurationError, RESERVED_GROUP_ALL},
+    configuration::{
+        BundleGroupMembership, ConfigurationError, ConfigurationRootsError, RESERVED_GROUP_ALL,
+    },
     relay::{CredentialDestination, RelayError},
     runtime::{
         error::RuntimeError,
@@ -21,11 +23,20 @@ pub(super) fn parse_runtime_flag(
 ) -> Result<bool, RuntimeError> {
     match arguments[*index].as_str() {
         "--configuration-directory" => {
-            runtime.configuration_root = Some(PathBuf::from(take_value(
-                arguments,
-                index,
-                "--configuration-directory",
-            )?));
+            // Repeatable: each occurrence appends one layer, and the layers are
+            // searched in the order given, so the first occurrence is the
+            // highest-precedence one.
+            let value = take_value(arguments, index, "--configuration-directory")?;
+            if value.is_empty() {
+                return Err(RuntimeError::validation(
+                    "validation_invalid_configuration_layers",
+                    ConfigurationRootsError::EmptyElement {
+                        position: runtime.configuration_layers.len(),
+                    }
+                    .to_string(),
+                ));
+            }
+            runtime.configuration_layers.push(PathBuf::from(value));
             Ok(true)
         }
         "--state-directory" => {
@@ -52,10 +63,6 @@ pub(super) fn parse_runtime_flag(
             )?));
             Ok(true)
         }
-        "--discover-local-configuration" => {
-            runtime.discover_local_configuration = true;
-            Ok(true)
-        }
         _ => Ok(false),
     }
 }
@@ -70,7 +77,7 @@ pub(super) fn resolve_roots(
     current_directory: &Path,
 ) -> Result<RuntimeRoots, RuntimeError> {
     RuntimeRoots::resolve(&RuntimeRootOverrides {
-        configuration_root: runtime.configuration_root.clone(),
+        configuration_layers: runtime.configuration_layers.clone(),
         state_root: runtime.state_root.clone(),
         inscriptions_root: runtime.inscriptions_root.clone(),
         // An explicit --repository-root is operator intent and goes through
@@ -79,7 +86,6 @@ pub(super) fn resolve_roots(
             .repository_root
             .clone()
             .or_else(|| repository_checkout_root(current_directory)),
-        discover_local_configuration: runtime.discover_local_configuration,
     })
 }
 

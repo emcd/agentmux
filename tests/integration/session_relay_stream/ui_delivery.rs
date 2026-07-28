@@ -21,11 +21,11 @@ use super::*;
 fn relay_send_routes_to_connected_ui_stream_with_event_frames() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
-    let (mut ui_client, ui_handle) = spawn_relay_stream(&configuration_root, &bundle_paths);
+    let (mut ui_client, ui_handle) = spawn_relay_stream(&configuration_roots, &bundle_paths);
     let read_stream = ui_client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
 
@@ -46,7 +46,7 @@ fn relay_send_routes_to_connected_ui_stream_with_event_frames() {
             quiet_window_ms: None,
             on_behalf_of: None,
         },
-        &configuration_root,
+        &configuration_roots,
         bundle_name.as_str(),
         &bundle_paths.runtime_directory,
     )
@@ -115,12 +115,12 @@ fn relay_send_routes_to_connected_ui_stream_with_event_frames() {
 fn relay_send_waits_for_ui_reconnect_before_delivery() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
 
-    let (mut first_client, first_handle) = spawn_relay_stream(&configuration_root, &bundle_paths);
+    let (mut first_client, first_handle) = spawn_relay_stream(&configuration_roots, &bundle_paths);
     let first_reader_stream = first_client.try_clone().expect("clone stream");
     let mut first_reader = BufReader::new(first_reader_stream);
     send_json(
@@ -134,7 +134,7 @@ fn relay_send_waits_for_ui_reconnect_before_delivery() {
     first_handle.join().expect("join initial stream");
 
     let (mut reconnect_client, reconnect_handle) =
-        spawn_relay_stream(&configuration_root, &bundle_paths);
+        spawn_relay_stream(&configuration_roots, &bundle_paths);
     let reconnect_reader_stream = reconnect_client
         .try_clone()
         .expect("clone reconnect stream");
@@ -173,7 +173,7 @@ fn relay_send_waits_for_ui_reconnect_before_delivery() {
             quiet_window_ms: None,
             on_behalf_of: None,
         },
-        &configuration_root,
+        &configuration_roots,
         bundle_name.as_str(),
         &bundle_paths.runtime_directory,
     )
@@ -211,12 +211,13 @@ fn relay_send_waits_for_ui_reconnect_before_delivery() {
 fn relay_async_send_emits_terminal_delivery_outcome_to_sender_ui_stream() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
 
-    let (mut sender_client, sender_handle) = spawn_relay_stream(&configuration_root, &bundle_paths);
+    let (mut sender_client, sender_handle) =
+        spawn_relay_stream(&configuration_roots, &bundle_paths);
     let sender_read_stream = sender_client.try_clone().expect("clone sender stream");
     sender_read_stream
         .set_read_timeout(Some(Duration::from_millis(100)))
@@ -239,7 +240,7 @@ fn relay_async_send_emits_terminal_delivery_outcome_to_sender_ui_stream() {
             quiet_window_ms: None,
             on_behalf_of: None,
         },
-        &configuration_root,
+        &configuration_roots,
         bundle_name.as_str(),
         &bundle_paths.runtime_directory,
     )
@@ -293,7 +294,7 @@ fn relay_async_send_emits_terminal_delivery_outcome_to_sender_ui_stream() {
 fn relay_configured_ui_target_recovers_after_late_stream_registration() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
+    let configuration_roots = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
@@ -313,7 +314,7 @@ fn relay_configured_ui_target_recovers_after_late_stream_registration() {
             quiet_window_ms: None,
             on_behalf_of: None,
         },
-        &configuration_root,
+        &configuration_roots,
         bundle_name.as_str(),
         &bundle_paths.runtime_directory,
     )
@@ -329,7 +330,7 @@ fn relay_configured_ui_target_recovers_after_late_stream_registration() {
     thread::sleep(UI_DELIVERY_WORKER_BUDGET);
 
     // The UI client now connects and registers a Ui stream for `display`.
-    let (mut ui_client, ui_handle) = spawn_relay_stream(&configuration_root, &bundle_paths);
+    let (mut ui_client, ui_handle) = spawn_relay_stream(&configuration_roots, &bundle_paths);
     let read_stream = ui_client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(
@@ -351,7 +352,7 @@ fn relay_configured_ui_target_recovers_after_late_stream_registration() {
             quiet_window_ms: None,
             on_behalf_of: None,
         },
-        &configuration_root,
+        &configuration_roots,
         bundle_name.as_str(),
         &bundle_paths.runtime_directory,
     )

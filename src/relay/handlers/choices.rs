@@ -2,7 +2,7 @@ use std::path::Path;
 
 use serde_json::json;
 
-use crate::configuration::{BundleConfiguration, load_bundle_configuration};
+use crate::configuration::{BundleConfiguration, ConfigurationRoots, load_bundle_configuration};
 
 use super::super::authorization::{
     AuthorizationContext, authorize_choose, authorize_choose_for_list,
@@ -19,13 +19,13 @@ use super::super::{
 };
 
 pub(super) fn emit_choices_snapshot_for_ui_registration(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     namespace: &str,
     runtime_directory: &Path,
     ui_session_id: &str,
 ) -> Result<(), RelayError> {
-    let bundle = load_bundle_configuration(configuration_root, namespace).map_err(map_config)?;
-    let authorization = load_authorization_context(configuration_root, Some(&bundle))?;
+    let bundle = load_bundle_configuration(configuration_roots, namespace).map_err(map_config)?;
+    let authorization = load_authorization_context(configuration_roots, Some(&bundle))?;
     let authorized_sessions = choose_authorized_ui_sessions(&authorization, &bundle);
     if !authorized_sessions
         .iter()

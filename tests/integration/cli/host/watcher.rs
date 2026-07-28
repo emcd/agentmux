@@ -469,12 +469,13 @@ fn host_relay_watcher_reloads_modified_bundle_file_at_runtime() {
     assert_eq!(after["principal_id"], "a@alpha");
 }
 
-// An overlay definition appearing over a byte-identical base — and later being
-// removed to reveal it again — changes which file supplies the identifier
-// without changing a single content byte. Both transitions must reload, since
-// the relay now tracks a different file for edits and deletions.
+// A definition appearing in an earlier layer over a byte-identical one in a
+// later layer — and later being removed to reveal it again — changes which file
+// supplies the identifier without changing a single content byte. Both
+// transitions must reload, since the relay now tracks a different file for edits
+// and deletions.
 #[test]
-fn host_relay_watcher_reloads_when_a_byte_identical_overlay_appears_and_is_removed() {
+fn host_relay_watcher_reloads_when_a_byte_identical_earlier_layer_appears_and_is_removed() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = temporary.path().join("config");
     let state_root = temporary.path().join("state");
@@ -489,10 +490,13 @@ fn host_relay_watcher_reloads_when_a_byte_identical_overlay_appears_and_is_remov
         &["a"],
         Some(true),
     );
-    let overlay_bundles = config_root.join("overlay/bundles");
-    fs::create_dir_all(&overlay_bundles).expect("create overlay bundles");
+    // A sibling layer, watched from startup so its bundles directory appearing
+    // later is observed. The bundle file itself arrives mid-test.
+    let override_layer = temporary.path().join("override");
+    let override_bundles = override_layer.join("bundles");
+    fs::create_dir_all(&override_bundles).expect("create override bundles");
     let base_bundle = config_root.join("bundles/alpha.toml");
-    let overlay_bundle = overlay_bundles.join("alpha.toml");
+    let override_bundle = override_bundles.join("alpha.toml");
     let fake_tmux = temporary.path().join("fake-tmux.sh");
     write_fake_tmux_script(&fake_tmux);
 
@@ -500,6 +504,8 @@ fn host_relay_watcher_reloads_when_a_byte_identical_overlay_appears_and_is_remov
         .args([
             "host",
             "relay",
+            "--configuration-directory",
+            &override_layer.to_string_lossy(),
             "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
@@ -517,10 +523,10 @@ fn host_relay_watcher_reloads_when_a_byte_identical_overlay_appears_and_is_remov
 
     let (_appearance_stream, mut appearance_reader, appearance_hello) =
         relay_hello_keepalive(&state_root, "a@alpha", "socket-trust");
-    fs::copy(&base_bundle, &overlay_bundle).expect("copy base bundle into the overlay");
+    fs::copy(&base_bundle, &override_bundle).expect("copy base bundle into the earlier layer");
     let appearance_eviction = expect_watcher_signal(
         read_next_frame(&mut appearance_reader),
-        "overlay appearance reload eviction frame",
+        "earlier-layer appearance reload eviction frame",
         &inscriptions_root,
     );
     let after_appearance =
@@ -530,10 +536,10 @@ fn host_relay_watcher_reloads_when_a_byte_identical_overlay_appears_and_is_remov
 
     let (_removal_stream, mut removal_reader, removal_hello) =
         relay_hello_keepalive(&state_root, "a@alpha", "socket-trust");
-    fs::remove_file(&overlay_bundle).expect("remove the overlay bundle");
+    fs::remove_file(&override_bundle).expect("remove the earlier-layer bundle");
     let removal_eviction = expect_watcher_signal(
         read_next_frame(&mut removal_reader),
-        "overlay removal reload eviction frame",
+        "earlier-layer removal reload eviction frame",
         &inscriptions_root,
     );
     let after_removal = poll_hello_first_frame(&state_root, "a@alpha", "socket-trust", |frame| {
@@ -548,13 +554,15 @@ fn host_relay_watcher_reloads_when_a_byte_identical_overlay_appears_and_is_remov
     assert_eq!(appearance_hello["frame"], "hello_ack");
     assert_eq!(
         appearance_eviction["response"]["error"]["code"], "runtime_bundle_reloaded",
-        "an overlay appearing over identical base content must reload: {appearance_eviction:?}"
+        "an earlier layer appearing over identical base content must reload: \
+         {appearance_eviction:?}"
     );
     assert_eq!(after_appearance["frame"], "hello_ack");
     assert_eq!(removal_hello["frame"], "hello_ack");
     assert_eq!(
         removal_eviction["response"]["error"]["code"], "runtime_bundle_reloaded",
-        "removing an overlay to reveal identical base content must reload: {removal_eviction:?}"
+        "removing an earlier layer to reveal identical base content must reload: \
+         {removal_eviction:?}"
     );
     assert_eq!(after_removal["frame"], "hello_ack");
 }

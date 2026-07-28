@@ -21,7 +21,8 @@
 //! namespace-rejection and the `GLOBAL` list clusters) live in this hub.
 //! Cluster-specific helpers live with their cluster.
 
-use std::{io::BufReader, path::Path};
+use agentmux::configuration::ConfigurationRoots;
+use std::io::BufReader;
 
 use serde_json::{Value, json};
 
@@ -35,12 +36,12 @@ mod send;
 /// Connects as a bundle-bound `alpha` session, sends one `list` request whose
 /// frame carries the given routing `namespace`, and returns the response frame.
 fn bundle_session_list_with_namespace(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     bundle_name: &str,
     namespace: &str,
 ) -> Value {
-    let (mut client, join) = spawn_relay_connection(configuration_root, bundle_paths);
+    let (mut client, join) = spawn_relay_connection(configuration_roots, bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     send_json(
         &mut client,

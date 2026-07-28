@@ -3,7 +3,7 @@ use std::env;
 use serde_json::{Map, Value, json};
 
 use crate::{
-    configuration::{load_bundle_configuration, load_bundle_group_memberships},
+    configuration::{ConfigurationRoots, load_bundle_configuration, load_bundle_group_memberships},
     relay::{RelayRequest, RelayResponse, request_relay},
     runtime::{
         error::RuntimeError, paths::RelayRuntimePaths,
@@ -26,12 +26,12 @@ pub(super) fn run_bundle_command(
     let roots = shared::resolve_roots(&parsed.runtime, &current_directory)?;
     ensure_starter_configuration_layout(&roots)?;
 
-    let selected_bundles = resolve_selected_bundles(&roots.configuration_root, &parsed.selector)?;
+    let selected_bundles = resolve_selected_bundles(&roots.configuration_roots, &parsed.selector)?;
     let relay_paths = RelayRuntimePaths::resolve(&roots.state_root);
     let mut bundles = Vec::<BundleTransitionResult>::with_capacity(selected_bundles.len());
     for bundle_name in selected_bundles {
         let resolved_operator = resolve_tui_session_identity(
-            &roots.configuration_root,
+            &roots.configuration_roots,
             Some(bundle_name.as_str()),
             None,
         )?;
@@ -82,13 +82,13 @@ pub(super) fn run_bundle_command(
 
 pub(super) fn print_up_help() {
     println!(
-        "Usage: agentmux up (<bundle-id> | --group GROUP) [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH] [--discover-local-configuration]"
+        "Usage: agentmux up (<bundle-id> | --group GROUP) [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }
 
 pub(super) fn print_down_help() {
     println!(
-        "Usage: agentmux down (<bundle-id> | --group GROUP) [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH] [--discover-local-configuration]"
+        "Usage: agentmux down (<bundle-id> | --group GROUP) [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }
 
@@ -152,17 +152,17 @@ fn parse_bundle_arguments(
 }
 
 fn resolve_selected_bundles(
-    configuration_root: &std::path::Path,
+    configuration_roots: &ConfigurationRoots,
     selector: &BundleSelector,
 ) -> Result<Vec<String>, RuntimeError> {
     match selector {
         BundleSelector::Bundle(bundle_name) => {
-            let _bundle = load_bundle_configuration(configuration_root, bundle_name)
+            let _bundle = load_bundle_configuration(configuration_roots, bundle_name)
                 .map_err(shared::map_bundle_load_error)?;
             Ok(vec![bundle_name.to_string()])
         }
         BundleSelector::Group(group_name) => {
-            let memberships = load_bundle_group_memberships(configuration_root)
+            let memberships = load_bundle_group_memberships(configuration_roots)
                 .map_err(shared::map_bundle_load_error)?;
             shared::resolve_group_bundles(memberships, group_name)
         }

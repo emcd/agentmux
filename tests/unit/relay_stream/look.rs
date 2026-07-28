@@ -15,12 +15,13 @@
 //! keeps the authorization outcome observable for the denial test.
 
 use super::*;
+use agentmux::configuration::ConfigurationRoots;
 
 /// Overwrites the policy artifact so the `default` preset's `look` control uses
 /// the given scope, leaving the other controls at workable defaults.
-fn write_policies_with_look(configuration_root: &Path, look: &str) {
+fn write_policies_with_look(configuration_roots: &ConfigurationRoots, look: &str) {
     std::fs::write(
-        configuration_root.join("policies.toml"),
+        configuration_roots.base_layer().join("policies.toml"),
         format!(
             r#"
 format-version = 1
@@ -43,14 +44,14 @@ send = "home"
 /// Connects as a bundle-bound `alpha` session and issues one cross-bundle `look`
 /// at `target_session`, returning the response frame.
 fn cross_bundle_look(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     state_root: &Path,
     catalog: BundleCatalog,
     bundle_name: &str,
     target_session: &str,
 ) -> Value {
     let (mut client, join) =
-        spawn_relay_connection_with_catalog(configuration_root, state_root, catalog);
+        spawn_relay_connection_with_catalog(configuration_roots, state_root, catalog);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     send_json(
         &mut client,
@@ -93,16 +94,16 @@ fn cross_bundle_look_permitted_under_all_scope_resolves_peer() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_a = "look_peer_a";
     let bundle_b = "look_peer_b";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_a);
-    write_ui_bundle(&configuration_root, bundle_b);
-    write_policies_with_look(&configuration_root, "all");
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_a);
+    write_ui_bundle(&configuration_roots, bundle_b);
+    write_policies_with_look(&configuration_roots, "all");
     let state_root = temporary.path().join("state");
     let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
     let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b).expect("bundle-b paths");
     let catalog = multi_bundle_catalog(&[paths_a, paths_b]);
 
     let response = cross_bundle_look(
-        &configuration_root,
+        &configuration_roots,
         &state_root,
         catalog,
         bundle_a,
@@ -128,16 +129,16 @@ fn cross_bundle_look_denied_under_home_scope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_a = "look_home_a";
     let bundle_b = "look_home_b";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_a);
-    write_tmux_bundle(&configuration_root, bundle_b);
-    write_policies_with_look(&configuration_root, "home");
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_a);
+    write_tmux_bundle(&configuration_roots, bundle_b);
+    write_policies_with_look(&configuration_roots, "home");
     let state_root = temporary.path().join("state");
     let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
     let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b).expect("bundle-b paths");
     let catalog = multi_bundle_catalog(&[paths_a, paths_b]);
 
     let response = cross_bundle_look(
-        &configuration_root,
+        &configuration_roots,
         &state_root,
         catalog,
         bundle_a,
@@ -160,14 +161,14 @@ fn cross_bundle_look_denied_under_home_scope() {
 fn cross_bundle_look_rejects_unknown_peer_bundle() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_a = "look_nobundle_a";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_a);
-    write_policies_with_look(&configuration_root, "all");
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_a);
+    write_policies_with_look(&configuration_roots, "all");
     let state_root = temporary.path().join("state");
     let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
     let catalog = multi_bundle_catalog(&[paths_a]);
 
     let response = cross_bundle_look(
-        &configuration_root,
+        &configuration_roots,
         &state_root,
         catalog,
         bundle_a,
@@ -188,16 +189,16 @@ fn cross_bundle_look_rejects_unknown_target_in_peer_bundle() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_a = "look_notarget_a";
     let bundle_b = "look_notarget_b";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_a);
-    write_ui_bundle(&configuration_root, bundle_b);
-    write_policies_with_look(&configuration_root, "all");
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_a);
+    write_ui_bundle(&configuration_roots, bundle_b);
+    write_policies_with_look(&configuration_roots, "all");
     let state_root = temporary.path().join("state");
     let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
     let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b).expect("bundle-b paths");
     let catalog = multi_bundle_catalog(&[paths_a, paths_b]);
 
     let response = cross_bundle_look(
-        &configuration_root,
+        &configuration_roots,
         &state_root,
         catalog,
         bundle_a,

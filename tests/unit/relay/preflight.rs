@@ -36,7 +36,7 @@ fn preflight_reports_invalid_relay_toml_peer() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     std::fs::write(
-        config_root.join("relay.toml"),
+        config_root.base_layer().join("relay.toml"),
         "[[peers]]\nalias = \"west\"\naddress = \"\"\nconnect-as = \"east\"\n",
     )
     .expect("write relay.toml");
@@ -61,7 +61,7 @@ fn preflight_reports_duplicate_peer_alias() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     std::fs::write(
-        config_root.join("relay.toml"),
+        config_root.base_layer().join("relay.toml"),
         "[[peers]]\nalias = \"west\"\naddress = \"/run/agentmux/west-a.sock\"\nconnect-as = \"east\"\n\
          [[peers]]\nalias = \"west\"\naddress = \"/run/agentmux/west-b.sock\"\nconnect-as = \"north\"\n",
     )

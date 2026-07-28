@@ -5,16 +5,16 @@ use std::{fs, path::Path};
 use serde::Deserialize;
 
 use crate::configuration::{
-    BUNDLE_ENVIRONMENT_VARIABLE, BundleConfiguration, ConfigurationError,
+    BUNDLE_ENVIRONMENT_VARIABLE, BundleConfiguration, ConfigurationError, ConfigurationRoots,
     SESSION_ENVIRONMENT_VARIABLE, effective_configuration_path,
     infer_sender_from_working_directory,
 };
 
 use super::error::RuntimeError;
 
-/// Logical artifact holding per-tree association overrides. Resolved through
-/// the configuration overlay like every other configuration file, so an overlay
-/// copy shadows a base copy.
+/// Logical artifact holding association overrides. Resolved through the
+/// configuration layers like every other configuration file, so a copy in an
+/// earlier layer shadows a copy in a later one.
 const ASSOCIATION_FILE: &str = "mcp.toml";
 
 /// CLI association hints provided by MCP startup arguments.
@@ -48,9 +48,9 @@ struct McpAssociationOverrideFile {
 ///
 /// Returns validation errors for malformed override file content.
 pub fn load_local_mcp_overrides(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
 ) -> Result<Option<McpAssociationOverrides>, RuntimeError> {
-    let path = effective_configuration_path(configuration_root, ASSOCIATION_FILE);
+    let path = effective_configuration_path(configuration_roots, ASSOCIATION_FILE);
     if !path.exists() {
         return Ok(None);
     }
@@ -112,7 +112,7 @@ impl McpAssociationEnvironment {
 pub enum AssociationSource {
     CommandLine,
     Environment,
-    Overlay,
+    AssociationFile,
     DefaultBundle,
     WorkingDirectory,
 }
@@ -123,7 +123,7 @@ impl AssociationSource {
         match self {
             Self::CommandLine => "command-line",
             Self::Environment => "environment",
-            Self::Overlay => "overlay",
+            Self::AssociationFile => "association-file",
             Self::DefaultBundle => "default-bundle",
             Self::WorkingDirectory => "working-directory",
         }
@@ -156,8 +156,10 @@ pub struct AssociationCandidates {
 /// Resolves association identity by precedence, each tier ranked by how
 /// deployment-specific its source is.
 ///
-/// Bundle: `--bundle` > injected environment > overlay file > `--default-bundle`.
-/// Session: `--session-name` > injected environment > overlay file, with the
+/// Bundle: `--bundle` > injected environment > effective association file >
+/// `--default-bundle`.
+/// Session: `--session-name` > injected environment > effective association
+/// file, with the
 /// working-directory match against declared member directories applied later by
 /// the caller, once the bundle configuration is loaded.
 ///
@@ -181,7 +183,7 @@ pub fn resolve_association(
         .or_else(|| {
             candidate(
                 local_overrides.and_then(|overrides| overrides.bundle_name.clone()),
-                AssociationSource::Overlay,
+                AssociationSource::AssociationFile,
             )
         })
         .or_else(|| {
@@ -200,7 +202,7 @@ pub fn resolve_association(
         .or_else(|| {
             candidate(
                 local_overrides.and_then(|overrides| overrides.session_name.clone()),
-                AssociationSource::Overlay,
+                AssociationSource::AssociationFile,
             )
         });
     AssociationCandidates { bundle, session }

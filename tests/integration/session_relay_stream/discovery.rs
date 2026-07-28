@@ -11,6 +11,7 @@
 //!   `principals_partial` subset, an out-of-scope or empty namespace discloses no
 //!   existence, and an absent scope denies.
 
+use agentmux::configuration::ConfigurationRoots;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
@@ -39,13 +40,13 @@ use super::{
 // that must not dial (relay enumeration) succeed regardless, and paths that fail
 // authorization before dialing never reach them.
 fn spawn_origin_relay(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     state_root: &Path,
     catalog_paths: Vec<BundleRuntimePaths>,
     aliases: &[&str],
 ) -> (UnixStream, thread::JoinHandle<()>) {
     let (server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
-    let root = configuration_root.to_path_buf();
+    let root = configuration_roots.clone();
     let state = state_root.to_path_buf();
     let catalog = BundleCatalog::from_paths(catalog_paths);
     let peers: Vec<PeerConfiguration> = aliases
@@ -114,23 +115,23 @@ fn discovery_exchange(
     response
 }
 
-fn origin_fixture() -> (TempDir, String, std::path::PathBuf, BundleRuntimePaths) {
+fn origin_fixture() -> (TempDir, String, ConfigurationRoots, BundleRuntimePaths) {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
-    (temporary, bundle_name, configuration_root, bundle_paths)
+    (temporary, bundle_name, configuration_roots, bundle_paths)
 }
 
 #[test]
 fn list_relays_enumerates_configured_aliases_sorted_without_dialing() {
-    let (_temporary, bundle_name, configuration_root, bundle_paths) = origin_fixture();
+    let (_temporary, bundle_name, configuration_roots, bundle_paths) = origin_fixture();
     let state_root = bundle_paths.state_root.clone();
     // Two aliases in reverse order; nonexistent sockets prove no dial occurs.
     let (client, handle) = spawn_origin_relay(
-        &configuration_root,
+        &configuration_roots,
         &state_root,
         vec![bundle_paths.clone()],
         &["west", "east"],
@@ -153,10 +154,10 @@ fn list_relays_enumerates_configured_aliases_sorted_without_dialing() {
 
 #[test]
 fn list_relays_returns_empty_when_no_peers_configured() {
-    let (_temporary, bundle_name, configuration_root, bundle_paths) = origin_fixture();
+    let (_temporary, bundle_name, configuration_roots, bundle_paths) = origin_fixture();
     let state_root = bundle_paths.state_root.clone();
     let (client, handle) = spawn_origin_relay(
-        &configuration_root,
+        &configuration_roots,
         &state_root,
         vec![bundle_paths.clone()],
         &[],
@@ -179,11 +180,11 @@ fn list_relays_returns_empty_when_no_peers_configured() {
 
 #[test]
 fn list_relays_requires_all_scope() {
-    let (_temporary, bundle_name, configuration_root, bundle_paths) = origin_fixture();
+    let (_temporary, bundle_name, configuration_roots, bundle_paths) = origin_fixture();
     let state_root = bundle_paths.state_root.clone();
     // `alpha` resolves the default policy (`list = home`), below the `all` tier.
     let (client, handle) = spawn_origin_relay(
-        &configuration_root,
+        &configuration_roots,
         &state_root,
         vec![bundle_paths.clone()],
         &["west"],
@@ -204,12 +205,13 @@ fn list_relays_requires_all_scope() {
 
 #[test]
 fn local_namespace_discovery_follows_list_scope() {
-    let (temporary, bundle_name, configuration_root, bundle_paths) = origin_fixture();
+    let (temporary, bundle_name, configuration_roots, bundle_paths) = origin_fixture();
     let state_root = bundle_paths.state_root.clone();
     // A second bundle the requester is not a member of, loaded into the catalog.
     let other_bundle = format!("other-{}", Uuid::new_v4().simple());
     std::fs::write(
-        configuration_root
+        configuration_roots
+            .base_layer()
             .join("bundles")
             .join(format!("{other_bundle}.toml")),
         "\nformat-version = 1\n\n[[sessions]]\nid = \"alpha\"\nname = \"Alpha\"\ndirectory = \"/tmp\"\ncoder = \"shell\"\n",
@@ -221,7 +223,7 @@ fn local_namespace_discovery_follows_list_scope() {
 
     // The `all`-tier operator sees every configured bundle namespace plus GLOBAL.
     let (client, handle) =
-        spawn_origin_relay(&configuration_root, &state_root, catalog.clone(), &[]);
+        spawn_origin_relay(&configuration_roots, &state_root, catalog.clone(), &[]);
     let operator = discovery_exchange(
         client,
         handle,
@@ -242,7 +244,7 @@ fn local_namespace_discovery_follows_list_scope() {
     assert!(namespaces.contains(&other_bundle.as_str()));
 
     // A home-tier member sees only its home namespace and GLOBAL.
-    let (client, handle) = spawn_origin_relay(&configuration_root, &state_root, catalog, &[]);
+    let (client, handle) = spawn_origin_relay(&configuration_roots, &state_root, catalog, &[]);
     let member = discovery_exchange(
         client,
         handle,
@@ -264,13 +266,13 @@ fn local_namespace_discovery_follows_list_scope() {
 
 #[test]
 fn foreign_discovery_requires_all_scope_before_peer_contact() {
-    let (_temporary, bundle_name, configuration_root, bundle_paths) = origin_fixture();
+    let (_temporary, bundle_name, configuration_roots, bundle_paths) = origin_fixture();
     write_peer_credential(&bundle_paths.state_root, "west", "peer-secret");
     // No listener bound: if authorization did not fail first, the forward would
     // dial this dead socket. `alpha` holds `list = home`, so the origin denies.
-    let peer_socket = configuration_root.join("west.sock");
+    let peer_socket = configuration_roots.base_layer().join("west.sock");
     let (client, handle) = spawn_relay_stream_with_peer(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         "west",
         "origin-relay",
@@ -292,7 +294,7 @@ fn foreign_discovery_requires_all_scope_before_peer_contact() {
 
 #[test]
 fn foreign_namespace_discovery_forwards_without_origin_selectors() {
-    let (temporary, bundle_name, configuration_root, bundle_paths) = origin_fixture();
+    let (temporary, bundle_name, configuration_roots, bundle_paths) = origin_fixture();
     write_peer_credential(&bundle_paths.state_root, "west", "peer-secret");
     let peer_socket = temporary.path().join("west.sock");
     let observed = spawn_answering_peer(
@@ -304,7 +306,7 @@ fn foreign_namespace_discovery_forwards_without_origin_selectors() {
         }),
     );
     let (client, handle) = spawn_relay_stream_with_peer(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         "west",
         "origin-relay",
@@ -332,7 +334,7 @@ fn foreign_namespace_discovery_forwards_without_origin_selectors() {
 
 #[test]
 fn foreign_principal_discovery_propagates_peer_bundles_unchanged() {
-    let (temporary, bundle_name, configuration_root, bundle_paths) = origin_fixture();
+    let (temporary, bundle_name, configuration_roots, bundle_paths) = origin_fixture();
     write_peer_credential(&bundle_paths.state_root, "west", "peer-secret");
     let peer_socket = temporary.path().join("west.sock");
     // A principal-scoped subset the peer authored, foreign id `myapp`.
@@ -353,7 +355,7 @@ fn foreign_principal_discovery_propagates_peer_bundles_unchanged() {
         }),
     );
     let (client, handle) = spawn_relay_stream_with_peer(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         "west",
         "origin-relay",
@@ -385,7 +387,7 @@ fn foreign_principal_discovery_propagates_peer_bundles_unchanged() {
 
 #[test]
 fn foreign_discovery_propagates_peer_authorization_denial() {
-    let (temporary, bundle_name, configuration_root, bundle_paths) = origin_fixture();
+    let (temporary, bundle_name, configuration_roots, bundle_paths) = origin_fixture();
     write_peer_credential(&bundle_paths.state_root, "west", "peer-secret");
     let peer_socket = temporary.path().join("west.sock");
     let _observed = spawn_answering_peer(
@@ -399,7 +401,7 @@ fn foreign_discovery_propagates_peer_authorization_denial() {
         }),
     );
     let (client, handle) = spawn_relay_stream_with_peer(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         "west",
         "origin-relay",
@@ -422,11 +424,11 @@ fn foreign_discovery_propagates_peer_authorization_denial() {
 
 #[test]
 fn foreign_discovery_reports_unknown_alias_typed_error() {
-    let (_temporary, bundle_name, configuration_root, bundle_paths) = origin_fixture();
+    let (_temporary, bundle_name, configuration_roots, bundle_paths) = origin_fixture();
     write_peer_credential(&bundle_paths.state_root, "west", "peer-secret");
-    let peer_socket = configuration_root.join("west.sock");
+    let peer_socket = configuration_roots.base_layer().join("west.sock");
     let (client, handle) = spawn_relay_stream_with_peer(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         "west",
         "origin-relay",
@@ -451,7 +453,7 @@ fn foreign_discovery_reports_unknown_alias_typed_error() {
 fn ingress_namespace_discovery_derives_from_receiver_catalog() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
@@ -463,7 +465,7 @@ fn ingress_namespace_discovery_derives_from_receiver_catalog() {
         Some(bundle_name.as_str()),
     );
     let response = ingress_request_response(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
         json!({"operation": "discover_namespaces"}),
@@ -483,14 +485,14 @@ fn ingress_namespace_discovery_derives_from_receiver_catalog() {
 fn ingress_namespace_discovery_denies_absent_scope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
     let relay_principal_id = unique_relay_principal_id();
     write_ingress_peer_store(&bundle_paths.state_root, relay_principal_id.as_str(), None);
     let response = ingress_request_response(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
         json!({"operation": "discover_namespaces"}),
@@ -506,7 +508,7 @@ fn ingress_namespace_discovery_denies_absent_scope() {
 fn ingress_namespace_discovery_omits_empty_namespace() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
@@ -519,7 +521,7 @@ fn ingress_namespace_discovery_omits_empty_namespace() {
         Some("phantom"),
     );
     let response = ingress_request_response(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
         json!({"operation": "discover_namespaces"}),
@@ -537,7 +539,7 @@ fn ingress_namespace_discovery_omits_empty_namespace() {
 fn ingress_principal_discovery_returns_complete_namespace_under_namespace_scope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
@@ -548,7 +550,7 @@ fn ingress_principal_discovery_returns_complete_namespace_under_namespace_scope(
         Some(bundle_name.as_str()),
     );
     let response = ingress_request_response(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
         json!({"operation": "discover_principals", "namespace": bundle_name}),
@@ -571,7 +573,7 @@ fn ingress_principal_discovery_returns_complete_namespace_under_namespace_scope(
 fn ingress_principal_discovery_marks_subset_under_exact_principal_scope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
@@ -583,7 +585,7 @@ fn ingress_principal_discovery_marks_subset_under_exact_principal_scope() {
         Some(format!("alpha@{bundle_name}").as_str()),
     );
     let response = ingress_request_response(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
         json!({"operation": "discover_principals", "namespace": bundle_name}),
@@ -606,7 +608,7 @@ fn ingress_principal_discovery_marks_subset_under_exact_principal_scope() {
 fn ingress_principal_discovery_denies_out_of_scope_namespace_without_disclosure() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
@@ -619,7 +621,7 @@ fn ingress_principal_discovery_denies_out_of_scope_namespace_without_disclosure(
         Some("some-other-bundle"),
     );
     let response = ingress_request_response(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
         json!({"operation": "discover_principals", "namespace": bundle_name}),
@@ -645,7 +647,7 @@ fn ingress_principal_discovery_denies_out_of_scope_namespace_without_disclosure(
 fn ingress_principal_discovery_denies_absent_scope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
@@ -654,7 +656,7 @@ fn ingress_principal_discovery_denies_absent_scope() {
     // discovery, exactly as for namespace discovery.
     write_ingress_peer_store(&bundle_paths.state_root, relay_principal_id.as_str(), None);
     let response = ingress_request_response(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
         json!({"operation": "discover_principals", "namespace": bundle_name}),
@@ -674,12 +676,13 @@ fn ingress_principal_discovery_denies_absent_scope() {
 fn ingress_exact_scope_suppresses_stale_out_of_scope_startup_history() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
     // Reconfigure the bundle to the single member `alpha`. `bravo` is no longer a
     // configured member, but a stale startup-failure record for it survives on
     // disk (startup history is keyed by session id, independent of membership).
     std::fs::write(
-        configuration_root
+        configuration_roots
+            .base_layer()
             .join("bundles")
             .join(format!("{bundle_name}.toml")),
         "\nformat-version = 1\n\n[[sessions]]\nid = \"alpha\"\nname = \"Alpha\"\ndirectory = \"/tmp\"\ncoder = \"shell\"\n",
@@ -700,7 +703,7 @@ fn ingress_exact_scope_suppresses_stale_out_of_scope_startup_history() {
         Some(format!("alpha@{bundle_name}").as_str()),
     );
     let response = ingress_request_response(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
         json!({"operation": "discover_principals", "namespace": bundle_name}),
@@ -732,13 +735,13 @@ fn ingress_exact_scope_suppresses_stale_out_of_scope_startup_history() {
 
 #[test]
 fn foreign_discovery_reports_unknown_peer_when_none_configured() {
-    let (_temporary, bundle_name, configuration_root, bundle_paths) = origin_fixture();
+    let (_temporary, bundle_name, configuration_roots, bundle_paths) = origin_fixture();
     let state_root = bundle_paths.state_root.clone();
     // No peers are configured at all. An `all`-scoped requester still gets a typed
     // unknown-peer error, distinct from the unknown-alias case (which has a peer
     // configured under a different alias).
     let (client, handle) = spawn_origin_relay(
-        &configuration_root,
+        &configuration_roots,
         &state_root,
         vec![bundle_paths.clone()],
         &[],
@@ -759,7 +762,7 @@ fn foreign_discovery_reports_unknown_peer_when_none_configured() {
 
 #[test]
 fn foreign_discovery_reports_unreachable_on_peer_authentication_failure() {
-    let (temporary, bundle_name, configuration_root, bundle_paths) = origin_fixture();
+    let (temporary, bundle_name, configuration_roots, bundle_paths) = origin_fixture();
     write_peer_credential(&bundle_paths.state_root, "west", "peer-secret");
     let peer_socket = temporary.path().join("west.sock");
     // A peer that answers the Hello with the structured credential-rejection error
@@ -768,7 +771,7 @@ fn foreign_discovery_reports_unreachable_on_peer_authentication_failure() {
     // classification, so authentication failure is not a distinct code.
     spawn_rejecting_peer(&peer_socket);
     let (client, handle) = spawn_relay_stream_with_peer(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         "west",
         "origin-relay",
@@ -793,7 +796,7 @@ fn foreign_discovery_reports_unreachable_on_peer_authentication_failure() {
 fn ingress_principal_subset_suppresses_out_of_scope_bundle_diagnostics() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
@@ -807,7 +810,7 @@ fn ingress_principal_subset_suppresses_out_of_scope_bundle_diagnostics() {
         Some(format!("alpha@{bundle_name}").as_str()),
     );
     let response = ingress_request_response(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
         json!({"operation": "discover_principals", "namespace": bundle_name}),
@@ -844,7 +847,7 @@ fn ingress_principal_subset_suppresses_out_of_scope_bundle_diagnostics() {
 fn ingress_global_principal_discovery_enumerates_registry_under_namespace_scope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
@@ -862,9 +865,9 @@ fn ingress_global_principal_discovery_enumerates_registry_under_namespace_scope(
     // configuration declares exactly this operator.
     let global_id = global_user_id(&bundle_name);
     let (global_client, global_handle) =
-        spawn_live_global_principal(&configuration_root, &bundle_paths, global_id.as_str());
+        spawn_live_global_principal(&configuration_roots, &bundle_paths, global_id.as_str());
     let response = ingress_request_response(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
         json!({"operation": "discover_principals", "namespace": "GLOBAL"}),
@@ -897,25 +900,25 @@ fn ingress_global_principal_discovery_enumerates_registry_under_namespace_scope(
 fn ingress_global_principal_discovery_marks_subset_under_exact_scope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
     let relay_principal_id = unique_relay_principal_id();
     // Two declared GLOBAL operators, both live in the registry; the exact grant
     // covers only one.
-    let (covered, excluded) = declare_two_global_operators(&configuration_root, &bundle_name);
+    let (covered, excluded) = declare_two_global_operators(&configuration_roots, &bundle_name);
     write_ingress_peer_store(
         &bundle_paths.state_root,
         relay_principal_id.as_str(),
         Some(covered.as_str()),
     );
     let (covered_client, covered_handle) =
-        spawn_live_global_principal(&configuration_root, &bundle_paths, covered.as_str());
+        spawn_live_global_principal(&configuration_roots, &bundle_paths, covered.as_str());
     let (excluded_client, excluded_handle) =
-        spawn_live_global_principal(&configuration_root, &bundle_paths, excluded.as_str());
+        spawn_live_global_principal(&configuration_roots, &bundle_paths, excluded.as_str());
     let response = ingress_request_response(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
         json!({"operation": "discover_principals", "namespace": "GLOBAL"}),
@@ -942,7 +945,7 @@ fn ingress_global_principal_discovery_marks_subset_under_exact_scope() {
 fn ingress_discovery_rejects_peer_reforward_without_dialing() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
@@ -957,7 +960,7 @@ fn ingress_discovery_rejects_peer_reforward_without_dialing() {
     // `validation_unknown_peer`; `authorization_forbidden` proves the re-forward
     // was refused before any onward lookup or dial.
     let response = ingress_request_response(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
         json!({"operation": "discover_namespaces", "relay": "west"}),
@@ -975,11 +978,11 @@ fn ingress_discovery_rejects_peer_reforward_without_dialing() {
 
 #[test]
 fn foreign_discovery_reports_missing_peer_credential_typed_error() {
-    let (_temporary, bundle_name, configuration_root, bundle_paths) = origin_fixture();
+    let (_temporary, bundle_name, configuration_roots, bundle_paths) = origin_fixture();
     // No peer credential is provisioned, so the forward cannot present an identity.
-    let peer_socket = configuration_root.join("west.sock");
+    let peer_socket = configuration_roots.base_layer().join("west.sock");
     let (client, handle) = spawn_relay_stream_with_peer(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         "west",
         "origin-relay",
@@ -1001,12 +1004,12 @@ fn foreign_discovery_reports_missing_peer_credential_typed_error() {
 
 #[test]
 fn foreign_discovery_reports_unreachable_peer_typed_error() {
-    let (_temporary, bundle_name, configuration_root, bundle_paths) = origin_fixture();
+    let (_temporary, bundle_name, configuration_roots, bundle_paths) = origin_fixture();
     // The credential is present but no listener is bound, so the dial itself fails.
     write_peer_credential(&bundle_paths.state_root, "west", "peer-secret");
-    let peer_socket = configuration_root.join("west.sock");
+    let peer_socket = configuration_roots.base_layer().join("west.sock");
     let (client, handle) = spawn_relay_stream_with_peer(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         "west",
         "origin-relay",
@@ -1055,11 +1058,14 @@ fn write_startup_failure(runtime_directory: &Path, session_id: &str) {
 // ids. A GLOBAL principal must be declared to Hello, so a multi-principal GLOBAL
 // registry test needs more than the single default operator the standard
 // configuration declares.
-fn declare_two_global_operators(configuration_root: &Path, bundle_name: &str) -> (String, String) {
+fn declare_two_global_operators(
+    configuration_roots: &ConfigurationRoots,
+    bundle_name: &str,
+) -> (String, String) {
     let first = global_user_id(bundle_name);
     let second = first.replace("@GLOBAL", "-two@GLOBAL");
     std::fs::write(
-        configuration_root.join("users.toml"),
+        configuration_roots.base_layer().join("users.toml"),
         format!(
             "default-session = \"{first}\"\n\n[[sessions]]\nid = \"{first}\"\npolicy = \"operator\"\n\n[sessions.ui]\n\n[[sessions]]\nid = \"{second}\"\npolicy = \"operator\"\n\n[sessions.ui]\n"
         ),
@@ -1107,11 +1113,11 @@ fn spawn_rejecting_peer(socket_path: &Path) {
 // stream registry, returning the client stream and serve handle so the caller can
 // keep it alive across a discovery request and tear it down afterward.
 fn spawn_live_global_principal(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     global_id: &str,
 ) -> (UnixStream, thread::JoinHandle<()>) {
-    let (mut client, handle) = spawn_relay_stream(configuration_root, bundle_paths);
+    let (mut client, handle) = spawn_relay_stream(configuration_roots, bundle_paths);
     let reader_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(reader_stream);
     send_json(

@@ -1,3 +1,4 @@
+use agentmux::configuration::ConfigurationRoots;
 use std::fs;
 
 use agentmux::{
@@ -51,9 +52,12 @@ policy = "default"
 "#,
     );
 
-    let resolved =
-        resolve_tui_session_identity(temporary.path(), Some("agentmux"), Some("user@GLOBAL"))
-            .expect("resolve explicit session");
+    let resolved = resolve_tui_session_identity(
+        &ConfigurationRoots::single(temporary.path()),
+        Some("agentmux"),
+        Some("user@GLOBAL"),
+    )
+    .expect("resolve explicit session");
     assert_eq!(resolved.namespace, "agentmux");
     assert_eq!(resolved.session_selector, "user@GLOBAL");
     assert_eq!(resolved.session_id, "user@GLOBAL");
@@ -79,7 +83,8 @@ policy = "default"
     );
 
     let resolved =
-        resolve_tui_session_identity(temporary.path(), None, None).expect("resolve defaults");
+        resolve_tui_session_identity(&ConfigurationRoots::single(temporary.path()), None, None)
+            .expect("resolve defaults");
     assert_eq!(resolved.namespace, "agentmux");
     assert_eq!(resolved.session_selector, "user@GLOBAL");
 }
@@ -101,8 +106,9 @@ policy = "default"
 "#,
     );
 
-    let error = resolve_tui_session_identity(temporary.path(), None, None)
-        .expect_err("missing default bundle should fail");
+    let error =
+        resolve_tui_session_identity(&ConfigurationRoots::single(temporary.path()), None, None)
+            .expect_err("missing default bundle should fail");
     let rendered = error.to_string();
     assert!(rendered.contains("validation_unknown_bundle"));
     assert!(
@@ -128,9 +134,13 @@ policy = "default"
 "#,
     );
 
-    let resolved =
-        resolve_tui_launch_identity(temporary.path(), None, None, Some("first-available"))
-            .expect("launch without default bundle should succeed");
+    let resolved = resolve_tui_launch_identity(
+        &ConfigurationRoots::single(temporary.path()),
+        None,
+        None,
+        Some("first-available"),
+    )
+    .expect("launch without default bundle should succeed");
     assert_eq!(resolved.namespace, "first-available");
     assert_eq!(resolved.session_id, "user@GLOBAL");
     assert_eq!(resolved.policy, "default");
@@ -153,8 +163,13 @@ policy = "default"
 "#,
     );
 
-    let resolved = resolve_tui_launch_identity(temporary.path(), None, None, None)
-        .expect("launch with no bundle context should still succeed");
+    let resolved = resolve_tui_launch_identity(
+        &ConfigurationRoots::single(temporary.path()),
+        None,
+        None,
+        None,
+    )
+    .expect("launch with no bundle context should still succeed");
     assert_eq!(resolved.namespace, "");
     assert_eq!(resolved.session_id, "user@GLOBAL");
 }
@@ -177,9 +192,13 @@ policy = "default"
 "#,
     );
 
-    let resolved =
-        resolve_tui_launch_identity(temporary.path(), None, None, Some("first-available"))
-            .expect("configured default bundle should win");
+    let resolved = resolve_tui_launch_identity(
+        &ConfigurationRoots::single(temporary.path()),
+        None,
+        None,
+        Some("first-available"),
+    )
+    .expect("configured default bundle should win");
     assert_eq!(resolved.namespace, "configured");
 }
 
@@ -198,8 +217,13 @@ policy = "default"
 "#,
     );
 
-    let error = resolve_tui_launch_identity(temporary.path(), None, None, None)
-        .expect_err("missing default session should still fail");
+    let error = resolve_tui_launch_identity(
+        &ConfigurationRoots::single(temporary.path()),
+        None,
+        None,
+        None,
+    )
+    .expect_err("missing default session should still fail");
     assert!(error.to_string().contains("validation_unknown_session"));
 }
 
@@ -218,8 +242,12 @@ policy = "default"
 "#,
     );
 
-    let error = resolve_tui_session_identity(temporary.path(), Some("agentmux"), Some("ghost"))
-        .expect_err("unknown session should fail");
+    let error = resolve_tui_session_identity(
+        &ConfigurationRoots::single(temporary.path()),
+        Some("agentmux"),
+        Some("ghost"),
+    )
+    .expect_err("unknown session should fail");
     assert!(error.to_string().contains("validation_unknown_session"));
 }
 
@@ -241,13 +269,14 @@ policy = "missing"
 "#,
     );
 
-    let error = resolve_tui_session_identity(temporary.path(), None, None)
-        .expect_err("unknown policy should fail");
+    let error =
+        resolve_tui_session_identity(&ConfigurationRoots::single(temporary.path()), None, None)
+            .expect_err("unknown policy should fail");
     assert!(error.to_string().contains("validation_unknown_policy"));
 }
 
 #[test]
-fn overlay_users_file_shadows_the_base_in_every_build_profile() {
+fn an_earlier_users_layer_shadows_a_later_one_in_every_build_profile() {
     let temporary = TempDir::new().expect("temporary");
     write_users(
         temporary.path(),
@@ -261,10 +290,10 @@ policy = "default"
 [sessions.ui]
 "#,
     );
-    let overlay_directory = temporary.path().join("overlay");
-    fs::create_dir_all(&overlay_directory).expect("create overlay directory");
+    let override_layer = temporary.path().join("rnd");
+    fs::create_dir_all(&override_layer).expect("create override layer");
     fs::write(
-        overlay_directory.join("users.toml"),
+        override_layer.join("users.toml"),
         r#"
 default-session = "override@GLOBAL"
 
@@ -277,24 +306,26 @@ policy = "default"
     )
     .expect("write override file");
 
-    let loaded = load_active_tui_configuration(temporary.path()).expect("load config");
+    let roots = ConfigurationRoots::from_elements([override_layer, temporary.path().to_path_buf()])
+        .expect("layer list");
+    let loaded = load_active_tui_configuration(&roots).expect("load config");
     let Some(TuiConfiguration {
         default_session, ..
     }) = loaded
     else {
         panic!("expected active tui configuration");
     };
-    // Honored regardless of build profile: the overlay is the one mechanism for
-    // per-tree divergence, and gating it on optimization level misclassified a
-    // release binary run from a checkout.
+    // Honored regardless of build profile: layering is the one mechanism for
+    // per-deployment divergence, and gating it on optimization level
+    // misclassified a release binary run from a checkout.
     assert_eq!(default_session.as_deref(), Some("override@GLOBAL"));
 }
 
-/// An overlay `users.toml` swaps identity (`default-session`) only. `ui.toml`
-/// resolves through its own overlay lookup independently, so overlaying one file
-/// does not silently pull the other from the overlay layer.
+/// A `users.toml` in an earlier layer swaps identity (`default-session`) only.
+/// `ui.toml` resolves through the same lookup independently, so shadowing one
+/// file does not silently pull the other from that layer too.
 #[test]
-fn override_swaps_identity_but_not_the_ui_default_bundle() {
+fn an_earlier_layer_swaps_identity_but_not_the_ui_default_bundle() {
     let temporary = TempDir::new().expect("temporary");
     write_policies(temporary.path(), &["default"]);
     write_ui(temporary.path(), "root-bundle");
@@ -310,10 +341,10 @@ policy = "default"
 [sessions.ui]
 "#,
     );
-    let overlay_directory = temporary.path().join("overlay");
-    fs::create_dir_all(&overlay_directory).expect("create overlay directory");
+    let override_layer = temporary.path().join("rnd");
+    fs::create_dir_all(&override_layer).expect("create override layer");
     fs::write(
-        overlay_directory.join("users.toml"),
+        override_layer.join("users.toml"),
         r#"
 default-session = "override@GLOBAL"
 
@@ -326,10 +357,12 @@ policy = "default"
     )
     .expect("write override file");
 
-    let resolved = resolve_tui_launch_identity(temporary.path(), None, None, None)
-        .expect("resolve launch identity");
-    // The overlay defines no ui.toml, so the browsing bundle still comes from
-    // the base file.
+    let roots = ConfigurationRoots::from_elements([override_layer, temporary.path().to_path_buf()])
+        .expect("layer list");
+    let resolved =
+        resolve_tui_launch_identity(&roots, None, None, None).expect("resolve launch identity");
+    // The earlier layer defines no ui.toml, so the browsing bundle still comes
+    // from the base file.
     assert_eq!(resolved.namespace, "root-bundle");
     assert_eq!(resolved.session_id, "override@GLOBAL");
 }

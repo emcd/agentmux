@@ -1,4 +1,5 @@
 use agentmux::acp::snapshot_entries_to_plain_lines;
+use agentmux::configuration::ConfigurationRoots;
 use agentmux::relay::{
     LookFreshness, LookSnapshotPayload, LookSnapshotSource, RelayResponse, SendOutcome,
 };
@@ -482,7 +483,7 @@ fn acp_look_across_respawn_window_returns_clean_snapshots() {
 }
 
 fn wait_for_look(
-    config_root: &std::path::Path,
+    config_root: &ConfigurationRoots,
     tmux_socket: &std::path::Path,
     requester_session: &str,
     target_session: &str,

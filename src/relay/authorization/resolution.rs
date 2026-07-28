@@ -8,8 +8,8 @@ use serde_json::json;
 
 use crate::{
     configuration::{
-        BundleConfiguration, BundleMember, load_bundle_configuration, load_tui_configuration,
-        policies_configuration_path,
+        BundleConfiguration, BundleMember, ConfigurationRoots, load_bundle_configuration,
+        load_tui_configuration, policies_configuration_path,
     },
     relay::{RelayError, relay_error},
 };
@@ -84,10 +84,10 @@ pub(super) fn resolve_session_policy_controls<'a>(
 /// mapping and resolve to the conservative default (which grants no relay-wide
 /// action), keeping the path fail-closed.
 pub(super) fn resolve_relay_principal_controls(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     requester_principal_id: &str,
 ) -> Result<PolicyControls, RelayError> {
-    let (presets, default_policy_id) = load_policy_presets(configuration_root)?;
+    let (presets, default_policy_id) = load_policy_presets(configuration_roots)?;
     let conservative_default = PolicyControls::conservative_default();
     let principal_type = classify_principal_id(requester_principal_id).ok_or_else(|| {
         relay_error(
@@ -99,7 +99,7 @@ pub(super) fn resolve_relay_principal_controls(
     match principal_type {
         PrincipalType::User => {
             let Some(tui_configuration) =
-                load_tui_configuration(configuration_root).map_err(map_tui_configuration_error)?
+                load_tui_configuration(configuration_roots).map_err(map_tui_configuration_error)?
             else {
                 return Ok(conservative_default);
             };
@@ -125,11 +125,11 @@ pub(super) fn resolve_relay_principal_controls(
                 return Ok(conservative_default);
             };
             let bundle =
-                load_bundle_configuration(configuration_root, namespace).map_err(map_config)?;
+                load_bundle_configuration(configuration_roots, namespace).map_err(map_config)?;
             let Some(member) = bundle.members.iter().find(|member| member.id == session_id) else {
                 return Ok(conservative_default);
             };
-            let policies_path = policies_configuration_path(configuration_root);
+            let policies_path = policies_configuration_path(configuration_roots);
             resolve_session_policy_controls(
                 member,
                 &presets,

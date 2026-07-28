@@ -1,3 +1,4 @@
+use agentmux::configuration::ConfigurationRoots;
 use std::{
     fs,
     os::unix::fs::PermissionsExt,
@@ -18,12 +19,12 @@ use tokio::sync::{broadcast, watch};
 
 fn dispatch_request(
     request: RelayRequest,
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
     tmux_socket: &Path,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
     let runtime_directory = tmux_socket.parent().unwrap_or_else(|| Path::new("."));
-    handle_request(request, configuration_root, bundle_name, runtime_directory)
+    handle_request(request, configuration_roots, bundle_name, runtime_directory)
 }
 
 #[derive(Clone, Debug)]
@@ -209,7 +210,10 @@ pub(super) fn as_json_boolean(value: bool) -> &'static str {
     if value { "true" } else { "false" }
 }
 
-pub(super) fn write_configuration(root: &Path, options: &AcpStubOptions) -> (PathBuf, PathBuf) {
+pub(super) fn write_configuration(
+    root: &Path,
+    options: &AcpStubOptions,
+) -> (ConfigurationRoots, PathBuf) {
     let config_root = root.join("config");
     let bundles = config_root.join("bundles");
     fs::create_dir_all(&bundles).expect("create bundles directory");
@@ -360,7 +364,7 @@ coder = "acp"
         bundle.push_str(format!("coder-session-id = \"{value}\"\n").as_str());
     }
     fs::write(bundles.join("party.toml"), bundle).expect("write bundle");
-    (config_root, log_path)
+    (ConfigurationRoots::single(config_root), log_path)
 }
 
 fn acp_send_request() -> RelayRequest {
@@ -379,7 +383,7 @@ fn acp_send_request() -> RelayRequest {
 /// the persistent ACP worker has acted on the queued task -- its
 /// `session/prompt` reached the stub, or the worker settled `unavailable` --
 /// so callers can inspect post-delivery side effects deterministically.
-pub(super) fn dispatch_send(config_root: &Path, tmux_socket: &Path) -> RelayResponse {
+pub(super) fn dispatch_send(config_root: &ConfigurationRoots, tmux_socket: &Path) -> RelayResponse {
     let root = tmux_socket.parent().unwrap_or_else(|| Path::new("."));
     let log_path = root.join("acp_requests.log");
     let baseline_prompts = count_logged_method(&log_path, "session/prompt");
@@ -400,7 +404,7 @@ pub(super) fn dispatch_send(config_root: &Path, tmux_socket: &Path) -> RelayResp
 /// Starts the bundle and dispatches an async send to `bravo`, returning the
 /// immediate relay response without waiting for the worker to act.
 pub(super) fn dispatch_send_result(
-    config_root: &Path,
+    config_root: &ConfigurationRoots,
     tmux_socket: &Path,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
     startup_bundle(config_root, tmux_socket)?;
@@ -408,7 +412,7 @@ pub(super) fn dispatch_send_result(
 }
 
 pub(super) fn dispatch_send_without_startup_result(
-    config_root: &Path,
+    config_root: &ConfigurationRoots,
     tmux_socket: &Path,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
     dispatch_request(acp_send_request(), config_root, "party", tmux_socket)
@@ -562,7 +566,10 @@ pub(super) const ACP_FAIL_LOAD_SETTLE_BUDGET: Duration = Duration::from_secs(30)
 /// path the production bootstrap can take; the test thread is parked on the
 /// in-process watch channel, so the wider deadline costs nothing in the
 /// happy case.
-pub(super) fn assert_acp_delivery_unavailable(config_root: &Path, tmux_socket: &Path) {
+pub(super) fn assert_acp_delivery_unavailable(
+    config_root: &ConfigurationRoots,
+    tmux_socket: &Path,
+) {
     let root = tmux_socket.parent().unwrap_or_else(|| Path::new("."));
     let mut receiver = subscribe_bravo_worker_state(root);
     match dispatch_send_result(config_root, tmux_socket) {
@@ -604,7 +611,7 @@ fn qualify_party_target(target_session: &str) -> String {
 }
 
 pub(super) fn dispatch_look(
-    config_root: &Path,
+    config_root: &ConfigurationRoots,
     tmux_socket: &Path,
     requester_session: &str,
     target_session: &str,
@@ -621,7 +628,7 @@ pub(super) fn dispatch_look(
 }
 
 pub(super) fn dispatch_look_with_offset(
-    config_root: &Path,
+    config_root: &ConfigurationRoots,
     tmux_socket: &Path,
     requester_session: &str,
     target_session: &str,
@@ -644,7 +651,7 @@ pub(super) fn dispatch_look_with_offset(
 }
 
 pub(super) fn dispatch_look_without_startup(
-    config_root: &Path,
+    config_root: &ConfigurationRoots,
     tmux_socket: &Path,
     requester_session: &str,
     target_session: &str,
@@ -665,7 +672,7 @@ pub(super) fn dispatch_look_without_startup(
 }
 
 pub(super) fn dispatch_raww(
-    config_root: &Path,
+    config_root: &ConfigurationRoots,
     tmux_socket: &Path,
     requester_session: &str,
     target_session: &str,
@@ -690,7 +697,7 @@ pub(super) fn dispatch_raww(
 }
 
 fn startup_bundle(
-    config_root: &Path,
+    config_root: &ConfigurationRoots,
     tmux_socket: &Path,
 ) -> Result<(), agentmux::relay::RelayError> {
     ensure_fast_respawn_for_tests();

@@ -27,7 +27,7 @@ pub(super) fn run_agentmux_new(arguments: &[String]) -> Result<(), RuntimeError>
     let roots = shared::resolve_roots(&parsed.runtime, &current_directory)?;
     ensure_starter_configuration_layout(&roots)?;
     let resolved_session = resolve_tui_session_identity(
-        &roots.configuration_root,
+        &roots.configuration_roots,
         parsed.bundle_name.as_deref(),
         parsed.session_selector.as_deref(),
     )?;
@@ -175,6 +175,6 @@ fn parse_new_arguments(arguments: &[String]) -> Result<NewPeerArguments, Runtime
 
 pub(super) fn print_new_help() {
     println!(
-        "Usage: agentmux new peer <principal_id> [--scope SCOPE] [--output PATH | --write-config] [--bundle NAME] [--as-session NAME] [--json] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH] [--discover-local-configuration]"
+        "Usage: agentmux new peer <principal_id> [--scope SCOPE] [--output PATH | --write-config] [--bundle NAME] [--as-session NAME] [--json] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }
