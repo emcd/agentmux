@@ -77,10 +77,10 @@
   overlay, including the first-wins direction, the closed list and what
   closedness does not mean, and the rejection of empty layer elements
 - [x] 7.2 Update `src/runtime/README.md` root-resolution section
-- [ ] 7.3 Write the maintainer guide section on configuration layout, with
+- [x] 7.3 Write the maintainer guide section on configuration layout, with
   worked examples of a base plus an R&D layer, and the migration note that an
   `overlay/` subdirectory silently stops being consulted
-- [ ] 7.4 Document how to introspect which layer supplied each artifact, since
+- [x] 7.4 Document how to introspect which layer supplied each artifact, since
   that is the operator's only way to diagnose a shadowed file
 - [x] 7.5 Sweep prose for `overlay` references that now mean something else
 

@@ -12,6 +12,108 @@ All primary commands support these runtime root overrides:
 - `--inscriptions-directory PATH` (alias: `--logs-directory PATH`)
 - `--repository-root PATH`
 
+## Configuration Layout
+
+Configuration lives outside any project checkout, in a directory you manage
+yourself. Everything under it is specific to one maintainer: policies encode
+your lane topology, `users.toml` names you, and `coders.toml` records the coder
+CLIs you have installed. A configuration root holds:
+
+```
+coders.toml      # coder definitions
+policies.toml    # authorization policy presets
+relay.toml       # relay settings and peers
+users.toml       # operator sessions and their policies  (optional)
+ui.toml          # UI-surface defaults                    (optional)
+bundles/*.toml   # one file per bundle
+```
+
+### Layering
+
+`--configuration-directory` is repeatable. Each occurrence appends one layer,
+and the layers are searched **in the order given — the first occurrence wins**.
+This is a search path, like `PATH` or `-I` include directories: a lookup finds
+a file and stops. Nothing is merged, so a layer that supplies `relay.toml`
+replaces the whole file rather than contributing keys to it.
+
+The gesture for adding an override is therefore to **prepend** it:
+
+```bash
+agentmux host relay \
+  --configuration-directory ~/config/agentmux-rnd \
+  --configuration-directory ~/config/agentmux
+```
+
+Here an R&D layer sits ahead of the shared base. If `~/config/agentmux-rnd`
+holds only `relay.toml` and `bundles/scratch.toml`, then `relay.toml` and the
+`scratch` bundle resolve from it while `coders.toml`, `policies.toml`, and every
+other bundle resolve from the base. Resolution is per file, not per layer.
+
+Bundle directories are the one exception to whole-file replacement, and it is
+still not merging: the `bundles/` directories **union by identifier**, so a
+layer redefining one bundle need not restate the others. A bundle present in
+two layers resolves from the earlier one.
+
+The environment form is `:`-separated, in the same order:
+
+```bash
+export AGENTMUX_CONFIGURATION_DIRECTORY=~/config/agentmux-rnd:~/config/agentmux
+```
+
+Paths containing `:` cannot be expressed this way; use the repeatable flag
+instead. Empty elements are rejected rather than treated as the working
+directory, so a leading, trailing, or doubled `:` is an error.
+
+A supplied layer list is **closed**: no root outside the list is consulted, so
+naming a layer that does not exist is an error rather than a silent fall-through
+to the layers below it. This does not change what absence means — `users.toml`
+and `ui.toml` are still optional, and being absent from every layer is still
+fine for them.
+
+### Inspecting which layer won
+
+A shadowed file is present, valid, and entirely inert, which makes an edit that
+does nothing the characteristic failure of a layered setup. `agentmux check
+configuration` reports the physical file supplying each artifact it resolves:
+
+```console
+$ agentmux check configuration
+source coders.toml: /home/you/config/agentmux/coders.toml
+source policies.toml: /home/you/config/agentmux/policies.toml
+source relay.toml: /home/you/config/agentmux-rnd/relay.toml
+source bundles/scratch.toml: /home/you/config/agentmux-rnd/bundles/scratch.toml
+source bundles/work.toml: /home/you/config/agentmux/bundles/work.toml
+ok: scratch
+ok: work
+checked 2 bundle configuration(s): all valid
+```
+
+If the file you edited is not on that list, some earlier layer is shadowing it.
+Only artifacts a layer actually supplies are reported, so an absent optional
+file simply has no line. The report is written before validation runs, so it is
+complete even on a run that fails, and it goes to standard output while failures
+go to standard error. Pass `-q`/`--quiet` for the exit code alone.
+
+### Migrating from `overlay/`
+
+The `overlay/` subdirectory convention is gone. A layer is now an ordinary
+configuration root, named on the command line.
+
+**This failure is silent.** An `overlay/` directory simply stops being
+consulted; the base configuration below it is valid and loads cleanly, so
+nothing errors — the deployment just runs on the files the overlay used to
+override. Move the directory to a sibling and name it as a layer ahead of the
+base:
+
+```bash
+mv ~/config/agentmux/overlay ~/config/agentmux-local
+agentmux check configuration \
+  --configuration-directory ~/config/agentmux-local \
+  --configuration-directory ~/config/agentmux
+```
+
+Use the source report above to confirm the moved files are the ones in effect.
+
 ## Auto Start On Login
 
 ### Systemd (--user)
