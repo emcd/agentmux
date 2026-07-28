@@ -152,12 +152,12 @@ with two answers is not retained, it is ambiguous.
 
 ## 8. Documentation and drift
 
-- [ ] 8.1 Update subsystem READMEs covering root resolution, the overlay, and
+- [x] 8.1 Update subsystem READMEs covering root resolution, the overlay, and
   association precedence
-- [ ] 8.2 Sweep documentation and non-normative prose for stale
+- [x] 8.2 Sweep documentation and non-normative prose for stale
   `--config-directory` and `overrides/` references. Normative spec text is
   carried by the deltas in this change, not by this sweep
-- [ ] 8.3 Confirm no live spec still describes Git-derived association discovery
+- [x] 8.3 Confirm no live spec still describes Git-derived association discovery
   or startup failure on an unknown bundle
 
 ## 9. Verification
