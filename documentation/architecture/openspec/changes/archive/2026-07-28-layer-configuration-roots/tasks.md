@@ -49,14 +49,21 @@
 
 ## 5. Source introspection
 
-- [ ] 5.1 Report the physical file supplying each resolved artifact from
-  `agentmux check configuration`, so a shadowed copy is distinguishable from the
-  copy in effect
-- [ ] 5.2 Decide whether that reporting is default output or behind a flag. The
-  command's output is already the widest surface in `cli-surface`, so enlarging
-  it unconditionally may be the wrong default
-- [ ] 5.3 Report it whether or not validation succeeds, since the case it exists
-  for is configuration that is valid and inert rather than broken
+- [x] 5.1 Report the physical file supplying each resolved artifact from
+  `agentmux check configuration` as default output, so a shadowed copy is
+  distinguishable from the copy in effect. Report only artifacts a layer
+  actually supplies, and emit physical paths rather than the relative forms a
+  layer list may carry
+- [x] 5.2 Accept `-q`/`--quiet` on `check configuration`, suppressing source
+  reporting, per-bundle confirmations, and the summary while leaving the exit
+  code and any failure report
+- [x] 5.3 Resolve and report sources before validation runs, so a fail-fast
+  failure does not truncate the report on the run that most needs it
+- [x] 5.4 Write sources to stdout and failures to stderr, flushing stdout before
+  any failure. The runtime line-buffers stdout regardless of destination, so the
+  flush is presently redundant; it is required because that is an
+  implementation choice rather than a guarantee, and it orders the two streams
+  only where they share a destination
 
 ## 6. Discovery removal
 
@@ -72,24 +79,24 @@
   overlay, including the first-wins direction, the closed list and what
   closedness does not mean, and the rejection of empty layer elements
 - [x] 7.2 Update `src/runtime/README.md` root-resolution section
-- [ ] 7.3 Write the maintainer guide section on configuration layout, with
+- [x] 7.3 Write the maintainer guide section on configuration layout, with
   worked examples of a base plus an R&D layer, and the migration note that an
   `overlay/` subdirectory silently stops being consulted
-- [ ] 7.4 Document how to introspect which layer supplied each artifact, since
+- [x] 7.4 Document how to introspect which layer supplied each artifact, since
   that is the operator's only way to diagnose a shadowed file
 - [x] 7.5 Sweep prose for `overlay` references that now mean something else
 
 ## 8. Verification
 
-- [ ] 8.1 `cargo fmt`, `cargo clippy --all-targets -D warnings`, and the full
+- [x] 8.1 `cargo fmt`, `cargo clippy --all-targets -D warnings`, and the full
   nextest suite
-- [ ] 8.2 `openspec validate --all --strict`
+- [x] 8.2 `openspec validate --all --strict`
 - [x] 8.3 Prove the ordering rule with a test asserting the first layer wins,
   and a second asserting a supplied list never reaches the XDG default
-- [ ] 8.4 Prove credential administration is untouched by layering: a
+- [x] 8.4 Prove credential administration is untouched by layering: a
   `--write-config` operation under a multi-layer list still writes under the
   state root and writes nothing into any configuration layer
-- [ ] 8.5 Prove introspection identifies the supplying layer for an artifact
+- [x] 8.5 Prove introspection identifies the supplying layer for an artifact
   present in more than one, including when every copy is valid
-- [ ] 8.6 Exercise the release binary for layer resolution and bundle union,
+- [x] 8.6 Exercise the release binary for layer resolution and bundle union,
   since build-profile-invisible defects motivated the same step previously

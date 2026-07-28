@@ -318,6 +318,283 @@ fn check_configuration_accepts_valid_ui_toml() {
 }
 
 #[test]
+fn check_configuration_reports_the_layer_that_supplied_each_artifact() {
+    // The shadowing case layering introduces: two valid copies of one bundle,
+    // where nothing is wrong and the operator's only question is which copy is in
+    // effect. Resolution is per file, not per layer, so this asserts both
+    // directions — the shadowed bundle resolves from the override while
+    // `coders.toml`, which the override does not supply, resolves from the base.
+    // An implementation reporting a single layer for everything fails one of them
+    // whichever layer it picked.
+    let temporary = TempDir::new().expect("temporary");
+    let (config_root, state_root) = config_and_state(&temporary);
+    write_bundle_configuration(&config_root, "alpha", None, &["a"]);
+    let override_layer = temporary.path().join("override");
+    fs::create_dir_all(override_layer.join("bundles")).expect("create override bundles directory");
+    fs::write(
+        override_layer.join("bundles").join("alpha.toml"),
+        "format-version = 1\n\n[[sessions]]\nid = \"shadowing\"\nname = \"shadowing\"\ndirectory = \"/tmp\"\ncoder = \"default\"\n",
+    )
+    .expect("write shadowing bundle");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "check",
+            "configuration",
+            "--configuration-directory",
+            override_layer.to_str().expect("override utf8"),
+            "--configuration-directory",
+            config_root.to_str().expect("config root utf8"),
+            "--state-directory",
+            state_root.to_str().expect("state root utf8"),
+        ])
+        .output()
+        .expect("run agentmux check configuration");
+
+    assert!(
+        output.status.success(),
+        "both copies are valid: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let shadowing = override_layer.join("bundles").join("alpha.toml");
+    let shadowed = config_root.join("bundles").join("alpha.toml");
+    assert!(
+        stdout.contains(&format!(
+            "source bundles/alpha.toml: {}",
+            shadowing.display()
+        )),
+        "the bundle must be reported against the layer supplying it: {stdout}"
+    );
+    assert!(
+        !stdout.contains(shadowed.to_str().expect("shadowed utf8")),
+        "the shadowed copy must not appear as a source: {stdout}"
+    );
+    assert!(
+        stdout.contains(&format!(
+            "source coders.toml: {}",
+            config_root.join("coders.toml").display()
+        )),
+        "an artifact the override does not supply must resolve from the base: {stdout}"
+    );
+    // `ui.toml` exists in no layer. Reporting a synthesized path for it would
+    // claim a file that is not there.
+    assert!(
+        !stdout.contains("source ui.toml"),
+        "an artifact no layer supplies must contribute no line: {stdout}"
+    );
+}
+
+#[test]
+fn check_configuration_reports_the_layer_that_supplied_the_association_file() {
+    // `mcp.toml` selects the bundle and session an MCP server binds to, so a
+    // shadowed copy silently redirects an association — the most consequential
+    // shadowing this report exists to expose, and the one no other surface shows.
+    let temporary = TempDir::new().expect("temporary");
+    let (config_root, state_root) = config_and_state(&temporary);
+    write_bundle_configuration(&config_root, "alpha", None, &["a"]);
+    fs::write(config_root.join("mcp.toml"), "bundle_name = \"alpha\"\n")
+        .expect("write base mcp.toml");
+    let override_layer = temporary.path().join("override");
+    fs::create_dir_all(&override_layer).expect("create override layer");
+    fs::write(
+        override_layer.join("mcp.toml"),
+        "bundle_name = \"alpha\"\nsession_name = \"a\"\n",
+    )
+    .expect("write override mcp.toml");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "check",
+            "configuration",
+            "--configuration-directory",
+            override_layer.to_str().expect("override utf8"),
+            "--configuration-directory",
+            config_root.to_str().expect("config root utf8"),
+            "--state-directory",
+            state_root.to_str().expect("state root utf8"),
+        ])
+        .output()
+        .expect("run agentmux check configuration");
+
+    assert!(
+        output.status.success(),
+        "both copies are valid: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&format!(
+            "source mcp.toml: {}",
+            override_layer.join("mcp.toml").display()
+        )),
+        "the association file must be reported against the layer supplying it: {stdout}"
+    );
+    assert!(
+        !stdout.contains(
+            config_root
+                .join("mcp.toml")
+                .to_str()
+                .expect("shadowed utf8")
+        ),
+        "the shadowed association file must not appear as a source: {stdout}"
+    );
+}
+
+#[test]
+fn check_configuration_reports_sources_before_rejecting_a_missing_layer() {
+    // The report is worth most on exactly this run: every artifact resolves from
+    // the layers beneath the missing one, which is the diagnosis, and the error
+    // then names the layer responsible. Reporting after layer validation would
+    // blank it here.
+    let temporary = TempDir::new().expect("temporary");
+    let (config_root, state_root) = config_and_state(&temporary);
+    write_bundle_configuration(&config_root, "alpha", None, &["a"]);
+    let absent_override = temporary.path().join("override-typo");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "check",
+            "configuration",
+            "--configuration-directory",
+            absent_override.to_str().expect("override utf8"),
+            "--configuration-directory",
+            config_root.to_str().expect("config root utf8"),
+            "--state-directory",
+            state_root.to_str().expect("state root utf8"),
+        ])
+        .output()
+        .expect("run agentmux check configuration");
+
+    assert!(!output.status.success(), "a missing layer must still fault");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&format!(
+            "source coders.toml: {}",
+            config_root.join("coders.toml").display()
+        )),
+        "sources must be reported before the layer-existence check: {stdout}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("validation_configuration_root_absent"),
+        "the layer fault must still be reported: {stderr}"
+    );
+}
+
+#[test]
+fn check_configuration_reports_sources_ahead_of_a_validation_failure() {
+    // Validation is fail-fast, so a report interleaved with it would stop at the
+    // first invalid artifact — the run where the whole picture is most wanted.
+    // Both streams are merged into one pipe here because the ordering under test
+    // is the one an operator captures, not the one each stream sees alone.
+    let temporary = TempDir::new().expect("temporary");
+    let (config_root, state_root) = config_and_state(&temporary);
+    write_bundle_configuration(&config_root, "alpha", None, &["a"]);
+    fs::write(
+        config_root.join("bundles").join("alpha.toml"),
+        "format-version = 1\n\n[[sessions]]\nid = \"a\"\nname = \"a\"\ndirectory = \"/tmp\"\ncoder = \"default\"\ncodex-session-id = \"a\"\n",
+    )
+    .expect("overwrite bundle with bad field");
+
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "{binary} check configuration alpha --configuration-directory {config} --state-directory {state} 2>&1",
+            binary = env!("CARGO_BIN_EXE_agentmux"),
+            config = config_root.display(),
+            state = state_root.display(),
+        ))
+        .output()
+        .expect("run agentmux check configuration with merged streams");
+
+    assert!(!output.status.success(), "command should fail");
+    let merged = String::from_utf8_lossy(&output.stdout);
+    let report = merged
+        .find("source coders.toml")
+        .unwrap_or_else(|| panic!("sources must be reported on a failing run: {merged}"));
+    let failure = merged
+        .find("codex-session-id")
+        .unwrap_or_else(|| panic!("the failure must be reported: {merged}"));
+    assert!(
+        report < failure,
+        "the source report must precede the failure explaining it: {merged}"
+    );
+}
+
+#[test]
+fn check_configuration_quiet_suppresses_success_output() {
+    let temporary = TempDir::new().expect("temporary");
+    let (config_root, state_root) = config_and_state(&temporary);
+    write_bundle_configuration(&config_root, "alpha", None, &["a"]);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "check",
+            "configuration",
+            "--quiet",
+            "--configuration-directory",
+            config_root.to_str().expect("config root utf8"),
+            "--state-directory",
+            state_root.to_str().expect("state root utf8"),
+        ])
+        .output()
+        .expect("run agentmux check configuration --quiet");
+
+    assert!(
+        output.status.success(),
+        "quiet must not change the verdict: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "quiet must suppress sources, per-bundle lines, and the summary alike: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn check_configuration_quiet_still_reports_a_failure() {
+    // Quiet serves the operator who wants the exit code alone; it must not
+    // suppress the diagnosis, which is the one output a failing run exists to
+    // produce. `-q` is exercised here so both spellings are covered.
+    let temporary = TempDir::new().expect("temporary");
+    let (config_root, state_root) = config_and_state(&temporary);
+    write_bundle_configuration(&config_root, "alpha", None, &["a"]);
+    fs::write(
+        config_root.join("bundles").join("alpha.toml"),
+        "format-version = 1\n\n[[sessions]]\nid = \"a\"\nname = \"a\"\ndirectory = \"/tmp\"\ncoder = \"default\"\ncodex-session-id = \"a\"\n",
+    )
+    .expect("overwrite bundle with bad field");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "check",
+            "configuration",
+            "alpha",
+            "-q",
+            "--configuration-directory",
+            config_root.to_str().expect("config root utf8"),
+            "--state-directory",
+            state_root.to_str().expect("state root utf8"),
+        ])
+        .output()
+        .expect("run agentmux check configuration -q");
+
+    assert!(!output.status.success(), "command should fail");
+    assert!(
+        output.stdout.is_empty(),
+        "quiet must still suppress success output on a failing run: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("codex-session-id"),
+        "quiet must not suppress the diagnosis: {stderr}"
+    );
+}
+
+#[test]
 fn check_configuration_rejects_unknown_subcommand() {
     let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
         .args(["check", "everything"])

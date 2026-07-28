@@ -47,6 +47,55 @@ async fn a_retained_startup_fault_outranks_a_failing_configuration_load() {
     );
 }
 
+// A malformed request must be rejected as malformed even under a retained
+// startup fault.
+//
+// The complement of the test above, and the boundary between them: a fault
+// outranks work the server does on the caller's behalf, but not the validation
+// of what the caller sent. A namespace of `bad/name` names no bundle in any
+// server state, so reporting it as a startup fault tells the operator to repair
+// a server that would reject the request either way.
+//
+// The retained fault is what gives this teeth. With readiness checked inside the
+// association gate and the grammar enforced only once resolution reaches the
+// runtime -- which is past that gate -- the fault answers first and the
+// malformed namespace never surfaces.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_malformed_namespace_outranks_a_retained_startup_fault() {
+    let runtime = TestRuntime::create();
+    let mut harness = McpHarness::spawn_with_retained_fault(&runtime).await;
+
+    let mut arguments = Map::new();
+    arguments.insert("namespace".to_string(), Value::String("bad/name".into()));
+    let response = harness
+        .call_tool(2, "list", list_principals_call(arguments))
+        .await;
+
+    assert_eq!(
+        response["error"]["data"]["code"], "validation_invalid_params",
+        "request validation must precede the readiness gate: {response}"
+    );
+}
+
+// The traversal segments satisfy the bundle-name grammar, which admits `.`, so
+// they need excluding by name rather than by grammar.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_traversal_namespace_is_rejected_as_malformed() {
+    let runtime = TestRuntime::create();
+    let mut harness = McpHarness::spawn_with_retained_fault(&runtime).await;
+
+    let mut arguments = Map::new();
+    arguments.insert("namespace".to_string(), Value::String("..".into()));
+    let response = harness
+        .call_tool(2, "list", list_principals_call(arguments))
+        .await;
+
+    assert_eq!(
+        response["error"]["data"]["code"], "validation_invalid_params",
+        "a traversal segment names no bundle: {response}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_catalog_contains_list_sessions_send_look_and_raww() {
     let runtime = TestRuntime::create();

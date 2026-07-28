@@ -8,12 +8,18 @@
 //! offending file path plus field-level detail. The check is read-only — it
 //! never scaffolds or mutates configuration.
 
-use std::env;
+use std::{
+    collections::BTreeMap,
+    env,
+    io::{self, Write},
+    path::{Path, PathBuf},
+};
 
 use crate::{
     configuration::{
-        ConfigurationError, ConfigurationRoots, bundle_directory_layers,
-        effective_bundle_definitions, load_ui_configuration,
+        BUNDLE_EXTENSION, BUNDLES_DIRECTORY, ConfigurationError, ConfigurationRoots,
+        bundle_directory_layers, effective_bundle_definitions, load_ui_configuration,
+        supplied_root_configuration_sources,
     },
     relay::{RelayError, load_relay_runtime_configuration, preflight_bundle_configuration},
     runtime::{error::RuntimeError, starter::validate_supplied_configuration_layers},
@@ -21,7 +27,27 @@ use crate::{
 
 use super::{CheckArguments, shared};
 
+/// Runs the pre-flight check, flushing standard output ahead of any failure.
+///
+/// The flush is redundant against the standard library as it stands: standard
+/// output is line-buffered whether or not it is a terminal, so each reported
+/// line reaches the pipe at its newline and the two streams stay in order on
+/// their own. It is here because that is an implementation choice rather than a
+/// guarantee. A standard output buffered by destination — the C discipline, and
+/// a change the standard library has been asked for more than once — would let
+/// the caller's failure report overtake the source report explaining it in a
+/// captured transcript, which is what an operator pastes into a bug report.
+/// Flushing at the single exit costs nothing, states the ordering contract where
+/// a reader can find it, and covers failure paths added later.
 pub(super) fn run_agentmux_check(arguments: &[String]) -> Result<(), RuntimeError> {
+    let outcome = check_configuration(arguments);
+    if outcome.is_err() {
+        let _ = io::stdout().flush();
+    }
+    outcome
+}
+
+fn check_configuration(arguments: &[String]) -> Result<(), RuntimeError> {
     if arguments
         .iter()
         .any(|value| value == "--help" || value == "-h")
@@ -35,7 +61,32 @@ pub(super) fn run_agentmux_check(arguments: &[String]) -> Result<(), RuntimeErro
         .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
     let roots = shared::resolve_roots(&parsed.runtime, &current_directory)?;
 
-    // A supplied layer that does not exist is reported here rather than absorbed.
+    // Discovery is a lookup, not validation, so it runs ahead of everything and
+    // serves the source report and the validation loop from one enumeration. An
+    // absent bundles directory yields no entries rather than an error, mirroring
+    // the relay's own discovery.
+    let bundle_definitions = effective_bundle_definitions(&roots.configuration_roots);
+    let bundle_names: Vec<String> = match parsed.bundle_id.as_deref() {
+        Some(bundle_id) => vec![bundle_id.to_string()],
+        None => bundle_definitions.keys().cloned().collect(),
+    };
+
+    // Ahead of every validation, including the layer-existence check below. A
+    // missing override layer is the case where the report is worth most: it
+    // shows every artifact resolving from the layers beneath, which is the
+    // diagnosis the operator needs, and the error that follows names the layer
+    // responsible. Withholding it there would blank the report on one of the few
+    // runs that motivate having one.
+    if !parsed.quiet {
+        report_configuration_sources(
+            &roots.configuration_roots,
+            &bundle_definitions,
+            &bundle_names,
+            &current_directory,
+        );
+    }
+
+    // A supplied layer that does not exist is reported rather than absorbed.
     // Every other command reaches this check through
     // `ensure_starter_configuration_layout`; pre-flight cannot, because that path
     // scaffolds and this command is read-only. Without it a typo'd override layer
@@ -44,10 +95,11 @@ pub(super) fn run_agentmux_check(arguments: &[String]) -> Result<(), RuntimeErro
     // pre-flight to catch.
     validate_supplied_configuration_layers(&roots)?;
 
-    // Validate relay-level configuration before bundle discovery, so a malformed,
-    // unknown-field, wrong-type, or invalid-peer relay.toml is reported even when
-    // the config root has no bundles — matching relay startup, which rejects the
-    // same artifact up front. The shared loader keeps check and startup in step.
+    // Validate relay-level configuration before bundle validation, so a
+    // malformed, unknown-field, wrong-type, or invalid-peer relay.toml is
+    // reported even when the config root has no bundles — matching relay startup,
+    // which rejects the same artifact up front. The shared loader keeps check and
+    // startup in step.
     load_relay_runtime_configuration(&roots.configuration_roots, None, None)
         .map_err(preflight_error_to_runtime)?;
 
@@ -57,10 +109,6 @@ pub(super) fn run_agentmux_check(arguments: &[String]) -> Result<(), RuntimeErro
     // defaults. An absent or valid ui.toml is a no-op.
     load_ui_configuration(&roots.configuration_roots).map_err(configuration_error_to_runtime)?;
 
-    let bundle_names = match parsed.bundle_id.as_deref() {
-        Some(bundle_id) => vec![bundle_id.to_string()],
-        None => discover_bundle_names(&roots.configuration_roots),
-    };
     if bundle_names.is_empty() {
         return Err(RuntimeError::validation(
             "validation_no_bundles",
@@ -83,13 +131,67 @@ pub(super) fn run_agentmux_check(arguments: &[String]) -> Result<(), RuntimeErro
     for bundle_name in &bundle_names {
         preflight_bundle_configuration(&roots.configuration_roots, bundle_name)
             .map_err(preflight_error_to_runtime)?;
-        println!("ok: {bundle_name}");
+        if !parsed.quiet {
+            println!("ok: {bundle_name}");
+        }
     }
-    println!(
-        "checked {} bundle configuration(s): all valid",
-        bundle_names.len()
-    );
+    if !parsed.quiet {
+        println!(
+            "checked {} bundle configuration(s): all valid",
+            bundle_names.len()
+        );
+    }
     Ok(())
+}
+
+/// Writes the physical file supplying each artifact this run resolves.
+///
+/// Runs before validation because validation is fail-fast: interleaving the two
+/// would truncate the report at the first invalid artifact, on precisely the run
+/// where the whole picture is most wanted. Resolving sources is a lookup that
+/// cannot fail, so it can complete first.
+///
+/// Only artifacts a layer actually supplies are reported. Bundles are scoped to
+/// the set being validated, so a run naming one bundle reports that bundle
+/// rather than every discoverable one.
+fn report_configuration_sources(
+    roots: &ConfigurationRoots,
+    bundle_definitions: &BTreeMap<String, PathBuf>,
+    bundle_names: &[String],
+    current_directory: &Path,
+) {
+    for (name, path) in supplied_root_configuration_sources(roots) {
+        println!(
+            "source {name}: {}",
+            physical_path(current_directory, &path).display()
+        );
+    }
+    for bundle_name in bundle_names {
+        // A name with no definition is a bundle the operator asked for and no
+        // layer supplies; validation reports that, and inventing a source line
+        // for it here would contradict the report's own contract.
+        let Some(path) = bundle_definitions.get(bundle_name) else {
+            continue;
+        };
+        println!(
+            "source {BUNDLES_DIRECTORY}/{bundle_name}.{BUNDLE_EXTENSION}: {}",
+            physical_path(current_directory, path).display()
+        );
+    }
+}
+
+/// Renders a resolved path in absolute form.
+///
+/// A layer list may carry relative layers, which resolve against the working
+/// directory. A relative path in the report is ambiguous the moment the report
+/// leaves the shell that produced it — which is the normal case, since the
+/// report exists to be read elsewhere.
+fn physical_path(current_directory: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        current_directory.join(path)
+    }
 }
 
 fn parse_check_arguments(arguments: &[String]) -> Result<CheckArguments, RuntimeError> {
@@ -114,6 +216,9 @@ fn parse_check_arguments(arguments: &[String]) -> Result<CheckArguments, Runtime
             continue;
         }
         match arguments[index].as_str() {
+            "-q" | "--quiet" => {
+                parsed.quiet = true;
+            }
             value if !value.starts_with('-') => {
                 if parsed.bundle_id.is_some() {
                     return Err(RuntimeError::InvalidArgument {
@@ -133,19 +238,6 @@ fn parse_check_arguments(arguments: &[String]) -> Result<CheckArguments, Runtime
         index += 1;
     }
     Ok(parsed)
-}
-
-/// Enumerates bundle ids from the effective bundle set, which unions every
-/// layer's bundles directory with earlier entries shadowing later ones.
-///
-/// Returns an empty list (not an error) when no directory is present,
-/// mirroring the relay's own discovery so an unconfigured root reports "no
-/// bundles" rather than failing on a missing directory. Validating the union is
-/// what makes this command validate what the relay would actually load.
-fn discover_bundle_names(configuration_roots: &ConfigurationRoots) -> Vec<String> {
-    effective_bundle_definitions(configuration_roots)
-        .into_keys()
-        .collect()
 }
 
 /// Maps a relay pre-flight error onto a runtime error while preserving the
@@ -181,6 +273,10 @@ fn preflight_error_to_runtime(error: RelayError) -> RuntimeError {
 
 pub(super) fn print_check_help() {
     println!(
-        "Usage: agentmux check configuration [<bundle-id>] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux check configuration [<bundle-id>] [-q|--quiet] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
+    println!(
+        "  Reports the physical file supplying each resolved artifact, so a shadowed copy is distinguishable from the copy in effect."
+    );
+    println!("  -q, --quiet  Suppress success output, leaving the exit code and any failure.");
 }

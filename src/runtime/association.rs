@@ -5,17 +5,12 @@ use std::{fs, path::Path};
 use serde::Deserialize;
 
 use crate::configuration::{
-    BUNDLE_ENVIRONMENT_VARIABLE, BundleConfiguration, ConfigurationError, ConfigurationRoots,
-    SESSION_ENVIRONMENT_VARIABLE, effective_configuration_path,
+    ASSOCIATION_FILE, BUNDLE_ENVIRONMENT_VARIABLE, BundleConfiguration, ConfigurationError,
+    ConfigurationRoots, SESSION_ENVIRONMENT_VARIABLE, effective_configuration_path,
     infer_sender_from_working_directory,
 };
 
 use super::error::RuntimeError;
-
-/// Logical artifact holding association overrides. Resolved through the
-/// configuration layers like every other configuration file, so a copy in an
-/// earlier layer shadows a copy in a later one.
-const ASSOCIATION_FILE: &str = "mcp.toml";
 
 /// CLI association hints provided by MCP startup arguments.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

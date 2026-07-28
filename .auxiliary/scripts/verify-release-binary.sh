@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
-# Exercise the RELEASE binary for configuration root resolution, overlay
-# shadowing, and green MCP startup. These paths are gated on
-# cfg!(debug_assertions) or otherwise vary by build profile, so the nextest
-# suite -- which runs debug -- cannot observe them. Written for task 9.3 of
-# redesign-configuration-resolution and kept because the gap it covers outlives
-# that change.
+# Exercise the RELEASE binary for configuration layer resolution, bundle union,
+# and green MCP startup. These paths are gated on cfg!(debug_assertions) or
+# otherwise vary by build profile, so the nextest suite -- which runs debug --
+# cannot observe them.
+#
+# Originally written for redesign-configuration-resolution, which layered a
+# fixed `overlay/` subdirectory beneath a single root. layer-configuration-roots
+# replaced that with an operator-declared list of sibling roots, so checks A
+# through C now pass the layers as repeated flags. Check B1 is new: with a list
+# rather than a nested pair, the bundle-directory union is a distinct behavior
+# from per-file shadowing and needs its own coverage.
 #
 # Re-run whenever build-profile-dependent resolution changes. In particular, the
 # runtime-instance work removes the repository-local state and inscriptions
-# branches, which is exactly what checks C and D assert; those two need
-# rewriting rather than re-running once that lands.
+# branches, which is exactly what check D asserts; it needs rewriting rather than
+# re-running once that lands.
 #
 # Requires a release build: cargo build --release --bin agentmux
 # (Check C additionally requires a debug build.)
@@ -19,8 +24,8 @@ set -uo pipefail
 
 RELEASE=./target/release/agentmux
 DEBUG=./target/debug/agentmux
-ROOT=.auxiliary/temporary/verify-9.3
-rm -rf "$ROOT"; mkdir -p "$ROOT/base/bundles" "$ROOT/base/overlay/bundles"
+ROOT=.auxiliary/temporary/verify-release-binary
+rm -rf "$ROOT"; mkdir -p "$ROOT/base/bundles" "$ROOT/override/bundles"
 
 pass=0; fail=0
 status=0   # exit status of the most recent run_* invocation
@@ -94,41 +99,66 @@ this-field-does-not-exist = true
 "
 
 printf '%s' "$VALID_BUNDLE" > "$ROOT/base/bundles/baseonly.toml"
+printf '%s' "$VALID_BUNDLE" > "$ROOT/override/bundles/overrideonly.toml"
+
+# The layer list, highest precedence first. Passed as repeated flags so the
+# script exercises the repeatability the flag contract specifies rather than the
+# environment form, which cannot express a path containing a colon.
+LAYERS=(--configuration-directory "$ROOT/override" --configuration-directory "$ROOT/base")
 
 echo
-echo "== A. Overlay shadowing in a release build =="
-# `check configuration` reports validity, not contents, so validity is the
-# observable: make exactly one of the two copies invalid and see which verdict
-# comes back. That proves which file was parsed rather than inferring it.
+echo "== A. Layer shadowing in a release build =="
+# `check configuration` reports validity as well as sources, so validity is the
+# discriminator: make exactly one of the two copies invalid and see which verdict
+# comes back. That proves which file was parsed rather than inferring it. The
+# source line is asserted alongside, since it is the surface an operator reads.
 printf '%s' "$INVALID_BUNDLE" > "$ROOT/base/bundles/shadowed.toml"
-printf '%s' "$VALID_BUNDLE"   > "$ROOT/base/overlay/bundles/shadowed.toml"
-run "$RELEASE" check configuration shadowed --configuration-directory "$ROOT/base"
-check         "valid overlay wins over an invalid base" "all valid" "$out"
-expect_status "valid overlay wins over an invalid base" 0
+printf '%s' "$VALID_BUNDLE"   > "$ROOT/override/bundles/shadowed.toml"
+run "$RELEASE" check configuration shadowed "${LAYERS[@]}"
+check         "valid earlier layer wins over an invalid base" "all valid" "$out"
+check         "the source names the supplying layer"          "override/bundles/shadowed.toml" "$out"
+expect_status "valid earlier layer wins over an invalid base" 0
 
 printf '%s' "$VALID_BUNDLE"   > "$ROOT/base/bundles/shadowed.toml"
-printf '%s' "$INVALID_BUNDLE" > "$ROOT/base/overlay/bundles/shadowed.toml"
-run "$RELEASE" check configuration shadowed --configuration-directory "$ROOT/base"
-check         "invalid overlay is reported as the fault"      "this-field-does-not-exist" "$out"
-refute        "invalid overlay does not fall through to base" "all valid"                 "$out"
-expect_status "invalid overlay fails the command"             1
+printf '%s' "$INVALID_BUNDLE" > "$ROOT/override/bundles/shadowed.toml"
+run "$RELEASE" check configuration shadowed "${LAYERS[@]}"
+check         "invalid earlier layer is reported as the fault"      "this-field-does-not-exist" "$out"
+refute        "invalid earlier layer does not fall through to base" "all valid"                 "$out"
+expect_status "invalid earlier layer fails the command"             1
 
 echo
-echo "== B. Base file reachable when the overlay lacks it =="
-run "$RELEASE" check configuration baseonly --configuration-directory "$ROOT/base"
+echo "== B. Base file reachable when the earlier layer lacks it =="
+run "$RELEASE" check configuration baseonly "${LAYERS[@]}"
 check         "base-only bundle resolves" "ok: baseonly" "$out"
 expect_status "base-only bundle resolves" 0
 
 echo
+echo "== B1. Bundle directories union across layers =="
+# Distinct from shadowing: a bundle defined in only one layer must remain
+# discoverable from the whole list, in both directions. Whole-directory
+# replacement -- the plausible wrong implementation -- would drop whichever
+# layer's bundles lost, so asserting both names in one run discriminates against
+# it. Restore the shadowed pair to valid first so this measures union alone.
+printf '%s' "$VALID_BUNDLE" > "$ROOT/base/bundles/shadowed.toml"
+printf '%s' "$VALID_BUNDLE" > "$ROOT/override/bundles/shadowed.toml"
+run "$RELEASE" check configuration "${LAYERS[@]}"
+check         "a base-only bundle is in the effective set"     "ok: baseonly"     "$out"
+check         "an override-only bundle is in the effective set" "ok: overrideonly" "$out"
+check         "a bundle in both layers is validated once"      "checked 3 bundle configuration(s)" "$out"
+expect_status "the union validates cleanly"                    0
+
+echo
 echo "== C. Debug and release resolve identically =="
-# Discriminating by construction: base and overlay disagree about validity, so
-# the two profiles produce identical output only if they select the same file.
-# Comparing two VALID copies would pass whether or not resolution agreed.
+# Discriminating by construction: the two layers disagree about validity, so the
+# profiles produce identical output only if they select the same file. Comparing
+# two VALID copies would pass whether or not resolution agreed. Both the
+# comparison and the release verdict are asserted, so an outcome where the
+# profiles agree on a wrong answer still fails.
 printf '%s' "$INVALID_BUNDLE" > "$ROOT/base/bundles/shadowed.toml"
-printf '%s' "$VALID_BUNDLE"   > "$ROOT/base/overlay/bundles/shadowed.toml"
-run "$RELEASE" check configuration shadowed --configuration-directory "$ROOT/base"
+printf '%s' "$VALID_BUNDLE"   > "$ROOT/override/bundles/shadowed.toml"
+run "$RELEASE" check configuration shadowed "${LAYERS[@]}"
 rel="$out"; relstatus=$status
-run "$DEBUG"   check configuration shadowed --configuration-directory "$ROOT/base"
+run "$DEBUG"   check configuration shadowed "${LAYERS[@]}"
 dbg="$out"; dbgstatus=$status
 if [ "$rel" = "$dbg" ] && [ "$relstatus" -eq "$dbgstatus" ]; then
   echo "  PASS  identical resolution and status across build profiles"; pass=$((pass+1))
@@ -136,7 +166,8 @@ else
   echo "  FAIL  build profiles diverge (exit $dbgstatus vs $relstatus)"
   diff <(echo "$dbg") <(echo "$rel"); fail=$((fail+1))
 fi
-check "both profiles selected the overlay copy" "all valid" "$rel"
+check "both profiles selected the earlier layer's copy" "all valid" "$rel"
+status=$relstatus; expect_status "release accepts the valid earlier layer" 0
 
 echo
 echo "== D. Release ignores repository-local state; debug does not =="
@@ -152,9 +183,9 @@ mkdir -p "$CHECKOUT"
 git -C "$CHECKOUT" init -q 2>/dev/null
 printf '[package]\nname = "agentmux"\nversion = "0.0.0"\n' > "$CHECKOUT/Cargo.toml"
 FAKEHOME="$PWD/$ROOT/home"; mkdir -p "$FAKEHOME"
-CONFIG="$PWD/$ROOT/base"
 args=(list principals --namespace shadowed --as-session user@GLOBAL
-      --configuration-directory "$CONFIG")
+      --configuration-directory "$PWD/$ROOT/override"
+      --configuration-directory "$PWD/$ROOT/base")
 
 ABS_RELEASE=$(cd "$(dirname "$RELEASE")" && pwd)/$(basename "$RELEASE")
 ABS_DEBUG=$(cd "$(dirname "$DEBUG")" && pwd)/$(basename "$DEBUG")
@@ -186,14 +217,14 @@ echo "== E. Green MCP startup on an unknown bundle (release) =="
 init='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"verify","version":"0"}}}'
 listt='{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
 mcp=$(printf '%s\n%s\n' "$init" "$listt" \
-  | timeout 20 "$RELEASE" host mcp --configuration-directory "$ROOT/base" \
+  | timeout 20 "$RELEASE" host mcp "${LAYERS[@]}" \
       --default-bundle does-not-exist 2>/dev/null); status=$?
 check         "initialize is answered despite the fault"     '"protocolVersion"' "$mcp"
 check         "tool surface is advertised despite the fault" '"name":"send"'     "$mcp"
 expect_status "process serves the protocol and exits cleanly" 0
 
 echo
-echo "== F. Green MCP startup on a missing configuration root (release) =="
+echo "== F. Green MCP startup on a missing configuration layer (release) =="
 mcp=$(printf '%s\n%s\n' "$init" "$listt" \
   | timeout 20 "$RELEASE" host mcp --configuration-directory "$ROOT/does-not-exist" \
       --default-bundle whatever 2>/dev/null); status=$?

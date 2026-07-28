@@ -5,52 +5,92 @@ Runtime layout, configuration root resolution, and startup sequencing for the re
 ## Requirements
 ### Requirement: XDG Configuration Root
 
-The system SHALL resolve the configuration root using precedence:
+The system SHALL resolve configuration from an ordered list of configuration
+roots, called **layers**, using precedence:
 
-1. explicit CLI `--configuration-directory` when present
-2. `AGENTMUX_CONFIGURATION_DIRECTORY` environment variable when set and
-   non-blank, resolved against the working directory when relative, identically
-   to the CLI flag
-3. nearest-ancestor discovery when discovery is enabled
-4. `$XDG_CONFIG_HOME/agentmux` when set and non-empty, otherwise
-   `~/.config/agentmux`
+1. explicit CLI `--configuration-directory`, accepted repeatably, each
+   occurrence appending one layer in the order given
+2. `AGENTMUX_CONFIGURATION_DIRECTORY` when set and non-blank, parsed as a
+   `:`-separated list in the same order, each element resolved against the
+   working directory when relative, identically to the CLI flag
+3. `$XDG_CONFIG_HOME/agentmux` when set and non-empty, otherwise
+   `~/.config/agentmux`, as a single layer
 
-Tiers 1 and 2 SHALL **replace** the configuration root rather than extend a
-search list, so an explicitly supplied root never falls through to a different
-root for files it does not define.
+Tiers 1 and 2 SHALL **replace** the layer list rather than extend it, and a
+supplied list SHALL be closed: no root outside the supplied list SHALL be
+consulted for any file.
+
+Closedness governs which roots are searched, not what absence means. A file
+absent from every supplied layer is absent, and each artifact's existing
+absence semantics continue to apply unchanged: an optional artifact such as
+`mcp.toml`, `users.toml`, or `ui.toml` remains optional, while an artifact a
+command requires still faults.
+
+Every element of a supplied list SHALL be a non-empty path. An empty element —
+whether from a repeated flag with an empty value, or from a leading, trailing,
+or doubled separator in the environment form — SHALL be rejected with a
+structured validation error. An empty element SHALL NOT be interpreted as the
+working directory, which would silently admit configuration from wherever a
+process happened to be started.
+
+The list SHALL be searched front to back, so the first layer is the
+highest-precedence layer and the last is the base.
+
+A layer SHALL be an ordinary configuration root. No subdirectory beneath a layer
+SHALL be given special resolution meaning.
 
 Configuration root resolution SHALL NOT depend on build profile.
 
-#### Scenario: Resolve configuration root from explicit CLI value
+#### Scenario: Resolve a single layer from an explicit CLI value
 
-- **WHEN** startup receives `--configuration-directory`
-- **THEN** the configuration root is that path
-- **AND** discovery and XDG/home resolution are bypassed
+- **WHEN** startup receives one `--configuration-directory`
+- **THEN** the layer list is that one path
+- **AND** XDG/home resolution is bypassed
 
-#### Scenario: Resolve configuration root from environment
+#### Scenario: Repeated flags append layers in order
+
+- **WHEN** startup receives `--configuration-directory A` then
+  `--configuration-directory B`
+- **THEN** the layer list is `[A, B]`
+- **AND** a file present in both resolves from `A`
+
+#### Scenario: Resolve layers from environment
 
 - **WHEN** no `--configuration-directory` is provided
-- **AND** `AGENTMUX_CONFIGURATION_DIRECTORY` is set and non-blank
-- **THEN** the configuration root is that path
+- **AND** `AGENTMUX_CONFIGURATION_DIRECTORY` is set to `A:B`
+- **THEN** the layer list is `[A, B]`
 
-#### Scenario: Explicit root does not fall through for undefined files
+#### Scenario: Supplied layers do not fall through for undefined files
 
-- **WHEN** the configuration root is supplied explicitly
-- **AND** a requested configuration file does not exist under that root
+- **WHEN** a layer list is supplied explicitly
+- **AND** a requested configuration file exists under none of its layers
 - **THEN** resolution reports the file as absent
-- **AND** no other configuration root is consulted
+- **AND** no unsupplied configuration root is consulted
+
+#### Scenario: Absence keeps each artifact's own semantics
+
+- **WHEN** an optional artifact exists under none of the supplied layers
+- **THEN** the command proceeds as it would with a single root
+
+#### Scenario: Reject an empty layer element
+
+- **WHEN** a supplied layer list contains an empty element, from an empty flag
+  value or from a leading, trailing, or doubled separator in the environment
+  form
+- **THEN** startup returns a structured validation error naming the offending
+  position
+- **AND** the working directory is not consulted as a configuration root
 
 #### Scenario: Resolve configuration root from XDG default
 
-- **WHEN** no explicit root is provided
-- **AND** discovery is disabled or finds no marker
-- **THEN** the configuration root resolves from `$XDG_CONFIG_HOME/agentmux` or
+- **WHEN** no explicit layer list is provided
+- **THEN** the layer list is the single root `$XDG_CONFIG_HOME/agentmux` or
   `~/.config/agentmux`
 
 #### Scenario: Configuration root resolution is identical across build profiles
 
 - **WHEN** the same inputs are supplied to a debug build and a release build
-- **THEN** both resolve the same configuration root
+- **THEN** both resolve the same layer list
 
 ### Requirement: XDG State Root
 
@@ -247,7 +287,7 @@ The MCP server SHALL resolve sender association at startup using precedence:
 1. explicit CLI `--session-name` when present
 2. injected bring-up environment variable `AGENTMUX_SESSION` when present and
    non-blank
-3. overlay-resolved association file `session_name` when present
+3. the effective association file's `session_name` when present
 4. working-directory match against configured member directories
 
 A blank injected value SHALL be treated as absent.
@@ -260,7 +300,9 @@ Sender association SHALL NOT be derived from Git metadata. When no tier supplies
 a sender and no configured member matches, sender association SHALL be recorded
 as unresolved rather than failing startup.
 
-The tier which supplied the resolved sender SHALL be recorded.
+The tier which supplied the resolved sender SHALL be recorded. The association
+file occupies one tier regardless of how many configuration layers were searched
+to produce it.
 
 #### Scenario: Resolve sender from explicit CLI value
 
@@ -271,7 +313,7 @@ The tier which supplied the resolved sender SHALL be recorded.
 
 - **WHEN** CLI sender is absent
 - **AND** the `AGENTMUX_SESSION` environment value is present and non-blank
-- **AND** the association file also provides `session_name`
+- **AND** the effective association file also provides `session_name`
 - **THEN** sender association resolves to the environment value
 
 #### Scenario: Resolve sender from working directory match
@@ -288,7 +330,8 @@ The tier which supplied the resolved sender SHALL be recorded.
 
 #### Scenario: Supplied sender naming no member does not fall through
 
-- **WHEN** a sender is supplied by CLI, environment, or association file
+- **WHEN** a sender is supplied by CLI, environment, or the effective association
+  file
 - **AND** it names no configured member
 - **AND** the working directory matches a different configured member
 - **THEN** sender association is recorded as unresolved with that cause
@@ -346,7 +389,7 @@ The MCP server SHALL resolve bundle association at startup using precedence:
 1. explicit CLI `--bundle` when present
 2. injected bring-up environment variable `AGENTMUX_BUNDLE` when present and
    non-blank
-3. overlay-resolved association file `bundle_name` when present
+3. the effective association file's `bundle_name` when present
 4. explicit CLI `--default-bundle` when present
 
 A blank injected value SHALL be treated as absent.
@@ -364,7 +407,9 @@ intent. When a supplied bundle cannot be loaded, MCP startup SHALL retain the
 loading fault with its own cause rather than recording a generic unassociated
 server.
 
-The tier which supplied the resolved bundle SHALL be recorded.
+The tier which supplied the resolved bundle SHALL be recorded. The association
+file occupies one tier regardless of how many configuration layers were searched
+to produce it.
 
 #### Scenario: Resolve bundle from explicit CLI value
 
@@ -381,7 +426,7 @@ The tier which supplied the resolved bundle SHALL be recorded.
 #### Scenario: Injected environment wins over association file
 
 - **WHEN** `--bundle` is absent
-- **AND** the association file provides `bundle_name`
+- **AND** the effective association file provides `bundle_name`
 - **AND** the `AGENTMUX_BUNDLE` environment value is present and non-blank
 - **THEN** bundle association resolves to the environment value
 
@@ -412,12 +457,11 @@ The tier which supplied the resolved bundle SHALL be recorded.
 
 The MCP server SHALL support optional association overrides in a logical
 configuration artifact at relative path `mcp.toml`, resolved through the shared
-effective-file lookup. The lookup selects `<root>/overlay/mcp.toml` when present
-and otherwise `<root>/mcp.toml`; the overlay segment SHALL NOT appear in the
-logical path, so it is applied exactly once.
+effective-file lookup across the configuration layers.
 
 The resolved artifact is the **effective association file**, and it occupies a
-single tier in each association ladder.
+single tier in each association ladder regardless of how many layers were
+searched to produce it.
 
 Supported override fields SHALL be:
 
@@ -427,19 +471,20 @@ Supported override fields SHALL be:
 Fields SHALL be independently optional: a file supplying only one field SHALL
 leave the other to the remaining association tiers.
 
-The file SHALL NOT support a configuration-root field. A file located beneath the
-configuration root cannot redirect the configuration root.
+The file SHALL NOT support a configuration-root field. A file located beneath a
+configuration layer cannot redirect the layer list.
 
 #### Scenario: Ignore missing association file
 
-- **WHEN** neither `<root>/overlay/mcp.toml` nor `<root>/mcp.toml` exists
+- **WHEN** `mcp.toml` exists under no configuration layer
 - **THEN** startup continues using the remaining association tiers
 
-#### Scenario: Overlay association file shadows the base
+#### Scenario: Nearest layer supplies the association file
 
-- **WHEN** both `<root>/overlay/mcp.toml` and `<root>/mcp.toml` exist
-- **THEN** the overlay file is the effective association file
-- **AND** the base file contributes no fields
+- **WHEN** `mcp.toml` exists under more than one configuration layer
+- **THEN** the copy from the earliest layer in the list is the effective
+  association file
+- **AND** copies in later layers contribute no fields
 
 #### Scenario: Resolve bundle from the effective association file alone
 
@@ -689,9 +734,9 @@ If selected session references unknown policy, runtime SHALL fail with
 ### Requirement: TUI Sender Configuration Files
 
 The runtime SHALL support global user session configuration at relative path
-`users.toml`, resolved through the shared effective-file lookup so an
-overlay-provided file shadows the base file. Resolution SHALL NOT depend on
-build profile.
+`users.toml`, resolved through the shared effective-file lookup across the
+configuration layers so a copy in an earlier layer shadows a copy in a later
+one. Resolution SHALL NOT depend on build profile.
 
 Supported fields SHALL use kebab-case and include:
 
@@ -720,10 +765,10 @@ within the file.
 - **AND** `[[sessions]]` in `users.toml` contains `id = "user@GLOBAL"`
 - **THEN** runtime resolves sender identity as `user@GLOBAL`
 
-#### Scenario: Overlay users.toml shadows the base file in every build
+#### Scenario: Earlier layer users.toml shadows a later one in every build
 
-- **WHEN** `users.toml` exists under both the overlay and the base root
-- **THEN** the overlay file is used
+- **WHEN** `users.toml` exists under two configuration layers
+- **THEN** the copy from the earlier layer is used
 - **AND** the result is identical in debug and release builds
 
 #### Scenario: Reject unknown configured default session
@@ -1104,123 +1149,6 @@ context without redefining the mechanism.
 - **THEN** it is normalized to absent where the environment is read
 - **AND** every consumer observes it identically as absent
 
-### Requirement: Configuration Overlay Resolution
-
-The system SHALL resolve every configuration file through a single effective-file
-lookup that consults, in order, `<root>/overlay/<path>` then `<root>/<path>`, and
-selects the first existing regular file. All relay, TUI, CLI, and preflight
-loaders SHALL use this lookup.
-
-- A malformed overlay file SHALL be a fault and SHALL NOT fall through to the
-  base file.
-- Directories of bundle definitions SHALL union by bundle identifier, with an
-  overlay entry shadowing a base entry of the same identifier.
-- Relative path-valued fields SHALL retain their existing per-field resolution
-  base. A field supplied by an overlay file SHALL resolve identically to the
-  same field supplied by the corresponding base file; the overlay directory
-  SHALL NOT become a resolution base and SHALL NOT alter any field's existing
-  base.
-- Starter configuration hydration SHALL occur only when the configuration root
-  was resolved from the XDG/home default tier. A root supplied by CLI,
-  environment, or discovery SHALL never be scaffolded, and SHALL never have an
-  overlay directory created for it.
-
-#### Scenario: Overlay file shadows base file
-
-- **WHEN** the same relative path exists under both the overlay and the base root
-- **THEN** the overlay file is used
-
-#### Scenario: Fall through to base when overlay lacks the file
-
-- **WHEN** a relative path exists only under the base root
-- **THEN** the base file is used
-
-#### Scenario: Malformed overlay file does not fall through
-
-- **WHEN** an overlay file exists but cannot be parsed
-- **THEN** the fault is reported
-- **AND** the corresponding base file is not used
-
-#### Scenario: Explicit root is never scaffolded
-
-- **WHEN** the configuration root is supplied by CLI, environment, or discovery
-- **AND** it lacks starter configuration files
-- **THEN** no starter configuration is written
-
-#### Scenario: Missing explicit root surfaces per command class
-
-- **WHEN** the configuration root is supplied explicitly and does not exist
-- **THEN** `host mcp` retains the fault and reports it at tool-invocation time
-- **AND** other commands report it immediately
-
-#### Scenario: Bundle definitions union by identifier
-
-- **WHEN** the base root defines bundles `alpha` and `beta`
-- **AND** the overlay defines bundle `beta`
-- **THEN** the effective set is `alpha` from the base and `beta` from the overlay
-
-#### Scenario: Relative paths do not rebase under the overlay
-
-- **WHEN** an overlay bundle file declares a relative member directory
-- **THEN** it resolves against the same base as the identical declaration in a
-  base bundle file
-- **AND** that field's existing resolution base is unchanged by this requirement
-
-### Requirement: Configuration Root Discovery
-
-The system SHALL support opt-in discovery of a configuration root, enabled by
-the `--discover-local-configuration` flag and disabled by default.
-
-Discovery SHALL enumerate the working directory and each of its ancestors. For
-each candidate ancestor `A`, the candidate configuration root SHALL be
-`A/.auxiliary/configuration/agentmux`. A candidate SHALL be valid when that path
-exists and is a directory. The candidate derived from the nearest ancestor SHALL
-win.
-
-- Enumeration SHALL begin at the canonicalized working directory and terminate
-  at the filesystem root.
-- Paths SHALL be canonicalized before enumeration so symbolic links resolve
-  consistently, and the selected root SHALL be reported in canonical form.
-- Discovery SHALL NOT depend on build profile, Git metadata, or package
-  manifests.
-- The selected root SHALL be reported on a diagnostic channel that is never the
-  MCP stdio stream, so a diagnostic cannot corrupt the protocol.
-
-#### Scenario: Discovery disabled by default
-
-- **WHEN** `--discover-local-configuration` is not supplied
-- **AND** an ancestor of the working directory contains
-  `.auxiliary/configuration/agentmux`
-- **THEN** it is not used
-- **AND** resolution falls through to the XDG/home default
-
-#### Scenario: Discover root from an ancestor of the working directory
-
-- **WHEN** discovery is enabled
-- **AND** the working directory is `/repo/subdir`
-- **AND** `/repo/.auxiliary/configuration/agentmux` exists and is a directory
-- **THEN** the configuration root is `/repo/.auxiliary/configuration/agentmux`
-
-#### Scenario: Nearest ancestor wins
-
-- **WHEN** discovery is enabled
-- **AND** both `/repo/.auxiliary/configuration/agentmux` and
-  `/repo/nested/.auxiliary/configuration/agentmux` exist
-- **AND** the working directory is under `/repo/nested`
-- **THEN** the configuration root derived from `/repo/nested` is selected
-
-#### Scenario: Discovery finds no candidate
-
-- **WHEN** discovery is enabled
-- **AND** no ancestor yields an existing candidate directory
-- **THEN** resolution falls through to the XDG/home default
-
-#### Scenario: Report the selected root off the protocol stream
-
-- **WHEN** discovery selects a configuration root during `host mcp` startup
-- **THEN** the selected root is reported on a diagnostic channel
-- **AND** nothing is written to the MCP stdio stream
-
 ### Requirement: MCP Startup Fault Tolerance
 
 `agentmux host mcp` SHALL fail at process start only when it cannot serve the
@@ -1297,4 +1225,72 @@ retained startup fault.
 
 - **WHEN** stdio transport or protocol router initialization fails
 - **THEN** MCP process startup fails
+
+### Requirement: Configuration Layer Resolution
+
+The system SHALL resolve every configuration file through a single
+effective-file lookup that consults each configuration layer in list order and
+selects the first existing regular file. All relay, TUI, CLI, and preflight
+loaders SHALL use this lookup.
+
+- A malformed file in one layer SHALL be a fault and SHALL NOT fall through to a
+  later layer.
+- Directories of bundle definitions SHALL union by bundle identifier, with an
+  entry in an earlier layer shadowing an entry of the same identifier in a later
+  layer.
+- Relative path-valued fields SHALL retain their existing per-field resolution
+  base. A field SHALL resolve identically regardless of which layer supplied the
+  file containing it; no layer SHALL become a resolution base and no layer SHALL
+  alter any field's existing base.
+- Starter configuration hydration SHALL occur only when the layer list was
+  resolved from the XDG/home default tier, which is a single layer. A list
+  supplied by CLI or environment SHALL never be scaffolded.
+
+#### Scenario: Earlier layer shadows later layer
+
+- **WHEN** the same relative path exists under two configuration layers
+- **THEN** the file from the earlier layer is used
+
+#### Scenario: Fall through to a later layer
+
+- **WHEN** a relative path exists only under a later configuration layer
+- **THEN** that file is used
+
+#### Scenario: Malformed file does not fall through
+
+- **WHEN** a file exists in one layer but cannot be parsed
+- **THEN** the fault is reported
+- **AND** the corresponding file in a later layer is not used
+
+#### Scenario: Supplied layers are never scaffolded
+
+- **WHEN** the layer list is supplied by CLI or environment
+- **AND** a layer lacks starter configuration files
+- **THEN** no starter configuration is written
+
+#### Scenario: Missing supplied layer surfaces per command class
+
+- **WHEN** a supplied configuration layer does not exist
+- **THEN** `host mcp` retains the fault and reports it at tool-invocation time
+- **AND** other commands report it immediately
+
+#### Scenario: Bundle definitions union by identifier across layers
+
+- **WHEN** the last layer defines bundles `alpha` and `beta`
+- **AND** an earlier layer defines bundle `beta`
+- **THEN** the effective set is `alpha` from the last layer and `beta` from the
+  earlier one
+
+#### Scenario: Relative paths do not rebase per layer
+
+- **WHEN** a bundle file in one layer declares a relative member directory
+- **THEN** it resolves against the same base as the identical declaration in a
+  bundle file supplied by any other layer
+
+#### Scenario: Watcher reconciles against the layer union
+
+- **WHEN** a bundle definition is created in an earlier layer shadowing one in a
+  later layer
+- **THEN** the effective bundle reloads from the earlier layer
+- **AND** removing it again reloads from the later layer rather than unloading
 

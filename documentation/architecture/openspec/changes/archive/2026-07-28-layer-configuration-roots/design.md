@@ -205,9 +205,49 @@ reports which file *won* for every artifact, including when nothing is wrong.
 The two are complementary: one explains a failure, the other explains a
 surprise.
 
-Left open for implementation: whether introspection is the default output or
-sits behind a flag. The command's output is already the widest surface in
-`cli-surface`, so enlarging it unconditionally may be the wrong default.
+**Introspection is default output, with `-q`/`--quiet` to suppress it.**
+
+This was left open when the delta was first written, on the reasoning that the
+command's output is already the widest surface in `cli-surface` and enlarging it
+unconditionally may be the wrong default. That concern is real but does not
+decide it. The command has two uses: "is this valid?", answered by the exit code
+regardless of how much is printed, and "what is actually in effect?", answered
+only by source reporting. A flag costs the first nothing and the second
+everything — the operator who needs introspection is the one whose edit did
+nothing, and who therefore has no reason to suspect a flag exists. Putting the
+diagnosis behind a flag hides it behind already knowing the diagnosis exists.
+`--quiet` serves the operator who wants the exit code alone, which is the need a
+flag actually fits.
+
+A third option was considered and rejected: report sources only when more than
+one layer is in effect. It reads as "show it only when it matters", but it makes
+the output shape depend on deployment topology, so the output changes the day a
+second layer appears — the day someone is least able to absorb a surprise.
+
+Two consequences follow rather than being separate decisions. Reporting runs
+*before* validation, because validation is fail-fast and would otherwise
+truncate the report on exactly the run where the whole picture is wanted; the
+lookup cannot fail, so it can go first. And sources go to standard output while
+failures go to standard error, which is what the command already does for its
+existing output.
+
+The one argument for merging the streams is interleaving: if standard output
+were buffered by destination, as C stdio is, a piped transcript could show a
+failure ahead of the report explaining it. It is not. The runtime wraps standard
+output in a line writer unconditionally, so each line is flushed at its newline
+whether the destination is a terminal or a pipe, and the two streams stay in
+order without help. This was measured rather than assumed, and it contradicts
+what an earlier draft of this section asserted.
+
+The explicit flush before a failure is kept regardless, and the reason is not the
+hazard it appears to answer. Line buffering is an implementation choice — one the
+standard library has repeatedly been asked to change for piped output — rather
+than a guarantee. A flush at the command's single exit costs nothing, survives
+that change, and puts the ordering contract where a reader of the command can
+find it, instead of leaving it unstated and enforced by something outside this
+project. What the specification must not do is claim the flush repairs a present
+defect, because a requirement describing an absent hazard invites a test that
+cannot fail.
 
 ## Open Questions
 

@@ -136,13 +136,18 @@ impl McpServer {
         self.request_relay_with_namespace(request, None)
     }
 
-    /// The single door to the relay, and therefore where readiness is enforced.
+    /// The single door to the relay, and the backstop for readiness.
     ///
     /// Every relay-backed handler reaches the relay through here, so a handler
-    /// cannot forget the check the way it can when each one places its own. The
-    /// position is also the only one the contract allows: it is past each
-    /// handler's argument validation, which the dispatch boundary is not, and
-    /// ahead of any relay contact.
+    /// cannot forget the check the way it can when each one places its own. It is
+    /// not the only place readiness is consulted: the association gates check it
+    /// too, because a handler doing configuration I/O on the way here would
+    /// otherwise surface a loader error ahead of the fault that caused it.
+    ///
+    /// Both positions sit past each handler's argument validation, which the
+    /// dispatch boundary does not. Handlers must therefore reject malformed
+    /// arguments themselves rather than leaving it to resolution, which happens
+    /// past the gates.
     ///
     /// Work that never touches the relay stays ungated by construction, which is
     /// why `help` still answers under a retained fault.

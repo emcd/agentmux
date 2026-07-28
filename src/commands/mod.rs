@@ -136,6 +136,8 @@ pub(super) struct CheckArguments {
     /// Optional single bundle to validate; `None` validates every discoverable
     /// bundle.
     pub(super) bundle_id: Option<String>,
+    /// Suppresses success output, leaving the exit code and any failure report.
+    pub(super) quiet: bool,
     pub(super) runtime: RuntimeArguments,
 }
 
@@ -278,7 +280,7 @@ fn print_agentmux_help() {
         "[--configuration-directory PATH] [--state-directory PATH] ",
         "[--inscriptions-directory PATH|--logs-directory PATH] ",
         "[--repository-root PATH]\n",
-        "  check configuration [<bundle-id>] [--configuration-directory PATH] ",
+        "  check configuration [<bundle-id>] [-q|--quiet] [--configuration-directory PATH] ",
         "[--state-directory PATH] [--inscriptions-directory PATH|",
         "--logs-directory PATH] [--repository-root PATH]\n",
         "  tui [--bundle NAME] [--as-session NAME] [--lines N] ",

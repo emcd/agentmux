@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use rmcp::ErrorData as McpError;
 use serde_json::json;
 
-use crate::relay::CredentialDestination;
+use crate::{relay::CredentialDestination, runtime::paths::is_valid_bundle_name};
 
 use super::errors::validation_tool_error;
 use super::params::{
@@ -104,7 +104,7 @@ pub(super) fn validate_list_principals_args(args: &ListArgs) -> Result<(), McpEr
                     Some(json!({"namespace": namespace})),
                 ));
             }
-            Ok(())
+            validate_concrete_namespace(namespace)
         }
         // Local principal listing keeps its existing selector semantics.
         None => {
@@ -117,9 +117,33 @@ pub(super) fn validate_list_principals_args(args: &ListArgs) -> Result<(), McpEr
                     Some(json!({"namespace": namespace})),
                 ));
             }
-            Ok(())
+            match namespace {
+                Some("*") | None => Ok(()),
+                Some(namespace) => validate_concrete_namespace(namespace),
+            }
         }
     }
+}
+
+/// Rejects a concrete namespace that is not a well-formed bundle name.
+///
+/// Request validation belongs ahead of the readiness and association gates, so a
+/// malformed namespace reports as a malformed namespace rather than as whatever
+/// state the server happens to be in. Without this the grammar was enforced only
+/// once resolution reached the runtime, which is past both gates.
+///
+/// The traversal segments are excluded separately because the bundle-name
+/// grammar admits `.`: `.` and `..` satisfy it while naming no bundle and
+/// carrying meaning as path segments.
+fn validate_concrete_namespace(namespace: &str) -> Result<(), McpError> {
+    if is_valid_bundle_name(namespace) && !matches!(namespace, "." | "..") {
+        return Ok(());
+    }
+    Err(validation_tool_error(
+        "validation_invalid_params",
+        "namespace must be a well-formed bundle name",
+        Some(json!({"namespace": namespace})),
+    ))
 }
 
 pub(super) fn validate_list_namespaces_args(args: &ListNamespacesArgs) -> Result<(), McpError> {
