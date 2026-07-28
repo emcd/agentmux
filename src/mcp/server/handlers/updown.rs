@@ -62,10 +62,6 @@ impl McpServer {
         command: &str,
         request: RelayRequest,
     ) -> Result<CallToolResult, McpError> {
-        // After every validation for the selected command and before any
-        // inscription or relay work: a malformed request reports its own
-        // fault even while a startup fault is retained.
-        self.require_ready()?;
         let event_prefix = format!("mcp.tool.updown.{command}");
         let request_event = format!("{event_prefix}.request");
         let success_event = format!("{event_prefix}.success");
@@ -109,7 +105,7 @@ impl McpServer {
                 Ok(CallToolResult::success(vec![Content::json(response)?]))
             }
             Ok(other) => Err(self.map_nonsuccess_relay_response(event_prefix.as_str(), other)),
-            Err(source) => Err(self.map_relay_stream_failure(io_error_event.as_str(), source)),
+            Err(source) => Err(self.map_relay_call_error(io_error_event.as_str(), source)),
         }
     }
 }
