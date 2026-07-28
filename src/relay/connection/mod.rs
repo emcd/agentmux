@@ -267,7 +267,7 @@ impl ConnectionServeContext {
     }
 
     /// Configuration root the catalog was built against, used by the serve phase
-    /// to spawn per-config-directory watchers without holding a `RuntimeRoots`.
+    /// to spawn per-configuration-directory watchers without holding a `RuntimeRoots`.
     #[must_use]
     pub fn configuration_root(&self) -> &Path {
         &self.configuration_root

@@ -1,6 +1,6 @@
 use tempfile::TempDir;
 
-use agentmux::configuration::{TargetConfiguration, load_bundle_configuration};
+use agentmux::configuration::{BringUpContext, TargetConfiguration, load_bundle_configuration};
 
 use super::helpers::*;
 
@@ -51,11 +51,18 @@ coder = "acp"
     // The coder-level environment is lifted transport-agnostically onto the
     // resolved member, not held on the ACP-specific target descriptor.
     let environment = &loaded.members[0].environment;
-    assert_eq!(environment.len(), 2);
     assert_eq!(environment[0].name, "ACP_TOKEN");
     assert_eq!(environment[0].value, "secret-123");
     assert_eq!(environment[1].name, "LOG_LEVEL");
     assert_eq!(environment[1].value, "debug");
+    // Bring-up context is stamped after the operator-declared layers, so it
+    // trails them. Compared against the enumeration rather than a count, so
+    // extending the context does not falsify this test's actual subject.
+    let stamped: Vec<&str> = environment[2..]
+        .iter()
+        .map(|entry| entry.name.as_str())
+        .collect();
+    assert_eq!(stamped, BringUpContext::VARIABLE_NAMES);
 }
 
 #[test]

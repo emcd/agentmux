@@ -1,15 +1,14 @@
 //! TUI session configuration discovery and precedence resolution.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::configuration::{
     ConfigurationError, TuiConfiguration, load_policy_ids, load_tui_configuration,
-    load_tui_configuration_file, load_ui_configuration,
+    load_ui_configuration,
 };
 
 use super::error::RuntimeError;
 
-const OVERRIDE_FILE_PATH: &str = ".auxiliary/configuration/agentmux/overrides/users.toml";
 const GLOBAL_SESSION_SUFFIX: &str = "@GLOBAL";
 
 /// Resolved TUI session identity for CLI/TUI operations.
@@ -22,20 +21,19 @@ pub struct ResolvedTuiSession {
     pub policy: String,
 }
 
-/// Loads active TUI configuration with debug/testing override precedence.
+/// Loads active TUI configuration.
+///
+/// Per-tree overrides arrive through the configuration overlay like every other
+/// configuration file, rather than through a bespoke lookup rooted at the
+/// working tree. That lookup was gated on build profile, so this override was
+/// inert in release builds while its sibling in the same directory was not.
 ///
 /// # Errors
 ///
 /// Returns `RuntimeError` when configuration files are malformed.
 pub fn load_active_tui_configuration(
     configuration_root: &Path,
-    workspace_root: &Path,
 ) -> Result<Option<TuiConfiguration>, RuntimeError> {
-    if let Some(override_path) = local_override_path(workspace_root) {
-        return load_tui_configuration_file(&override_path).map_err(|source| {
-            map_configuration_error(source, "load local TUI override configuration")
-        });
-    }
     load_tui_configuration(configuration_root)
         .map_err(|source| map_configuration_error(source, "load TUI configuration"))
 }
@@ -54,11 +52,10 @@ pub fn load_active_tui_configuration(
 /// unknown policy references.
 pub fn resolve_tui_session_identity(
     configuration_root: &Path,
-    workspace_root: &Path,
     explicit_bundle: Option<&str>,
     explicit_session: Option<&str>,
 ) -> Result<ResolvedTuiSession, RuntimeError> {
-    let configuration = load_active_tui_configuration(configuration_root, workspace_root)?;
+    let configuration = load_active_tui_configuration(configuration_root)?;
     let ui_default_bundle = load_ui_default_bundle(configuration_root)?;
     let bundle_name = resolve_bundle_name(ui_default_bundle.as_deref(), explicit_bundle)?;
     finish_tui_session(
@@ -86,12 +83,11 @@ pub fn resolve_tui_session_identity(
 /// references — never for an absent bundle.
 pub fn resolve_tui_launch_identity(
     configuration_root: &Path,
-    workspace_root: &Path,
     explicit_bundle: Option<&str>,
     explicit_session: Option<&str>,
     fallback_bundle: Option<&str>,
 ) -> Result<ResolvedTuiSession, RuntimeError> {
-    let configuration = load_active_tui_configuration(configuration_root, workspace_root)?;
+    let configuration = load_active_tui_configuration(configuration_root)?;
     let ui_default_bundle = load_ui_default_bundle(configuration_root)?;
     let bundle_name = resolve_browsing_bundle(
         ui_default_bundle.as_deref(),
@@ -130,9 +126,9 @@ fn finish_tui_session(
 
 /// Loads the `ui.toml` `default-bundle` from the configuration root.
 ///
-/// `ui.toml` is root-only: unlike `users.toml`, it does not honor a
-/// debug/testing override file, so surface defaults never leak from a
-/// per-worktree override. A missing file resolves to `None`.
+/// Resolved through the configuration overlay like every other configuration
+/// file, so a per-tree overlay can supply surface defaults. A missing file
+/// resolves to `None`.
 ///
 /// # Errors
 ///
@@ -263,17 +259,6 @@ fn validate_sender_shape(session_id: &str) -> Result<(), RuntimeError> {
         ));
     }
     Ok(())
-}
-
-fn local_override_path(workspace_root: &Path) -> Option<PathBuf> {
-    if !cfg!(debug_assertions) {
-        return None;
-    }
-    let path = workspace_root.join(OVERRIDE_FILE_PATH);
-    if path.exists() {
-        return Some(path);
-    }
-    None
 }
 
 fn map_configuration_error(source: ConfigurationError, context: &str) -> RuntimeError {

@@ -1,7 +1,7 @@
 //! Runtime bundle file watcher.
 //!
-//! Watches the bundles configuration directory and reconciles the loaded bundle
-//! set against the on-disk set whenever a debounced filesystem change arrives.
+//! Watches the configuration root and reconciles the loaded bundle
+//! set against the effective bundle union whenever a debounced change arrives.
 //! New bundle files are loaded and started; removed files unload their bundle
 //! (evicting active sessions with `runtime_bundle_unloaded`); modified files are
 //! treated as a full teardown + reload (evicting active sessions with
@@ -26,7 +26,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::configuration::{
-    bundle_configuration_path, bundles_configuration_directory, load_bundle_configuration,
+    bundle_configuration_path, effective_bundle_definitions, load_bundle_configuration,
 };
 use crate::runtime::error::RuntimeError;
 use crate::runtime::inscriptions::emit_inscription;
@@ -88,7 +88,6 @@ pub fn spawn_bundle_watcher(
 ) -> Result<BundleWatcher, RuntimeError> {
     let configuration_root = configuration_root.as_ref().to_path_buf();
     let state_root = state_root.as_ref().to_path_buf();
-    let bundles_directory = bundles_configuration_directory(&configuration_root);
 
     let (sender, receiver) = mpsc::channel::<DebounceEventResult>();
     let mut debouncer = new_debouncer(BUNDLE_WATCH_DEBOUNCE, None, sender).map_err(|source| {
@@ -97,17 +96,25 @@ pub fn spawn_bundle_watcher(
             format!("failed to create bundle file watcher: {source}"),
         )
     })?;
+    // Watched recursively at the configuration root rather than per bundles
+    // directory, so both physical layers are covered by one watch and an overlay
+    // directory created after startup is observed without re-arming anything.
+    // Reconciliation is driven by the effective union and by content
+    // fingerprints, so an event from an unrelated file under the root costs one
+    // re-scan and changes nothing.
     debouncer
-        .watch(&bundles_directory, RecursiveMode::NonRecursive)
+        .watch(&configuration_root, RecursiveMode::Recursive)
         .map_err(|source| {
             RuntimeError::validation(
                 "runtime_bundle_watch_unavailable",
                 format!(
-                    "failed to watch bundles directory {}: {source}",
-                    bundles_directory.display()
+                    "failed to watch configuration root {}: {source}",
+                    configuration_root.display()
                 ),
             )
         })?;
+
+    let watched_root = configuration_root.clone();
 
     // Seed reconciliation state from the bundles already loaded at startup so the
     // first real change is diffed against their current on-disk content.
@@ -155,7 +162,7 @@ pub fn spawn_bundle_watcher(
 
     emit_inscription(
         "relay.bundle.watch.started",
-        &json!({ "bundles_directory": bundles_directory.display().to_string() }),
+        &json!({ "configuration_root": watched_root.display().to_string() }),
     );
 
     Ok(BundleWatcher {
@@ -175,7 +182,15 @@ struct ReconcileState {
     failed: HashMap<String, [u8; 32]>,
 }
 
-/// Re-scans the bundles directory and reconciles it against the loaded set.
+/// Re-scans both bundle layers and reconciles the effective union against the
+/// loaded set.
+///
+/// Reconciliation is driven by change in the **effective** set, never by the
+/// physical file event. An overlay file appearing over a loaded base bundle
+/// keeps the identifier in the union while changing which file supplies it, so
+/// it reloads rather than unloading; deleting that overlay file reveals the base
+/// and reloads again; and editing a base file which an overlay still shadows
+/// changes no effective content, so it is inert.
 fn reconcile_bundles(
     configuration_root: &Path,
     state_root: &Path,
@@ -183,22 +198,9 @@ fn reconcile_bundles(
     state: &mut ReconcileState,
     no_autostart: bool,
 ) {
-    let bundles_directory = bundles_configuration_directory(configuration_root);
-    let on_disk = match scan_bundle_names(&bundles_directory) {
-        Ok(names) => names,
-        Err(source) => {
-            // An unreadable directory is treated as transient: take no
-            // destructive action rather than unload every bundle.
-            emit_inscription(
-                "relay.bundle.watch.scan_failed",
-                &json!({
-                    "bundles_directory": bundles_directory.display().to_string(),
-                    "cause": source.to_string(),
-                }),
-            );
-            return;
-        }
-    };
+    let on_disk: HashSet<String> = effective_bundle_definitions(configuration_root)
+        .into_keys()
+        .collect();
     let loaded = catalog.loaded_bundle_names();
 
     // Disappeared: loaded bundles whose file is no longer on disk.
@@ -567,29 +569,20 @@ fn seed_fingerprints(
         .collect()
 }
 
-/// Lists the bundle names present on disk (the `<name>.toml` files in the
-/// bundles configuration directory). A missing directory yields an empty set.
-fn scan_bundle_names(bundles_directory: &Path) -> io::Result<HashSet<String>> {
-    if !bundles_directory.exists() {
-        return Ok(HashSet::new());
-    }
-    let mut names = HashSet::new();
-    for entry in std::fs::read_dir(bundles_directory)? {
-        let entry = entry?;
-        let file_name = entry.file_name();
-        let Some(file_name) = file_name.to_str() else {
-            continue;
-        };
-        if let Some(bundle_name) = file_name.strip_suffix(".toml") {
-            names.insert(bundle_name.to_string());
-        }
-    }
-    Ok(names)
-}
-
-/// Computes the SHA-256 content fingerprint of a bundle definition file.
+/// Computes the SHA-256 fingerprint of a bundle definition: the resolved path
+/// which supplies it, then its content.
+///
+/// Content alone cannot distinguish an overlay appearing over a byte-identical
+/// base — or being deleted to reveal one — from no change at all. Both change
+/// which file the relay tracks for that identifier, so both must reload.
 fn fingerprint_bundle_file(configuration_root: &Path, bundle_name: &str) -> io::Result<[u8; 32]> {
     let path = bundle_configuration_path(configuration_root, bundle_name);
     let bytes = std::fs::read(&path)?;
-    Ok(Sha256::digest(&bytes).into())
+    let mut hasher = Sha256::new();
+    hasher.update(path.as_os_str().as_encoded_bytes());
+    // Separator: without it a path/content split could shift without altering
+    // the concatenation.
+    hasher.update([0u8]);
+    hasher.update(&bytes);
+    Ok(hasher.finalize().into())
 }

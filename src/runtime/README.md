@@ -11,7 +11,11 @@ shared by relay and MCP hosts.
   - enforces ownership and secure directory permissions.
 - `association.rs`
   - resolves bundle/session association for MCP + CLI workflows,
-  - supports precedence: CLI flags > local overrides > auto-discovery.
+  - bundle precedence: `--bundle` > injected environment > overlay >
+    `--default-bundle`,
+  - session precedence: `--session-name` > injected environment > overlay >
+    working-directory match against declared member directories,
+  - resolves to nothing rather than guessing when no tier supplies an identity.
 - `tui_session.rs`
   - resolves TUI session selection from CLI + `users.toml` defaults, and
     browsing-bundle selection from CLI + `ui.toml` defaults,
@@ -40,32 +44,56 @@ shared by relay and MCP hosts.
 - `mod.rs`
   - module exports.
 
-## Association Override File
+## Root Resolution
 
-Per-worktree overrides are loaded from:
+The configuration root resolves by precedence, each tier ranked by how
+deployment-specific its source is:
 
-- `.auxiliary/configuration/agentmux/overrides/mcp.toml`
+1. `--configuration-directory`
+2. `AGENTMUX_CONFIGURATION_DIRECTORY`
+3. nearest-ancestor discovery, only with `--discover-local-configuration`
+4. `$XDG_CONFIG_HOME/agentmux`, else `~/.config/agentmux`
 
-Supported keys:
+Tiers 1 and 2 **replace** the root; they do not extend a search list, so a root
+supplied explicitly never falls through to another one for a file it does not
+define. Resolution does not vary by build profile.
 
-- `bundle_name`
-- `session_name`
-- `config_root`
+Discovery walks the canonicalized working directory and its ancestors for
+`<ancestor>/.auxiliary/configuration/agentmux`, nearest winning, and reports its
+selection on stderr — never stdout, which `host mcp` uses for the protocol.
 
-## TUI Session Override File
+Starter hydration applies only to a root from tier 4. A root named by flag,
+environment, or discovery is never scaffolded; when it does not exist, that is a
+fault rather than a reason to create one.
 
-Per-worktree TUI session overrides are loaded from:
+The **state** and **inscriptions** roots deliberately keep their build-profile
+gating and their Git-derived repository-root provenance. That gating is
+currently the only thing keeping a source-tree relay and an installed relay off
+the same relay-wide socket, locks, ready sentinel, principal store, and peer
+credentials. Runtime instances replace it; until then the configuration root and
+the state root resolve by different rules on purpose.
 
-- `.auxiliary/configuration/agentmux/overrides/users.toml`
+## Overridable Files
 
-Supported keys:
+Every configuration file resolves through the overlay, so overriding one is the
+same operation regardless of which file it is:
 
-- `default-session`
-- `[[sessions]]`
+| Logical artifact | Effective lookup |
+|---|---|
+| `mcp.toml` (association) | `<root>/overlay/mcp.toml`, then `<root>/mcp.toml` |
+| `users.toml` (TUI identity) | `<root>/overlay/users.toml`, then `<root>/users.toml` |
+| `ui.toml` (surface defaults) | `<root>/overlay/ui.toml`, then `<root>/ui.toml` |
+| `bundles/<id>.toml` | overlay entry shadows base entry of the same id |
 
-The override is identity-only. UI-surface defaults (`default-bundle`) live in
-`ui.toml`, which is read from the configuration root only and has no per-worktree
-override.
+`mcp.toml` supports `bundle_name` and `session_name`. It no longer carries a
+configuration-root field: the file lives *under* the configuration root, so
+letting it select that root made the lookup circular. Roots resolve first, and
+the file is read from the resolved root.
+
+Layering is whole-file replacement, not deep merge — "what is in effect" stays
+answerable by naming one file. Bundle *directories* are the exception and union
+by identifier, since replacing the directory wholesale would force an overlay
+redefining one bundle to restate every other one.
 
 ## Bootstrap Notes
 

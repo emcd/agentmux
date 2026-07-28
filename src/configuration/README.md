@@ -29,3 +29,8 @@ normalizes them into runtime structures used by CLI, MCP, relay, and TUI code.
 - Raw TOML structs stay private to the configuration module.
 - Loader behavior should preserve existing config schema and validation errors
   unless a spec or task explicitly changes them.
+- Bring-up context (`BringUpContext`) is stamped onto an agent-spawning member's
+  merged environment after the operator-declared layers, upsert-if-absent.
+  Carrying further context means adding a field there rather than teaching the
+  loader about another variable; `BringUpContext::VARIABLE_NAMES` is the
+  enumeration consumers read when they need the names without values.

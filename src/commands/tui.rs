@@ -34,8 +34,8 @@ pub(super) fn run_agentmux_tui(arguments: &[String]) -> Result<(), RuntimeError>
     let current_directory = env::current_dir()
         .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
     let workspace = WorkspaceContext::discover(&current_directory)?;
-    let roots = shared::resolve_roots(&parsed.runtime, &workspace, None)?;
-    ensure_starter_configuration_layout(&roots.configuration_root)?;
+    let roots = shared::resolve_roots(&parsed.runtime, &workspace)?;
+    ensure_starter_configuration_layout(&roots)?;
     // The interactive TUI does not require a default bundle to launch: a fresh
     // install ships no `default-bundle` (and the example bundle is empty), so an
     // eager bundle load here would crash startup (issues/tui/11, issues/runtime/3).
@@ -48,7 +48,6 @@ pub(super) fn run_agentmux_tui(arguments: &[String]) -> Result<(), RuntimeError>
         .collect::<Vec<_>>();
     let resolved_session = resolve_tui_launch_identity(
         &roots.configuration_root,
-        &workspace.workspace_root,
         parsed.bundle_name.as_deref(),
         parsed.session_selector.as_deref(),
         available_bundles.first().map(String::as_str),
@@ -116,7 +115,7 @@ fn parse_tui_arguments(arguments: &[String]) -> Result<TuiArguments, RuntimeErro
 
 pub(super) fn print_tui_help() {
     println!(
-        "Usage: agentmux tui [--bundle NAME] [--as-session NAME] [--lines N] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux tui [--bundle NAME] [--as-session NAME] [--lines N] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH] [--discover-local-configuration]"
     );
 }
 
@@ -179,7 +178,7 @@ fn spawn_relay_host_for_tui(
     command
         .arg("host")
         .arg("relay")
-        .arg("--config-directory")
+        .arg("--configuration-directory")
         .arg(configuration_root)
         .arg("--state-directory")
         .arg(state_root)

@@ -80,6 +80,10 @@ impl McpServer {
             args.output_path.as_deref(),
             args.write_to_config.unwrap_or(false),
         )?;
+        // After every validation for the selected command and before any
+        // inscription or relay work: a malformed request reports its own
+        // fault even while a startup fault is retained.
+        self.require_ready()?;
         emit_inscription(
             "mcp.tool.new.peer.request",
             &json!({

@@ -151,6 +151,27 @@ pub(super) fn unassociated_server_error() -> McpError {
     )
 }
 
+/// Builds the error reporting a retained startup fault at tool-invocation time.
+///
+/// Carries the original code so a caller can distinguish an absent configuration
+/// root from a malformed overlay from an unknown bundle, rather than seeing one
+/// undifferentiated "not ready".
+pub(super) fn startup_fault_error(fault: &crate::mcp::McpStartupFault) -> McpError {
+    validation_tool_error(
+        fault.code.as_str(),
+        format!(
+            "MCP server started but could not build an operational context: {}",
+            fault.message
+        )
+        .as_str(),
+        Some(json!({
+            "reason": "startup_fault",
+            "startup_fault_code": fault.code,
+            "startup_fault_message": fault.message,
+        })),
+    )
+}
+
 pub(super) fn validation_tool_error(
     code: &str,
     message: &str,

@@ -5,14 +5,14 @@ use std::{
 };
 
 use super::{
-    BUNDLE_SCHEMA_VERSION, BUNDLES_DIRECTORY, ConfigurationError, POLICIES_SCHEMA_VERSION,
+    BUNDLE_SCHEMA_VERSION, ConfigurationError, POLICIES_SCHEMA_VERSION,
     fields::{
         canonicalize_best_effort, normalize_field, normalize_global_session_id,
         validate_bundle_groups, validate_format_version, validate_session_id,
     },
     paths::{
-        bundle_configuration_path, coders_configuration_path, policies_configuration_path,
-        tui_configuration_path, ui_configuration_path,
+        bundle_configuration_path, coders_configuration_path, effective_bundle_definitions,
+        policies_configuration_path, tui_configuration_path, ui_configuration_path,
     },
     raw::{
         Coder, CoderTarget, RawBundleFile, RawCoder, RawCodersFile, RawPoliciesFile, RawUiFile,
@@ -23,8 +23,8 @@ use super::{
         validate_environment_entries, validate_pty_target, validate_tmux_target,
     },
     types::{
-        BundleConfiguration, BundleGroupMembership, BundleMember, NameValueEntry, TuiConfiguration,
-        TuiSession, UiConfiguration,
+        BringUpContext, BundleConfiguration, BundleGroupMembership, BundleMember, NameValueEntry,
+        TuiConfiguration, TuiSession, UiConfiguration,
     },
 };
 
@@ -36,28 +36,12 @@ use super::{
 pub fn load_bundle_group_memberships(
     configuration_root: &Path,
 ) -> Result<Vec<BundleGroupMembership>, ConfigurationError> {
-    let bundles_directory = configuration_root.join(BUNDLES_DIRECTORY);
-    if !bundles_directory.exists() {
-        return Ok(Vec::new());
-    }
-    let mut bundle_names = fs::read_dir(&bundles_directory)
-        .map_err(|source| {
-            ConfigurationError::io(
-                format!("read bundle directory {}", bundles_directory.display()),
-                source,
-            )
-        })?
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| entry.path().file_name().map(ToOwned::to_owned))
-        .filter_map(|name| name.to_str().map(ToOwned::to_owned))
-        .filter(|name| name.ends_with(".toml"))
-        .filter_map(|name| name.strip_suffix(".toml").map(ToOwned::to_owned))
-        .collect::<Vec<_>>();
-    bundle_names.sort_unstable();
-
-    let mut memberships = Vec::with_capacity(bundle_names.len());
-    for bundle_name in bundle_names {
-        let bundle_path = bundle_configuration_path(configuration_root, &bundle_name);
+    let definitions = effective_bundle_definitions(configuration_root);
+    let mut memberships = Vec::with_capacity(definitions.len());
+    // Keyed by identifier and ordered by it, so an overlay-only bundle is
+    // enumerated and an overlay definition shadowing a base one is enumerated
+    // once, at its overlay path.
+    for (bundle_name, bundle_path) in definitions {
         let bundle_raw = fs::read_to_string(&bundle_path).map_err(|source| {
             ConfigurationError::io(format!("read {}", bundle_path.display()), source)
         })?;
@@ -385,11 +369,23 @@ fn validate_loaded_configuration(
             .and_then(|coder_id| coders.get(coder_id))
             .map(|coder| coder.environment.as_slice())
             .unwrap_or_default();
-        let environment = merge_environment(
+        let mut environment = merge_environment(
             coder_environment,
             &bundle_file.environment,
             &session.environment,
         );
+        // Stamped after the operator-declared layers merge, so an
+        // operator-declared entry of the same name survives. Targets which
+        // spawn no agent carry no context, since nothing would inherit it.
+        if target.spawns_agent() {
+            stamp_context_environment(
+                &mut environment,
+                &BringUpContext {
+                    bundle_name: expected_bundle_name,
+                    session_id,
+                },
+            );
+        }
 
         members.push(BundleMember {
             id: session_id.to_string(),
@@ -558,4 +554,20 @@ fn merge_environment(
         }
     }
     merged
+}
+
+/// Upserts-if-absent each entry of a bring-up `context` into a member's merged
+/// spawn `environment`. An operator-declared entry of the same name is left
+/// untouched, so declaring one of these names in configuration overrides what
+/// bring-up would otherwise supply.
+fn stamp_context_environment(environment: &mut Vec<NameValueEntry>, context: &BringUpContext<'_>) {
+    for (name, value) in context.environment_entries() {
+        if environment.iter().any(|entry| entry.name == name) {
+            continue;
+        }
+        environment.push(NameValueEntry {
+            name: name.to_string(),
+            value: value.to_string(),
+        });
+    }
 }

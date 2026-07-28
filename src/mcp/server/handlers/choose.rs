@@ -43,6 +43,10 @@ impl McpServer {
             .option_id
             .as_ref()
             .map(|value| value.trim().to_string());
+        // After every validation for the selected command and before any
+        // inscription or relay work: a malformed request reports its own
+        // fault even while a startup fault is retained.
+        self.require_ready()?;
         emit_inscription(
             "mcp.tool.choose.request",
             &json!({

@@ -25,11 +25,10 @@ pub(super) fn run_agentmux_change(arguments: &[String]) -> Result<(), RuntimeErr
     let current_directory = env::current_dir()
         .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
     let workspace = WorkspaceContext::discover(&current_directory)?;
-    let roots = shared::resolve_roots(&parsed.runtime, &workspace, None)?;
-    ensure_starter_configuration_layout(&roots.configuration_root)?;
+    let roots = shared::resolve_roots(&parsed.runtime, &workspace)?;
+    ensure_starter_configuration_layout(&roots)?;
     let resolved_session = resolve_tui_session_identity(
         &roots.configuration_root,
-        &workspace.workspace_root,
         parsed.bundle_name.as_deref(),
         parsed.session_selector.as_deref(),
     )?;
@@ -168,6 +167,6 @@ fn parse_change_arguments(arguments: &[String]) -> Result<ChangePskArguments, Ru
 
 pub(super) fn print_change_help() {
     println!(
-        "Usage: agentmux change psk <principal_id> [--output PATH | --write-config] [--bundle NAME] [--as-session NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux change psk <principal_id> [--output PATH | --write-config] [--bundle NAME] [--as-session NAME] [--json] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH] [--discover-local-configuration]"
     );
 }

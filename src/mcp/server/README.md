@@ -46,15 +46,39 @@ materializes the `RelayStreamSession` when both `sender_session` and
 `associated_bundle_paths` are configured; otherwise the
 `relay_stream` slot stays `None`. That single precondition —
 `relay_stream.is_some()`, equivalently association of both fields — is
-what every relay-backed tool needs, so an unassociated server rejects
-each of them with one actionable, validation-shaped
-`validation_unassociated_server` error (built by
-`errors::unassociated_server_error`, reached via the early
-`require_associated_sender_session` / `require_association` prechecks
-and the `map_relay_stream_failure` chokepoint). Genuine IO failures on
-an associated server still classify as
+what every relay-backed tool needs, so a server that cannot serve them
+rejects each with one actionable, validation-shaped error, reached via
+the early `require_associated_sender_session` / `require_association`
+prechecks and the `map_relay_stream_failure` chokepoint. Genuine IO
+failures on an associated server still classify as
 `relay_timeout` / `relay_unavailable` / `internal_unexpected_failure`
 via `validation::is_relay_unavailable_error`.
+
+`McpConfiguration::readiness` selects which error that is. The process
+serves the protocol even when startup could not build an operational
+context, because MCP negotiates tool inventory at `initialize`: failing
+startup erases the advertised surface rather than degrading it, and some
+harnesses never recover from tools disappearing. `unavailable_error()`
+therefore reports the **retained cause** (`errors::startup_fault_error`,
+carrying the original code so an absent configuration root is
+distinguishable from a malformed overlay) when one exists, and the
+generic `validation_unassociated_server` remedy when the server is
+merely unassociated. The fault is snapshotted at startup and never
+recomputed.
+
+Three ordering rules make this safe, and each is load-bearing:
+
+- Every handler validates its own request **before** consulting the
+  guard, so a malformed call reports its own defect rather than sending
+  the caller to fix an unrelated startup problem.
+- `initialize`, tool listing, schemas, and `help` stay green in every
+  readiness state.
+- Relay reachability is **not** part of readiness. A complete context is
+  `Ready` even with the relay down, so `list` keeps its synthetic
+  home-bundle and `GLOBAL` payloads for an unreachable relay. Those
+  paths sit behind the association guard, so a retained startup fault
+  reports the fault instead — with no context, there is nothing to
+  synthesize from.
 
 The `Arc<McpState>` is shared across all per-tool handler
 invocations on the same `McpServer` instance, so a single server

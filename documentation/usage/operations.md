@@ -7,7 +7,7 @@ locations for operators.
 
 All primary commands support these runtime root overrides:
 
-- `--config-directory PATH`
+- `--configuration-directory PATH`
 - `--state-directory PATH`
 - `--inscriptions-directory PATH` (alias: `--logs-directory PATH`)
 - `--repository-root PATH`

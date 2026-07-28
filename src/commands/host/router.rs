@@ -35,7 +35,12 @@ pub(in crate::commands) async fn run_agentmux_host(
                 help::print_host_mcp_help();
                 return Ok(());
             }
-            mcp::run_mcp_host(arguments::parse_host_mcp_arguments(&arguments[1..])?).await
+            // `host mcp` is identifiable here, so an argument fault is retained
+            // and reported at tool time rather than failing startup. `--help`
+            // above still exits: it is an operator at a shell, not a client
+            // negotiating a tool surface. No partially parsed value survives a
+            // failed parse -- the whole result is discarded.
+            mcp::run_mcp_host(arguments::parse_host_mcp_arguments(&arguments[1..])).await
         }
         unknown => Err(RuntimeError::InvalidArgument {
             argument: unknown.to_string(),

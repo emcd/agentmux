@@ -11,14 +11,16 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::{
-    configuration::{BundleConfiguration, load_tui_configuration},
-    relay::{POLICIES_FILE, POLICIES_FORMAT_VERSION, RelayError, relay_error},
+    configuration::{
+        BundleConfiguration, load_tui_configuration, policies_configuration_path,
+        relay_configuration_path,
+    },
+    relay::{POLICIES_FORMAT_VERSION, RelayError, relay_error},
 };
 
 use super::context::{AuthorizationContext, PolicyControls, PolicyScope, UiSessionAuthorization};
 use super::resolution::{normalize_policy_id, resolve_session_policy_controls};
 
-const RELAY_FILE: &str = "relay.toml";
 const DEFAULT_CHOICES_PENDING_MAX: usize = 256;
 const MIN_CHOICES_PENDING_MAX: usize = 1;
 const MAX_CHOICES_PENDING_MAX: usize = 4096;
@@ -133,7 +135,7 @@ fn default_updown_policy_scope() -> String {
 pub(super) fn load_policy_presets(
     configuration_root: &Path,
 ) -> Result<(HashMap<String, PolicyControls>, Option<String>), RelayError> {
-    let policies_path = configuration_root.join(POLICIES_FILE);
+    let policies_path = policies_configuration_path(configuration_root);
     let policies_raw = fs::read_to_string(&policies_path).map_err(|source| {
         relay_error(
             "validation_invalid_arguments",
@@ -214,7 +216,7 @@ pub(in crate::relay) fn load_authorization_context(
     configuration_root: &Path,
     bundle: Option<&BundleConfiguration>,
 ) -> Result<AuthorizationContext, RelayError> {
-    let policies_path = configuration_root.join(POLICIES_FILE);
+    let policies_path = policies_configuration_path(configuration_root);
     let (presets, default_policy_id) = load_policy_presets(configuration_root)?;
 
     let choices_pending_max =
@@ -424,7 +426,7 @@ fn relay_bool_env_override(variable: &str) -> Result<Option<bool>, RelayError> {
 fn load_relay_file_configuration(
     configuration_root: &Path,
 ) -> Result<RelayFileConfiguration, RelayError> {
-    let path = configuration_root.join(RELAY_FILE);
+    let path = relay_configuration_path(configuration_root);
     if !path.exists() {
         return Ok(RelayFileConfiguration {
             watch_bundles: None,

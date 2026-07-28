@@ -84,7 +84,7 @@ Terminal A:
 
 ```bash
 agentmux host relay "${BUNDLE_NAME}" \
-  --config-directory "${CONFIG_ROOT}" \
+  --configuration-directory "${CONFIG_ROOT}" \
   --state-directory "${STATE_ROOT}"
 ```
 
@@ -93,7 +93,7 @@ Optional diagnostics for prompt-readiness triage:
 ```bash
 AGENTMUX_RELAY_DELIVERY_DIAGNOSTICS=1 \
 agentmux host relay "${BUNDLE_NAME}" \
-  --config-directory "${CONFIG_ROOT}" \
+  --configuration-directory "${CONFIG_ROOT}" \
   --state-directory "${STATE_ROOT}"
 ```
 
@@ -110,7 +110,7 @@ Terminal B:
 agentmux host mcp \
   --bundle "${BUNDLE_NAME}" \
   --session-name sender \
-  --config-directory "${CONFIG_ROOT}" \
+  --configuration-directory "${CONFIG_ROOT}" \
   --state-directory "${STATE_ROOT}"
 ```
 

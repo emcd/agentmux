@@ -1,132 +1,292 @@
-use std::env;
+use std::{env, path::PathBuf};
 
 use serde_json::json;
 
 use crate::{
     configuration::load_bundle_configuration,
-    mcp::McpConfiguration,
+    mcp::{McpConfiguration, McpReadiness, McpStartupFault},
     runtime::{
         association::{
-            McpAssociationCli, WorkspaceContext, load_local_mcp_overrides, resolve_association,
-            resolve_sender_session,
+            AssociationSource, McpAssociationCli, McpAssociationEnvironment, WorkspaceContext,
+            load_local_mcp_overrides, resolve_association, resolve_sender_session,
         },
         error::RuntimeError,
         inscriptions::{
             configure_process_inscriptions, emit_inscription, mcp_inscriptions_path,
             mcp_unassociated_inscriptions_path,
         },
-        paths::BundleRuntimePaths,
+        paths::{BundleRuntimePaths, RuntimeRoots},
         starter::ensure_starter_configuration_layout,
     },
 };
 
 use crate::commands::{McpHostArguments, shared};
 
-pub(super) async fn run_mcp_host(arguments: McpHostArguments) -> Result<(), RuntimeError> {
-    let current_directory = env::current_dir()
-        .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
-    let workspace = WorkspaceContext::discover(&current_directory)?;
-    let local_overrides = load_local_mcp_overrides(&workspace.workspace_root)?;
-    let association_cli = McpAssociationCli {
-        bundle_name: arguments.bundle_name.clone(),
-        session_name: arguments.session_name.clone(),
-    };
-    let association_is_explicit = association_cli.bundle_name.is_some()
-        || association_cli.session_name.is_some()
-        || local_overrides.as_ref().is_some_and(|overrides| {
-            overrides.bundle_name.is_some() || overrides.session_name.is_some()
-        });
-    let roots = shared::resolve_roots(&arguments.runtime, &workspace, local_overrides.as_ref())?;
-    ensure_starter_configuration_layout(&roots.configuration_root)?;
-    let mut associated_bundle_name = None::<String>;
-    let mut sender_session = None::<String>;
-    let mut startup_association_reason = None::<String>;
+/// A resolved operational context.
+struct PreparedRuntime {
+    roots: RuntimeRoots,
+    associated_bundle_paths: Option<BundleRuntimePaths>,
+    sender_session: Option<String>,
+    diagnostics: StartupDiagnostics,
+}
 
-    let association = resolve_association(&association_cli, local_overrides.as_ref(), &workspace);
-    match association {
-        Ok(association) => {
-            associated_bundle_name = Some(association.bundle_name.clone());
-            let loaded_bundle =
-                load_bundle_configuration(&roots.configuration_root, &association.bundle_name)
-                    .map_err(shared::map_bundle_load_error);
-            match loaded_bundle {
-                Ok(bundle) => {
-                    let resolved_sender = resolve_sender_session(
-                        &bundle,
-                        &association.session_name,
-                        &current_directory,
-                    );
-                    match resolved_sender {
-                        Ok(session_name) => sender_session = Some(session_name),
-                        Err(source)
-                            if should_start_mcp_unassociated(association_is_explicit, &source) =>
-                        {
-                            startup_association_reason = Some(source.to_string());
-                            associated_bundle_name = None;
-                        }
-                        Err(source) => return Err(source),
-                    }
-                }
-                Err(source) if should_start_mcp_unassociated(association_is_explicit, &source) => {
-                    startup_association_reason = Some(source.to_string());
-                    associated_bundle_name = None;
-                }
-                Err(source) => return Err(source),
+/// What startup reports about how it arrived at its association.
+#[derive(Default)]
+struct StartupDiagnostics {
+    /// Why the association is absent, when it is. Distinct from a startup
+    /// fault: a relay-wide server carrying no bundle is legitimate.
+    association_reason: Option<String>,
+    /// The tier each identity came from, so a resolution that silently fell
+    /// below the tier an operator configured is visible without reproducing it.
+    bundle_source: Option<AssociationSource>,
+    session_source: Option<AssociationSource>,
+    /// A supplied identity which did not resolve. Retained with its original
+    /// cause rather than flattened into a generic unassociated server, because
+    /// an operator naming something unresolvable has a mistake to repair, not a
+    /// configuration to accept.
+    startup_fault: Option<McpStartupFault>,
+}
+
+/// Runs the MCP stdio service.
+///
+/// Takes the argument parse *result* rather than parsed arguments: once
+/// `host mcp` is identifiable, even an argument fault is retained rather than
+/// fatal. A failed parse contributes no values at all -- the whole result is
+/// discarded -- so nothing partially parsed can leak into the running server.
+pub(super) async fn run_mcp_host(
+    arguments: Result<McpHostArguments, RuntimeError>,
+) -> Result<(), RuntimeError> {
+    // Past this point the process serves the protocol whatever it finds. Failing
+    // startup would erase the tool inventory negotiated at `initialize` rather
+    // than degrading it, leaving agents calling tools their context says exist,
+    // and would bury the cause in a log no agent reads. Only an inability to
+    // serve the protocol itself remains fatal.
+    let prepared = arguments
+        .map_err(to_startup_fault)
+        .and_then(|arguments| prepare_runtime(&arguments));
+    let configuration = match prepared {
+        Ok(mut prepared) => {
+            let inscriptions_path = match (
+                prepared.associated_bundle_paths.as_ref(),
+                prepared.sender_session.as_deref(),
+            ) {
+                (Some(bundle_paths), Some(session_name)) => mcp_inscriptions_path(
+                    &prepared.roots.inscriptions_root,
+                    bundle_paths.bundle_name.as_str(),
+                    session_name,
+                ),
+                _ => mcp_unassociated_inscriptions_path(&prepared.roots.inscriptions_root),
+            };
+            // Inscriptions are diagnostics, not the protocol, so failing to open
+            // them must not terminate the process. It is still a startup fault
+            // and is retained as one: a fault reported only on stderr reaches
+            // nobody, and this one can be a foreign-owned path, where an agent
+            // running fully functional with no audit trail is precisely what
+            // must not pass quietly. Stderr as well, never stdout, which carries
+            // the protocol -- the sink that would otherwise record this is the
+            // thing that just failed.
+            if let Err(source) = configure_process_inscriptions(&inscriptions_path) {
+                eprintln!("failed to configure MCP inscriptions: {source}");
+                // An earlier fault keeps precedence: it names the condition that
+                // came first, and this one would not have been reached without it.
+                prepared
+                    .diagnostics
+                    .startup_fault
+                    .get_or_insert_with(|| to_startup_fault(source));
             }
+            let readiness = match prepared.diagnostics.startup_fault.clone() {
+                Some(fault) => McpReadiness::Unavailable(fault),
+                None => McpReadiness::Ready,
+            };
+            let configuration = McpConfiguration {
+                configuration_root: prepared.roots.configuration_root,
+                state_root: prepared.roots.state_root,
+                associated_bundle_paths: prepared.associated_bundle_paths,
+                sender_session: prepared.sender_session,
+                readiness,
+            };
+            emit_startup_inscription(&configuration, &prepared.diagnostics);
+            configuration
         }
-        Err(source) if should_start_mcp_unassociated(association_is_explicit, &source) => {
-            startup_association_reason = Some(source.to_string());
+        Err(fault) => {
+            // Faulted before any root resolved, so there is nowhere to inscribe.
+            // A fault found *after* roots resolve takes the branch above, which
+            // keeps its inscriptions. The fault still reaches an operator
+            // through every tool call, which is the channel that gets it
+            // repaired.
+            let configuration = McpConfiguration {
+                configuration_root: PathBuf::new(),
+                state_root: PathBuf::new(),
+                associated_bundle_paths: None,
+                sender_session: None,
+                readiness: McpReadiness::Unavailable(fault.clone()),
+            };
+            emit_startup_inscription(
+                &configuration,
+                &StartupDiagnostics {
+                    startup_fault: Some(fault),
+                    ..StartupDiagnostics::default()
+                },
+            );
+            configuration
         }
-        Err(source) => return Err(source),
-    }
-
-    let associated_bundle_paths = associated_bundle_name
-        .as_deref()
-        .map(|bundle_name| BundleRuntimePaths::resolve(&roots.state_root, bundle_name))
-        .transpose()?;
-    let inscriptions_path = if let Some(bundle_paths) = associated_bundle_paths.as_ref() {
-        let session_name = sender_session
-            .as_deref()
-            .expect("associated startup must include sender session");
-        mcp_inscriptions_path(
-            &roots.inscriptions_root,
-            bundle_paths.bundle_name.as_str(),
-            session_name,
-        )
-    } else {
-        mcp_unassociated_inscriptions_path(&roots.inscriptions_root)
     };
-    configure_process_inscriptions(&inscriptions_path)?;
+
+    crate::mcp::run(configuration)
+        .await
+        .map_err(|source| RuntimeError::io("run MCP stdio service", std::io::Error::other(source)))
+}
+
+/// Builds the operational context, or reports the fault which prevented one.
+fn prepare_runtime(arguments: &McpHostArguments) -> Result<PreparedRuntime, McpStartupFault> {
+    let current_directory = env::current_dir().map_err(|source| McpStartupFault {
+        code: "runtime_startup_failed".to_string(),
+        message: format!("cannot resolve current working directory: {source}"),
+    })?;
+    let workspace = WorkspaceContext::discover(&current_directory).map_err(to_startup_fault)?;
+    let roots = shared::resolve_roots(&arguments.runtime, &workspace).map_err(to_startup_fault)?;
+    ensure_starter_configuration_layout(&roots).map_err(to_startup_fault)?;
+    let local_overrides =
+        load_local_mcp_overrides(&roots.configuration_root).map_err(to_startup_fault)?;
+
+    let candidates = resolve_association(
+        &McpAssociationCli {
+            bundle_name: arguments.bundle_name.clone(),
+            session_name: arguments.session_name.clone(),
+        },
+        &McpAssociationEnvironment::from_process_environment(),
+        local_overrides.as_ref(),
+        arguments.default_bundle.as_deref(),
+    );
+
+    let bundle_source = candidates.bundle.as_ref().map(|candidate| candidate.source);
+    let unassociated = |roots, reason: String| PreparedRuntime {
+        roots,
+        associated_bundle_paths: None,
+        sender_session: None,
+        diagnostics: StartupDiagnostics {
+            association_reason: Some(reason),
+            bundle_source,
+            ..StartupDiagnostics::default()
+        },
+    };
+    let retained = |roots, source: RuntimeError| PreparedRuntime {
+        roots,
+        associated_bundle_paths: None,
+        sender_session: None,
+        diagnostics: StartupDiagnostics {
+            bundle_source,
+            startup_fault: Some(to_startup_fault(source)),
+            ..StartupDiagnostics::default()
+        },
+    };
+
+    let Some(bundle_candidate) = candidates.bundle.clone() else {
+        return Ok(unassociated(
+            roots,
+            "no bundle resolved from --bundle, injected environment, overlay, or \
+             --default-bundle"
+                .to_string(),
+        ));
+    };
+
+    // The bundle was named by some tier, so failing to load it is a mistake to
+    // repair rather than a configuration to accept.
+    let bundle = match load_bundle_configuration(&roots.configuration_root, &bundle_candidate.value)
+        .map_err(shared::map_bundle_load_error)
+    {
+        Ok(bundle) => bundle,
+        Err(source) => return Ok(retained(roots, source)),
+    };
+
+    // With no candidate, the session falls to matching the working directory
+    // against the member directories the bundle file already declares. A
+    // candidate that *was* supplied is validated and nothing more, so a typo
+    // cannot authenticate as whichever member owns the current directory.
+    let session_candidate = candidates.session.clone();
+    let sender_session = match resolve_sender_session(
+        &bundle,
+        session_candidate
+            .as_ref()
+            .map(|candidate| candidate.value.as_str()),
+        &current_directory,
+    ) {
+        Ok(Some(sender_session)) => sender_session,
+        Ok(None) => {
+            return Ok(unassociated(
+                roots,
+                format!(
+                    "no session resolved from --session-name, injected environment, or overlay, \
+                     and working directory '{}' matched no session directory declared by bundle \
+                     '{}'",
+                    current_directory.display(),
+                    bundle_candidate.value
+                ),
+            ));
+        }
+        Err(source) => return Ok(retained(roots, source)),
+    };
+    let session_source = session_candidate
+        .map_or(AssociationSource::WorkingDirectory, |candidate| {
+            candidate.source
+        });
+
+    let associated_bundle_paths =
+        match BundleRuntimePaths::resolve(&roots.state_root, &bundle_candidate.value) {
+            Ok(paths) => paths,
+            Err(source) => return Ok(retained(roots, source)),
+        };
+
+    Ok(PreparedRuntime {
+        roots,
+        associated_bundle_paths: Some(associated_bundle_paths),
+        sender_session: Some(sender_session),
+        diagnostics: StartupDiagnostics {
+            association_reason: None,
+            bundle_source,
+            session_source: Some(session_source),
+            startup_fault: None,
+        },
+    })
+}
+
+/// Maps a runtime failure onto a retained startup fault, preserving its code so
+/// a caller can tell an absent configuration root from a malformed overlay.
+fn to_startup_fault(source: RuntimeError) -> McpStartupFault {
+    let code = match &source {
+        RuntimeError::Validation { code, .. } => code.clone(),
+        RuntimeError::InvalidArgument { .. } => "validation_invalid_arguments".to_string(),
+        RuntimeError::SecurityForeignOwned { .. } => "runtime_security_foreign_owned".to_string(),
+        _ => "runtime_startup_failed".to_string(),
+    };
+    McpStartupFault {
+        code,
+        message: source.to_string(),
+    }
+}
+
+fn emit_startup_inscription(configuration: &McpConfiguration, diagnostics: &StartupDiagnostics) {
+    let startup_fault = diagnostics.startup_fault.as_ref();
     emit_inscription(
         "mcp.startup",
         &json!({
-            "association_status": if sender_session.is_some() { "associated" } else { "unassociated" },
-            "association_reason": startup_association_reason,
-            "bundle_name": associated_bundle_name,
-            "session_name": sender_session.clone(),
-            "runtime_bundle_name": associated_bundle_paths.as_ref().map(|paths| paths.bundle_name.clone()),
-            "configuration_root": roots.configuration_root,
-            "state_root": roots.state_root,
-            "inscriptions_root": roots.inscriptions_root,
+            "association_status": if configuration.sender_session.is_some() {
+                "associated"
+            } else {
+                "unassociated"
+            },
+            "association_reason": diagnostics.association_reason,
+            "bundle_source": diagnostics.bundle_source.map(AssociationSource::as_str),
+            "session_source": diagnostics.session_source.map(AssociationSource::as_str),
+            "startup_fault_code": startup_fault.map(|fault| fault.code.clone()),
+            "startup_fault_message": startup_fault.map(|fault| fault.message.clone()),
+            "bundle_name": configuration
+                .associated_bundle_paths
+                .as_ref()
+                .map(|paths| paths.bundle_name.clone()),
+            "session_name": configuration.sender_session.clone(),
+            "configuration_root": configuration.configuration_root,
+            "state_root": configuration.state_root,
         }),
     );
-    crate::mcp::run(McpConfiguration {
-        configuration_root: roots.configuration_root,
-        state_root: roots.state_root,
-        associated_bundle_paths,
-        sender_session,
-    })
-    .await
-    .map_err(|source| RuntimeError::io("run MCP stdio service", std::io::Error::other(source)))
-}
-
-fn should_start_mcp_unassociated(association_is_explicit: bool, source: &RuntimeError) -> bool {
-    if association_is_explicit {
-        return false;
-    }
-    matches!(
-        source,
-        RuntimeError::Validation { code, .. }
-            if code == "validation_unknown_bundle" || code == "validation_unknown_sender"
-    )
 }

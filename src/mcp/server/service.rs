@@ -23,8 +23,32 @@ use crate::runtime::paths::{BundleRuntimePaths, RelayRuntimePaths};
 
 use crate::mcp::errors::{
     UNASSOCIATED_SERVER_REMEDY, internal_tool_error, map_relay_error, map_relay_request_failure,
-    unassociated_server_error,
+    startup_fault_error, unassociated_server_error,
 };
+
+/// A startup failure retained instead of aborting the process.
+///
+/// MCP negotiates tool inventory at `initialize`, so failing startup erases the
+/// advertised surface rather than degrading it: agents then call tools their
+/// context says exist, and some harnesses never recover. A retained fault keeps
+/// the surface intact and delivers the cause to the actor who can repair it,
+/// rather than to a log nobody reads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct McpStartupFault {
+    pub code: String,
+    pub message: String,
+}
+
+/// Whether the server can serve requests, or is holding a startup fault.
+///
+/// Relay reachability is deliberately **not** part of this: a complete
+/// operational context is `Ready` even when the relay is down, and reachability
+/// surfaces per request as `relay_unavailable`.
+#[derive(Clone, Debug)]
+pub enum McpReadiness {
+    Ready,
+    Unavailable(McpStartupFault),
+}
 
 /// Configuration provided when booting MCP stdio service.
 #[derive(Clone, Debug)]
@@ -33,6 +57,10 @@ pub struct McpConfiguration {
     pub state_root: PathBuf,
     pub associated_bundle_paths: Option<BundleRuntimePaths>,
     pub sender_session: Option<String>,
+    /// Snapshotted at startup and never recomputed: a fault that made the
+    /// process unable to build an operational context does not resolve itself
+    /// while the process runs.
+    pub readiness: McpReadiness,
 }
 
 #[derive(Clone, Debug)]
@@ -163,10 +191,10 @@ impl McpServer {
             let relay_paths = RelayRuntimePaths::resolve(&self.state.configuration.state_root);
             return map_relay_request_failure(&relay_paths.relay_socket, source);
         }
-        // The stream is absent because the server is unassociated, not because a
-        // present relay failed; report the actionable startup contract so a
-        // caller can self-correct instead of seeing an internal fault.
-        unassociated_server_error()
+        // The stream is absent because the server never became operational, not
+        // because a present relay failed; report the retained cause, or the
+        // actionable startup contract when there is none.
+        self.unavailable_error()
     }
 
     /// Whether the server holds a live relay stream. True only when both a sender
@@ -178,15 +206,43 @@ impl McpServer {
             && self.state.configuration.associated_bundle_paths.is_some()
     }
 
+    /// The error a tool returns when the server cannot serve it.
+    ///
+    /// A retained startup fault names the actual defect, which is what makes it
+    /// repairable; without one the server is simply unassociated, and the
+    /// actionable contract is the startup command.
+    pub(super) fn unavailable_error(&self) -> rmcp::ErrorData {
+        match &self.state.configuration.readiness {
+            McpReadiness::Ready => unassociated_server_error(),
+            McpReadiness::Unavailable(fault) => startup_fault_error(fault),
+        }
+    }
+
     /// Guards a relay-backed path that needs only an associated relay stream, not
     /// the sender value: the relay-wide `list` discovery commands. Returns the
     /// canonical unassociated-server error so the failure precedes any relay
     /// contact rather than surfacing later as a stream fault.
+    /// Rejects a retained startup fault before a handler does any work.
+    ///
+    /// A fault can coexist with a complete association: an unwritable
+    /// inscriptions sink leaves bundle and session fully resolved, so gating on
+    /// association alone would let the fault stay invisible on exactly the
+    /// servers that keep working -- the one outcome retaining it exists to
+    /// prevent. `help` deliberately does not call this, so an operator can still
+    /// read the server's own account of its state.
+    pub(super) fn require_ready(&self) -> Result<(), rmcp::ErrorData> {
+        match &self.state.configuration.readiness {
+            McpReadiness::Ready => Ok(()),
+            McpReadiness::Unavailable(fault) => Err(startup_fault_error(fault)),
+        }
+    }
+
     pub(super) fn require_association(&self) -> Result<(), rmcp::ErrorData> {
+        self.require_ready()?;
         if self.is_associated() {
             Ok(())
         } else {
-            Err(unassociated_server_error())
+            Err(self.unavailable_error())
         }
     }
 
@@ -195,12 +251,13 @@ impl McpServer {
     /// with the same canonical error. Association requires both the sender session
     /// and a bundle, so a partial configuration is unassociated by definition.
     pub(super) fn require_associated_sender_session(&self) -> Result<String, rmcp::ErrorData> {
+        self.require_ready()?;
         match (
             self.state.configuration.sender_session.as_ref(),
             self.state.configuration.associated_bundle_paths.as_ref(),
         ) {
             (Some(session), Some(_)) => Ok(session.clone()),
-            _ => Err(unassociated_server_error()),
+            _ => Err(self.unavailable_error()),
         }
     }
 

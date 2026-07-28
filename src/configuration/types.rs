@@ -4,6 +4,55 @@ use serde::{Deserialize, Serialize};
 
 pub const RESERVED_GROUP_ALL: &str = "ALL";
 
+/// Environment variable carrying the bundle identity of the bundle hosting a
+/// member. Part of the bring-up context stamped by [`BringUpContext`].
+pub const BUNDLE_ENVIRONMENT_VARIABLE: &str = "AGENTMUX_BUNDLE";
+
+/// Environment variable carrying the sender-session identity of a member.
+/// Part of the bring-up context stamped by [`BringUpContext`].
+pub const SESSION_ENVIRONMENT_VARIABLE: &str = "AGENTMUX_SESSION";
+
+/// Authoritative context which bring-up holds about a member it is starting.
+///
+/// Configuration load stamps this context onto an agent-spawning member's
+/// merged environment. The launched agent propagates it to its
+/// `agentmux host mcp` subprocess, which consults it instead of inferring an
+/// identity from the filesystem. Bring-up is the only party which knows this
+/// authoritatively, so the context outranks every configuration file while
+/// still yielding to explicit invocation intent.
+///
+/// Further context is carried by adding a field here and a corresponding pair
+/// in [`Self::environment_entries`]; the stamping mechanism itself is agnostic
+/// to which variables it carries.
+#[derive(Clone, Copy, Debug)]
+pub struct BringUpContext<'a> {
+    /// Bundle hosting the member.
+    pub bundle_name: &'a str,
+    /// Member id, which is the sender-session identity.
+    pub session_id: &'a str,
+}
+
+impl<'a> BringUpContext<'a> {
+    /// Names of every environment variable this context may carry.
+    ///
+    /// Enumerated apart from [`Self::environment_entries`] for consumers which
+    /// need the names without a context to populate them, such as a test
+    /// harness clearing inherited context. The two are held in agreement by
+    /// test, so extending one without the other fails rather than silently
+    /// leaving a variable unhandled.
+    pub const VARIABLE_NAMES: &'static [&'static str] =
+        &[BUNDLE_ENVIRONMENT_VARIABLE, SESSION_ENVIRONMENT_VARIABLE];
+
+    /// Environment name/value pairs representing this context.
+    #[must_use]
+    pub fn environment_entries(&self) -> Vec<(&'static str, &'a str)> {
+        vec![
+            (BUNDLE_ENVIRONMENT_VARIABLE, self.bundle_name),
+            (SESSION_ENVIRONMENT_VARIABLE, self.session_id),
+        ]
+    }
+}
+
 /// Declared session type for one configured session entry.
 ///
 /// The session type is fixed at operator configuration time by the single
@@ -144,6 +193,16 @@ impl TargetConfiguration {
             Self::Pty(_) => SessionType::Pty,
             Self::Ui => SessionType::Ui,
             Self::Pubsub => SessionType::Pubsub,
+        }
+    }
+
+    /// Reports whether this target spawns an agent process inheriting the
+    /// member's environment.
+    #[must_use]
+    pub fn spawns_agent(&self) -> bool {
+        match self {
+            Self::Tmux(_) | Self::Acp(_) | Self::Pty(_) => true,
+            Self::Ui | Self::Pubsub => false,
         }
     }
 }

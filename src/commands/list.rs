@@ -34,8 +34,8 @@ pub(super) fn run_agentmux_list(arguments: &[String]) -> Result<(), RuntimeError
     let current_directory = env::current_dir()
         .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
     let workspace = WorkspaceContext::discover(&current_directory)?;
-    let roots = shared::resolve_roots(&parsed.runtime, &workspace, None)?;
-    ensure_starter_configuration_layout(&roots.configuration_root)?;
+    let roots = shared::resolve_roots(&parsed.runtime, &workspace)?;
+    ensure_starter_configuration_layout(&roots)?;
     let namespace = parsed
         .namespace
         .as_deref()
@@ -50,7 +50,6 @@ pub(super) fn run_agentmux_list(arguments: &[String]) -> Result<(), RuntimeError
     };
     let resolved_session = resolve_tui_session_identity(
         &roots.configuration_root,
-        &workspace.workspace_root,
         bundle_hint,
         parsed.session_selector.as_deref(),
     )?;
@@ -187,7 +186,7 @@ fn parse_list_arguments(arguments: &[String]) -> Result<ListArguments, RuntimeEr
 
 pub(super) fn print_list_help() {
     println!(
-        "Usage: agentmux list principals [--namespace NAME|GLOBAL|*] [--as-session NAME] [--json] [--config-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux list principals [--namespace NAME|GLOBAL|*] [--as-session NAME] [--json] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH] [--discover-local-configuration]"
     );
 }
 

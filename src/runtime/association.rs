@@ -9,12 +9,17 @@ use std::{
 use serde::Deserialize;
 
 use crate::configuration::{
-    BundleConfiguration, ConfigurationError, infer_sender_from_working_directory,
+    BUNDLE_ENVIRONMENT_VARIABLE, BundleConfiguration, ConfigurationError,
+    SESSION_ENVIRONMENT_VARIABLE, effective_configuration_path,
+    infer_sender_from_working_directory,
 };
 
 use super::error::RuntimeError;
 
-const OVERRIDE_FILE_PATH: &str = ".auxiliary/configuration/agentmux/overrides/mcp.toml";
+/// Logical artifact holding per-tree association overrides. Resolved through
+/// the configuration overlay like every other configuration file, so an overlay
+/// copy shadows a base copy.
+const ASSOCIATION_FILE: &str = "mcp.toml";
 
 /// Git and workspace context used for association auto-discovery.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -62,49 +67,6 @@ impl WorkspaceContext {
         })
     }
 
-    /// Auto-discovers bundle name from Git common-dir parent basename,
-    /// falling back to current-directory basename.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when name cannot be derived.
-    pub fn auto_bundle_name(&self) -> Result<String, RuntimeError> {
-        if let Some(common_dir) = self.git_common_dir.as_ref() {
-            let parent = common_dir.parent().ok_or_else(|| {
-                RuntimeError::validation(
-                    "validation_unknown_bundle",
-                    format!(
-                        "cannot derive bundle name from git common-dir {}",
-                        common_dir.display()
-                    ),
-                )
-            })?;
-            return basename(parent, "validation_unknown_bundle", "bundle");
-        }
-        basename(
-            &self.current_directory,
-            "validation_unknown_bundle",
-            "bundle",
-        )
-    }
-
-    /// Auto-discovers session name from worktree top-level basename, falling
-    /// back to current-directory basename.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when name cannot be derived.
-    pub fn auto_session_name(&self) -> Result<String, RuntimeError> {
-        if let Some(top_level) = self.git_top_level.as_ref() {
-            return basename(top_level, "validation_unknown_sender", "session");
-        }
-        basename(
-            &self.current_directory,
-            "validation_unknown_sender",
-            "session",
-        )
-    }
-
     /// Resolves the repository root used for debug local state/config defaults.
     ///
     /// Uses the Git common-dir owner repository root when available (for
@@ -134,8 +96,6 @@ pub struct McpAssociationOverrides {
     pub bundle_name: Option<String>,
     #[serde(default)]
     pub session_name: Option<String>,
-    #[serde(default)]
-    pub config_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -145,15 +105,6 @@ struct McpAssociationOverrideFile {
     bundle_name: Option<String>,
     #[serde(default)]
     session_name: Option<String>,
-    #[serde(default)]
-    config_root: Option<PathBuf>,
-}
-
-/// Fully resolved MCP association identities.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ResolvedAssociation {
-    pub bundle_name: String,
-    pub session_name: String,
 }
 
 /// Loads optional per-worktree MCP override file.
@@ -162,9 +113,9 @@ pub struct ResolvedAssociation {
 ///
 /// Returns validation errors for malformed override file content.
 pub fn load_local_mcp_overrides(
-    workspace_root: &Path,
+    configuration_root: &Path,
 ) -> Result<Option<McpAssociationOverrides>, RuntimeError> {
-    let path = workspace_root.join(OVERRIDE_FILE_PATH);
+    let path = effective_configuration_path(configuration_root, ASSOCIATION_FILE);
     if !path.exists() {
         return Ok(None);
     }
@@ -183,38 +134,150 @@ pub fn load_local_mcp_overrides(
             ),
         )
     })?;
-    Ok(Some(normalize_overrides(parsed, workspace_root)))
+    Ok(Some(McpAssociationOverrides {
+        bundle_name: parsed.bundle_name.and_then(normalize_string),
+        session_name: parsed.session_name.and_then(normalize_string),
+    }))
 }
 
-/// Resolves bundle and session identity with precedence:
-/// CLI > local override > auto-discovery.
+/// Association identities carried by the injected bring-up environment.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct McpAssociationEnvironment {
+    pub bundle_name: Option<String>,
+    pub session_name: Option<String>,
+}
+
+impl McpAssociationEnvironment {
+    /// Reads the injected context from the process environment.
+    ///
+    /// Blank values normalize to absent here, at the single point the
+    /// environment enters the process, so no consumer has to decide separately
+    /// whether a blank value counts as present.
+    #[must_use]
+    pub fn from_process_environment() -> Self {
+        Self {
+            bundle_name: std::env::var(BUNDLE_ENVIRONMENT_VARIABLE)
+                .ok()
+                .and_then(normalize_string),
+            session_name: std::env::var(SESSION_ENVIRONMENT_VARIABLE)
+                .ok()
+                .and_then(normalize_string),
+        }
+    }
+}
+
+/// Which precedence tier supplied an association identity.
 ///
-/// # Errors
+/// Recorded so an operator can tell the tier they intended from the tier that
+/// actually won. The injected environment is the one tier whose delivery depends
+/// on an agent harness passing it through to a grandchild process; a resolution
+/// that silently fell to a lower tier is otherwise indistinguishable from one
+/// that never needed it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AssociationSource {
+    CommandLine,
+    Environment,
+    Overlay,
+    DefaultBundle,
+    WorkingDirectory,
+}
+
+impl AssociationSource {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CommandLine => "command-line",
+            Self::Environment => "environment",
+            Self::Overlay => "overlay",
+            Self::DefaultBundle => "default-bundle",
+            Self::WorkingDirectory => "working-directory",
+        }
+    }
+}
+
+/// An association identity together with the tier which supplied it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssociationCandidate {
+    pub value: String,
+    pub source: AssociationSource,
+}
+
+/// Bundle and session identities as far as they resolve, each independently
+/// optional.
 ///
-/// Returns validation errors when identities cannot be derived.
+/// Absence is a recorded condition rather than a failure. A relay-wide server
+/// with no bundle is legitimate, and a misconfigured one should report its cause
+/// where the agent will see it rather than erase its tool surface at startup.
+///
+/// Absence is *not* interchangeable with an unresolvable value: presence carries
+/// operator intent, so a supplied identity which does not resolve is a fault
+/// rather than an invitation to try a lower tier.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AssociationCandidates {
+    pub bundle: Option<AssociationCandidate>,
+    pub session: Option<AssociationCandidate>,
+}
+
+/// Resolves association identity by precedence, each tier ranked by how
+/// deployment-specific its source is.
+///
+/// Bundle: `--bundle` > injected environment > overlay file > `--default-bundle`.
+/// Session: `--session-name` > injected environment > overlay file, with the
+/// working-directory match against declared member directories applied later by
+/// the caller, once the bundle configuration is loaded.
+///
+/// `--default-bundle` sits *below* the injected environment so generated client
+/// configuration can seed a bundle without impersonating invocation intent.
+/// `--bundle` sits above it and still asserts that intent.
+#[must_use]
 pub fn resolve_association(
     cli: &McpAssociationCli,
+    environment: &McpAssociationEnvironment,
     local_overrides: Option<&McpAssociationOverrides>,
-    workspace: &WorkspaceContext,
-) -> Result<ResolvedAssociation, RuntimeError> {
-    let bundle_name = cli
-        .bundle_name
-        .clone()
-        .or_else(|| local_overrides.and_then(|overrides| overrides.bundle_name.clone()))
+    default_bundle: Option<&str>,
+) -> AssociationCandidates {
+    let bundle = candidate(cli.bundle_name.clone(), AssociationSource::CommandLine)
+        .or_else(|| {
+            candidate(
+                environment.bundle_name.clone(),
+                AssociationSource::Environment,
+            )
+        })
+        .or_else(|| {
+            candidate(
+                local_overrides.and_then(|overrides| overrides.bundle_name.clone()),
+                AssociationSource::Overlay,
+            )
+        })
+        .or_else(|| {
+            candidate(
+                default_bundle.map(ToString::to_string),
+                AssociationSource::DefaultBundle,
+            )
+        });
+    let session = candidate(cli.session_name.clone(), AssociationSource::CommandLine)
+        .or_else(|| {
+            candidate(
+                environment.session_name.clone(),
+                AssociationSource::Environment,
+            )
+        })
+        .or_else(|| {
+            candidate(
+                local_overrides.and_then(|overrides| overrides.session_name.clone()),
+                AssociationSource::Overlay,
+            )
+        });
+    AssociationCandidates { bundle, session }
+}
+
+/// Pairs a tier's value with that tier, dropping it when the tier supplied
+/// nothing. Blank normalizes to absent so a tier cannot claim a turn with an
+/// empty string.
+fn candidate(value: Option<String>, source: AssociationSource) -> Option<AssociationCandidate> {
+    value
         .and_then(normalize_string)
-        .map(Ok)
-        .unwrap_or_else(|| workspace.auto_bundle_name())?;
-    let session_name = cli
-        .session_name
-        .clone()
-        .or_else(|| local_overrides.and_then(|overrides| overrides.session_name.clone()))
-        .and_then(normalize_string)
-        .map(Ok)
-        .unwrap_or_else(|| workspace.auto_session_name())?;
-    Ok(ResolvedAssociation {
-        bundle_name,
-        session_name,
-    })
+        .map(|value| AssociationCandidate { value, source })
 }
 
 /// Validates that resolved sender exists as bundle member.
@@ -242,40 +305,32 @@ pub fn validate_sender_session(
     ))
 }
 
-/// Resolves sender session from candidate name with working-directory fallback.
+/// Resolves the sender session from a candidate, or from the working directory
+/// when no tier supplied one.
 ///
-/// First tries direct session membership. If candidate is not configured,
-/// attempts to infer sender from the current working directory by matching
-/// bundle member `directory` paths.
+/// A supplied candidate is validated against bundle membership and nothing else.
+/// The working-directory match is the tier that applies in the *absence* of a
+/// candidate, so letting an unresolvable candidate fall into it would let a typo
+/// authenticate as whichever member happens to own the current directory --
+/// identity resolved by inference where it was in fact declared.
+///
+/// `Ok(None)` reports a legitimately unassociated server: nothing was supplied
+/// and the working directory matched no member.
 ///
 /// # Errors
 ///
-/// Returns `validation_unknown_sender` when no sender can be resolved or when
-/// working-directory inference is ambiguous.
+/// Returns `validation_unknown_sender` when a supplied candidate names no
+/// member, or when the working directory matches more than one.
 pub fn resolve_sender_session(
     bundle: &BundleConfiguration,
-    candidate_session_name: &str,
+    candidate_session_name: Option<&str>,
     working_directory: &Path,
-) -> Result<String, RuntimeError> {
-    if let Ok(session_name) = validate_sender_session(bundle, candidate_session_name) {
-        return Ok(session_name);
+) -> Result<Option<String>, RuntimeError> {
+    if let Some(candidate_session_name) = candidate_session_name {
+        return validate_sender_session(bundle, candidate_session_name).map(Some);
     }
-
-    let inferred = infer_sender_from_working_directory(bundle, working_directory)
-        .map_err(map_sender_inference_error)?;
-    if let Some(inferred) = inferred {
-        return Ok(inferred);
-    }
-
-    Err(RuntimeError::validation(
-        "validation_unknown_sender",
-        format!(
-            "session '{}' is not configured in bundle '{}' and working directory '{}' did not match any configured session directory",
-            candidate_session_name,
-            bundle.bundle_name,
-            working_directory.display()
-        ),
-    ))
+    infer_sender_from_working_directory(bundle, working_directory)
+        .map_err(map_sender_inference_error)
 }
 
 fn run_git(directory: &Path, arguments: &[&str]) -> Option<String> {
@@ -296,28 +351,6 @@ fn run_git(directory: &Path, arguments: &[&str]) -> Option<String> {
     normalize_string(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-fn normalize_overrides(
-    parsed: McpAssociationOverrideFile,
-    workspace_root: &Path,
-) -> McpAssociationOverrides {
-    let config_root = parsed.config_root.and_then(|path| {
-        if path.as_os_str().is_empty() {
-            return None;
-        }
-        let normalized = if path.is_absolute() {
-            path
-        } else {
-            workspace_root.join(path)
-        };
-        Some(normalized)
-    });
-    McpAssociationOverrides {
-        bundle_name: parsed.bundle_name.and_then(normalize_string),
-        session_name: parsed.session_name.and_then(normalize_string),
-        config_root,
-    }
-}
-
 fn repository_root_from_git_common_dir(common_dir: &Path) -> Option<PathBuf> {
     let mut cursor = Some(common_dir);
     while let Some(path) = cursor {
@@ -334,20 +367,6 @@ fn normalize_path(current_directory: &Path, path: &Path) -> PathBuf {
         return path.to_path_buf();
     }
     current_directory.join(path)
-}
-
-fn basename(path: &Path, code: &str, noun: &str) -> Result<String, RuntimeError> {
-    let value = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .and_then(normalize_str);
-    if let Some(value) = value {
-        return Ok(value.to_string());
-    }
-    Err(RuntimeError::validation(
-        code,
-        format!("cannot derive {noun} name from {}", path.display()),
-    ))
 }
 
 fn normalize_string(value: String) -> Option<String> {
