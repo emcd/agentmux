@@ -58,3 +58,114 @@ one.
 
 - **WHEN** an operator passes `--repository-root`
 - **THEN** state and inscriptions root resolution continue to honor it
+
+### Requirement: Configuration Pre-flight Command Surface
+
+The system SHALL provide an `agentmux check configuration [<bundle-id>]`
+subcommand that validates bundle configuration through the same loading path the
+relay uses at startup, without starting the relay or mutating configuration.
+
+The command SHALL accept an optional positional `<bundle-id>`: when present it
+validates that single bundle; when omitted it validates every bundle in the
+effective bundle set, which is the union of the bundles directories across every
+configuration layer, with an entry in an earlier layer shadowing an entry of the
+same identifier in a later one.
+
+The command SHALL inherit the global runtime flags
+(`--configuration-directory`, `--state-directory`,
+`--inscriptions-directory`/`--logs-directory`, `--repository-root`), including
+the repeatability of `--configuration-directory`.
+
+Validation SHALL cover bundle and coders schema and authorization-policy
+resolution (`policies.toml`, `relay.toml`, and `users.toml` policy mappings),
+matching what the relay rejects at startup, and SHALL resolve every file through
+the shared effective-file lookup so it validates what the relay would actually
+load.
+
+The command SHALL be read-only: it MUST NOT scaffold or modify configuration
+artifacts.
+
+On success the command SHALL exit zero. On the first invalid bundle it SHALL
+exit non-zero and report the offending file path and field-level detail; it does
+not partially load or degrade gracefully. The reported path SHALL be the
+physical file selected by the effective lookup, so an operator can tell which
+layer is at fault. With an arbitrary number of layers the physical path is the
+only way to identify the copy in effect, so reporting it is load-bearing rather
+than a convenience.
+
+#### Scenario: Validate a single named bundle
+
+- **WHEN** an operator runs `agentmux check configuration <bundle-id>` against a
+  valid configuration
+- **THEN** the command exits zero
+- **AND** reports the bundle as validated
+
+#### Scenario: Validate every bundle in the effective set
+
+- **WHEN** an operator runs `agentmux check configuration` with no positional
+  argument
+- **THEN** validation covers the union of bundle definitions across every layer
+- **AND** a definition in an earlier layer shadows one of the same identifier in
+  a later layer
+- **AND** exits zero when all are valid
+
+#### Scenario: Report an unknown configuration field
+
+- **WHEN** a bundle file contains an unknown field (for example a misspelled
+  session key)
+- **THEN** the command exits non-zero
+- **AND** reports the offending file path and the offending field
+
+#### Scenario: Report the physical file at fault
+
+- **WHEN** validation fails on a bundle supplied by a layer other than the last
+- **THEN** the reported path is the file in that layer rather than any copy it
+  shadows
+
+#### Scenario: Reject an unknown check subcommand
+
+- **WHEN** an operator runs `agentmux check <other>` where `<other>` is not
+  `configuration`
+- **THEN** the command rejects the invocation with a structured argument
+  validation error
+
+#### Scenario: Report when no bundles are discoverable
+
+- **WHEN** an operator runs `agentmux check configuration` with no positional
+  argument and no bundle files exist in any layer
+- **THEN** the command exits non-zero
+- **AND** reports that no bundle configurations were found
+
+#### Scenario: Remain read-only
+
+- **WHEN** the command runs against a configuration layer missing starter files
+- **THEN** no configuration artifact is created or modified
+
+### Requirement: Default Bundle Selector for MCP Hosting
+
+`agentmux host mcp` SHALL accept an optional `--default-bundle <name>` that
+supplies a bundle in the default tier of association resolution, distinct from
+`--bundle`, which asserts invocation intent and outranks the injected bring-up
+environment.
+
+This allows generated client configuration to seed a bundle without overriding
+what bring-up authoritatively knows.
+
+#### Scenario: Default bundle yields to injected environment
+
+- **WHEN** `agentmux host mcp --default-bundle alpha` is invoked
+- **AND** the injected bring-up environment names bundle `beta`
+- **THEN** bundle association resolves to `beta`
+
+#### Scenario: Explicit bundle outranks injected environment
+
+- **WHEN** `agentmux host mcp --bundle alpha` is invoked
+- **AND** the injected bring-up environment names bundle `beta`
+- **THEN** bundle association resolves to `alpha`
+
+#### Scenario: Default bundle applies when no higher tier resolves
+
+- **WHEN** `agentmux host mcp --default-bundle alpha` is invoked
+- **AND** no explicit or injected bundle is present
+- **AND** the effective association file supplies none
+- **THEN** bundle association resolves to `alpha`
