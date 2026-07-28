@@ -43,10 +43,6 @@ impl McpServer {
             .option_id
             .as_ref()
             .map(|value| value.trim().to_string());
-        // After every validation for the selected command and before any
-        // inscription or relay work: a malformed request reports its own
-        // fault even while a startup fault is retained.
-        self.require_ready()?;
         emit_inscription(
             "mcp.tool.choose.request",
             &json!({
@@ -105,7 +101,7 @@ impl McpServer {
                 Ok(CallToolResult::success(vec![Content::json(response)?]))
             }
             Ok(other) => Err(self.map_nonsuccess_relay_response("mcp.tool.choose", other)),
-            Err(source) => Err(self.map_relay_stream_failure("mcp.tool.choose.io_error", source)),
+            Err(source) => Err(self.map_relay_call_error("mcp.tool.choose.io_error", source)),
         }
     }
 }

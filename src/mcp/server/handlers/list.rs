@@ -23,7 +23,7 @@ use crate::mcp::params::{
     LIST_SESSIONS_SCHEMA_VERSION, ListArgs, ListDecisionsArgs, ListNamespacesArgs, ListParams,
     ListRelaysArgs,
 };
-use crate::mcp::server::McpServer;
+use crate::mcp::server::{McpServer, service::RelayCallError};
 use crate::mcp::validation::{
     is_relay_unavailable_error, parse_meta_tool_args, validate_list_decisions_args,
     validate_list_namespaces_args, validate_list_params, validate_list_principals_args,
@@ -196,7 +196,7 @@ impl McpServer {
                 ))
             }
             Err(source) => {
-                Err(self.map_relay_stream_failure("mcp.tool.list.decisions.io_error", source))
+                Err(self.map_relay_call_error("mcp.tool.list.decisions.io_error", source))
             }
         }
     }
@@ -244,7 +244,7 @@ impl McpServer {
             }
             Ok(other) => Err(self.map_nonsuccess_relay_response("mcp.tool.list.principals", other)),
             Err(source) => {
-                Err(self.map_relay_stream_failure("mcp.tool.list.principals.io_error", source))
+                Err(self.map_relay_call_error("mcp.tool.list.principals.io_error", source))
             }
         }
     }
@@ -295,7 +295,7 @@ impl McpServer {
             }
             Ok(other) => Err(self.map_nonsuccess_relay_response("mcp.tool.list.namespaces", other)),
             Err(source) => {
-                Err(self.map_relay_stream_failure("mcp.tool.list.namespaces.io_error", source))
+                Err(self.map_relay_call_error("mcp.tool.list.namespaces.io_error", source))
             }
         }
     }
@@ -332,9 +332,7 @@ impl McpServer {
                 Ok(CallToolResult::success(vec![Content::json(response)?]))
             }
             Ok(other) => Err(self.map_nonsuccess_relay_response("mcp.tool.list.relays", other)),
-            Err(source) => {
-                Err(self.map_relay_stream_failure("mcp.tool.list.relays.io_error", source))
-            }
+            Err(source) => Err(self.map_relay_call_error("mcp.tool.list.relays.io_error", source)),
         }
     }
 
@@ -366,13 +364,20 @@ impl McpServer {
                 "relay returned unexpected response variant",
                 Some(json!({"response": other})),
             )),
-            Err(source)
+            // Only a present-but-unreachable relay earns the synthesized down
+            // view. A retained startup fault never reached the relay at all, so
+            // papering it over with an empty bundle would hide the defect behind
+            // a plausible answer.
+            Err(RelayCallError::Io(source))
                 if is_relay_unavailable_error(&source)
                     && self.home_bundle_name() == Some(bundle_name) =>
             {
                 Ok(self.synthesize_down_bundle(&bundle, &relay_socket, &bundle_paths))
             }
-            Err(source) => Err(map_relay_request_failure(&relay_socket, source)),
+            Err(RelayCallError::Io(source)) => {
+                Err(map_relay_request_failure(&relay_socket, source))
+            }
+            Err(RelayCallError::NotReady(fault)) => Err(fault),
         }
     }
 
@@ -412,12 +417,10 @@ impl McpServer {
                 "relay returned unexpected response variant",
                 Some(json!({"response": other})),
             )),
-            Err(source) if is_relay_unavailable_error(&source) => {
+            Err(RelayCallError::Io(source)) if is_relay_unavailable_error(&source) => {
                 Ok(synthesize_empty_global_bundle())
             }
-            Err(source) => {
-                Err(self.map_relay_stream_failure("mcp.tool.list.global.io_error", source))
-            }
+            Err(source) => Err(self.map_relay_call_error("mcp.tool.list.global.io_error", source)),
         }
     }
 

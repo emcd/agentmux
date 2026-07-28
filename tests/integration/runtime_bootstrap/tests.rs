@@ -476,6 +476,21 @@ async fn mcp_reports_argument_faults_ahead_of_a_retained_startup_fault() {
         response["error"]["data"]["code"],
         Value::String("runtime_startup_failed".to_string())
     );
+
+    // `list decisions` consults no association guard, so it is the path that
+    // stayed silent while every sibling reported the fault. Gating at the relay
+    // boundary covers it without naming it.
+    let mut arguments = Map::new();
+    arguments.insert(
+        "command".to_string(),
+        Value::String("decisions".to_string()),
+    );
+    let response = harness.call_tool(request_id + 1, "list", arguments).await;
+    assert_eq!(
+        response["error"]["data"]["code"],
+        Value::String("runtime_startup_failed".to_string()),
+        "list decisions must surface the retained fault rather than reaching the relay"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

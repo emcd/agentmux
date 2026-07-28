@@ -132,7 +132,7 @@ impl McpServer {
                 Ok(CallToolResult::success(vec![Content::json(response)?]))
             }
             Ok(other) => Err(self.map_nonsuccess_relay_response("mcp.tool.look", other)),
-            Err(source) => Err(self.map_relay_stream_failure("mcp.tool.look.io_error", source)),
+            Err(source) => Err(self.map_relay_call_error("mcp.tool.look.io_error", source)),
         }
     }
 }

@@ -50,6 +50,24 @@ pub enum McpReadiness {
     Unavailable(McpStartupFault),
 }
 
+/// Why a relay call did not produce a response.
+///
+/// The two arms are genuinely different subsystems: `NotReady` means this server
+/// never became operational and the relay was never contacted, while `Io` means a
+/// present relay failed. Collapsing them would report a startup defect as a relay
+/// outage.
+#[derive(Debug)]
+pub(super) enum RelayCallError {
+    NotReady(rmcp::ErrorData),
+    Io(std::io::Error),
+}
+
+impl From<std::io::Error> for RelayCallError {
+    fn from(source: std::io::Error) -> Self {
+        Self::Io(source)
+    }
+}
+
 /// Configuration provided when booting MCP stdio service.
 #[derive(Clone, Debug)]
 pub struct McpConfiguration {
@@ -110,15 +128,26 @@ impl McpServer {
     pub(super) fn request_relay(
         &self,
         request: &RelayRequest,
-    ) -> Result<RelayResponse, std::io::Error> {
+    ) -> Result<RelayResponse, RelayCallError> {
         self.request_relay_with_namespace(request, None)
     }
 
+    /// The single door to the relay, and therefore where readiness is enforced.
+    ///
+    /// Every relay-backed handler reaches the relay through here, so a handler
+    /// cannot forget the check the way it can when each one places its own. The
+    /// position is also the only one the contract allows: it is past each
+    /// handler's argument validation, which the dispatch boundary is not, and
+    /// ahead of any relay contact.
+    ///
+    /// Work that never touches the relay stays ungated by construction, which is
+    /// why `help` still answers under a retained fault.
     pub(super) fn request_relay_with_namespace(
         &self,
         request: &RelayRequest,
         namespace: Option<&str>,
-    ) -> Result<RelayResponse, std::io::Error> {
+    ) -> Result<RelayResponse, RelayCallError> {
+        self.require_ready().map_err(RelayCallError::NotReady)?;
         let mut guard = self
             .state
             .relay_stream
@@ -197,6 +226,35 @@ impl McpServer {
         self.unavailable_error()
     }
 
+    /// Maps a failed relay call onto the MCP error taxonomy.
+    ///
+    /// A retained fault is returned as itself: it already names the defect, and
+    /// rewriting it as a relay failure would send an operator to the wrong
+    /// subsystem.
+    pub(super) fn map_relay_call_error(
+        &self,
+        event: &str,
+        error: RelayCallError,
+    ) -> rmcp::ErrorData {
+        match error {
+            RelayCallError::NotReady(fault) => fault,
+            RelayCallError::Io(source) => self.map_relay_stream_failure(event, source),
+        }
+    }
+
+    /// Rejects a retained startup fault before a handler reaches the relay.
+    ///
+    /// A fault can coexist with a complete association -- an unwritable
+    /// inscriptions sink leaves bundle and session fully resolved -- so gating on
+    /// association alone would let the fault stay invisible on exactly the
+    /// servers that keep working, the one outcome retaining it exists to prevent.
+    fn require_ready(&self) -> Result<(), rmcp::ErrorData> {
+        match &self.state.configuration.readiness {
+            McpReadiness::Ready => Ok(()),
+            McpReadiness::Unavailable(fault) => Err(startup_fault_error(fault)),
+        }
+    }
+
     /// Whether the server holds a live relay stream. True only when both a sender
     /// session and an associated bundle are configured, mirroring the
     /// `relay_stream` construction in `new`; this is the real precondition every
@@ -222,23 +280,7 @@ impl McpServer {
     /// the sender value: the relay-wide `list` discovery commands. Returns the
     /// canonical unassociated-server error so the failure precedes any relay
     /// contact rather than surfacing later as a stream fault.
-    /// Rejects a retained startup fault before a handler does any work.
-    ///
-    /// A fault can coexist with a complete association: an unwritable
-    /// inscriptions sink leaves bundle and session fully resolved, so gating on
-    /// association alone would let the fault stay invisible on exactly the
-    /// servers that keep working -- the one outcome retaining it exists to
-    /// prevent. `help` deliberately does not call this, so an operator can still
-    /// read the server's own account of its state.
-    pub(super) fn require_ready(&self) -> Result<(), rmcp::ErrorData> {
-        match &self.state.configuration.readiness {
-            McpReadiness::Ready => Ok(()),
-            McpReadiness::Unavailable(fault) => Err(startup_fault_error(fault)),
-        }
-    }
-
     pub(super) fn require_association(&self) -> Result<(), rmcp::ErrorData> {
-        self.require_ready()?;
         if self.is_associated() {
             Ok(())
         } else {
@@ -251,7 +293,6 @@ impl McpServer {
     /// with the same canonical error. Association requires both the sender session
     /// and a bundle, so a partial configuration is unassociated by definition.
     pub(super) fn require_associated_sender_session(&self) -> Result<String, rmcp::ErrorData> {
-        self.require_ready()?;
         match (
             self.state.configuration.sender_session.as_ref(),
             self.state.configuration.associated_bundle_paths.as_ref(),
