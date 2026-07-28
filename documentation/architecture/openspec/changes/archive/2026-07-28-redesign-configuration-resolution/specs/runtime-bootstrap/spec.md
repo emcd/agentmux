@@ -272,22 +272,6 @@ configuration root cannot redirect the configuration root.
 - **WHEN** the effective association file has invalid TOML or unknown fields
 - **THEN** the fault is recorded as a startup fault with its cause
 
-### Requirement: Override Directory VCS Posture
-
-The project SHALL commit its Agentmux configuration directory and SHALL
-Git-ignore the overlay directory beneath it, so shared configuration is tracked
-while per-working-tree divergence is not.
-
-#### Scenario: Track configuration directory in Git
-
-- **WHEN** repository ignore rules are evaluated
-- **THEN** `.auxiliary/configuration/agentmux/` is tracked
-
-#### Scenario: Ignore overlay directory in Git
-
-- **WHEN** repository ignore rules are evaluated
-- **THEN** `.auxiliary/configuration/agentmux/overlay/` is ignored
-
 ### Requirement: Bundle Configuration File Name
 
 Bundle configuration SHALL be stored as:
@@ -409,17 +393,6 @@ within the file.
 - **WHEN** operator starts TUI without selectors
 - **AND** required default keys are absent in global `users.toml`
 - **THEN** startup fails with stable validation code
-
-### Requirement: TUI Override File VCS Posture
-
-The global users overlay file SHALL follow the overlay VCS posture so per-user
-test defaults do not leak into shared tracked configuration.
-
-#### Scenario: Keep overlay users.toml under the ignored overlay directory
-
-- **WHEN** repository ignore rules are evaluated
-- **THEN** `.auxiliary/configuration/agentmux/overlay/users.toml` is covered by
-  the ignored overlay path
 
 ## ADDED Requirements
 
@@ -660,3 +633,21 @@ retained startup fault.
 
 - **WHEN** stdio transport or protocol router initialization fails
 - **THEN** MCP process startup fails
+
+## REMOVED Requirements
+
+### Requirement: Override Directory VCS Posture
+
+**Reason**: The requirement directed a project to commit its Agentmux
+configuration directory and Git-ignore an overlay beneath it. Every file under a
+configuration root is maintainer-specific -- policies encode one operator's lane
+topology, `users.toml` names a person, `coders.toml` records locally installed
+coders -- so no such directory is committed to the repository of the tool. The
+absence of absolute paths in a file does not make it portable.
+
+Nothing replaces it. Where configuration is stored is an operational fact
+carried by maintainer documentation, not a behavior the runtime enforces.
+
+### Requirement: TUI Override File VCS Posture
+
+**Reason**: Depended entirely on the posture above, which is removed.

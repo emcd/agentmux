@@ -141,15 +141,6 @@ with two answers is not retained, it is ambiguous.
 - [x] 6.6 Record in code why the remaining Git usage exists and what removes it,
   so it is not mistaken for an oversight and deleted opportunistically
 
-## 7. Repository configuration posture
-
-- [ ] 7.1 Commit the repository's Agentmux configuration directory
-- [ ] 7.2 Ignore only the overlay directory beneath it
-- [ ] 7.3 Update the R&D MCP invocation to use the discovery flag and
-  `--default-bundle`
-- [ ] 7.4 Request the corresponding upstream Copier template change emitting
-  `--default-bundle`
-
 ## 8. Documentation and drift
 
 - [x] 8.1 Update subsystem READMEs covering root resolution, the overlay, and
@@ -162,9 +153,30 @@ with two answers is not retained, it is ambiguous.
 
 ## 9. Verification
 
-- [ ] 9.1 `cargo fmt`, `cargo clippy --all-targets -D warnings`, and the full
+- [x] 9.1 `cargo fmt`, `cargo clippy --all-targets -D warnings`, and the full
   nextest suite
-- [ ] 9.2 `openspec validate --all --strict`
-- [ ] 9.3 Exercise the release binary directly for root resolution, overlay
+- [x] 9.2 `openspec validate --all --strict`
+- [x] 9.3 Exercise the release binary directly for root resolution, overlay
   shadowing, and green startup, since several defects this change fixes were
   invisible to debug-build testing
+
+  Nineteen checks against a `--release` build, all passing, reproducible via
+  `.auxiliary/scripts/verify-release-binary.sh`:
+  a valid overlay wins over an invalid base and an invalid overlay is reported
+  rather than falling through; a base file stays reachable when the overlay
+  lacks it; debug and release resolve configuration identically; release
+  resolves the XDG state root while debug resolves the repository-local one,
+  confirming the build-profile gate from both sides; and `host mcp` answers
+  `initialize` and advertises its full tool surface under both an unknown bundle
+  and a missing configuration root.
+
+  Three properties make the checks discriminating rather than merely green.
+  Validity is the observable for overlay precedence, because `check
+  configuration` reports validity rather than contents: exactly one copy of a
+  bundle file is made invalid, so the verdict names which file was parsed
+  instead of leaving it inferred. The cross-profile comparison uses that same
+  disagreeing pair, since comparing two valid copies would pass whether or not
+  the profiles selected the same file. And the state-root checks run inside a
+  throwaway Agentmux checkout rather than this worktree, so no live relay can
+  absorb the debug request and both halves of the gate can be asserted
+  positively.

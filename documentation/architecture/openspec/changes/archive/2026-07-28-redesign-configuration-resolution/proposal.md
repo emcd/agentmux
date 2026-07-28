@@ -102,7 +102,33 @@ location and build-profile reachability are governed by `runtime-bootstrap`.
   would leave the repository root unresolved and silently collapse
   repository-local runtime data onto the XDG default. Removing the remaining Git
   usage belongs with the deferred runtime-instance work.
-- Requires the repository's own Agentmux configuration directory to be committed,
-  with `overlay/` ignored.
+- ~~Requires the repository's own Agentmux configuration directory to be
+  committed, with `overlay/` ignored.~~ **Reversed before archive.** See the note
+  below.
 - Requires the upstream Copier template to emit `--default-bundle` instead of
-  `--bundle`.
+  `--bundle`. Tracked as operator work outside this change.
+
+## Reversal Recorded Before Archive
+
+This proposal originally required the project to commit its own Agentmux
+configuration directory, Git-ignoring an `overlay/` beneath it, and added a
+`Override Directory VCS Posture` requirement saying so. That posture was
+reversed during implementation and never carried out.
+
+Every file under a configuration root proved to be maintainer-specific:
+`policies.toml` encodes one operator's lane topology, `users.toml` names a
+person, `coders.toml` records locally installed coders and their prompt regexes,
+and bundle members carry absolute worktree paths. The reasoning that led here
+was that these files contained no absolute paths and were therefore shareable;
+absence of absolute paths is not portability. The test is whether a second
+maintainer would want the file's contents, and for every file the answer is no.
+
+Consequently the two VCS-posture requirements are REMOVED by this change rather
+than modified, nothing replaces them, and configuration moves out of the
+repository entirely. The successor work is
+`agentmux:todos/general/35` (migration) and `agentmux:todos/general/36`
+(maintainer guide). The layering shape that replaces `overlay/` is proposed
+separately as `layer-configuration-roots`.
+
+The record is annotated rather than rewritten so a later reader sees that the
+decision changed, rather than believing it was never made.

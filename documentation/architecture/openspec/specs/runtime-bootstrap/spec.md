@@ -5,34 +5,52 @@ Runtime layout, configuration root resolution, and startup sequencing for the re
 ## Requirements
 ### Requirement: XDG Configuration Root
 
-The system SHALL resolve default configuration root as:
+The system SHALL resolve the configuration root using precedence:
 
-- debug builds: repository-local
-  `.auxiliary/configuration/agentmux/` when that directory exists
-- otherwise: `$XDG_CONFIG_HOME/agentmux` or `~/.config/agentmux`
+1. explicit CLI `--configuration-directory` when present
+2. `AGENTMUX_CONFIGURATION_DIRECTORY` environment variable when set and
+   non-blank, resolved against the working directory when relative, identically
+   to the CLI flag
+3. nearest-ancestor discovery when discovery is enabled
+4. `$XDG_CONFIG_HOME/agentmux` when set and non-empty, otherwise
+   `~/.config/agentmux`
 
-Explicit configuration path overrides (CLI or local override file fields) SHALL
-continue to take precedence over default file resolution.
+Tiers 1 and 2 SHALL **replace** the configuration root rather than extend a
+search list, so an explicitly supplied root never falls through to a different
+root for files it does not define.
 
-#### Scenario: Use repository-local config root in debug build
+Configuration root resolution SHALL NOT depend on build profile.
 
-- **WHEN** runtime is debug/development mode
-- **AND** `.auxiliary/configuration/agentmux/` exists under workspace root
-- **AND** no explicit config path override is provided
-- **THEN** bundle loading uses that repository-local config root
+#### Scenario: Resolve configuration root from explicit CLI value
 
-#### Scenario: Ignore repository-local file in release build
+- **WHEN** startup receives `--configuration-directory`
+- **THEN** the configuration root is that path
+- **AND** discovery and XDG/home resolution are bypassed
 
-- **WHEN** runtime is non-debug/release mode
-- **AND** `.auxiliary/configuration/agentmux/` exists
-- **AND** no explicit config path override is provided
-- **THEN** bundle loading uses XDG/home configuration resolution
+#### Scenario: Resolve configuration root from environment
 
-#### Scenario: Explicit config override takes precedence
+- **WHEN** no `--configuration-directory` is provided
+- **AND** `AGENTMUX_CONFIGURATION_DIRECTORY` is set and non-blank
+- **THEN** the configuration root is that path
 
-- **WHEN** runtime startup receives an explicit config path override
-- **THEN** bundle loading uses the explicit path
-- **AND** default debug/release config path logic is bypassed
+#### Scenario: Explicit root does not fall through for undefined files
+
+- **WHEN** the configuration root is supplied explicitly
+- **AND** a requested configuration file does not exist under that root
+- **THEN** resolution reports the file as absent
+- **AND** no other configuration root is consulted
+
+#### Scenario: Resolve configuration root from XDG default
+
+- **WHEN** no explicit root is provided
+- **AND** discovery is disabled or finds no marker
+- **THEN** the configuration root resolves from `$XDG_CONFIG_HOME/agentmux` or
+  `~/.config/agentmux`
+
+#### Scenario: Configuration root resolution is identical across build profiles
+
+- **WHEN** the same inputs are supplied to a debug build and a release build
+- **THEN** both resolve the same configuration root
 
 ### Requirement: XDG State Root
 
@@ -103,18 +121,17 @@ Each bundle SHALL use a dedicated runtime directory for per-bundle artifacts:
 
 ### Requirement: Relay Connectivity Handling from MCP
 
-MCP bootstrap SHALL resolve bundle and sender association at startup without
-requiring relay connectivity.
+MCP bootstrap SHALL NOT require relay connectivity.
 Relay connectivity SHALL be checked when MCP tools invoke relay-backed
 operations.
 If connection fails, MCP tool responses SHALL return a structured
 `relay_unavailable` error and MCP process startup SHALL remain successful.
 
-#### Scenario: Fail startup before relay bootstrap when bundle is unknown
-
-- **WHEN** bundle discovery resolves to an unknown or missing bundle
-- **THEN** MCP startup returns structured `validation_unknown_bundle`
-- **AND** relay connectivity checks are not required for startup
+One exception is retained unchanged: the MCP list surface MAY return its
+synthetic home-bundle payload when the relay is unreachable, rather than
+`relay_unavailable`, as specified by `mcp-tool-surface`. That fallback is
+distinct from a retained startup fault and is not affected by startup fault
+tolerance.
 
 #### Scenario: Start MCP when relay is unavailable after association resolves
 
@@ -145,7 +162,7 @@ event loop.
 When helper-triggered spawn is required for `agentmux tui`, spawned relay
 invocation SHALL use the same resolved runtime roots as TUI startup:
 
-- `--config-directory` from active runtime resolution
+- `--configuration-directory` from active runtime resolution
 - `--state-directory` from active runtime resolution
 - `--inscriptions-directory` from active runtime resolution
 
@@ -167,7 +184,7 @@ invocation SHALL use the same resolved runtime roots as TUI startup:
 - **WHEN** operator starts `agentmux tui`
 - **AND** resolved `relay.sock` is unavailable
 - **THEN** startup invokes relay auto-start helper
-- **AND** helper spawn uses the same resolved `--config-directory`,
+- **AND** helper spawn uses the same resolved `--configuration-directory`,
   `--state-directory`, and `--inscriptions-directory` values
 
 ### Requirement: TUI Auto-Spawn Relay Lifecycle Ownership
@@ -228,36 +245,71 @@ spawns relay while others wait for socket readiness.
 The MCP server SHALL resolve sender association at startup using precedence:
 
 1. explicit CLI `--session-name` when present
-2. local override file `session_name` when present
-3. auto-discovered sender session
+2. injected bring-up environment variable `AGENTMUX_SESSION` when present and
+   non-blank
+3. overlay-resolved association file `session_name` when present
+4. working-directory match against configured member directories
 
-Auto-discovered sender session SHALL use:
+A blank injected value SHALL be treated as absent.
 
-- basename of Git worktree top-level directory when running inside Git
-- otherwise basename of current working directory
+A tier SHALL apply only when every tier above it is absent. When a tier supplies
+a sender that names no configured member, sender association SHALL be recorded as
+unresolved with that cause and SHALL NOT fall through to a lower tier.
 
-#### Scenario: Resolve sender from worktree basename
+Sender association SHALL NOT be derived from Git metadata. When no tier supplies
+a sender and no configured member matches, sender association SHALL be recorded
+as unresolved rather than failing startup.
 
-- **WHEN** MCP starts inside a Git worktree rooted at
-  `/home/me/src/WORKTREES/agentmux/relay`
-- **AND** no CLI or override sender is provided
-- **THEN** sender association resolves to `relay`
+The tier which supplied the resolved sender SHALL be recorded.
 
 #### Scenario: Resolve sender from explicit CLI value
 
 - **WHEN** MCP startup has explicit `--session-name`
 - **THEN** sender association is set to that configured session
 
-#### Scenario: Resolve sender from local override file
+#### Scenario: Injected environment wins over association file
 
 - **WHEN** CLI sender is absent
-- **AND** local override file provides `session_name`
-- **THEN** sender association is set to override value
+- **AND** the `AGENTMUX_SESSION` environment value is present and non-blank
+- **AND** the association file also provides `session_name`
+- **THEN** sender association resolves to the environment value
+
+#### Scenario: Resolve sender from working directory match
+
+- **WHEN** CLI, environment, and association file senders are all absent
+- **AND** the working directory matches a configured member's declared directory
+- **THEN** sender association resolves to that member
+
+#### Scenario: Blank injected sender is ignored
+
+- **WHEN** `AGENTMUX_SESSION` is set to a blank value
+- **THEN** it contributes no identity
+- **AND** resolution continues with the next tier
+
+#### Scenario: Supplied sender naming no member does not fall through
+
+- **WHEN** a sender is supplied by CLI, environment, or association file
+- **AND** it names no configured member
+- **AND** the working directory matches a different configured member
+- **THEN** sender association is recorded as unresolved with that cause
+- **AND** the working-directory match is not applied
+
+#### Scenario: Record unresolved sender without failing startup
+
+- **WHEN** no tier supplies a sender
+- **AND** the working directory matches no configured member
+- **THEN** sender association is recorded as unresolved with its cause
+- **AND** MCP startup succeeds
+
+#### Scenario: Record the tier which supplied the sender
+
+- **WHEN** sender association resolves
+- **THEN** the startup record names the tier it resolved from
 
 #### Scenario: Reject ambiguous sender association
 
-- **WHEN** sender association candidate matches multiple configured members
-- **THEN** MCP startup returns a structured `validation_unknown_sender` error
+- **WHEN** the sender association candidate matches multiple configured members
+- **THEN** sender association is recorded as unresolved with an ambiguity cause
 
 ### Requirement: Runtime Security Posture
 
@@ -291,74 +343,126 @@ starts before MCP, and relay/MCP use matching `--bundle` and
 
 The MCP server SHALL resolve bundle association at startup using precedence:
 
-1. explicit CLI `--bundle-name` when present
-2. local override file `bundle_name` when present
-3. auto-discovered bundle
+1. explicit CLI `--bundle` when present
+2. injected bring-up environment variable `AGENTMUX_BUNDLE` when present and
+   non-blank
+3. overlay-resolved association file `bundle_name` when present
+4. explicit CLI `--default-bundle` when present
 
-Auto-discovered bundle SHALL use:
+A blank injected value SHALL be treated as absent.
 
-- basename of parent directory of Git common-dir when running inside Git
-- otherwise basename of current working directory
+`--default-bundle` SHALL occupy the default tier so generated client
+configuration can seed a bundle without outranking bring-up, while `--bundle`
+retains its meaning as an assertion of invocation intent.
 
-Resolved bundle SHALL map to a configured bundle definition; otherwise startup
-fails with structured `validation_unknown_bundle`.
+Bundle association SHALL NOT be derived from Git metadata. When no tier supplies
+a bundle, bundle association SHALL be recorded as unresolved rather than failing
+startup.
 
-#### Scenario: Resolve bundle from Git common-dir
+A bundle supplied by any tier, `--default-bundle` included, carries operator
+intent. When a supplied bundle cannot be loaded, MCP startup SHALL retain the
+loading fault with its own cause rather than recording a generic unassociated
+server.
 
-- **WHEN** MCP starts in a Git worktree whose Git common-dir is
-  `/home/me/src/agentmux/.git`
-- **AND** no CLI or override bundle is provided
-- **THEN** bundle association resolves to `agentmux`
-
-#### Scenario: Resolve bundle from local override file
-
-- **WHEN** CLI bundle is absent
-- **AND** local override file provides `bundle_name`
-- **THEN** bundle association resolves to override value
-
-#### Scenario: Reject unknown bundle association
-
-- **WHEN** resolved bundle has no corresponding configured bundle definition
-- **THEN** MCP startup returns structured `validation_unknown_bundle`
+The tier which supplied the resolved bundle SHALL be recorded.
 
 #### Scenario: Resolve bundle from explicit CLI value
 
-- **WHEN** MCP startup has explicit `--bundle-name`
+- **WHEN** MCP startup has explicit `--bundle`
 - **THEN** bundle association is set to that configured bundle
+
+#### Scenario: Injected environment wins over default bundle
+
+- **WHEN** `--bundle` is absent
+- **AND** `--default-bundle` names one bundle
+- **AND** the `AGENTMUX_BUNDLE` environment value names a different bundle
+- **THEN** bundle association resolves to the environment value
+
+#### Scenario: Injected environment wins over association file
+
+- **WHEN** `--bundle` is absent
+- **AND** the association file provides `bundle_name`
+- **AND** the `AGENTMUX_BUNDLE` environment value is present and non-blank
+- **THEN** bundle association resolves to the environment value
+
+#### Scenario: Fall back to default bundle
+
+- **WHEN** no CLI `--bundle`, environment, or association file value is present
+- **AND** `--default-bundle` is provided
+- **THEN** bundle association resolves to the default value
+
+#### Scenario: Record unresolved bundle without failing startup
+
+- **WHEN** no tier supplies a bundle
+- **THEN** bundle association is recorded as unresolved with its cause
+- **AND** MCP startup succeeds
+
+#### Scenario: Retain the cause when a supplied bundle cannot be loaded
+
+- **WHEN** a tier supplies a bundle which is unknown or malformed
+- **THEN** MCP startup retains that loading fault with its own cause
+- **AND** tool calls report that cause rather than a generic unassociated server
+
+#### Scenario: Record the tier which supplied the bundle
+
+- **WHEN** bundle association resolves
+- **THEN** the startup record names the tier it resolved from
 
 ### Requirement: Local MCP Association Override File
 
-The MCP server SHALL support optional local association overrides in:
+The MCP server SHALL support optional association overrides in a logical
+configuration artifact at relative path `mcp.toml`, resolved through the shared
+effective-file lookup. The lookup selects `<root>/overlay/mcp.toml` when present
+and otherwise `<root>/mcp.toml`; the overlay segment SHALL NOT appear in the
+logical path, so it is applied exactly once.
 
-- `.auxiliary/configuration/agentmux/overrides/mcp.toml`
+The resolved artifact is the **effective association file**, and it occupies a
+single tier in each association ladder.
 
-Supported override fields SHALL include:
+Supported override fields SHALL be:
 
 - `bundle_name`
 - `session_name`
 
-The system MAY support optional config-root override fields for cross-project
-bundle coordination.
+Fields SHALL be independently optional: a file supplying only one field SHALL
+leave the other to the remaining association tiers.
 
-#### Scenario: Ignore missing override file
+The file SHALL NOT support a configuration-root field. A file located beneath the
+configuration root cannot redirect the configuration root.
 
-- **WHEN** local override file does not exist
-- **THEN** startup continues using CLI and auto-discovery resolution
+#### Scenario: Ignore missing association file
 
-#### Scenario: Reject malformed override file
+- **WHEN** neither `<root>/overlay/mcp.toml` nor `<root>/mcp.toml` exists
+- **THEN** startup continues using the remaining association tiers
 
-- **WHEN** local override file exists but has invalid TOML or invalid fields
-- **THEN** MCP startup returns a structured bootstrap validation error
+#### Scenario: Overlay association file shadows the base
 
-### Requirement: Override Directory VCS Posture
+- **WHEN** both `<root>/overlay/mcp.toml` and `<root>/mcp.toml` exist
+- **THEN** the overlay file is the effective association file
+- **AND** the base file contributes no fields
 
-The project SHALL Git-ignore the local override directory so overrides can be
-used per worktree without leaking to shared commits.
+#### Scenario: Resolve bundle from the effective association file alone
 
-#### Scenario: Ignore local override directory in Git
+- **WHEN** no CLI or injected bundle is present
+- **AND** the effective association file supplies `bundle_name`
+- **THEN** bundle association resolves to that value
 
-- **WHEN** repository ignore rules are evaluated
-- **THEN** `.auxiliary/configuration/agentmux/overrides/` is ignored
+#### Scenario: Resolve sender from the effective association file alone
+
+- **WHEN** no CLI or injected sender is present
+- **AND** the effective association file supplies `session_name`
+- **THEN** sender association resolves to that value
+
+#### Scenario: Apply one field and defer the other
+
+- **WHEN** the effective association file supplies only `bundle_name`
+- **THEN** bundle association uses that value
+- **AND** sender association continues through its remaining tiers
+
+#### Scenario: Reject malformed association file
+
+- **WHEN** the effective association file has invalid TOML or unknown fields
+- **THEN** the fault is recorded as a startup fault with its cause
 
 ### Requirement: Bundle Configuration File Name
 
@@ -369,17 +473,31 @@ Bundle configuration SHALL be stored as:
 
 Per-bundle `bundles/<bundle-name>.json` files SHALL NOT be required.
 
+A command that resolves a requested bundle ID in order to act on it SHALL fail
+when no matching effective bundle file exists. MCP startup SHALL retain that
+condition instead, because it advertises its tool surface before any tool is
+called.
+
 #### Scenario: Load bundle from per-bundle TOML plus coders TOML
 
-- **WHEN** runtime resolves configuration defaults or explicit config path
-- **THEN** bundle lookup reads `bundles/<bundle-id>.toml`
-- **AND** coder lookup reads `coders.toml`
+- **WHEN** runtime resolves configuration defaults or an explicit configuration
+  root
+- **THEN** bundle lookup reads the effective `bundles/<bundle-id>.toml`
+- **AND** coder lookup reads the effective `coders.toml`
 
 #### Scenario: Fail when bundle file is absent
 
-- **WHEN** requested bundle ID does not have matching
+- **WHEN** a command other than `host mcp` resolves a requested bundle ID with
+  no matching effective `bundles/<bundle-id>.toml`
+- **THEN** the command returns structured `validation_unknown_bundle`
+
+#### Scenario: Retain an absent bundle file at MCP startup
+
+- **WHEN** MCP startup resolves a requested bundle ID with no matching effective
   `bundles/<bundle-id>.toml`
-- **THEN** startup returns structured `validation_unknown_bundle`
+- **THEN** the process starts and serves the protocol
+- **AND** the cause is retained and reported on invocation of a tool requiring a
+  resolved association, a loaded configuration, or relay access
 
 ### Requirement: Bundle Group Resolution
 
@@ -570,11 +688,10 @@ If selected session references unknown policy, runtime SHALL fail with
 
 ### Requirement: TUI Sender Configuration Files
 
-The runtime SHALL support global user session configuration at:
-
-- normal config path: `<config-root>/users.toml`
-- debug/testing override path:
-  `.auxiliary/configuration/agentmux/overrides/users.toml`
+The runtime SHALL support global user session configuration at relative path
+`users.toml`, resolved through the shared effective-file lookup so an
+overlay-provided file shadows the base file. Resolution SHALL NOT depend on
+build profile.
 
 Supported fields SHALL use kebab-case and include:
 
@@ -603,23 +720,17 @@ within the file.
 - **AND** `[[sessions]]` in `users.toml` contains `id = "user@GLOBAL"`
 - **THEN** runtime resolves sender identity as `user@GLOBAL`
 
+#### Scenario: Overlay users.toml shadows the base file in every build
+
+- **WHEN** `users.toml` exists under both the overlay and the base root
+- **THEN** the overlay file is used
+- **AND** the result is identical in debug and release builds
+
 #### Scenario: Reject unknown configured default session
 
 - **WHEN** operator starts TUI without selectors
 - **AND** required default keys are absent in global `users.toml`
 - **THEN** startup fails with stable validation code
-
-### Requirement: TUI Override File VCS Posture
-
-Global users local testing override file SHALL follow the existing local
-override VCS posture so per-user test defaults do not leak into shared tracked
-configuration.
-
-#### Scenario: Keep override users.toml under ignored overrides directory
-
-- **WHEN** repository ignore rules are evaluated
-- **THEN** `.auxiliary/configuration/agentmux/overrides/users.toml` is covered
-  by the existing ignored overrides path
 
 ### Requirement: Bundle Autostart Eligibility Field
 
@@ -948,4 +1059,242 @@ configuration validation with a structured validation error.
 - **THEN** relay startup fails with a structured validation error naming the
   `peers.connect-as` field
 - **AND** `agentmux check configuration` reports the same invalid artifact
+
+### Requirement: Bring-Up Association Environment Injection
+
+Configuration load SHALL stamp authoritative bring-up context into each
+coder-backed member's merged spawn environment, so a launched agent propagates it
+to its `agentmux host mcp` subprocess and association resolution consults it
+rather than inferring identity from the filesystem.
+
+The stamped context SHALL include the hosting bundle name as `AGENTMUX_BUNDLE`
+and the member id as `AGENTMUX_SESSION`, and SHALL be extensible to further
+context without redefining the mechanism.
+
+- The context SHALL be stamped only for coder-backed members; coder-less members
+  (`ui`/`pubsub`) spawn no agent and SHALL carry no injected context.
+- The stamp SHALL be upsert-if-absent: an operator-declared environment entry of
+  the same name SHALL be left untouched.
+- A blank value SHALL be treated as absent by every consumer, for both
+  resolution and any classification derived from presence.
+
+#### Scenario: Stamp context onto a coder member
+
+- **WHEN** a bundle configuration is loaded
+- **AND** a coder-backed member declares no `AGENTMUX_BUNDLE`/`AGENTMUX_SESSION`
+  environment entries
+- **THEN** the member's spawn environment includes `AGENTMUX_BUNDLE` set to the
+  hosting bundle name and `AGENTMUX_SESSION` set to the member id
+
+#### Scenario: Preserve operator-declared context
+
+- **WHEN** a coder-backed member explicitly declares an `AGENTMUX_BUNDLE`
+  environment entry
+- **THEN** configuration load leaves that entry's value untouched
+
+#### Scenario: Skip injection for coder-less members
+
+- **WHEN** a coder-less (`ui` or `pubsub`) member is loaded
+- **THEN** its spawn environment carries no injected context entry
+
+#### Scenario: Blank context value is absent at ingress
+
+- **WHEN** a context variable is present in the process environment with a blank
+  value
+- **THEN** it is normalized to absent where the environment is read
+- **AND** every consumer observes it identically as absent
+
+### Requirement: Configuration Overlay Resolution
+
+The system SHALL resolve every configuration file through a single effective-file
+lookup that consults, in order, `<root>/overlay/<path>` then `<root>/<path>`, and
+selects the first existing regular file. All relay, TUI, CLI, and preflight
+loaders SHALL use this lookup.
+
+- A malformed overlay file SHALL be a fault and SHALL NOT fall through to the
+  base file.
+- Directories of bundle definitions SHALL union by bundle identifier, with an
+  overlay entry shadowing a base entry of the same identifier.
+- Relative path-valued fields SHALL retain their existing per-field resolution
+  base. A field supplied by an overlay file SHALL resolve identically to the
+  same field supplied by the corresponding base file; the overlay directory
+  SHALL NOT become a resolution base and SHALL NOT alter any field's existing
+  base.
+- Starter configuration hydration SHALL occur only when the configuration root
+  was resolved from the XDG/home default tier. A root supplied by CLI,
+  environment, or discovery SHALL never be scaffolded, and SHALL never have an
+  overlay directory created for it.
+
+#### Scenario: Overlay file shadows base file
+
+- **WHEN** the same relative path exists under both the overlay and the base root
+- **THEN** the overlay file is used
+
+#### Scenario: Fall through to base when overlay lacks the file
+
+- **WHEN** a relative path exists only under the base root
+- **THEN** the base file is used
+
+#### Scenario: Malformed overlay file does not fall through
+
+- **WHEN** an overlay file exists but cannot be parsed
+- **THEN** the fault is reported
+- **AND** the corresponding base file is not used
+
+#### Scenario: Explicit root is never scaffolded
+
+- **WHEN** the configuration root is supplied by CLI, environment, or discovery
+- **AND** it lacks starter configuration files
+- **THEN** no starter configuration is written
+
+#### Scenario: Missing explicit root surfaces per command class
+
+- **WHEN** the configuration root is supplied explicitly and does not exist
+- **THEN** `host mcp` retains the fault and reports it at tool-invocation time
+- **AND** other commands report it immediately
+
+#### Scenario: Bundle definitions union by identifier
+
+- **WHEN** the base root defines bundles `alpha` and `beta`
+- **AND** the overlay defines bundle `beta`
+- **THEN** the effective set is `alpha` from the base and `beta` from the overlay
+
+#### Scenario: Relative paths do not rebase under the overlay
+
+- **WHEN** an overlay bundle file declares a relative member directory
+- **THEN** it resolves against the same base as the identical declaration in a
+  base bundle file
+- **AND** that field's existing resolution base is unchanged by this requirement
+
+### Requirement: Configuration Root Discovery
+
+The system SHALL support opt-in discovery of a configuration root, enabled by
+the `--discover-local-configuration` flag and disabled by default.
+
+Discovery SHALL enumerate the working directory and each of its ancestors. For
+each candidate ancestor `A`, the candidate configuration root SHALL be
+`A/.auxiliary/configuration/agentmux`. A candidate SHALL be valid when that path
+exists and is a directory. The candidate derived from the nearest ancestor SHALL
+win.
+
+- Enumeration SHALL begin at the canonicalized working directory and terminate
+  at the filesystem root.
+- Paths SHALL be canonicalized before enumeration so symbolic links resolve
+  consistently, and the selected root SHALL be reported in canonical form.
+- Discovery SHALL NOT depend on build profile, Git metadata, or package
+  manifests.
+- The selected root SHALL be reported on a diagnostic channel that is never the
+  MCP stdio stream, so a diagnostic cannot corrupt the protocol.
+
+#### Scenario: Discovery disabled by default
+
+- **WHEN** `--discover-local-configuration` is not supplied
+- **AND** an ancestor of the working directory contains
+  `.auxiliary/configuration/agentmux`
+- **THEN** it is not used
+- **AND** resolution falls through to the XDG/home default
+
+#### Scenario: Discover root from an ancestor of the working directory
+
+- **WHEN** discovery is enabled
+- **AND** the working directory is `/repo/subdir`
+- **AND** `/repo/.auxiliary/configuration/agentmux` exists and is a directory
+- **THEN** the configuration root is `/repo/.auxiliary/configuration/agentmux`
+
+#### Scenario: Nearest ancestor wins
+
+- **WHEN** discovery is enabled
+- **AND** both `/repo/.auxiliary/configuration/agentmux` and
+  `/repo/nested/.auxiliary/configuration/agentmux` exist
+- **AND** the working directory is under `/repo/nested`
+- **THEN** the configuration root derived from `/repo/nested` is selected
+
+#### Scenario: Discovery finds no candidate
+
+- **WHEN** discovery is enabled
+- **AND** no ancestor yields an existing candidate directory
+- **THEN** resolution falls through to the XDG/home default
+
+#### Scenario: Report the selected root off the protocol stream
+
+- **WHEN** discovery selects a configuration root during `host mcp` startup
+- **THEN** the selected root is reported on a diagnostic channel
+- **AND** nothing is written to the MCP stdio stream
+
+### Requirement: MCP Startup Fault Tolerance
+
+`agentmux host mcp` SHALL fail at process start only when it cannot serve the
+MCP protocol. Faults arising while constructing the operational context —
+argument interpretation, root resolution, configuration loading, association
+resolution, and runtime security posture — SHALL be retained and reported at
+tool-invocation time.
+
+Relay reachability SHALL NOT be a retained startup fault. It is evaluated per
+request at tool time and surfaces as `relay_unavailable`, and a server whose
+operational context is complete SHALL be `Ready` regardless of whether the relay
+is currently connectable.
+
+The server SHALL hold an explicit readiness state of either a ready context or a
+retained startup fault.
+
+- Process-time failure SHALL remain for faults arising before `host mcp` is
+  identifiable as the requested command, for async runtime, router, stdio, or
+  protocol serving failures, and for `--help`.
+- The server SHALL NOT proceed on partially parsed arguments, and SHALL NOT fall
+  through from malformed higher-level intent to a lower tier.
+- Protocol initialization, tool listing, tool schemas, and `help` SHALL succeed
+  regardless of readiness state.
+- Each tool request SHALL be validated on its own terms before the readiness
+  guard is consulted, so a malformed request reports its own fault.
+- The retained fault SHALL be a snapshot and SHALL NOT be re-evaluated until the
+  process restarts.
+
+#### Scenario: Start green when the bundle is unknown
+
+- **WHEN** bundle association resolves to a bundle with no configured definition
+- **THEN** MCP startup succeeds
+- **AND** the fault is retained
+
+#### Scenario: Start green when configuration is malformed
+
+- **WHEN** a required configuration file cannot be parsed
+- **THEN** MCP startup succeeds
+- **AND** the fault is retained
+
+#### Scenario: Start green when startup arguments are invalid
+
+- **WHEN** `host mcp` is identifiable but its arguments are invalid
+- **THEN** MCP startup succeeds
+- **AND** the fault is retained
+- **AND** no partially parsed argument value is used
+
+#### Scenario: Advertise tools regardless of readiness
+
+- **WHEN** the server holds a retained startup fault
+- **THEN** protocol initialization, tool listing, and tool schemas succeed
+- **AND** the advertised tool inventory is unchanged
+
+#### Scenario: Report the retained cause on tool invocation
+
+- **WHEN** the server holds a retained startup fault
+- **AND** a well-formed request is received for a tool that requires a resolved
+  association, a loaded configuration, or relay access
+- **THEN** the response is a structured error carrying the retained cause
+
+#### Scenario: Tools needing no operational context still succeed
+
+- **WHEN** the server holds a retained startup fault
+- **AND** a well-formed request is received for a tool requiring none of those
+- **THEN** the tool succeeds
+
+#### Scenario: Malformed request reports its own fault
+
+- **WHEN** the server holds a retained startup fault
+- **AND** a tool request fails its own validation
+- **THEN** the response reports the request's fault rather than the retained one
+
+#### Scenario: Fail process start when the protocol cannot be served
+
+- **WHEN** stdio transport or protocol router initialization fails
+- **THEN** MCP process startup fails
 

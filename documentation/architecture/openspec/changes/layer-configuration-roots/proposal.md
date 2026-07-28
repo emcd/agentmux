@@ -1,0 +1,131 @@
+## Why
+
+Configuration layering is currently fixed at two layers with a hardcoded shape:
+a root, and an `overlay/` subdirectory beneath it. That shape was chosen when
+configuration was expected to live inside the project being worked on, and it
+does not survive contact with how Agentmux is actually deployed.
+
+Every file under a configuration root is maintainer-specific. Policies encode
+one operator's lane topology, `users.toml` names a person, and `coders.toml`
+records which coders that developer has installed. None of it belongs in the
+Agentmux repository, so configuration moves out of the repository entirely, into
+a separately managed directory. Once it lives outside a project, the "overlay
+beneath the root" arrangement has nothing to anchor to, and the layering an
+operator actually wants — a shared base plus an R&D or production variant — is
+not expressible as one nested pair.
+
+The number two was never derived from anything. Making the layer list explicit
+at the invocation site replaces a fixed arrangement with one the operator
+declares, and states the layering where a reader can see it.
+
+## What Changes
+
+- **BREAKING** Accept `--configuration-directory` repeatably. Each occurrence
+  appends a layer; the resulting list is searched in order, first match winning.
+- **BREAKING** Remove the `overlay/` subdirectory convention. A layer is an
+  ordinary configuration root, and layering is expressed only by the list.
+- **BREAKING** `AGENTMUX_CONFIGURATION_DIRECTORY` accepts a `:`-separated list
+  with the same ordering. Paths containing `:` are unrepresentable through the
+  environment; the repeatable flag is the escape hatch and this limitation is
+  documented rather than worked around.
+- An explicitly supplied layer list is **closed**: it replaces the tier stack
+  rather than extending it, so no root outside the list is consulted for any
+  file. Closedness governs which roots are searched, not what absence means —
+  each artifact keeps its own absence semantics, so optional files stay
+  optional.
+- Empty layer elements are rejected, from an empty flag value or from a
+  leading, trailing, or doubled separator in the environment form. An empty
+  element must never mean the working directory, which would silently admit
+  configuration from wherever a process was started.
+- Bundle definitions continue to union by identifier, generalized from two
+  layers to N, nearest layer winning per identifier.
+- The configuration-root watcher observes every supplied layer and reconciles
+  against their effective union.
+- **BREAKING** Remove `--discover-local-configuration`. See Open Decisions.
+
+## Capabilities
+
+### New Capabilities
+
+None. This changes how an existing capability resolves, not what Agentmux can
+do.
+
+### Modified Capabilities
+
+- `runtime-bootstrap`: configuration root resolution becomes an ordered layer
+  list; the overlay subdirectory is removed from effective-file resolution,
+  bundle-definition union, association-file lookup, and TUI sender
+  configuration; the watcher observes N layers. The two VCS-posture requirements
+  are removed by `redesign-configuration-resolution` rather than here, since
+  their premise died with the decision to keep configuration out of the
+  repository.
+- `cli-surface`: `--configuration-directory` becomes repeatable, and
+  `--discover-local-configuration` is removed.
+- `bundle-lifecycle`: overlay-specific bundle resolution contracts.
+- `ui-surface-configuration`: overlay-specific `ui.toml` resolution contracts.
+
+**The delta set here is deliberately incomplete.** Deltas exist for the
+requirements that carry the design's load — root resolution, layer resolution,
+and the command-line surface. `bundle-lifecycle`, `ui-surface-configuration`,
+and the remaining overlay-bearing requirements in `runtime-bootstrap` and
+`cli-surface` are not yet drafted. Post-archive, overlay contracts span four
+specs (roughly 30 references in `runtime-bootstrap`, 13 in `bundle-lifecycle`,
+8 each in `cli-surface` and `ui-surface-configuration`), and every one of those
+requirements needs a full MODIFIED delta before implementation.
+
+They are deferred rather than drafted now because they must be authored from
+live text, and that text does not exist until
+`redesign-configuration-resolution` archives. Drafting them from that change's
+delta text would repeat the double-indirection that task 0 exists to guard
+against, on six files instead of two. Completing them is task 0.3, and the
+change cannot be implemented until it is done.
+
+`AGENTMUX_CONFIGURATION_DIRECTORY` is specified by `runtime-bootstrap` rather
+than `environment-variables`, which covers variables configured *for* spawned
+children.
+
+`mcp-tool-surface` is **not** modified. Credential administration
+(`new peer --write-config`, `change psk --write-config`) writes session
+pre-shared keys under the **state root**, not configuration, so layering does
+not reach it and no requirement about it changes. See design.md for why the flag
+name misleads.
+
+## Impact
+
+**Sequencing.** This change depends on `redesign-configuration-resolution`
+having been archived first. That change's deltas rewrite most of the same
+requirements, so authoring these deltas against today's live text would replace
+the wrong baseline. Every MODIFIED delta here must be written from the
+post-archive text.
+
+**Code.** `configuration_root` appears 319 times across 37 files, and 77
+function signatures take `configuration_root: &Path`. Those become a
+`ConfigurationRoots` value. The change is wide but mechanical and fully
+compiler-checked; the abstraction introduced by
+`redesign-configuration-resolution` generalizes rather than being replaced.
+`effective_configuration_path` goes from first-of-two to first-of-N,
+`effective_bundle_definitions` unions N directories, and the watcher already
+fingerprints by supplying layer, which is exactly what N-way reconciliation
+needs.
+
+**Operators.** Any invocation relying on an `overlay/` subdirectory must move
+that directory into an explicit layer. There is no compatibility shim.
+
+**Documentation.** With no configuration committed anywhere in the repository,
+maintainer documentation becomes the only description of the layer layout, and
+must carry worked examples.
+
+## Open Decisions
+
+- **Removing `--discover-local-configuration`.** It was added by
+  `redesign-configuration-resolution` to find a configuration root inside the
+  project being worked on. Configuration is moving out of projects, which
+  removes the case it was built for, and no replacement consumer has been
+  identified. An explicit layer list also covers the deployments discovery was
+  meant to serve, with the target named rather than inferred. Recommended for
+  removal; retaining it means carrying a second, inferential answer to the
+  question this change makes explicit.
+- **Tombstones are out of scope.** N layers make "remove what a lower layer
+  defines" more likely to be wanted than two layers did, but no use case exists
+  today, and shadowing may already suffice. Tracked separately rather than
+  guessed at here.
