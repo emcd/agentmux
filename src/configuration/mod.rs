@@ -36,6 +36,13 @@ pub(super) const BUNDLES_DIRECTORY: &str = "bundles";
 pub(super) const BUNDLE_EXTENSION: &str = "toml";
 pub(super) const USERS_FILE: &str = "users.toml";
 pub(super) const UI_FILE: &str = "ui.toml";
+/// Association overrides (`mcp.toml`), naming the bundle and session an MCP
+/// server binds to.
+///
+/// Declared here with the other artifact names rather than beside its loader:
+/// the source inventory is built from this list, and a name held somewhere else
+/// is a name the inventory silently omits.
+pub(super) const ASSOCIATION_FILE: &str = "mcp.toml";
 pub(super) const POLICIES_FILE: &str = "policies.toml";
 pub(super) const RELAY_FILE: &str = "relay.toml";
 pub(super) const SESSION_ID_LENGTH_MAX: usize = 31;

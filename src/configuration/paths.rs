@@ -4,8 +4,8 @@ use std::{
 };
 
 use super::{
-    BUNDLE_EXTENSION, BUNDLES_DIRECTORY, CODERS_FILE, ConfigurationRoots, POLICIES_FILE,
-    RELAY_FILE, UI_FILE, USERS_FILE,
+    ASSOCIATION_FILE, BUNDLE_EXTENSION, BUNDLES_DIRECTORY, CODERS_FILE, ConfigurationRoots,
+    POLICIES_FILE, RELAY_FILE, UI_FILE, USERS_FILE,
 };
 
 /// The layer-supplied file for a path relative to the configuration roots: the
@@ -134,20 +134,35 @@ pub fn relay_configuration_path(roots: &ConfigurationRoots) -> PathBuf {
     effective_configuration_path(roots, RELAY_FILE)
 }
 
+/// Every root-level configuration artifact resolved through the layer list.
+///
+/// This is the inventory the source report enumerates, so an artifact missing
+/// from it is one whose shadowing no surface exposes. `mcp.toml` earns its place
+/// on exactly that ground: it selects the bundle and session an MCP server binds
+/// to, so a shadowed copy silently redirects an association.
+const ROOT_CONFIGURATION_ARTIFACTS: [&str; 6] = [
+    ASSOCIATION_FILE,
+    CODERS_FILE,
+    POLICIES_FILE,
+    RELAY_FILE,
+    UI_FILE,
+    USERS_FILE,
+];
+
 /// The root-level configuration artifacts some layer actually supplies, each
 /// paired with the layer-relative name identifying it, in a stable order.
 ///
-/// Only supplied artifacts appear. `users.toml` and `ui.toml` are legitimately
-/// absent in ordinary deployments, so reporting a synthesized base-layer path
-/// for every name would pad the report with files that do not exist and bury the
-/// ones that do. Bundle definitions are enumerated by
+/// Only supplied artifacts appear. `mcp.toml`, `users.toml`, and `ui.toml` are
+/// legitimately absent in ordinary deployments, so reporting a synthesized
+/// base-layer path for every name would pad the report with files that do not
+/// exist and bury the ones that do. Bundle definitions are enumerated by
 /// [`effective_bundle_definitions`] instead, since they union a directory rather
 /// than resolve a single name.
 #[must_use]
 pub fn supplied_root_configuration_sources(
     roots: &ConfigurationRoots,
 ) -> Vec<(&'static str, PathBuf)> {
-    [CODERS_FILE, POLICIES_FILE, RELAY_FILE, UI_FILE, USERS_FILE]
+    ROOT_CONFIGURATION_ARTIFACTS
         .into_iter()
         .filter_map(|name| supplied_configuration_path(roots, name).map(|path| (name, path)))
         .collect()

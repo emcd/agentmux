@@ -386,6 +386,103 @@ fn check_configuration_reports_the_layer_that_supplied_each_artifact() {
 }
 
 #[test]
+fn check_configuration_reports_the_layer_that_supplied_the_association_file() {
+    // `mcp.toml` selects the bundle and session an MCP server binds to, so a
+    // shadowed copy silently redirects an association — the most consequential
+    // shadowing this report exists to expose, and the one no other surface shows.
+    let temporary = TempDir::new().expect("temporary");
+    let (config_root, state_root) = config_and_state(&temporary);
+    write_bundle_configuration(&config_root, "alpha", None, &["a"]);
+    fs::write(config_root.join("mcp.toml"), "bundle_name = \"alpha\"\n")
+        .expect("write base mcp.toml");
+    let override_layer = temporary.path().join("override");
+    fs::create_dir_all(&override_layer).expect("create override layer");
+    fs::write(
+        override_layer.join("mcp.toml"),
+        "bundle_name = \"alpha\"\nsession_name = \"a\"\n",
+    )
+    .expect("write override mcp.toml");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "check",
+            "configuration",
+            "--configuration-directory",
+            override_layer.to_str().expect("override utf8"),
+            "--configuration-directory",
+            config_root.to_str().expect("config root utf8"),
+            "--state-directory",
+            state_root.to_str().expect("state root utf8"),
+        ])
+        .output()
+        .expect("run agentmux check configuration");
+
+    assert!(
+        output.status.success(),
+        "both copies are valid: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&format!(
+            "source mcp.toml: {}",
+            override_layer.join("mcp.toml").display()
+        )),
+        "the association file must be reported against the layer supplying it: {stdout}"
+    );
+    assert!(
+        !stdout.contains(
+            config_root
+                .join("mcp.toml")
+                .to_str()
+                .expect("shadowed utf8")
+        ),
+        "the shadowed association file must not appear as a source: {stdout}"
+    );
+}
+
+#[test]
+fn check_configuration_reports_sources_before_rejecting_a_missing_layer() {
+    // The report is worth most on exactly this run: every artifact resolves from
+    // the layers beneath the missing one, which is the diagnosis, and the error
+    // then names the layer responsible. Reporting after layer validation would
+    // blank it here.
+    let temporary = TempDir::new().expect("temporary");
+    let (config_root, state_root) = config_and_state(&temporary);
+    write_bundle_configuration(&config_root, "alpha", None, &["a"]);
+    let absent_override = temporary.path().join("override-typo");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "check",
+            "configuration",
+            "--configuration-directory",
+            absent_override.to_str().expect("override utf8"),
+            "--configuration-directory",
+            config_root.to_str().expect("config root utf8"),
+            "--state-directory",
+            state_root.to_str().expect("state root utf8"),
+        ])
+        .output()
+        .expect("run agentmux check configuration");
+
+    assert!(!output.status.success(), "a missing layer must still fault");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&format!(
+            "source coders.toml: {}",
+            config_root.join("coders.toml").display()
+        )),
+        "sources must be reported before the layer-existence check: {stdout}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("validation_configuration_root_absent"),
+        "the layer fault must still be reported: {stderr}"
+    );
+}
+
+#[test]
 fn check_configuration_reports_sources_ahead_of_a_validation_failure() {
     // Validation is fail-fast, so a report interleaved with it would stop at the
     // first invalid artifact — the run where the whole picture is most wanted.

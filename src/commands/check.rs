@@ -61,25 +61,22 @@ fn check_configuration(arguments: &[String]) -> Result<(), RuntimeError> {
         .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
     let roots = shared::resolve_roots(&parsed.runtime, &current_directory)?;
 
-    // A supplied layer that does not exist is reported here rather than absorbed.
-    // Every other command reaches this check through
-    // `ensure_starter_configuration_layout`; pre-flight cannot, because that path
-    // scaffolds and this command is read-only. Without it a typo'd override layer
-    // validates clean from the layers below it — the silent demotion the closed
-    // list exists to prevent, and precisely the misconfiguration an operator runs
-    // pre-flight to catch.
-    validate_supplied_configuration_layers(&roots)?;
-
-    // Discovery is a lookup, not validation, so it runs ahead of both and serves
-    // the source report and the validation loop from one enumeration. An absent
-    // bundles directory yields no entries rather than an error, mirroring the
-    // relay's own discovery.
+    // Discovery is a lookup, not validation, so it runs ahead of everything and
+    // serves the source report and the validation loop from one enumeration. An
+    // absent bundles directory yields no entries rather than an error, mirroring
+    // the relay's own discovery.
     let bundle_definitions = effective_bundle_definitions(&roots.configuration_roots);
     let bundle_names: Vec<String> = match parsed.bundle_id.as_deref() {
         Some(bundle_id) => vec![bundle_id.to_string()],
         None => bundle_definitions.keys().cloned().collect(),
     };
 
+    // Ahead of every validation, including the layer-existence check below. A
+    // missing override layer is the case where the report is worth most: it
+    // shows every artifact resolving from the layers beneath, which is the
+    // diagnosis the operator needs, and the error that follows names the layer
+    // responsible. Withholding it there would blank the report on one of the few
+    // runs that motivate having one.
     if !parsed.quiet {
         report_configuration_sources(
             &roots.configuration_roots,
@@ -88,6 +85,15 @@ fn check_configuration(arguments: &[String]) -> Result<(), RuntimeError> {
             &current_directory,
         );
     }
+
+    // A supplied layer that does not exist is reported rather than absorbed.
+    // Every other command reaches this check through
+    // `ensure_starter_configuration_layout`; pre-flight cannot, because that path
+    // scaffolds and this command is read-only. Without it a typo'd override layer
+    // validates clean from the layers below it — the silent demotion the closed
+    // list exists to prevent, and precisely the misconfiguration an operator runs
+    // pre-flight to catch.
+    validate_supplied_configuration_layers(&roots)?;
 
     // Validate relay-level configuration before bundle validation, so a
     // malformed, unknown-field, wrong-type, or invalid-peer relay.toml is
