@@ -50,13 +50,18 @@
 ## 5. Source introspection
 
 - [ ] 5.1 Report the physical file supplying each resolved artifact from
-  `agentmux check configuration`, so a shadowed copy is distinguishable from the
-  copy in effect
-- [ ] 5.2 Decide whether that reporting is default output or behind a flag. The
-  command's output is already the widest surface in `cli-surface`, so enlarging
-  it unconditionally may be the wrong default
-- [ ] 5.3 Report it whether or not validation succeeds, since the case it exists
-  for is configuration that is valid and inert rather than broken
+  `agentmux check configuration` as default output, so a shadowed copy is
+  distinguishable from the copy in effect. Report only artifacts a layer
+  actually supplies, and emit physical paths rather than the relative forms a
+  layer list may carry
+- [ ] 5.2 Accept `-q`/`--quiet` on `check configuration`, suppressing source
+  reporting, per-bundle confirmations, and the summary while leaving the exit
+  code and any failure report
+- [ ] 5.3 Resolve and report sources before validation runs, so a fail-fast
+  failure does not truncate the report on the run that most needs it
+- [ ] 5.4 Write sources to stdout and failures to stderr, flushing stdout before
+  any failure. Without the flush a piped transcript can show the failure ahead
+  of the report explaining it, since stdout is block-buffered when piped
 
 ## 6. Discovery removal
 

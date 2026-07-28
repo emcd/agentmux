@@ -120,8 +120,8 @@ must carry worked examples.
 - **Configuration sources are introspectable through `agentmux check
   configuration`.** With an arbitrary layer list an operator cannot otherwise
   tell which copy of an artifact won, and a shadowed file can be present,
-  valid, and entirely inert. Whether it is default output or behind a flag is
-  left to implementation.
+  valid, and entirely inert. It is default output, suppressed by `-q`/`--quiet`,
+  and emitted on standard output before validation runs. See design.md.
 
 ## Out of Scope
 
