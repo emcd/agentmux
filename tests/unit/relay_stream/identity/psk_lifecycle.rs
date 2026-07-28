@@ -69,6 +69,103 @@ fn change_psk_rotates_credential() {
     );
 }
 
+// Layering must not reach credential administration. `--write-config` names the
+// operator's intent — write the credential down rather than return it — not the
+// tree it lands in: a session pre-shared key belongs under the state root.
+// Giving it layer semantics would put a secret into a tree that is shared,
+// layered, and plausibly committed, so this pins the destination under a
+// multi-layer list rather than leaving it to the single-layer case the other
+// tests exercise.
+#[test]
+fn change_psk_config_writes_under_the_state_root_not_a_configuration_layer() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "ident_change_layered";
+    let base = write_identity_configuration(&temporary, bundle_name);
+    let override_layer = temporary.path().join("override");
+    std::fs::create_dir_all(&override_layer).expect("create override layer");
+    let configuration_roots = ConfigurationRoots::from_elements([
+        override_layer.clone(),
+        base.base_layer().to_path_buf(),
+    ])
+    .expect("two-layer configuration list");
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let principal_id = format!("alpha@{bundle_name}");
+
+    let original_psk = register_peer(
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name,
+        &principal_id,
+        None,
+    );
+    // Snapshot after registration so the comparison isolates the rotation.
+    let layers_before = layer_file_inventory(&configuration_roots);
+
+    let rotation = operator_request(
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name,
+        json!({
+            "operation": "change_psk",
+            "principal_id": principal_id,
+            "destination": {"kind": "config"},
+        }),
+    );
+    assert_eq!(
+        rotation["response"]["kind"], "change_psk",
+        "change psk config rejected: {rotation:?}"
+    );
+
+    // The positive half, and the one that carries the proof: the credential
+    // landed under the state root. An implementation that resolved the
+    // destination through a configuration layer would fail here, not merely on
+    // the inventory comparison below.
+    let canonical = session_identity_psk_path(&state_root, bundle_name, "alpha");
+    assert_eq!(
+        rotation["response"]["written_path"],
+        canonical.to_string_lossy().as_ref(),
+        "a layered configuration list must not move the credential destination"
+    );
+    let rotated_psk = std::fs::read_to_string(&canonical).expect("read rotated credential");
+    assert_ne!(rotated_psk, original_psk, "rotation must mint a new psk");
+
+    assert_eq!(
+        layer_file_inventory(&configuration_roots),
+        layers_before,
+        "credential administration must write nothing into any configuration layer"
+    );
+}
+
+/// Every file under every configuration layer, for before/after comparison.
+///
+/// A whole-tree inventory rather than a search for `.psk` files: the property is
+/// that credential administration writes nothing into a configuration layer at
+/// all, and a check keyed to one filename would miss a credential written under
+/// another.
+fn layer_file_inventory(roots: &ConfigurationRoots) -> Vec<PathBuf> {
+    fn collect(directory: &std::path::Path, found: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect(&path, found);
+            } else {
+                found.push(path);
+            }
+        }
+    }
+
+    let mut found = Vec::new();
+    for layer in roots.layers() {
+        collect(layer, &mut found);
+    }
+    found.sort();
+    found
+}
+
 // `change psk` with the `config` destination writes the rotated PSK to the
 // session's relay-owned canonical `identity.psk` (mode 0600), omits it from the
 // response, and the rotated credential authenticates while the old one is

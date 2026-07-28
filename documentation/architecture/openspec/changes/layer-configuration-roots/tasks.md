@@ -91,7 +91,7 @@
 - [ ] 8.2 `openspec validate --all --strict`
 - [x] 8.3 Prove the ordering rule with a test asserting the first layer wins,
   and a second asserting a supplied list never reaches the XDG default
-- [ ] 8.4 Prove credential administration is untouched by layering: a
+- [x] 8.4 Prove credential administration is untouched by layering: a
   `--write-config` operation under a multi-layer list still writes under the
   state root and writes nothing into any configuration layer
 - [x] 8.5 Prove introspection identifies the supplying layer for an artifact
