@@ -301,6 +301,12 @@ impl McpServer {
     /// canonical unassociated-server error so the failure precedes any relay
     /// contact rather than surfacing later as a stream fault.
     pub(super) fn require_association(&self) -> Result<(), rmcp::ErrorData> {
+        // Readiness first. A retained fault outranks association state, and
+        // checking it here rather than at the relay boundary keeps it ahead of
+        // the configuration I/O some handlers perform on the way there — a
+        // loader error would otherwise surface first and mask the fault that
+        // caused it.
+        self.require_ready()?;
         if self.is_associated() {
             Ok(())
         } else {
@@ -313,6 +319,7 @@ impl McpServer {
     /// with the same canonical error. Association requires both the sender session
     /// and a bundle, so a partial configuration is unassociated by definition.
     pub(super) fn require_associated_sender_session(&self) -> Result<String, rmcp::ErrorData> {
+        self.require_ready()?;
         match (
             self.state.configuration.sender_session.as_ref(),
             self.state.configuration.associated_bundle_paths.as_ref(),

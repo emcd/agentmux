@@ -14,6 +14,39 @@ fn list_principals_call(args: Map<String, Value>) -> Map<String, Value> {
     ])
 }
 
+// A retained startup fault must outrank a configuration load performed on the
+// way to the relay.
+//
+// The bundle file is corrupted after startup, so the tool-time load fails. With
+// readiness checked only at the relay boundary, that loader error surfaces first
+// and reports a broken bundle — while the actual defect is the fault startup
+// already recorded, and the operator is sent to repair the wrong thing. The
+// corruption is what gives this teeth: on a server whose configuration still
+// loads cleanly, both orderings report the fault and the ordering is invisible.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_retained_startup_fault_outranks_a_failing_configuration_load() {
+    let runtime = TestRuntime::create();
+    let mut harness = McpHarness::spawn_with_retained_fault(&runtime).await;
+
+    std::fs::write(
+        runtime
+            .config_root
+            .join("bundles")
+            .join(format!("{BUNDLE_NAME}.toml")),
+        "format-version = 1\nnot-a-key = [\n",
+    )
+    .expect("corrupt bundle configuration after startup");
+
+    let response = harness
+        .call_tool(2, "list", list_principals_call(Map::new()))
+        .await;
+
+    assert_eq!(
+        response["error"]["data"]["details"]["reason"], "startup_fault",
+        "the retained fault must outrank the loader error it precedes: {response}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_catalog_contains_list_sessions_send_look_and_raww() {
     let runtime = TestRuntime::create();

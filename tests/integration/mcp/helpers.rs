@@ -316,6 +316,49 @@ impl McpHarness {
         harness
     }
 
+    /// Spawns a fully associated MCP server carrying a retained startup fault.
+    ///
+    /// The fault is produced *after* roots and association resolve, by pointing
+    /// the inscriptions directory at a path beneath a regular file so the sink
+    /// cannot be created. That combination — roots present, association
+    /// complete, readiness `Unavailable` — is the one a gate on association
+    /// alone lets through, so it is the shape worth building a harness for.
+    pub(crate) async fn spawn_with_retained_fault(runtime: &TestRuntime) -> Self {
+        let blocker = runtime.root.join("inscriptions-blocker");
+        std::fs::write(&blocker, b"not a directory").expect("write inscriptions blocker");
+
+        let mut command = Command::new(env!("CARGO_BIN_EXE_agentmux"));
+        command
+            .arg("host")
+            .arg("mcp")
+            .arg("--bundle")
+            .arg(BUNDLE_NAME)
+            .arg("--session-name")
+            .arg(SENDER_SESSION)
+            .arg("--configuration-directory")
+            .arg(&runtime.config_root)
+            .arg("--state-directory")
+            .arg(&runtime.state_root)
+            .arg("--inscriptions-directory")
+            .arg(blocker.join("under-a-file"))
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        strip_bring_up_context(&mut command);
+
+        let mut child = command.spawn().expect("spawn faulted agentmux host mcp");
+        let stdin = child.stdin.take().expect("take mcp stdin");
+        let stdout = child.stdout.take().expect("take mcp stdout");
+        let mut harness = Self {
+            child,
+            stdin,
+            stdout: tokio::io::BufReader::new(stdout),
+            instructions: String::new(),
+        };
+        harness.initialize().await;
+        harness
+    }
+
     /// Spawns a relay-wide (unassociated) MCP server: no `--bundle` or
     /// `--session-name`, so it carries no sender session and holds no relay
     /// stream. Used to prove relay-backed paths surface a typed
