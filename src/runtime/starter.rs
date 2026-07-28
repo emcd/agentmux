@@ -42,6 +42,40 @@ const RELAY_TEMPLATE: &str = include_str!(concat!(
     "/data/configuration/relay.toml"
 ));
 
+/// Validates that every operator-supplied configuration layer exists.
+///
+/// Read-only, which is what lets the pre-flight command share it with the
+/// hydrating path: `check configuration` must validate the same layer list the
+/// relay would load without scaffolding anything, and it is the one command that
+/// cannot call [`ensure_starter_configuration_layout`] for exactly that reason.
+///
+/// Every supplied layer is checked, not just one. A typo in any of them would
+/// otherwise resolve silently from the layers around it, which is the demotion
+/// naming a root exists to prevent — and it stays silent through enumeration,
+/// since an unreadable bundles directory contributes nothing rather than
+/// faulting.
+///
+/// A defaulted list is exempt: that root is the one hydration is permitted to
+/// create.
+///
+/// # Errors
+///
+/// Returns `RuntimeError` when a supplied layer does not exist.
+pub fn validate_supplied_configuration_layers(roots: &RuntimeRoots) -> Result<(), RuntimeError> {
+    if roots.configuration_root_source.permits_hydration() {
+        return Ok(());
+    }
+    for layer in roots.configuration_roots.layers() {
+        if !layer.is_dir() {
+            return Err(RuntimeError::validation(
+                "validation_configuration_root_absent",
+                format!("configuration layer does not exist: {}", layer.display()),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Ensures starter configuration files exist without overwriting user config.
 ///
 /// Hydration applies only to a layer list resolved from the default tier, which
@@ -56,19 +90,9 @@ const RELAY_TEMPLATE: &str = include_str!(concat!(
 /// Returns `RuntimeError` when directories or template files cannot be created,
 /// or when a supplied layer does not exist.
 pub fn ensure_starter_configuration_layout(roots: &RuntimeRoots) -> Result<(), RuntimeError> {
+    validate_supplied_configuration_layers(roots)?;
     let configuration_roots = &roots.configuration_roots;
     if !roots.configuration_root_source.permits_hydration() {
-        // Every supplied layer, not just one: a typo in any of them would
-        // otherwise resolve silently from the layers around it, which is the
-        // demotion that naming a root exists to prevent.
-        for layer in configuration_roots.layers() {
-            if !layer.is_dir() {
-                return Err(RuntimeError::validation(
-                    "validation_configuration_root_absent",
-                    format!("configuration layer does not exist: {}", layer.display()),
-                ));
-            }
-        }
         return Ok(());
     }
     // Only a defaulted list reaches here, and a defaulted list is a single

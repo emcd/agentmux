@@ -16,7 +16,7 @@ use crate::{
         effective_bundle_definitions, load_ui_configuration,
     },
     relay::{RelayError, load_relay_runtime_configuration, preflight_bundle_configuration},
-    runtime::error::RuntimeError,
+    runtime::{error::RuntimeError, starter::validate_supplied_configuration_layers},
 };
 
 use super::{CheckArguments, shared};
@@ -34,6 +34,15 @@ pub(super) fn run_agentmux_check(arguments: &[String]) -> Result<(), RuntimeErro
     let current_directory = env::current_dir()
         .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
     let roots = shared::resolve_roots(&parsed.runtime, &current_directory)?;
+
+    // A supplied layer that does not exist is reported here rather than absorbed.
+    // Every other command reaches this check through
+    // `ensure_starter_configuration_layout`; pre-flight cannot, because that path
+    // scaffolds and this command is read-only. Without it a typo'd override layer
+    // validates clean from the layers below it — the silent demotion the closed
+    // list exists to prevent, and precisely the misconfiguration an operator runs
+    // pre-flight to catch.
+    validate_supplied_configuration_layers(&roots)?;
 
     // Validate relay-level configuration before bundle discovery, so a malformed,
     // unknown-field, wrong-type, or invalid-peer relay.toml is reported even when

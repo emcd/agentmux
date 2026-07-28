@@ -340,6 +340,65 @@ fn configuration_root_resolves_from_environment_when_no_flag() {
 }
 
 #[test]
+fn a_supplied_layer_list_never_reaches_the_xdg_default() {
+    // Closedness. A supplied list replaces the tier stack rather than extending
+    // it, so a typo names a root that does not exist rather than silently
+    // resolving the operator's real configuration from the tier below — the
+    // demotion that naming a root exists to prevent.
+    clear_configuration_environment();
+    unsafe {
+        std::env::set_var("XDG_CONFIG_HOME", "/xdg");
+    }
+
+    let mut overrides = unnamed_configuration_overrides();
+    overrides.configuration_layers = vec!["/typo'd".into()];
+    let roots = RuntimeRoots::resolve(&overrides).expect("roots should resolve");
+
+    assert_eq!(
+        roots.configuration_roots.layers(),
+        [PathBuf::from("/typo'd")],
+        "a supplied list must not be extended by the default tier"
+    );
+}
+
+#[test]
+fn a_supplied_environment_list_never_reaches_the_xdg_default() {
+    clear_configuration_environment();
+    unsafe {
+        std::env::set_var("AGENTMUX_CONFIGURATION_DIRECTORY", "/rnd:/base");
+        std::env::set_var("XDG_CONFIG_HOME", "/xdg");
+    }
+
+    let roots =
+        RuntimeRoots::resolve(&unnamed_configuration_overrides()).expect("roots should resolve");
+
+    assert_eq!(
+        roots.configuration_roots.layers(),
+        [PathBuf::from("/rnd"), PathBuf::from("/base")],
+        "a supplied list must not be extended by the default tier"
+    );
+}
+
+#[test]
+fn an_empty_layer_element_is_rejected_at_resolution() {
+    // The classic search-path trap: an empty element read as the working
+    // directory would admit configuration from wherever a process was started.
+    clear_configuration_environment();
+    unsafe {
+        std::env::set_var("AGENTMUX_CONFIGURATION_DIRECTORY", "/rnd::/base");
+    }
+
+    let error = RuntimeRoots::resolve(&unnamed_configuration_overrides())
+        .expect_err("an empty element must fault rather than contribute a layer");
+    assert!(
+        error
+            .to_string()
+            .contains("validation_invalid_configuration_layers"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 fn explicit_flag_outranks_environment() {
     clear_configuration_environment();
     unsafe {
