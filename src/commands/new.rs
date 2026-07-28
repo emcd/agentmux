@@ -5,7 +5,7 @@ use serde_json::json;
 use crate::{
     relay::{RelayRequest, RelayResponse, request_relay},
     runtime::{
-        association::WorkspaceContext, error::RuntimeError, paths::RelayRuntimePaths,
+        error::RuntimeError, paths::RelayRuntimePaths,
         starter::ensure_starter_configuration_layout, tui_session::resolve_tui_session_identity,
     },
 };
@@ -24,8 +24,7 @@ pub(super) fn run_agentmux_new(arguments: &[String]) -> Result<(), RuntimeError>
     let parsed = parse_new_arguments(arguments)?;
     let current_directory = env::current_dir()
         .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
-    let workspace = WorkspaceContext::discover(&current_directory)?;
-    let roots = shared::resolve_roots(&parsed.runtime, &workspace)?;
+    let roots = shared::resolve_roots(&parsed.runtime, &current_directory)?;
     ensure_starter_configuration_layout(&roots)?;
     let resolved_session = resolve_tui_session_identity(
         &roots.configuration_root,

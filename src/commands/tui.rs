@@ -10,7 +10,6 @@ use std::{
 use crate::{
     configuration::load_bundle_group_memberships,
     runtime::{
-        association::WorkspaceContext,
         bootstrap::{BootstrapOptions, SpawnedRelay, bootstrap_relay, resolve_relay_program},
         error::RuntimeError,
         paths::{RelayRuntimePaths, RuntimeRoots},
@@ -33,8 +32,7 @@ pub(super) fn run_agentmux_tui(arguments: &[String]) -> Result<(), RuntimeError>
     let parsed = parse_tui_arguments(arguments)?;
     let current_directory = env::current_dir()
         .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
-    let workspace = WorkspaceContext::discover(&current_directory)?;
-    let roots = shared::resolve_roots(&parsed.runtime, &workspace)?;
+    let roots = shared::resolve_roots(&parsed.runtime, &current_directory)?;
     ensure_starter_configuration_layout(&roots)?;
     // The interactive TUI does not require a default bundle to launch: a fresh
     // install ships no `default-bundle` (and the example bundle is empty), so an

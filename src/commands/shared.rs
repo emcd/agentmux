@@ -7,9 +7,8 @@ use crate::{
     configuration::{BundleGroupMembership, ConfigurationError, RESERVED_GROUP_ALL},
     relay::{CredentialDestination, RelayError},
     runtime::{
-        association::WorkspaceContext,
         error::RuntimeError,
-        paths::{RuntimeRootOverrides, RuntimeRoots},
+        paths::{RuntimeRootOverrides, RuntimeRoots, repository_checkout_root},
     },
 };
 
@@ -68,16 +67,18 @@ pub(super) fn parse_runtime_flag(
 /// Roots resolve first, and the association file is read from the resolved root.
 pub(super) fn resolve_roots(
     runtime: &RuntimeArguments,
-    workspace: &WorkspaceContext,
+    current_directory: &Path,
 ) -> Result<RuntimeRoots, RuntimeError> {
     RuntimeRoots::resolve(&RuntimeRootOverrides {
         configuration_root: runtime.configuration_root.clone(),
         state_root: runtime.state_root.clone(),
         inscriptions_root: runtime.inscriptions_root.clone(),
+        // An explicit --repository-root is operator intent and goes through
+        // unprobed; only its absence consults the checkout resolver.
         repository_root: runtime
             .repository_root
             .clone()
-            .or_else(|| workspace.debug_repository_root()),
+            .or_else(|| repository_checkout_root(current_directory)),
         discover_local_configuration: runtime.discover_local_configuration,
     })
 }

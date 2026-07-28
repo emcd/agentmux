@@ -225,6 +225,27 @@ coexistence failure this change defers. Association's use of Git is therefore
 removed here; state provenance's use of Git is retained and removed by the
 runtime-instance work that replaces it.
 
+Retaining it also means reducing it to one answer. The probe and the common-dir
+lookup were not two implementations of one rule; they were two rules, and they
+disagree wherever it matters most. From a linked worktree the common-dir lookup
+returns the owner root while the probe returns the worktree, so `host relay`
+started in a worktree binds its socket where none of its own clients — CLI, TUI,
+`host mcp`, all of which took the other path — would look. From a subdirectory
+of a checkout the probe returns nothing at all while Git resolves the root, so
+the same invocation silently changes deployment depending on which directory it
+was issued from. Neither surface is wrong in isolation, which is why the
+divergence survived: it is only visible by asking who else answers the question.
+
+The two are therefore folded into one resolver, composing what each was right
+about. Git supplies the candidate root, which buys worktree agreement and
+ancestor search; the package-manifest marker then confirms it, which keeps the
+repository-local branch confined to an actual Agentmux checkout rather than
+whichever repository the process happens to stand in — a check the common-dir
+path never had, and whose absence let a debug-build CLI adopt any unrelated
+clone's `.auxiliary/` as its state root. Because the resolver is what the
+retained provenance *is*, it is deleted by the same runtime-instance work that
+deletes the branches it feeds, and by nothing sooner.
+
 ## Risks / Trade-offs
 
 - **Deleting auto-discovery makes previously working invocations fail to
