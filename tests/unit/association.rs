@@ -1,12 +1,9 @@
-use std::{path::PathBuf, process::Command};
-
 use agentmux::{
     configuration::BundleConfiguration,
     runtime::association::{
         AssociationCandidate, AssociationCandidates, AssociationSource, McpAssociationCli,
-        McpAssociationEnvironment, McpAssociationOverrides, WorkspaceContext,
-        load_local_mcp_overrides, resolve_association, resolve_sender_session,
-        validate_sender_session,
+        McpAssociationEnvironment, McpAssociationOverrides, load_local_mcp_overrides,
+        resolve_association, resolve_sender_session, validate_sender_session,
     },
 };
 use tempfile::TempDir;
@@ -19,41 +16,6 @@ fn named(candidate: Option<&AssociationCandidate>) -> Option<&str> {
 /// The tier that supplied a resolved value.
 fn sourced(candidate: Option<&AssociationCandidate>) -> Option<AssociationSource> {
     candidate.map(|candidate| candidate.source)
-}
-
-fn run_git(directory: &std::path::Path, arguments: &[&str]) {
-    let output = Command::new("git")
-        .current_dir(directory)
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .env_remove("GIT_COMMON_DIR")
-        .args(arguments)
-        .output()
-        .expect("run git");
-    if output.status.success() {
-        return;
-    }
-    panic!(
-        "git command failed: git {} \nstdout:\n{}\nstderr:\n{}",
-        arguments.join(" "),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-fn context(
-    current_directory: &str,
-    workspace_root: &str,
-    git_top_level: Option<&str>,
-    git_common_dir: Option<&str>,
-) -> WorkspaceContext {
-    WorkspaceContext {
-        current_directory: PathBuf::from(current_directory),
-        workspace_root: PathBuf::from(workspace_root),
-        git_top_level: git_top_level.map(PathBuf::from),
-        git_common_dir: git_common_dir.map(PathBuf::from),
-    }
 }
 
 fn bundle_with_sessions(sessions: &[&str]) -> BundleConfiguration {
@@ -237,52 +199,7 @@ fn blank_values_are_absent_rather_than_present_and_empty() {
 }
 
 #[test]
-fn debug_repository_root_prefers_git_common_dir_parent() {
-    let workspace = context(
-        "/home/me/src/WORKTREES/agentmux/tui",
-        "/home/me/src/WORKTREES/agentmux/tui",
-        Some("/home/me/src/WORKTREES/agentmux/tui"),
-        Some("/home/me/src/agentmux/.git"),
-    );
-    assert_eq!(
-        workspace.debug_repository_root(),
-        Some(PathBuf::from("/home/me/src/agentmux"))
-    );
-}
-
-#[test]
-fn debug_repository_root_handles_nested_common_dir_layout() {
-    let workspace = context(
-        "/home/me/src/WORKTREES/agentmux/tui",
-        "/home/me/src/WORKTREES/agentmux/tui",
-        Some("/home/me/src/WORKTREES/agentmux/tui"),
-        Some("/home/me/src/agentmux/.git/worktrees/tui"),
-    );
-    assert_eq!(
-        workspace.debug_repository_root(),
-        Some(PathBuf::from("/home/me/src/agentmux"))
-    );
-}
-
-#[test]
-fn debug_repository_root_is_none_without_git_common_dir() {
-    let workspace = context(
-        "/home/me/src/WORKTREES/agentmux/tui",
-        "/home/me/src/WORKTREES/agentmux/tui",
-        Some("/home/me/src/WORKTREES/agentmux/tui"),
-        None,
-    );
-    assert_eq!(workspace.debug_repository_root(), None);
-}
-
-#[test]
 fn applies_cli_precedence_over_local_overrides() {
-    let workspace = context(
-        "/home/me/src/WORKTREES/agentmux/relay",
-        "/home/me/src/WORKTREES/agentmux/relay",
-        Some("/home/me/src/WORKTREES/agentmux/relay"),
-        Some("/home/me/src/agentmux/.git"),
-    );
     let overrides = McpAssociationOverrides {
         bundle_name: Some("override-bundle".to_string()),
         session_name: Some("override-session".to_string()),
@@ -298,7 +215,6 @@ fn applies_cli_precedence_over_local_overrides() {
     );
     assert_eq!(named(candidates.bundle.as_ref()), Some("cli-bundle"));
     assert_eq!(named(candidates.session.as_ref()), Some("cli-session"));
-    let _ = &workspace;
 }
 
 #[test]
@@ -443,61 +359,5 @@ fn rejects_ambiguous_sender_when_directory_matches_multiple_members() {
     assert!(
         err.to_string()
             .contains("matched multiple configured sessions")
-    );
-}
-
-#[test]
-fn linked_worktree_resolves_the_common_dir_owner_repository_root() {
-    let temporary = TempDir::new().expect("temporary");
-    let project_root = temporary.path().join("agentmux");
-    std::fs::create_dir_all(&project_root).expect("create project root");
-
-    run_git(&project_root, &["init"]);
-    run_git(
-        &project_root,
-        &[
-            "-c",
-            "user.email=test@example.com",
-            "-c",
-            "user.name=Test User",
-            "commit",
-            "--allow-empty",
-            "-m",
-            "init",
-        ],
-    );
-
-    let worktree_root = temporary.path().join("WORKTREES/agentmux/relay");
-    std::fs::create_dir_all(
-        worktree_root
-            .parent()
-            .expect("worktree parent should exist"),
-    )
-    .expect("create worktree parent");
-    run_git(
-        &project_root,
-        &[
-            "worktree",
-            "add",
-            "--detach",
-            worktree_root.to_str().expect("utf8 path"),
-        ],
-    );
-
-    // Association no longer derives anything from Git. What remains is the
-    // repository root feeding repository-local state and inscriptions, and it
-    // must resolve to the common-dir *owner* rather than the linked worktree, so
-    // every worktree of a checkout shares one relay rather than starting its own.
-    let discovered = WorkspaceContext::discover(&worktree_root).expect("discover workspace");
-    let repository_root = discovered
-        .debug_repository_root()
-        .expect("linked worktree must resolve a repository root");
-    assert_eq!(
-        repository_root
-            .canonicalize()
-            .expect("canonicalize resolved"),
-        project_root
-            .canonicalize()
-            .expect("canonicalize project root"),
     );
 }

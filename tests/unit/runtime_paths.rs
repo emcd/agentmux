@@ -1,86 +1,195 @@
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
+
 use agentmux::runtime::paths::{
     BundleRuntimePaths, ConfigurationRootSource, RelayRuntimePaths, RuntimeRootOverrides,
-    RuntimeRoots, agentmux_source_checkout_root, debug_repository_inscriptions_root,
-    debug_repository_state_root, ensure_bundle_runtime_directory, local_configuration_root,
+    RuntimeRoots, debug_repository_inscriptions_root, debug_repository_state_root,
+    ensure_bundle_runtime_directory, local_configuration_root, repository_checkout_root,
     tmux_socket_path_for_runtime_directory,
 };
 use tempfile::TempDir;
 
-/// Writes a minimal candidate checkout: optional `.git` entry (directory or
-/// marker file, mirroring a primary clone vs a linked worktree) and optional
-/// `Cargo.toml` with the given package name.
-fn write_checkout_candidate(
-    temporary: &TempDir,
-    git_entry: Option<GitEntry>,
-    package_name: Option<&str>,
-) -> std::path::PathBuf {
-    let root = temporary.path().join("candidate");
-    std::fs::create_dir_all(&root).expect("create candidate root");
-    match git_entry {
-        Some(GitEntry::Directory) => {
-            std::fs::create_dir(root.join(".git")).expect("create .git directory");
-        }
-        Some(GitEntry::WorktreeFile) => {
-            std::fs::write(root.join(".git"), "gitdir: /elsewhere/.git/worktrees/wt\n")
-                .expect("write .git worktree file");
-        }
-        None => {}
-    }
-    if let Some(name) = package_name {
-        std::fs::write(
-            root.join("Cargo.toml"),
-            format!("[package]\nname = \"{name}\"\nversion = \"0.0.0\"\n"),
-        )
-        .expect("write Cargo.toml");
-    }
-    root
+fn run_git(directory: &Path, arguments: &[&str]) {
+    let output = Command::new("git")
+        .current_dir(directory)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_COMMON_DIR")
+        .args(arguments)
+        .output()
+        .expect("run git");
+    assert!(
+        output.status.success(),
+        "git command failed: git {}\nstdout:\n{}\nstderr:\n{}",
+        arguments.join(" "),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
-enum GitEntry {
-    Directory,
-    WorktreeFile,
+/// Initializes a real repository with one commit, so `git worktree add` has
+/// something to link against. The resolver reads Git's own answer rather than a
+/// fabricated layout, which is the only way the worktree case is exercised
+/// honestly.
+fn initialize_repository(root: &Path) {
+    std::fs::create_dir_all(root).expect("create repository root");
+    run_git(root, &["init"]);
+    run_git(
+        root,
+        &[
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "user.name=Test User",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "init",
+        ],
+    );
 }
 
-// Debug builds take the dev-mode branch, so the probe's positive and negative
-// signals are observable directly. The positive-path tests are ignored in
-// release mode because the probe unconditionally returns None without
-// debug_assertions.
+/// Writes the package manifest marker distinguishing an Agentmux checkout from
+/// any other repository the process might be standing in.
+fn write_manifest(root: &Path, package_name: &str) {
+    std::fs::write(
+        root.join("Cargo.toml"),
+        format!("[package]\nname = \"{package_name}\"\nversion = \"0.0.0\"\n"),
+    )
+    .expect("write Cargo.toml");
+}
+
+fn resolved(path: &Path) -> PathBuf {
+    path.canonicalize().expect("canonicalize path")
+}
+
+// Repository-local roots are reachable only under debug_assertions, where the
+// resolver does its work; in release it short-circuits to None by design, so the
+// positive cases have nothing to assert.
 #[test]
-#[cfg_attr(not(debug_assertions), ignore = "probe returns None in release builds")]
-fn source_checkout_probe_accepts_agentmux_clone() {
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "repository-local roots are unreachable in release builds"
+)]
+fn repository_checkout_root_resolves_an_agentmux_checkout() {
     let temporary = TempDir::new().expect("temporary directory");
-    let root = write_checkout_candidate(&temporary, Some(GitEntry::Directory), Some("agentmux"));
-    assert_eq!(agentmux_source_checkout_root(&root), Some(root.clone()));
+    let root = temporary.path().join("agentmux");
+    initialize_repository(&root);
+    write_manifest(&root, "agentmux");
+
+    let checkout = repository_checkout_root(&root).expect("checkout must resolve");
+    assert_eq!(resolved(&checkout), resolved(&root));
 }
 
 #[test]
-#[cfg_attr(not(debug_assertions), ignore = "probe returns None in release builds")]
-fn source_checkout_probe_accepts_linked_worktree() {
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "repository-local roots are unreachable in release builds"
+)]
+fn repository_checkout_root_resolves_from_a_nested_working_directory() {
     let temporary = TempDir::new().expect("temporary directory");
-    let root = write_checkout_candidate(&temporary, Some(GitEntry::WorktreeFile), Some("agentmux"));
-    assert_eq!(agentmux_source_checkout_root(&root), Some(root.clone()));
+    let root = temporary.path().join("agentmux");
+    initialize_repository(&root);
+    write_manifest(&root, "agentmux");
+    let nested = root.join("src/relay");
+    std::fs::create_dir_all(&nested).expect("create nested directory");
+
+    // Git searches ancestors, so a process launched anywhere beneath a checkout
+    // resolves the same root as one launched at its top.
+    let checkout = repository_checkout_root(&nested).expect("checkout must resolve");
+    assert_eq!(resolved(&checkout), resolved(&root));
 }
 
 #[test]
-fn source_checkout_probe_rejects_foreign_git_clone() {
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "repository-local roots are unreachable in release builds"
+)]
+fn linked_worktree_resolves_the_common_dir_owner_repository_root() {
     let temporary = TempDir::new().expect("temporary directory");
-    let root =
-        write_checkout_candidate(&temporary, Some(GitEntry::Directory), Some("otherproject"));
-    assert_eq!(agentmux_source_checkout_root(&root), None);
+    let project_root = temporary.path().join("agentmux");
+    initialize_repository(&project_root);
+    write_manifest(&project_root, "agentmux");
+
+    let worktree_root = temporary.path().join("WORKTREES/agentmux/relay");
+    std::fs::create_dir_all(worktree_root.parent().expect("worktree parent"))
+        .expect("create worktree parent");
+    run_git(
+        &project_root,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            worktree_root.to_str().expect("utf8 path"),
+        ],
+    );
+
+    // The owner root, not the worktree. Every worktree of a checkout must answer
+    // with one path, or siblings bind private relay sockets and cannot reach
+    // each other.
+    let checkout = repository_checkout_root(&worktree_root).expect("worktree must resolve a root");
+    assert_eq!(resolved(&checkout), resolved(&project_root));
 }
 
 #[test]
-fn source_checkout_probe_rejects_git_clone_without_manifest() {
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "repository-local roots are unreachable in release builds"
+)]
+fn repository_local_state_and_inscriptions_activate_for_a_source_checkout() {
     let temporary = TempDir::new().expect("temporary directory");
-    let root = write_checkout_candidate(&temporary, Some(GitEntry::Directory), None);
-    assert_eq!(agentmux_source_checkout_root(&root), None);
+    let root = temporary.path().join("agentmux");
+    initialize_repository(&root);
+    write_manifest(&root, "agentmux");
+
+    // The end the resolver serves: an unresolved root would silently collapse
+    // repository-local state onto the XDG default, which is the coexistence
+    // failure the retained provenance exists to prevent.
+    let checkout = repository_checkout_root(&root).expect("checkout must resolve");
+    let roots = RuntimeRoots::resolve(&RuntimeRootOverrides {
+        configuration_root: Some(temporary.path().join("configuration")),
+        repository_root: Some(checkout.clone()),
+        ..RuntimeRootOverrides::default()
+    })
+    .expect("resolve runtime roots");
+
+    assert_eq!(roots.state_root, debug_repository_state_root(&checkout));
+    assert_eq!(
+        roots.inscriptions_root,
+        debug_repository_inscriptions_root(&checkout)
+    );
 }
 
 #[test]
-fn source_checkout_probe_rejects_source_export_without_git() {
+fn repository_checkout_root_rejects_a_foreign_repository() {
     let temporary = TempDir::new().expect("temporary directory");
-    let root = write_checkout_candidate(&temporary, None, Some("agentmux"));
-    assert_eq!(agentmux_source_checkout_root(&root), None);
+    let root = temporary.path().join("otherproject");
+    initialize_repository(&root);
+    write_manifest(&root, "otherproject");
+
+    assert_eq!(repository_checkout_root(&root), None);
+}
+
+#[test]
+fn repository_checkout_root_rejects_a_repository_without_a_manifest() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let root = temporary.path().join("unmarked");
+    initialize_repository(&root);
+
+    assert_eq!(repository_checkout_root(&root), None);
+}
+
+#[test]
+fn repository_checkout_root_rejects_a_source_export_without_git() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let root = temporary.path().join("export");
+    std::fs::create_dir_all(&root).expect("create export root");
+    write_manifest(&root, "agentmux");
+
+    assert_eq!(repository_checkout_root(&root), None);
 }
 
 #[test]

@@ -288,6 +288,41 @@ while per-working-tree divergence is not.
 - **WHEN** repository ignore rules are evaluated
 - **THEN** `.auxiliary/configuration/agentmux/overlay/` is ignored
 
+### Requirement: Bundle Configuration File Name
+
+Bundle configuration SHALL be stored as:
+
+- `coders.toml`
+- `bundles/<bundle-id>.toml`
+
+Per-bundle `bundles/<bundle-name>.json` files SHALL NOT be required.
+
+A command that resolves a requested bundle ID in order to act on it SHALL fail
+when no matching effective bundle file exists. MCP startup SHALL retain that
+condition instead, because it advertises its tool surface before any tool is
+called.
+
+#### Scenario: Load bundle from per-bundle TOML plus coders TOML
+
+- **WHEN** runtime resolves configuration defaults or an explicit configuration
+  root
+- **THEN** bundle lookup reads the effective `bundles/<bundle-id>.toml`
+- **AND** coder lookup reads the effective `coders.toml`
+
+#### Scenario: Fail when bundle file is absent
+
+- **WHEN** a command other than `host mcp` resolves a requested bundle ID with
+  no matching effective `bundles/<bundle-id>.toml`
+- **THEN** the command returns structured `validation_unknown_bundle`
+
+#### Scenario: Retain an absent bundle file at MCP startup
+
+- **WHEN** MCP startup resolves a requested bundle ID with no matching effective
+  `bundles/<bundle-id>.toml`
+- **THEN** the process starts and serves the protocol
+- **AND** the cause is retained and reported on invocation of a tool requiring a
+  resolved association, a loaded configuration, or relay access
+
 ### Requirement: Relay Auto-Start Primitive for Non-MCP Clients
 
 Runtime bootstrap helpers SHALL support optional relay auto-start for future

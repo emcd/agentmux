@@ -75,6 +75,44 @@ This module implements the MCP stdio server for `agentmux`.
   when the relay returns stream events that the MCP layer does not
   surface.
 
+## Startup Readiness
+
+`host mcp` starts green. A startup problem — an unknown bundle, malformed
+configuration, invalid arguments, an unwritable inscriptions sink — is retained
+as an `McpStartupFault` rather than aborting the process, and the server still
+serves the protocol.
+
+The reason is the protocol, not leniency. MCP negotiates tool inventory once at
+`initialize`, so a process that fails startup does not degrade its surface, it
+*erases* it: the agent then calls tools its context says exist, and some
+harnesses never recover. A retained fault keeps the surface intact and delivers
+the cause to the actor who can repair it, rather than to a log nobody reads. The
+process fails to start only when it cannot serve the protocol at all.
+
+Readiness is enforced at the relay boundary. Every relay-backed handler reaches
+the relay through `request_relay_with_namespace`, which consults readiness before
+contacting it, so a handler cannot forget a check the way it can when each one
+places its own. That position is also the only one the contract allows: it sits
+past each handler's argument validation — which the dispatch boundary does not,
+since request validation precedes the readiness guard — and ahead of any relay
+contact. Work that never touches the relay stays ungated by construction, which
+is why `help` still answers under a retained fault.
+
+A failed relay call is therefore a `RelayCallError`, and its two arms are
+different subsystems: `NotReady` means this server never became operational and
+the relay was never contacted; `Io` covers everything that went wrong reaching
+or using the relay stream — a present relay failing, but also a stream absent
+because the server is unassociated, or a poisoned lock. Only `Io` can earn the
+synthesized down views in `list`, and only when it additionally classifies as
+relay-unavailable; papering over a retained fault with a plausible empty answer
+would hide the defect it exists to surface.
+
+Readiness is snapshotted at startup and never recomputed: a fault that prevented
+an operational context does not resolve itself while the process runs. Relay
+reachability is deliberately *not* part of it — a complete context is ready even
+when the relay is down, and reachability surfaces per request as
+`relay_unavailable`.
+
 ## Data Flow
 
 1. MCP client calls `list`, `look`, `choose`, `updown`, `raww`, or `send`.

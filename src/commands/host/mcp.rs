@@ -7,7 +7,7 @@ use crate::{
     mcp::{McpConfiguration, McpReadiness, McpStartupFault},
     runtime::{
         association::{
-            AssociationSource, McpAssociationCli, McpAssociationEnvironment, WorkspaceContext,
+            AssociationSource, McpAssociationCli, McpAssociationEnvironment,
             load_local_mcp_overrides, resolve_association, resolve_sender_session,
         },
         error::RuntimeError,
@@ -143,8 +143,8 @@ fn prepare_runtime(arguments: &McpHostArguments) -> Result<PreparedRuntime, McpS
         code: "runtime_startup_failed".to_string(),
         message: format!("cannot resolve current working directory: {source}"),
     })?;
-    let workspace = WorkspaceContext::discover(&current_directory).map_err(to_startup_fault)?;
-    let roots = shared::resolve_roots(&arguments.runtime, &workspace).map_err(to_startup_fault)?;
+    let roots =
+        shared::resolve_roots(&arguments.runtime, &current_directory).map_err(to_startup_fault)?;
     ensure_starter_configuration_layout(&roots).map_err(to_startup_fault)?;
     let local_overrides =
         load_local_mcp_overrides(&roots.configuration_root).map_err(to_startup_fault)?;

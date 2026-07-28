@@ -107,27 +107,38 @@
 Association-driven Git usage is removed here. Git-derived *state* provenance is
 deliberately retained, because the repository-local state and inscriptions
 branches remain gated in this change and those branches are only reachable when
-a repository root is resolved. Deleting the probe, the debug repository-root
-helper, or the Git common-dir lookup would leave the repository root permanently
-unresolved, silently collapsing repository-local state onto the XDG default and
-producing exactly the coexistence failure this change defers. The full collapse
-belongs with the runtime-instance work that replaces the provenance.
+a repository root is resolved. Deleting the common-dir lookup or the
+package-manifest marker would leave the repository root permanently unresolved,
+silently collapsing repository-local state onto the XDG default and producing
+exactly the coexistence failure this change defers. The full collapse belongs
+with the runtime-instance work that replaces the provenance.
 
-- [ ] 6.1 Remove only the association consumers of Git metadata, leaving the
-  common-dir lookup and the debug repository-root helper in place
-- [ ] 6.2 Retain the source-checkout probe and the package-manifest marker, since
-  the host-relay repository-root fallback still consumes them
-- [ ] 6.3 Narrow the workspace context to what remains: the working directory
-  plus the Git-derived repository-root provenance feeding state and inscriptions
-- [ ] 6.4 Drop the workspace-root argument only from call sites that thread it
+Implementation found the provenance answered by **two** resolvers which
+disagreed: CLI, TUI, and `host mcp` took the Git common-dir owner root, while
+`host relay` probed its working directory for `.git` plus the package-manifest
+marker. From a linked worktree these return different roots, so a relay hosted
+there binds a socket its own clients never look for; from a subdirectory the
+probe returns nothing while Git resolves the checkout. Unifying them is
+therefore part of retaining the provenance, not scope beyond it — a provenance
+with two answers is not retained, it is ambiguous.
+
+- [x] 6.1 Remove the association consumers of Git metadata, leaving the
+  repository-root provenance feeding state and inscriptions in place
+- [x] 6.2 Fold the source-checkout probe and the common-dir lookup into one
+  resolver: Git supplies the candidate root, the package-manifest marker
+  confirms it, and every surface resolves through it
+- [x] 6.3 Delete the workspace context, whose remaining fields existed only to
+  reach the repository-root helper, in favor of that resolver taking the working
+  directory directly
+- [x] 6.4 Drop the workspace-root argument from call sites that threaded it
   purely to locate override files, which now resolve under the configuration
   root
-- [ ] 6.5 Verify the repository-local state and inscriptions branches still
+- [x] 6.5 Verify the repository-local state and inscriptions branches still
   activate in a debug build from a source checkout, with a test that fails if the
   repository root resolves to `None`, and a second test proving a linked worktree
   still resolves the common-dir owner root so worktrees continue sharing one
   relay
-- [ ] 6.6 Record in code why the remaining Git usage exists and what removes it,
+- [x] 6.6 Record in code why the remaining Git usage exists and what removes it,
   so it is not mistaken for an oversight and deleted opportunistically
 
 ## 7. Repository configuration posture
@@ -141,12 +152,12 @@ belongs with the runtime-instance work that replaces the provenance.
 
 ## 8. Documentation and drift
 
-- [ ] 8.1 Update subsystem READMEs covering root resolution, the overlay, and
+- [x] 8.1 Update subsystem READMEs covering root resolution, the overlay, and
   association precedence
-- [ ] 8.2 Sweep documentation and non-normative prose for stale
+- [x] 8.2 Sweep documentation and non-normative prose for stale
   `--config-directory` and `overrides/` references. Normative spec text is
   carried by the deltas in this change, not by this sweep
-- [ ] 8.3 Confirm no live spec still describes Git-derived association discovery
+- [x] 8.3 Confirm no live spec still describes Git-derived association discovery
   or startup failure on an unknown bundle
 
 ## 9. Verification

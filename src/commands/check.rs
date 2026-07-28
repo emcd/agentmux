@@ -16,7 +16,7 @@ use crate::{
         load_ui_configuration,
     },
     relay::{RelayError, load_relay_runtime_configuration, preflight_bundle_configuration},
-    runtime::{association::WorkspaceContext, error::RuntimeError},
+    runtime::error::RuntimeError,
 };
 
 use super::{CheckArguments, shared};
@@ -33,8 +33,7 @@ pub(super) fn run_agentmux_check(arguments: &[String]) -> Result<(), RuntimeErro
     let parsed = parse_check_arguments(arguments)?;
     let current_directory = env::current_dir()
         .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
-    let workspace = WorkspaceContext::discover(&current_directory)?;
-    let roots = shared::resolve_roots(&parsed.runtime, &workspace)?;
+    let roots = shared::resolve_roots(&parsed.runtime, &current_directory)?;
 
     // Validate relay-level configuration before bundle discovery, so a malformed,
     // unknown-field, wrong-type, or invalid-peer relay.toml is reported even when

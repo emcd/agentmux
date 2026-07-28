@@ -1,10 +1,6 @@
 //! MCP bundle/session association discovery and override resolution.
 
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    process::Command,
-};
+use std::{fs, path::Path};
 
 use serde::Deserialize;
 
@@ -20,67 +16,6 @@ use super::error::RuntimeError;
 /// the configuration overlay like every other configuration file, so an overlay
 /// copy shadows a base copy.
 const ASSOCIATION_FILE: &str = "mcp.toml";
-
-/// Git and workspace context used for association auto-discovery.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WorkspaceContext {
-    pub current_directory: PathBuf,
-    pub workspace_root: PathBuf,
-    pub git_top_level: Option<PathBuf>,
-    pub git_common_dir: Option<PathBuf>,
-}
-
-impl WorkspaceContext {
-    /// Discovers workspace context using current directory and optional Git
-    /// metadata.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RuntimeError` when current directory cannot be resolved.
-    pub fn discover(current_directory: &Path) -> Result<Self, RuntimeError> {
-        let current_directory = current_directory.to_path_buf();
-        let git_top_level = run_git(
-            current_directory.as_path(),
-            &["rev-parse", "--show-toplevel"],
-        )
-        .map(PathBuf::from);
-        let git_common_dir = run_git(
-            current_directory.as_path(),
-            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-        )
-        .or_else(|| {
-            run_git(
-                current_directory.as_path(),
-                &["rev-parse", "--git-common-dir"],
-            )
-        })
-        .map(PathBuf::from)
-        .map(|path| normalize_path(&current_directory, &path));
-        let workspace_root = git_top_level
-            .clone()
-            .unwrap_or_else(|| current_directory.clone());
-        Ok(Self {
-            current_directory,
-            workspace_root,
-            git_top_level,
-            git_common_dir,
-        })
-    }
-
-    /// Resolves the repository root used for debug local state/config defaults.
-    ///
-    /// Uses the Git common-dir owner repository root when available (for
-    /// example, for worktrees). Returns `None` when this cannot be resolved.
-    #[must_use]
-    pub fn debug_repository_root(&self) -> Option<PathBuf> {
-        if let Some(common_dir) = self.git_common_dir.as_ref()
-            && let Some(repository_root) = repository_root_from_git_common_dir(common_dir)
-        {
-            return Some(repository_root);
-        }
-        None
-    }
-}
 
 /// CLI association hints provided by MCP startup arguments.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -331,42 +266,6 @@ pub fn resolve_sender_session(
     }
     infer_sender_from_working_directory(bundle, working_directory)
         .map_err(map_sender_inference_error)
-}
-
-fn run_git(directory: &Path, arguments: &[&str]) -> Option<String> {
-    let output = Command::new("git")
-        .current_dir(directory)
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .env_remove("GIT_COMMON_DIR")
-        .env_remove("GIT_OBJECT_DIRECTORY")
-        .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
-        .args(arguments)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    normalize_string(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-fn repository_root_from_git_common_dir(common_dir: &Path) -> Option<PathBuf> {
-    let mut cursor = Some(common_dir);
-    while let Some(path) = cursor {
-        if path.file_name().is_some_and(|name| name == ".git") {
-            return path.parent().map(Path::to_path_buf);
-        }
-        cursor = path.parent();
-    }
-    None
-}
-
-fn normalize_path(current_directory: &Path, path: &Path) -> PathBuf {
-    if path.is_absolute() {
-        return path.to_path_buf();
-    }
-    current_directory.join(path)
 }
 
 fn normalize_string(value: String) -> Option<String> {

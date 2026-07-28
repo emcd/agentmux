@@ -73,6 +73,25 @@ the same relay-wide socket, locks, ready sentinel, principal store, and peer
 credentials. Runtime instances replace it; until then the configuration root and
 the state root resolve by different rules on purpose.
 
+That provenance has exactly one resolver, `repository_checkout_root`. Every
+surface — CLI, TUI, `host mcp`, `host relay` — goes through it, because a
+surface answering differently would look for the relay socket somewhere the
+relay never bound it. It asks Git for the common directory and takes the
+repository root owning it, then requires that root's `Cargo.toml` to declare
+`name = "agentmux"`. Git makes the answer identical from every worktree of a
+checkout, so siblings share one relay instead of each starting its own, and it
+searches ancestors so any working directory beneath a checkout resolves it. The
+manifest marker confines the repository-local branch to an actual Agentmux
+checkout rather than whichever repository the process happens to stand in; when
+Git resolves a repository that fails the check, the reason is reported on
+stderr. Stderr is the only channel available, because root resolution runs
+before any inscriptions sink is configured. Worktrees owned by a bare
+repository are not supported and resolve production paths: their common
+directory is conventionally `<name>.git` rather than an ancestor named `.git`,
+and a bare repository has no checked-out root to carry the manifest. An explicit
+`--repository-root` is operator intent and bypasses the resolver. In release
+builds it always answers `None`.
+
 ## Overridable Files
 
 Every configuration file resolves through the overlay, so overriding one is the
