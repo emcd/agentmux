@@ -17,7 +17,8 @@ pub use loaders::{
 pub use paths::{
     bundle_configuration_path, bundle_directory_layers, coders_configuration_path,
     effective_bundle_definitions, effective_configuration_path, policies_configuration_path,
-    relay_configuration_path, tui_configuration_path, ui_configuration_path,
+    relay_configuration_path, supplied_configuration_path, supplied_root_configuration_sources,
+    tui_configuration_path, ui_configuration_path,
 };
 pub use roots::{ConfigurationRoots, ConfigurationRootsError, LAYER_SEPARATOR};
 pub use types::{

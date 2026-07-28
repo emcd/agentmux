@@ -8,6 +8,26 @@ use super::{
     RELAY_FILE, UI_FILE, USERS_FILE,
 };
 
+/// The layer-supplied file for a path relative to the configuration roots: the
+/// first layer holding it as a regular file, or `None` when no layer does.
+///
+/// This is the lookup proper. [`effective_configuration_path`] adds the
+/// absent-file policy on top; source reporting needs the lookup without it,
+/// because a path synthesized for a file no layer supplies would be reported as
+/// though a layer supplied it.
+#[must_use]
+pub fn supplied_configuration_path(
+    roots: &ConfigurationRoots,
+    relative: impl AsRef<Path>,
+) -> Option<PathBuf> {
+    let relative = relative.as_ref();
+    roots
+        .layers()
+        .iter()
+        .map(|layer| layer.join(relative))
+        .find(|candidate| candidate.is_file())
+}
+
 /// Resolves the effective file for a path relative to the configuration roots:
 /// the first layer holding it as a regular file.
 ///
@@ -25,13 +45,8 @@ pub fn effective_configuration_path(
     relative: impl AsRef<Path>,
 ) -> PathBuf {
     let relative = relative.as_ref();
-    for layer in roots.layers() {
-        let candidate = layer.join(relative);
-        if candidate.is_file() {
-            return candidate;
-        }
-    }
-    roots.base_layer().join(relative)
+    supplied_configuration_path(roots, relative)
+        .unwrap_or_else(|| roots.base_layer().join(relative))
 }
 
 /// Resolves path to shared coder definitions.
@@ -117,4 +132,23 @@ pub fn policies_configuration_path(roots: &ConfigurationRoots) -> PathBuf {
 #[must_use]
 pub fn relay_configuration_path(roots: &ConfigurationRoots) -> PathBuf {
     effective_configuration_path(roots, RELAY_FILE)
+}
+
+/// The root-level configuration artifacts some layer actually supplies, each
+/// paired with the layer-relative name identifying it, in a stable order.
+///
+/// Only supplied artifacts appear. `users.toml` and `ui.toml` are legitimately
+/// absent in ordinary deployments, so reporting a synthesized base-layer path
+/// for every name would pad the report with files that do not exist and bury the
+/// ones that do. Bundle definitions are enumerated by
+/// [`effective_bundle_definitions`] instead, since they union a directory rather
+/// than resolve a single name.
+#[must_use]
+pub fn supplied_root_configuration_sources(
+    roots: &ConfigurationRoots,
+) -> Vec<(&'static str, PathBuf)> {
+    [CODERS_FILE, POLICIES_FILE, RELAY_FILE, UI_FILE, USERS_FILE]
+        .into_iter()
+        .filter_map(|name| supplied_configuration_path(roots, name).map(|path| (name, path)))
+        .collect()
 }

@@ -49,17 +49,17 @@
 
 ## 5. Source introspection
 
-- [ ] 5.1 Report the physical file supplying each resolved artifact from
+- [x] 5.1 Report the physical file supplying each resolved artifact from
   `agentmux check configuration` as default output, so a shadowed copy is
   distinguishable from the copy in effect. Report only artifacts a layer
   actually supplies, and emit physical paths rather than the relative forms a
   layer list may carry
-- [ ] 5.2 Accept `-q`/`--quiet` on `check configuration`, suppressing source
+- [x] 5.2 Accept `-q`/`--quiet` on `check configuration`, suppressing source
   reporting, per-bundle confirmations, and the summary while leaving the exit
   code and any failure report
-- [ ] 5.3 Resolve and report sources before validation runs, so a fail-fast
+- [x] 5.3 Resolve and report sources before validation runs, so a fail-fast
   failure does not truncate the report on the run that most needs it
-- [ ] 5.4 Write sources to stdout and failures to stderr, flushing stdout before
+- [x] 5.4 Write sources to stdout and failures to stderr, flushing stdout before
   any failure. Without the flush a piped transcript can show the failure ahead
   of the report explaining it, since stdout is block-buffered when piped
 
@@ -94,7 +94,7 @@
 - [ ] 8.4 Prove credential administration is untouched by layering: a
   `--write-config` operation under a multi-layer list still writes under the
   state root and writes nothing into any configuration layer
-- [ ] 8.5 Prove introspection identifies the supplying layer for an artifact
+- [x] 8.5 Prove introspection identifies the supplying layer for an artifact
   present in more than one, including when every copy is valid
 - [ ] 8.6 Exercise the release binary for layer resolution and bundle union,
   since build-profile-invisible defects motivated the same step previously
