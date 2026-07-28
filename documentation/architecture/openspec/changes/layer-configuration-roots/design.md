@@ -159,11 +159,12 @@ question. Operators with an existing overlay name it as a layer instead.
 
 ## Migration Plan
 
-This change must be implemented only after `redesign-configuration-resolution`
-is archived. That change rewrites most of the same requirements, so deltas
-authored against today's live text would replace a baseline that no longer
-exists by the time they apply. Every MODIFIED delta here is authored from the
-post-archive text.
+This change follows `redesign-configuration-resolution`, which rewrote most of
+the same requirements. Its deltas apply at archive, so deltas here had to be
+authored afterwards or they would have replaced a baseline that no longer
+existed by the time they applied. That ordering has been observed: every
+MODIFIED requirement here is reproduced from the live specifications as they
+stand after that archive.
 
 Operators move any `overlay/` directory to a sibling and name it as a layer
 ahead of the base. There is no compatibility shim, per alpha defaults: an

@@ -1,25 +1,3 @@
-## 0. Sequencing gate
-
-`redesign-configuration-resolution` rewrites most of the requirements this
-change modifies. Its deltas apply at archive, so any MODIFIED delta authored
-here before that point replaces a baseline which will no longer exist. The
-deltas in this change were drafted from that change's delta text; they must be
-re-verified against the live specs once it archives, before any code is written.
-
-- [ ] 0.1 Confirm `redesign-configuration-resolution` is archived
-- [ ] 0.2 Re-verify each MODIFIED requirement here against the post-archive live
-  text, scenario by scenario, since a MODIFIED delta replaces the whole
-  requirement and a dropped scenario is invisible to `--strict`
-- [ ] 0.3 Draft the deferred deltas from the post-archive live text: every
-  overlay-bearing requirement in `bundle-lifecycle` and
-  `ui-surface-configuration`, and the ones in `runtime-bootstrap` and
-  `cli-surface` this change does not yet cover. Enumerate them by grepping the
-  live specs for overlay references rather than working from memory; the count
-  at drafting time was roughly 30, 13, 8, and 8 references respectively
-- [ ] 0.4 Re-review the completed delta set before implementation. The change is
-  not implementable until 0.3 lands, and the delta set is the contract the
-  implementation is held to
-
 ## 1. Layer list type and resolution
 
 - [ ] 1.1 Introduce a `ConfigurationRoots` value holding an ordered, non-empty
