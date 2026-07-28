@@ -89,14 +89,25 @@ harnesses never recover. A retained fault keeps the surface intact and delivers
 the cause to the actor who can repair it, rather than to a log nobody reads. The
 process fails to start only when it cannot serve the protocol at all.
 
-Readiness is enforced at the relay boundary. Every relay-backed handler reaches
-the relay through `request_relay_with_namespace`, which consults readiness before
-contacting it, so a handler cannot forget a check the way it can when each one
-places its own. That position is also the only one the contract allows: it sits
-past each handler's argument validation — which the dispatch boundary does not,
-since request validation precedes the readiness guard — and ahead of any relay
-contact. Work that never touches the relay stays ungated by construction, which
-is why `help` still answers under a retained fault.
+Readiness is enforced at the relay boundary and at the association gates. Every
+relay-backed handler reaches the relay through `request_relay_with_namespace`,
+which consults readiness before contacting it, so a handler cannot forget a
+check the way it can when each one places its own. The association gates
+(`require_association`, `require_associated_sender_session`) consult it too,
+because several handlers perform configuration I/O between the gate and the
+relay: checked only at the boundary, a loader error surfaces ahead of the fault
+that caused it and sends an operator to the wrong subsystem.
+
+Request validation stays ahead of both. A malformed request is malformed in every
+server state, so answering it with a startup fault reports a server defect for
+input the server would reject either way. This constrains what argument
+validation may defer: a handler must reject a malformed argument itself rather
+than relying on the runtime to reject it during resolution, since resolution
+happens past the gates. `list principals` previously left concrete namespace
+grammar to the runtime and reported a retained fault for `bad/name`.
+
+Work that never touches the relay stays ungated by construction, which is why
+`help` still answers under a retained fault.
 
 A failed relay call is therefore a `RelayCallError`, and its two arms are
 different subsystems: `NotReady` means this server never became operational and
