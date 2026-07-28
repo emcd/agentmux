@@ -1,15 +1,23 @@
 //! Compact table-driven coverage for the opencode prompt-readiness regex.
 //!
 //! The regex is shipped in `data/configuration/coders.toml` under the
-//! `opencode` coder's `prompt-regex` field. The corrected shape anchors
-//! on an empty current-input line immediately followed by the separator
-//! and the status row that ends with `ctrl+p commands`. The corrected
-//! readiness invariant: the current input prompt is empty and is the
-//! `┃` line immediately before the separator.
+//! `opencode` coder's `prompt-regex` field. The corrected shape matches
+//! the actual Opencode 1.18.5 idle layout, which is:
 //!
-//! The fixture matrix keeps one composing entry and two agent-side
-//! false-positive entries (agent processing, agent just responded) so
-//! the corrected contract is preserved against future regressions.
+//! ```text
+//! [chat history]
+//! ┃                          <- empty input-box line
+//! ┃                          <- empty input-box line (1..N)
+//! ┃                          <- empty input-box line
+//! ┃  Build · <Model> ...     <- info row (always shows current model/agent)
+//! ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀    <- separator (full pane width)
+//!   /path/...  ctrl+p commands    • OpenCode <version>   <- status row
+//! ```
+//!
+//! The readiness invariant: every `┃` line in the input box is empty,
+//! the info row is present and is the `┃` line immediately before the
+//! separator, and the separator is immediately followed by the status
+//! row that ends with `ctrl+p commands`.
 
 use std::fs;
 
@@ -20,9 +28,10 @@ const IDLE_SHORT_HISTORY: &str = "\
   ┃ Completely agree with you. The format of what landed was fine; the problem is that it should not have landed.
   ┃
   ┃
+  ┃
+  ┃  Build · MiniMax-M3 MiniMax Token Plan (minimax.io)
   ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-  Build · MiniMax-M3 MiniMax Token Plan (minimax.io)             ~/src/WORKTREES/agentmux/pty:pty
-  /Users/me/src/WORKTREES/agentmux/pty                            65.6K (7%) · $0.27 ctrl+p commands    • OpenCode 1.18.3";
+   /Users/me/src/WORKTREES/agentmux/pty                            65.6K (7%) · $0.27 ctrl+p commands    • OpenCode 1.18.3";
 
 const IDLE_LONG_HISTORY: &str = "\
   2. Whether there's a trailing blank ┃ line that I'm missing (which would change the regex anchoring)
@@ -33,38 +42,45 @@ const IDLE_LONG_HISTORY: &str = "\
   I'll hold on drafting until you've got it captured.
                                                                         ⊟ Build · MiniMax-M3 · 14.1s
   ┃
+  ┃
+  ┃
+  ┃  Build · MiniMax-M3 MiniMax Token Plan (minimax.io)
   ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-  Build · MiniMax-M3 MiniMax Token Plan (minimax.io)             ~/src/WORKTREES/agentmux/pty:pty
-  /Users/me/src/WORKTREES/agentmux/pty                            133.6K (13%) · $0.27 ctrl+p commands    • OpenCode 1.18.4";
+   /Users/me/src/WORKTREES/agentmux/pty                            133.6K (13%) · $0.27 ctrl+p commands    • OpenCode 1.18.4";
 
 const COLD_START: &str = "\
   ┃
+  ┃
+  ┃
+  ┃  Build · MiniMax-M3 MiniMax Token Plan (minimax.io)
   ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-  Build · MiniMax-M3 MiniMax Token Plan (minimax.io)             ~/src/WORKTREES/agentmux/pty:pty
-  /Users/me/src/WORKTREES/agentmux/pty                            133.6K (13%) · $0.27 ctrl+p commands    • OpenCode 1.18.4";
+   /Users/me/src/WORKTREES/agentmux/pty                            133.6K (13%) · $0.27 ctrl+p commands    • OpenCode 1.18.4";
 
 const COMPOSING: &str = "\
   ┃ Completely agree with you. The format of what landed was fine; the problem is that it should not have landed.
   ┃
   ┃ I suspect that our regex for prompt readiness is what needs tuning.
+  ┃  Build · MiniMax-M3 MiniMax Token Plan (minimax.io)
   ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-  Build · MiniMax-M3 MiniMax Token Plan (minimax.io)             ~/src/WORKTREES/agentmux/pty:pty
-  /Users/me/src/WORKTREES/agentmux/pty                            65.6K (7%) · $0.27 ctrl+p commands    • OpenCode 1.18.3";
+   /Users/me/src/WORKTREES/agentmux/pty                            65.6K (7%) · $0.27 ctrl+p commands    • OpenCode 1.18.3";
 
-const AGENT_PROCESSING: &str = "\
-  ┃ Completely agree with you. The format of what landed was fine; the problem is that it should not have landed.
-  ┃
-  ┃  ▣  Build · MiniMax-M3 · 14.1s
+const COMPOSING_FULL: &str = "\
+  ┃ user prompt line 3
+  ┃ user prompt line 2
+  ┃ user prompt line 1
+  ┃  Build · MiniMax-M3 MiniMax Token Plan (minimax.io)
   ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-  Build · MiniMax-M3 MiniMax Token Plan (minimax.io)             ~/src/WORKTREES/agentmux/pty:pty
-  /Users/me/src/WORKTREES/agentmux/pty                            133.6K (13%) · $0.27 ctrl+p commands    • OpenCode 1.18.4";
+   /Users/me/src/WORKTREES/agentmux/pty                            65.6K (7%) · $0.27 ctrl+p commands    • OpenCode 1.18.3";
 
 const AGENT_JUST_RESPONDED: &str = "\
   ┃ user prompt
   ┃  agent response text
+  ┃
+  ┃
+  ┃
+  ┃  Build · MiniMax-M3 MiniMax Token Plan (minimax.io)
   ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-  Build · MiniMax-M3 MiniMax Token Plan (minimax.io)             ~/src/WORKTREES/agentmux/pty:pty
-  /Users/me/src/WORKTREES/agentmux/pty                            133.6K (13%) · $0.27 ctrl+p commands    • OpenCode 1.18.4";
+   /Users/me/src/WORKTREES/agentmux/pty                            133.6K (13%) · $0.27 ctrl+p commands    • OpenCode 1.18.4";
 
 fn read_opencode_prompt_regex_from_config() -> String {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
@@ -108,8 +124,8 @@ fn opencode_prompt_regex_classifies_states() {
         ("idle_long_history", IDLE_LONG_HISTORY, true),
         ("cold_start", COLD_START, true),
         ("composing", COMPOSING, false),
-        ("agent_processing", AGENT_PROCESSING, false),
-        ("agent_just_responded", AGENT_JUST_RESPONDED, false),
+        ("composing_full", COMPOSING_FULL, false),
+        ("agent_just_responded", AGENT_JUST_RESPONDED, true),
     ];
 
     for (label, fixture, expected_match) in cases {
