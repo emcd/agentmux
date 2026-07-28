@@ -86,9 +86,9 @@
 
 ## 8. Verification
 
-- [ ] 8.1 `cargo fmt`, `cargo clippy --all-targets -D warnings`, and the full
+- [x] 8.1 `cargo fmt`, `cargo clippy --all-targets -D warnings`, and the full
   nextest suite
-- [ ] 8.2 `openspec validate --all --strict`
+- [x] 8.2 `openspec validate --all --strict`
 - [x] 8.3 Prove the ordering rule with a test asserting the first layer wins,
   and a second asserting a supplied list never reaches the XDG default
 - [x] 8.4 Prove credential administration is untouched by layering: a
@@ -96,5 +96,5 @@
   state root and writes nothing into any configuration layer
 - [x] 8.5 Prove introspection identifies the supplying layer for an artifact
   present in more than one, including when every copy is valid
-- [ ] 8.6 Exercise the release binary for layer resolution and bundle union,
+- [x] 8.6 Exercise the release binary for layer resolution and bundle union,
   since build-profile-invisible defects motivated the same step previously
