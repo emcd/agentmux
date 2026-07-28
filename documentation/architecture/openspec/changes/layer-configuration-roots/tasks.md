@@ -1,25 +1,3 @@
-## 0. Sequencing gate
-
-`redesign-configuration-resolution` rewrites most of the requirements this
-change modifies. Its deltas apply at archive, so any MODIFIED delta authored
-here before that point replaces a baseline which will no longer exist. The
-deltas in this change were drafted from that change's delta text; they must be
-re-verified against the live specs once it archives, before any code is written.
-
-- [ ] 0.1 Confirm `redesign-configuration-resolution` is archived
-- [ ] 0.2 Re-verify each MODIFIED requirement here against the post-archive live
-  text, scenario by scenario, since a MODIFIED delta replaces the whole
-  requirement and a dropped scenario is invisible to `--strict`
-- [ ] 0.3 Draft the deferred deltas from the post-archive live text: every
-  overlay-bearing requirement in `bundle-lifecycle` and
-  `ui-surface-configuration`, and the ones in `runtime-bootstrap` and
-  `cli-surface` this change does not yet cover. Enumerate them by grepping the
-  live specs for overlay references rather than working from memory; the count
-  at drafting time was roughly 30, 13, 8, and 8 references respectively
-- [ ] 0.4 Re-review the completed delta set before implementation. The change is
-  not implementable until 0.3 lands, and the delta set is the contract the
-  implementation is held to
-
 ## 1. Layer list type and resolution
 
 - [ ] 1.1 Introduce a `ConfigurationRoots` value holding an ordered, non-empty
@@ -69,34 +47,49 @@ re-verified against the live specs once it archives, before any code is written.
 - [ ] 4.3 Confirm the existing supplying-layer fingerprint distinguishes
   byte-identical files across N layers, and extend it if it does not
 
-## 5. Discovery removal
+## 5. Source introspection
 
-- [ ] 5.1 Remove `--discover-local-configuration` and the ancestor walk
-- [ ] 5.2 Remove the discovered tier from root resolution and its
+- [ ] 5.1 Report the physical file supplying each resolved artifact from
+  `agentmux check configuration`, so a shadowed copy is distinguishable from the
+  copy in effect
+- [ ] 5.2 Decide whether that reporting is default output or behind a flag. The
+  command's output is already the widest surface in `cli-surface`, so enlarging
+  it unconditionally may be the wrong default
+- [ ] 5.3 Report it whether or not validation succeeds, since the case it exists
+  for is configuration that is valid and inert rather than broken
+
+## 6. Discovery removal
+
+- [ ] 6.1 Remove `--discover-local-configuration` and the ancestor walk
+- [ ] 6.2 Remove the discovered tier from root resolution and its
   `ConfigurationRootSource` variant
-- [ ] 5.3 Remove the discovery inscription and its stderr report, resolving
+- [ ] 6.3 Remove the discovery inscription and its stderr report, resolving
   `agentmux:issues/runtime/5` if that issue is still open
 
-## 6. Documentation
+## 7. Documentation
 
-- [ ] 6.1 Update `src/configuration/README.md`: the layer list replaces the
+- [ ] 7.1 Update `src/configuration/README.md`: the layer list replaces the
   overlay, including the first-wins direction, the closed list and what
   closedness does not mean, and the rejection of empty layer elements
-- [ ] 6.2 Update `src/runtime/README.md` root-resolution section
-- [ ] 6.3 Write the maintainer guide section on configuration layout, with
+- [ ] 7.2 Update `src/runtime/README.md` root-resolution section
+- [ ] 7.3 Write the maintainer guide section on configuration layout, with
   worked examples of a base plus an R&D layer, and the migration note that an
   `overlay/` subdirectory silently stops being consulted
-- [ ] 6.4 Sweep prose for `overlay` references that now mean something else
+- [ ] 7.4 Document how to introspect which layer supplied each artifact, since
+  that is the operator's only way to diagnose a shadowed file
+- [ ] 7.5 Sweep prose for `overlay` references that now mean something else
 
-## 7. Verification
+## 8. Verification
 
-- [ ] 7.1 `cargo fmt`, `cargo clippy --all-targets -D warnings`, and the full
+- [ ] 8.1 `cargo fmt`, `cargo clippy --all-targets -D warnings`, and the full
   nextest suite
-- [ ] 7.2 `openspec validate --all --strict`
-- [ ] 7.3 Prove the ordering rule with a test asserting the first layer wins,
+- [ ] 8.2 `openspec validate --all --strict`
+- [ ] 8.3 Prove the ordering rule with a test asserting the first layer wins,
   and a second asserting a supplied list never reaches the XDG default
-- [ ] 7.4 Prove credential administration is untouched by layering: a
+- [ ] 8.4 Prove credential administration is untouched by layering: a
   `--write-config` operation under a multi-layer list still writes under the
   state root and writes nothing into any configuration layer
-- [ ] 7.5 Exercise the release binary for layer resolution and bundle union,
+- [ ] 8.5 Prove introspection identifies the supplying layer for an artifact
+  present in more than one, including when every copy is valid
+- [ ] 8.6 Exercise the release binary for layer resolution and bundle union,
   since build-profile-invisible defects motivated the same step previously

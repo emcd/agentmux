@@ -159,11 +159,12 @@ question. Operators with an existing overlay name it as a layer instead.
 
 ## Migration Plan
 
-This change must be implemented only after `redesign-configuration-resolution`
-is archived. That change rewrites most of the same requirements, so deltas
-authored against today's live text would replace a baseline that no longer
-exists by the time they apply. Every MODIFIED delta here is authored from the
-post-archive text.
+This change follows `redesign-configuration-resolution`, which rewrote most of
+the same requirements. Its deltas apply at archive, so deltas here had to be
+authored afterwards or they would have replaced a baseline that no longer
+existed by the time they applied. That ordering has been observed: every
+MODIFIED requirement here is reproduced from the live specifications as they
+stand after that archive.
 
 Operators move any `overlay/` directory to a sibling and name it as a layer
 ahead of the base. There is no compatibility shim, per alpha defaults: an
@@ -172,12 +173,42 @@ on one resolves the base files it was overriding. Because that failure is
 silent — the base configuration is valid and loads cleanly — the migration step
 is called out in the maintainer guide rather than left to the changelog.
 
+### Discovery is removed rather than kept for a hypothetical consumer
+
+`--discover-local-configuration` is deleted. No consumer was identified, and the
+case it was built for — locating a configuration root inside the project being
+worked on — is the case this change removes.
+
+Reviving it later costs less than carrying it now. Kept, it would be a second,
+inferential answer to the question an explicit layer list answers by naming its
+target, and two answers to one question is the defect this change exists to fix
+elsewhere. If a use case appears, it can come back with that use case to
+justify its shape, rather than being preserved in the shape an obsolete case
+gave it.
+
+### Configuration sources must be introspectable, through the pre-flight command
+
+An operator needs to see where configuration actually came from. With a single
+root and one overlay this was inferable; with an arbitrary layer list it is not,
+and shadowing is the failure mode layering introduces — a file can be present,
+valid, and entirely inert.
+
+Introspection belongs to `agentmux check configuration` rather than a new
+command. That command already resolves every artifact through the same lookup
+the relay uses, which is precisely the state worth reporting, and an operator
+diagnosing configuration is already reaching for it. A separate command would
+duplicate the loader and drift from it.
+
+This is deliberately more than the malformed-file path reporting specified for
+`ui.toml` and bundles. That reports which file was at fault; introspection
+reports which file *won* for every artifact, including when nothing is wrong.
+The two are complementary: one explains a failure, the other explains a
+surprise.
+
+Left open for implementation: whether introspection is the default output or
+sits behind a flag. The command's output is already the widest surface in
+`cli-surface`, so enlarging it unconditionally may be the wrong default.
+
 ## Open Questions
 
-- Does `--discover-local-configuration` have a consumer worth keeping it for?
-  Recommended for removal; the operator has identified no specific use case, and
-  its original one is being removed.
-- Should the pre-flight command render the resolved list with the supplying
-  layer for each effective file? It would make a shadowed file obvious, which is
-  the failure mode layering introduces, but it enlarges output that is already
-  the widest surface in `cli-surface`.
+None outstanding.

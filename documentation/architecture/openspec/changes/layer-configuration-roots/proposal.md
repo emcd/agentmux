@@ -64,21 +64,16 @@ do.
 - `bundle-lifecycle`: overlay-specific bundle resolution contracts.
 - `ui-surface-configuration`: overlay-specific `ui.toml` resolution contracts.
 
-**The delta set here is deliberately incomplete.** Deltas exist for the
-requirements that carry the design's load — root resolution, layer resolution,
-and the command-line surface. `bundle-lifecycle`, `ui-surface-configuration`,
-and the remaining overlay-bearing requirements in `runtime-bootstrap` and
-`cli-surface` are not yet drafted. Post-archive, overlay contracts span four
-specs (roughly 30 references in `runtime-bootstrap`, 13 in `bundle-lifecycle`,
-8 each in `cli-surface` and `ui-surface-configuration`), and every one of those
-requirements needs a full MODIFIED delta before implementation.
+Every delta is authored from live specification text. Drafting was deliberately
+held until `redesign-configuration-resolution` archived, because that change
+rewrote most of the same requirements and deltas written against its delta text
+would have replaced a baseline that no longer existed by the time they applied.
 
-They are deferred rather than drafted now because they must be authored from
-live text, and that text does not exist until
-`redesign-configuration-resolution` archives. Drafting them from that change's
-delta text would repeat the double-indirection that task 0 exists to guard
-against, on six files instead of two. Completing them is task 0.3, and the
-change cannot be implemented until it is done.
+Enumerating the live specs found the surface smaller than a raw reference count
+suggested: nine requirements carry overlay contracts, not the ~59 references
+spread across them. Each is reproduced in full as MODIFIED, and scenario counts
+were compared against the live text mechanically, since a MODIFIED delta
+replaces a whole requirement and a dropped scenario is invisible to `--strict`.
 
 `AGENTMUX_CONFIGURATION_DIRECTORY` is specified by `runtime-bootstrap` rather
 than `environment-variables`, which covers variables configured *for* spawned
@@ -115,17 +110,22 @@ that directory into an explicit layer. There is no compatibility shim.
 maintainer documentation becomes the only description of the layer layout, and
 must carry worked examples.
 
-## Open Decisions
+## Decisions Taken
 
-- **Removing `--discover-local-configuration`.** It was added by
-  `redesign-configuration-resolution` to find a configuration root inside the
-  project being worked on. Configuration is moving out of projects, which
-  removes the case it was built for, and no replacement consumer has been
-  identified. An explicit layer list also covers the deployments discovery was
-  meant to serve, with the target named rather than inferred. Recommended for
-  removal; retaining it means carrying a second, inferential answer to the
-  question this change makes explicit.
-- **Tombstones are out of scope.** N layers make "remove what a lower layer
-  defines" more likely to be wanted than two layers did, but no use case exists
-  today, and shadowing may already suffice. Tracked separately rather than
+- **`--discover-local-configuration` is removed.** No consumer was identified,
+  and the case it was built for — a configuration root inside the project being
+  worked on — is the case this change removes. Reviving it later with a
+  justifying use case costs less than carrying a second, inferential answer to
+  the question an explicit layer list answers by naming its target.
+- **Configuration sources are introspectable through `agentmux check
+  configuration`.** With an arbitrary layer list an operator cannot otherwise
+  tell which copy of an artifact won, and a shadowed file can be present,
+  valid, and entirely inert. Whether it is default output or behind a flag is
+  left to implementation.
+
+## Out of Scope
+
+- **Tombstones.** N layers make "remove what a lower layer defines" more likely
+  to be wanted than two layers did, but no use case exists today, and shadowing
+  may already suffice. Tracked as `agentmux:ideas/general/4` rather than
   guessed at here.

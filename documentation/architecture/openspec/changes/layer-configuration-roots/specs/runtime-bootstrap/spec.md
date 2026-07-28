@@ -191,6 +191,151 @@ within the file.
 - **AND** required default keys are absent in global `users.toml`
 - **THEN** startup fails with stable validation code
 
+### Requirement: Sender Association Resolution
+
+The MCP server SHALL resolve sender association at startup using precedence:
+
+1. explicit CLI `--session-name` when present
+2. injected bring-up environment variable `AGENTMUX_SESSION` when present and
+   non-blank
+3. the effective association file's `session_name` when present
+4. working-directory match against configured member directories
+
+A blank injected value SHALL be treated as absent.
+
+A tier SHALL apply only when every tier above it is absent. When a tier supplies
+a sender that names no configured member, sender association SHALL be recorded as
+unresolved with that cause and SHALL NOT fall through to a lower tier.
+
+Sender association SHALL NOT be derived from Git metadata. When no tier supplies
+a sender and no configured member matches, sender association SHALL be recorded
+as unresolved rather than failing startup.
+
+The tier which supplied the resolved sender SHALL be recorded. The association
+file occupies one tier regardless of how many configuration layers were searched
+to produce it.
+
+#### Scenario: Resolve sender from explicit CLI value
+
+- **WHEN** MCP startup has explicit `--session-name`
+- **THEN** sender association is set to that configured session
+
+#### Scenario: Injected environment wins over association file
+
+- **WHEN** CLI sender is absent
+- **AND** the `AGENTMUX_SESSION` environment value is present and non-blank
+- **AND** the effective association file also provides `session_name`
+- **THEN** sender association resolves to the environment value
+
+#### Scenario: Resolve sender from working directory match
+
+- **WHEN** CLI, environment, and association file senders are all absent
+- **AND** the working directory matches a configured member's declared directory
+- **THEN** sender association resolves to that member
+
+#### Scenario: Blank injected sender is ignored
+
+- **WHEN** `AGENTMUX_SESSION` is set to a blank value
+- **THEN** it contributes no identity
+- **AND** resolution continues with the next tier
+
+#### Scenario: Supplied sender naming no member does not fall through
+
+- **WHEN** a sender is supplied by CLI, environment, or the effective association
+  file
+- **AND** it names no configured member
+- **AND** the working directory matches a different configured member
+- **THEN** sender association is recorded as unresolved with that cause
+- **AND** the working-directory match is not applied
+
+#### Scenario: Record unresolved sender without failing startup
+
+- **WHEN** no tier supplies a sender
+- **AND** the working directory matches no configured member
+- **THEN** sender association is recorded as unresolved with its cause
+- **AND** MCP startup succeeds
+
+#### Scenario: Record the tier which supplied the sender
+
+- **WHEN** sender association resolves
+- **THEN** the startup record names the tier it resolved from
+
+#### Scenario: Reject ambiguous sender association
+
+- **WHEN** the sender association candidate matches multiple configured members
+- **THEN** sender association is recorded as unresolved with an ambiguity cause
+
+### Requirement: Bundle Association Resolution
+
+The MCP server SHALL resolve bundle association at startup using precedence:
+
+1. explicit CLI `--bundle` when present
+2. injected bring-up environment variable `AGENTMUX_BUNDLE` when present and
+   non-blank
+3. the effective association file's `bundle_name` when present
+4. explicit CLI `--default-bundle` when present
+
+A blank injected value SHALL be treated as absent.
+
+`--default-bundle` SHALL occupy the default tier so generated client
+configuration can seed a bundle without outranking bring-up, while `--bundle`
+retains its meaning as an assertion of invocation intent.
+
+Bundle association SHALL NOT be derived from Git metadata. When no tier supplies
+a bundle, bundle association SHALL be recorded as unresolved rather than failing
+startup.
+
+A bundle supplied by any tier, `--default-bundle` included, carries operator
+intent. When a supplied bundle cannot be loaded, MCP startup SHALL retain the
+loading fault with its own cause rather than recording a generic unassociated
+server.
+
+The tier which supplied the resolved bundle SHALL be recorded. The association
+file occupies one tier regardless of how many configuration layers were searched
+to produce it.
+
+#### Scenario: Resolve bundle from explicit CLI value
+
+- **WHEN** MCP startup has explicit `--bundle`
+- **THEN** bundle association is set to that configured bundle
+
+#### Scenario: Injected environment wins over default bundle
+
+- **WHEN** `--bundle` is absent
+- **AND** `--default-bundle` names one bundle
+- **AND** the `AGENTMUX_BUNDLE` environment value names a different bundle
+- **THEN** bundle association resolves to the environment value
+
+#### Scenario: Injected environment wins over association file
+
+- **WHEN** `--bundle` is absent
+- **AND** the effective association file provides `bundle_name`
+- **AND** the `AGENTMUX_BUNDLE` environment value is present and non-blank
+- **THEN** bundle association resolves to the environment value
+
+#### Scenario: Fall back to default bundle
+
+- **WHEN** no CLI `--bundle`, environment, or association file value is present
+- **AND** `--default-bundle` is provided
+- **THEN** bundle association resolves to the default value
+
+#### Scenario: Record unresolved bundle without failing startup
+
+- **WHEN** no tier supplies a bundle
+- **THEN** bundle association is recorded as unresolved with its cause
+- **AND** MCP startup succeeds
+
+#### Scenario: Retain the cause when a supplied bundle cannot be loaded
+
+- **WHEN** a tier supplies a bundle which is unknown or malformed
+- **THEN** MCP startup retains that loading fault with its own cause
+- **AND** tool calls report that cause rather than a generic unassociated server
+
+#### Scenario: Record the tier which supplied the bundle
+
+- **WHEN** bundle association resolves
+- **THEN** the startup record names the tier it resolved from
+
 ## ADDED Requirements
 
 ### Requirement: Configuration Layer Resolution
