@@ -180,6 +180,58 @@ will fail.
 - If a candidate inline test fails any of these conditions, move it to
   `tests/unit` and widen visibility or restructure as needed.
 
+### Timing-Sensitive and Flaky Tests
+
+Tests that wait on an external signal (a file-watcher event, a process
+respawn, a scheduled callback) are exposed to real OS timing variance, not
+just logic bugs. A handful of recurring failure shapes are worth designing
+against up front:
+
+- **Budget, don't sleep.** Wait for the expected condition against a
+  deadline — event- or notification-based waits are often preferable to
+  polling, since they avoid unnecessary observer load — rather than
+  sleeping a fixed duration and hoping the work finished. On timeout,
+  panic with the accumulated evidence (captured logs, last-seen state)
+  rather than a bare "timed out" — the next person debugging a CI-only
+  failure has no other way to see what actually happened.
+- **Budgets tuned on one platform are not proven on another.** OS
+  schedulers and filesystem-notification backends vary in latency and
+  variance far more across platforms (and across loaded vs. idle
+  machines) than most logic does. A budget that comfortably passes on
+  Linux CI is not evidence it is generous enough for macOS, Windows, or a
+  contended local machine — validate timing-sensitive tests in CI on
+  every supported platform before trusting a fixed budget, and prefer an
+  intentionally generous budget over a tight one when the cost of waiting
+  a few extra seconds on failure is cheap.
+- **Watch for self-triggered feedback loops.** A process that reads or
+  writes the same files it is watching can retrigger its own watcher
+  (e.g., filesystem "access" events fired by the watcher's own reconcile
+  read). Filter or debounce events the system itself causes, not only
+  events from external actors, or a test can pass by accident on a
+  coincidental extra trigger and fail once that coincidence goes away.
+- **Assert on identifying state, not on aggregate counts, in shared
+  fixtures.** When a test fixture has multiple actors that can produce
+  indistinguishable log lines or events (two workers emitting the same
+  event name, for instance), an assertion on a global count is fragile —
+  any actor's unrelated activity can shift the count. Assert on the
+  specific actor or target under test instead.
+- **Diagnose from evidence, don't guess at a fix.** Attempt targeted
+  reproduction in an environment equivalent to where the failure occurred
+  (e.g., stress-running the specific test under load). If it doesn't
+  reproduce — a platform-specific or CI-load-dependent race may be
+  impossible to trigger on a developer's machine — preserve the CI
+  failure evidence and either add diagnostics/instrumentation to capture
+  more on the next occurrence, or validate a concrete causal hypothesis
+  against that evidence. A fix can be justified without local
+  reproduction when the evidence proves the cause, but a speculative
+  timing change applied on a hunch cannot: it can leave the actual race
+  intact while appearing to close the issue, and a second, deeper
+  investigation is sometimes needed when the first fix doesn't hold up
+  under recurrence.
+- **Quarantine is a last resort, not a resolution.** `#[ignore]`-ing a
+  flaky test to unblock a merge should be paired with a tracked
+  follow-up to de-flake and re-enable it. An indefinitely ignored test is
+  a silent coverage gap.
 
 ## Pre-Commit Validation
 
