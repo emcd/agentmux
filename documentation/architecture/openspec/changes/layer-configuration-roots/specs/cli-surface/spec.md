@@ -85,6 +85,17 @@ load.
 The command SHALL be read-only: it MUST NOT scaffold or modify configuration
 artifacts.
 
+The command SHALL report, for each configuration artifact it resolves, the
+physical file the effective lookup selected, so an operator can see which layer
+supplied it. This SHALL be reported whether or not validation succeeds: a
+shadowed file may be present, valid, and entirely inert, and no other surface
+exposes which copy of an artifact is in effect.
+
+Whether this reporting is default output or requested by a flag is not
+specified here. The scenario below therefore says "with source reporting in
+effect", which holds under either interface; a scenario naming a bare
+invocation would silently decide the question.
+
 On success the command SHALL exit zero. On the first invalid bundle it SHALL
 exit non-zero and report the offending file path and field-level detail; it does
 not partially load or degrade gracefully. The reported path SHALL be the
@@ -140,6 +151,15 @@ than a convenience.
 
 - **WHEN** the command runs against a configuration layer missing starter files
 - **THEN** no configuration artifact is created or modified
+
+#### Scenario: Report which layer supplied each artifact
+
+- **WHEN** an operator runs `agentmux check configuration` against a valid
+  multi-layer configuration with source reporting in effect
+- **THEN** each resolved artifact is reported with the physical file that
+  supplied it
+- **AND** a copy shadowed by an earlier layer is distinguishable from the copy
+  in effect
 
 ### Requirement: Default Bundle Selector for MCP Hosting
 

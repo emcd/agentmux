@@ -110,17 +110,22 @@ that directory into an explicit layer. There is no compatibility shim.
 maintainer documentation becomes the only description of the layer layout, and
 must carry worked examples.
 
-## Open Decisions
+## Decisions Taken
 
-- **Removing `--discover-local-configuration`.** It was added by
-  `redesign-configuration-resolution` to find a configuration root inside the
-  project being worked on. Configuration is moving out of projects, which
-  removes the case it was built for, and no replacement consumer has been
-  identified. An explicit layer list also covers the deployments discovery was
-  meant to serve, with the target named rather than inferred. Recommended for
-  removal; retaining it means carrying a second, inferential answer to the
-  question this change makes explicit.
-- **Tombstones are out of scope.** N layers make "remove what a lower layer
-  defines" more likely to be wanted than two layers did, but no use case exists
-  today, and shadowing may already suffice. Tracked separately rather than
+- **`--discover-local-configuration` is removed.** No consumer was identified,
+  and the case it was built for — a configuration root inside the project being
+  worked on — is the case this change removes. Reviving it later with a
+  justifying use case costs less than carrying a second, inferential answer to
+  the question an explicit layer list answers by naming its target.
+- **Configuration sources are introspectable through `agentmux check
+  configuration`.** With an arbitrary layer list an operator cannot otherwise
+  tell which copy of an artifact won, and a shadowed file can be present,
+  valid, and entirely inert. Whether it is default output or behind a flag is
+  left to implementation.
+
+## Out of Scope
+
+- **Tombstones.** N layers make "remove what a lower layer defines" more likely
+  to be wanted than two layers did, but no use case exists today, and shadowing
+  may already suffice. Tracked as `agentmux:ideas/general/4` rather than
   guessed at here.
