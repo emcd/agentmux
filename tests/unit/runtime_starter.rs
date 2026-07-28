@@ -177,7 +177,6 @@ fn refuses_to_scaffold_an_explicitly_named_root() {
     for source in [
         ConfigurationRootSource::CommandLine,
         ConfigurationRootSource::Environment,
-        ConfigurationRootSource::Discovered,
     ] {
         let error = ensure_starter_configuration_layout(&roots_from(&configuration_root, source))
             .expect_err("naming an absent root should fault rather than scaffold");

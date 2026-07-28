@@ -165,6 +165,6 @@ fn preflight_error_to_runtime(error: RelayError) -> RuntimeError {
 
 pub(super) fn print_check_help() {
     println!(
-        "Usage: agentmux check configuration [<bundle-id>] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH] [--discover-local-configuration]"
+        "Usage: agentmux check configuration [<bundle-id>] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }

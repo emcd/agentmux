@@ -113,7 +113,7 @@ fn parse_tui_arguments(arguments: &[String]) -> Result<TuiArguments, RuntimeErro
 
 pub(super) fn print_tui_help() {
     println!(
-        "Usage: agentmux tui [--bundle NAME] [--as-session NAME] [--lines N] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH] [--discover-local-configuration]"
+        "Usage: agentmux tui [--bundle NAME] [--as-session NAME] [--lines N] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }
 

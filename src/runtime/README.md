@@ -51,20 +51,15 @@ deployment-specific its source is:
 
 1. `--configuration-directory`
 2. `AGENTMUX_CONFIGURATION_DIRECTORY`
-3. nearest-ancestor discovery, only with `--discover-local-configuration`
-4. `$XDG_CONFIG_HOME/agentmux`, else `~/.config/agentmux`
+3. `$XDG_CONFIG_HOME/agentmux`, else `~/.config/agentmux`
 
 Tiers 1 and 2 **replace** the root; they do not extend a search list, so a root
 supplied explicitly never falls through to another one for a file it does not
 define. Resolution does not vary by build profile.
 
-Discovery walks the canonicalized working directory and its ancestors for
-`<ancestor>/.auxiliary/configuration/agentmux`, nearest winning, and reports its
-selection on stderr — never stdout, which `host mcp` uses for the protocol.
-
-Starter hydration applies only to a root from tier 4. A root named by flag,
-environment, or discovery is never scaffolded; when it does not exist, that is a
-fault rather than a reason to create one.
+Starter hydration applies only to a root from tier 3. A root named by flag or
+environment is never scaffolded; when it does not exist, that is a fault rather
+than a reason to create one.
 
 The **state** and **inscriptions** roots deliberately keep their build-profile
 gating and their Git-derived repository-root provenance. That gating is

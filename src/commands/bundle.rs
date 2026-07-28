@@ -82,13 +82,13 @@ pub(super) fn run_bundle_command(
 
 pub(super) fn print_up_help() {
     println!(
-        "Usage: agentmux up (<bundle-id> | --group GROUP) [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH] [--discover-local-configuration]"
+        "Usage: agentmux up (<bundle-id> | --group GROUP) [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }
 
 pub(super) fn print_down_help() {
     println!(
-        "Usage: agentmux down (<bundle-id> | --group GROUP) [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH] [--discover-local-configuration]"
+        "Usage: agentmux down (<bundle-id> | --group GROUP) [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }
 

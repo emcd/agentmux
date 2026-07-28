@@ -166,6 +166,6 @@ fn parse_change_arguments(arguments: &[String]) -> Result<ChangePskArguments, Ru
 
 pub(super) fn print_change_help() {
     println!(
-        "Usage: agentmux change psk <principal_id> [--output PATH | --write-config] [--bundle NAME] [--as-session NAME] [--json] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH] [--discover-local-configuration]"
+        "Usage: agentmux change psk <principal_id> [--output PATH | --write-config] [--bundle NAME] [--as-session NAME] [--json] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }

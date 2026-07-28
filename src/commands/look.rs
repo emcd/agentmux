@@ -171,6 +171,6 @@ fn parse_look_arguments(arguments: &[String]) -> Result<LookArguments, RuntimeEr
 
 pub(super) fn print_look_help() {
     println!(
-        "Usage: agentmux look <target-session> [--bundle NAME] [--as-session NAME] [--lines N] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH] [--discover-local-configuration]"
+        "Usage: agentmux look <target-session> [--bundle NAME] [--as-session NAME] [--lines N] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }

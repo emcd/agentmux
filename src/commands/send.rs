@@ -283,7 +283,7 @@ fn validate_send_targets(arguments: &SendArguments) -> Result<(), RuntimeError> 
 
 pub(super) fn print_send_help() {
     println!(
-        "Usage: agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--request-id ID] [--bundle NAME] [--as-session NAME] [--json] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH] [--discover-local-configuration]\n\
+        "Usage: agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--request-id ID] [--bundle NAME] [--as-session NAME] [--json] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\n\
          \n\
          Send carries no per-call timeout override in v1; the per-coder\n\
          [coders.<id>.acp].prime-timeout-ms and\n\

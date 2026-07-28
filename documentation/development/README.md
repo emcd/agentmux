@@ -77,7 +77,7 @@ root, and apply in every build profile:
 - MCP association override: `<configuration-root>/overlay/mcp.toml`
 - TUI session override: `<configuration-root>/overlay/users.toml`
 
-To point a development invocation at a repository-local configuration root
-without editing generated MCP client arguments, pass
-`--discover-local-configuration`; it selects the nearest ancestor holding
-`.auxiliary/configuration/agentmux`.
+To point a development invocation at a specific configuration root, pass
+`--configuration-directory` (or set `AGENTMUX_CONFIGURATION_DIRECTORY`). The
+root is named rather than inferred, so a typo faults instead of silently
+resolving a different deployment.

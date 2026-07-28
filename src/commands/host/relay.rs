@@ -225,7 +225,6 @@ fn resolve_runtime_roots(runtime: RuntimeArguments) -> Result<RuntimeRoots, Runt
         repository_root: runtime
             .repository_root
             .or_else(|| repository_checkout_root(&current_directory)),
-        discover_local_configuration: runtime.discover_local_configuration,
     };
     let roots = RuntimeRoots::resolve(&overrides)?;
     ensure_starter_configuration_layout(&roots)?;

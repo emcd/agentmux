@@ -184,7 +184,7 @@ fn parse_list_arguments(arguments: &[String]) -> Result<ListArguments, RuntimeEr
 
 pub(super) fn print_list_help() {
     println!(
-        "Usage: agentmux list principals [--namespace NAME|GLOBAL|*] [--as-session NAME] [--json] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH] [--discover-local-configuration]"
+        "Usage: agentmux list principals [--namespace NAME|GLOBAL|*] [--as-session NAME] [--json] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
     );
 }
 

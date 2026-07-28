@@ -8,7 +8,6 @@ use std::{
 };
 
 use super::error::RuntimeError;
-use super::inscriptions::emit_inscription;
 
 const APPLICATION_DIRECTORY: &str = "agentmux";
 /// Environment tier of configuration-root resolution. Ranked below the CLI flag
@@ -40,10 +39,6 @@ pub struct RuntimeRootOverrides {
     /// Feeds state and inscriptions root resolution only. Configuration root
     /// resolution ignores it.
     pub repository_root: Option<PathBuf>,
-    /// Enables nearest-ancestor discovery of a configuration root. Off unless
-    /// requested, so a repository-local root is never silently preferred over
-    /// the user-level one.
-    pub discover_local_configuration: bool,
 }
 
 /// Tier which supplied the configuration root.
@@ -53,8 +48,6 @@ pub enum ConfigurationRootSource {
     CommandLine,
     /// `AGENTMUX_CONFIGURATION_DIRECTORY`.
     Environment,
-    /// Nearest-ancestor discovery.
-    Discovered,
     /// `$XDG_CONFIG_HOME/agentmux` or `~/.config/agentmux`.
     Default,
 }
@@ -167,18 +160,6 @@ impl RelayRuntimePaths {
 pub fn debug_repository_state_root(repository_root: &Path) -> PathBuf {
     repository_root
         .join(".auxiliary/state")
-        .join(APPLICATION_DIRECTORY)
-}
-
-/// Resolves the configuration root a directory would supply if it hosts one.
-///
-/// This is the shape ancestor discovery looks for. It describes only where a
-/// tree keeps Agentmux configuration, so a tree which is not an Agentmux
-/// checkout can legitimately host configuration; nothing here inspects build
-/// profile, Git metadata, or package manifests.
-pub fn local_configuration_root(directory: &Path) -> PathBuf {
-    directory
-        .join(".auxiliary/configuration")
         .join(APPLICATION_DIRECTORY)
 }
 
@@ -416,8 +397,8 @@ pub fn ensure_existing_artifact_is_owned(path: &Path) -> Result<(), RuntimeError
     ensure_current_user_owns(path)
 }
 
-/// Resolves the configuration root: explicit flag, then environment, then
-/// opt-in ancestor discovery, then the XDG/home default.
+/// Resolves the configuration root: explicit flag, then environment, then the
+/// XDG/home default.
 ///
 /// The first two tiers **replace** the root rather than extending a search
 /// list, so an explicitly supplied root never falls through to a different one
@@ -433,11 +414,6 @@ fn resolve_configuration_root(
     if let Some(path) = env_directory(CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE) {
         return Ok((path, ConfigurationRootSource::Environment));
     }
-    if overrides.discover_local_configuration
-        && let Some(path) = discover_configuration_root()
-    {
-        return Ok((path, ConfigurationRootSource::Discovered));
-    }
     if let Some(path) = env_directory("XDG_CONFIG_HOME") {
         return Ok((
             path.join(APPLICATION_DIRECTORY),
@@ -449,40 +425,6 @@ fn resolve_configuration_root(
         configuration_root_from_sources(None, &home_directory),
         ConfigurationRootSource::Default,
     ))
-}
-
-/// Walks the working directory and its ancestors for a directory hosting an
-/// Agentmux configuration root, nearest ancestor winning.
-///
-/// Enumeration starts at the canonicalized working directory so symbolic links
-/// resolve consistently, and terminates at the filesystem root. The selection
-/// is reported on stderr rather than stdout: `host mcp` serves the protocol
-/// over stdout, where a diagnostic would corrupt the stream.
-fn discover_configuration_root() -> Option<PathBuf> {
-    let working_directory = env::current_dir().ok()?;
-    let working_directory = working_directory
-        .canonicalize()
-        .unwrap_or(working_directory);
-    for ancestor in working_directory.ancestors() {
-        let candidate = local_configuration_root(ancestor);
-        if !candidate.is_dir() {
-            continue;
-        }
-        let candidate = candidate.canonicalize().unwrap_or(candidate);
-        emit_inscription(
-            "runtime.configuration.discovered_root",
-            &serde_json::json!({
-                "working_directory": working_directory,
-                "configuration_root": candidate,
-            }),
-        );
-        eprintln!(
-            "discovered local configuration root: {}",
-            candidate.display()
-        );
-        return Some(candidate);
-    }
-    None
 }
 
 /// Resolves the state root.

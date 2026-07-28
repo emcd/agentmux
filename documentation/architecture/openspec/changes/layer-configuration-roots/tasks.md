@@ -60,10 +60,10 @@
 
 ## 6. Discovery removal
 
-- [ ] 6.1 Remove `--discover-local-configuration` and the ancestor walk
-- [ ] 6.2 Remove the discovered tier from root resolution and its
+- [x] 6.1 Remove `--discover-local-configuration` and the ancestor walk
+- [x] 6.2 Remove the discovered tier from root resolution and its
   `ConfigurationRootSource` variant
-- [ ] 6.3 Remove the discovery inscription and its stderr report, resolving
+- [x] 6.3 Remove the discovery inscription and its stderr report, resolving
   `agentmux:issues/runtime/5` if that issue is still open
 
 ## 7. Documentation

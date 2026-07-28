@@ -52,10 +52,6 @@ pub(super) fn parse_runtime_flag(
             )?));
             Ok(true)
         }
-        "--discover-local-configuration" => {
-            runtime.discover_local_configuration = true;
-            Ok(true)
-        }
         _ => Ok(false),
     }
 }
@@ -79,7 +75,6 @@ pub(super) fn resolve_roots(
             .repository_root
             .clone()
             .or_else(|| repository_checkout_root(current_directory)),
-        discover_local_configuration: runtime.discover_local_configuration,
     })
 }
 
