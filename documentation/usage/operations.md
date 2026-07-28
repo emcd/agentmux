@@ -92,7 +92,9 @@ If the file you edited is not on that list, some earlier layer is shadowing it.
 Only artifacts a layer actually supplies are reported, so an absent optional
 file simply has no line. The report is written before validation runs, so it is
 complete even on a run that fails, and it goes to standard output while failures
-go to standard error. Pass `-q`/`--quiet` for the exit code alone.
+go to standard error. Pass `-q`/`--quiet` to suppress the success output — the
+source report, the per-bundle lines, and the summary — leaving the exit code and
+any failure report.
 
 ### Migrating from `overlay/`
 

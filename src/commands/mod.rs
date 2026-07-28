@@ -280,7 +280,7 @@ fn print_agentmux_help() {
         "[--configuration-directory PATH] [--state-directory PATH] ",
         "[--inscriptions-directory PATH|--logs-directory PATH] ",
         "[--repository-root PATH]\n",
-        "  check configuration [<bundle-id>] [--configuration-directory PATH] ",
+        "  check configuration [<bundle-id>] [-q|--quiet] [--configuration-directory PATH] ",
         "[--state-directory PATH] [--inscriptions-directory PATH|",
         "--logs-directory PATH] [--repository-root PATH]\n",
         "  tui [--bundle NAME] [--as-session NAME] [--lines N] ",

@@ -60,8 +60,10 @@
 - [x] 5.3 Resolve and report sources before validation runs, so a fail-fast
   failure does not truncate the report on the run that most needs it
 - [x] 5.4 Write sources to stdout and failures to stderr, flushing stdout before
-  any failure. Without the flush a piped transcript can show the failure ahead
-  of the report explaining it, since stdout is block-buffered when piped
+  any failure. The runtime line-buffers stdout regardless of destination, so the
+  flush is presently redundant; it is required because that is an
+  implementation choice rather than a guarantee, and it orders the two streams
+  only where they share a destination
 
 ## 6. Discovery removal
 

@@ -114,13 +114,15 @@ Resolving sources is a lookup that cannot fail, so it can complete first.
 
 Source reporting SHALL be written to standard output and failure reports to
 standard error. Standard output SHALL be flushed before any failure report is
-written, so a captured transcript cannot show the failure ahead of the source
-report that explains it — and a captured transcript is what an operator pastes
-into a bug report. The flush is redundant under a runtime that line-buffers
-standard output regardless of destination, which is the present behavior; it is
-required because that is an implementation choice rather than a guarantee, and a
-standard output buffered by destination would reorder the two streams with no
-other signal.
+written, so that where the two streams share a destination — the merged
+transcript an operator pastes into a bug report — the failure cannot appear
+ahead of the source report explaining it. Streams captured separately carry no
+ordering between them and the flush does not supply one.
+
+The flush is redundant under a runtime that line-buffers standard output
+regardless of destination, which is the present behavior. It is required because
+that is an implementation choice rather than a guarantee: a standard output
+buffered by destination would reorder a merged transcript with no other signal.
 
 On success the command SHALL exit zero. On the first invalid bundle it SHALL
 exit non-zero and report the offending file path and field-level detail; it does
