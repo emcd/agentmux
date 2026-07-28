@@ -452,10 +452,16 @@ fn discovery_falls_through_when_no_ancestor_qualifies() {
 }
 
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "repository-local roots are unreachable in release builds"
+)]
 fn repository_root_no_longer_selects_the_configuration_root() {
     // It retains its state and inscriptions role; only the configuration-root
-    // role is gone. Asserted without a build-profile guard, because
-    // configuration-root resolution no longer varies by profile.
+    // role is gone. The state-root assertion below depends on the
+    // repository-local branch of resolve_state_root, which is reachable only
+    // under debug_assertions (see src/runtime/paths.rs), so this test is
+    // gated like its siblings above rather than asserted profile-invariantly.
     clear_configuration_environment();
     unsafe {
         std::env::set_var("XDG_CONFIG_HOME", "/xdg");
