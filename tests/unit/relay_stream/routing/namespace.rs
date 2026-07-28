@@ -12,12 +12,12 @@ use super::*;
 fn request_namespace_external_is_rejected_as_reserved() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_namespace_external";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
 
     let response = bundle_session_list_with_namespace(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         "EXTERNAL",
@@ -38,12 +38,12 @@ fn request_namespace_external_is_rejected_as_reserved() {
 fn request_namespace_relay_is_rejected_as_reserved() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_namespace_relay";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
 
     let response = bundle_session_list_with_namespace(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         "RELAY",
@@ -64,12 +64,12 @@ fn request_namespace_relay_is_rejected_as_reserved() {
 fn relay_wide_principal_without_namespace_is_rejected() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_namespace_missing";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default", bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_roots, "default", bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
 
-    let (mut client, join) = spawn_relay_connection(&configuration_root, &bundle_paths);
+    let (mut client, join) = spawn_relay_connection(&configuration_roots, &bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     let operator = global_user_id(bundle_name);
     send_json(

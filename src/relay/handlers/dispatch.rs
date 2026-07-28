@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use crate::configuration::BundleConfiguration;
+use crate::configuration::{BundleConfiguration, ConfigurationRoots};
 
 use super::super::authorization::{AuthorizationContext, authorize_updown};
 use super::super::identity::IdentityIntrospectRights;
@@ -140,7 +140,7 @@ pub(in crate::relay) fn handle_global_list() -> RelayResponse {
 /// requester's policy preset relay-wide rather than within a bundle context.
 pub(in crate::relay) fn handle_identity_admin_request(
     request: RelayRequest,
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     state_root: &Path,
     requester_principal_id: &str,
 ) -> Result<RelayResponse, RelayError> {
@@ -150,7 +150,7 @@ pub(in crate::relay) fn handle_identity_admin_request(
             scope,
             destination,
         } => identity::handle_new_peer(
-            configuration_root,
+            configuration_roots,
             state_root,
             requester_principal_id,
             identity::NewPeerRequestContext {
@@ -163,7 +163,7 @@ pub(in crate::relay) fn handle_identity_admin_request(
             principal_id,
             destination,
         } => identity::handle_change_psk(
-            configuration_root,
+            configuration_roots,
             state_root,
             requester_principal_id,
             principal_id,
@@ -202,13 +202,13 @@ pub(in crate::relay) fn build_identity_snapshot_event(
 }
 
 pub(in crate::relay) fn emit_choices_snapshot_for_ui_registration(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     namespace: &str,
     runtime_directory: &Path,
     ui_session_id: &str,
 ) -> Result<(), RelayError> {
     choices::emit_choices_snapshot_for_ui_registration(
-        configuration_root,
+        configuration_roots,
         namespace,
         runtime_directory,
         ui_session_id,

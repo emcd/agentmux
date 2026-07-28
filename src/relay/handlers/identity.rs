@@ -12,6 +12,7 @@ use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+use crate::configuration::ConfigurationRoots;
 use crate::relay::authorization::{RelayActionFamily, authorize_relay_action};
 use crate::relay::context::RequestPrincipal;
 use crate::relay::identity::{
@@ -42,13 +43,13 @@ pub(in crate::relay) struct NewPeerRequestContext {
 /// registers nothing; the temp file is published with an atomic rename after
 /// the commit, and a failed rename rolls the just-inserted record back out.
 pub(in crate::relay) fn handle_new_peer(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     state_root: &Path,
     requester_principal_id: &str,
     context: NewPeerRequestContext,
 ) -> Result<RelayResponse, RelayError> {
     authorize_relay_action(
-        configuration_root,
+        configuration_roots,
         requester_principal_id,
         RelayActionFamily::New,
         "peer",
@@ -127,14 +128,14 @@ pub(in crate::relay) fn handle_new_peer(
 /// `runtime_identity_revoked` error frame and its connection is closed, so a
 /// rotated credential cannot keep a live session.
 pub(in crate::relay) fn handle_change_psk(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     state_root: &Path,
     requester_principal_id: &str,
     principal_id: String,
     destination: CredentialDestination,
 ) -> Result<RelayResponse, RelayError> {
     authorize_relay_action(
-        configuration_root,
+        configuration_roots,
         requester_principal_id,
         RelayActionFamily::Change,
         "psk",

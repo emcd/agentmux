@@ -17,6 +17,7 @@ use rmcp::{
 };
 use serde_json::json;
 
+use crate::configuration::ConfigurationRoots;
 use crate::relay::{RelayRequest, RelayResponse, RelayStreamSession};
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::paths::{BundleRuntimePaths, RelayRuntimePaths};
@@ -71,7 +72,10 @@ impl From<std::io::Error> for RelayCallError {
 /// Configuration provided when booting MCP stdio service.
 #[derive(Clone, Debug)]
 pub struct McpConfiguration {
-    pub configuration_root: PathBuf,
+    /// `None` when the process faulted before roots resolved. Every path that
+    /// reads them is behind the readiness gate, so the absence is unreachable
+    /// rather than something callers work around.
+    pub configuration_roots: Option<ConfigurationRoots>,
     pub state_root: PathBuf,
     pub associated_bundle_paths: Option<BundleRuntimePaths>,
     pub sender_session: Option<String>,
@@ -253,6 +257,22 @@ impl McpServer {
             McpReadiness::Ready => Ok(()),
             McpReadiness::Unavailable(fault) => Err(startup_fault_error(fault)),
         }
+    }
+
+    /// The resolved configuration layers, or the fault that kept them from
+    /// resolving.
+    ///
+    /// Roots are absent only on the branch that faulted before resolution, and
+    /// that branch is `Unavailable`, so this reports the original fault rather
+    /// than inventing one about missing roots.
+    pub(super) fn require_configuration_roots(
+        &self,
+    ) -> Result<&ConfigurationRoots, rmcp::ErrorData> {
+        self.state
+            .configuration
+            .configuration_roots
+            .as_ref()
+            .ok_or_else(|| self.unavailable_error())
     }
 
     /// Whether the server holds a live relay stream. True only when both a sender

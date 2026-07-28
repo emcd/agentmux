@@ -6,6 +6,7 @@ use std::{
 };
 
 use agentmux::{
+    configuration::ConfigurationRoots,
     relay::{reconcile_bundle, registered_principal_ids},
     runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory},
 };
@@ -83,7 +84,7 @@ fn write_bundle_configuration(
     bundle_name: &str,
     coders: &[CoderSpec],
     sessions: &[SessionSpec],
-) -> PathBuf {
+) -> ConfigurationRoots {
     let config_root = root.join("config");
     let bundles = config_root.join("bundles");
     fs::create_dir_all(&bundles).expect("create bundles directory");
@@ -132,7 +133,7 @@ send = "home"
     }
     fs::write(bundles.join(format!("{bundle_name}.toml")), bundle_toml)
         .expect("write bundle config");
-    config_root
+    ConfigurationRoots::single(config_root)
 }
 
 fn list_owned_sessions(socket: &Path) -> Vec<String> {

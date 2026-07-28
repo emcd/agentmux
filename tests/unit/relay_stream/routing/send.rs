@@ -3,7 +3,8 @@
 //! mixed-target regression, and the `unknown_bundle` / reserved-`@EXTERNAL`
 //! rejections.
 
-use std::{io::BufReader, path::Path};
+use agentmux::configuration::ConfigurationRoots;
+use std::io::BufReader;
 
 use agentmux::runtime::paths::BundleRuntimePaths;
 use serde_json::{Value, json};
@@ -15,12 +16,12 @@ use super::*;
 /// bound bundle), sends one `send` request with the given target list, and
 /// returns the response frame.
 fn relay_wide_operator_send(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     bundle_name: &str,
     targets: Value,
 ) -> Value {
-    let (mut client, join) = spawn_relay_connection(configuration_root, bundle_paths);
+    let (mut client, join) = spawn_relay_connection(configuration_roots, bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     let operator_id = global_user_id(bundle_name);
     send_json(
@@ -63,15 +64,15 @@ fn relay_wide_operator_send(
 fn send_to_global_target_is_delivered_to_registered_operator() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_send_global_target";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default", bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_roots, "default", bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let operator_id = global_user_id(bundle_name);
 
     // The operator registers as a relay-wide session and stays connected.
     let (mut operator_client, operator_join) =
-        spawn_relay_connection(&configuration_root, &bundle_paths);
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let mut operator_reader =
         BufReader::new(operator_client.try_clone().expect("clone operator stream"));
     send_json(
@@ -86,7 +87,8 @@ fn send_to_global_target_is_delivered_to_registered_operator() {
     assert_eq!(read_json(&mut operator_reader)["frame"], "hello_ack");
 
     // A bundle-bound session sends to the operator by its `@GLOBAL` id.
-    let (mut alpha_client, alpha_join) = spawn_relay_connection(&configuration_root, &bundle_paths);
+    let (mut alpha_client, alpha_join) =
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let mut alpha_reader = BufReader::new(alpha_client.try_clone().expect("clone alpha stream"));
     send_json(
         &mut alpha_client,
@@ -141,14 +143,14 @@ fn send_to_global_target_is_delivered_to_registered_operator() {
 fn relay_wide_send_routes_to_bundle_target_by_suffix() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_relay_wide_to_bundle";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default", bundle_name);
-    write_policies_with_send(&configuration_root, "all");
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_roots, "default", bundle_name);
+    write_policies_with_send(&configuration_roots, "all");
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
 
     let response = relay_wide_operator_send(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         json!([format!("alpha@{bundle_name}")]),
@@ -170,14 +172,14 @@ fn relay_wide_send_routes_to_bundle_target_by_suffix() {
 fn relay_wide_send_into_bundle_denied_under_home_scope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_relay_wide_home_denied";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default", bundle_name);
-    write_policies_with_send(&configuration_root, "home");
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_roots, "default", bundle_name);
+    write_policies_with_send(&configuration_roots, "home");
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
 
     let response = relay_wide_operator_send(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         json!([format!("alpha@{bundle_name}")]),
@@ -201,13 +203,13 @@ fn relay_wide_send_into_bundle_denied_under_home_scope() {
 fn relay_wide_send_with_bare_target_is_rejected() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_relay_wide_bare";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default", bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_roots, "default", bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
 
     let response = relay_wide_operator_send(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         json!(["alpha"]),
@@ -228,13 +230,13 @@ fn relay_wide_send_with_bare_target_is_rejected() {
 fn send_mixing_relay_wide_and_session_targets_fans_out() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_mixed_targets";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_tui_configuration(&configuration_root, "default", bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    write_tui_configuration(&configuration_roots, "default", bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let operator_id = global_user_id(bundle_name);
 
-    let (mut client, join) = spawn_relay_connection(&configuration_root, &bundle_paths);
+    let (mut client, join) = spawn_relay_connection(&configuration_roots, &bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     send_json(
         &mut client,
@@ -286,12 +288,12 @@ fn send_fans_out_across_bundle_and_global_namespaces() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_a = "party_fanout_a";
     let bundle_b = "party_fanout_b";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_a);
-    write_tui_configuration(&configuration_root, "default", bundle_a);
-    write_ui_bundle(&configuration_root, bundle_b);
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_a);
+    write_tui_configuration(&configuration_roots, "default", bundle_a);
+    write_ui_bundle(&configuration_roots, bundle_b);
     // The fan-out crosses into peer bundle-b, which now requires `all` send
     // scope (the uniform cross-bundle threshold).
-    write_policies_with_send(&configuration_root, "all");
+    write_policies_with_send(&configuration_roots, "all");
     let state_root = temporary.path().join("state");
     let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
     let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b).expect("bundle-b paths");
@@ -300,7 +302,7 @@ fn send_fans_out_across_bundle_and_global_namespaces() {
 
     // The relay-wide operator registers and stays connected.
     let (mut operator_client, operator_join) =
-        spawn_relay_connection_with_catalog(&configuration_root, &state_root, catalog.clone());
+        spawn_relay_connection_with_catalog(&configuration_roots, &state_root, catalog.clone());
     let mut operator_reader =
         BufReader::new(operator_client.try_clone().expect("clone operator stream"));
     send_json(
@@ -316,7 +318,7 @@ fn send_fans_out_across_bundle_and_global_namespaces() {
 
     // The `agent` UI session in bundle-b registers and stays connected.
     let (mut agent_client, agent_join) =
-        spawn_relay_connection_with_catalog(&configuration_root, &state_root, catalog.clone());
+        spawn_relay_connection_with_catalog(&configuration_roots, &state_root, catalog.clone());
     let mut agent_reader = BufReader::new(agent_client.try_clone().expect("clone agent stream"));
     send_json(
         &mut agent_client,
@@ -331,7 +333,7 @@ fn send_fans_out_across_bundle_and_global_namespaces() {
 
     // A bundle-a session fans one Send out to both namespaces.
     let (mut alpha_client, alpha_join) =
-        spawn_relay_connection_with_catalog(&configuration_root, &state_root, catalog.clone());
+        spawn_relay_connection_with_catalog(&configuration_roots, &state_root, catalog.clone());
     let mut alpha_reader = BufReader::new(alpha_client.try_clone().expect("clone alpha stream"));
     send_json(
         &mut alpha_client,
@@ -410,16 +412,16 @@ fn cross_bundle_send_denied_under_home_scope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_a = "party_send_home_a";
     let bundle_b = "party_send_home_b";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_a);
-    write_ui_bundle(&configuration_root, bundle_b);
-    write_policies_with_send(&configuration_root, "home");
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_a);
+    write_ui_bundle(&configuration_roots, bundle_b);
+    write_policies_with_send(&configuration_roots, "home");
     let state_root = temporary.path().join("state");
     let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
     let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b).expect("bundle-b paths");
     let catalog = multi_bundle_catalog(&[paths_a, paths_b]);
 
     let (mut client, join) =
-        spawn_relay_connection_with_catalog(&configuration_root, &state_root, catalog);
+        spawn_relay_connection_with_catalog(&configuration_roots, &state_root, catalog);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     send_json(
         &mut client,
@@ -469,12 +471,12 @@ fn cross_bundle_send_denied_under_home_scope() {
 fn same_bundle_send_permitted_under_home_scope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_send_same_home";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
-    write_policies_with_send(&configuration_root, "home");
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    write_policies_with_send(&configuration_roots, "home");
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
 
-    let (mut client, join) = spawn_relay_connection(&configuration_root, &bundle_paths);
+    let (mut client, join) = spawn_relay_connection(&configuration_roots, &bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     send_json(
         &mut client,
@@ -521,11 +523,11 @@ fn same_bundle_send_permitted_under_home_scope() {
 fn send_to_unknown_bundle_target_is_rejected() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_unknown_bundle";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
 
-    let (mut client, join) = spawn_relay_connection(&configuration_root, &bundle_paths);
+    let (mut client, join) = spawn_relay_connection(&configuration_roots, &bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     send_json(
         &mut client,
@@ -571,11 +573,11 @@ fn send_to_unknown_bundle_target_is_rejected() {
 fn send_to_external_namespace_target_is_rejected() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_external_target";
-    let configuration_root = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
 
-    let (mut client, join) = spawn_relay_connection(&configuration_root, &bundle_paths);
+    let (mut client, join) = spawn_relay_connection(&configuration_roots, &bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     send_json(
         &mut client,

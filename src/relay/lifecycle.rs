@@ -5,7 +5,8 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::configuration::{
-    BundleConfiguration, TargetConfiguration, load_bundle_configuration, load_tui_configuration,
+    BundleConfiguration, ConfigurationRoots, TargetConfiguration, load_bundle_configuration,
+    load_tui_configuration,
 };
 use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 
@@ -36,12 +37,12 @@ impl From<TmuxLifecycleError> for RelayError {
 /// Returns structured validation/configuration errors when bundle loading
 /// fails, and internal failures when tmux session operations fail.
 pub(super) fn reconcile_bundle(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
     tmux_socket: &Path,
 ) -> Result<ReconciliationReport, RelayError> {
-    let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
-    let _authorization = load_authorization_context(configuration_root, Some(&bundle))?;
+    let bundle = load_bundle_configuration(configuration_roots, bundle_name).map_err(map_config)?;
+    let _authorization = load_authorization_context(configuration_roots, Some(&bundle))?;
     reconcile_loaded_bundle(&bundle, tmux_socket)
 }
 
@@ -57,11 +58,11 @@ pub(super) fn reconcile_bundle(
 /// Returns the same structured validation/configuration errors as startup when
 /// any artifact fails to parse or resolve.
 pub(super) fn preflight_bundle_configuration(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
 ) -> Result<(), RelayError> {
-    let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
-    let _authorization = load_authorization_context(configuration_root, Some(&bundle))?;
+    let bundle = load_bundle_configuration(configuration_roots, bundle_name).map_err(map_config)?;
+    let _authorization = load_authorization_context(configuration_roots, Some(&bundle))?;
     Ok(())
 }
 
@@ -83,12 +84,12 @@ pub(super) fn shutdown_bundle_runtime(tmux_socket: &Path) -> Result<ShutdownRepo
 }
 
 pub(super) fn startup_bundle(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
     runtime_directory: &Path,
 ) -> Result<BundleStartupReport, RelayError> {
-    let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
-    let authorization = load_authorization_context(configuration_root, Some(&bundle))?;
+    let bundle = load_bundle_configuration(configuration_roots, bundle_name).map_err(map_config)?;
+    let authorization = load_authorization_context(configuration_roots, Some(&bundle))?;
     let tmux_socket = tmux_socket_path_for_runtime_directory(runtime_directory);
     startup_loaded_bundle(
         &bundle,
@@ -108,9 +109,9 @@ pub(super) fn startup_bundle(
 /// (capability gate) rather than `validation_unknown_target` — and a Hello later
 /// flips the same entry online. Absent `users.toml` is not an error.
 pub(super) fn register_configured_relay_wide_principals(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
 ) -> Result<(), RelayError> {
-    let Some(users) = load_tui_configuration(configuration_root).map_err(map_tui_config)? else {
+    let Some(users) = load_tui_configuration(configuration_roots).map_err(map_tui_config)? else {
         return Ok(());
     };
     for session in &users.sessions {
@@ -162,10 +163,10 @@ pub(super) fn register_configured_bundle_principals(
 /// the relay begins serving, so a declared-but-offline member is a known target
 /// rather than an unknown one.
 pub(super) fn register_configured_bundle(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
 ) -> Result<(), RelayError> {
-    let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
+    let bundle = load_bundle_configuration(configuration_roots, bundle_name).map_err(map_config)?;
     register_configured_bundle_principals(&bundle)
 }
 

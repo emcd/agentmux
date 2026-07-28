@@ -1364,7 +1364,7 @@ async fn relay_async_delivery_envelope_addresses_carry_canonical_ids_across_bund
     // A second namespace plus a send scope that reaches it: the fixture's
     // policies file caps send at home.
     fs::write(
-        config_root.join("bundles").join("qa.toml"),
+        config_root.base_layer().join("bundles").join("qa.toml"),
         r#"format-version = 1
 autostart = true
 
@@ -1377,7 +1377,7 @@ coder = "default"
     )
     .expect("write qa bundle config");
     fs::write(
-        config_root.join("policies.toml"),
+        config_root.base_layer().join("policies.toml"),
         r#"
 format-version = 1
 default = "default"

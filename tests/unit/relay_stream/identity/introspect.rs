@@ -1,6 +1,7 @@
 //! `IdentityIntrospect` dispatch gate and the connect-time `identity.snapshot`
 //! for application principals.
 
+use agentmux::configuration::ConfigurationRoots;
 use std::io::BufReader;
 
 use agentmux::runtime::paths::BundleRuntimePaths;
@@ -12,13 +13,13 @@ use super::*;
 /// `IdentityIntrospect` for `target_session` (a qualified principal id), and
 /// returns the response frame. The connection is closed before returning.
 fn introspect_request(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     principal_id: &str,
     identity_token: &str,
     target_session: &str,
 ) -> Value {
-    let (mut client, join) = spawn_relay_connection(configuration_root, bundle_paths);
+    let (mut client, join) = spawn_relay_connection(configuration_roots, bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone introspect stream"));
     send_json(
         &mut client,
@@ -60,7 +61,7 @@ fn introspect_request(
 fn application_principal_introspects_active_session() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_introspect_ok";
-    let configuration_root = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let target_principal_id = format!("alpha@{bundle_name}");
@@ -70,7 +71,7 @@ fn application_principal_introspects_active_session() {
 
     // Register the introspection target as a session principal in the store.
     register_peer(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         &target_principal_id,
@@ -79,7 +80,7 @@ fn application_principal_introspects_active_session() {
     // Register the application principal scoped to the whole bundle (bare-bundle
     // scope covers every session in that namespace).
     let app_psk = register_peer(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         &app_principal_id,
@@ -87,7 +88,7 @@ fn application_principal_introspects_active_session() {
     );
 
     let response = introspect_request(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         &app_principal_id,
         &app_psk,
@@ -125,14 +126,14 @@ fn application_principal_introspects_active_session() {
 fn session_principal_introspect_is_denied() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_introspect_denied";
-    let configuration_root = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
 
     // A socket-trust session principal: accepted at Hello (enforcement off) but
     // granted no introspection rights.
     let response = introspect_request(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         &format!("alpha@{bundle_name}"),
         "socket-trust",
@@ -160,12 +161,12 @@ fn session_principal_introspect_is_denied() {
 fn introspect_rejects_bare_target_session_before_authorization() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_introspect_bare";
-    let configuration_root = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
 
     let response = introspect_request(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         &format!("alpha@{bundle_name}"),
         "socket-trust",
@@ -193,7 +194,7 @@ fn introspect_rejects_bare_target_session_before_authorization() {
 fn application_principal_receives_identity_snapshot_on_connect() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_snapshot_connect";
-    let configuration_root = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let target_principal_id = format!("alpha@{bundle_name}");
@@ -204,21 +205,21 @@ fn application_principal_receives_identity_snapshot_on_connect() {
     // An in-scope session principal in the store, plus the application principal
     // scoped to the whole bundle (bare-bundle scope covers every session in it).
     register_peer(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         &target_principal_id,
         None,
     );
     let app_psk = register_peer(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         &app_principal_id,
         Some(bundle_name),
     );
 
-    let (mut client, join) = spawn_relay_connection(&configuration_root, &bundle_paths);
+    let (mut client, join) = spawn_relay_connection(&configuration_roots, &bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone app stream"));
     send_json(
         &mut client,

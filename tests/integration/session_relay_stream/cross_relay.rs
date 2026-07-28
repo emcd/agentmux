@@ -23,7 +23,7 @@ use super::*;
 fn cross_relay_send_propagates_peer_delivery_outcome() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_cross_relay_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots = write_cross_relay_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
@@ -45,7 +45,7 @@ fn cross_relay_send_propagates_peer_delivery_outcome() {
     let observed = spawn_answering_peer(&peer_socket, peer_response);
 
     let (results, forwarded) = forward_cross_relay_send(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name.as_str(),
         &peer_socket,
@@ -74,7 +74,7 @@ fn cross_relay_send_propagates_peer_delivery_outcome() {
 fn cross_relay_send_reports_ingress_denied_as_failed() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_cross_relay_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots = write_cross_relay_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
@@ -93,7 +93,7 @@ fn cross_relay_send_reports_ingress_denied_as_failed() {
     let observed = spawn_answering_peer(&peer_socket, peer_response);
 
     let (results, _forwarded) = forward_cross_relay_send(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name.as_str(),
         &peer_socket,
@@ -110,7 +110,7 @@ fn cross_relay_send_reports_ingress_denied_as_failed() {
 fn cross_relay_send_reports_peer_unavailable_when_unreachable() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_cross_relay_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots = write_cross_relay_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
@@ -121,7 +121,7 @@ fn cross_relay_send_reports_peer_unavailable_when_unreachable() {
     // the first delivery to it yields the distinct `peer_unavailable` outcome.
     let peer_socket = temporary.path().join("nonexistent-peer.sock");
     let (mut client, handle) = spawn_relay_stream_with_peer(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         "peer",
         "origin-relay",
@@ -167,7 +167,7 @@ fn cross_relay_send_requires_all_tier() {
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     // The default policy grants alpha `send = home`, so a cross-relay (always
     // all-tier) target is denied at authorization before any peer is dialed.
-    let configuration_root = write_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
@@ -177,7 +177,7 @@ fn cross_relay_send_requires_all_tier() {
     // socket is never dialed because authorization fails first (no listener bound).
     let peer_socket = temporary.path().join("unused-peer.sock");
     let (mut client, handle) = spawn_relay_stream_with_peer(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         "peer",
         "origin-relay",
@@ -218,7 +218,7 @@ fn cross_relay_send_requires_all_tier() {
 fn cross_relay_ingress_accepts_in_scope_target() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
+    let configuration_roots = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
@@ -231,7 +231,7 @@ fn cross_relay_ingress_accepts_in_scope_target() {
     );
 
     let response = ingress_send_response(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
         format!("display@{bundle_name}").as_str(),
@@ -252,7 +252,7 @@ fn cross_relay_ingress_accepts_in_scope_target() {
 fn cross_relay_ingress_denies_out_of_scope_target() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
+    let configuration_roots = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
@@ -265,7 +265,7 @@ fn cross_relay_ingress_denies_out_of_scope_target() {
     );
 
     let response = ingress_send_response(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
         format!("display@{bundle_name}").as_str(),
@@ -285,7 +285,7 @@ fn cross_relay_ingress_denies_out_of_scope_target() {
 fn cross_relay_ingress_denies_absent_scope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
+    let configuration_roots = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
@@ -294,7 +294,7 @@ fn cross_relay_ingress_denies_absent_scope() {
     write_ingress_peer_store(&bundle_paths.state_root, relay_principal_id.as_str(), None);
 
     let response = ingress_send_response(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
         format!("display@{bundle_name}").as_str(),
@@ -310,7 +310,7 @@ fn cross_relay_ingress_denies_absent_scope() {
 fn cross_relay_ingress_unknown_target_sorts_before_authorization() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
+    let configuration_roots = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
@@ -325,7 +325,7 @@ fn cross_relay_ingress_unknown_target_sorts_before_authorization() {
     );
 
     let response = ingress_send_response(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
         format!("ghost@{bundle_name}").as_str(),
@@ -341,7 +341,7 @@ fn cross_relay_ingress_unknown_target_sorts_before_authorization() {
 fn cross_relay_ingress_rejects_bang_path_send_before_forwarding() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
+    let configuration_roots = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
@@ -357,7 +357,7 @@ fn cross_relay_ingress_rejects_bang_path_send_before_forwarding() {
     );
 
     let response = ingress_request_response(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
         json!({
@@ -383,7 +383,7 @@ fn cross_relay_ingress_rejects_bang_path_send_before_forwarding() {
 fn cross_relay_ingress_rejects_bang_path_raww_before_forwarding() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_root = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
+    let configuration_roots = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
@@ -398,7 +398,7 @@ fn cross_relay_ingress_rejects_bang_path_raww_before_forwarding() {
     // target must be rejected there, not forwarded onward under this relay's
     // identity.
     let response = ingress_request_response(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
         json!({

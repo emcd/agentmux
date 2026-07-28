@@ -16,8 +16,7 @@
 //! `tests/unit/relay/` directory and are sibling modules under this
 //! hub.
 
-use std::path::PathBuf;
-
+use agentmux::configuration::ConfigurationRoots;
 use agentmux::relay::{RelayRequest, RelayResponse, handle_request};
 use tempfile::TempDir;
 
@@ -36,19 +35,19 @@ mod startup_failures;
 
 fn dispatch_request(
     request: RelayRequest,
-    configuration_root: &std::path::Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
     tmux_socket: &std::path::Path,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
     let runtime_directory = tmux_socket
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
-    handle_request(request, configuration_root, bundle_name, runtime_directory)
+    handle_request(request, configuration_roots, bundle_name, runtime_directory)
 }
 
-fn write_tui_configuration(root: &std::path::Path, policy: &str) {
+fn write_tui_configuration(roots: &ConfigurationRoots, policy: &str) {
     std::fs::write(
-        root.join("users.toml"),
+        roots.base_layer().join("users.toml"),
         format!(
             r#"
 default-session = "user@GLOBAL"
@@ -64,9 +63,13 @@ policy = "{policy}"
     .expect("write users configuration");
 }
 
-fn write_tui_configuration_with_session_id(root: &std::path::Path, policy: &str, session_id: &str) {
+fn write_tui_configuration_with_session_id(
+    roots: &ConfigurationRoots,
+    policy: &str,
+    session_id: &str,
+) {
     std::fs::write(
-        root.join("users.toml"),
+        roots.base_layer().join("users.toml"),
         format!(
             r#"
 default-session = "{session_id}"
@@ -82,7 +85,7 @@ policy = "{policy}"
     .expect("write users configuration");
 }
 
-fn write_bundle(temporary: &TempDir, name: &str) -> PathBuf {
+fn write_bundle(temporary: &TempDir, name: &str) -> ConfigurationRoots {
     let root = temporary.path().join("config");
     let bundles = root.join("bundles");
     std::fs::create_dir_all(&bundles).expect("create bundles directory");
@@ -144,10 +147,10 @@ directory = "/tmp"
 coder = "shell"
 "#;
     std::fs::write(bundles.join(format!("{name}.toml")), body).expect("write bundle file");
-    root
+    ConfigurationRoots::single(root)
 }
 
-fn write_single_member_bundle(temporary: &TempDir, name: &str) -> PathBuf {
+fn write_single_member_bundle(temporary: &TempDir, name: &str) -> ConfigurationRoots {
     let root = temporary.path().join("config");
     let bundles = root.join("bundles");
     std::fs::create_dir_all(&bundles).expect("create bundles directory");
@@ -192,10 +195,10 @@ directory = "/tmp"
 coder = "shell"
 "#;
     std::fs::write(bundles.join(format!("{name}.toml")), body).expect("write bundle file");
-    root
+    ConfigurationRoots::single(root)
 }
 
-fn write_acp_bundle(temporary: &TempDir, name: &str) -> PathBuf {
+fn write_acp_bundle(temporary: &TempDir, name: &str) -> ConfigurationRoots {
     let root = temporary.path().join("config");
     let bundles = root.join("bundles");
     std::fs::create_dir_all(&bundles).expect("create bundles directory");
@@ -256,7 +259,7 @@ directory = "/tmp"
 coder = "acp"
 "#;
     std::fs::write(bundles.join(format!("{name}.toml")), body).expect("write bundle file");
-    root
+    ConfigurationRoots::single(root)
 }
 
 fn write_bundle_with_policy(
@@ -264,7 +267,7 @@ fn write_bundle_with_policy(
     name: &str,
     bundle_body: &str,
     policy_body: Option<&str>,
-) -> PathBuf {
+) -> ConfigurationRoots {
     let root = temporary.path().join("config");
     let bundles = root.join("bundles");
     std::fs::create_dir_all(&bundles).expect("create bundles directory");
@@ -286,5 +289,5 @@ resume-command = "sh -lc 'exec sleep 45'"
         std::fs::write(root.join("policies.toml"), policy_body).expect("write policies file");
     }
     std::fs::write(bundles.join(format!("{name}.toml")), bundle_body).expect("write bundle file");
-    root
+    ConfigurationRoots::single(root)
 }

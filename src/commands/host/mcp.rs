@@ -3,7 +3,7 @@ use std::{env, path::PathBuf};
 use serde_json::json;
 
 use crate::{
-    configuration::load_bundle_configuration,
+    configuration::{ConfigurationRoots, load_bundle_configuration},
     mcp::{McpConfiguration, McpReadiness, McpStartupFault},
     runtime::{
         association::{
@@ -99,7 +99,7 @@ pub(super) async fn run_mcp_host(
                 None => McpReadiness::Ready,
             };
             let configuration = McpConfiguration {
-                configuration_root: prepared.roots.configuration_root,
+                configuration_roots: Some(prepared.roots.configuration_roots),
                 state_root: prepared.roots.state_root,
                 associated_bundle_paths: prepared.associated_bundle_paths,
                 sender_session: prepared.sender_session,
@@ -115,7 +115,7 @@ pub(super) async fn run_mcp_host(
             // through every tool call, which is the channel that gets it
             // repaired.
             let configuration = McpConfiguration {
-                configuration_root: PathBuf::new(),
+                configuration_roots: None,
                 state_root: PathBuf::new(),
                 associated_bundle_paths: None,
                 sender_session: None,
@@ -147,7 +147,7 @@ fn prepare_runtime(arguments: &McpHostArguments) -> Result<PreparedRuntime, McpS
         shared::resolve_roots(&arguments.runtime, &current_directory).map_err(to_startup_fault)?;
     ensure_starter_configuration_layout(&roots).map_err(to_startup_fault)?;
     let local_overrides =
-        load_local_mcp_overrides(&roots.configuration_root).map_err(to_startup_fault)?;
+        load_local_mcp_overrides(&roots.configuration_roots).map_err(to_startup_fault)?;
 
     let candidates = resolve_association(
         &McpAssociationCli {
@@ -184,7 +184,7 @@ fn prepare_runtime(arguments: &McpHostArguments) -> Result<PreparedRuntime, McpS
     let Some(bundle_candidate) = candidates.bundle.clone() else {
         return Ok(unassociated(
             roots,
-            "no bundle resolved from --bundle, injected environment, overlay, or \
+            "no bundle resolved from --bundle, injected environment, association file, or \
              --default-bundle"
                 .to_string(),
         ));
@@ -192,12 +192,13 @@ fn prepare_runtime(arguments: &McpHostArguments) -> Result<PreparedRuntime, McpS
 
     // The bundle was named by some tier, so failing to load it is a mistake to
     // repair rather than a configuration to accept.
-    let bundle = match load_bundle_configuration(&roots.configuration_root, &bundle_candidate.value)
-        .map_err(shared::map_bundle_load_error)
-    {
-        Ok(bundle) => bundle,
-        Err(source) => return Ok(retained(roots, source)),
-    };
+    let bundle =
+        match load_bundle_configuration(&roots.configuration_roots, &bundle_candidate.value)
+            .map_err(shared::map_bundle_load_error)
+        {
+            Ok(bundle) => bundle,
+            Err(source) => return Ok(retained(roots, source)),
+        };
 
     // With no candidate, the session falls to matching the working directory
     // against the member directories the bundle file already declares. A
@@ -216,9 +217,9 @@ fn prepare_runtime(arguments: &McpHostArguments) -> Result<PreparedRuntime, McpS
             return Ok(unassociated(
                 roots,
                 format!(
-                    "no session resolved from --session-name, injected environment, or overlay, \
-                     and working directory '{}' matched no session directory declared by bundle \
-                     '{}'",
+                    "no session resolved from --session-name, injected environment, or \
+                     association file, and working directory '{}' matched no session directory \
+                     declared by bundle '{}'",
                     current_directory.display(),
                     bundle_candidate.value
                 ),
@@ -251,7 +252,7 @@ fn prepare_runtime(arguments: &McpHostArguments) -> Result<PreparedRuntime, McpS
 }
 
 /// Maps a runtime failure onto a retained startup fault, preserving its code so
-/// a caller can tell an absent configuration root from a malformed overlay.
+/// a caller can tell an absent configuration layer from a malformed file.
 fn to_startup_fault(source: RuntimeError) -> McpStartupFault {
     let code = match &source {
         RuntimeError::Validation { code, .. } => code.clone(),
@@ -285,7 +286,10 @@ fn emit_startup_inscription(configuration: &McpConfiguration, diagnostics: &Star
                 .as_ref()
                 .map(|paths| paths.bundle_name.clone()),
             "session_name": configuration.sender_session.clone(),
-            "configuration_root": configuration.configuration_root,
+            "configuration_layers": configuration
+                .configuration_roots
+                .as_ref()
+                .map(ConfigurationRoots::layers),
             "state_root": configuration.state_root,
         }),
     );

@@ -219,7 +219,7 @@ fn resolve_runtime_roots(runtime: RuntimeArguments) -> Result<RuntimeRoots, Runt
     // question differently from its clients would bind a socket none of them
     // look for.
     let overrides = RuntimeRootOverrides {
-        configuration_root: runtime.configuration_root,
+        configuration_layers: runtime.configuration_layers,
         state_root: runtime.state_root,
         inscriptions_root: runtime.inscriptions_root,
         repository_root: runtime
@@ -245,13 +245,13 @@ fn prepare_relay_host(
     // entry, or invalid environment override) fails startup up front, regardless
     // of how many bundles are configured.
     let relay_configuration = crate::relay::load_relay_runtime_configuration(
-        &roots.configuration_root,
+        &roots.configuration_roots,
         cli_watch_bundles,
         cli_require_session_credentials,
     )
     .map_err(shared::map_relay_error)?;
 
-    let memberships = load_bundle_group_memberships(&roots.configuration_root)
+    let memberships = load_bundle_group_memberships(&roots.configuration_roots)
         .map_err(shared::map_bundle_load_error)?;
     configure_process_inscriptions(&relay_inscriptions_path(&roots.inscriptions_root))?;
 
@@ -326,7 +326,7 @@ fn prepare_relay_host(
     // Register `users.toml`-declared relay-wide principals as static (offline)
     // registry entries so look/raww resolve their capabilities from the unified
     // registry and a declared-but-disconnected principal is a known target.
-    crate::relay::register_configured_relay_wide_principals(&roots.configuration_root)
+    crate::relay::register_configured_relay_wide_principals(&roots.configuration_roots)
         .map_err(shared::map_relay_error)?;
 
     // A restart-first operator diagnoses from the journal and inscriptions, so
@@ -416,7 +416,7 @@ fn prepare_relay_host(
         .map(|peer| peer.alias.clone())
         .collect::<Vec<_>>();
     let serve_context = ConnectionServeContext::new(
-        roots.configuration_root.clone(),
+        roots.configuration_roots.clone(),
         roots.state_root.clone(),
         catalog,
         peer_connection_manager,
@@ -497,7 +497,7 @@ async fn serve_relay_host(plan: Box<RelayHostServePlan>) -> Result<(), RuntimeEr
     // and a removal produces no event at all.
     let bundle_watcher = if watch_bundles {
         match spawn_bundle_watcher(
-            serve_context.configuration_root(),
+            serve_context.configuration_roots(),
             serve_context.state_root(),
             serve_context.bundle_catalog().clone(),
             no_autostart,
@@ -852,7 +852,7 @@ fn host_selected_bundle(
         &json!({
             "bundle_name": paths.bundle_name,
             "tmux_socket": paths.tmux_socket,
-            "configuration_root": roots.configuration_root,
+            "configuration_layers": roots.configuration_roots.layers(),
             "state_root": roots.state_root,
             "inscriptions_root": roots.inscriptions_root,
         }),
@@ -867,7 +867,7 @@ fn host_selected_bundle(
     // performs this registration inside `startup_bundle`.
     if let RelayHostStartupMode::ProcessOnly = startup_mode
         && let Err(source) =
-            crate::relay::register_configured_bundle(&roots.configuration_root, &paths.bundle_name)
+            crate::relay::register_configured_bundle(&roots.configuration_roots, &paths.bundle_name)
     {
         return (
             failed_startup_bundle_from_relay_error(bundle_name, source),
@@ -877,7 +877,7 @@ fn host_selected_bundle(
     let mut startup_report = None;
     if let RelayHostStartupMode::Autostart = startup_mode {
         let report = match startup_bundle(
-            &roots.configuration_root,
+            &roots.configuration_roots,
             &paths.bundle_name,
             &paths.runtime_directory,
         ) {

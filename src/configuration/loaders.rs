@@ -5,7 +5,7 @@ use std::{
 };
 
 use super::{
-    BUNDLE_SCHEMA_VERSION, ConfigurationError, POLICIES_SCHEMA_VERSION,
+    BUNDLE_SCHEMA_VERSION, ConfigurationError, ConfigurationRoots, POLICIES_SCHEMA_VERSION,
     fields::{
         canonicalize_best_effort, normalize_field, normalize_global_session_id,
         validate_bundle_groups, validate_format_version, validate_session_id,
@@ -34,13 +34,13 @@ use super::{
 ///
 /// Returns `ConfigurationError` for malformed bundle files and I/O failures.
 pub fn load_bundle_group_memberships(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
 ) -> Result<Vec<BundleGroupMembership>, ConfigurationError> {
-    let definitions = effective_bundle_definitions(configuration_root);
+    let definitions = effective_bundle_definitions(configuration_roots);
     let mut memberships = Vec::with_capacity(definitions.len());
-    // Keyed by identifier and ordered by it, so an overlay-only bundle is
-    // enumerated and an overlay definition shadowing a base one is enumerated
-    // once, at its overlay path.
+    // Keyed by identifier and ordered by it, so a bundle only one layer defines
+    // is enumerated, and a definition shadowing one of the same identifier in a
+    // later layer is enumerated once, at the path that supplied it.
     for (bundle_name, bundle_path) in definitions {
         let bundle_raw = fs::read_to_string(&bundle_path).map_err(|source| {
             ConfigurationError::io(format!("read {}", bundle_path.display()), source)
@@ -75,11 +75,11 @@ pub fn load_bundle_group_memberships(
 ///
 /// Returns `ConfigurationError` for unknown bundles, invalid schema, and I/O.
 pub fn load_bundle_configuration(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
 ) -> Result<BundleConfiguration, ConfigurationError> {
-    let coders_path = coders_configuration_path(configuration_root);
-    let bundle_path = bundle_configuration_path(configuration_root, bundle_name);
+    let coders_path = coders_configuration_path(configuration_roots);
+    let bundle_path = bundle_configuration_path(configuration_roots, bundle_name);
 
     if !bundle_path.exists() {
         return Err(ConfigurationError::UnknownBundle {
@@ -123,9 +123,9 @@ pub fn load_bundle_configuration(
 ///
 /// Returns `ConfigurationError` when the file exists but is malformed.
 pub fn load_tui_configuration(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
 ) -> Result<Option<TuiConfiguration>, ConfigurationError> {
-    load_tui_configuration_file(&tui_configuration_path(configuration_root))
+    load_tui_configuration_file(&tui_configuration_path(configuration_roots))
 }
 
 /// Loads global user configuration from an explicit file path.
@@ -174,9 +174,9 @@ pub fn load_tui_configuration_file(
 ///
 /// Returns `ConfigurationError` when the file exists but is malformed.
 pub fn load_ui_configuration(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
 ) -> Result<Option<UiConfiguration>, ConfigurationError> {
-    let path = ui_configuration_path(configuration_root);
+    let path = ui_configuration_path(configuration_roots);
     if !path.exists() {
         return Ok(None);
     }
@@ -204,8 +204,10 @@ pub fn load_ui_configuration(
 /// # Errors
 ///
 /// Returns `ConfigurationError` when the artifact is missing or malformed.
-pub fn load_policy_ids(configuration_root: &Path) -> Result<HashSet<String>, ConfigurationError> {
-    let path = policies_configuration_path(configuration_root);
+pub fn load_policy_ids(
+    configuration_roots: &ConfigurationRoots,
+) -> Result<HashSet<String>, ConfigurationError> {
+    let path = policies_configuration_path(configuration_roots);
     let raw = fs::read_to_string(&path)
         .map_err(|source| ConfigurationError::io(format!("read {}", path.display()), source))?;
     let parsed = toml::from_str::<RawPoliciesFile>(&raw).map_err(|source| {

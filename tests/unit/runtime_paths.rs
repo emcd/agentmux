@@ -150,7 +150,7 @@ fn repository_local_state_and_inscriptions_activate_for_a_source_checkout() {
     // failure the retained provenance exists to prevent.
     let checkout = repository_checkout_root(&root).expect("checkout must resolve");
     let roots = RuntimeRoots::resolve(&RuntimeRootOverrides {
-        configuration_root: Some(temporary.path().join("configuration")),
+        configuration_layers: vec![temporary.path().join("configuration")],
         repository_root: Some(checkout.clone()),
         ..RuntimeRootOverrides::default()
     })
@@ -258,15 +258,15 @@ fn rejects_invalid_bundle_name() {
 #[test]
 fn resolves_roots_from_explicit_overrides() {
     let overrides = RuntimeRootOverrides {
-        configuration_root: Some("/configuration".into()),
+        configuration_layers: vec!["/configuration".into()],
         state_root: Some("/state".into()),
         inscriptions_root: Some("/inscriptions".into()),
         repository_root: None,
     };
     let roots = RuntimeRoots::resolve(&overrides).expect("roots should resolve");
     assert_eq!(
-        roots.configuration_root,
-        std::path::Path::new("/configuration")
+        roots.configuration_roots.layers(),
+        [PathBuf::from("/configuration")]
     );
     assert_eq!(roots.state_root, std::path::Path::new("/state"));
     assert_eq!(
@@ -302,7 +302,7 @@ fn derives_tmux_socket_from_runtime_directory() {
 /// observing the configuration tier is not also exercising theirs.
 fn unnamed_configuration_overrides() -> RuntimeRootOverrides {
     RuntimeRootOverrides {
-        configuration_root: None,
+        configuration_layers: Vec::new(),
         state_root: Some("/state".into()),
         inscriptions_root: Some("/inscriptions".into()),
         repository_root: None,
@@ -330,8 +330,8 @@ fn configuration_root_resolves_from_environment_when_no_flag() {
     let roots =
         RuntimeRoots::resolve(&unnamed_configuration_overrides()).expect("roots should resolve");
     assert_eq!(
-        roots.configuration_root,
-        std::path::Path::new("/from-environment")
+        roots.configuration_roots.layers(),
+        [PathBuf::from("/from-environment")]
     );
     assert_eq!(
         roots.configuration_root_source,
@@ -347,9 +347,12 @@ fn explicit_flag_outranks_environment() {
     }
 
     let mut overrides = unnamed_configuration_overrides();
-    overrides.configuration_root = Some("/from-flag".into());
+    overrides.configuration_layers = vec!["/from-flag".into()];
     let roots = RuntimeRoots::resolve(&overrides).expect("roots should resolve");
-    assert_eq!(roots.configuration_root, std::path::Path::new("/from-flag"));
+    assert_eq!(
+        roots.configuration_roots.layers(),
+        [PathBuf::from("/from-flag")]
+    );
     assert_eq!(
         roots.configuration_root_source,
         ConfigurationRootSource::CommandLine
@@ -380,16 +383,16 @@ fn repository_root_no_longer_selects_the_configuration_root() {
         .expect("create repository configuration root");
 
     let overrides = RuntimeRootOverrides {
-        configuration_root: None,
+        configuration_layers: Vec::new(),
         state_root: None,
         inscriptions_root: None,
         repository_root: Some(repository_root.clone()),
     };
     let roots = RuntimeRoots::resolve(&overrides).expect("roots should resolve");
     assert_eq!(
-        roots.configuration_root,
-        std::path::Path::new("/xdg/agentmux"),
-        "repository root must not supply the configuration root"
+        roots.configuration_roots.layers(),
+        [PathBuf::from("/xdg/agentmux")],
+        "repository root must not supply a configuration layer"
     );
     assert_eq!(
         roots.state_root,

@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
-use crate::configuration::{BundleConfiguration, load_bundle_configuration};
+use crate::configuration::{BundleConfiguration, ConfigurationRoots, load_bundle_configuration};
 
 use super::super::authorization::{
     AuthorizationContext, RouteAuthorization, load_authorization_context,
@@ -54,14 +54,14 @@ pub(super) fn run_target_operation<Prepared>(
 /// not this policy context, but still loads it so the shared spine can run.
 pub(super) fn load_home_context(
     home_namespace: &str,
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
 ) -> Result<(Option<BundleConfiguration>, AuthorizationContext), RelayError> {
     let home_bundle = if home_namespace == GLOBAL_NAMESPACE || home_namespace == RELAY_NAMESPACE {
         None
     } else {
-        Some(load_bundle_configuration(configuration_root, home_namespace).map_err(map_config)?)
+        Some(load_bundle_configuration(configuration_roots, home_namespace).map_err(map_config)?)
     };
-    let authorization = load_authorization_context(configuration_root, home_bundle.as_ref())?;
+    let authorization = load_authorization_context(configuration_roots, home_bundle.as_ref())?;
     Ok((home_bundle, authorization))
 }
 
@@ -76,7 +76,7 @@ pub(super) fn resolve_target_bundle(
     home_bundle: Option<&BundleConfiguration>,
     home_runtime_directory: Option<&Path>,
     target_namespace: &str,
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_catalog: &BundleCatalog,
 ) -> Result<(BundleConfiguration, PathBuf), RelayError> {
     if target_namespace == home_namespace
@@ -95,6 +95,6 @@ pub(super) fn resolve_target_bundle(
         ));
     };
     let bundle =
-        load_bundle_configuration(configuration_root, target_namespace).map_err(map_config)?;
+        load_bundle_configuration(configuration_roots, target_namespace).map_err(map_config)?;
     Ok((bundle, paths.runtime_directory.clone()))
 }

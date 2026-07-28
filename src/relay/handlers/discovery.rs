@@ -14,8 +14,8 @@
 //! principal's registered ingress `scope`; it never trusts an origin-supplied
 //! catalog, namespace, or alias.
 
+use crate::configuration::ConfigurationRoots;
 use std::collections::BTreeSet;
-use std::path::Path;
 
 use serde_json::json;
 
@@ -39,7 +39,7 @@ use super::listing::build_listed_bundle;
 /// Grouped so the handler signatures stay within the argument budget rather than
 /// suppressing the lint.
 pub(in crate::relay) struct DiscoveryContext<'a> {
-    pub(in crate::relay) configuration_root: &'a Path,
+    pub(in crate::relay) configuration_roots: &'a ConfigurationRoots,
     pub(in crate::relay) bundle_catalog: &'a BundleCatalog,
     pub(in crate::relay) peer_connection_manager: &'a PeerConnectionManager,
     /// This relay's configured outbound peer aliases, sorted, read from the
@@ -62,7 +62,7 @@ pub(in crate::relay) fn handle_list_relays(
         "relay.discovery.relays.request",
         &json!({ "requester_session": principal.session_id }),
     );
-    authorize_discovery_origin(context.configuration_root, principal.session_id.as_str())?;
+    authorize_discovery_origin(context.configuration_roots, principal.session_id.as_str())?;
     let mut aliases: Vec<String> = context.configured_relay_aliases.to_vec();
     aliases.sort();
     aliases.dedup();
@@ -90,7 +90,7 @@ pub(in crate::relay) fn handle_discover_namespaces(
     match relay {
         Some(alias) => {
             reject_peer_reforward(ingress)?;
-            authorize_discovery_origin(context.configuration_root, principal.session_id.as_str())?;
+            authorize_discovery_origin(context.configuration_roots, principal.session_id.as_str())?;
             forward_discovery(
                 context,
                 alias.as_str(),
@@ -116,7 +116,7 @@ pub(in crate::relay) fn handle_discover_principals(
     match relay {
         Some(alias) => {
             reject_peer_reforward(ingress)?;
-            authorize_discovery_origin(context.configuration_root, principal.session_id.as_str())?;
+            authorize_discovery_origin(context.configuration_roots, principal.session_id.as_str())?;
             forward_discovery(
                 context,
                 alias.as_str(),
@@ -149,7 +149,7 @@ fn local_namespace_discovery(
     let requester = principal.session_id.as_str();
     let mut namespaces = BTreeSet::new();
     namespaces.insert(GLOBAL_NAMESPACE.to_string());
-    if requester_list_reaches_all(context.configuration_root, requester)? {
+    if requester_list_reaches_all(context.configuration_roots, requester)? {
         for paths in context.bundle_catalog.snapshot() {
             namespaces.insert(paths.bundle_name);
         }
@@ -173,7 +173,7 @@ fn receiving_namespace_discovery(
     }
     let mut namespaces = BTreeSet::new();
     for paths in context.bundle_catalog.snapshot() {
-        let bundle = load_bundle_configuration(context.configuration_root, &paths.bundle_name)
+        let bundle = load_bundle_configuration(context.configuration_roots, &paths.bundle_name)
             .map_err(map_config)?;
         let covered = bundle.members.iter().any(|member| {
             scope_permits(
@@ -252,7 +252,7 @@ fn build_scoped_namespace_bundle(
         return Ok(empty_namespace_bundle(namespace));
     };
     let bundle_config =
-        load_bundle_configuration(context.configuration_root, namespace).map_err(map_config)?;
+        load_bundle_configuration(context.configuration_roots, namespace).map_err(map_config)?;
     let tmux_socket = tmux_socket_path_for_runtime_directory(&paths.runtime_directory);
     let mut bundle = build_listed_bundle(
         &bundle_config,

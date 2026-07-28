@@ -15,13 +15,13 @@ use super::*;
 fn change_psk_rotates_credential() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_change_psk";
-    let configuration_root = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let principal_id = format!("alpha@{bundle_name}");
 
     let original_psk = register_peer(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         &principal_id,
@@ -29,7 +29,7 @@ fn change_psk_rotates_credential() {
     );
 
     let rotation = operator_request(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         json!({"operation": "change_psk", "principal_id": principal_id}),
@@ -45,7 +45,7 @@ fn change_psk_rotates_credential() {
     assert_ne!(rotated_psk, original_psk, "rotation must mint a new psk");
 
     let accepted = hello_first_frame(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         &principal_id,
         &rotated_psk,
@@ -55,7 +55,7 @@ fn change_psk_rotates_credential() {
     assert_eq!(accepted["principal_id"], principal_id);
 
     let rejected = hello_first_frame(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         &principal_id,
         &original_psk,
@@ -79,13 +79,13 @@ fn change_psk_config_writes_session_identity_and_omits_psk() {
 
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_change_config";
-    let configuration_root = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let principal_id = format!("alpha@{bundle_name}");
 
     let original_psk = register_peer(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         &principal_id,
@@ -93,7 +93,7 @@ fn change_psk_config_writes_session_identity_and_omits_psk() {
     );
 
     let rotation = operator_request(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         json!({
@@ -132,7 +132,7 @@ fn change_psk_config_writes_session_identity_and_omits_psk() {
     assert_ne!(rotated_psk, original_psk, "rotation must mint a new psk");
 
     let accepted = hello_first_frame(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         &principal_id,
         &rotated_psk,
@@ -144,7 +144,7 @@ fn change_psk_config_writes_session_identity_and_omits_psk() {
     );
 
     let rejected = hello_first_frame(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         &principal_id,
         &original_psk,
@@ -164,13 +164,13 @@ fn change_psk_config_writes_session_identity_and_omits_psk() {
 fn change_psk_config_rejected_for_relay_principal_leaves_credential_unrotated() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_change_config_relay";
-    let configuration_root = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let principal_id = "peer1@RELAY";
 
     let original_psk = register_peer(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         principal_id,
@@ -178,7 +178,7 @@ fn change_psk_config_rejected_for_relay_principal_leaves_credential_unrotated() 
     );
 
     let rejected = operator_request(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         json!({
@@ -199,7 +199,7 @@ fn change_psk_config_rejected_for_relay_principal_leaves_credential_unrotated() 
     // The rejected rotation must not have replaced the stored hash: the original
     // credential still authenticates.
     let accepted = hello_first_frame(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         principal_id,
         &original_psk,
@@ -220,13 +220,13 @@ fn change_psk_config_rejected_for_relay_principal_leaves_credential_unrotated() 
 fn change_psk_output_finalization_failure_leaves_credential_unrotated() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_change_finalization";
-    let configuration_root = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let principal_id = format!("alpha@{bundle_name}");
 
     let original_psk = register_peer(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         &principal_id,
@@ -236,7 +236,7 @@ fn change_psk_output_finalization_failure_leaves_credential_unrotated() {
     let output_path = temporary.path().join("occupied.psk");
     std::fs::create_dir_all(&output_path).expect("create directory at output path");
     let response = operator_request(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         json!({
@@ -253,7 +253,7 @@ fn change_psk_output_finalization_failure_leaves_credential_unrotated() {
     // Rollback restored the prior record: the original credential still
     // authenticates, so the rotation did not take effect.
     let accepted = hello_first_frame(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         &principal_id,
         &original_psk,
@@ -273,13 +273,13 @@ fn change_psk_output_finalization_failure_leaves_credential_unrotated() {
 fn change_psk_revokes_live_session_holding_old_credential() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_revoke_live";
-    let configuration_root = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let principal_id = format!("alpha@{bundle_name}");
 
     let psk = register_peer(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         &principal_id,
@@ -287,7 +287,8 @@ fn change_psk_revokes_live_session_holding_old_credential() {
     );
 
     // Bring up a live, store-backed session and keep its connection open.
-    let (mut alpha_client, alpha_join) = spawn_relay_connection(&configuration_root, &bundle_paths);
+    let (mut alpha_client, alpha_join) =
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let mut alpha_reader = BufReader::new(alpha_client.try_clone().expect("clone alpha stream"));
     send_json(
         &mut alpha_client,
@@ -308,7 +309,7 @@ fn change_psk_revokes_live_session_holding_old_credential() {
     // credential and must be revoked. `operator_request` only returns after the
     // rotation handler has run, by which point the revocation frame is queued.
     let rotation = operator_request(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         json!({"operation": "change_psk", "principal_id": principal_id}),
@@ -352,7 +353,7 @@ fn change_psk_revokes_live_session_holding_old_credential() {
 fn change_psk_fans_out_identity_revoked_to_trusted_hosts() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_revoked_fanout";
-    let configuration_root = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let target_principal_id = format!("alpha@{bundle_name}");
@@ -361,14 +362,14 @@ fn change_psk_fans_out_identity_revoked_to_trusted_hosts() {
     // An in-scope session principal to revoke, plus a trusted host scoped to the
     // whole bundle.
     register_peer(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         &target_principal_id,
         None,
     );
     let app_psk = register_peer(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         &app_principal_id,
@@ -377,7 +378,7 @@ fn change_psk_fans_out_identity_revoked_to_trusted_hosts() {
 
     // Connect the trusted host and keep its connection open; it receives the
     // connect-time identity.snapshot first, which the revoked-event read skips.
-    let (mut app_client, app_join) = spawn_relay_connection(&configuration_root, &bundle_paths);
+    let (mut app_client, app_join) = spawn_relay_connection(&configuration_roots, &bundle_paths);
     let mut app_reader = BufReader::new(app_client.try_clone().expect("clone app stream"));
     send_json(
         &mut app_client,
@@ -398,7 +399,7 @@ fn change_psk_fans_out_identity_revoked_to_trusted_hosts() {
     // `operator_request` returns only after the rotation handler has run, by
     // which point the fan-out event is queued to the host's writer.
     let rotation = operator_request(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         json!({"operation": "change_psk", "principal_id": target_principal_id}),

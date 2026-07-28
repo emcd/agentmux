@@ -1,6 +1,6 @@
 //! Runtime bundle file watcher.
 //!
-//! Watches the configuration root and reconciles the loaded bundle
+//! Watches every configuration layer and reconciles the loaded bundle
 //! set against the effective bundle union whenever a debounced change arrives.
 //! New bundle files are loaded and started; removed files unload their bundle
 //! (evicting active sessions with `runtime_bundle_unloaded`); modified files are
@@ -26,7 +26,8 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::configuration::{
-    bundle_configuration_path, effective_bundle_definitions, load_bundle_configuration,
+    ConfigurationRoots, bundle_configuration_path, effective_bundle_definitions,
+    load_bundle_configuration,
 };
 use crate::runtime::error::RuntimeError;
 use crate::runtime::inscriptions::emit_inscription;
@@ -81,12 +82,12 @@ impl Drop for BundleWatcher {
 /// spawned. The relay host treats this as non-fatal and continues serving
 /// without dynamic reconciliation.
 pub fn spawn_bundle_watcher(
-    configuration_root: impl AsRef<Path>,
+    configuration_roots: &ConfigurationRoots,
     state_root: impl AsRef<Path>,
     catalog: BundleCatalog,
     no_autostart: bool,
 ) -> Result<BundleWatcher, RuntimeError> {
-    let configuration_root = configuration_root.as_ref().to_path_buf();
+    let configuration_roots = configuration_roots.clone();
     let state_root = state_root.as_ref().to_path_buf();
 
     let (sender, receiver) = mpsc::channel::<DebounceEventResult>();
@@ -96,30 +97,32 @@ pub fn spawn_bundle_watcher(
             format!("failed to create bundle file watcher: {source}"),
         )
     })?;
-    // Watched recursively at the configuration root rather than per bundles
-    // directory, so both physical layers are covered by one watch and an overlay
-    // directory created after startup is observed without re-arming anything.
-    // Reconciliation is driven by the effective union and by content
-    // fingerprints, so an event from an unrelated file under the root costs one
-    // re-scan and changes nothing.
-    debouncer
-        .watch(&configuration_root, RecursiveMode::Recursive)
-        .map_err(|source| {
-            RuntimeError::validation(
-                "runtime_bundle_watch_unavailable",
-                format!(
-                    "failed to watch configuration root {}: {source}",
-                    configuration_root.display()
-                ),
-            )
-        })?;
+    // One recursive watch per layer, rather than per bundles directory, so a
+    // bundles directory created after startup is observed without re-arming
+    // anything. Every layer is watched because a change in any of them can
+    // alter the effective set. Reconciliation is driven by the effective union
+    // and by content fingerprints, so an event from an unrelated file under a
+    // layer costs one re-scan and changes nothing.
+    for layer in configuration_roots.layers() {
+        debouncer
+            .watch(layer, RecursiveMode::Recursive)
+            .map_err(|source| {
+                RuntimeError::validation(
+                    "runtime_bundle_watch_unavailable",
+                    format!(
+                        "failed to watch configuration layer {}: {source}",
+                        layer.display()
+                    ),
+                )
+            })?;
+    }
 
-    let watched_root = configuration_root.clone();
+    let watched_roots = configuration_roots.clone();
 
     // Seed reconciliation state from the bundles already loaded at startup so the
     // first real change is diffed against their current on-disk content.
     let mut state = ReconcileState {
-        fingerprints: seed_fingerprints(&configuration_root, &catalog),
+        fingerprints: seed_fingerprints(&configuration_roots, &catalog),
         failed: HashMap::new(),
     };
 
@@ -142,7 +145,7 @@ pub fn spawn_bundle_watcher(
                             continue;
                         }
                         reconcile_bundles(
-                            &configuration_root,
+                            &configuration_roots,
                             &state_root,
                             &catalog,
                             &mut state,
@@ -162,7 +165,7 @@ pub fn spawn_bundle_watcher(
 
     emit_inscription(
         "relay.bundle.watch.started",
-        &json!({ "configuration_root": watched_root.display().to_string() }),
+        &json!({ "configuration_layers": watched_roots.layers() }),
     );
 
     Ok(BundleWatcher {
@@ -182,23 +185,23 @@ struct ReconcileState {
     failed: HashMap<String, [u8; 32]>,
 }
 
-/// Re-scans both bundle layers and reconciles the effective union against the
+/// Re-scans every bundle layer and reconciles the effective union against the
 /// loaded set.
 ///
 /// Reconciliation is driven by change in the **effective** set, never by the
-/// physical file event. An overlay file appearing over a loaded base bundle
-/// keeps the identifier in the union while changing which file supplies it, so
-/// it reloads rather than unloading; deleting that overlay file reveals the base
-/// and reloads again; and editing a base file which an overlay still shadows
-/// changes no effective content, so it is inert.
+/// physical file event. A file appearing in an earlier layer over a loaded
+/// bundle keeps the identifier in the union while changing which file supplies
+/// it, so it reloads rather than unloading; deleting that file reveals the copy
+/// in a later layer and reloads again; and editing a file which an earlier layer
+/// still shadows changes no effective content, so it is inert.
 fn reconcile_bundles(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     state_root: &Path,
     catalog: &BundleCatalog,
     state: &mut ReconcileState,
     no_autostart: bool,
 ) {
-    let on_disk: HashSet<String> = effective_bundle_definitions(configuration_root)
+    let on_disk: HashSet<String> = effective_bundle_definitions(configuration_roots)
         .into_keys()
         .collect();
     let loaded = catalog.loaded_bundle_names();
@@ -210,7 +213,7 @@ fn reconcile_bundles(
 
     // New or modified bundles present on disk.
     for bundle_name in &on_disk {
-        let fingerprint = match fingerprint_bundle_file(configuration_root, bundle_name) {
+        let fingerprint = match fingerprint_bundle_file(configuration_roots, bundle_name) {
             Ok(fingerprint) => fingerprint,
             // The file vanished between scan and read; a later event reconciles it.
             Err(_) => continue,
@@ -236,7 +239,7 @@ fn reconcile_bundles(
                 continue;
             }
             reload_bundle(
-                configuration_root,
+                configuration_roots,
                 state_root,
                 catalog,
                 bundle_name,
@@ -248,7 +251,7 @@ fn reconcile_bundles(
                 continue;
             }
             load_new_bundle(
-                configuration_root,
+                configuration_roots,
                 state_root,
                 catalog,
                 bundle_name,
@@ -267,7 +270,7 @@ fn reconcile_bundles(
 /// validation or startup failure is recorded and the bundle is left unloaded;
 /// other bundles continue serving.
 fn load_new_bundle(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     state_root: &Path,
     catalog: &BundleCatalog,
     bundle_name: &str,
@@ -303,7 +306,7 @@ fn load_new_bundle(
     // The same rule applied at boot: a per-bundle `autostart = false` or a
     // relay-wide `--no-autostart` holds the bundle. A held bundle is registered
     // (its members become offline registry shells) but not started.
-    let configuration = match load_bundle_configuration(configuration_root, bundle_name) {
+    let configuration = match load_bundle_configuration(configuration_roots, bundle_name) {
         Ok(configuration) => configuration,
         Err(source) => {
             record_load_failure(
@@ -347,7 +350,7 @@ fn load_new_bundle(
         );
         return;
     }
-    match startup_bundle(configuration_root, bundle_name, &paths.runtime_directory) {
+    match startup_bundle(configuration_roots, bundle_name, &paths.runtime_directory) {
         Ok(report) if report.ready_session_count > 0 => {
             catalog.insert(paths, HostingIntent::Run);
             state
@@ -387,7 +390,7 @@ fn load_new_bundle(
 /// then bring it back up with the new configuration. If the new configuration is
 /// invalid the bundle is left unloaded with a recorded failure.
 fn reload_bundle(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     state_root: &Path,
     catalog: &BundleCatalog,
     bundle_name: &str,
@@ -416,7 +419,7 @@ fn reload_bundle(
     // failure should not block the reload attempt.
     let _ = shutdown_bundle_runtime(&paths.tmux_socket);
 
-    match startup_bundle(configuration_root, bundle_name, &paths.runtime_directory) {
+    match startup_bundle(configuration_roots, bundle_name, &paths.runtime_directory) {
         Ok(report) if report.ready_session_count > 0 => {
             // Reload is reached only for a bundle whose intent is `Run` (held
             // bundles are suppressed above), so the refreshed entry stays `Run`.
@@ -555,14 +558,14 @@ fn bundle_reloaded_response(bundle_name: &str) -> RelayResponse {
 
 /// Seeds content fingerprints for the bundles already loaded at startup.
 fn seed_fingerprints(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     catalog: &BundleCatalog,
 ) -> HashMap<String, [u8; 32]> {
     catalog
         .loaded_bundle_names()
         .into_iter()
         .filter_map(|bundle_name| {
-            fingerprint_bundle_file(configuration_root, &bundle_name)
+            fingerprint_bundle_file(configuration_roots, &bundle_name)
                 .ok()
                 .map(|fingerprint| (bundle_name, fingerprint))
         })
@@ -572,11 +575,15 @@ fn seed_fingerprints(
 /// Computes the SHA-256 fingerprint of a bundle definition: the resolved path
 /// which supplies it, then its content.
 ///
-/// Content alone cannot distinguish an overlay appearing over a byte-identical
-/// base — or being deleted to reveal one — from no change at all. Both change
-/// which file the relay tracks for that identifier, so both must reload.
-fn fingerprint_bundle_file(configuration_root: &Path, bundle_name: &str) -> io::Result<[u8; 32]> {
-    let path = bundle_configuration_path(configuration_root, bundle_name);
+/// Content alone cannot distinguish a definition appearing in an earlier layer
+/// over a byte-identical one — or being deleted to reveal it — from no change at
+/// all. Both change which file the relay tracks for that identifier, so both
+/// must reload.
+fn fingerprint_bundle_file(
+    configuration_roots: &ConfigurationRoots,
+    bundle_name: &str,
+) -> io::Result<[u8; 32]> {
+    let path = bundle_configuration_path(configuration_roots, bundle_name);
     let bytes = std::fs::read(&path)?;
     let mut hasher = Sha256::new();
     hasher.update(path.as_os_str().as_encoded_bytes());

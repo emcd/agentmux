@@ -27,7 +27,7 @@ pub(super) fn run_agentmux_change(arguments: &[String]) -> Result<(), RuntimeErr
     let roots = shared::resolve_roots(&parsed.runtime, &current_directory)?;
     ensure_starter_configuration_layout(&roots)?;
     let resolved_session = resolve_tui_session_identity(
-        &roots.configuration_root,
+        &roots.configuration_roots,
         parsed.bundle_name.as_deref(),
         parsed.session_selector.as_deref(),
     )?;

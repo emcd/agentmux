@@ -12,8 +12,8 @@ use serde_json::json;
 
 use crate::{
     configuration::{
-        BundleConfiguration, load_tui_configuration, policies_configuration_path,
-        relay_configuration_path,
+        BundleConfiguration, ConfigurationRoots, load_tui_configuration,
+        policies_configuration_path, relay_configuration_path,
     },
     relay::{POLICIES_FORMAT_VERSION, RelayError, relay_error},
 };
@@ -133,9 +133,9 @@ fn default_updown_policy_scope() -> String {
 /// `authorize_relay_action` path, which authorizes namespace-agnostic operator
 /// actions (`new.peer`, `change.psk`) that have no bundle context.
 pub(super) fn load_policy_presets(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
 ) -> Result<(HashMap<String, PolicyControls>, Option<String>), RelayError> {
-    let policies_path = policies_configuration_path(configuration_root);
+    let policies_path = policies_configuration_path(configuration_roots);
     let policies_raw = fs::read_to_string(&policies_path).map_err(|source| {
         relay_error(
             "validation_invalid_arguments",
@@ -213,14 +213,14 @@ pub(super) fn load_policy_presets(
 }
 
 pub(in crate::relay) fn load_authorization_context(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle: Option<&BundleConfiguration>,
 ) -> Result<AuthorizationContext, RelayError> {
-    let policies_path = policies_configuration_path(configuration_root);
-    let (presets, default_policy_id) = load_policy_presets(configuration_root)?;
+    let policies_path = policies_configuration_path(configuration_roots);
+    let (presets, default_policy_id) = load_policy_presets(configuration_roots)?;
 
     let choices_pending_max =
-        load_relay_file_configuration(configuration_root)?.choices_pending_max;
+        load_relay_file_configuration(configuration_roots)?.choices_pending_max;
 
     // A relay-wide (`GLOBAL`) home namespace has no bundle members; its
     // requester controls come entirely from the operator policy loaded below
@@ -242,7 +242,7 @@ pub(in crate::relay) fn load_authorization_context(
     }
     let mut ui_sessions = HashMap::<String, UiSessionAuthorization>::new();
     if let Some(tui_configuration) =
-        load_tui_configuration(configuration_root).map_err(map_tui_configuration_error)?
+        load_tui_configuration(configuration_roots).map_err(map_tui_configuration_error)?
     {
         for session in tui_configuration.sessions {
             let session_id = session.id.clone();
@@ -345,11 +345,11 @@ struct RelayFileConfiguration {
 /// invalid environment override, or invalid peer entry fails fast with a
 /// structured [`RelayError`].
 pub fn load_relay_runtime_configuration(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     cli_watch_bundles: Option<bool>,
     cli_require_session_credentials: Option<bool>,
 ) -> Result<RelayRuntimeConfiguration, RelayError> {
-    let file = load_relay_file_configuration(configuration_root)?;
+    let file = load_relay_file_configuration(configuration_roots)?;
     let environment_watch_bundles = relay_bool_env_override(ENV_WATCH_BUNDLES)?;
     let environment_require_session_credentials =
         relay_bool_env_override(ENV_REQUIRE_SESSION_CREDENTIALS)?;
@@ -424,9 +424,9 @@ fn relay_bool_env_override(variable: &str) -> Result<Option<bool>, RelayError> {
 /// startup and `agentmux check configuration` (which loads through this path)
 /// report the same structured errors.
 fn load_relay_file_configuration(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
 ) -> Result<RelayFileConfiguration, RelayError> {
-    let path = relay_configuration_path(configuration_root);
+    let path = relay_configuration_path(configuration_roots);
     if !path.exists() {
         return Ok(RelayFileConfiguration {
             watch_bundles: None,

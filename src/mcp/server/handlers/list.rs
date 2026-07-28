@@ -345,9 +345,8 @@ impl McpServer {
             BundleRuntimePaths::resolve(&self.state.configuration.state_root, bundle_name)
                 .map_err(map_runtime_error)?;
         let relay_paths = RelayRuntimePaths::resolve(&self.state.configuration.state_root);
-        let bundle =
-            load_bundle_configuration(&self.state.configuration.configuration_root, bundle_name)
-                .map_err(map_configuration_error)?;
+        let bundle = load_bundle_configuration(self.require_configuration_roots()?, bundle_name)
+            .map_err(map_configuration_error)?;
         let relay_socket = relay_paths.relay_socket;
         let request = RelayRequest::List {
             requester_session: Some(requester_session.to_string()),
@@ -385,9 +384,8 @@ impl McpServer {
         &self,
         requester_session: &str,
     ) -> Result<Vec<ListedBundle>, McpError> {
-        let memberships =
-            load_bundle_group_memberships(&self.state.configuration.configuration_root)
-                .map_err(map_configuration_error)?;
+        let memberships = load_bundle_group_memberships(self.require_configuration_roots()?)
+            .map_err(map_configuration_error)?;
         let mut bundles = Vec::with_capacity(memberships.len());
         for membership in memberships {
             let listed = self

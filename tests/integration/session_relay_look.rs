@@ -1,3 +1,4 @@
+use agentmux::configuration::ConfigurationRoots;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -30,11 +31,11 @@ fn tmux_command(socket: &Path, arguments: &[&str]) -> std::process::Output {
 
 fn dispatch_request(
     request: RelayRequest,
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
     runtime_directory: &Path,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
-    handle_request(request, configuration_root, bundle_name, runtime_directory)
+    handle_request(request, configuration_roots, bundle_name, runtime_directory)
 }
 
 struct TmuxServerGuard {
@@ -78,7 +79,11 @@ fn wait_for_pane_contains(socket: &Path, target: &str, needle: &str, timeout: Du
     }
 }
 
-fn write_bundle_configuration(root: &Path, bundle_name: &str, sessions: &[&str]) -> PathBuf {
+fn write_bundle_configuration(
+    root: &Path,
+    bundle_name: &str,
+    sessions: &[&str],
+) -> ConfigurationRoots {
     let config_root = root.join("config");
     let bundles = config_root.join("bundles");
     fs::create_dir_all(&bundles).expect("create bundles directory");
@@ -124,7 +129,7 @@ send = "home"
     }
     fs::write(bundles.join(format!("{bundle_name}.toml")), bundle_toml)
         .expect("write bundle config");
-    config_root
+    ConfigurationRoots::single(config_root)
 }
 
 fn spawn_session(socket: &Path, session_name: &str, shell_command: &str) {

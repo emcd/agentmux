@@ -1,6 +1,7 @@
 //! `authenticated_identity` on the Send response and on the delivered
 //! envelope, for both store-backed and socket-trust senders.
 
+use agentmux::configuration::ConfigurationRoots;
 use std::io::BufReader;
 
 use agentmux::runtime::paths::BundleRuntimePaths;
@@ -14,14 +15,14 @@ use super::*;
 /// operator. Returns the sender-side `send` response frame. Both connections are
 /// closed before returning.
 fn alpha_send_response_with_token(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     bundle_name: &str,
     identity_token: &str,
 ) -> Value {
     let operator_id = global_user_id(bundle_name);
     let (mut operator_client, operator_join) =
-        spawn_relay_connection(configuration_root, bundle_paths);
+        spawn_relay_connection(configuration_roots, bundle_paths);
     let mut operator_reader =
         BufReader::new(operator_client.try_clone().expect("clone operator stream"));
     send_json(
@@ -35,7 +36,7 @@ fn alpha_send_response_with_token(
     );
     assert_eq!(read_json(&mut operator_reader)["frame"], "hello_ack");
 
-    let (mut alpha_client, alpha_join) = spawn_relay_connection(configuration_root, bundle_paths);
+    let (mut alpha_client, alpha_join) = spawn_relay_connection(configuration_roots, bundle_paths);
     let mut alpha_reader = BufReader::new(alpha_client.try_clone().expect("clone alpha stream"));
     send_json(
         &mut alpha_client,
@@ -81,14 +82,14 @@ fn alpha_send_response_with_token(
 /// returns the `incoming_message` event the operator receives on its stream.
 /// Both connections are closed before returning.
 fn operator_incoming_message_for_alpha_send(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     bundle_name: &str,
     identity_token: &str,
 ) -> Value {
     let operator_id = global_user_id(bundle_name);
     let (mut operator_client, operator_join) =
-        spawn_relay_connection(configuration_root, bundle_paths);
+        spawn_relay_connection(configuration_roots, bundle_paths);
     let mut operator_reader =
         BufReader::new(operator_client.try_clone().expect("clone operator stream"));
     send_json(
@@ -102,7 +103,7 @@ fn operator_incoming_message_for_alpha_send(
     );
     assert_eq!(read_json(&mut operator_reader)["frame"], "hello_ack");
 
-    let (mut alpha_client, alpha_join) = spawn_relay_connection(configuration_root, bundle_paths);
+    let (mut alpha_client, alpha_join) = spawn_relay_connection(configuration_roots, bundle_paths);
     let mut alpha_reader = BufReader::new(alpha_client.try_clone().expect("clone alpha stream"));
     send_json(
         &mut alpha_client,
@@ -152,20 +153,20 @@ fn operator_incoming_message_for_alpha_send(
 fn send_from_store_backed_session_carries_authenticated_identity() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_attr_store_backed";
-    let configuration_root = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let principal_id = format!("alpha@{bundle_name}");
 
     let psk = register_peer(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         &principal_id,
         None,
     );
     let response =
-        alpha_send_response_with_token(&configuration_root, &bundle_paths, bundle_name, &psk);
+        alpha_send_response_with_token(&configuration_roots, &bundle_paths, bundle_name, &psk);
 
     assert_eq!(response["response"]["kind"], "send", "{response:?}");
     assert_eq!(
@@ -184,12 +185,12 @@ fn send_from_store_backed_session_carries_authenticated_identity() {
 fn send_from_socket_trust_session_omits_authenticated_identity() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_attr_socket_trust";
-    let configuration_root = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
 
     let response = alpha_send_response_with_token(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         "socket-trust",
@@ -212,20 +213,20 @@ fn send_from_socket_trust_session_omits_authenticated_identity() {
 fn delivered_envelope_on_recipient_stream_carries_authenticated_identity() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_delivery_store_backed";
-    let configuration_root = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let principal_id = format!("alpha@{bundle_name}");
 
     let psk = register_peer(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         &principal_id,
         None,
     );
     let event = operator_incoming_message_for_alpha_send(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         &psk,
@@ -249,12 +250,12 @@ fn delivered_envelope_on_recipient_stream_carries_authenticated_identity() {
 fn delivered_envelope_omits_authenticated_identity_for_socket_trust_sender() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_delivery_socket_trust";
-    let configuration_root = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
 
     let event = operator_incoming_message_for_alpha_send(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         bundle_name,
         "socket-trust",

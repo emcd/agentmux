@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use agentmux::{
+    configuration::ConfigurationRoots,
     relay::{RelayRequest, RelayResponse, SendOutcome, handle_request},
     runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory},
 };
@@ -16,11 +17,11 @@ use crate::support::relay_delivery::{
 
 fn dispatch_request(
     request: RelayRequest,
-    configuration_root: &std::path::Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
     runtime_directory: &std::path::Path,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
-    handle_request(request, configuration_root, bundle_name, runtime_directory)
+    handle_request(request, configuration_roots, bundle_name, runtime_directory)
 }
 
 /// A non-delivered terminal outcome for a queued message must reach the original

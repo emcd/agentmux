@@ -19,14 +19,14 @@ use super::*;
 fn concurrent_admin_ops_serialize_without_losing_updates() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_concurrent";
-    let configuration_root = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
     // Declare two distinct `@GLOBAL` operators on the operator policy so the two
     // concurrent admin callers don't collide on a single operator identity claim
     // (the identity registry allows one live claim per principal id).
     let operator_one = "operatorone@GLOBAL";
     let operator_two = "operatortwo@GLOBAL";
     std::fs::write(
-        configuration_root.join("users.toml"),
+        configuration_roots.base_layer().join("users.toml"),
         format!(
             r#"
 default-session = "{operator_one}"
@@ -49,7 +49,7 @@ policy = "operator"
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let catalog = single_bundle_catalog(&bundle_paths);
-    let context = shared_serve_context(&configuration_root, &state_root, catalog);
+    let context = shared_serve_context(&configuration_roots, &state_root, catalog);
 
     // Pre-register the session we will rotate (response mode).
     let session_id = format!("alpha@{bundle_name}");
@@ -116,7 +116,7 @@ policy = "operator"
     let canonical = session_identity_psk_path(&state_root, bundle_name, "alpha");
     let rotated_psk = std::fs::read_to_string(&canonical).expect("read rotated config credential");
     let accepted = hello_first_frame(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         &session_id,
         &rotated_psk,
@@ -134,7 +134,7 @@ policy = "operator"
         .expect("bravo psk in response")
         .to_string();
     let bravo_ok = hello_first_frame(
-        &configuration_root,
+        &configuration_roots,
         &bundle_paths,
         &unrelated_id,
         &bravo_psk,

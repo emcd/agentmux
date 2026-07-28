@@ -154,7 +154,7 @@ pub(super) fn unassociated_server_error() -> McpError {
 /// Builds the error reporting a retained startup fault at tool-invocation time.
 ///
 /// Carries the original code so a caller can distinguish an absent configuration
-/// root from a malformed overlay from an unknown bundle, rather than seeing one
+/// layer from a malformed file from an unknown bundle, rather than seeing one
 /// undifferentiated "not ready".
 pub(super) fn startup_fault_error(fault: &crate::mcp::McpStartupFault) -> McpError {
     validation_tool_error(

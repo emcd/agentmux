@@ -326,12 +326,13 @@ fn up_succeeds_for_operator_policy_with_updown_capability() {
     assert!(host_output.status.success(), "host should succeed");
 }
 
-/// An overlay `policies.toml` must govern the decision the relay actually
-/// enforces, not merely the presets `check` validates. Base policy grants
-/// `updown` and the overlay withholds it, so a permitted outcome here means
-/// authorization consulted a document the operator believed they had replaced.
+/// A `policies.toml` in an earlier layer must govern the decision the relay
+/// actually enforces, not merely the presets `check` validates. The base layer
+/// grants `updown` and the earlier layer withholds it, so a permitted outcome
+/// here means authorization consulted a document the operator believed they had
+/// replaced.
 #[test]
-fn overlay_policies_govern_relay_authorization() {
+fn an_earlier_policies_layer_governs_relay_authorization() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = temporary.path().join("config");
     let state_root = temporary.path().join("state");
@@ -340,10 +341,10 @@ fn overlay_policies_govern_relay_authorization() {
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
     write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(false));
-    let overlay = config_root.join("overlay");
-    fs::create_dir_all(&overlay).expect("create overlay");
+    let override_layer = temporary.path().join("override");
+    fs::create_dir_all(&override_layer).expect("create override layer");
     fs::write(
-        overlay.join("policies.toml"),
+        override_layer.join("policies.toml"),
         r#"
 format-version = 1
 default = "default"
@@ -370,15 +371,19 @@ send = "all"
 updown = "none"
 "#,
     )
-    .expect("write overlay policies config");
+    .expect("write override policies config");
     let fake_tmux = temporary.path().join("fake-tmux.sh");
     write_fake_tmux_script(&fake_tmux);
 
+    // Two occurrences: the override layer first, so its policies.toml shadows
+    // the base layer's while the bundle definition still resolves from the base.
     let host_child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
         .args([
             "host",
             "relay",
             "--no-autostart",
+            "--configuration-directory",
+            &override_layer.to_string_lossy(),
             "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
@@ -398,6 +403,8 @@ updown = "none"
             "up",
             "alpha",
             "--configuration-directory",
+            &override_layer.to_string_lossy(),
+            "--configuration-directory",
             &config_root.to_string_lossy(),
             "--state-directory",
             &state_root.to_string_lossy(),
@@ -406,10 +413,10 @@ updown = "none"
         ])
         .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
         .output()
-        .expect("run up under overlay policies");
+        .expect("run up under layered policies");
     assert!(
         !attempt.status.success(),
-        "overlay policy withholding updown should forbid up; stdout={} stderr={}",
+        "an earlier layer withholding updown should forbid up; stdout={} stderr={}",
         String::from_utf8_lossy(&attempt.stdout),
         String::from_utf8_lossy(&attempt.stderr),
     );

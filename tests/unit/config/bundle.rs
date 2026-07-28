@@ -3,8 +3,8 @@ use std::fs;
 use tempfile::TempDir;
 
 use agentmux::configuration::{
-    ConfigurationError, TargetConfiguration, infer_sender_from_working_directory,
-    load_bundle_configuration,
+    ConfigurationError, ConfigurationRoots, TargetConfiguration,
+    infer_sender_from_working_directory, load_bundle_configuration,
 };
 
 use super::helpers::*;
@@ -100,7 +100,8 @@ resume-command = "sh -lc 'exec sleep 45'"
     )
     .expect("write coders");
 
-    let err = load_bundle_configuration(&root, "missing").expect_err("missing bundle");
+    let err = load_bundle_configuration(&ConfigurationRoots::single(&root), "missing")
+        .expect_err("missing bundle");
     match err {
         ConfigurationError::UnknownBundle { bundle_name, .. } => {
             assert_eq!(bundle_name, "missing");

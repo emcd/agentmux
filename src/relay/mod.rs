@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use crate::configuration::load_bundle_configuration;
+use crate::configuration::{ConfigurationRoots, load_bundle_configuration};
 use crate::runtime::paths::{BundleRuntimePaths, tmux_socket_path_for_runtime_directory};
 use crate::transports::WorkerReadinessState;
 
@@ -54,7 +54,7 @@ pub use self::watcher::{BundleWatcher, spawn_bundle_watcher};
 /// Executes one relay request for a configured bundle.
 pub fn handle_request(
     request: RelayRequest,
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
     runtime_directory: &Path,
 ) -> Result<RelayResponse, RelayError> {
@@ -72,7 +72,7 @@ pub fn handle_request(
     }]);
     handle_request_with_principal(
         request,
-        configuration_root,
+        configuration_roots,
         bundle_name,
         runtime_directory,
         None,
@@ -82,7 +82,7 @@ pub fn handle_request(
 
 fn handle_request_with_principal(
     request: RelayRequest,
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
     runtime_directory: &Path,
     principal: Option<RequestPrincipal>,
@@ -102,7 +102,7 @@ fn handle_request_with_principal(
             return handlers::handle_send_routed(
                 bundle_name,
                 request,
-                configuration_root,
+                configuration_roots,
                 bundle_catalog,
                 principal.as_ref(),
                 None,
@@ -113,7 +113,7 @@ fn handle_request_with_principal(
                 bundle_name,
                 Some(runtime_directory),
                 request,
-                configuration_root,
+                configuration_roots,
                 bundle_catalog,
                 principal.as_ref(),
             );
@@ -126,7 +126,7 @@ fn handle_request_with_principal(
                 bundle_name,
                 Some(runtime_directory),
                 request,
-                configuration_root,
+                configuration_roots,
                 bundle_catalog,
                 principal.as_ref(),
                 None,
@@ -134,8 +134,8 @@ fn handle_request_with_principal(
         }
         _ => {}
     }
-    let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
-    let authorization = load_authorization_context(configuration_root, Some(&bundle))?;
+    let bundle = load_bundle_configuration(configuration_roots, bundle_name).map_err(map_config)?;
+    let authorization = load_authorization_context(configuration_roots, Some(&bundle))?;
     handlers::handle_request(
         request,
         &bundle,
@@ -153,11 +153,11 @@ fn handle_request_with_principal(
 /// Returns structured validation/configuration errors when bundle loading
 /// fails, and internal failures when tmux session operations fail.
 pub fn reconcile_bundle(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
     tmux_socket: &Path,
 ) -> Result<ReconciliationReport, RelayError> {
-    lifecycle::reconcile_bundle(configuration_root, bundle_name, tmux_socket)
+    lifecycle::reconcile_bundle(configuration_roots, bundle_name, tmux_socket)
 }
 
 /// Validates a bundle's configuration the way startup would (bundle + coders
@@ -169,19 +169,19 @@ pub fn reconcile_bundle(
 /// Returns the same structured validation/configuration errors as startup when
 /// any configuration artifact fails to parse or resolve.
 pub fn preflight_bundle_configuration(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
 ) -> Result<(), RelayError> {
-    lifecycle::preflight_bundle_configuration(configuration_root, bundle_name)
+    lifecycle::preflight_bundle_configuration(configuration_roots, bundle_name)
 }
 
 /// Attempts startup for all configured bundle sessions and reports outcomes.
 pub fn startup_bundle(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
     runtime_directory: &Path,
 ) -> Result<BundleStartupReport, RelayError> {
-    lifecycle::startup_bundle(configuration_root, bundle_name, runtime_directory)
+    lifecycle::startup_bundle(configuration_roots, bundle_name, runtime_directory)
 }
 
 /// Registers the relay-wide principals declared in `users.toml` as static
@@ -189,9 +189,9 @@ pub fn startup_bundle(
 /// their capabilities from the registry and a declared-but-disconnected principal
 /// is a known target rather than an unknown one.
 pub fn register_configured_relay_wide_principals(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
 ) -> Result<(), RelayError> {
-    lifecycle::register_configured_relay_wide_principals(configuration_root)
+    lifecycle::register_configured_relay_wide_principals(configuration_roots)
 }
 
 /// Registers a bundle's configured members as static (offline) unified-registry
@@ -199,10 +199,10 @@ pub fn register_configured_relay_wide_principals(
 /// host path where no startup or reconcile runs. Keeps the registry holding every
 /// configured principal before the relay serves requests.
 pub fn register_configured_bundle(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
 ) -> Result<(), RelayError> {
-    lifecycle::register_configured_bundle(configuration_root, bundle_name)
+    lifecycle::register_configured_bundle(configuration_roots, bundle_name)
 }
 
 /// Returns the canonical `principal_id`s currently registered in `namespace`,
@@ -277,7 +277,7 @@ pub fn read_worker_readiness(
 
 pub(in crate::relay) fn dispatch_request(
     request: RelayRequest,
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
     runtime_directory: &Path,
     principal: Option<RequestPrincipal>,
@@ -285,7 +285,7 @@ pub(in crate::relay) fn dispatch_request(
 ) -> RelayResponse {
     match handle_request_with_principal(
         request,
-        configuration_root,
+        configuration_roots,
         bundle_name,
         runtime_directory,
         principal,
@@ -308,7 +308,7 @@ pub(in crate::relay) fn dispatch_request(
 /// members.
 pub(in crate::relay) fn dispatch_list(
     request: RelayRequest,
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     dispatch_paths: &crate::runtime::paths::BundleRuntimePaths,
     enumerate_paths: &crate::runtime::paths::BundleRuntimePaths,
 ) -> RelayResponse {
@@ -321,12 +321,12 @@ pub(in crate::relay) fn dispatch_list(
             ));
         };
         let dispatch_bundle =
-            load_bundle_configuration(configuration_root, &dispatch_paths.bundle_name)
+            load_bundle_configuration(configuration_roots, &dispatch_paths.bundle_name)
                 .map_err(map_config)?;
         let dispatch_authorization =
-            load_authorization_context(configuration_root, Some(&dispatch_bundle))?;
+            load_authorization_context(configuration_roots, Some(&dispatch_bundle))?;
         let enumerate_bundle =
-            load_bundle_configuration(configuration_root, &enumerate_paths.bundle_name)
+            load_bundle_configuration(configuration_roots, &enumerate_paths.bundle_name)
                 .map_err(map_config)?;
         handlers::handle_list_routed(
             &dispatch_bundle,
@@ -352,7 +352,7 @@ pub(in crate::relay) fn dispatch_list(
 /// target bundle — the home bundle included — from the catalog.
 pub(in crate::relay) fn dispatch_send(
     request: RelayRequest,
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bound_bundle: Option<&crate::runtime::paths::BundleRuntimePaths>,
     principal: Option<RequestPrincipal>,
     bundle_catalog: &BundleCatalog,
@@ -365,7 +365,7 @@ pub(in crate::relay) fn dispatch_send(
     match handlers::handle_send_routed(
         home_namespace.as_str(),
         request,
-        configuration_root,
+        configuration_roots,
         bundle_catalog,
         principal.as_ref(),
         Some(peer_connection_manager),
@@ -384,7 +384,7 @@ pub(in crate::relay) fn dispatch_send(
 /// the snapshot — never a borrowed dispatch bundle.
 pub(in crate::relay) fn dispatch_look(
     request: RelayRequest,
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bound_bundle: Option<&crate::runtime::paths::BundleRuntimePaths>,
     principal: Option<RequestPrincipal>,
     bundle_catalog: &BundleCatalog,
@@ -400,7 +400,7 @@ pub(in crate::relay) fn dispatch_look(
         home_namespace.as_str(),
         home_runtime.as_deref(),
         request,
-        configuration_root,
+        configuration_roots,
         bundle_catalog,
         principal.as_ref(),
     ) {
@@ -418,7 +418,7 @@ pub(in crate::relay) fn dispatch_look(
 /// borrowed target bundle.
 pub(in crate::relay) fn dispatch_raww(
     request: RelayRequest,
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bound_bundle: Option<&crate::runtime::paths::BundleRuntimePaths>,
     principal: Option<RequestPrincipal>,
     bundle_catalog: &BundleCatalog,
@@ -435,7 +435,7 @@ pub(in crate::relay) fn dispatch_raww(
         home_namespace.as_str(),
         home_runtime.as_deref(),
         request,
-        configuration_root,
+        configuration_roots,
         bundle_catalog,
         principal.as_ref(),
         Some(peer_connection_manager),
@@ -453,14 +453,14 @@ pub(in crate::relay) fn dispatch_raww(
 /// bound bundle is threaded here.
 pub(in crate::relay) fn dispatch_discovery(
     request: RelayRequest,
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     principal: RequestPrincipal,
     bundle_catalog: &BundleCatalog,
     peer_connection_manager: &PeerConnectionManager,
     configured_relay_aliases: &[String],
 ) -> RelayResponse {
     let context = handlers::DiscoveryContext {
-        configuration_root,
+        configuration_roots,
         bundle_catalog,
         peer_connection_manager,
         configured_relay_aliases,
@@ -491,7 +491,7 @@ pub(in crate::relay) fn dispatch_discovery(
 /// caller, used to resolve operator authorization relay-wide.
 pub(in crate::relay) fn dispatch_identity_admin(
     request: RelayRequest,
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     state_root: &Path,
     requester_principal_id: &str,
     identity_admin_lock: &std::sync::Mutex<()>,
@@ -505,7 +505,7 @@ pub(in crate::relay) fn dispatch_identity_admin(
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     match handlers::handle_identity_admin_request(
         request,
-        configuration_root,
+        configuration_roots,
         state_root,
         requester_principal_id,
     ) {

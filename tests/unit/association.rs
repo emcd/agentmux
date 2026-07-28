@@ -1,3 +1,4 @@
+use agentmux::configuration::ConfigurationRoots;
 use agentmux::{
     configuration::BundleConfiguration,
     runtime::association::{
@@ -100,10 +101,10 @@ fn nothing_supplied_resolves_to_nothing() {
 }
 
 #[test]
-fn injected_environment_outranks_the_overlay_and_default_bundle() {
+fn injected_environment_outranks_the_association_file_and_default_bundle() {
     let overrides = McpAssociationOverrides {
-        bundle_name: Some("overlay-bundle".to_string()),
-        session_name: Some("overlay-session".to_string()),
+        bundle_name: Some("file-bundle".to_string()),
+        session_name: Some("file-session".to_string()),
     };
     let candidates = resolve_association(
         &McpAssociationCli::default(),
@@ -143,9 +144,9 @@ fn explicit_flags_outrank_the_injected_environment() {
 }
 
 #[test]
-fn overlay_outranks_default_bundle() {
+fn the_association_file_outranks_default_bundle() {
     let overrides = McpAssociationOverrides {
-        bundle_name: Some("overlay-bundle".to_string()),
+        bundle_name: Some("file-bundle".to_string()),
         session_name: None,
     };
     let candidates = resolve_association(
@@ -154,10 +155,17 @@ fn overlay_outranks_default_bundle() {
         Some(&overrides),
         Some("default-bundle"),
     );
-    assert_eq!(named(candidates.bundle.as_ref()), Some("overlay-bundle"));
+    assert_eq!(named(candidates.bundle.as_ref()), Some("file-bundle"));
     assert_eq!(
         sourced(candidates.bundle.as_ref()),
-        Some(AssociationSource::Overlay)
+        Some(AssociationSource::AssociationFile)
+    );
+    // The tier's reported name is diagnostic output an operator reads to see
+    // which tier supplied an identity, so the string is asserted directly
+    // rather than only through the variant.
+    assert_eq!(
+        AssociationSource::AssociationFile.as_str(),
+        "association-file"
     );
 }
 
@@ -182,7 +190,7 @@ fn default_bundle_applies_when_no_higher_tier_resolves() {
 #[test]
 fn blank_values_are_absent_rather_than_present_and_empty() {
     let overrides = McpAssociationOverrides {
-        bundle_name: Some("overlay-bundle".to_string()),
+        bundle_name: Some("file-bundle".to_string()),
         session_name: None,
     };
     let candidates = resolve_association(
@@ -194,7 +202,7 @@ fn blank_values_are_absent_rather_than_present_and_empty() {
         Some(&overrides),
         None,
     );
-    assert_eq!(named(candidates.bundle.as_ref()), Some("overlay-bundle"));
+    assert_eq!(named(candidates.bundle.as_ref()), Some("file-bundle"));
     assert_eq!(candidates.session, None);
 }
 
@@ -220,14 +228,14 @@ fn applies_cli_precedence_over_local_overrides() {
 #[test]
 fn loads_association_file_from_the_configuration_root() {
     let temporary = TempDir::new().expect("temporary");
-    let configuration_root = temporary.path();
     std::fs::write(
-        configuration_root.join("mcp.toml"),
+        temporary.path().join("mcp.toml"),
         "bundle_name = 'agentmux'\nsession_name = 'relay'\n",
     )
     .expect("write association file");
 
-    let loaded = load_local_mcp_overrides(configuration_root).expect("load overrides");
+    let loaded = load_local_mcp_overrides(&ConfigurationRoots::single(temporary.path()))
+        .expect("load overrides");
     let Some(loaded) = loaded else {
         panic!("expected association file");
     };
@@ -236,38 +244,55 @@ fn loads_association_file_from_the_configuration_root() {
 }
 
 #[test]
-fn association_overlay_shadows_the_base_file() {
+fn an_earlier_association_layer_shadows_a_later_one() {
     let temporary = TempDir::new().expect("temporary");
-    let configuration_root = temporary.path();
-    std::fs::create_dir_all(configuration_root.join("overlay")).expect("create overlay");
+    let base = temporary.path().join("base");
+    let override_layer = temporary.path().join("rnd");
+    std::fs::create_dir_all(&base).expect("create base layer");
+    std::fs::create_dir_all(&override_layer).expect("create override layer");
+    std::fs::write(base.join("mcp.toml"), "bundle_name = 'base-bundle'\n")
+        .expect("write base association file");
     std::fs::write(
-        configuration_root.join("mcp.toml"),
-        "bundle_name = 'base-bundle'\n",
+        override_layer.join("mcp.toml"),
+        "bundle_name = 'override-bundle'\n",
     )
-    .expect("write base association file");
-    std::fs::write(
-        configuration_root.join("overlay/mcp.toml"),
-        "bundle_name = 'overlay-bundle'\n",
-    )
-    .expect("write overlay association file");
+    .expect("write override association file");
 
-    let loaded = load_local_mcp_overrides(configuration_root)
+    let roots = ConfigurationRoots::from_elements([override_layer, base]).expect("layer list");
+    let loaded = load_local_mcp_overrides(&roots)
         .expect("load overrides")
         .expect("expected association file");
-    assert_eq!(loaded.bundle_name.as_deref(), Some("overlay-bundle"));
+    assert_eq!(loaded.bundle_name.as_deref(), Some("override-bundle"));
+}
+
+#[test]
+fn an_association_file_in_a_later_layer_is_reached() {
+    let temporary = TempDir::new().expect("temporary");
+    let base = temporary.path().join("base");
+    let override_layer = temporary.path().join("rnd");
+    std::fs::create_dir_all(&base).expect("create base layer");
+    std::fs::create_dir_all(&override_layer).expect("create override layer");
+    std::fs::write(base.join("mcp.toml"), "bundle_name = 'base-bundle'\n")
+        .expect("write base association file");
+
+    let roots = ConfigurationRoots::from_elements([override_layer, base]).expect("layer list");
+    let loaded = load_local_mcp_overrides(&roots)
+        .expect("load overrides")
+        .expect("expected association file");
+    assert_eq!(loaded.bundle_name.as_deref(), Some("base-bundle"));
 }
 
 #[test]
 fn rejects_malformed_local_override_file() {
     let temporary = TempDir::new().expect("temporary");
-    let root = temporary.path();
     std::fs::write(
-        root.join("mcp.toml"),
+        temporary.path().join("mcp.toml"),
         "bundle_name = 'agentmux'\nunknown_field = 1\n",
     )
     .expect("write override");
 
-    let err = load_local_mcp_overrides(root).expect_err("override should fail");
+    let err = load_local_mcp_overrides(&ConfigurationRoots::single(temporary.path()))
+        .expect_err("override should fail");
     assert!(err.to_string().contains("validation_invalid_arguments"));
 }
 

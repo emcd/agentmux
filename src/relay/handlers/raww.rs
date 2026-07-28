@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::configuration::{BundleConfiguration, TargetConfiguration};
+use crate::configuration::{BundleConfiguration, ConfigurationRoots, TargetConfiguration};
 
 use super::super::authorization::{
     AuthorizationContext, RouteAuthorization, authorize_route, choose_authorized_ui_sessions,
@@ -43,7 +43,7 @@ pub(in crate::relay) fn handle_raww_routed(
     home_namespace: &str,
     home_runtime_directory: Option<&Path>,
     request: RelayRequest,
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_catalog: &BundleCatalog,
     principal: Option<&RequestPrincipal>,
     peer_connection_manager: Option<&PeerConnectionManager>,
@@ -101,7 +101,7 @@ pub(in crate::relay) fn handle_raww_routed(
     // The requester is identified in its home namespace (operator policy for
     // `GLOBAL`, the bundle's policy, or — for a peer relay — no bundle), never a
     // borrowed target bundle.
-    let (home_bundle, authorization) = load_home_context(home_namespace, configuration_root)?;
+    let (home_bundle, authorization) = load_home_context(home_namespace, configuration_roots)?;
     // A peer relay's own principal is the sender for an ingress request (keyed on
     // the authenticated identity); otherwise resolve the requester in its home
     // namespace.
@@ -179,7 +179,7 @@ pub(in crate::relay) fn handle_raww_routed(
                 home_namespace,
                 home_bundle.as_ref(),
                 home_runtime_directory,
-                configuration_root,
+                configuration_roots,
                 bundle_catalog,
             )
         },
@@ -292,7 +292,7 @@ fn prepare_raww(
     home_namespace: &str,
     home_bundle: Option<&BundleConfiguration>,
     home_runtime_directory: Option<&Path>,
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_catalog: &BundleCatalog,
 ) -> Result<RawwPrepared, RelayError> {
     let target_route = &route.targets[0];
@@ -326,7 +326,7 @@ fn prepare_raww(
         home_bundle,
         home_runtime_directory,
         target_namespace,
-        configuration_root,
+        configuration_roots,
         bundle_catalog,
     )?;
     let Some(member) = bundle
@@ -355,7 +355,7 @@ fn prepare_raww(
             "can_be_written",
         ));
     }
-    let target_authorization = load_authorization_context(configuration_root, Some(&bundle))?;
+    let target_authorization = load_authorization_context(configuration_roots, Some(&bundle))?;
     Ok(RawwPrepared {
         bundle,
         runtime_directory,

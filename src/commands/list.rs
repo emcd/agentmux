@@ -47,7 +47,7 @@ pub(super) fn run_agentmux_list(arguments: &[String]) -> Result<(), RuntimeError
         other => other,
     };
     let resolved_session = resolve_tui_session_identity(
-        &roots.configuration_root,
+        &roots.configuration_roots,
         bundle_hint,
         parsed.session_selector.as_deref(),
     )?;
@@ -56,7 +56,7 @@ pub(super) fn run_agentmux_list(arguments: &[String]) -> Result<(), RuntimeError
 
     let payload = match namespace {
         Some("*") => {
-            let memberships = load_bundle_group_memberships(&roots.configuration_root)
+            let memberships = load_bundle_group_memberships(&roots.configuration_roots)
                 .map_err(shared::map_bundle_load_error)?;
             let mut bundle_names = memberships
                 .into_iter()
@@ -200,7 +200,7 @@ fn request_listed_bundle(
     requester_session: &str,
     home_bundle_name: &str,
 ) -> Result<ListedBundleResult, RuntimeError> {
-    let bundle = load_bundle_configuration(&roots.configuration_root, bundle_name)
+    let bundle = load_bundle_configuration(&roots.configuration_roots, bundle_name)
         .map_err(shared::map_bundle_load_error)?;
     let bundle_paths = BundleRuntimePaths::resolve(&roots.state_root, bundle_name)?;
     let relay_paths = RelayRuntimePaths::resolve(&roots.state_root);

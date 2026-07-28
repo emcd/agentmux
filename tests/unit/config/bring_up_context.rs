@@ -6,6 +6,7 @@
 //! `agentmux host mcp` subprocess, so association is carried rather than
 //! inferred from the filesystem.
 
+use agentmux::configuration::ConfigurationRoots;
 use tempfile::TempDir;
 
 use agentmux::configuration::{
@@ -45,7 +46,7 @@ fn write_plain_bundle(
     temporary: &TempDir,
     bundle_name: &str,
     session_id: &str,
-) -> std::path::PathBuf {
+) -> ConfigurationRoots {
     let dir = temporary.path().display().to_string();
     write_config(
         temporary,

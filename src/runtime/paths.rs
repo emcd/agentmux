@@ -7,11 +7,15 @@ use std::{
     process::Command,
 };
 
+use crate::configuration::{ConfigurationRoots, ConfigurationRootsError};
+
 use super::error::RuntimeError;
 
 const APPLICATION_DIRECTORY: &str = "agentmux";
-/// Environment tier of configuration-root resolution. Ranked below the CLI flag
-/// and above discovery, and like the flag it replaces the root outright.
+/// Environment tier of configuration-layer resolution. Ranked below the CLI
+/// flag, and like the flag it replaces the layer list outright. Carries a
+/// separator-delimited list, so a path containing the separator is
+/// unrepresentable here and needs the repeatable flag.
 const CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE: &str = "AGENTMUX_CONFIGURATION_DIRECTORY";
 const CONFIGURATION_DIRECTORY_DEFAULT: &str = ".config";
 const STATE_DIRECTORY_DEFAULT: &str = ".local/state";
@@ -33,7 +37,10 @@ const CREDENTIAL_FILE_MODE_OWNER_ONLY: u32 = 0o600;
 /// Optional overrides for runtime root resolution.
 #[derive(Clone, Debug, Default)]
 pub struct RuntimeRootOverrides {
-    pub configuration_root: Option<PathBuf>,
+    /// Configuration layers in list order, empty when none were supplied. The
+    /// list replaces the tier stack rather than extending it, so a supplied
+    /// list is closed and no unsupplied root is consulted for any file.
+    pub configuration_layers: Vec<PathBuf>,
     pub state_root: Option<PathBuf>,
     pub inscriptions_root: Option<PathBuf>,
     /// Feeds state and inscriptions root resolution only. Configuration root
@@ -68,7 +75,7 @@ impl ConfigurationRootSource {
 /// Resolved application roots for configuration and state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RuntimeRoots {
-    pub configuration_root: PathBuf,
+    pub configuration_roots: ConfigurationRoots,
     pub state_root: PathBuf,
     pub inscriptions_root: PathBuf,
     pub configuration_root_source: ConfigurationRootSource,
@@ -82,12 +89,12 @@ impl RuntimeRoots {
     /// Returns `RuntimeError::HomeDirectoryUnavailable` if `HOME` is not
     /// available and no explicit or XDG paths are configured.
     pub fn resolve(overrides: &RuntimeRootOverrides) -> Result<Self, RuntimeError> {
-        let (configuration_root, configuration_root_source) =
-            resolve_configuration_root(overrides)?;
+        let (configuration_roots, configuration_root_source) =
+            resolve_configuration_roots(overrides)?;
         let state_root = resolve_state_root(overrides)?;
         let inscriptions_root = resolve_inscriptions_root(overrides, &state_root);
         Ok(Self {
-            configuration_root,
+            configuration_roots,
             state_root,
             inscriptions_root,
             configuration_root_source,
@@ -397,34 +404,47 @@ pub fn ensure_existing_artifact_is_owned(path: &Path) -> Result<(), RuntimeError
     ensure_current_user_owns(path)
 }
 
-/// Resolves the configuration root: explicit flag, then environment, then the
-/// XDG/home default.
+/// Resolves the configuration layer list: explicit flags, then environment,
+/// then the XDG/home default.
 ///
-/// The first two tiers **replace** the root rather than extending a search
-/// list, so an explicitly supplied root never falls through to a different one
-/// for a file it does not define. Resolution is identical in every build
-/// profile: unlike the state and inscriptions roots below, nothing here needs
-/// to keep a source-tree deployment from colliding with an installed one.
-fn resolve_configuration_root(
+/// The first two tiers **replace** the list rather than extending it, so a
+/// supplied list is closed and never falls through to a root the operator did
+/// not name. The default tier resolves as a single-layer list, so one lookup
+/// path serves every tier. Resolution is identical in every build profile:
+/// unlike the state and inscriptions roots below, nothing here needs to keep a
+/// source-tree deployment from colliding with an installed one.
+fn resolve_configuration_roots(
     overrides: &RuntimeRootOverrides,
-) -> Result<(PathBuf, ConfigurationRootSource), RuntimeError> {
-    if let Some(path) = overrides.configuration_root.clone() {
-        return Ok((path, ConfigurationRootSource::CommandLine));
+) -> Result<(ConfigurationRoots, ConfigurationRootSource), RuntimeError> {
+    if !overrides.configuration_layers.is_empty() {
+        let roots = ConfigurationRoots::from_elements(overrides.configuration_layers.clone())
+            .map_err(invalid_configuration_layers)?;
+        return Ok((roots, ConfigurationRootSource::CommandLine));
     }
-    if let Some(path) = env_directory(CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE) {
-        return Ok((path, ConfigurationRootSource::Environment));
+    if let Some(value) = env::var(CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE).ok()
+        && let Some(roots) = ConfigurationRoots::from_environment_value(&value)
+            .map_err(invalid_configuration_layers)?
+    {
+        return Ok((roots, ConfigurationRootSource::Environment));
     }
     if let Some(path) = env_directory("XDG_CONFIG_HOME") {
         return Ok((
-            path.join(APPLICATION_DIRECTORY),
+            ConfigurationRoots::single(path.join(APPLICATION_DIRECTORY)),
             ConfigurationRootSource::Default,
         ));
     }
     let home_directory = resolve_home_directory()?;
     Ok((
-        configuration_root_from_sources(None, &home_directory),
+        ConfigurationRoots::single(configuration_root_from_sources(None, &home_directory)),
         ConfigurationRootSource::Default,
     ))
+}
+
+fn invalid_configuration_layers(source: ConfigurationRootsError) -> RuntimeError {
+    RuntimeError::validation(
+        "validation_invalid_configuration_layers",
+        source.to_string(),
+    )
 }
 
 /// Resolves the state root.

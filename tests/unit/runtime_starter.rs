@@ -1,5 +1,6 @@
 use std::{fs, path::Path};
 
+use agentmux::configuration::ConfigurationRoots;
 use agentmux::runtime::{
     paths::{ConfigurationRootSource, RuntimeRoots},
     starter::ensure_starter_configuration_layout,
@@ -7,14 +8,15 @@ use agentmux::runtime::{
 use tempfile::TempDir;
 
 /// Roots naming `configuration_root`, presented as resolved from the default
-/// tier so hydration applies.
+/// tier so hydration applies. A defaulted list is always a single layer, which
+/// is the only shape hydration ever sees.
 fn defaulted_roots(configuration_root: &Path) -> RuntimeRoots {
     roots_from(configuration_root, ConfigurationRootSource::Default)
 }
 
 fn roots_from(configuration_root: &Path, source: ConfigurationRootSource) -> RuntimeRoots {
     RuntimeRoots {
-        configuration_root: configuration_root.to_path_buf(),
+        configuration_roots: ConfigurationRoots::single(configuration_root),
         state_root: configuration_root.join("state"),
         inscriptions_root: configuration_root.join("inscriptions"),
         configuration_root_source: source,
@@ -78,14 +80,6 @@ fn creates_starter_configuration_files_when_missing() {
     let bundle_text = fs::read_to_string(example_bundle).expect("read example bundle");
     assert!(bundle_text.contains("format-version = 1"));
     assert!(bundle_text.contains("[[sessions]]"));
-
-    // Hydration writes to the base root only. Scaffolding an overlay would
-    // create a layer the operator never asked for, which then shadows the very
-    // files hydration just wrote.
-    assert!(
-        !configuration_root.join("overlay").exists(),
-        "hydration must not create an overlay directory"
-    );
 }
 
 #[test]
@@ -147,29 +141,6 @@ fn skips_example_seed_when_bundles_directory_already_has_toml() {
 }
 
 #[test]
-fn skips_example_seed_when_only_the_overlay_supplies_bundles() {
-    let temporary = TempDir::new().expect("temporary");
-    let configuration_root = temporary.path().join("config");
-    let overlay_bundles = configuration_root.join("overlay/bundles");
-    fs::create_dir_all(&overlay_bundles).expect("create overlay bundle dir");
-    fs::write(
-        overlay_bundles.join("production.toml"),
-        "format-version = 1\n# operator bundle\n",
-    )
-    .expect("write overlay bundle");
-
-    ensure_starter_configuration_layout(&defaulted_roots(&configuration_root))
-        .expect("starter layout");
-
-    // Bundles union across layers, so seeding beside an overlay definition would
-    // add a live bundle the operator never wrote.
-    assert!(
-        !configuration_root.join("bundles/example.toml").exists(),
-        "expected example.toml to stay unseeded when the overlay supplies a bundle"
-    );
-}
-
-#[test]
 fn refuses_to_scaffold_an_explicitly_named_root() {
     let temporary = TempDir::new().expect("temporary");
     let configuration_root = temporary.path().join("named-but-absent");
@@ -183,7 +154,7 @@ fn refuses_to_scaffold_an_explicitly_named_root() {
         assert!(
             error
                 .to_string()
-                .contains("configuration root does not exist"),
+                .contains("configuration layer does not exist"),
             "unexpected error for {source:?}: {error}"
         );
         assert!(

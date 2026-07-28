@@ -20,7 +20,7 @@ mod up;
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct RuntimeArguments {
-    pub(super) configuration_root: Option<PathBuf>,
+    pub(super) configuration_layers: Vec<PathBuf>,
     pub(super) state_root: Option<PathBuf>,
     pub(super) inscriptions_root: Option<PathBuf>,
     pub(super) repository_root: Option<PathBuf>,
@@ -292,6 +292,11 @@ fn print_agentmux_help() {
         "--logs-directory PATH] [--repository-root PATH]\n",
         "\n",
         "Global flags:\n",
+        "  --configuration-directory PATH\n",
+        "                 Configuration layer. Repeatable; layers are searched in the\n",
+        "                 order given, so the FIRST occurrence wins. Also settable as\n",
+        "                 AGENTMUX_CONFIGURATION_DIRECTORY, a ':'-separated list in the\n",
+        "                 same order. Supplying any layer replaces the default entirely.\n",
         "  -h, --help     Print this help and exit\n",
         "  -V, --version  Print the agentmux version and exit"
     ));

@@ -28,11 +28,11 @@ pub(super) fn run_agentmux_look(arguments: &[String]) -> Result<(), RuntimeError
     let roots = shared::resolve_roots(&parsed.runtime, &current_directory)?;
     ensure_starter_configuration_layout(&roots)?;
     let resolved_session = resolve_tui_session_identity(
-        &roots.configuration_root,
+        &roots.configuration_roots,
         parsed.bundle_name.as_deref(),
         parsed.session_selector.as_deref(),
     )?;
-    load_bundle_configuration(&roots.configuration_root, &resolved_session.namespace)
+    load_bundle_configuration(&roots.configuration_roots, &resolved_session.namespace)
         .map_err(shared::map_bundle_load_error)?;
     let relay_paths = RelayRuntimePaths::resolve(&roots.state_root);
     let response = request_relay(

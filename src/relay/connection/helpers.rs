@@ -23,7 +23,8 @@ use super::{
 use crate::relay::errors::{map_config, map_tui_config};
 use crate::{
     configuration::{
-        SessionType, load_bundle_configuration, load_policy_ids, load_tui_configuration,
+        ConfigurationRoots, SessionType, load_bundle_configuration, load_policy_ids,
+        load_tui_configuration,
     },
     relay::{errors::relay_error, identity::canonical_session_id},
     runtime::paths::principal_store_path,
@@ -118,7 +119,7 @@ pub(super) fn identity_claim_conflict_error(
 /// configured bundle's snapshot — a global operator sees pending requests
 /// across the whole relay on (re)connect.
 pub(super) fn emit_registration_choices_snapshots(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_catalog: &BundleCatalog,
     binding: &HelloBinding,
 ) -> Result<(), RelayError> {
@@ -128,7 +129,7 @@ pub(super) fn emit_registration_choices_snapshots(
             if let Some((session_id, namespace)) = split_principal_id(binding.principal_id.as_str())
             {
                 emit_choices_snapshot_for_ui_registration(
-                    configuration_root,
+                    configuration_roots,
                     namespace,
                     &bundle_paths.runtime_directory,
                     session_id,
@@ -141,7 +142,7 @@ pub(super) fn emit_registration_choices_snapshots(
         None => {
             for bundle_paths in bundle_catalog.snapshot() {
                 emit_choices_snapshot_for_ui_registration(
-                    configuration_root,
+                    configuration_roots,
                     &bundle_paths.bundle_name,
                     &bundle_paths.runtime_directory,
                     binding.principal_id.as_str(),
@@ -159,7 +160,7 @@ pub(super) fn emit_registration_choices_snapshots(
 /// that bundle; non-session principals (`@GLOBAL`, `@EXTERNAL`, `@RELAY`) skip
 /// the catalog and are not bundle-bound.
 pub(super) fn resolve_hello_binding(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     state_root: &Path,
     bundle_catalog: &BundleCatalog,
     require_session_credentials: bool,
@@ -209,7 +210,7 @@ pub(super) fn resolve_hello_binding(
                 .lookup(namespace)
                 .ok_or_else(|| unknown_bundle_error(namespace))?;
             let session_type =
-                resolve_bundle_member_session_type(configuration_root, namespace, session_id)?;
+                resolve_bundle_member_session_type(configuration_roots, namespace, session_id)?;
             Ok(HelloBinding {
                 session_type,
                 principal_id: hello.principal_id.clone(),
@@ -221,7 +222,7 @@ pub(super) fn resolve_hello_binding(
         }
         PrincipalType::User => {
             let session_type =
-                resolve_global_user_session_type(configuration_root, hello.principal_id.as_str())?;
+                resolve_global_user_session_type(configuration_roots, hello.principal_id.as_str())?;
             Ok(HelloBinding {
                 session_type,
                 principal_id: hello.principal_id.clone(),
@@ -244,11 +245,11 @@ pub(super) fn resolve_hello_binding(
 
 /// Resolves the session type for a hello identity matching a bundle member.
 pub(super) fn resolve_bundle_member_session_type(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
     session_id: &str,
 ) -> Result<SessionType, RelayError> {
-    let bundle = load_bundle_configuration(configuration_root, bundle_name).map_err(map_config)?;
+    let bundle = load_bundle_configuration(configuration_roots, bundle_name).map_err(map_config)?;
     let Some(member) = bundle.members.iter().find(|member| member.id == session_id) else {
         return Err(relay_error(
             "validation_unknown_sender",
@@ -265,18 +266,18 @@ pub(super) fn resolve_bundle_member_session_type(
 /// Resolves the session type for a `@GLOBAL` user principal by searching
 /// `users.toml` global users. Global users are not bundle-bound.
 pub(super) fn resolve_global_user_session_type(
-    configuration_root: &Path,
+    configuration_roots: &ConfigurationRoots,
     principal_id: &str,
 ) -> Result<SessionType, RelayError> {
     let Some(users_configuration) =
-        load_tui_configuration(configuration_root).map_err(map_tui_config)?
+        load_tui_configuration(configuration_roots).map_err(map_tui_config)?
     else {
         return Err(global_user_missing_error(principal_id));
     };
     let Some(user_session) = users_configuration.session_by_id(principal_id) else {
         return Err(global_user_missing_error(principal_id));
     };
-    let policy_ids = load_policy_ids(configuration_root).map_err(map_tui_config)?;
+    let policy_ids = load_policy_ids(configuration_roots).map_err(map_tui_config)?;
     if !policy_ids.contains(user_session.policy.as_str()) {
         return Err(relay_error(
             "validation_unknown_policy",

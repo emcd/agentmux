@@ -4,6 +4,7 @@
 //! load onto each resolved [`BundleMember`]'s `environment`, with per-variable
 //! precedence session > bundle > coder and a union of distinct names.
 
+use agentmux::configuration::ConfigurationRoots;
 use tempfile::TempDir;
 
 use agentmux::configuration::{BringUpContext, BundleMember, load_bundle_configuration};
@@ -23,7 +24,7 @@ fn value_of<'member>(member: &'member BundleMember, name: &str) -> Option<&'memb
 /// file that layers bundle- and session-level environment over it, exercising
 /// the full session > bundle > coder precedence stack and the union of names
 /// declared at a single level.
-fn write_layered_environment(temporary: &TempDir) -> std::path::PathBuf {
+fn write_layered_environment(temporary: &TempDir) -> ConfigurationRoots {
     write_config(
         temporary,
         "alpha",
