@@ -95,6 +95,12 @@ independently of the configuration root. Rejected because it requires Git
 awareness, and because committing the configuration directory already makes the
 overlay per-working-tree by construction.
 
+> **Reversed before archive.** The second half of that rationale no longer
+> holds: the configuration directory is not committed. See Reversal Recorded
+> Before Archive at the end of this document. The first half — that anchoring to
+> the working-tree root requires Git awareness — stands on its own and is still
+> the operative reason.
+
 Lookup selects the first existing regular file. A malformed overlay file is an
 error, not a cue to fall through to the base: falling through would silently
 apply configuration the operator believed they had overridden. Directories of
@@ -262,9 +268,11 @@ deletes the branches it feeds, and by nothing sooner.
   discovery enabled. Both are stated, and the previous behavior depended on Git
   awareness being removed here.
 
-- **Committing the configuration directory means working trees stop inheriting
-  configuration changes without an update.** → Accepted deliberately; the
-  overlay is the supported mechanism for per-tree divergence.
+- ~~**Committing the configuration directory means working trees stop
+  inheriting configuration changes without an update.** → Accepted
+  deliberately; the overlay is the supported mechanism for per-tree
+  divergence.~~ **Reversed before archive** — the configuration directory is not
+  committed, so this trade-off never arises. See the reversal note below.
 
 - **The renamed flag and the `--default-bundle` migration require an upstream
   template change.** → Coordinated with the template owner; alpha policy permits
@@ -274,11 +282,13 @@ deletes the branches it feeds, and by nothing sooner.
   content.** → Accepted for legibility. Bundle directories union by identifier,
   which covers the case where restating everything would be most painful.
 
-- **Ordering constraint.** The repository's configuration directory must be
+- ~~**Ordering constraint.** The repository's configuration directory must be
   committed before any invocation relying on a relative configuration path
-  works; until then such a path resolves to a missing directory, which today
-  would be scaffolded silently. The hydration change removes that failure mode,
-  but the ordering still governs the sequence of work.
+  works.~~ **Reversed before archive.** No configuration directory is
+  committed, so this ordering constraint does not exist. The hydration change
+  it referred to still stands on its own: an explicitly supplied root that does
+  not exist is a recorded fault rather than something scaffolded silently. See
+  the reversal note below.
 
 ## Migration Plan
 
@@ -303,3 +313,28 @@ None outstanding. Both prior questions are resolved and specified:
 - Discovery **always** reports the selected root, on a diagnostic channel that
   is never the MCP stdio stream, since writing to that stream would corrupt the
   protocol.
+
+## Reversal Recorded Before Archive
+
+Three passages above assumed the project would commit its own Agentmux
+configuration directory, Git-ignoring an `overlay/` beneath it. That posture was
+reversed during implementation and never carried out; the two VCS-posture
+requirements are REMOVED by this change rather than modified.
+
+Every file under a configuration root proved to be maintainer-specific:
+`policies.toml` encodes one operator's lane topology, `users.toml` names a
+person, `coders.toml` records locally installed coders and their prompt regexes,
+and bundle members carry absolute worktree paths. The reasoning that led here
+treated absence of absolute paths as portability; the test is whether a second
+maintainer would want the file's contents, and for every file the answer is no.
+
+Each affected passage is annotated in place, and in each case the reasoning that
+did *not* depend on the committed directory is called out as still operative —
+Git-awareness as the reason for rejecting a working-tree anchor, and the
+hydration change as a fault rather than silent scaffolding. The successor work
+is `agentmux:todos/general/35` and `agentmux:todos/general/36`; the layering
+shape replacing `overlay/` is proposed as `layer-configuration-roots`.
+
+Annotated rather than rewritten, so a later reader sees that the decision
+changed rather than believing it was never made. The corresponding note in
+`proposal.md` carries the same record for that document.
