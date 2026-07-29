@@ -33,7 +33,6 @@ use crate::{
         paths::{
             BundleRuntimePaths, RelayRuntimePaths, RuntimeRootOverrides, RuntimeRoots,
             ensure_bundle_runtime_directory, ensure_relay_runtime_directory,
-            repository_checkout_root,
         },
         signals::{install_shutdown_signal_handlers, shutdown_requested},
         starter::ensure_starter_configuration_layout,
@@ -213,8 +212,6 @@ fn spawn_shutdown_watchdog() -> Result<(), RuntimeError> {
 }
 
 fn resolve_runtime_roots(runtime: RuntimeArguments) -> Result<RuntimeRoots, RuntimeError> {
-    let current_directory = env::current_dir()
-        .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
     // The same resolver every other surface uses. A relay that answered this
     // question differently from its clients would bind a socket none of them
     // look for.
@@ -222,9 +219,6 @@ fn resolve_runtime_roots(runtime: RuntimeArguments) -> Result<RuntimeRoots, Runt
         configuration_layers: runtime.configuration_layers,
         state_root: runtime.state_root,
         inscriptions_root: runtime.inscriptions_root,
-        repository_root: runtime
-            .repository_root
-            .or_else(|| repository_checkout_root(&current_directory)),
     };
     let roots = RuntimeRoots::resolve(&overrides)?;
     ensure_starter_configuration_layout(&roots)?;
@@ -876,11 +870,7 @@ fn host_selected_bundle(
     }
     let mut startup_report = None;
     if let RelayHostStartupMode::Autostart = startup_mode {
-        let report = match startup_bundle(
-            &roots.configuration_roots,
-            &paths.bundle_name,
-            &paths.runtime_directory,
-        ) {
+        let report = match startup_bundle(&roots.configuration_roots, &paths) {
             Ok(report) => report,
             Err(source) => {
                 return (

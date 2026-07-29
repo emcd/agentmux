@@ -172,10 +172,8 @@ fn next_paste_buffer_name() -> String {
 }
 
 fn load_tmux_buffer(tmux_socket: &Path, buffer_name: &str, text: &str) -> Result<(), String> {
-    let mut command = Command::new(tmux_program());
+    let mut command = tmux_command(tmux_socket);
     command
-        .arg("-S")
-        .arg(tmux_socket)
         .args(["load-buffer", "-b", buffer_name, "-"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -226,9 +224,37 @@ pub(crate) fn run_tmux_command_capture(
     tmux_socket: &Path,
     command_arguments: &[impl AsRef<OsStr>],
 ) -> Result<std::process::Output, String> {
-    let mut command = Command::new(tmux_program());
-    command.arg("-S").arg(tmux_socket).args(command_arguments);
+    let mut command = tmux_command(tmux_socket);
+    command.args(command_arguments);
     command.output().map_err(|source| source.to_string())
+}
+
+/// Builds a tmux invocation addressing `tmux_socket` relative to its own
+/// directory.
+///
+/// tmux binds and connects the `-S` path itself, so the `sockaddr_un` limit
+/// applies to whatever string it is handed — and this is the longest path the
+/// project constructs. Agentmux cannot address it through a directory
+/// descriptor the way it does its own sockets, because the descriptor would
+/// have to survive into tmux's process. Running the client from the socket's
+/// directory achieves the same bound: the kernel resolves the bare file name
+/// against the process working directory, so the address stays a handful of
+/// bytes however deep the state root is.
+///
+/// Callers that create sessions must pass `-c` explicitly. tmux takes an
+/// omitted start directory from the *client's* working directory, so moving the
+/// client here would otherwise start panes in the bundle runtime directory.
+fn tmux_command(tmux_socket: &Path) -> Command {
+    let mut command = Command::new(tmux_program());
+    match tmux_socket.parent().zip(tmux_socket.file_name()) {
+        Some((directory, file_name)) => {
+            command.current_dir(directory).arg("-S").arg(file_name);
+        }
+        None => {
+            command.arg("-S").arg(tmux_socket);
+        }
+    }
+    command
 }
 
 fn tmux_program() -> String {

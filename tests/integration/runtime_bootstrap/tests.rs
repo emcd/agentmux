@@ -562,21 +562,24 @@ async fn mcp_refuses_an_invalid_session_selector_rather_than_binding_the_directo
     );
 }
 
-#[cfg(debug_assertions)]
+/// A `host mcp` child reaches the relay of the state root it was given, not the
+/// default root's.
+///
+/// The workspace it runs from is deliberately a different directory than the
+/// state root, so a relative or unnormalized root fails here rather than
+/// passing by coincidence.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mcp_uses_repository_root_debug_state_override() {
+async fn mcp_reaches_the_relay_of_the_named_state_directory() {
     let temporary = TempDir::new().expect("temporary");
     let root = temporary.path().to_path_buf();
     let workspace = root.join("workspace");
-    let repository_root = root.join("repository");
+    let state_root = root.join("named-state");
     let config_root = root.join("config");
     fs::create_dir_all(&workspace).expect("create workspace");
-    fs::create_dir_all(&repository_root).expect("create repository root");
+    fs::create_dir_all(&state_root).expect("create state root");
     write_bundle_configuration(&config_root, "party", &["alpha", "bravo"]);
 
-    let relay_socket = repository_root
-        .join(".auxiliary/state/agentmux")
-        .join("relay.sock");
+    let relay_socket = state_root.join("relay.sock");
     let relay = FakeRelay::start(
         relay_socket,
         Arc::new(
@@ -614,8 +617,8 @@ async fn mcp_uses_repository_root_debug_state_override() {
             "alpha",
             "--configuration-directory",
             config_root.to_str().expect("utf8 config path"),
-            "--repository-root",
-            repository_root.to_str().expect("utf8 repository path"),
+            "--state-directory",
+            state_root.to_str().expect("utf8 state path"),
         ],
         &[],
     )
@@ -641,7 +644,7 @@ async fn mcp_uses_repository_root_debug_state_override() {
     assert_eq!(bundles[0]["id"], "party");
     // Two list calls: the configured bundle and the relay-wide GLOBAL fetch.
     // The local FakeRelay returns the same canned payload to both; this test
-    // verifies only that the debug-override socket was reachable.
+    // verifies only that the named state root's socket was reachable.
     assert_eq!(relay.requests_for_operation("list").len(), 2);
 }
 

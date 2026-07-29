@@ -1,53 +1,53 @@
 ## 1. State root resolution
 
-- [ ] 1.1 Add `AGENTMUX_STATE_DIRECTORY` as the environment tier for the state
+- [x] 1.1 Add `AGENTMUX_STATE_DIRECTORY` as the environment tier for the state
   root, ranked below `--state-directory` and above the XDG and home defaults,
   with a blank value treated as absent like every other tier
-- [ ] 1.2 Remove the `cfg!(debug_assertions)` branches from `resolve_state_root`
+- [x] 1.2 Remove the `cfg!(debug_assertions)` branches from `resolve_state_root`
   and `resolve_inscriptions_root`
-- [ ] 1.3 Confirm the inscriptions root still defaults to
+- [x] 1.3 Confirm the inscriptions root still defaults to
   `<state_root>/inscriptions` and therefore follows the state root without
   separate selection
-- [ ] 1.4 Remove `repository_root` from `RuntimeRootOverrides`
-- [ ] 1.5 Normalize the resolved state root to a non-empty absolute path,
+- [x] 1.4 Remove `repository_root` from `RuntimeRootOverrides`
+- [x] 1.5 Normalize the resolved state root to a non-empty absolute path,
   resolving a relative value against the resolving process's working directory,
   and reject an empty `--state-directory` with a structured validation error
-- [ ] 1.6 Bind and connect Agentmux-owned sockets through their parent directory
+- [x] 1.6 Bind and connect Agentmux-owned sockets through their parent directory
   (`/proc/self/fd/<n>/<name>`) rather than by full path, so socket length stops
   scaling with state-root depth. Normalization removes the relative-path escape
   hatch deep hierarchies relied on, and the margin is 11 bytes on the current
   worst case
-- [ ] 1.7 Settle the tmux socket, which is the longest path at 96 bytes and is
+- [x] 1.7 Settle the tmux socket, which is the longest path at 96 bytes and is
   bound by tmux rather than by Agentmux. The candidate is setting the spawned
   tmux process's working directory to the bundle runtime directory and passing a
   relative `-S tmux.sock` (`src/tmux/pane.rs` currently passes the absolute path
   and sets no working directory). Verify against tmux's use of its server working
   directory for default pane directories before adopting it
-- [ ] 1.8 Report a socket path-length failure as a structured error naming the
+- [x] 1.8 Report a socket path-length failure as a structured error naming the
   limit and the offending path, rather than the raw bind errno an operator sees
   today
 
 ## 2. Deleting the Git provenance
 
-- [ ] 2.1 Delete `repository_checkout_root`, `git_common_directory`,
+- [x] 2.1 Delete `repository_checkout_root`, `git_common_directory`,
   `repository_root_from_git_common_directory`, `cargo_manifest_declares_agentmux`,
   and `run_git` **in the same commit as task 1.2**. Removing the resolver without
   the branches leaves the repository root permanently unresolved and silently
   collapses repository-local state onto the XDG default
-- [ ] 2.2 Remove `debug_repository_state_root` and
+- [x] 2.2 Remove `debug_repository_state_root` and
   `debug_repository_inscriptions_root`
-- [ ] 2.3 Remove `--repository-root` and stop threading it through
+- [x] 2.3 Remove `--repository-root` and stop threading it through
   `commands/shared.rs` and `commands/host/relay.rs`
-- [ ] 2.4 Confirm no `git` subprocess remains at startup, and drop the
+- [x] 2.4 Confirm no `git` subprocess remains at startup, and drop the
   `git`-on-`PATH` expectation from prerequisites documentation if stated there
 
 ## 3. Propagation
 
-- [ ] 3.1 Inject `AGENTMUX_STATE_DIRECTORY` at spawn, from the relay's normalized
+- [x] 3.1 Inject `AGENTMUX_STATE_DIRECTORY` at spawn, from the relay's normalized
   absolute state root, overwriting any value merged from coder, bundle, or member
   configuration. Bundle and session stay load-time upsert-if-absent; do not move
   them
-- [ ] 3.2 Split the two enumerations `BringUpContext::VARIABLE_NAMES` currently
+- [x] 3.2 Split the two enumerations `BringUpContext::VARIABLE_NAMES` currently
   conflates. It is documented as "every environment variable this context may
   carry", is held equal to `environment_entries` by test
   (`tests/unit/config/bring_up_context.rs`, `tests/unit/config/coder.rs`), and
@@ -56,7 +56,7 @@
   bundle and session — and add a separate enumeration of every agentmux context
   variable a child may inherit, including `AGENTMUX_STATE_DIRECTORY`, for
   consumers that sanitize inherited context rather than stamp it
-- [ ] 3.3 Point the test-harness sanitizer
+- [x] 3.3 Point the test-harness sanitizer
   (`tests/integration/support/process.rs`) at the inherited-context enumeration,
   so an inherited `AGENTMUX_STATE_DIRECTORY` is cleared between tests. Leaving it
   on the stamped enumeration would let a developer's own state root leak into
@@ -103,10 +103,10 @@
 - [ ] 5.1 `cargo fmt`, `cargo clippy --all-targets -D warnings`, and the full
   nextest suite
 - [ ] 5.2 `openspec validate --all --strict`
-- [ ] 5.3 Prove the state-root tier order, including that `--state-directory`
+- [x] 5.3 Prove the state-root tier order, including that `--state-directory`
   outranks `AGENTMUX_STATE_DIRECTORY` and that a blank environment value is
   absent rather than empty
-- [ ] 5.4 Prove a debug build and a release build resolve identical state and
+- [x] 5.4 Prove a debug build and a release build resolve identical state and
   inscriptions roots from identical arguments — the assertion the deleted
   branches made impossible
 - [ ] 5.5 Prove a child stays on the spawning relay: a relay started with an

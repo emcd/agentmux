@@ -135,6 +135,13 @@ fn create_member_once(tmux_socket: &Path, member: &BundleMember) -> Result<(), S
         "-s".to_string(),
         member.id.clone(),
     ];
+    // `-c` must reach tmux for every session it creates. tmux takes an omitted
+    // start directory from the *client's* working directory, and the client now
+    // runs from the bundle runtime directory so the socket address stays inside
+    // `sun_path` (see `tmux_command`). Configuration load is what makes this
+    // hold: it builds every member with `working_directory` set from the
+    // session's declared directory, so the `None` arm is unreachable rather
+    // than merely unlikely.
     if let Some(working_directory) = member.working_directory.as_ref() {
         arguments.push("-c".to_string());
         arguments.push(working_directory.display().to_string());

@@ -12,6 +12,30 @@ pub const BUNDLE_ENVIRONMENT_VARIABLE: &str = "AGENTMUX_BUNDLE";
 /// Part of the bring-up context stamped by [`BringUpContext`].
 pub const SESSION_ENVIRONMENT_VARIABLE: &str = "AGENTMUX_SESSION";
 
+/// Environment variable naming the state root of the relay which spawned a
+/// member, and the environment tier of state-root resolution.
+///
+/// Not part of [`BringUpContext`]: its value belongs to the relay performing
+/// the spawn rather than to the configuration being loaded, so it is injected
+/// at spawn rather than stamped at load. It is declared here with the other two
+/// so [`INHERITED_CONTEXT_VARIABLE_NAMES`] can be built from one list — a name
+/// held elsewhere is a name that list silently omits.
+pub const STATE_DIRECTORY_ENVIRONMENT_VARIABLE: &str = "AGENTMUX_STATE_DIRECTORY";
+
+/// Names of every agentmux context variable a spawned child may inherit.
+///
+/// Distinct from [`BringUpContext::VARIABLE_NAMES`], which enumerates only what
+/// configuration load stamps. Consumers that *sanitize* inherited context need
+/// the wider set: a test harness clearing the developer's own environment must
+/// clear the state root too, or the suite silently resolves against whichever
+/// relay launched it. Consumers that count or assert what load stamps need the
+/// narrower one.
+pub const INHERITED_CONTEXT_VARIABLE_NAMES: &[&str] = &[
+    BUNDLE_ENVIRONMENT_VARIABLE,
+    SESSION_ENVIRONMENT_VARIABLE,
+    STATE_DIRECTORY_ENVIRONMENT_VARIABLE,
+];
+
 /// Authoritative context which bring-up holds about a member it is starting.
 ///
 /// Configuration load stamps this context onto an agent-spawning member's
@@ -33,13 +57,16 @@ pub struct BringUpContext<'a> {
 }
 
 impl<'a> BringUpContext<'a> {
-    /// Names of every environment variable this context may carry.
+    /// Names of every environment variable this context carries, and therefore
+    /// of everything configuration load stamps.
     ///
     /// Enumerated apart from [`Self::environment_entries`] for consumers which
-    /// need the names without a context to populate them, such as a test
-    /// harness clearing inherited context. The two are held in agreement by
-    /// test, so extending one without the other fails rather than silently
-    /// leaving a variable unhandled.
+    /// need the names without a context to populate them. The two are held in
+    /// agreement by test, so extending one without the other fails rather than
+    /// silently leaving a variable unhandled.
+    ///
+    /// This is the load-time set, not everything a child inherits. A consumer
+    /// sanitizing inherited context wants [`INHERITED_CONTEXT_VARIABLE_NAMES`].
     pub const VARIABLE_NAMES: &'static [&'static str] =
         &[BUNDLE_ENVIRONMENT_VARIABLE, SESSION_ENVIRONMENT_VARIABLE];
 

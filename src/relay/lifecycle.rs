@@ -5,10 +5,10 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::configuration::{
-    BundleConfiguration, ConfigurationRoots, TargetConfiguration, load_bundle_configuration,
-    load_tui_configuration,
+    BundleConfiguration, ConfigurationRoots, TargetConfiguration, inject_spawn_state_directory,
+    load_bundle_configuration, load_tui_configuration,
 };
-use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
+use crate::runtime::paths::BundleRuntimePaths;
 
 use super::identity::canonical_session_id;
 use super::startup_state::note_session_served_successfully;
@@ -85,18 +85,12 @@ pub(super) fn shutdown_bundle_runtime(tmux_socket: &Path) -> Result<ShutdownRepo
 
 pub(super) fn startup_bundle(
     configuration_roots: &ConfigurationRoots,
-    bundle_name: &str,
-    runtime_directory: &Path,
+    paths: &BundleRuntimePaths,
 ) -> Result<BundleStartupReport, RelayError> {
-    let bundle = load_bundle_configuration(configuration_roots, bundle_name).map_err(map_config)?;
+    let bundle = load_bundle_configuration(configuration_roots, paths.bundle_name.as_str())
+        .map_err(map_config)?;
     let authorization = load_authorization_context(configuration_roots, Some(&bundle))?;
-    let tmux_socket = tmux_socket_path_for_runtime_directory(runtime_directory);
-    startup_loaded_bundle(
-        &bundle,
-        runtime_directory,
-        tmux_socket.as_path(),
-        choices_pending_max(&authorization),
-    )
+    startup_loaded_bundle(&bundle, paths, choices_pending_max(&authorization))
 }
 
 /// Registers the relay-wide principals declared in `users.toml` as static
@@ -248,10 +242,11 @@ pub(super) fn reconcile_loaded_bundle(
 
 fn startup_loaded_bundle(
     bundle: &BundleConfiguration,
-    runtime_directory: &Path,
-    tmux_socket: &Path,
+    paths: &BundleRuntimePaths,
     choices_pending_max: usize,
 ) -> Result<BundleStartupReport, RelayError> {
+    let runtime_directory = paths.runtime_directory.as_path();
+    let tmux_socket = paths.tmux_socket.as_path();
     let configured_tmux_sessions = bundle
         .members
         .iter()
@@ -279,6 +274,14 @@ fn startup_loaded_bundle(
     let mut failed_startups = Vec::<StartupFailureRecord>::new();
     let mut members = bundle.members.clone();
     members.sort_by(|left, right| left.id.cmp(&right.id));
+    // Authoritative, and applied here because this is the one place every
+    // transport's spawn passes through with the spawning relay's state root in
+    // hand. A child exists to reach the relay that started it, so a value
+    // arriving from coder, bundle, or member configuration is overwritten
+    // rather than preserved.
+    for member in &mut members {
+        inject_spawn_state_directory(&mut member.environment, paths.state_root.as_path());
+    }
 
     for member in members {
         match &member.target {

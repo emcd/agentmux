@@ -176,12 +176,16 @@ pub fn preflight_bundle_configuration(
 }
 
 /// Attempts startup for all configured bundle sessions and reports outcomes.
+///
+/// Takes the resolved bundle paths rather than a bare runtime directory: the
+/// spawning relay's state root is injected into every member's environment
+/// here, and re-deriving it by walking up from the runtime directory would be
+/// the guesswork this propagation exists to remove.
 pub fn startup_bundle(
     configuration_roots: &ConfigurationRoots,
-    bundle_name: &str,
-    runtime_directory: &Path,
+    paths: &BundleRuntimePaths,
 ) -> Result<BundleStartupReport, RelayError> {
-    lifecycle::startup_bundle(configuration_roots, bundle_name, runtime_directory)
+    lifecycle::startup_bundle(configuration_roots, paths)
 }
 
 /// Registers the relay-wide principals declared in `users.toml` as static

@@ -6,5 +6,6 @@ pub mod error;
 pub mod inscriptions;
 pub mod paths;
 pub mod signals;
+pub mod sockets;
 pub mod starter;
 pub mod tui_session;

@@ -1,4 +1,5 @@
 use agentmux::configuration::ConfigurationRoots;
+use agentmux::runtime::paths::BundleRuntimePaths;
 use std::{
     fs,
     os::unix::fs::PermissionsExt,
@@ -702,7 +703,18 @@ fn startup_bundle(
 ) -> Result<(), agentmux::relay::RelayError> {
     ensure_fast_respawn_for_tests();
     let runtime_directory = tmux_socket.parent().unwrap_or_else(|| Path::new("."));
-    let _ = agentmux::relay::startup_bundle(config_root, "party", runtime_directory)?;
+    // Built rather than resolved: this fixture flattens the layout, putting the
+    // socket directly in the temporary directory instead of under
+    // `bundles/party/`. These tests exercise ACP worker lifecycle, not path
+    // resolution, so the paths are stated to match the fixture and the state
+    // root coincides with the runtime directory.
+    let paths = BundleRuntimePaths {
+        state_root: runtime_directory.to_path_buf(),
+        bundle_name: "party".to_string(),
+        runtime_directory: runtime_directory.to_path_buf(),
+        tmux_socket: tmux_socket.to_path_buf(),
+    };
+    let _ = agentmux::relay::startup_bundle(config_root, &paths)?;
     Ok(())
 }
 
