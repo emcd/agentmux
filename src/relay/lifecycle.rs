@@ -5,8 +5,8 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::configuration::{
-    BundleConfiguration, ConfigurationRoots, TargetConfiguration, inject_spawn_state_directory,
-    load_bundle_configuration, load_tui_configuration,
+    BundleConfiguration, BundleMember, ConfigurationRoots, TargetConfiguration,
+    inject_spawn_state_directory, load_bundle_configuration, load_tui_configuration,
 };
 use crate::runtime::paths::BundleRuntimePaths;
 
@@ -38,12 +38,12 @@ impl From<TmuxLifecycleError> for RelayError {
 /// fails, and internal failures when tmux session operations fail.
 pub(super) fn reconcile_bundle(
     configuration_roots: &ConfigurationRoots,
-    bundle_name: &str,
-    tmux_socket: &Path,
+    paths: &BundleRuntimePaths,
 ) -> Result<ReconciliationReport, RelayError> {
-    let bundle = load_bundle_configuration(configuration_roots, bundle_name).map_err(map_config)?;
+    let bundle = load_bundle_configuration(configuration_roots, paths.bundle_name.as_str())
+        .map_err(map_config)?;
     let _authorization = load_authorization_context(configuration_roots, Some(&bundle))?;
-    reconcile_loaded_bundle(&bundle, tmux_socket)
+    reconcile_loaded_bundle(&bundle, paths)
 }
 
 /// Validates a bundle's configuration exactly as startup does — bundle and
@@ -81,6 +81,26 @@ pub(super) fn shutdown_bundle_runtime(tmux_socket: &Path) -> Result<ShutdownRepo
     }
     report.killed_tmux_server = cleanup_tmux_server_when_unowned(tmux_socket)?;
     Ok(report)
+}
+
+/// Returns `bundle`'s members prepared for spawning by the relay owning
+/// `paths`.
+///
+/// The relay's state root is injected authoritatively into each member's
+/// environment. Both bring-up paths — first startup and `up`/reconcile — run
+/// through here, because a member created by one and a member created by the
+/// other must be pointed at the same relay; injecting on only one of them would
+/// leave whichever path an operator happened to take deciding whether the child
+/// could find its relay.
+fn members_for_spawn(
+    bundle: &BundleConfiguration,
+    paths: &BundleRuntimePaths,
+) -> Vec<BundleMember> {
+    let mut members = bundle.members.clone();
+    for member in &mut members {
+        inject_spawn_state_directory(&mut member.environment, paths.state_root.as_path());
+    }
+    members
 }
 
 pub(super) fn startup_bundle(
@@ -166,20 +186,20 @@ pub(super) fn register_configured_bundle(
 
 pub(super) fn reconcile_loaded_bundle(
     bundle: &BundleConfiguration,
-    tmux_socket: &Path,
+    paths: &BundleRuntimePaths,
 ) -> Result<ReconciliationReport, RelayError> {
+    let tmux_socket = paths.tmux_socket.as_path();
     // Refresh the static registry shells for every configured member so the
     // reconcile/`up` path keeps the unified registry complete (offline members
     // included), independent of transport readiness.
     register_configured_bundle_principals(bundle)?;
-    let configured_sessions = bundle
-        .members
+    let members = members_for_spawn(bundle, paths);
+    let configured_sessions = members
         .iter()
         .filter(|member| matches!(member.target, TargetConfiguration::Tmux(_)))
         .map(|member| member.id.clone())
         .collect::<HashSet<_>>();
-    let mut missing = bundle
-        .members
+    let mut missing = members
         .iter()
         .filter(|member| matches!(member.target, TargetConfiguration::Tmux(_)))
         .filter_map(|member| match session_exists(tmux_socket, &member.id) {
@@ -272,16 +292,8 @@ fn startup_loaded_bundle(
 
     let mut ready_session_count = 0usize;
     let mut failed_startups = Vec::<StartupFailureRecord>::new();
-    let mut members = bundle.members.clone();
+    let mut members = members_for_spawn(bundle, paths);
     members.sort_by(|left, right| left.id.cmp(&right.id));
-    // Authoritative, and applied here because this is the one place every
-    // transport's spawn passes through with the spawning relay's state root in
-    // hand. A child exists to reach the relay that started it, so a value
-    // arriving from coder, bundle, or member configuration is overwritten
-    // rather than preserved.
-    for member in &mut members {
-        inject_spawn_state_directory(&mut member.environment, paths.state_root.as_path());
-    }
 
     for member in members {
         match &member.target {

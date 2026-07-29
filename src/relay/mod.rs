@@ -1,9 +1,6 @@
 //! Relay IPC contract and message-routing implementation.
 
-use std::{
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{path::Path, time::Duration};
 
 use crate::configuration::{ConfigurationRoots, load_bundle_configuration};
 use crate::runtime::paths::{BundleRuntimePaths, tmux_socket_path_for_runtime_directory};
@@ -62,10 +59,19 @@ pub fn handle_request(
     // fan-out is reachable only over the stream path, which threads the live
     // catalog through `dispatch_request`. The catalog carries only the home
     // bundle — delivery resolves it like any other catalog entry, and targets
-    // beyond it are confined to relay-wide (`@GLOBAL`) sessions. `state_root`
-    // is a placeholder: delivery consumes only `runtime_directory`.
+    // beyond it are confined to relay-wide (`@GLOBAL`) sessions.
+    //
+    // The state root is recovered by inverting the layout
+    // `BundleRuntimePaths::resolve` builds — `<state_root>/bundles/<bundle>` —
+    // because this entry point is handed only a runtime directory, and `up`
+    // reads the catalog's state root to point spawned members at their relay.
+    let state_root = runtime_directory
+        .parent()
+        .and_then(Path::parent)
+        .unwrap_or(runtime_directory)
+        .to_path_buf();
     let bundle_catalog = BundleCatalog::from_paths([BundleRuntimePaths {
-        state_root: PathBuf::new(),
+        state_root,
         bundle_name: bundle_name.to_string(),
         runtime_directory: runtime_directory.to_path_buf(),
         tmux_socket: tmux_socket_path_for_runtime_directory(runtime_directory),
@@ -148,16 +154,19 @@ fn handle_request_with_principal(
 
 /// Reconciles configured bundle sessions against tmux state.
 ///
+/// Takes the resolved bundle paths for the same reason [`startup_bundle`] does:
+/// reconcile creates members, and a created member has to carry the spawning
+/// relay's state root.
+///
 /// # Errors
 ///
 /// Returns structured validation/configuration errors when bundle loading
 /// fails, and internal failures when tmux session operations fail.
 pub fn reconcile_bundle(
     configuration_roots: &ConfigurationRoots,
-    bundle_name: &str,
-    tmux_socket: &Path,
+    paths: &BundleRuntimePaths,
 ) -> Result<ReconciliationReport, RelayError> {
-    lifecycle::reconcile_bundle(configuration_roots, bundle_name, tmux_socket)
+    lifecycle::reconcile_bundle(configuration_roots, paths)
 }
 
 /// Validates a bundle's configuration the way startup would (bundle + coders

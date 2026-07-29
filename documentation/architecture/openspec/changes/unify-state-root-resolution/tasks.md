@@ -61,7 +61,7 @@
   so an inherited `AGENTMUX_STATE_DIRECTORY` is cleared between tests. Leaving it
   on the stamped enumeration would let a developer's own state root leak into
   test processes
-- [ ] 3.4 Assert no `--state-directory` in the in-repo artifacts that actually
+- [x] 3.4 Assert no `--state-directory` in the in-repo artifacts that actually
   carry an `agentmux host mcp` command line:
   `.auxiliary/configuration/coders/opencode/settings.jsonc`,
   `.auxiliary/configuration/coders/codex/config.toml`, and the shared
@@ -109,17 +109,17 @@
 - [x] 5.4 Prove a debug build and a release build resolve identical state and
   inscriptions roots from identical arguments — the assertion the deleted
   branches made impossible
-- [ ] 5.5 Prove a child stays on the spawning relay: a relay started with an
+- [x] 5.5 Prove a child stays on the spawning relay: a relay started with an
   explicit `--state-directory` spawns a member whose `agentmux host mcp`
   descendant reaches that relay's socket, not the default root's. Drive it
   through an actual spawn rather than by asserting the variable is set, since the
   defect is that the child resolves elsewhere. Give the member a working
   directory different from the relay's, so a relative or unnormalized root fails
   the test rather than passing by coincidence
-- [ ] 5.6 Prove the authoritative injection: a member declaring
+- [x] 5.6 Prove the authoritative injection: a member declaring
   `AGENTMUX_STATE_DIRECTORY`, both with a conflicting value and with a blank one,
   still reaches the spawning relay
-- [ ] 5.7 Prove a deep state root works: bring a relay up and reach it through a
+- [x] 5.7 Prove a deep state root works: bring a relay up and reach it through a
   state root long enough that the full `<state_root>/bundles/<bundle>/tmux.sock`
   path exceeds 107 bytes. Construct the fixture to exceed the limit rather than
   approach it, since a test merely near the boundary passes whether or not the

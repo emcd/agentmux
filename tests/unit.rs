@@ -12,6 +12,8 @@ mod config;
 mod delivery_message;
 #[path = "unit/envelope.rs"]
 mod envelope;
+#[path = "unit/generated_client_configuration.rs"]
+mod generated_client_configuration;
 #[path = "unit/opencode_prompt_regex.rs"]
 mod opencode_prompt_regex;
 #[cfg(feature = "pty")]

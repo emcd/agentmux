@@ -23,7 +23,6 @@ use crate::tmux::pane::resolve_active_pane_target;
 
 pub(super) fn handle_bundle_up(
     bundle: &BundleConfiguration,
-    runtime_directory: &Path,
     catalog: &BundleCatalog,
 ) -> Result<RelayResponse, RelayError> {
     // Bringing the bundle up sets its hosting intent to `Run` so the watcher
@@ -32,8 +31,17 @@ pub(super) fn handle_bundle_up(
     // whose `autostart = false` seeded it `Hold`) because the operator's request
     // to host it is the authoritative signal, regardless of current runtime state.
     catalog.set_intent(bundle.bundle_name.as_str(), HostingIntent::Run);
-    let tmux_socket = tmux_socket_path_for_runtime_directory(runtime_directory);
-    let report = reconcile_loaded_bundle(bundle, tmux_socket.as_path())?;
+    // From the catalog rather than derived from `runtime_directory`: the entry
+    // carries the state root the hosting relay actually resolved, and that is
+    // the root every member it spawns has to be pointed at.
+    let paths = catalog.lookup(bundle.bundle_name.as_str()).ok_or_else(|| {
+        relay_error(
+            "internal_unexpected_failure",
+            "bundle is not present in the runtime catalog",
+            Some(json!({ "bundle_name": bundle.bundle_name })),
+        )
+    })?;
+    let report = reconcile_loaded_bundle(bundle, &paths)?;
     let changed = report.bootstrap_session.is_some()
         || !report.created_sessions.is_empty()
         || !report.pruned_sessions.is_empty();

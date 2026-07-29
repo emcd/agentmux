@@ -136,8 +136,7 @@ fn list_reports_hosted_round_trip_for_tmux_bundle() {
         "no session should be ready before reconcile"
     );
 
-    reconcile_bundle(&config_root, bundle_name, &paths.tmux_socket)
-        .expect("reconcile bundle hosting");
+    reconcile_bundle(&config_root, &paths).expect("reconcile bundle hosting");
 
     let hosted_response = list_bundle(&config_root, bundle_name, &paths.runtime_directory);
     let RelayResponse::List {
