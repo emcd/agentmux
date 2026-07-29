@@ -5,7 +5,9 @@
       "args": [
         "--",
         "cargo", "run", "--bin", "agentmux", "--",
-        "host", "mcp"
+        "host", "mcp",
+        "--configuration-directory",
+        "/home/me/src/agentmux/.auxiliary/configuration/agentmux"
       ]
     },
     "context7": {
