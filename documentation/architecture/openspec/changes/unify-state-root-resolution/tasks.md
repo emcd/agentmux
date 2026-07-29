@@ -76,33 +76,33 @@
 
 ## 4. Documentation
 
-- [ ] 4.1 Document state root resolution in
+- [x] 4.1 Document state root resolution in
   `documentation/usage/operations.md`: the four tiers, that one state root is one
   relay, and that isolating a deployment means naming its state root
-- [ ] 4.2 Write the cutover note: a deployment previously relying on
+- [x] 4.2 Write the cutover note: a deployment previously relying on
   repository-local state must stop its relay, then either name the old roots or
   start fresh on XDG and re-register credentials. Nothing moves on disk either
   way. Name **both** roots — the old state and inscriptions roots are siblings
   (`.auxiliary/state/agentmux` and `.auxiliary/inscriptions/agentmux`), so
   supplying only `--state-directory` relocates new inscriptions under it and
   splits the operator's log history without any indication
-- [ ] 4.3 State plainly that a source build and an installed build launched with
+- [x] 4.3 State plainly that a source build and an installed build launched with
   the same arguments now share a relay, and how to separate them deliberately
-- [ ] 4.4 Document the two-relay setup for inter-relay work: each relay names its
+- [x] 4.4 Document the two-relay setup for inter-relay work: each relay names its
   own state root, and a peer's `address` is the other relay's socket path beneath
   that root
-- [ ] 4.5 Update `src/runtime/README.md` root-resolution section, and remove the
+- [x] 4.5 Update `src/runtime/README.md` root-resolution section, and remove the
   provisional wording in `src/runtime/paths.rs` describing the deleted mechanism
-- [ ] 4.6 Sync the `runtime-bootstrap` spec Purpose prose, which still describes
+- [x] 4.6 Sync the `runtime-bootstrap` spec Purpose prose, which still describes
   "XDG state root resolution and its build-profile-gated repository-local
   override". Purpose text is outside the requirement deltas, so the archive will
   not correct it
 
 ## 5. Verification
 
-- [ ] 5.1 `cargo fmt`, `cargo clippy --all-targets -D warnings`, and the full
+- [x] 5.1 `cargo fmt`, `cargo clippy --all-targets -D warnings`, and the full
   nextest suite
-- [ ] 5.2 `openspec validate --all --strict`
+- [x] 5.2 `openspec validate --all --strict`
 - [x] 5.3 Prove the state-root tier order, including that `--state-directory`
   outranks `AGENTMUX_STATE_DIRECTORY` and that a blank environment value is
   absent rather than empty
@@ -124,6 +124,6 @@
   path exceeds 107 bytes. Construct the fixture to exceed the limit rather than
   approach it, since a test merely near the boundary passes whether or not the
   fix is present
-- [ ] 5.8 Rewrite check D of `.auxiliary/scripts/verify-release-binary.sh`, which
+- [x] 5.8 Rewrite check D of `.auxiliary/scripts/verify-release-binary.sh`, which
   asserts the debug/release divergence this change deletes, to assert identical
   resolution across profiles and explicit isolation via `--state-directory`

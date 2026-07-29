@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Exercise the RELEASE binary for configuration layer resolution, bundle union,
-# and green MCP startup. These paths are gated on cfg!(debug_assertions) or
-# otherwise vary by build profile, so the nextest suite -- which runs debug --
-# cannot observe them.
+# and green MCP startup. These paths vary by build profile, or must be shown not
+# to, and the nextest suite compiles one profile so it cannot observe either.
 #
 # Originally written for redesign-configuration-resolution, which layered a
 # fixed `overlay/` subdirectory beneath a single root. layer-configuration-roots
@@ -11,10 +10,12 @@
 # rather than a nested pair, the bundle-directory union is a distinct behavior
 # from per-file shadowing and needs its own coverage.
 #
-# Re-run whenever build-profile-dependent resolution changes. In particular, the
-# runtime-instance work removes the repository-local state and inscriptions
-# branches, which is exactly what check D asserts; it needs rewriting rather than
-# re-running once that lands.
+# unify-state-root-resolution then deleted the build-profile branches from state
+# and inscriptions root resolution, so check D was inverted: it asserted the two
+# profiles diverge, and now asserts they agree and that isolation comes from an
+# explicit --state-directory.
+#
+# Re-run whenever build-profile-dependent resolution changes.
 #
 # Requires a release build: cargo build --release --bin agentmux
 # (Check C additionally requires a debug build.)
@@ -170,19 +171,28 @@ check "both profiles selected the earlier layer's copy" "all valid" "$rel"
 status=$relstatus; expect_status "release accepts the valid earlier layer" 0
 
 echo
-echo "== D. Release ignores repository-local state; debug does not =="
-# Both profiles run inside a THROWAWAY Agentmux checkout -- git repository plus a
-# manifest declaring the package -- rather than inside this worktree. Running
-# here would let a debug build reach the live relay at the repository-local state
-# root and report a routing error instead of naming a socket, which would force
-# the debug half of this check to be a weak negative assertion. In a checkout
-# with no relay running, both profiles name the socket they resolved, so both
-# halves are positive and the gate is proven from each side.
+echo "== D. Both profiles resolve one state root; isolation is explicit =="
+# The inverse of what this check used to assert. Build profile no longer selects
+# a state root, so the property worth proving is that it does not: the same
+# invocation must name the same socket from a release build and a debug build.
+# That is the assertion the deleted cfg!(debug_assertions) branches made
+# impossible, and it still cannot be made by the nextest suite, which compiles
+# one profile.
+#
+# Both run inside a THROWAWAY Agentmux checkout -- git repository plus a manifest
+# declaring the package -- rather than inside this worktree. That is now a
+# discriminating fixture rather than a convenience: it is exactly the shape the
+# old Git provenance recognized, so a resurrected repository-local branch would
+# fire here and split the two profiles apart.
 CHECKOUT="$PWD/$ROOT/checkout"
 mkdir -p "$CHECKOUT"
 git -C "$CHECKOUT" init -q 2>/dev/null
 printf '[package]\nname = "agentmux"\nversion = "0.0.0"\n' > "$CHECKOUT/Cargo.toml"
 FAKEHOME="$PWD/$ROOT/home"; mkdir -p "$FAKEHOME"
+# Deliberately not created: the default roots do not exist either, and creating
+# only this one would put the named-root invocation on a different code path
+# than the two it is being compared against.
+NAMED_STATE="$PWD/$ROOT/named-state"
 args=(list principals --namespace shadowed --as-session user@GLOBAL
       --configuration-directory "$PWD/$ROOT/override"
       --configuration-directory "$PWD/$ROOT/base")
@@ -193,24 +203,37 @@ ABS_DEBUG=$(cd "$(dirname "$DEBUG")" && pwd)/$(basename "$DEBUG")
 # Routed through `run` like every other check, so the exit status is asserted
 # rather than discarded: the expected socket path can appear in output that
 # accompanies an unexpected failure, and a substring alone cannot tell the two
-# apart. Both profiles are expected to fail with the relay-unavailable status,
-# since no relay is running in the throwaway checkout -- that failure is the
-# whole point, because it is what makes each profile name the socket it
-# resolved.
-run_in_checkout() { # binary
-  run env -u XDG_STATE_HOME HOME="$FAKEHOME" "$1" "${args[@]}"
+# apart. No relay runs in the throwaway checkout, which is the whole point --
+# each profile names the socket it resolved while reporting the bundle down.
+#
+# Exit 0 is correct here and was not always so. This fixture lives under a
+# `.auxiliary/temporary/...` path long enough to overflow `sun_path`, so before
+# socket addressing stopped scaling with depth these invocations failed on the
+# path length rather than on the absent relay -- the check passed, for the wrong
+# reason. A `down`/`not_started` report is the honest outcome.
+run_in_checkout() { # binary [extra args...]
+  local binary="$1"; shift
+  run env -u XDG_STATE_HOME HOME="$FAKEHOME" "$binary" "${args[@]}" "$@"
 }
 cd "$CHECKOUT" || exit 1
 run_in_checkout "$ABS_RELEASE"; relout="$out"; relstatus=$status
 run_in_checkout "$ABS_DEBUG";   dbgout="$out"; dbgstatus=$status
+run_in_checkout "$ABS_DEBUG" --state-directory "$NAMED_STATE"
+namedout="$out"; namedstatus=$status
 cd "$OLDPWD" || exit 1
 
-check  "release resolves the XDG state root"             "$FAKEHOME/.local/state/agentmux" "$relout"
-refute "release reaches no repository-local state root"  ".auxiliary/state"                "$relout"
-check  "debug resolves the repository-local state root"  "$CHECKOUT/.auxiliary/state/agentmux" "$dbgout"
-refute "debug does not resolve the XDG state root"       "$FAKEHOME/.local/state/agentmux" "$dbgout"
-status=$relstatus; expect_status "release exits non-zero on the unavailable relay" 1
-status=$dbgstatus; expect_status "debug exits non-zero on the unavailable relay"   1
+check  "release resolves the home state root"           "$FAKEHOME/.local/state/agentmux" "$relout"
+check  "debug resolves the same home state root"        "$FAKEHOME/.local/state/agentmux" "$dbgout"
+refute "release reaches no repository-local state root" ".auxiliary/state"                "$relout"
+refute "debug reaches no repository-local state root"   ".auxiliary/state"                "$dbgout"
+check  "an explicit state directory is honored"         "$NAMED_STATE/relay.sock"         "$namedout"
+refute "the explicit root displaces the default"        "$FAKEHOME/.local/state/agentmux" "$namedout"
+check  "release reports the bundle down"                "reason_code=not_started"         "$relout"
+check  "debug reports the bundle down"                  "reason_code=not_started"         "$dbgout"
+check  "the named root reports the bundle down"         "reason_code=not_started"         "$namedout"
+status=$relstatus;   expect_status "release reports an absent relay without failing" 0
+status=$dbgstatus;   expect_status "debug reports an absent relay without failing"   0
+status=$namedstatus; expect_status "the named root reports an absent relay without failing" 0
 
 echo
 echo "== E. Green MCP startup on an unknown bundle (release) =="

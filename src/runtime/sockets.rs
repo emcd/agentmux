@@ -17,9 +17,32 @@
 //! descriptor as `/proc/self/fd/<n>/<name>`, which is bounded at roughly 30
 //! bytes however deep the real directory is. The directory is already `0700`
 //! and the descriptor is the process's own, so this adds no security surface.
-//! `/proc` is Linux-only; the full path is used where the descriptor form is
-//! unavailable, and the length is checked first so the failure names the limit
-//! rather than arriving as a bare `ENAMETOOLONG`.
+//!
+//! # Portability
+//!
+//! `/proc` is Linux-only, and the descriptor form is used only where it
+//! resolves. On Darwin the full path is passed instead, which is what every
+//! caller did before this module existed — macOS keeps today's reach and does
+//! not gain the depth-independence. Closing that gap needs a working-directory
+//! change, which is process-global and therefore not worth taking where the
+//! descriptor form is available; `bindat`/`connectat` would serve but Darwin
+//! does not provide them.
+//!
+//! Because the fallback is a real path on a real platform, the limit is
+//! per-target rather than Linux's number everywhere: a Darwin path between the
+//! two limits would otherwise pass the check and then fail with the bare
+//! `ENAMETOOLONG` the check exists to replace.
+//!
+//! Windows is an intended target — the Pty transport exists in part to give it
+//! a path that does not go through tmux — but this module cannot serve it yet.
+//! It is written against `std::os::unix::net`, and `std` exposes no AF_UNIX
+//! types on Windows even though the OS has supported the family since Windows
+//! 10; reaching it needs a third-party implementation. When that lands, this is
+//! one of the places needing a target-specific arm: there is no `/proc`, so the
+//! descriptor form does not carry over and the full path would be used, and the
+//! per-target limit below needs a Windows value (its `sun_path` is 108 bytes,
+//! matching Linux rather than the Darwin figure the fallback arm currently
+//! carries).
 
 use std::{
     fs::File,
@@ -31,9 +54,21 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// Usable bytes in `sockaddr_un.sun_path`: 108 on Linux, less the NUL
-/// terminator.
+/// Usable bytes in `sockaddr_un.sun_path`, less the NUL terminator.
+///
+/// The field is 108 bytes on Linux and 104 on Darwin and the BSDs, whose
+/// `sockaddr_un` also carries a leading `sun_len`. Reporting Linux's number on
+/// Darwin would admit paths the kernel then rejects.
+#[cfg(target_os = "linux")]
 pub const UNIX_SOCKET_PATH_MAXIMUM: usize = 107;
+
+/// Usable bytes in `sockaddr_un.sun_path`, less the NUL terminator. See the
+/// Linux definition above for why this is per-target.
+///
+/// This arm carries the Darwin/BSD figure, which is the only non-Linux target
+/// the module compiles for today. A Windows arm needs 107, not this value.
+#[cfg(not(target_os = "linux"))]
+pub const UNIX_SOCKET_PATH_MAXIMUM: usize = 103;
 
 /// Binds a Unix listener at `path`, addressing it through its parent directory.
 ///
@@ -62,26 +97,25 @@ fn with_short_address<T>(
     path: &Path,
     operation: impl FnOnce(&Path) -> io::Result<T>,
 ) -> io::Result<T> {
-    let short = path
-        .parent()
-        .zip(path.file_name())
-        .and_then(|(parent, file_name)| {
-            let directory = File::open(parent).ok()?;
-            let reference = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
-            // `/proc` is not mounted everywhere. A reference that does not
-            // resolve back to the directory just opened is unusable.
-            if !reference.is_dir() {
-                return None;
-            }
-            Some((directory, reference.join(file_name)))
-        });
-    let Some((directory, address)) = short else {
+    let Some((parent, file_name)) = path.parent().zip(path.file_name()) else {
         return operation(ensure_addressable(path)?);
     };
+    // A parent that cannot be opened is reported as itself rather than fed
+    // through the fallback. There is nothing to bind or connect inside a
+    // directory that is not there, and the length check below would otherwise
+    // convert a deep-but-absent state root into a path-length fault when the
+    // truth is that no relay lives there.
+    let directory = File::open(parent)?;
+    let reference = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
+    // `/proc` is not mounted everywhere. A reference that does not resolve back
+    // to the directory just opened is unusable.
+    if !reference.is_dir() {
+        return operation(ensure_addressable(path)?);
+    }
     // `directory` is held across the call: the `/proc/self/fd/<n>` component is
     // only meaningful while the descriptor is live, and dropping it before the
     // syscall would leave the address dangling.
-    let outcome = operation(ensure_addressable(&address)?);
+    let outcome = operation(ensure_addressable(&reference.join(file_name))?);
     drop(directory);
     outcome
 }

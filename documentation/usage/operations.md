@@ -10,7 +10,6 @@ All primary commands support these runtime root overrides:
 - `--configuration-directory PATH`
 - `--state-directory PATH`
 - `--inscriptions-directory PATH` (alias: `--logs-directory PATH`)
-- `--repository-root PATH`
 
 ## Configuration Layout
 
@@ -192,6 +191,91 @@ typed `authorization_forbidden` error from the relay; the CLI surfaces it
 as a `relay returned error: authorization_forbidden` message. Operators who
 hit this should verify that `users.toml` maps their `session@GLOBAL`
 identity to a policy with `updown = "home"`.
+
+## State Root
+
+The state root is where a relay lives. It is resolved from four tiers, in
+order, and the answer is identical in every build profile:
+
+1. `--state-directory PATH`
+2. `AGENTMUX_STATE_DIRECTORY`
+3. `$XDG_STATE_HOME/agentmux`
+4. `~/.local/state/agentmux`
+
+The resolved root is normalized to an absolute path. An empty
+`--state-directory` is an error; a blank `AGENTMUX_STATE_DIRECTORY` is treated
+as absent, like every other environment tier.
+
+**One state root is one relay.** Everything that distinguishes two deployments
+— the relay socket, both locks, the ready sentinel, the principal store, peer
+credentials — sits at the state root rather than under a bundle. Two relays
+started against the same root contend for the same socket and spawn lock.
+
+Isolating a deployment therefore means **naming its state root**, and nothing
+else does it. No identifier is inferred from your configuration, your build, or
+where you launched from. In particular, a source build and an installed build
+launched with the same arguments share a relay; separate them by giving one of
+them its own `--state-directory`.
+
+The inscriptions root defaults to `<state-root>/inscriptions`, so it follows the
+state root unless you name it separately with `--inscriptions-directory`.
+
+### Propagation to spawned agents
+
+A relay stamps its own state root into every member it spawns, as
+`AGENTMUX_STATE_DIRECTORY`. The launched coder passes it to its
+`agentmux host mcp` subprocess by ordinary environment inheritance, so the
+child resolves the relay that started it rather than re-deriving a root of its
+own.
+
+That stamp is **authoritative**: it overwrites any `AGENTMUX_STATE_DIRECTORY`
+declared at the coder, bundle, or session level. The variable names the relay a
+member belongs to, so a declared value would not express a preference — it
+would send the child to a relay that never spawned it, while the one that did
+waits for a client that never arrives. Reaching another relay is expressed with
+configured peers, not by re-pointing a child.
+
+For the same reason, generated coder client configuration must not pass
+`--state-directory`: a flag on a committed command line outranks the stamp.
+
+### Running two relays
+
+Inter-relay work needs each relay to name its own state root:
+
+```
+agentmux host relay --state-directory ~/.local/state/agentmux-a
+agentmux host relay --state-directory ~/.local/state/agentmux-b
+```
+
+A peer's `address` in `relay.toml` is the other relay's socket path beneath its
+state root — `~/.local/state/agentmux-b/relay.sock` for the pair above. Because
+you chose both roots, both addresses are known before either relay has run.
+
+### Migrating off repository-local state
+
+Earlier versions redirected debug builds to a repository-local state root,
+derived from the Git checkout you launched inside. That is gone: the same
+invocation now resolves the tiers above whatever the build profile.
+
+If you relied on it, this is a **stop-the-relay** operation, but nothing moves
+on disk. Stop the relay, then either keep using the old locations by naming
+them, or start fresh on the default root and re-register credentials.
+
+Name **both** roots if you keep them. The old state and inscriptions roots are
+siblings, not nested:
+
+```
+agentmux host relay \
+  --state-directory <checkout>/.auxiliary/state/agentmux \
+  --inscriptions-directory <checkout>/.auxiliary/inscriptions/agentmux
+```
+
+Supplying only `--state-directory` preserves credentials and session state
+while silently relocating new inscriptions to
+`<checkout>/.auxiliary/state/agentmux/inscriptions`, splitting your log history
+across two locations with nothing to indicate it happened.
+
+Nothing changes for a deployment already resolving XDG.
 
 ## Runtime Artifacts
 

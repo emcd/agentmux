@@ -119,8 +119,11 @@ fn a_spawned_member_receives_the_relays_state_root_over_its_own_declaration() {
 /// overshoots `sun_path`, rather than merely approaching it — a fixture near
 /// the boundary passes whether or not the fix is present.
 fn deep_state_root(base: &std::path::Path) -> std::path::PathBuf {
-    /// Usable bytes in `sockaddr_un.sun_path` on Linux.
-    const UNIX_SOCKET_PATH_MAXIMUM: usize = 107;
+    // The crate's own constant rather than a literal: the limit is 107 on Linux
+    // and 103 on Darwin, and a fixture hardcoding one of them would overshoot by
+    // a different margin on the other.
+    use agentmux::runtime::sockets::UNIX_SOCKET_PATH_MAXIMUM;
+
     /// Clears the limit by a wide margin instead of sitting on it.
     const OVERSHOOT: usize = 60;
 
