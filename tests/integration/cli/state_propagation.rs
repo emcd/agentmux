@@ -9,6 +9,8 @@
 use std::{
     fs,
     process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 use tempfile::TempDir;
@@ -50,6 +52,161 @@ fn recorded_new_session(log: &str) -> &str {
         "expected exactly one new-session invocation, got:\n{log}"
     );
     lines.pop().expect("one new-session line")
+}
+
+/// Writes a bundle whose member, once spawned, runs an agentmux client that
+/// must find the relay on its own.
+///
+/// The client is given a configuration directory but deliberately **no**
+/// `--state-directory`, so the only way it can reach the relay is by resolving
+/// `AGENTMUX_STATE_DIRECTORY` out of the environment it inherited. Its output is
+/// captured to `report`.
+fn write_rendezvous_bundle(
+    config_root: &std::path::Path,
+    report: &std::path::Path,
+    member_directory: &std::path::Path,
+) {
+    write_bundle_configuration_with_options(config_root, "alpha", None, &["a"], Some(false));
+    let client = format!(
+        "{binary} list principals --namespace alpha --as-session user@GLOBAL \
+         --configuration-directory {config}",
+        binary = env!("CARGO_BIN_EXE_agentmux"),
+        config = config_root.display()
+    );
+    fs::write(
+        config_root.join("coders.toml"),
+        format!(
+            r#"
+format-version = 1
+
+[[coders]]
+id = "default"
+
+[coders.tmux]
+initial-command = "sh -lc '{client} > {report} 2>&1; exec sleep 45'"
+resume-command = "sh -lc 'exec sleep 45'"
+"#,
+            client = client,
+            report = report.display()
+        ),
+    )
+    .expect("write rendezvous coders config");
+    // The member runs from a directory that is not the relay's, so a relative or
+    // unnormalized state root would resolve somewhere else and fail rather than
+    // pass by coincidence.
+    let bundle = fs::read_to_string(config_root.join("bundles").join("alpha.toml"))
+        .expect("read bundle configuration")
+        .replace(
+            "directory = \"/tmp\"",
+            &format!("directory = \"{}\"", member_directory.display()),
+        );
+    fs::write(config_root.join("bundles").join("alpha.toml"), bundle)
+        .expect("write rendezvous bundle config");
+}
+
+/// Waits for the spawned member's client to write its report.
+fn await_rendezvous_report(report: &std::path::Path) -> String {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        if let Ok(contents) = fs::read_to_string(report)
+            && !contents.trim().is_empty()
+        {
+            return contents;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    panic!(
+        "the spawned member's agentmux client never reported at {}",
+        report.display()
+    );
+}
+
+/// A relay-spawned member's own agentmux client reaches the relay that spawned
+/// it, resolving the state root from inherited environment alone.
+///
+/// This is the propagation contract end to end rather than by argv inspection:
+/// the child is a real process, started by the relay through tmux, given no
+/// state directory of its own, and it has to arrive at the right socket. If the
+/// stamp were missing the child would resolve the XDG or home default, find no
+/// relay, and report the bundle down.
+#[test]
+fn a_relay_spawned_member_client_reaches_the_spawning_relay() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("named-state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    let member_directory = temporary.path().join("member-cwd");
+    let report = temporary.path().join("rendezvous-report");
+    // Where the spawned child's *fallback* tier lands if the stamp fails to
+    // arrive. Pointing it inside the fixture is a safety requirement, not
+    // tidiness: on a developer machine the real XDG state root often holds a
+    // live relay, and a broken stamp would otherwise send this test's child to
+    // connect to it. It also makes the negative case deterministic — no relay
+    // there, ever — instead of depending on what happens to be running.
+    let isolated_fallback = temporary.path().join("fallback-state");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    fs::create_dir_all(&member_directory).expect("create member directory");
+    fs::create_dir_all(&isolated_fallback).expect("create fallback state root");
+    write_rendezvous_bundle(&config_root, &report, &member_directory);
+
+    // Real tmux, not the fake: the stamp has to reach a live child, and the fake
+    // records invocations without executing the member's command.
+    let host_child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "--configuration-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        // The relay is unaffected (it was given an explicit state directory);
+        // this is inherited by the tmux server and thence by the member's child,
+        // which is the process whose fallback needs containing.
+        .env("XDG_STATE_HOME", &isolated_fallback)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay");
+    wait_for_relay_ready(&state_root, "alpha");
+
+    let up = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "up",
+            "alpha",
+            "--configuration-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .output()
+        .expect("run agentmux up");
+    assert!(
+        up.status.success(),
+        "up should start the member; stderr:\n{}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+
+    let reported = await_rendezvous_report(&report);
+
+    shutdown_relay_if_present(&state_root, "alpha");
+    process::wait_with_output_bounded(host_child, process::HARNESS_CHILD_WAIT_DEFAULT).ok();
+
+    assert!(
+        !reported.contains("relay socket is absent") && !reported.contains("relay_unavailable"),
+        "the spawned member's client must have reached the spawning relay, not a \
+         default root; it reported:\n{reported}"
+    );
+    assert!(
+        reported.contains("bundle=alpha"),
+        "the client should have listed the bundle it belongs to; it reported:\n{reported}"
+    );
 }
 
 /// Brings a relay up with `declared` as the member's own
