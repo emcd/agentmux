@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fs,
     io::{BufRead, BufReader, Write},
-    os::unix::net::{UnixListener, UnixStream},
+    os::unix::net::UnixStream,
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -17,6 +17,8 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt},
     process::Command,
 };
+
+use agentmux::runtime::sockets::bind_unix_listener;
 
 use crate::support::process::strip_bring_up_context;
 
@@ -89,7 +91,12 @@ impl FakeRelay {
         if let Some(parent) = socket_path.parent() {
             fs::create_dir_all(parent).expect("create relay socket parent");
         }
-        let listener = UnixListener::bind(&socket_path).expect("bind fake relay");
+        // Through the crate's own helper rather than `UnixListener::bind`: the
+        // fixture root is an absolute path inside the checkout, which on a
+        // normal working copy already exceeds `sun_path`. Binding it the way
+        // the relay does is both what makes this work and what keeps the
+        // harness honest about the production path.
+        let listener = bind_unix_listener(&socket_path).expect("bind fake relay");
         listener
             .set_nonblocking(true)
             .expect("set fake relay listener nonblocking");
@@ -594,7 +601,10 @@ pub(crate) fn temporary_root(prefix: &str) -> PathBuf {
         .as_nanos();
     let root = PathBuf::from(".auxiliary/temporary").join(format!("{prefix}-{pid}-{nanos}"));
     fs::create_dir_all(&root).expect("create temporary root");
-    root
+    // Absolute, because the runtime normalizes the state root it is given and
+    // then reports resolved paths back. A relative fixture root would leave the
+    // harness asserting a path the runtime never produces.
+    std::path::absolute(&root).expect("absolute temporary root")
 }
 
 pub(crate) fn decode_tool_payload(response: &Value) -> Value {

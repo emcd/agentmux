@@ -4,10 +4,7 @@ use std::{
     fs::{self, OpenOptions},
     io,
     os::fd::AsRawFd,
-    os::unix::{
-        fs::PermissionsExt,
-        net::{UnixListener, UnixStream},
-    },
+    os::unix::{fs::PermissionsExt, net::UnixListener},
     path::{Path, PathBuf},
     process::Child,
     thread,
@@ -17,6 +14,7 @@ use std::{
 use super::{
     error::RuntimeError,
     paths::{RelayRuntimePaths, ensure_existing_artifact_is_owned, ensure_relay_runtime_directory},
+    sockets::{bind_unix_listener, connect_unix_stream},
 };
 
 const SOCKET_MODE_OWNER_ONLY: u32 = 0o600;
@@ -223,7 +221,7 @@ pub fn bind_relay_listener(paths: &RelayRuntimePaths) -> Result<UnixListener, Ru
             )
         })?;
     }
-    let listener = UnixListener::bind(&paths.relay_socket).map_err(|source| {
+    let listener = bind_unix_listener(&paths.relay_socket).map_err(|source| {
         RuntimeError::io(
             format!("bind relay socket {}", paths.relay_socket.display()),
             source,
@@ -267,7 +265,7 @@ pub fn resolve_relay_program() -> Result<PathBuf, RuntimeError> {
 
 fn relay_socket_connectable(paths: &RelayRuntimePaths) -> bool {
     ensure_existing_artifact_is_owned(&paths.relay_socket).is_ok()
-        && UnixStream::connect(&paths.relay_socket).is_ok()
+        && connect_unix_stream(&paths.relay_socket).is_ok()
 }
 
 // A connectable socket alone is not a sound readiness gate: the kernel queues

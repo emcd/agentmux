@@ -4,10 +4,11 @@ use std::{
     env, fs,
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
-    process::Command,
 };
 
-use crate::configuration::{ConfigurationRoots, ConfigurationRootsError};
+use crate::configuration::{
+    ConfigurationRoots, ConfigurationRootsError, STATE_DIRECTORY_ENVIRONMENT_VARIABLE,
+};
 
 use super::error::RuntimeError;
 
@@ -43,9 +44,6 @@ pub struct RuntimeRootOverrides {
     pub configuration_layers: Vec<PathBuf>,
     pub state_root: Option<PathBuf>,
     pub inscriptions_root: Option<PathBuf>,
-    /// Feeds state and inscriptions root resolution only. Configuration root
-    /// resolution ignores it.
-    pub repository_root: Option<PathBuf>,
 }
 
 /// Tier which supplied the configuration root.
@@ -163,159 +161,6 @@ impl RelayRuntimePaths {
     }
 }
 
-/// Resolves the debug repository-local state root.
-pub fn debug_repository_state_root(repository_root: &Path) -> PathBuf {
-    repository_root
-        .join(".auxiliary/state")
-        .join(APPLICATION_DIRECTORY)
-}
-
-/// Resolves the debug repository-local inscriptions root.
-pub fn debug_repository_inscriptions_root(repository_root: &Path) -> PathBuf {
-    repository_root
-        .join(".auxiliary/inscriptions")
-        .join(APPLICATION_DIRECTORY)
-}
-
-/// Resolves the Agentmux source checkout supplying repository-local (dev-mode)
-/// state and inscriptions, or `None` when the working directory sits in none.
-///
-/// This is the sole repository-root resolver. Every surface — CLI, TUI, MCP
-/// host, relay host — resolves through it, because a surface that answered
-/// differently would look for the relay socket somewhere the relay never bound
-/// it, and the two would never meet.
-///
-/// Git supplies the candidate and the package manifest confirms it, because
-/// each covers what the other cannot:
-///
-/// Git makes the answer stable across a project's linked worktrees. The common
-/// directory is shared by a primary clone and every worktree linked to it, so
-/// its owner root is one path no matter which worktree the process runs in, and
-/// every principal in the project therefore agrees on one state root and one
-/// relay socket. Probing the working directory alone answers with the worktree,
-/// which would give each sibling worktree a private relay and sever the
-/// cross-worktree coordination Agentmux exists to provide. Git also searches
-/// ancestors, so a process launched anywhere beneath a checkout resolves it.
-///
-/// The manifest marker keeps the answer honest. Git alone adopts whichever
-/// repository the process happens to stand in, so an unrelated clone would
-/// become an Agentmux state root; requiring the owner root to declare
-/// `name = "agentmux"` confines dev-mode to an actual Agentmux checkout. When
-/// Git resolves a repository whose owner root fails that check, the reason is
-/// reported on stderr so an operator can see why production paths were
-/// selected. Stderr is the only channel available: this runs during root
-/// resolution, before any inscriptions sink is configured.
-///
-/// Worktrees owned by a bare repository are not supported. Their common
-/// directory is conventionally `<name>.git` rather than an ancestor named
-/// `.git`, and a bare repository has no checked-out root to carry the manifest,
-/// so both halves of the answer are unavailable. Such a deployment resolves
-/// production paths.
-///
-/// Always `None` in release builds, where dev-mode roots are unreachable and
-/// both the subprocess and the manifest read would be wasted work.
-///
-/// This is the last Git dependency in Agentmux, and it exists only to feed the
-/// build-profile-gated repository-local branches of [`resolve_state_root`] and
-/// [`resolve_inscriptions_root`]. Deleting it without deleting those branches
-/// leaves the repository root permanently unresolved and silently collapses
-/// repository-local state onto the XDG default. The runtime-instance work that
-/// replaces the provenance removes the branches, and this resolver goes with
-/// them.
-#[must_use]
-pub fn repository_checkout_root(current_directory: &Path) -> Option<PathBuf> {
-    if !cfg!(debug_assertions) {
-        return None;
-    }
-    let common_directory = git_common_directory(current_directory)?;
-    let repository_root = repository_root_from_git_common_directory(&common_directory)?;
-    if !cargo_manifest_declares_agentmux(&repository_root) {
-        eprintln!(
-            "debug build launched inside a Git repository that is not an Agentmux source \
-             checkout ({}); using production runtime paths",
-            repository_root.display()
-        );
-        return None;
-    }
-    Some(repository_root)
-}
-
-/// Asks Git for the common directory — the one a primary clone shares with
-/// every worktree linked to it.
-fn git_common_directory(current_directory: &Path) -> Option<PathBuf> {
-    let common_directory = run_git(
-        current_directory,
-        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )
-    // `--path-format` is absent from older Git; the bare form answers relative
-    // to the working directory, so the result is joined onto it below.
-    .or_else(|| run_git(current_directory, &["rev-parse", "--git-common-dir"]))
-    .map(PathBuf::from)?;
-    if common_directory.is_absolute() {
-        return Some(common_directory);
-    }
-    Some(current_directory.join(common_directory))
-}
-
-/// Walks a Git common directory up to the repository root owning it: the parent
-/// of `.git`. A linked worktree's common directory points into the *owner's*
-/// `.git`, which is what makes every worktree of a project resolve one root.
-fn repository_root_from_git_common_directory(common_directory: &Path) -> Option<PathBuf> {
-    let mut cursor = Some(common_directory);
-    while let Some(path) = cursor {
-        if path.file_name().is_some_and(|name| name == ".git") {
-            return path.parent().map(Path::to_path_buf);
-        }
-        cursor = path.parent();
-    }
-    None
-}
-
-/// Runs Git in `directory`, yielding trimmed stdout on success.
-///
-/// The ambient Git environment is cleared so the answer describes the directory
-/// asked about rather than whichever repository invoked this process — an agent
-/// spawned from a Git hook or a worktree command otherwise inherits a `GIT_DIR`
-/// pointing somewhere else entirely.
-fn run_git(directory: &Path, arguments: &[&str]) -> Option<String> {
-    let output = Command::new("git")
-        .current_dir(directory)
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .env_remove("GIT_COMMON_DIR")
-        .env_remove("GIT_OBJECT_DIRECTORY")
-        .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
-        .args(arguments)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if value.is_empty() {
-        return None;
-    }
-    Some(value)
-}
-
-/// Reports whether the `Cargo.toml` at `root` declares `name = "agentmux"`
-/// in its `[package]` table. Unreadable or unparseable manifests are not
-/// checkouts.
-fn cargo_manifest_declares_agentmux(root: &Path) -> bool {
-    let Ok(raw) = fs::read_to_string(root.join("Cargo.toml")) else {
-        return false;
-    };
-    let Ok(manifest) = raw.parse::<toml::Value>() else {
-        return false;
-    };
-    manifest
-        .get("package")
-        .and_then(|package| package.get("name"))
-        .and_then(toml::Value::as_str)
-        == Some(APPLICATION_DIRECTORY)
-}
-
 /// Resolves the tmux socket path for one bundle runtime directory.
 #[must_use]
 pub fn tmux_socket_path_for_runtime_directory(runtime_directory: &Path) -> PathBuf {
@@ -410,9 +255,7 @@ pub fn ensure_existing_artifact_is_owned(path: &Path) -> Result<(), RuntimeError
 /// The first two tiers **replace** the list rather than extending it, so a
 /// supplied list is closed and never falls through to a root the operator did
 /// not name. The default tier resolves as a single-layer list, so one lookup
-/// path serves every tier. Resolution is identical in every build profile:
-/// unlike the state and inscriptions roots below, nothing here needs to keep a
-/// source-tree deployment from colliding with an installed one.
+/// path serves every tier.
 fn resolve_configuration_roots(
     overrides: &RuntimeRootOverrides,
 ) -> Result<(ConfigurationRoots, ConfigurationRootSource), RuntimeError> {
@@ -447,44 +290,61 @@ fn invalid_configuration_layers(source: ConfigurationRootsError) -> RuntimeError
     )
 }
 
-/// Resolves the state root.
+/// Resolves the state root: the explicit flag, then the environment tier, then
+/// XDG, then home. Resolution is identical in every build profile.
 ///
-/// The repository-local branch stays gated on build profile deliberately. It is
-/// currently the only thing keeping a source-tree relay and an installed relay
-/// from resolving the same socket, locks, ready sentinel, principal store, and
-/// peer credentials, all of which are relay-wide rather than per-bundle.
-/// Ungating it without runtime instances would collapse two live deployments
-/// into one, stranding sessions on one relay while new clients attach to
-/// another. Runtime instances replace this mechanism; until then it stays, and
-/// so does the Git-derived repository-root provenance which activates it.
+/// One state root is one relay. Everything that distinguishes two deployments —
+/// the relay socket, both locks, the ready sentinel, the principal store, peer
+/// credentials — sits at this root rather than beneath a bundle, so isolating a
+/// deployment means naming a distinct root and nothing else does it.
 fn resolve_state_root(overrides: &RuntimeRootOverrides) -> Result<PathBuf, RuntimeError> {
     if let Some(path) = overrides.state_root.clone() {
-        return Ok(path);
+        return normalize_state_root(&path);
     }
-    if cfg!(debug_assertions)
-        && let Some(repository_root) = overrides.repository_root.as_ref()
-    {
-        return Ok(debug_repository_state_root(repository_root));
+    if let Some(path) = env_directory(STATE_DIRECTORY_ENVIRONMENT_VARIABLE) {
+        return normalize_state_root(&path);
     }
     if let Some(path) = env_directory("XDG_STATE_HOME") {
-        return Ok(path.join(APPLICATION_DIRECTORY));
+        return normalize_state_root(&path.join(APPLICATION_DIRECTORY));
     }
     let home_directory = resolve_home_directory()?;
-    Ok(state_root_from_sources(None, &home_directory))
+    normalize_state_root(&state_root_from_sources(None, &home_directory))
 }
 
-/// Resolves the inscriptions root. Gated on build profile for the same reason
-/// as [`resolve_state_root`], and removed by the same deferred work.
+/// Normalizes a resolved state root to a non-empty absolute path.
+///
+/// This is a precondition for propagation rather than tidiness. The root is
+/// stamped into every spawned member's environment, and a relative value
+/// re-resolves against each child's working directory — members routinely
+/// declare their own — so the child would silently address a different state
+/// root than the relay that spawned it, find no socket there, and report the
+/// relay unavailable.
+///
+/// Empty is rejected rather than normalized. The environment tier reads blank as
+/// absent, so accepting an empty flag would give one spelling of "nothing" two
+/// meanings depending on which surface carried it.
+fn normalize_state_root(path: &Path) -> Result<PathBuf, RuntimeError> {
+    if path.as_os_str().is_empty() {
+        return Err(RuntimeError::validation(
+            "validation_invalid_state_directory",
+            "state directory must not be empty".to_string(),
+        ));
+    }
+    std::path::absolute(path).map_err(|source| {
+        RuntimeError::io(
+            format!("resolve state directory {}", path.display()),
+            source,
+        )
+    })
+}
+
+/// Resolves the inscriptions root, which defaults beneath the state root and so
+/// follows it without separate selection.
 fn resolve_inscriptions_root(overrides: &RuntimeRootOverrides, state_root: &Path) -> PathBuf {
-    if let Some(path) = overrides.inscriptions_root.clone() {
-        return path;
-    }
-    if cfg!(debug_assertions)
-        && let Some(repository_root) = overrides.repository_root.as_ref()
-    {
-        return debug_repository_inscriptions_root(repository_root);
-    }
-    state_root.join(INSCRIPTIONS_DIRECTORY_DEFAULT)
+    overrides
+        .inscriptions_root
+        .clone()
+        .unwrap_or_else(|| state_root.join(INSCRIPTIONS_DIRECTORY_DEFAULT))
 }
 
 fn resolve_home_directory() -> Result<PathBuf, RuntimeError> {

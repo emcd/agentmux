@@ -1,5 +1,3 @@
-use std::env;
-
 use serde_json::{Map, Value, json};
 
 use crate::{
@@ -21,9 +19,7 @@ pub(super) fn run_bundle_command(
     arguments: &[String],
 ) -> Result<(), RuntimeError> {
     let parsed = parse_bundle_arguments(action, arguments)?;
-    let current_directory = env::current_dir()
-        .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
-    let roots = shared::resolve_roots(&parsed.runtime, &current_directory)?;
+    let roots = shared::resolve_roots(&parsed.runtime)?;
     ensure_starter_configuration_layout(&roots)?;
 
     let selected_bundles = resolve_selected_bundles(&roots.configuration_roots, &parsed.selector)?;
@@ -82,13 +78,13 @@ pub(super) fn run_bundle_command(
 
 pub(super) fn print_up_help() {
     println!(
-        "Usage: agentmux up (<bundle-id> | --group GROUP) [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux up (<bundle-id> | --group GROUP) [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH]"
     );
 }
 
 pub(super) fn print_down_help() {
     println!(
-        "Usage: agentmux down (<bundle-id> | --group GROUP) [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux down (<bundle-id> | --group GROUP) [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH]"
     );
 }
 

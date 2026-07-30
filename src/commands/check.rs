@@ -59,7 +59,7 @@ fn check_configuration(arguments: &[String]) -> Result<(), RuntimeError> {
     let parsed = parse_check_arguments(arguments)?;
     let current_directory = env::current_dir()
         .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
-    let roots = shared::resolve_roots(&parsed.runtime, &current_directory)?;
+    let roots = shared::resolve_roots(&parsed.runtime)?;
 
     // Discovery is a lookup, not validation, so it runs ahead of everything and
     // serves the source report and the validation loop from one enumeration. An
@@ -273,7 +273,7 @@ fn preflight_error_to_runtime(error: RelayError) -> RuntimeError {
 
 pub(super) fn print_check_help() {
     println!(
-        "Usage: agentmux check configuration [<bundle-id>] [-q|--quiet] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux check configuration [<bundle-id>] [-q|--quiet] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH]"
     );
     println!(
         "  Reports the physical file supplying each resolved artifact, so a shadowed copy is distinguishable from the copy in effect."

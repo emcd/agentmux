@@ -1,7 +1,7 @@
 use std::{
     ffi::OsStr,
     io::Write,
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -172,10 +172,8 @@ fn next_paste_buffer_name() -> String {
 }
 
 fn load_tmux_buffer(tmux_socket: &Path, buffer_name: &str, text: &str) -> Result<(), String> {
-    let mut command = Command::new(tmux_program());
+    let mut command = tmux_command(tmux_socket);
     command
-        .arg("-S")
-        .arg(tmux_socket)
         .args(["load-buffer", "-b", buffer_name, "-"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -226,9 +224,117 @@ pub(crate) fn run_tmux_command_capture(
     tmux_socket: &Path,
     command_arguments: &[impl AsRef<OsStr>],
 ) -> Result<std::process::Output, String> {
-    let mut command = Command::new(tmux_program());
-    command.arg("-S").arg(tmux_socket).args(command_arguments);
+    let mut command = tmux_command(tmux_socket);
+    command.args(command_arguments);
     command.output().map_err(|source| source.to_string())
+}
+
+/// Builds a tmux invocation addressing `tmux_socket` relative to its own
+/// directory.
+///
+/// tmux binds and connects the `-S` path itself, so the `sockaddr_un` limit
+/// applies to whatever string it is handed — and this is the longest path the
+/// project constructs. Agentmux cannot address it through a directory
+/// descriptor the way it does its own sockets, because the descriptor would
+/// have to survive into tmux's process. Running the client from the socket's
+/// directory achieves the same bound: the kernel resolves the bare file name
+/// against the process working directory, so the address stays a handful of
+/// bytes however deep the state root is.
+///
+/// Callers that create sessions must pass `-c` explicitly. tmux takes an
+/// omitted start directory from the *client's* working directory, so moving the
+/// client here would otherwise start panes in the bundle runtime directory.
+fn tmux_command(tmux_socket: &Path) -> Command {
+    let mut command = Command::new(resolve_tmux_program());
+    match tmux_socket.parent().zip(tmux_socket.file_name()) {
+        Some((directory, file_name)) => {
+            command.current_dir(directory).arg("-S").arg(file_name);
+        }
+        None => {
+            command.arg("-S").arg(tmux_socket);
+        }
+    }
+    command
+}
+
+/// Resolves the tmux program to something the child's working directory cannot
+/// reinterpret.
+///
+/// Two kinds of relative reference are affected by running the client from the
+/// socket's directory. A value containing a separator is resolved by the kernel
+/// against the *child's* working directory, so an `AGENTMUX_TMUX_COMMAND` of
+/// `./wrapper.sh` would be looked for under the bundle runtime directory. A bare
+/// name goes through `PATH`, whose entries may themselves be relative or empty
+/// (an empty entry means the working directory), so `PATH=bin:/usr/bin` moves
+/// with the child too.
+///
+/// Both are resolved here, against the relay's own working directory, and
+/// nothing else is touched. In particular the child's `PATH` is left exactly as
+/// inherited: it is not this function's to normalize, because the tmux client
+/// hands its environment to a server it starts and thence to every pane, where
+/// a relative entry is resolved against the *member's* directory by intent. The
+/// scope of the fix is the program this code is about to execute.
+fn resolve_tmux_program() -> std::ffi::OsString {
+    let program = tmux_program();
+    let path = Path::new(program.as_str());
+    if path.components().count() > 1 {
+        return std::path::absolute(path)
+            .map(PathBuf::into_os_string)
+            .unwrap_or_else(|_| program.clone().into());
+    }
+    resolve_program_on_search_path(program.as_str()).unwrap_or_else(|| program.into())
+}
+
+/// Resolves a bare program name against `PATH` from the current working
+/// directory, the way `execvp` would from the child's.
+///
+/// Follows `execvp`'s search rather than approximating it: a candidate the
+/// effective user cannot execute is passed over for a later entry rather than
+/// selected and failed. Executability is asked of the kernel via `faccessat`
+/// with `AT_EACCESS`, not inferred from mode bits — a file can carry an execute
+/// bit that belongs to a principal this process is not, and an ACL can deny
+/// where the mode appears to allow. The `is_file` guard is what keeps a
+/// *searchable directory* of the same name from answering `X_OK`.
+///
+/// Returns `None` when `PATH` is unset — its libc default is absolute, so the
+/// working directory cannot reach that lookup — and when no entry holds an
+/// executable candidate, which leaves the bare name for `execvp` to fail on so
+/// the operator sees an error naming what they configured.
+fn resolve_program_on_search_path(program: &str) -> Option<std::ffi::OsString> {
+    let search_path = std::env::var_os("PATH")?;
+    std::env::split_paths(&search_path)
+        .map(|entry| {
+            if entry.as_os_str().is_empty() {
+                PathBuf::from(".")
+            } else {
+                entry
+            }
+        })
+        .filter_map(|directory| std::path::absolute(directory.join(program)).ok())
+        .find(|candidate| candidate.is_file() && effective_user_can_execute(candidate))
+        .map(PathBuf::into_os_string)
+}
+
+/// Whether the *effective* user can execute `path`, as the kernel would decide
+/// it at `exec` time.
+fn effective_user_can_execute(path: &Path) -> bool {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let Ok(candidate) = CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: `candidate` is a valid NUL-terminated C string that outlives the
+    // call, and `AT_FDCWD` needs no descriptor. `faccessat` only reads.
+    let outcome = unsafe {
+        libc::faccessat(
+            libc::AT_FDCWD,
+            candidate.as_ptr(),
+            libc::X_OK,
+            libc::AT_EACCESS,
+        )
+    };
+    outcome == 0
 }
 
 fn tmux_program() -> String {

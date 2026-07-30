@@ -350,7 +350,7 @@ fn load_new_bundle(
         );
         return;
     }
-    match startup_bundle(configuration_roots, bundle_name, &paths.runtime_directory) {
+    match startup_bundle(configuration_roots, &paths) {
         Ok(report) if report.ready_session_count > 0 => {
             catalog.insert(paths, HostingIntent::Run);
             state
@@ -419,7 +419,7 @@ fn reload_bundle(
     // failure should not block the reload attempt.
     let _ = shutdown_bundle_runtime(&paths.tmux_socket);
 
-    match startup_bundle(configuration_roots, bundle_name, &paths.runtime_directory) {
+    match startup_bundle(configuration_roots, &paths) {
         Ok(report) if report.ready_session_count > 0 => {
             // Reload is reached only for a bundle whose intent is `Run` (held
             // bundles are suppressed above), so the refreshed entry stays `Run`.

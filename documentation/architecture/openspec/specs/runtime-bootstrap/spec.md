@@ -1,7 +1,7 @@
 # runtime-bootstrap Specification
 
 ## Purpose
-Runtime layout, configuration root resolution, and startup sequencing for the relay and MCP binaries. The spec governs configuration root resolution (explicit flag, environment, opt-in ancestor discovery, then the XDG default, identically in every build profile) and the overlay through which every configuration file resolves; XDG state root resolution and its build-profile-gated repository-local override; the relay-level and per-bundle runtime directory structure (`<state_root>/relay.sock`, `<bundle_runtime>/tmux.sock`, `<bundle_runtime>/sessions/<session>/identity.psk`); and sender and bundle association resolution precedence for MCP startup, which retains an unresolvable association as a reportable fault rather than failing to start. It also covers MCP-to-relay connectivity handling with `relay_unavailable` tool errors, the relay auto-start helper for `agentmux tui`, and the runtime security posture (per-user ownership, 0700 bundle directories, rejection of foreign-owned runtime artifacts).
+Runtime layout, configuration root resolution, and startup sequencing for the relay and MCP binaries. The spec governs configuration root resolution (explicit flag, environment, opt-in ancestor discovery, then the XDG default, identically in every build profile) and the overlay through which every configuration file resolves; state root resolution (explicit flag, environment, then the XDG and home defaults, identically in every build profile) and its propagation to spawned members; the relay-level and per-bundle runtime directory structure (`<state_root>/relay.sock`, `<bundle_runtime>/tmux.sock`, `<bundle_runtime>/sessions/<session>/identity.psk`); and sender and bundle association resolution precedence for MCP startup, which retains an unresolvable association as a reportable fault rather than failing to start. It also covers MCP-to-relay connectivity handling with `relay_unavailable` tool errors, the relay auto-start helper for `agentmux tui`, and the runtime security posture (per-user ownership, 0700 bundle directories, rejection of foreign-owned runtime artifacts).
 ## Requirements
 ### Requirement: XDG Configuration Root
 
@@ -94,36 +94,77 @@ Configuration root resolution SHALL NOT depend on build profile.
 
 ### Requirement: XDG State Root
 
-The system SHALL resolve the state root using:
+The system SHALL resolve the state root using, in order:
 
+- the explicit `--state-directory` value when supplied
+- `AGENTMUX_STATE_DIRECTORY` when set and non-empty
 - `$XDG_STATE_HOME/agentmux` when `XDG_STATE_HOME` is set and non-empty
 - `~/.local/state/agentmux` otherwise
+
+The resolved state root SHALL be identical in every build profile. Build profile
+SHALL NOT influence state or inscriptions root resolution.
+
+The resolved state root SHALL be normalized to a non-empty absolute path before
+use, resolving a relative value against the working directory of the process
+performing the resolution. An unnormalized root cannot be propagated: a relative
+path re-resolves against each spawned process's working directory, silently
+sending a child to a different state root than the relay that spawned it.
+
+`--state-directory` with an empty value SHALL be rejected with a structured
+validation error. Empty is not the same signal as absent here: the environment
+tier treats blank as absent, so accepting an empty flag would give one spelling
+of "nothing" two different meanings depending on which surface carried it.
+
+One state root SHALL correspond to one relay. Isolating a deployment SHALL be
+expressed by naming a distinct state root; no deployment identifier is derived
+from configuration, build profile, or repository location.
+
+The inscriptions root SHALL continue to default to `<state_root>/inscriptions`,
+and therefore follows the state root without separate selection.
+
+A blank `AGENTMUX_STATE_DIRECTORY` SHALL be treated as absent, matching every
+other environment tier.
 
 #### Scenario: Resolve state root from XDG variable
 
 - **WHEN** `XDG_STATE_HOME` is set to a non-empty value
+- **AND** no explicit or environment state directory is supplied
 - **THEN** state root resolves under that directory
 
 #### Scenario: Resolve state root from fallback
 
 - **WHEN** `XDG_STATE_HOME` is unset or empty
+- **AND** no explicit or environment state directory is supplied
 - **THEN** state root resolves to `~/.local/state/agentmux`
 
-### Requirement: Debug Repository-Local State Override
+#### Scenario: Environment tier selects the state root
 
-Debug builds SHALL support an optional repository-local state override to
-isolate development runtime data from deployed runtime state.
+- **WHEN** `AGENTMUX_STATE_DIRECTORY` is set to a non-empty value
+- **THEN** state root resolves to that path
+- **AND** the XDG and home defaults are not consulted
 
-#### Scenario: Use repository-local override in debug build
+#### Scenario: Explicit flag outranks the environment tier
 
-- **WHEN** runtime is debug/development mode
-- **AND** repository-local override is configured
-- **THEN** state root resolves to repository-local override path
+- **WHEN** an operator passes `--state-directory`
+- **AND** `AGENTMUX_STATE_DIRECTORY` is also set
+- **THEN** the state root is the flag's value
 
-#### Scenario: Ignore repository-local override in non-debug build
+#### Scenario: Reject an empty state directory
 
-- **WHEN** runtime is not debug/development mode
-- **THEN** state root resolution follows XDG state rules
+- **WHEN** an operator passes `--state-directory` with an empty value
+- **THEN** the command returns a structured validation error
+
+#### Scenario: Normalize a relative state root
+
+- **WHEN** a relative state root is supplied by flag or environment
+- **THEN** it resolves against the working directory into an absolute path
+- **AND** that absolute path is what downstream resolution and propagation use
+
+#### Scenario: Build profile does not change the state root
+
+- **WHEN** a debug build and a release build resolve roots from identical
+  arguments and environment
+- **THEN** both resolve the same state root and the same inscriptions root
 
 ### Requirement: Runtime Layout
 
@@ -1116,10 +1157,39 @@ The stamped context SHALL include the hosting bundle name as `AGENTMUX_BUNDLE`
 and the member id as `AGENTMUX_SESSION`, and SHALL be extensible to further
 context without redefining the mechanism.
 
+Bundle and session context SHALL be stamped upsert-if-absent: an
+operator-declared environment entry of the same name SHALL be left untouched.
+
+The relay's normalized state root SHALL additionally be injected as
+`AGENTMUX_STATE_DIRECTORY` at spawn time, authoritatively, overwriting any value
+already present from coder, bundle, or member configuration. This differs from
+bundle and session context deliberately, on two grounds.
+
+First, the value is not known at configuration load. The state root belongs to
+the relay performing the spawn, not to the configuration being loaded, so
+load-time injection would have to invent or re-derive it.
+
+Second, upsert-if-absent cannot express this contract. A child exists to reach
+the relay that spawned it; an operator-declared or blank `AGENTMUX_STATE_DIRECTORY`
+would suppress the stamp and send the child to a different relay, which is not an
+override of a preference but a broken rendezvous. There is no legitimate reason
+for a member of one relay to address another — cross-relay communication is
+expressed by configured peers, not by children attaching elsewhere.
+
+The value injected SHALL be the normalized absolute state root, so it does not
+re-resolve against the child's working directory.
+
+Spawned coder processes receive the context directly; `agentmux host mcp` is a
+descendant of the coder rather than a child of the relay, and receives the
+context by ordinary environment inheritance.
+
+Generated coder client configuration SHALL NOT emit `--state-directory`. A
+template-generated command line is committed content, so a flag in it would
+outrank the environment value and silently defeat the rendezvous the injection
+exists to guarantee.
+
 - The context SHALL be stamped only for coder-backed members; coder-less members
   (`ui`/`pubsub`) spawn no agent and SHALL carry no injected context.
-- The stamp SHALL be upsert-if-absent: an operator-declared environment entry of
-  the same name SHALL be left untouched.
 - A blank value SHALL be treated as absent by every consumer, for both
   resolution and any classification derived from presence.
 
@@ -1148,6 +1218,27 @@ context without redefining the mechanism.
   value
 - **THEN** it is normalized to absent where the environment is read
 - **AND** every consumer observes it identically as absent
+
+#### Scenario: Inject the state root authoritatively at spawn
+
+- **WHEN** a relay spawns a coder-backed member
+- **THEN** the spawn environment carries `AGENTMUX_STATE_DIRECTORY` set to the
+  relay's normalized absolute state root
+
+#### Scenario: A configured state directory does not suppress the rendezvous
+
+- **WHEN** a coder, bundle, or member declares `AGENTMUX_STATE_DIRECTORY`,
+  whether with a conflicting value or a blank one
+- **THEN** the relay's value is injected in its place
+
+#### Scenario: A child stays on the relay that spawned it
+
+- **WHEN** a relay is started with an explicit `--state-directory`
+- **AND** it spawns a coder-backed member whose process runs with a working
+  directory different from the relay's
+- **THEN** the member's `agentmux host mcp` descendant resolves the spawning
+  relay's state root
+- **AND** reaches that relay's socket rather than the default root's
 
 ### Requirement: MCP Startup Fault Tolerance
 

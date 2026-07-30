@@ -92,9 +92,22 @@ preserved (operator-declared wins). The stamped context, its extensibility, and
 its consumption during MCP association resolution are specified by the
 runtime-bootstrap spec's Bring-Up Association Environment Injection requirement.
 
-Within association resolution, the stamped context ranks **above** any
-configuration file and below explicit invocation intent, because it carries what
-bring-up authoritatively knows rather than a declared preference.
+`AGENTMUX_STATE_DIRECTORY` is the one exception, and it SHALL be injected at
+spawn time by the relay, authoritatively, overwriting any operator-declared
+value at any level.
+
+The exception is narrow and follows from what the variable addresses rather than
+from a preference about precedence. Every other stamped variable describes an
+identity a member may legitimately want to assert; this one names the relay the
+member is a child of. An operator-declared value would not override a
+preference, it would break the rendezvous — the child would address a relay that
+did not spawn it, while the relay that did waits for a client that never arrives.
+There is no legitimate case for the override, because a member of one relay
+reaching another is expressed by configured peers rather than by re-pointing a
+child.
+
+The value is also unavailable at configuration load: it belongs to the relay
+performing the spawn, not to the configuration being loaded.
 
 #### Scenario: Session value overrides bundle and coder
 
@@ -119,4 +132,10 @@ bring-up authoritatively knows rather than a declared preference.
 - **WHEN** a coder-backed member explicitly declares `AGENTMUX_BUNDLE`
 - **THEN** configuration load preserves the operator-declared value rather than
   overwriting it with the stamped context
+
+#### Scenario: Operator-declared state directory is overwritten
+
+- **WHEN** a coder, bundle, or member declares `AGENTMUX_STATE_DIRECTORY`
+- **THEN** the relay's normalized state root is injected in its place at spawn
+- **AND** the child addresses the relay that spawned it
 

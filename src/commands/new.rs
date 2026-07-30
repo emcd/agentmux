@@ -1,5 +1,3 @@
-use std::env;
-
 use serde_json::json;
 
 use crate::{
@@ -22,9 +20,7 @@ pub(super) fn run_agentmux_new(arguments: &[String]) -> Result<(), RuntimeError>
     }
 
     let parsed = parse_new_arguments(arguments)?;
-    let current_directory = env::current_dir()
-        .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
-    let roots = shared::resolve_roots(&parsed.runtime, &current_directory)?;
+    let roots = shared::resolve_roots(&parsed.runtime)?;
     ensure_starter_configuration_layout(&roots)?;
     let resolved_session = resolve_tui_session_identity(
         &roots.configuration_roots,
@@ -175,6 +171,6 @@ fn parse_new_arguments(arguments: &[String]) -> Result<NewPeerArguments, Runtime
 
 pub(super) fn print_new_help() {
     println!(
-        "Usage: agentmux new peer <principal_id> [--scope SCOPE] [--output PATH | --write-config] [--bundle NAME] [--as-session NAME] [--json] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux new peer <principal_id> [--scope SCOPE] [--output PATH | --write-config] [--bundle NAME] [--as-session NAME] [--json] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH]"
     );
 }

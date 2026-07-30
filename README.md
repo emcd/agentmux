@@ -231,9 +231,12 @@ Typical topology:
 
 Association resolution:
 
-- `list principals` and `host mcp` use association auto-discovery fallback:
-  - bundle from Git common-dir owner name,
-  - session from worktree top-level directory name,
+- `list principals` and `host mcp` resolve association by tier:
+  - bundle from `--bundle`, else the relay-injected `AGENTMUX_BUNDLE`, else the
+    effective `mcp.toml`, else `--default-bundle`,
+  - session from `--session-name`, else the relay-injected `AGENTMUX_SESSION`,
+    else the effective `mcp.toml`, else — only when no tier supplied one — the
+    working directory's match against declared member directories,
 - `send` and `tui` use global session/surface selectors:
   - `--bundle`, else `default-bundle` from `ui.toml`,
   - `--as-session`, else `default-session` from `users.toml`,

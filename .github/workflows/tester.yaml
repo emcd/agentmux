@@ -20,6 +20,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Lint Generated Client Configuration
+        # Needs no toolchain, so it runs before the Rust setup: a committed
+        # --state-directory in a coder client configuration fails here in
+        # seconds rather than after a build.
+        run: scripts/lint-client-configuration.sh
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:

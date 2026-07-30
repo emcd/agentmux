@@ -10,7 +10,9 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::runtime::{inscriptions::emit_inscription, paths::session_identity_psk_path};
+use crate::runtime::{
+    inscriptions::emit_inscription, paths::session_identity_psk_path, sockets::connect_unix_stream,
+};
 
 use super::identity::SOCKET_TRUST_TOKEN;
 use super::{RelayRequest, RelayResponse, RelayStreamEvent, SCHEMA_VERSION, canonical_session_id};
@@ -378,7 +380,7 @@ impl RelayStreamSession {
     fn try_connect_once(&self) -> Result<RelayStreamConnection, ConnectAttemptError> {
         let principal_id = canonical_session_id(self.session_id.as_str(), self.namespace.as_str());
         let identity_token = self.read_identity_token();
-        let mut stream = UnixStream::connect(&self.socket_path).map_err(ConnectAttemptError::Io)?;
+        let mut stream = connect_unix_stream(&self.socket_path).map_err(ConnectAttemptError::Io)?;
         send_stream_client_frame(
             &mut stream,
             StreamClientFrame::Hello {

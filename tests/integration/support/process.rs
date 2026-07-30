@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use agentmux::configuration::BringUpContext;
+use agentmux::configuration::INHERITED_CONTEXT_VARIABLE_NAMES;
 
 /// Removes inherited bring-up context from a test child's environment.
 ///
@@ -19,14 +19,32 @@ use agentmux::configuration::BringUpContext;
 /// who runs the suite and from where, which is precisely what a test result
 /// must not depend on.
 ///
+/// The same reasoning covers the state root, which the relay injects at spawn
+/// rather than at load: a developer running this suite from an Agentmux-launched
+/// coder carries their own relay's state root, and a `host mcp` child inheriting
+/// it would look for that relay's socket instead of the fixture's.
+///
 /// Call this before applying any test-supplied entries, so a child observes
-/// context only where a test sets it deliberately. Keyed off the crate's own
-/// enumeration, so extending the context cannot silently desync the sanitizer
-/// from what the loader stamps.
+/// context only where a test sets it deliberately. Keyed off the crate's
+/// inherited-context enumeration — the wider of the two, since sanitizing must
+/// cover everything a child may carry, not only what configuration load stamps.
 pub(crate) fn strip_bring_up_context(
     command: &mut tokio::process::Command,
 ) -> &mut tokio::process::Command {
-    for name in BringUpContext::VARIABLE_NAMES {
+    for name in INHERITED_CONTEXT_VARIABLE_NAMES {
+        command.env_remove(name);
+    }
+    command
+}
+
+/// [`strip_bring_up_context`] for a blocking [`std::process::Command`].
+///
+/// Two functions rather than one because the two `Command` builders share no
+/// trait; the reasoning above applies unchanged to both.
+pub(crate) fn strip_bring_up_context_std(
+    command: &mut std::process::Command,
+) -> &mut std::process::Command {
+    for name in INHERITED_CONTEXT_VARIABLE_NAMES {
         command.env_remove(name);
     }
     command

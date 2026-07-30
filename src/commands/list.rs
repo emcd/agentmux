@@ -1,5 +1,3 @@
-use std::env;
-
 use serde_json::{Value, json};
 
 use crate::{
@@ -30,9 +28,7 @@ pub(super) fn run_agentmux_list(arguments: &[String]) -> Result<(), RuntimeError
     }
 
     let parsed = parse_list_arguments(arguments)?;
-    let current_directory = env::current_dir()
-        .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
-    let roots = shared::resolve_roots(&parsed.runtime, &current_directory)?;
+    let roots = shared::resolve_roots(&parsed.runtime)?;
     ensure_starter_configuration_layout(&roots)?;
     let namespace = parsed
         .namespace
@@ -184,7 +180,7 @@ fn parse_list_arguments(arguments: &[String]) -> Result<ListArguments, RuntimeEr
 
 pub(super) fn print_list_help() {
     println!(
-        "Usage: agentmux list principals [--namespace NAME|GLOBAL|*] [--as-session NAME] [--json] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]"
+        "Usage: agentmux list principals [--namespace NAME|GLOBAL|*] [--as-session NAME] [--json] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH]"
     );
 }
 

@@ -143,8 +143,7 @@ fn prepare_runtime(arguments: &McpHostArguments) -> Result<PreparedRuntime, McpS
         code: "runtime_startup_failed".to_string(),
         message: format!("cannot resolve current working directory: {source}"),
     })?;
-    let roots =
-        shared::resolve_roots(&arguments.runtime, &current_directory).map_err(to_startup_fault)?;
+    let roots = shared::resolve_roots(&arguments.runtime).map_err(to_startup_fault)?;
     ensure_starter_configuration_layout(&roots).map_err(to_startup_fault)?;
     let local_overrides =
         load_local_mcp_overrides(&roots.configuration_roots).map_err(to_startup_fault)?;

@@ -24,7 +24,7 @@ use super::{
     },
     types::{
         BringUpContext, BundleConfiguration, BundleGroupMembership, BundleMember, NameValueEntry,
-        TuiConfiguration, TuiSession, UiConfiguration,
+        STATE_DIRECTORY_ENVIRONMENT_VARIABLE, TuiConfiguration, TuiSession, UiConfiguration,
     },
 };
 
@@ -556,6 +556,37 @@ fn merge_environment(
         }
     }
     merged
+}
+
+/// Injects the spawning relay's `state_root` into a member's merged spawn
+/// `environment`, overwriting any value already present.
+///
+/// This is the one exception to the upsert-if-absent rule
+/// [`stamp_context_environment`] implements, and the asymmetry follows from
+/// what the variable addresses. Bundle and session name an identity a member
+/// may legitimately assert. This one names the relay the member is a child of,
+/// so an operator-declared or blank value does not override a preference — it
+/// breaks the rendezvous, sending the child to a relay that did not spawn it
+/// while the one that did waits for a client that never arrives. A member of
+/// one relay reaching another is expressed by configured peers instead.
+///
+/// Injected at spawn rather than at load because the value belongs to the relay
+/// performing the spawn, not to the configuration being loaded; load-time
+/// injection would have to re-derive it, which is what propagation exists to
+/// prevent.
+pub fn inject_spawn_state_directory(environment: &mut Vec<NameValueEntry>, state_root: &Path) {
+    let value = state_root.display().to_string();
+    if let Some(entry) = environment
+        .iter_mut()
+        .find(|entry| entry.name == STATE_DIRECTORY_ENVIRONMENT_VARIABLE)
+    {
+        entry.value = value;
+        return;
+    }
+    environment.push(NameValueEntry {
+        name: STATE_DIRECTORY_ENVIRONMENT_VARIABLE.to_string(),
+        value,
+    });
 }
 
 /// Upserts-if-absent each entry of a bring-up `context` into a member's merged

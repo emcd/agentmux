@@ -11,8 +11,9 @@ mod types;
 
 pub use errors::ConfigurationError;
 pub use loaders::{
-    infer_sender_from_working_directory, load_bundle_configuration, load_bundle_group_memberships,
-    load_policy_ids, load_tui_configuration, load_tui_configuration_file, load_ui_configuration,
+    infer_sender_from_working_directory, inject_spawn_state_directory, load_bundle_configuration,
+    load_bundle_group_memberships, load_policy_ids, load_tui_configuration,
+    load_tui_configuration_file, load_ui_configuration,
 };
 pub use paths::{
     bundle_configuration_path, bundle_directory_layers, coders_configuration_path,
@@ -23,10 +24,11 @@ pub use paths::{
 pub use roots::{ConfigurationRoots, ConfigurationRootsError, LAYER_SEPARATOR};
 pub use types::{
     AcpChannel, AcpTargetConfiguration, BUNDLE_ENVIRONMENT_VARIABLE, BringUpContext,
-    BundleConfiguration, BundleGroupMembership, BundleMember, NameValueEntry,
-    PromptReadinessTemplate, PtyTargetConfiguration, RESERVED_GROUP_ALL,
-    SESSION_ENVIRONMENT_VARIABLE, SessionType, TargetConfiguration, TermProtocol,
-    TmuxTargetConfiguration, TuiConfiguration, TuiSession, UiConfiguration,
+    BundleConfiguration, BundleGroupMembership, BundleMember, INHERITED_CONTEXT_VARIABLE_NAMES,
+    NameValueEntry, PromptReadinessTemplate, PtyTargetConfiguration, RESERVED_GROUP_ALL,
+    SESSION_ENVIRONMENT_VARIABLE, STATE_DIRECTORY_ENVIRONMENT_VARIABLE, SessionType,
+    TargetConfiguration, TermProtocol, TmuxTargetConfiguration, TuiConfiguration, TuiSession,
+    UiConfiguration,
 };
 
 pub(super) const BUNDLE_SCHEMA_VERSION: u32 = 1;

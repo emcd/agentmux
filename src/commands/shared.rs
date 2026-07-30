@@ -10,7 +10,7 @@ use crate::{
     relay::{CredentialDestination, RelayError},
     runtime::{
         error::RuntimeError,
-        paths::{RuntimeRootOverrides, RuntimeRoots, repository_checkout_root},
+        paths::{RuntimeRootOverrides, RuntimeRoots},
     },
 };
 
@@ -55,14 +55,6 @@ pub(super) fn parse_runtime_flag(
             )?));
             Ok(true)
         }
-        "--repository-root" => {
-            runtime.repository_root = Some(PathBuf::from(take_value(
-                arguments,
-                index,
-                "--repository-root",
-            )?));
-            Ok(true)
-        }
         _ => Ok(false),
     }
 }
@@ -72,20 +64,11 @@ pub(super) fn parse_runtime_flag(
 /// The association override file no longer participates: it lives *under* the
 /// configuration root, so letting it select that root made the lookup circular.
 /// Roots resolve first, and the association file is read from the resolved root.
-pub(super) fn resolve_roots(
-    runtime: &RuntimeArguments,
-    current_directory: &Path,
-) -> Result<RuntimeRoots, RuntimeError> {
+pub(super) fn resolve_roots(runtime: &RuntimeArguments) -> Result<RuntimeRoots, RuntimeError> {
     RuntimeRoots::resolve(&RuntimeRootOverrides {
         configuration_layers: runtime.configuration_layers.clone(),
         state_root: runtime.state_root.clone(),
         inscriptions_root: runtime.inscriptions_root.clone(),
-        // An explicit --repository-root is operator intent and goes through
-        // unprobed; only its absence consults the checkout resolver.
-        repository_root: runtime
-            .repository_root
-            .clone()
-            .or_else(|| repository_checkout_root(current_directory)),
     })
 }
 

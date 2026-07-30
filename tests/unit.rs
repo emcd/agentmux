@@ -29,6 +29,8 @@ mod runtime_inscriptions;
 mod runtime_owned_relay;
 #[path = "unit/runtime_paths.rs"]
 mod runtime_paths;
+#[path = "unit/runtime_sockets.rs"]
+mod runtime_sockets;
 #[path = "unit/runtime_starter.rs"]
 mod runtime_starter;
 #[path = "unit/tmux_transport.rs"]

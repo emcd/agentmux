@@ -3,7 +3,7 @@ use std::{
     io::{BufRead, BufReader, Write},
     os::unix::fs::PermissionsExt,
     os::unix::net::UnixListener,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
@@ -275,16 +275,40 @@ pub(super) fn parse_summary_json_line(stdout: &[u8]) -> Value {
     serde_json::from_str(line).expect("parse summary json")
 }
 
+/// Path the fake tmux script records each invocation's full argument vector to,
+/// `-S` included. Lets a test assert on what actually reached tmux rather than
+/// on an intermediate the production code could stop using.
+pub(super) fn fake_tmux_log_path(script_path: &Path) -> PathBuf {
+    script_path.with_extension("log")
+}
+
+/// Where the fake tmux records the `PATH` it was invoked with.
+///
+/// Separate from the invocation log because that log is asserted line by line
+/// elsewhere. This is what makes the client's inherited environment observable:
+/// the fake tmux stands in the tmux client's position, so its `PATH` is the one a
+/// tmux server it started -- and thence a pane -- would inherit.
+pub(super) fn fake_tmux_search_path_file(script_path: &Path) -> PathBuf {
+    script_path.with_extension("search-path")
+}
+
 pub(super) fn write_fake_tmux_script(path: &Path) {
     let sessions_file = path.with_extension("sessions");
     let owned_file = path.with_extension("owned");
+    let log_file = fake_tmux_log_path(path);
+    let search_path_file = fake_tmux_search_path_file(path);
     let body = format!(
         r##"#!/usr/bin/env bash
 set -euo pipefail
 
 SESSIONS_FILE="{sessions}"
 OWNED_FILE="{owned}"
-touch "${{SESSIONS_FILE}}" "${{OWNED_FILE}}"
+LOG_FILE="{log}"
+SEARCH_PATH_FILE="{search_path}"
+touch "${{SESSIONS_FILE}}" "${{OWNED_FILE}}" "${{LOG_FILE}}"
+
+printf "%s\n" "$*" >> "${{LOG_FILE}}"
+printf "%s\n" "${{PATH-}}" > "${{SEARCH_PATH_FILE}}"
 
 args=("$@")
 if [[ "${{#args[@]}}" -ge 2 && "${{args[0]}}" == "-S" ]]; then
@@ -373,6 +397,8 @@ esac
 "##,
         sessions = sessions_file.display(),
         owned = owned_file.display(),
+        log = log_file.display(),
+        search_path = search_path_file.display(),
     );
     fs::write(path, body).expect("write fake tmux script");
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("set fake tmux executable");

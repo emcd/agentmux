@@ -1,212 +1,138 @@
-use std::{
-    path::{Path, PathBuf},
-    process::Command,
-};
+use std::path::PathBuf;
 
 use agentmux::runtime::paths::{
     BundleRuntimePaths, ConfigurationRootSource, RelayRuntimePaths, RuntimeRootOverrides,
-    RuntimeRoots, debug_repository_inscriptions_root, debug_repository_state_root,
-    ensure_bundle_runtime_directory, repository_checkout_root,
-    tmux_socket_path_for_runtime_directory,
+    RuntimeRoots, ensure_bundle_runtime_directory, tmux_socket_path_for_runtime_directory,
 };
 use tempfile::TempDir;
 
-fn run_git(directory: &Path, arguments: &[&str]) {
-    let output = Command::new("git")
-        .current_dir(directory)
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .env_remove("GIT_COMMON_DIR")
-        .args(arguments)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git command failed: git {}\nstdout:\n{}\nstderr:\n{}",
-        arguments.join(" "),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+/// Clears every environment variable feeding state-root resolution, so a test
+/// observes the tier it is exercising rather than the developer's shell.
+///
+/// Safe because nextest runs each test in its own process.
+fn clear_state_environment() {
+    unsafe {
+        std::env::remove_var("AGENTMUX_STATE_DIRECTORY");
+        std::env::remove_var("XDG_STATE_HOME");
+    }
 }
 
-/// Initializes a real repository with one commit, so `git worktree add` has
-/// something to link against. The resolver reads Git's own answer rather than a
-/// fabricated layout, which is the only way the worktree case is exercised
-/// honestly.
-fn initialize_repository(root: &Path) {
-    std::fs::create_dir_all(root).expect("create repository root");
-    run_git(root, &["init"]);
-    run_git(
-        root,
-        &[
-            "-c",
-            "user.email=test@example.com",
-            "-c",
-            "user.name=Test User",
-            "commit",
-            "--allow-empty",
-            "-m",
-            "init",
-        ],
-    );
-}
-
-/// Writes the package manifest marker distinguishing an Agentmux checkout from
-/// any other repository the process might be standing in.
-fn write_manifest(root: &Path, package_name: &str) {
-    std::fs::write(
-        root.join("Cargo.toml"),
-        format!("[package]\nname = \"{package_name}\"\nversion = \"0.0.0\"\n"),
-    )
-    .expect("write Cargo.toml");
-}
-
-fn resolved(path: &Path) -> PathBuf {
-    path.canonicalize().expect("canonicalize path")
-}
-
-// Repository-local roots are reachable only under debug_assertions, where the
-// resolver does its work; in release it short-circuits to None by design, so the
-// positive cases have nothing to assert.
-#[test]
-#[cfg_attr(
-    not(debug_assertions),
-    ignore = "repository-local roots are unreachable in release builds"
-)]
-fn repository_checkout_root_resolves_an_agentmux_checkout() {
-    let temporary = TempDir::new().expect("temporary directory");
-    let root = temporary.path().join("agentmux");
-    initialize_repository(&root);
-    write_manifest(&root, "agentmux");
-
-    let checkout = repository_checkout_root(&root).expect("checkout must resolve");
-    assert_eq!(resolved(&checkout), resolved(&root));
+/// Builds overrides naming no state root, so resolution falls to the tiers
+/// below the command line. Configuration is pinned so a test observing the
+/// state tier is not also exercising its resolution.
+fn unnamed_state_overrides() -> RuntimeRootOverrides {
+    RuntimeRootOverrides {
+        configuration_layers: vec!["/configuration".into()],
+        state_root: None,
+        inscriptions_root: None,
+    }
 }
 
 #[test]
-#[cfg_attr(
-    not(debug_assertions),
-    ignore = "repository-local roots are unreachable in release builds"
-)]
-fn repository_checkout_root_resolves_from_a_nested_working_directory() {
-    let temporary = TempDir::new().expect("temporary directory");
-    let root = temporary.path().join("agentmux");
-    initialize_repository(&root);
-    write_manifest(&root, "agentmux");
-    let nested = root.join("src/relay");
-    std::fs::create_dir_all(&nested).expect("create nested directory");
+fn environment_tier_selects_the_state_root() {
+    clear_state_environment();
+    unsafe {
+        std::env::set_var("AGENTMUX_STATE_DIRECTORY", "/from-environment");
+        std::env::set_var("XDG_STATE_HOME", "/xdg");
+    }
 
-    // Git searches ancestors, so a process launched anywhere beneath a checkout
-    // resolves the same root as one launched at its top.
-    let checkout = repository_checkout_root(&nested).expect("checkout must resolve");
-    assert_eq!(resolved(&checkout), resolved(&root));
-}
+    let roots = RuntimeRoots::resolve(&unnamed_state_overrides()).expect("roots should resolve");
 
-#[test]
-#[cfg_attr(
-    not(debug_assertions),
-    ignore = "repository-local roots are unreachable in release builds"
-)]
-fn linked_worktree_resolves_the_common_dir_owner_repository_root() {
-    let temporary = TempDir::new().expect("temporary directory");
-    let project_root = temporary.path().join("agentmux");
-    initialize_repository(&project_root);
-    write_manifest(&project_root, "agentmux");
-
-    let worktree_root = temporary.path().join("WORKTREES/agentmux/relay");
-    std::fs::create_dir_all(worktree_root.parent().expect("worktree parent"))
-        .expect("create worktree parent");
-    run_git(
-        &project_root,
-        &[
-            "worktree",
-            "add",
-            "--detach",
-            worktree_root.to_str().expect("utf8 path"),
-        ],
-    );
-
-    // The owner root, not the worktree. Every worktree of a checkout must answer
-    // with one path, or siblings bind private relay sockets and cannot reach
-    // each other.
-    let checkout = repository_checkout_root(&worktree_root).expect("worktree must resolve a root");
-    assert_eq!(resolved(&checkout), resolved(&project_root));
-}
-
-#[test]
-#[cfg_attr(
-    not(debug_assertions),
-    ignore = "repository-local roots are unreachable in release builds"
-)]
-fn repository_local_state_and_inscriptions_activate_for_a_source_checkout() {
-    let temporary = TempDir::new().expect("temporary directory");
-    let root = temporary.path().join("agentmux");
-    initialize_repository(&root);
-    write_manifest(&root, "agentmux");
-
-    // The end the resolver serves: an unresolved root would silently collapse
-    // repository-local state onto the XDG default, which is the coexistence
-    // failure the retained provenance exists to prevent.
-    let checkout = repository_checkout_root(&root).expect("checkout must resolve");
-    let roots = RuntimeRoots::resolve(&RuntimeRootOverrides {
-        configuration_layers: vec![temporary.path().join("configuration")],
-        repository_root: Some(checkout.clone()),
-        ..RuntimeRootOverrides::default()
-    })
-    .expect("resolve runtime roots");
-
-    assert_eq!(roots.state_root, debug_repository_state_root(&checkout));
+    assert_eq!(roots.state_root, PathBuf::from("/from-environment"));
     assert_eq!(
         roots.inscriptions_root,
-        debug_repository_inscriptions_root(&checkout)
+        PathBuf::from("/from-environment/inscriptions"),
+        "inscriptions follow the state root rather than being selected separately"
     );
 }
 
 #[test]
-fn repository_checkout_root_rejects_a_foreign_repository() {
-    let temporary = TempDir::new().expect("temporary directory");
-    let root = temporary.path().join("otherproject");
-    initialize_repository(&root);
-    write_manifest(&root, "otherproject");
+fn explicit_state_directory_outranks_the_environment_tier() {
+    clear_state_environment();
+    unsafe {
+        std::env::set_var("AGENTMUX_STATE_DIRECTORY", "/from-environment");
+    }
 
-    assert_eq!(repository_checkout_root(&root), None);
+    let mut overrides = unnamed_state_overrides();
+    overrides.state_root = Some("/from-flag".into());
+    let roots = RuntimeRoots::resolve(&overrides).expect("roots should resolve");
+
+    assert_eq!(roots.state_root, PathBuf::from("/from-flag"));
 }
 
 #[test]
-fn repository_checkout_root_rejects_a_repository_without_a_manifest() {
-    let temporary = TempDir::new().expect("temporary directory");
-    let root = temporary.path().join("unmarked");
-    initialize_repository(&root);
+fn a_blank_state_environment_value_is_absent_rather_than_empty() {
+    // Blank must mean "this tier said nothing", not "the state root is the
+    // empty path". Reading it as a value would resolve every state artifact
+    // against the working directory.
+    clear_state_environment();
+    unsafe {
+        std::env::set_var("AGENTMUX_STATE_DIRECTORY", "   ");
+        std::env::set_var("XDG_STATE_HOME", "/xdg");
+    }
 
-    assert_eq!(repository_checkout_root(&root), None);
+    let roots = RuntimeRoots::resolve(&unnamed_state_overrides()).expect("roots should resolve");
+
+    assert_eq!(roots.state_root, PathBuf::from("/xdg/agentmux"));
 }
 
 #[test]
-fn repository_checkout_root_rejects_a_source_export_without_git() {
-    let temporary = TempDir::new().expect("temporary directory");
-    let root = temporary.path().join("export");
-    std::fs::create_dir_all(&root).expect("create export root");
-    write_manifest(&root, "agentmux");
+fn an_empty_state_directory_flag_is_rejected() {
+    clear_state_environment();
+    let mut overrides = unnamed_state_overrides();
+    overrides.state_root = Some(PathBuf::new());
 
-    assert_eq!(repository_checkout_root(&root), None);
-}
-
-#[test]
-fn resolves_debug_repository_state_root() {
-    let root = debug_repository_state_root(std::path::Path::new("/repo"));
-    assert_eq!(
-        root,
-        std::path::Path::new("/repo/.auxiliary/state/agentmux")
+    let error = RuntimeRoots::resolve(&overrides)
+        .expect_err("an empty state directory must fault rather than resolve");
+    assert!(
+        error
+            .to_string()
+            .contains("validation_invalid_state_directory"),
+        "unexpected error: {error}"
     );
 }
 
 #[test]
-fn resolves_debug_repository_inscriptions_root() {
-    let root = debug_repository_inscriptions_root(std::path::Path::new("/repo"));
+fn a_relative_state_root_normalizes_against_the_working_directory() {
+    // Propagation depends on this. A relative root re-resolves under each
+    // spawned child's working directory, so the stamped value would name a
+    // different directory for every member that declares its own.
+    clear_state_environment();
+    let mut overrides = unnamed_state_overrides();
+    overrides.state_root = Some("relative-state".into());
+
+    let roots = RuntimeRoots::resolve(&overrides).expect("roots should resolve");
+
+    assert!(
+        roots.state_root.is_absolute(),
+        "state root must be absolute, got {}",
+        roots.state_root.display()
+    );
+    let working_directory = std::env::current_dir().expect("working directory");
+    assert_eq!(roots.state_root, working_directory.join("relative-state"));
     assert_eq!(
-        root,
-        std::path::Path::new("/repo/.auxiliary/inscriptions/agentmux")
+        roots.inscriptions_root,
+        working_directory.join("relative-state/inscriptions"),
+        "the absolute root is what downstream resolution uses"
+    );
+}
+
+#[test]
+fn build_profile_does_not_change_the_resolved_roots() {
+    // The assertion the deleted `cfg!(debug_assertions)` branches made
+    // impossible. Written profile-invariantly on purpose: the same arguments
+    // must produce the same roots whichever profile compiled this test.
+    clear_state_environment();
+    unsafe {
+        std::env::set_var("XDG_STATE_HOME", "/xdg");
+    }
+
+    let roots = RuntimeRoots::resolve(&unnamed_state_overrides()).expect("roots should resolve");
+
+    assert_eq!(roots.state_root, PathBuf::from("/xdg/agentmux"));
+    assert_eq!(
+        roots.inscriptions_root,
+        PathBuf::from("/xdg/agentmux/inscriptions")
     );
 }
 
@@ -261,7 +187,6 @@ fn resolves_roots_from_explicit_overrides() {
         configuration_layers: vec!["/configuration".into()],
         state_root: Some("/state".into()),
         inscriptions_root: Some("/inscriptions".into()),
-        repository_root: None,
     };
     let roots = RuntimeRoots::resolve(&overrides).expect("roots should resolve");
     assert_eq!(
@@ -305,7 +230,6 @@ fn unnamed_configuration_overrides() -> RuntimeRootOverrides {
         configuration_layers: Vec::new(),
         state_root: Some("/state".into()),
         inscriptions_root: Some("/inscriptions".into()),
-        repository_root: None,
     }
 }
 
@@ -415,46 +339,5 @@ fn explicit_flag_outranks_environment() {
     assert_eq!(
         roots.configuration_root_source,
         ConfigurationRootSource::CommandLine
-    );
-}
-
-#[test]
-#[cfg_attr(
-    not(debug_assertions),
-    ignore = "repository-local roots are unreachable in release builds"
-)]
-fn repository_root_no_longer_selects_the_configuration_root() {
-    // It retains its state and inscriptions role; only the configuration-root
-    // role is gone. The state-root assertion below depends on the
-    // repository-local branch of resolve_state_root, which is reachable only
-    // under debug_assertions (see src/runtime/paths.rs), so this test is
-    // gated like its siblings above rather than asserted profile-invariantly.
-    clear_configuration_environment();
-    unsafe {
-        std::env::set_var("XDG_CONFIG_HOME", "/xdg");
-    }
-    let temporary = TempDir::new().expect("temporary");
-    let repository_root = temporary.path().join("repo");
-    // Planted so a reintroduced repository-local configuration branch would
-    // have something to find; the path is spelled out because no resolver
-    // derives it any more.
-    std::fs::create_dir_all(repository_root.join(".auxiliary/configuration/agentmux"))
-        .expect("create repository configuration root");
-
-    let overrides = RuntimeRootOverrides {
-        configuration_layers: Vec::new(),
-        state_root: None,
-        inscriptions_root: None,
-        repository_root: Some(repository_root.clone()),
-    };
-    let roots = RuntimeRoots::resolve(&overrides).expect("roots should resolve");
-    assert_eq!(
-        roots.configuration_roots.layers(),
-        [PathBuf::from("/xdg/agentmux")],
-        "repository root must not supply a configuration layer"
-    );
-    assert_eq!(
-        roots.state_root,
-        debug_repository_state_root(&repository_root)
     );
 }

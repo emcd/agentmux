@@ -34,6 +34,19 @@ repos:
 - repo: local
   hooks:
 
+    - id: lint-client-configuration
+      name: 'Lint: Generated Client Configuration'
+      # Asserts a property of committed artifacts rather than behavior of the
+      # crate, so it is a lint and not a test. Runs unconditionally (it is a
+      # grep over three files) and first, so the cheap repository check reports
+      # before the expensive Rust hooks.
+      language: system
+      entry: 'scripts/lint-client-configuration.sh'
+      pass_filenames: false
+      require_serial: true
+      stages: [ 'pre-commit' ]
+      fail_fast: true
+
     - id: cargo-fmt
       name: 'Check Style (Rust)'
       language: system

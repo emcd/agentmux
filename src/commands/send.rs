@@ -1,7 +1,4 @@
-use std::{
-    env,
-    io::{IsTerminal, Read},
-};
+use std::io::{IsTerminal, Read};
 
 use serde_json::json;
 
@@ -27,9 +24,7 @@ pub(super) fn run_agentmux_send(arguments: &[String]) -> Result<(), RuntimeError
 
     let parsed = parse_send_arguments(arguments)?;
     validate_send_targets(&parsed)?;
-    let current_directory = env::current_dir()
-        .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
-    let roots = shared::resolve_roots(&parsed.runtime, &current_directory)?;
+    let roots = shared::resolve_roots(&parsed.runtime)?;
     ensure_starter_configuration_layout(&roots)?;
     let resolved_session = resolve_tui_session_identity(
         &roots.configuration_roots,
@@ -283,7 +278,7 @@ fn validate_send_targets(arguments: &SendArguments) -> Result<(), RuntimeError> 
 
 pub(super) fn print_send_help() {
     println!(
-        "Usage: agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--request-id ID] [--bundle NAME] [--as-session NAME] [--json] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH] [--repository-root PATH]\n\
+        "Usage: agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--request-id ID] [--bundle NAME] [--as-session NAME] [--json] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH]\n\
          \n\
          Send carries no per-call timeout override in v1; the per-coder\n\
          [coders.<id>.acp].prime-timeout-ms and\n\

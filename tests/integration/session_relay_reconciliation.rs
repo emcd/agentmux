@@ -205,8 +205,7 @@ fn reconciliation_creates_missing_members_and_sets_owned_metadata() {
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
-    let report = reconcile_bundle(&config_root, bundle_name, &paths.tmux_socket)
-        .expect("bundle reconciliation");
+    let report = reconcile_bundle(&config_root, &paths).expect("bundle reconciliation");
     assert_eq!(report.bootstrap_session.as_deref(), Some("alpha"));
     assert_eq!(report.pruned_sessions, Vec::<String>::new());
     assert_eq!(report.created_sessions.len(), 2);
@@ -284,8 +283,7 @@ fn reconciliation_prunes_stale_owned_sessions_without_killing_non_owned_sessions
         String::from_utf8_lossy(&mark_stale.stderr)
     );
 
-    let report = reconcile_bundle(&config_root, bundle_name, &paths.tmux_socket)
-        .expect("bundle reconciliation");
+    let report = reconcile_bundle(&config_root, &paths).expect("bundle reconciliation");
     assert_eq!(report.created_sessions, Vec::<String>::new());
     assert_eq!(report.pruned_sessions, vec!["stale".to_string()]);
 
@@ -339,7 +337,7 @@ fn reconciliation_registers_configured_members_in_unified_registry() {
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
-    reconcile_bundle(&config_root, bundle_name, &paths.tmux_socket).expect("bundle reconciliation");
+    reconcile_bundle(&config_root, &paths).expect("bundle reconciliation");
 
     // The reconcile/`up` path registers every configured member as a static
     // registry shell, so the unified registry holds them regardless of transport

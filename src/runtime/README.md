@@ -68,31 +68,77 @@ Starter hydration applies only to a list from tier 3, which is a single layer. A
 list supplied by flag or environment is never scaffolded; when one of its layers
 does not exist, that is a fault rather than a reason to create one.
 
-The **state** and **inscriptions** roots deliberately keep their build-profile
-gating and their Git-derived repository-root provenance. That gating is
-currently the only thing keeping a source-tree relay and an installed relay off
-the same relay-wide socket, locks, ready sentinel, principal store, and peer
-credentials. Runtime instances replace it; until then the configuration root and
-the state root resolve by different rules on purpose.
+## State Root
 
-That provenance has exactly one resolver, `repository_checkout_root`. Every
-surface — CLI, TUI, `host mcp`, `host relay` — goes through it, because a
-surface answering differently would look for the relay socket somewhere the
-relay never bound it. It asks Git for the common directory and takes the
-repository root owning it, then requires that root's `Cargo.toml` to declare
-`name = "agentmux"`. Git makes the answer identical from every worktree of a
-checkout, so siblings share one relay instead of each starting its own, and it
-searches ancestors so any working directory beneath a checkout resolves it. The
-manifest marker confines the repository-local branch to an actual Agentmux
-checkout rather than whichever repository the process happens to stand in; when
-Git resolves a repository that fails the check, the reason is reported on
-stderr. Stderr is the only channel available, because root resolution runs
-before any inscriptions sink is configured. Worktrees owned by a bare
-repository are not supported and resolve production paths: their common
-directory is conventionally `<name>.git` rather than an ancestor named `.git`,
-and a bare repository has no checked-out root to carry the manifest. An explicit
-`--repository-root` is operator intent and bypasses the resolver. In release
-builds it always answers `None`.
+The **state** root resolves by the same shape as the configuration root, from
+`--state-directory`, then `AGENTMUX_STATE_DIRECTORY`, then
+`$XDG_STATE_HOME/agentmux`, then `~/.local/state/agentmux`. It does not vary by
+build profile either: nothing infers a deployment from where a process was
+launched or how it was compiled.
+
+One state root is one relay. The relay socket, both locks, the ready sentinel,
+the principal store, and peer credentials all sit at the root rather than under
+a bundle, so nothing below it separates two deployments. Isolation is expressed
+by naming a distinct root and by nothing else. The **inscriptions** root
+defaults to `<state_root>/inscriptions` and so follows it unless named.
+
+The root is normalized to a non-empty absolute path before anything uses it.
+That is a precondition for propagation rather than tidiness: the root is stamped
+into every spawned member's environment, and a relative value would re-resolve
+against each child's working directory. An empty `--state-directory` is rejected
+instead of normalized, because the environment tier reads blank as absent and
+one spelling of "nothing" must not mean two things.
+
+### Propagation and the one authoritative stamp
+
+The relay injects its normalized root as `AGENTMUX_STATE_DIRECTORY` when it
+spawns a member, and that injection **overwrites** any value merged from coder,
+bundle, or member configuration. It is the single exception to the
+upsert-if-absent rule the rest of the bring-up context follows
+(`BringUpContext`), on two grounds: the value is not known at configuration
+load, since it belongs to the relay doing the spawn; and a declared value would
+not override a preference but break the rendezvous, pointing the child at a
+relay that never started it.
+
+Both bring-up paths — first startup and `up`/reconcile — run through
+`members_for_spawn`, so the path an operator happens to take cannot decide
+whether a child can find its relay.
+
+`BringUpContext::VARIABLE_NAMES` therefore stays the *load-time stamped* set.
+`INHERITED_CONTEXT_VARIABLE_NAMES` is the wider one, naming everything a child
+may inherit, and is what a consumer sanitizing inherited context wants.
+
+### Socket addressing
+
+`sockaddr_un.sun_path` is 108 bytes on Linux (107 usable) and 104 on Darwin
+(103 usable), and `<state_root>/bundles/<bundle>/tmux.sock` is the deepest path
+the project builds. Normalizing the state root removed the relative-path escape
+hatch that kept deep hierarchies under the limit, so `runtime::sockets`
+reconstructs a short address instead: the parent directory is opened and the
+socket addressed through that descriptor as `/proc/self/fd/<n>/<name>`. The
+state root still has to be absolute for propagation, but the string handed to
+`bind` or `connect` is a different string and need not be the same one.
+
+`/proc` is Linux-only. On Darwin the descriptor form does not resolve and the
+full path is used, which is what every caller did before — macOS keeps its
+existing reach and does not gain depth-independence, but a path over the limit
+reports the limit and the offending path rather than a bare `ENAMETOOLONG`.
+Closing the gap would need a working-directory change, which is process-global;
+Darwin offers no `bindat`/`connectat`. The limit is therefore a per-target
+constant, since Linux's number would admit Darwin paths the kernel rejects.
+
+Windows is an intended target, but this module does not reach it yet: it is
+written against `std::os::unix::net`, and `std` exposes no AF_UNIX types on
+Windows despite the OS supporting the family. A port needs a third-party
+implementation, a Windows arm here (no `/proc`, so the full path is used, and
+`sun_path` is 108 bytes there — Linux's figure, not the Darwin one the fallback
+arm currently carries), and the same for the other Unix-typed surfaces in the
+relay.
+
+tmux binds its own socket from the `-S` argument it is given, so the descriptor
+trick is unavailable there; the tmux client is run from the socket's directory
+with a bare `-S tmux.sock`. That makes `-c` mandatory on session creation, since
+tmux takes an omitted start directory from the client's working directory.
 
 ## Overridable Files
 
