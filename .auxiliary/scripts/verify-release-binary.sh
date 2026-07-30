@@ -236,6 +236,41 @@ status=$dbgstatus;   expect_status "debug reports an absent relay without failin
 status=$namedstatus; expect_status "the named root reports an absent relay without failing" 0
 
 echo
+echo "== D1. Both profiles place inscriptions under the same state root =="
+# Check D above compares the state root and the socket beneath it. The
+# inscriptions root is selected separately and defaults to
+# <state_root>/inscriptions, so "identical resolution across profiles" is only
+# half-asserted without it -- and an inscriptions root that diverged by profile
+# would split an operator's log history exactly the way the cutover note warns
+# about, while every socket assertion above still passed.
+#
+# Driven through `host mcp` because that is a surface which configures a
+# process inscriptions sink; a plain CLI query writes none. Each profile is
+# given only a state directory, so the inscriptions path is derived rather than
+# named, which is the behavior under test.
+mcp_init='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"verify","version":"0"}}}'
+inscriptions_relative() { # binary, state-directory  -> echoes path relative to the state dir
+  local binary="$1" state="$2"
+  mkdir -p "$state"
+  printf '%s\n' "$mcp_init" \
+    | timeout 20 "$binary" host mcp "${LAYERS[@]}" \
+        --state-directory "$state" --default-bundle does-not-exist >/dev/null 2>&1
+  ( cd "$state" && find inscriptions -type f -name '*.log' 2>/dev/null | sort | head -1 )
+}
+
+relinsc=$(inscriptions_relative "$RELEASE" "$PWD/$ROOT/insc-release")
+dbginsc=$(inscriptions_relative "$DEBUG"   "$PWD/$ROOT/insc-debug")
+
+check "release derives an inscriptions path under its state root" "inscriptions/" "$relinsc"
+check "debug derives an inscriptions path under its state root"   "inscriptions/" "$dbginsc"
+if [ -n "$relinsc" ] && [ "$relinsc" = "$dbginsc" ]; then
+  pass=$((pass+1)); echo "  PASS  both profiles derive the same inscriptions path"
+else
+  fail=$((fail+1)); echo "  FAIL  both profiles derive the same inscriptions path"
+  echo "        release=$relinsc debug=$dbginsc"
+fi
+
+echo
 echo "== E. Green MCP startup on an unknown bundle (release) =="
 init='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"verify","version":"0"}}}'
 listt='{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
