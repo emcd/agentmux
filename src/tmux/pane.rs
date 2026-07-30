@@ -257,25 +257,60 @@ fn tmux_command(tmux_socket: &Path) -> Command {
     command
 }
 
-/// Resolves the tmux program name, absolutizing a relative path that names a
-/// file rather than a `PATH` lookup.
+/// Resolves the tmux program to something the working directory cannot
+/// reinterpret.
 ///
 /// Running the client from the socket's directory changes what a relative
-/// program path means: a value containing a separator is resolved by the
-/// kernel against the *child's* working directory, so an
-/// `AGENTMUX_TMUX_COMMAND` of `./wrapper.sh` would be looked for under the
-/// bundle runtime directory instead of where the relay was launched. A bare
-/// name carries no separator and goes through `PATH`, which the working
-/// directory does not affect, so it is left alone.
+/// program reference means, and both kinds of reference are affected. A value
+/// containing a separator is resolved by the kernel against the *child's*
+/// working directory, so an `AGENTMUX_TMUX_COMMAND` of `./wrapper.sh` would be
+/// looked for under the bundle runtime directory instead of where the relay was
+/// launched. A bare name goes through `PATH`, whose entries may themselves be
+/// relative or empty (an empty entry means the working directory), so
+/// `PATH=bin:/usr/bin` moves with the child too.
+///
+/// Both are pinned here, before the working directory changes, by resolving
+/// against the relay's own. A lookup that finds nothing falls back to the
+/// configured value unchanged, so the failure an operator sees is still the
+/// exec error naming what they configured.
 fn resolve_tmux_program() -> std::ffi::OsString {
     let program = tmux_program();
     let path = Path::new(program.as_str());
-    if path.components().count() < 2 {
-        return program.into();
+    if path.components().count() > 1 {
+        return std::path::absolute(path)
+            .map(PathBuf::into_os_string)
+            .unwrap_or_else(|_| program.clone().into());
     }
-    std::path::absolute(path)
+    resolve_program_on_path(program.as_str()).unwrap_or_else(|| program.into())
+}
+
+/// Resolves a bare program name against `PATH` the way `execvp` would, but from
+/// the current working directory rather than the child's.
+///
+/// Returns `None` when `PATH` is unset (its libc default is absolute, so the
+/// working directory cannot affect that lookup) or when no entry holds a
+/// matching executable.
+fn resolve_program_on_path(program: &str) -> Option<std::ffi::OsString> {
+    let search_path = std::env::var_os("PATH")?;
+    std::env::split_paths(&search_path)
+        .map(|entry| {
+            // An empty `PATH` entry means the working directory, which is exactly
+            // the reference this resolution exists to pin.
+            if entry.as_os_str().is_empty() {
+                PathBuf::from(".")
+            } else {
+                entry
+            }
+        })
+        .filter_map(|directory| std::path::absolute(directory.join(program)).ok())
+        .find(|candidate| is_executable_file(candidate))
         .map(PathBuf::into_os_string)
-        .unwrap_or_else(|_| program.into())
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file() && metadata.mode() & 0o111 != 0)
 }
 
 fn tmux_program() -> String {
