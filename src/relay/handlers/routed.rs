@@ -17,6 +17,7 @@ use super::super::authorization::{
     AuthorizationContext, RouteAuthorization, load_authorization_context,
 };
 use super::super::connection::BundleCatalog;
+use super::super::lifecycle::inject_bundle_state_root;
 use super::super::routing::{OperationProfile, ResolvedRoute};
 use super::super::{
     GLOBAL_NAMESPACE, RELAY_NAMESPACE, RelayError, RelayResponse, map_config, relay_error,
@@ -79,22 +80,34 @@ pub(super) fn resolve_target_bundle(
     configuration_roots: &ConfigurationRoots,
     bundle_catalog: &BundleCatalog,
 ) -> Result<(BundleConfiguration, PathBuf), RelayError> {
+    // The catalog entry is consulted for every target, including a
+    // same-namespace one that reuses the already-loaded home bundle, because it
+    // carries the hosting relay's state root and that has to reach any member
+    // this delivery ends up spawning.
+    let paths = bundle_catalog.lookup(target_namespace);
     if target_namespace == home_namespace
         && let Some(home_bundle) = home_bundle
     {
-        let runtime = home_runtime_directory
-            .map(Path::to_path_buf)
+        let runtime = paths
+            .as_ref()
+            .map(|paths| paths.runtime_directory.clone())
+            .or_else(|| home_runtime_directory.map(Path::to_path_buf))
             .unwrap_or_default();
-        return Ok((home_bundle.clone(), runtime));
+        let mut bundle = home_bundle.clone();
+        if let Some(paths) = paths.as_ref() {
+            inject_bundle_state_root(&mut bundle, paths.state_root.as_path());
+        }
+        return Ok((bundle, runtime));
     }
-    let Some(paths) = bundle_catalog.lookup(target_namespace) else {
+    let Some(paths) = paths else {
         return Err(relay_error(
             "validation_unknown_bundle",
             "target bundle is not configured on this relay",
             Some(json!({ "bundle_name": target_namespace })),
         ));
     };
-    let bundle =
+    let mut bundle =
         load_bundle_configuration(configuration_roots, target_namespace).map_err(map_config)?;
+    inject_bundle_state_root(&mut bundle, paths.state_root.as_path());
     Ok((bundle, paths.runtime_directory.clone()))
 }

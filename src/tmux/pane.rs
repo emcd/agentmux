@@ -1,7 +1,7 @@
 use std::{
     ffi::OsStr,
     io::Write,
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -245,7 +245,7 @@ pub(crate) fn run_tmux_command_capture(
 /// omitted start directory from the *client's* working directory, so moving the
 /// client here would otherwise start panes in the bundle runtime directory.
 fn tmux_command(tmux_socket: &Path) -> Command {
-    let mut command = Command::new(tmux_program());
+    let mut command = Command::new(resolve_tmux_program());
     match tmux_socket.parent().zip(tmux_socket.file_name()) {
         Some((directory, file_name)) => {
             command.current_dir(directory).arg("-S").arg(file_name);
@@ -255,6 +255,27 @@ fn tmux_command(tmux_socket: &Path) -> Command {
         }
     }
     command
+}
+
+/// Resolves the tmux program name, absolutizing a relative path that names a
+/// file rather than a `PATH` lookup.
+///
+/// Running the client from the socket's directory changes what a relative
+/// program path means: a value containing a separator is resolved by the
+/// kernel against the *child's* working directory, so an
+/// `AGENTMUX_TMUX_COMMAND` of `./wrapper.sh` would be looked for under the
+/// bundle runtime directory instead of where the relay was launched. A bare
+/// name carries no separator and goes through `PATH`, which the working
+/// directory does not affect, so it is left alone.
+fn resolve_tmux_program() -> std::ffi::OsString {
+    let program = tmux_program();
+    let path = Path::new(program.as_str());
+    if path.components().count() < 2 {
+        return program.into();
+    }
+    std::path::absolute(path)
+        .map(PathBuf::into_os_string)
+        .unwrap_or_else(|_| program.into())
 }
 
 fn tmux_program() -> String {

@@ -16,6 +16,7 @@ use super::super::authorization::{
 use super::super::connection::BundleCatalog;
 use super::super::delivery::{QuiescenceOptions, enqueue_async_delivery};
 use super::super::identity::{PrincipalType, classify_principal_id};
+use super::super::lifecycle::inject_bundle_state_root;
 use super::super::routing::{
     Addressing, Capability, OperationProfile, ResolvedRoute, ResolvedTarget as RouteTarget,
     resolve_send_route,
@@ -834,8 +835,12 @@ fn ensure_bundle_group(
     let Some(paths) = bundle_catalog.lookup(namespace) else {
         return Err(BundleGroupError::UnknownBundle);
     };
-    let bundle = load_bundle_configuration(configuration_roots, namespace)
+    let mut bundle = load_bundle_configuration(configuration_roots, namespace)
         .map_err(|error| BundleGroupError::Relay(map_config(error)))?;
+    // Delivery loads its own copy of the bundle, so it needs the same
+    // authoritative overwrite bring-up applies. A Pty member started lazily by
+    // this delivery is spawned from exactly these members.
+    inject_bundle_state_root(&mut bundle, paths.state_root.as_path());
     let authorization = load_authorization_context(configuration_roots, Some(&bundle))
         .map_err(BundleGroupError::Relay)?;
     let choice_decider_sessions = choose_authorized_ui_sessions(&authorization, &bundle);

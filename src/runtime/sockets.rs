@@ -45,13 +45,19 @@
 //! carries).
 
 use std::{
-    fs::File,
     io,
+    os::unix::net::{UnixListener, UnixStream},
+    path::Path,
+};
+
+#[cfg(target_os = "linux")]
+use std::{
+    ffi::CString,
     os::{
-        fd::AsRawFd,
-        unix::net::{UnixListener, UnixStream},
+        fd::{AsRawFd, FromRawFd, OwnedFd},
+        unix::ffi::OsStrExt,
     },
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 
 /// Usable bytes in `sockaddr_un.sun_path`, less the NUL terminator.
@@ -93,6 +99,11 @@ pub fn connect_unix_stream(path: &Path) -> io::Result<UnixStream> {
 
 /// Resolves `path` to an address that fits `sun_path` and applies `operation`
 /// to it.
+///
+/// Only Linux takes the descriptor route. Elsewhere there is no `/proc` to
+/// address the descriptor through, so opening the parent would buy nothing and
+/// is skipped rather than performed and discarded.
+#[cfg(target_os = "linux")]
 fn with_short_address<T>(
     path: &Path,
     operation: impl FnOnce(&Path) -> io::Result<T>,
@@ -100,15 +111,15 @@ fn with_short_address<T>(
     let Some((parent, file_name)) = path.parent().zip(path.file_name()) else {
         return operation(ensure_addressable(path)?);
     };
-    // A parent that cannot be opened is reported as itself rather than fed
-    // through the fallback. There is nothing to bind or connect inside a
+    // A parent that cannot be opened at all is reported as itself rather than
+    // fed through the fallback. There is nothing to bind or connect inside a
     // directory that is not there, and the length check below would otherwise
-    // convert a deep-but-absent state root into a path-length fault when the
-    // truth is that no relay lives there.
-    let directory = File::open(parent)?;
+    // turn a deep-but-absent state root into a path-length fault when the truth
+    // is that no relay lives there.
+    let directory = open_directory_reference(parent)?;
     let reference = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
-    // `/proc` is not mounted everywhere. A reference that does not resolve back
-    // to the directory just opened is unusable.
+    // `/proc` is not always mounted, even on Linux. A reference that does not
+    // resolve back to the directory just opened is unusable.
     if !reference.is_dir() {
         return operation(ensure_addressable(path)?);
     }
@@ -118,6 +129,46 @@ fn with_short_address<T>(
     let outcome = operation(ensure_addressable(&reference.join(file_name))?);
     drop(directory);
     outcome
+}
+
+/// Opens `parent` purely as a location to resolve a name against.
+///
+/// `O_PATH` rather than a plain read open, because the descriptor is never read
+/// from — it exists only to be named through `/proc/self/fd`. A read open would
+/// additionally demand read permission on the directory, so a searchable but
+/// unreadable parent (`0111`, `0711` to a non-owner) would fail here even
+/// though binding and connecting inside it are permitted. That is a real
+/// configuration for a peer relay's socket directory, and requiring read there
+/// would reject a socket the kernel is willing to serve.
+#[cfg(target_os = "linux")]
+fn open_directory_reference(parent: &Path) -> io::Result<OwnedFd> {
+    let path = CString::new(parent.as_os_str().as_bytes())
+        .map_err(|source| io::Error::new(io::ErrorKind::InvalidInput, source))?;
+    // SAFETY: `path` is a valid NUL-terminated C string that outlives the call,
+    // and the returned descriptor is handed straight to `OwnedFd`, which owns
+    // the close.
+    let descriptor = unsafe {
+        libc::open(
+            path.as_ptr(),
+            libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC,
+        )
+    };
+    if descriptor < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `descriptor` is a fresh, owned, non-negative descriptor.
+    Ok(unsafe { OwnedFd::from_raw_fd(descriptor) })
+}
+
+/// Non-Linux targets pass the full path. See the module docs: without `/proc`
+/// there is nothing to address a directory descriptor through, and the
+/// alternative — changing the working directory — is process-global.
+#[cfg(not(target_os = "linux"))]
+fn with_short_address<T>(
+    path: &Path,
+    operation: impl FnOnce(&Path) -> io::Result<T>,
+) -> io::Result<T> {
+    operation(ensure_addressable(path)?)
 }
 
 /// Rejects an address that cannot fit in `sun_path` before the kernel does, so

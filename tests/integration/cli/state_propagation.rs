@@ -19,6 +19,12 @@ use super::helpers::*;
 /// A state root the member declares for itself, which the relay must overwrite.
 const MEMBER_DECLARED_STATE_ROOT: &str = "/nowhere/member-declared";
 
+/// A blank declaration, which must be overwritten rather than suppressing the
+/// stamp. Blank reads as absent everywhere else, so this is the case where an
+/// upsert-if-absent implementation would look correct and still break the
+/// rendezvous.
+const MEMBER_BLANK_STATE_ROOT: &str = "";
+
 /// Appends a session-level `AGENTMUX_STATE_DIRECTORY` to a written bundle file,
 /// so the spawn has an operator-declared value to contend with.
 fn declare_member_state_directory(config_root: &std::path::Path, bundle_name: &str, value: &str) {
@@ -44,6 +50,92 @@ fn recorded_new_session(log: &str) -> &str {
         "expected exactly one new-session invocation, got:\n{log}"
     );
     lines.pop().expect("one new-session line")
+}
+
+/// Brings a relay up with `declared` as the member's own
+/// `AGENTMUX_STATE_DIRECTORY` and returns the recorded `new-session`
+/// invocation together with the relay's state root.
+fn spawn_with_declared_state_root(
+    temporary: &TempDir,
+    declared: &str,
+) -> (String, std::path::PathBuf) {
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("named-state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(false));
+    declare_member_state_directory(&config_root, "alpha", declared);
+
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let host_child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "--no-autostart",
+            "--configuration-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay --no-autostart");
+    wait_for_relay_ready(&state_root, "alpha");
+
+    let up = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "up",
+            "alpha",
+            "--configuration-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .output()
+        .expect("run agentmux up");
+    assert!(
+        up.status.success(),
+        "up should succeed; stderr:\n{}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+
+    let log = fs::read_to_string(fake_tmux_log_path(&fake_tmux)).expect("read fake tmux log");
+    let new_session = recorded_new_session(&log).to_string();
+
+    shutdown_relay_if_present(&state_root, "alpha");
+    process::wait_with_output_bounded(host_child, process::HARNESS_CHILD_WAIT_DEFAULT).ok();
+    (new_session, state_root)
+}
+
+#[test]
+fn a_blank_member_declaration_does_not_suppress_the_stamp() {
+    let temporary = TempDir::new().expect("temporary");
+    let (new_session, state_root) =
+        spawn_with_declared_state_root(&temporary, MEMBER_BLANK_STATE_ROOT);
+
+    assert!(
+        new_session.contains(&format!(
+            "-e AGENTMUX_STATE_DIRECTORY={}",
+            state_root.display()
+        )),
+        "a blank declaration must be overwritten, not treated as absent-and-left; got:\n\
+         {new_session}"
+    );
+    assert!(
+        !new_session.contains("-e AGENTMUX_STATE_DIRECTORY "),
+        "no blank value may survive into the spawn; got:\n{new_session}"
+    );
 }
 
 #[test]
@@ -140,6 +232,13 @@ fn deep_state_root(base: &std::path::Path) -> std::path::PathBuf {
     root
 }
 
+// Linux only, and that is the behavior rather than a test-environment excuse.
+// Shortening the address depends on `/proc/self/fd`, so on Darwin the full path
+// is used and a root this deep is genuinely unreachable. The non-Linux
+// expectation — a structured refusal naming the limit — is asserted directly
+// against `runtime::sockets` in `tests/unit/runtime_sockets.rs`, which is where
+// it can be stated without standing up a relay that cannot come up.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_relay_comes_up_under_a_state_root_longer_than_sun_path() {
     // Normalizing the state root to an absolute path removed the relative-path
@@ -205,6 +304,83 @@ fn a_relay_comes_up_under_a_state_root_longer_than_sun_path() {
     assert!(
         new_session.starts_with("-S tmux.sock "),
         "tmux must still be addressed by the bare socket name; got:\n{new_session}"
+    );
+
+    shutdown_relay_if_present(&state_root, "alpha");
+    process::wait_with_output_bounded(host_child, process::HARNESS_CHILD_WAIT_DEFAULT).ok();
+}
+
+#[test]
+fn a_relative_tmux_wrapper_still_resolves_against_the_launch_directory() {
+    // Running the client from the socket's directory changed what a relative
+    // program path means: the kernel resolves a value containing a separator
+    // against the *child's* working directory, so `./fake-tmux.sh` would be
+    // looked for under the bundle runtime directory. Every other test here
+    // passes an absolute wrapper and cannot see it.
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("named-state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(false));
+
+    let wrapper_directory = temporary.path().join("wrappers");
+    fs::create_dir_all(&wrapper_directory).expect("create wrapper directory");
+    let fake_tmux = wrapper_directory.join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    // Relative, with a separator, interpreted against the relay's own working
+    // directory — which is the wrapper's parent, not the bundle runtime.
+    let relative_wrapper = std::path::PathBuf::from("wrappers/fake-tmux.sh");
+
+    let host_child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .current_dir(temporary.path())
+        .args([
+            "host",
+            "relay",
+            "--no-autostart",
+            "--configuration-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &relative_wrapper)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay --no-autostart");
+    wait_for_relay_ready(&state_root, "alpha");
+
+    let up = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .current_dir(temporary.path())
+        .args([
+            "up",
+            "alpha",
+            "--configuration-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &relative_wrapper)
+        .output()
+        .expect("run agentmux up");
+    assert!(
+        up.status.success(),
+        "a relative wrapper must still be found; stderr:\n{}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+
+    let log = fs::read_to_string(fake_tmux_log_path(&fake_tmux))
+        .expect("the relative wrapper must have run and recorded its invocations");
+    assert!(
+        log.contains("new-session"),
+        "the wrapper must have been reached for session creation; got:\n{log}"
     );
 
     shutdown_relay_if_present(&state_root, "alpha");

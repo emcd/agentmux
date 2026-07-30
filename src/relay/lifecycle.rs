@@ -83,24 +83,31 @@ pub(super) fn shutdown_bundle_runtime(tmux_socket: &Path) -> Result<ShutdownRepo
     Ok(report)
 }
 
+/// Overwrites `AGENTMUX_STATE_DIRECTORY` in every member of `bundle` with the
+/// spawning relay's `state_root`.
+///
+/// The single definition of that overwrite, applied wherever a bundle is loaded
+/// on a path that can end in a spawn. There are three such paths and they must
+/// agree: first startup, `up`/reconcile, and the lazy Pty spawn a delivery
+/// triggers, which loads its own copy of the bundle at delivery time. A member
+/// spawned by one and a member spawned by another must be pointed at the same
+/// relay, or which path an operator happened to take decides whether the child
+/// can find it.
+pub(super) fn inject_bundle_state_root(bundle: &mut BundleConfiguration, state_root: &Path) {
+    for member in &mut bundle.members {
+        inject_spawn_state_directory(&mut member.environment, state_root);
+    }
+}
+
 /// Returns `bundle`'s members prepared for spawning by the relay owning
 /// `paths`.
-///
-/// The relay's state root is injected authoritatively into each member's
-/// environment. Both bring-up paths — first startup and `up`/reconcile — run
-/// through here, because a member created by one and a member created by the
-/// other must be pointed at the same relay; injecting on only one of them would
-/// leave whichever path an operator happened to take deciding whether the child
-/// could find its relay.
 fn members_for_spawn(
     bundle: &BundleConfiguration,
     paths: &BundleRuntimePaths,
 ) -> Vec<BundleMember> {
-    let mut members = bundle.members.clone();
-    for member in &mut members {
-        inject_spawn_state_directory(&mut member.environment, paths.state_root.as_path());
-    }
-    members
+    let mut bundle = bundle.clone();
+    inject_bundle_state_root(&mut bundle, paths.state_root.as_path());
+    bundle.members
 }
 
 pub(super) fn startup_bundle(
