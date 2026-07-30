@@ -74,9 +74,12 @@
   behavior of the crate, and a working-tree read inside the test suite fires on
   an operator's deliberate local override. As a pre-commit hook it judges staged
   content, and a CI step keeps the regeneration case covered on push. These
-  artifacts are Copier-template-generated, so also raise the constraint against
-  the upstream generator rather than assuming a repo-local check covers
-  regeneration
+  artifacts are Copier-template-generated, so the constraint must also be raised
+  against the upstream generator rather than assuming a repo-local check covers
+  regeneration; that half is out of this repository and tracked as
+  `agentmux:issues/20`, which records the constraint, the affected artifacts and
+  the steps, so this task closes on the in-repo enforcement plus that record
+  rather than on an unevidenced claim about another repository
 
 ## 4. Documentation
 

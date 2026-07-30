@@ -10,6 +10,7 @@
 //! socket rules that out.
 
 use std::{
+    collections::HashMap,
     fs,
     os::unix::fs::PermissionsExt,
     process::{Command, Stdio},
@@ -17,6 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use serde_json::Value;
 use tempfile::TempDir;
 
 use super::super::support::process;
@@ -133,30 +135,102 @@ resume-command = "sh -lc 'exec sleep 45'"
     declare_member_state_directory(config_root, "alpha", declared);
 }
 
-/// Waits for the spawned member's client to finish its second exchange.
+/// Waits for the spawned member's client to finish its second exchange, and
+/// returns the decoded responses keyed by request id together with the raw
+/// report for diagnostics.
 ///
 /// Waiting on a non-empty file is not enough: the `initialize` response arrives
 /// first, and returning on it tears the relay down before the `tools/call` the
-/// assertions read. The `tools/call` carries `id` 2, and it arrives either way —
-/// an unreachable relay yields a successful call reporting the bundle down — so
-/// this is a wait for the exchange to finish rather than for it to succeed.
-fn await_rendezvous_report(report: &std::path::Path) -> String {
+/// assertions read. Waiting on the *text* `"id":2` is not enough either — the
+/// child's write is not atomic with respect to this reader, so that substring can
+/// be present while the line holding it is still partial, which puts the race
+/// back where it was one layer down.
+///
+/// So the wait is for a complete newline-terminated JSON object carrying id 2.
+/// Anything the writer has not finished fails to parse and is simply not counted
+/// yet. That answer arrives either way — an unreachable relay yields a successful
+/// call reporting the bundle down — so this waits for the exchange to finish
+/// rather than for it to succeed.
+fn await_rendezvous_report(report: &std::path::Path) -> (HashMap<u64, Value>, String) {
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut last_seen = String::new();
     while Instant::now() < deadline {
         if let Ok(contents) = fs::read_to_string(report) {
-            if contents.contains(r#""id":2"#) {
-                return contents;
+            let responses = decode_complete_responses(&contents);
+            if responses.contains_key(&2) {
+                return (responses, contents);
             }
             last_seen = contents;
         }
         thread::sleep(Duration::from_millis(100));
     }
     panic!(
-        "the spawned member's agentmux client never answered the tools/call at {}; \
+        "the spawned member's agentmux client never completed a response with id 2 at {}; \
          it reported:\n{last_seen}",
         report.display()
     );
+}
+
+/// Decodes the complete JSON-RPC responses in `contents`, keyed by request id.
+///
+/// A trailing partial line, or any non-JSON the member's shell wrote, is skipped
+/// rather than treated as an error: this reads a file another process is still
+/// appending to.
+fn decode_complete_responses(contents: &str) -> HashMap<u64, Value> {
+    contents
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|value| {
+            let id = value.get("id").and_then(Value::as_u64)?;
+            Some((id, value))
+        })
+        .collect()
+}
+
+#[test]
+fn a_partially_written_response_line_is_not_counted_as_complete() {
+    // The deterministic half of the teardown race. The race itself depends on
+    // catching the child mid-write, which does not reproduce on demand, so what
+    // is asserted is the property the wait rests on: a line the writer has not
+    // finished contributes no id, however much of it is present. Waiting on the
+    // text `"id":2` instead would return on the partial line below.
+    let complete = r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05"}}"#;
+    let partial = r#"{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","tex"#;
+    let responses = decode_complete_responses(&format!("{complete}\n{partial}"));
+
+    assert!(
+        responses.contains_key(&1),
+        "the finished response must still be counted"
+    );
+    assert!(
+        !responses.contains_key(&2),
+        "a partial line must not satisfy the wait, or the relay is torn down \
+         before the response the assertions read is written"
+    );
+}
+
+/// Extracts the bundle entry for `bundle_name` from a `list principals` tool
+/// response.
+///
+/// The payload is JSON encoded as a string inside `result.content[0].text`, so
+/// reaching the bundle means decoding two layers. Asserting on the decoded value
+/// rather than on the enclosing text is what makes the assertion independent of
+/// how the payload happens to be escaped.
+fn listed_bundle(response: &Value, bundle_name: &str) -> Value {
+    let text = response
+        .pointer("/result/content/0/text")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("tool response carries no content text: {response}"));
+    let payload = serde_json::from_str::<Value>(text)
+        .unwrap_or_else(|error| panic!("decode tool payload {text}: {error}"));
+    payload
+        .get("bundles")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("tool payload carries no bundles array: {payload}"))
+        .iter()
+        .find(|bundle| bundle.get("id").and_then(Value::as_str) == Some(bundle_name))
+        .unwrap_or_else(|| panic!("tool payload lists no bundle {bundle_name}: {payload}"))
+        .clone()
 }
 
 /// A relay-spawned member's own agentmux client reaches the relay that spawned
@@ -237,37 +311,48 @@ fn assert_rendezvous_survives_declaration(declared: &str) {
         String::from_utf8_lossy(&up.stderr)
     );
 
-    let reported = await_rendezvous_report(&report);
+    let (responses, reported) = await_rendezvous_report(&report);
 
     shutdown_relay_if_present(&state_root, "alpha");
     process::wait_with_output_bounded(host_child, process::HARNESS_CHILD_WAIT_DEFAULT).ok();
 
+    let initialized = responses
+        .get(&1)
+        .unwrap_or_else(|| panic!("no initialize response; it reported:\n{reported}"));
     assert!(
-        reported.contains("\"protocolVersion\""),
+        initialized
+            .pointer("/result/protocolVersion")
+            .and_then(Value::as_str)
+            .is_some(),
         "the descendant should have served the protocol at all; it reported:\n{reported}"
-    );
-    assert!(
-        !reported.contains("relay_unavailable")
-            && !reported.contains("relay socket is not present"),
-        "the spawned member's host mcp descendant must have reached the spawning \
-         relay, not a default root; it reported:\n{reported}"
     );
     // Association arrived by inheritance too: the server reports the namespace it
     // bound to, which came from the same stamp as the state root.
+    let instructions = initialized
+        .pointer("/result/instructions")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     assert!(
-        reported.contains("namespace 'alpha'"),
+        instructions.contains("namespace 'alpha'"),
         "the descendant should have associated with the bundle it was stamped \
-         into; it reported:\n{reported}"
+         into; it reported instructions {instructions:?} in:\n{reported}"
     );
+
     // The bundle came back hosted, which is only true of a relay that is actually
     // serving it. Deliberately not asserted on `isError`, which is false either
     // way: an unreachable relay still yields a successful tool call reporting the
-    // bundle down, so that field cannot tell the two apart. The payload is nested
-    // JSON, hence the escaped quotes.
-    assert!(
-        reported.contains(r#"\"hosted\":true"#),
+    // bundle down, so that field cannot tell the two apart.
+    let listed = listed_bundle(
+        responses
+            .get(&2)
+            .expect("awaited response with id 2 is present"),
+        "alpha",
+    );
+    assert_eq!(
+        listed.get("hosted").and_then(Value::as_bool),
+        Some(true),
         "the descendant should have found the bundle hosted on the relay that \
-         spawned it; it reported:\n{reported}"
+         spawned it; it reported bundle {listed} in:\n{reported}"
     );
 }
 
@@ -700,6 +785,103 @@ fn a_bare_tmux_command_resolves_through_the_launch_directorys_path() {
     assert!(
         log.contains("new-session"),
         "the wrapper must have been reached for session creation; got:\n{log}"
+    );
+
+    shutdown_relay_if_present(&state_root, "alpha");
+    process::wait_with_output_bounded(host_child, process::HARNESS_CHILD_WAIT_DEFAULT).ok();
+}
+
+#[test]
+fn a_bare_tmux_command_keeps_execvp_search_order_across_relative_entries() {
+    // The lookup for a bare name belongs to execvp, and its search is more than
+    // "first file of that name": a non-executable candidate is passed over for a
+    // later entry. This drives two relative entries where the first shadows the
+    // second by name only, so a hand-rolled lookup that stopped at the first
+    // match would run nothing.
+    //
+    // It does not reproduce the sharper case of a file carrying an execute bit
+    // the effective user cannot use — that needs a file owned by another
+    // principal, which an unprivileged fixture cannot create. An execute-only
+    // script does not stand in for it either: exec of a shebang script succeeds
+    // and the interpreter fails afterwards, so the search is never resumed. What
+    // rules that case out is not testing it but declining to reimplement the
+    // search at all.
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("named-state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(false));
+
+    let shadowed_directory = temporary.path().join("wrappers-shadowed");
+    let wrapper_directory = temporary.path().join("wrappers");
+    fs::create_dir_all(&shadowed_directory).expect("create shadowed directory");
+    fs::create_dir_all(&wrapper_directory).expect("create wrapper directory");
+    // Same name, earlier on PATH, and not executable at all.
+    let shadowed = shadowed_directory.join("fake-tmux.sh");
+    fs::write(&shadowed, "#!/usr/bin/env bash\nexit 3\n").expect("write shadowed wrapper");
+    fs::set_permissions(&shadowed, fs::Permissions::from_mode(0o644))
+        .expect("make shadowed wrapper non-executable");
+    let fake_tmux = wrapper_directory.join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let inherited_path = std::env::var("PATH").unwrap_or_default();
+    let search_path = format!("wrappers-shadowed:wrappers:{inherited_path}");
+
+    let host_child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .current_dir(temporary.path())
+        .args([
+            "host",
+            "relay",
+            "--no-autostart",
+            "--configuration-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", "fake-tmux.sh")
+        .env("PATH", &search_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay --no-autostart");
+    wait_for_relay_ready(&state_root, "alpha");
+
+    let up = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .current_dir(temporary.path())
+        .args([
+            "up",
+            "alpha",
+            "--configuration-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", "fake-tmux.sh")
+        .env("PATH", &search_path)
+        .output()
+        .expect("run agentmux up");
+    assert!(
+        up.status.success(),
+        "the executable later entry must be reached; stderr:\n{}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+
+    let log = fs::read_to_string(fake_tmux_log_path(&fake_tmux))
+        .expect("the executable wrapper must have run and recorded");
+    assert!(
+        log.contains("new-session"),
+        "the wrapper on the later PATH entry must have been reached; got:\n{log}"
+    );
+    assert!(
+        !fake_tmux_log_path(&shadowed).exists(),
+        "the shadowing non-executable entry must not have run"
     );
 
     shutdown_relay_if_present(&state_root, "alpha");
