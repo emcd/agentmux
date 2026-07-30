@@ -1,52 +1,47 @@
 //! Compact table-driven coverage for the opencode prompt-readiness regex.
 //!
 //! The regex is shipped in `data/configuration/coders.toml` under the
-//! `opencode` coder's `prompt-regex` field. The corrected shape matches
-//! the actual Opencode 1.18.5 idle layout, which is:
+//! `opencode` coder's `prompt-regex` field. It matches the Opencode
+//! prompt UI frame structure: at least one `┃` line, followed by the
+//! separator `╹▀▀▀...`, followed by the status row that ends with
+//! `ctrl+p commands    • OpenCode <version>`.
 //!
-//! ```text
-//! [chat history]
-//! ┃                          <- empty input-box line
-//! ┃                          <- empty input-box line (1..N)
-//! ┃                          <- empty input-box line
-//! ┃  Build · <Model> ...     <- info row (always shows current model/agent)
-//! ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀    <- separator (full pane width)
-//!   /path/...  ctrl+p commands    • OpenCode <version>   <- status row
-//! ```
+//! The regex does NOT distinguish between empty-input (idle) and
+//! non-empty-input (composing) states -- that distinction is the
+//! cursor-column check wired in `src/tmux/quiescence_probe.rs` via
+//! `prompt-idle-column = 5`. The full readiness check (regex match +
+//! cursor column equals 5) is the gate that prevents delivery during
+//! composing; see `tests/integration/relay_delivery_prompt.rs` for the
+//! cursor-column mismatch timeout test.
 //!
-//! The readiness invariant: every `┃` line in the input box is empty,
-//! the info row is present and is the `┃` line immediately before the
-//! separator, and the separator is immediately followed by the status
-//! row that ends with `ctrl+p commands`.
+//! Frame-structure matching (rather than "blank input box above info row")
+//! is required because the input-box area in some layouts carries
+//! sidebar content (e.g. when the working-directory path wraps into
+//! the bottom of the input area). The strict "blank above info row"
+//! anchor cannot distinguish sidebar text from compose-box text, since
+//! both render inside `┃` rows.
 
 use std::fs;
 
 use regex::Regex;
 use toml::Value;
 
-const IDLE_SHORT_HISTORY: &str = "\
+const IDLE_EDITOR: &str = "\
   ┃ Completely agree with you. The format of what landed was fine; the problem is that it should not have landed.
   ┃
   ┃
   ┃
-  ┃  Build · MiniMax-M3 MiniMax Token Plan (minimax.io)
-  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-   /Users/me/src/WORKTREES/agentmux/pty                            65.6K (7%) · $0.27 ctrl+p commands    • OpenCode 1.18.3";
+  ┃  Build · MiniMax-M3 MiniMax Token Plan (minimax.io)                                                                                                ~/src/WORKTREES/agentmux/editor:editor  
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /home/me/src/WORKTREES/agentmux/editor                                                                              97.9K (10%)  ctrl+p commands    • OpenCode 1.18.5";
 
-const IDLE_LONG_HISTORY: &str = "\
-  2. Whether there's a trailing blank ┃ line that I'm missing (which would change the regex anchoring)
-  3. Whether the inspect_lines = 10 window picks up the same shape I'm tracing
-
-  If you can also share the output of agentmux look against the idle pc-setup-xo@infrastructure session (or whichever session you have open in Opencode), that's the cleanest signal — the same inspect_lines = 10 tail the regex sees.
-
-  I'll hold on drafting until you've got it captured.
-                                                                        ⊟ Build · MiniMax-M3 · 14.1s
+const IDLE_ACP: &str = "\
   ┃
   ┃
   ┃
   ┃  Build · MiniMax-M3 MiniMax Token Plan (minimax.io)
   ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-   /Users/me/src/WORKTREES/agentmux/pty                            133.6K (13%) · $0.27 ctrl+p commands    • OpenCode 1.18.4";
+   /home/me/src/WORKTREES/agentmux/acp     35.4K (4%) · $0.15  ctrl+p commands    • OpenCode 1.18.5";
 
 const COLD_START: &str = "\
   ┃
@@ -56,21 +51,13 @@ const COLD_START: &str = "\
   ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
    /Users/me/src/WORKTREES/agentmux/pty                            133.6K (13%) · $0.27 ctrl+p commands    • OpenCode 1.18.4";
 
-const COMPOSING: &str = "\
-  ┃ Completely agree with you. The format of what landed was fine; the problem is that it should not have landed.
+const API_AUX_SIDEBAR_WRAP: &str = "\
   ┃
-  ┃ I suspect that our regex for prompt readiness is what needs tuning.
-  ┃  Build · MiniMax-M3 MiniMax Token Plan (minimax.io)
-  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-   /Users/me/src/WORKTREES/agentmux/pty                            65.6K (7%) · $0.27 ctrl+p commands    • OpenCode 1.18.3";
-
-const COMPOSING_FULL: &str = "\
-  ┃ user prompt line 3
-  ┃ user prompt line 2
-  ┃ user prompt line 1
-  ┃  Build · MiniMax-M3 MiniMax Token Plan (minimax.io)
-  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-   /Users/me/src/WORKTREES/agentmux/pty                            65.6K (7%) · $0.27 ctrl+p commands    • OpenCode 1.18.3";
+  ┃
+  ┃                                                                                    ~/src/WORKTREES/agentmux/api-aux:api-
+  ┃  Build · GPT-5.6 Sol OpenAI                                                        aux
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /home/me/src/WORKTREES/agentmux/api-aux                                                                            105.1K (21%)  ctrl+p commands    • OpenCode 1.18.9";
 
 const AGENT_JUST_RESPONDED: &str = "\
   ┃ user prompt
@@ -81,6 +68,15 @@ const AGENT_JUST_RESPONDED: &str = "\
   ┃  Build · MiniMax-M3 MiniMax Token Plan (minimax.io)
   ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
    /Users/me/src/WORKTREES/agentmux/pty                            133.6K (13%) · $0.27 ctrl+p commands    • OpenCode 1.18.4";
+
+const BUSY_RETRY_BANNER: &str = "\
+Our servers are currently overloaded. Please try again later.
+[retrying in 5m 27s attempt #9]        esc interrupt    • OpenCode 1.18.9";
+
+const EMPTY_PANE: &str = "\
+some unrelated content
+more content
+";
 
 fn read_opencode_prompt_regex_from_config() -> String {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
@@ -120,12 +116,13 @@ fn opencode_prompt_regex_classifies_states() {
         .expect("opencode prompt-regex from coders.toml must compile");
 
     let cases: &[(&str, &str, bool)] = &[
-        ("idle_short_history", IDLE_SHORT_HISTORY, true),
-        ("idle_long_history", IDLE_LONG_HISTORY, true),
+        ("idle_editor", IDLE_EDITOR, true),
+        ("idle_acp", IDLE_ACP, true),
         ("cold_start", COLD_START, true),
-        ("composing", COMPOSING, false),
-        ("composing_full", COMPOSING_FULL, false),
         ("agent_just_responded", AGENT_JUST_RESPONDED, true),
+        ("api_aux_sidebar_wrap", API_AUX_SIDEBAR_WRAP, true),
+        ("busy_retry_banner", BUSY_RETRY_BANNER, false),
+        ("empty_pane", EMPTY_PANE, false),
     ];
 
     for (label, fixture, expected_match) in cases {
