@@ -1,8 +1,9 @@
 //! Bootstrap scenarios: concurrent bootstrap races for the relay socket,
 //! stale-socket removal, MCP startup without an active bundle context,
-//! explicit unknown-bundle startup failure, association discovery from a
-//! non-git cwd, directory fallback when the auto-sender is not a
-//! configured member, and the debug-build repository-root socket override.
+//! explicit unknown-bundle startup failure, association from the injected
+//! bring-up environment, session resolution by declared member directories,
+//! retained startup faults that still serve the protocol, and reaching the
+//! relay of a named state directory.
 
 use std::{
     fs,
@@ -23,7 +24,7 @@ use serde_json::{Map, Value, json};
 use tempfile::TempDir;
 
 use super::mocks::{
-    FakeRelay, McpHarness, decode_tool_payload, hook_git_environment, write_bundle_configuration,
+    FakeRelay, McpHarness, decode_tool_payload, write_bundle_configuration,
     write_bundle_configuration_with_directories,
 };
 
@@ -240,9 +241,10 @@ async fn mcp_associates_from_the_injected_bring_up_environment() {
     // The channel through which bring-up states the identity it is starting,
     // end to end: configuration load stamps it, the transport applies it, and
     // this subprocess consumes it instead of inferring one from the filesystem.
-    let mut environment = hook_git_environment();
-    environment.push(("AGENTMUX_BUNDLE".to_string(), "relay".to_string()));
-    environment.push(("AGENTMUX_SESSION".to_string(), "relay".to_string()));
+    let environment = vec![
+        ("AGENTMUX_BUNDLE".to_string(), "relay".to_string()),
+        ("AGENTMUX_SESSION".to_string(), "relay".to_string()),
+    ];
     let mut harness = McpHarness::spawn_with_environment(
         &workspace,
         &[
@@ -319,7 +321,6 @@ async fn mcp_resolves_session_by_matching_declared_member_directories() {
     // directory is matched against the directories the bundle file already
     // declares. That is declarative rather than inferential -- unlike the
     // deleted filesystem guess, it cannot produce a plausible wrong answer.
-    let git_environment = hook_git_environment();
     let mut harness = McpHarness::spawn_with_environment(
         &workspace,
         &[
@@ -330,7 +331,7 @@ async fn mcp_resolves_session_by_matching_declared_member_directories() {
             "--state-directory",
             state_root.to_str().expect("utf8 state path"),
         ],
-        &git_environment,
+        &[],
     )
     .await;
 
@@ -527,7 +528,6 @@ async fn mcp_refuses_an_invalid_session_selector_rather_than_binding_the_directo
     // would have authenticated as that member despite the operator naming
     // something else. A mistyped selector must not silently become a different
     // identity -- that is the inference this ladder exists to remove.
-    let git_environment = hook_git_environment();
     let mut harness = McpHarness::spawn_with_environment(
         &workspace,
         &[
@@ -540,7 +540,7 @@ async fn mcp_refuses_an_invalid_session_selector_rather_than_binding_the_directo
             "--state-directory",
             state_root.to_str().expect("utf8 state path"),
         ],
-        &git_environment,
+        &[],
     )
     .await;
 

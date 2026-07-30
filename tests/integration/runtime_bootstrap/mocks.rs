@@ -7,10 +7,10 @@
 //!   `initialize` / `call_tool` / `read_response` / `send` primitives
 //!   that drive the MCP host the same way a real MCP client would.
 //!
-//! The four shared test fixtures (`write_bundle_configuration`,
-//! `write_bundle_configuration_with_directories`, `decode_tool_payload`,
-//! `hook_git_environment`) live in this module because they are shared
-//! by every test in the parent directory.
+//! The three shared test fixtures (`write_bundle_configuration`,
+//! `write_bundle_configuration_with_directories`, `decode_tool_payload`) live
+//! in this module because they are shared by every test in the parent
+//! directory.
 
 use std::{
     fs,
@@ -458,26 +458,4 @@ pub(super) fn decode_tool_payload(response: &Value) -> Value {
         .and_then(Value::as_str)
         .unwrap_or_else(|| panic!("missing content.text in response: {response}"));
     serde_json::from_str(text).expect("decode content.text as json")
-}
-
-pub(super) fn hook_git_environment() -> Vec<(String, String)> {
-    let repository_root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let output = std::process::Command::new("git")
-        .current_dir(repository_root)
-        .args(["rev-parse", "--path-format=absolute", "--git-dir"])
-        .output()
-        .expect("resolve repository git directory");
-    assert!(
-        output.status.success(),
-        "resolve repository git directory failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let git_directory = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    vec![
-        ("GIT_DIR".to_string(), git_directory),
-        (
-            "GIT_WORK_TREE".to_string(),
-            repository_root.display().to_string(),
-        ),
-    ]
 }
