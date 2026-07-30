@@ -787,6 +787,21 @@ fn a_bare_tmux_command_resolves_through_the_launch_directorys_path() {
         "the wrapper must have been reached for session creation; got:\n{log}"
     );
 
+    // The other half, and the reason the fix resolves the program rather than
+    // normalizing the environment: the client's `PATH` must reach it untouched.
+    // A tmux client hands its environment to a server it starts and thence to
+    // every pane, and a pane is started with `-c <member directory>`, so
+    // rewriting a relative entry here would silently repoint coder lookups from
+    // the member's directory to the relay's. The fake tmux stands where the
+    // client stands, so what it recorded is what a pane would inherit.
+    let observed_path = fs::read_to_string(fake_tmux_search_path_file(&fake_tmux))
+        .expect("the wrapper must have recorded the PATH it inherited");
+    assert_eq!(
+        observed_path.trim(),
+        search_path,
+        "the client's PATH must arrive exactly as inherited, relative entry included"
+    );
+
     shutdown_relay_if_present(&state_root, "alpha");
     process::wait_with_output_bounded(host_child, process::HARNESS_CHILD_WAIT_DEFAULT).ok();
 }

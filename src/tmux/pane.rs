@@ -249,11 +249,6 @@ fn tmux_command(tmux_socket: &Path) -> Command {
     match tmux_socket.parent().zip(tmux_socket.file_name()) {
         Some((directory, file_name)) => {
             command.current_dir(directory).arg("-S").arg(file_name);
-            // Set only here, because moving the working directory is the only
-            // reason a relative `PATH` entry would resolve anywhere new.
-            if let Some(search_path) = launch_relative_search_path() {
-                command.env("PATH", search_path);
-            }
         }
         None => {
             command.arg("-S").arg(tmux_socket);
@@ -262,60 +257,84 @@ fn tmux_command(tmux_socket: &Path) -> Command {
     command
 }
 
-/// Resolves a tmux program reference that names a file, so the child's working
-/// directory cannot reinterpret it.
+/// Resolves the tmux program to something the child's working directory cannot
+/// reinterpret.
 ///
-/// A value containing a separator is resolved by the kernel against the
-/// *child's* working directory, so an `AGENTMUX_TMUX_COMMAND` of `./wrapper.sh`
-/// would be looked for under the bundle runtime directory instead of where the
-/// relay was launched. A bare name carries no separator and is left alone: it
-/// belongs to `execvp`, whose search this code deliberately does not reimplement
-/// (see [`launch_relative_search_path`]).
+/// Two kinds of relative reference are affected by running the client from the
+/// socket's directory. A value containing a separator is resolved by the kernel
+/// against the *child's* working directory, so an `AGENTMUX_TMUX_COMMAND` of
+/// `./wrapper.sh` would be looked for under the bundle runtime directory. A bare
+/// name goes through `PATH`, whose entries may themselves be relative or empty
+/// (an empty entry means the working directory), so `PATH=bin:/usr/bin` moves
+/// with the child too.
+///
+/// Both are resolved here, against the relay's own working directory, and
+/// nothing else is touched. In particular the child's `PATH` is left exactly as
+/// inherited: it is not this function's to normalize, because the tmux client
+/// hands its environment to a server it starts and thence to every pane, where
+/// a relative entry is resolved against the *member's* directory by intent. The
+/// scope of the fix is the program this code is about to execute.
 fn resolve_tmux_program() -> std::ffi::OsString {
     let program = tmux_program();
     let path = Path::new(program.as_str());
-    if path.components().count() < 2 {
-        return program.into();
+    if path.components().count() > 1 {
+        return std::path::absolute(path)
+            .map(PathBuf::into_os_string)
+            .unwrap_or_else(|_| program.clone().into());
     }
-    std::path::absolute(path)
-        .map(PathBuf::into_os_string)
-        .unwrap_or_else(|_| program.into())
+    resolve_program_on_search_path(program.as_str()).unwrap_or_else(|| program.into())
 }
 
-/// Returns a `PATH` for the child with every relative or empty entry resolved
-/// against the current working directory, or `None` when no entry needs it.
+/// Resolves a bare program name against `PATH` from the current working
+/// directory, the way `execvp` would from the child's.
 ///
-/// A bare program name is looked up by `execvp` in the *child*, after the working
-/// directory has moved to the socket's, so a relative `PATH` entry moves with it:
-/// under `PATH=bin:/usr/bin` the client would search the bundle runtime
-/// directory. An empty entry means the working directory and moves the same way.
+/// Follows `execvp`'s search rather than approximating it: a candidate the
+/// effective user cannot execute is passed over for a later entry rather than
+/// selected and failed. Executability is asked of the kernel via `faccessat`
+/// with `AT_EACCESS`, not inferred from mode bits — a file can carry an execute
+/// bit that belongs to a principal this process is not, and an ACL can deny
+/// where the mode appears to allow. The `is_file` guard is what keeps a
+/// *searchable directory* of the same name from answering `X_OK`.
 ///
-/// Rewriting the entries rather than resolving the program here is deliberate.
-/// The search has semantics beyond "first file with an execute bit" — notably
-/// that `execvp` continues past an `EACCES` to later entries — and a
-/// reimplementation that picks a file the effective user cannot execute turns a
-/// working configuration into a failure. Handing `execvp` absolute entries keeps
-/// its semantics exactly and leaves nothing to get subtly wrong.
-///
-/// `None` when `PATH` is unset, because its libc default is absolute; `None`
-/// also when the rewritten value cannot be joined (an absolutized entry
-/// containing the separator), which leaves `PATH` untouched rather than
-/// truncated.
-fn launch_relative_search_path() -> Option<std::ffi::OsString> {
+/// Returns `None` when `PATH` is unset — its libc default is absolute, so the
+/// working directory cannot reach that lookup — and when no entry holds an
+/// executable candidate, which leaves the bare name for `execvp` to fail on so
+/// the operator sees an error naming what they configured.
+fn resolve_program_on_search_path(program: &str) -> Option<std::ffi::OsString> {
     let search_path = std::env::var_os("PATH")?;
-    let entries = std::env::split_paths(&search_path).collect::<Vec<_>>();
-    if entries.iter().all(|entry| entry.is_absolute()) {
-        return None;
-    }
-    let resolved = entries.into_iter().map(|entry| {
-        let entry = if entry.as_os_str().is_empty() {
-            PathBuf::from(".")
-        } else {
-            entry
-        };
-        std::path::absolute(&entry).unwrap_or(entry)
-    });
-    std::env::join_paths(resolved).ok()
+    std::env::split_paths(&search_path)
+        .map(|entry| {
+            if entry.as_os_str().is_empty() {
+                PathBuf::from(".")
+            } else {
+                entry
+            }
+        })
+        .filter_map(|directory| std::path::absolute(directory.join(program)).ok())
+        .find(|candidate| candidate.is_file() && effective_user_can_execute(candidate))
+        .map(PathBuf::into_os_string)
+}
+
+/// Whether the *effective* user can execute `path`, as the kernel would decide
+/// it at `exec` time.
+fn effective_user_can_execute(path: &Path) -> bool {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let Ok(candidate) = CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: `candidate` is a valid NUL-terminated C string that outlives the
+    // call, and `AT_FDCWD` needs no descriptor. `faccessat` only reads.
+    let outcome = unsafe {
+        libc::faccessat(
+            libc::AT_FDCWD,
+            candidate.as_ptr(),
+            libc::X_OK,
+            libc::AT_EACCESS,
+        )
+    };
+    outcome == 0
 }
 
 fn tmux_program() -> String {
