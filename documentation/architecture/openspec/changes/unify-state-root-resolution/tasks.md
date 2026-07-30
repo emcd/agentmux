@@ -68,10 +68,14 @@
   `.auxiliary/configuration/mcp-servers.json`, which is the generation source for
   the Claude/project surface. `coders/claude/settings.json` is **not** in scope:
   it carries environment, tool permissions, and sandbox settings, and names
-  agentmux only as tool identifiers. Add the regression test in this repository,
-  which is the only place the constraint can be enforced mechanically. These
+  agentmux only as tool identifiers. Enforce it in this repository, which is the
+  only place the constraint can be checked mechanically, as a **lint** rather
+  than a test: what it asserts is a property of committed artifacts, not
+  behavior of the crate, and a working-tree read inside the test suite fires on
+  an operator's deliberate local override. As a pre-commit hook it judges staged
+  content, and a CI step keeps the regeneration case covered on push. These
   artifacts are Copier-template-generated, so also raise the constraint against
-  the upstream generator rather than assuming a repo-local test covers
+  the upstream generator rather than assuming a repo-local check covers
   regeneration
 
 ## 4. Documentation
