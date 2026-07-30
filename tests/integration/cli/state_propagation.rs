@@ -1,13 +1,17 @@
 //! What a spawned member actually receives from the relay that started it.
 //!
-//! These drive `agentmux up` against a fake tmux and read the argument vector
-//! tmux was handed. Asserting on the recorded invocation rather than on
-//! configuration is the point: the defect these guard against is a child
-//! resolving somewhere the relay never bound, which is only visible at the
-//! spawn.
+//! Two levels of evidence, deliberately both. Most tests here drive
+//! `agentmux up` against a fake tmux and assert on the argument vector tmux was
+//! handed, which pins the stamp precisely and runs in milliseconds.
+//! `a_relay_spawned_member_client_reaches_the_spawning_relay` instead uses real
+//! tmux and a real `agentmux host mcp` descendant, because argv shows a value
+//! being passed while the defect being guarded against is a child *resolving*
+//! somewhere the relay never bound. Only a live child arriving at the right
+//! socket rules that out.
 
 use std::{
     fs,
+    os::unix::fs::PermissionsExt,
     process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
@@ -67,12 +71,33 @@ fn write_rendezvous_bundle(
     member_directory: &std::path::Path,
 ) {
     write_bundle_configuration_with_options(config_root, "alpha", None, &["a"], Some(false));
-    let client = format!(
-        "{binary} list principals --namespace alpha --as-session user@GLOBAL \
-         --configuration-directory {config}",
-        binary = env!("CARGO_BIN_EXE_agentmux"),
-        config = config_root.display()
-    );
+    // The descendant is a real `agentmux host mcp`, driven over stdio the way a
+    // coder drives it, rather than a CLI client standing in for one. That is the
+    // process the propagation contract names, and it resolves association as
+    // well as the state root, so both arrive by inheritance or neither does.
+    //
+    // Written as a script because the JSON-RPC frames would otherwise have to
+    // survive TOML quoting inside shell quoting.
+    let script = config_root.join("mcp-rendezvous.sh");
+    fs::write(
+        &script,
+        format!(
+            r#"#!/usr/bin/env bash
+# No --state-directory: reaching the relay is possible only by resolving the
+# inherited AGENTMUX_STATE_DIRECTORY.
+{{
+  printf '%s\n' '{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"2024-11-05","capabilities":{{}},"clientInfo":{{"name":"rendezvous","version":"0"}}}}}}'
+  printf '%s\n' '{{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"list","arguments":{{"command":"principals","args":{{}}}}}}}}'
+}} | {binary} host mcp --configuration-directory {config} > {report} 2>&1
+"#,
+            binary = env!("CARGO_BIN_EXE_agentmux"),
+            config = config_root.display(),
+            report = report.display()
+        ),
+    )
+    .expect("write rendezvous script");
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755))
+        .expect("make rendezvous script executable");
     fs::write(
         config_root.join("coders.toml"),
         format!(
@@ -83,11 +108,10 @@ format-version = 1
 id = "default"
 
 [coders.tmux]
-initial-command = "sh -lc '{client} > {report} 2>&1; exec sleep 45'"
+initial-command = "sh -lc '{script}; exec sleep 45'"
 resume-command = "sh -lc 'exec sleep 45'"
 "#,
-            client = client,
-            report = report.display()
+            script = script.display()
         ),
     )
     .expect("write rendezvous coders config");
@@ -199,13 +223,31 @@ fn a_relay_spawned_member_client_reaches_the_spawning_relay() {
     process::wait_with_output_bounded(host_child, process::HARNESS_CHILD_WAIT_DEFAULT).ok();
 
     assert!(
-        !reported.contains("relay socket is absent") && !reported.contains("relay_unavailable"),
-        "the spawned member's client must have reached the spawning relay, not a \
-         default root; it reported:\n{reported}"
+        reported.contains("\"protocolVersion\""),
+        "the descendant should have served the protocol at all; it reported:\n{reported}"
     );
     assert!(
-        reported.contains("bundle=alpha"),
-        "the client should have listed the bundle it belongs to; it reported:\n{reported}"
+        !reported.contains("relay_unavailable")
+            && !reported.contains("relay socket is not present"),
+        "the spawned member's host mcp descendant must have reached the spawning \
+         relay, not a default root; it reported:\n{reported}"
+    );
+    // Association arrived by inheritance too: the server reports the namespace it
+    // bound to, which came from the same stamp as the state root.
+    assert!(
+        reported.contains("namespace 'alpha'"),
+        "the descendant should have associated with the bundle it was stamped \
+         into; it reported:\n{reported}"
+    );
+    // The bundle came back hosted, which is only true of a relay that is actually
+    // serving it. Deliberately not asserted on `isError`, which is false either
+    // way: an unreachable relay still yields a successful tool call reporting the
+    // bundle down, so that field cannot tell the two apart. The payload is nested
+    // JSON, hence the escaped quotes.
+    assert!(
+        reported.contains(r#"\"hosted\":true"#),
+        "the descendant should have found the bundle hosted on the relay that \
+         spawned it; it reported:\n{reported}"
     );
 }
 
