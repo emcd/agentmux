@@ -26,6 +26,10 @@ use super::helpers::*;
 /// A state root the member declares for itself, which the relay must overwrite.
 const MEMBER_DECLARED_STATE_ROOT: &str = "/nowhere/member-declared";
 
+/// A blank declaration, which must be overwritten rather than suppressing the
+/// stamp.
+const MEMBER_BLANK_STATE_ROOT: &str = "";
+
 /// Writes a bundle whose single member is a Pty target declaring its own
 /// `AGENTMUX_STATE_DIRECTORY`, with an initial command that records the value
 /// it was actually spawned with.
@@ -88,21 +92,22 @@ fn await_report(report: &std::path::Path) -> String {
     );
 }
 
-// Ignored because the path it exercises cannot complete yet, not because the
-// expectation is wrong. A delivery that triggers a lazy Pty spawn panics inside
-// a tokio worker — `src/pty/transport.rs:526`, "Cannot block the current thread
-// from within a runtime" — so the task queues, never completes, and no child is
-// spawned. Tokio isolates worker panics, so the relay survives and the failure
-// appears only on its stderr.
-//
-// That defect is independent of state-root propagation and predates it; the
-// branch this reaches is documented as provisional in
-// `src/relay/delivery/dispatch/envelope.rs` ("the full startup wiring lands
-// alongside §6 config parsing"). Remove the ignore once the spawn completes:
-// the assertion below is the one that matters and needs no change.
-#[ignore = "lazy Pty spawn panics in a tokio worker; see src/pty/transport.rs:526"]
-#[test]
-fn a_lazily_spawned_pty_member_receives_the_relays_state_root() {
+/// Ignored because the path it exercises cannot complete yet, not because the
+/// expectation is wrong. `PtyTransport::startup` spawns the child, then blocks on
+/// the worker's init handshake — and that block is a tokio `blocking_recv` on a
+/// runtime worker thread, which panics with "Cannot block the current thread from
+/// within a runtime". So the child *is* spawned, and is then killed by the
+/// startup guard as the panic unwinds.
+///
+/// That ordering is why this cannot be made to pass by observing the child: the
+/// window between spawn and kill is not synchronized with anything the test can
+/// wait on, so a test that reads the child's report would pass or fail on
+/// timing. It stays ignored rather than becoming flaky.
+///
+/// Tracked separately as `agentmux:issues/runtime/8` — the defect is independent
+/// of state-root propagation and predates it. Remove the ignore once the spawn
+/// completes; the assertion needs no change.
+fn assert_lazy_pty_spawn_carries_the_relays_state_root(declared: &str) {
     let temporary = TempDir::new().expect("temporary");
     let config_root = temporary.path().join("config");
     let state_root = temporary.path().join("named-state");
@@ -111,7 +116,7 @@ fn a_lazily_spawned_pty_member_receives_the_relays_state_root() {
     fs::create_dir_all(config_root.join("bundles")).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_pty_bundle(&config_root, &report, MEMBER_DECLARED_STATE_ROOT);
+    write_pty_bundle(&config_root, &report, declared);
 
     // `--no-autostart` plus `autostart = false` keeps bring-up from starting the
     // member, so the spawn can only come from the delivery below. That is the
@@ -197,4 +202,18 @@ fn a_lazily_spawned_pty_member_receives_the_relays_state_root() {
         "the lazily spawned Pty child must carry the spawning relay's state root, \
          not its own declaration"
     );
+}
+
+#[ignore = "lazy Pty spawn panics in a tokio worker; agentmux:issues/runtime/8"]
+#[test]
+fn a_lazily_spawned_pty_member_receives_the_relays_state_root() {
+    assert_lazy_pty_spawn_carries_the_relays_state_root(MEMBER_DECLARED_STATE_ROOT);
+}
+
+// The blank declaration, which reads as absent everywhere else and so is the case
+// an upsert-if-absent implementation would leave to the child.
+#[ignore = "lazy Pty spawn panics in a tokio worker; agentmux:issues/runtime/8"]
+#[test]
+fn a_lazily_spawned_pty_member_survives_a_blank_declaration() {
+    assert_lazy_pty_spawn_carries_the_relays_state_root(MEMBER_BLANK_STATE_ROOT);
 }
