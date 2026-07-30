@@ -485,37 +485,32 @@ fn coalesce_during_wedge_counter_fires_after_consecutive_identical_signatures() 
     );
 }
 
-/// Cursor-class mismatch: the prompt regex matched but the cursor column
-/// did not match the per-coder `expected_cursor_column`. Verifies the
-/// probe-supplied `mismatch_reason` propagates through the wedge state
-/// machine unchanged — the resulting `Wedged.reason` (or `Timeout`
-/// `mismatch_reason`) must contain `"cursor column"` rather than the
-/// generic `"prompt regex did not match"` reason that the generalized
-/// state machine would derive from the inspected tail's emptiness.
+/// A cursor mismatch with a matching prompt regex represents pending operator
+/// input, not a wedge. An already-elapsed prime window therefore resolves it as
+/// Timeout while preserving the probe-supplied cursor reason.
 #[test]
-fn cursor_mismatch_preserves_its_reason_in_wedged_outcome() {
-    let mut probe = ScriptedProbe::sequence(vec![
-        ProbeObservation::cursor_mismatch(),
-        ProbeObservation::cursor_mismatch(),
-        ProbeObservation::cursor_mismatch(),
-    ]);
+fn cursor_mismatch_with_matching_regex_is_not_wedged() {
+    let mut probe = ScriptedProbe::constant(ProbeObservation::cursor_mismatch());
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
         TEST_TARGET_SESSION,
         SHORT_QUIET_WINDOW,
-        prime_window(Some(10_000)).0,
-        prime_window(Some(10_000)).1,
-        prime_window(Some(10_000)).2,
+        prime_window(Some(0)).0,
+        prime_window(Some(0)).1,
+        prime_window(Some(0)).2,
         true,
     );
     match result {
-        Err(DeliveryWaitError::Wedged { reason }) => {
+        Err(DeliveryWaitError::Timeout {
+            mismatch_reason: Some(reason),
+            ..
+        }) => {
             assert!(
                 reason.contains("cursor column"),
                 "expected cursor-column reason, got {reason:?}",
             );
         }
-        other => panic!("expected Wedged with cursor reason, got {other:?}"),
+        other => panic!("expected Timeout with cursor reason, got {other:?}"),
     }
 }
 

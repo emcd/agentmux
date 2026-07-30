@@ -54,11 +54,10 @@
 //! - **Empty-pane**: the pane has NO observable content (silent/dead).
 //!   Fires `Timeout` (the pane is unresponsive, not wedged).
 //!
-//! The signal is the inspected tail's emptiness: a non-empty tail with
-//! a non-prompt state is wedge-class; an empty tail is empty-pane. When
-//! the probe supplies a [`ReadinessMismatch`] reason, that reason is
-//! used directly (with the [`EMPTY_PANE_MISMATCH_PREFIX`] check applied)
-//! instead of being inferred from the tail.
+//! The signal is the inspected tail's emptiness when no structured mismatch
+//! is available. When the probe supplies a [`ReadinessMismatch`], a failed
+//! regex match is wedge-class while a successful regex match with a cursor
+//! mismatch means the operator has pending input and remains non-terminal.
 
 use std::{
     thread,
@@ -261,14 +260,20 @@ fn should_emit_prompt_mismatch(
 /// pane has settled at some specific non-prompt content) versus a
 /// dead-pane state (no observable content).
 ///
-/// Wedge-class mismatches carry a non-empty inspection result that did
-/// not match the prompt regex (e.g. stuck on a permission dialog) or a
-/// cursor-column mismatch — both indicate the pane has observable
-/// non-prompt content the agent is stuck on. The empty-pane mismatch
-/// ([`EMPTY_PANE_MISMATCH_PREFIX`] and any `None` reason) indicates the
-/// pane has NO observable content and is treated as Unresponsive, not
-/// Wedged.
-pub fn mismatch_is_wedge_class(mismatch_reason: &Option<String>) -> bool {
+/// A structured cursor mismatch with `regex_matched = Some(true)` means
+/// the prompt frame is healthy but the operator has pending input. It must
+/// remain pending rather than being classified as a wedged agent. Regex
+/// mismatches with observable content remain wedge-class. Empty-pane
+/// mismatches are Unresponsive territory instead.
+pub fn mismatch_is_wedge_class(snapshot: &WedgeObservation) -> bool {
+    if snapshot
+        .mismatch
+        .as_ref()
+        .is_some_and(|mismatch| mismatch.regex_matched == Some(true))
+    {
+        return false;
+    }
+    let mismatch_reason = resolve_mismatch_reason(snapshot);
     mismatch_reason
         .as_deref()
         .is_some_and(|reason| !reason.starts_with(EMPTY_PANE_MISMATCH_PREFIX))
@@ -457,7 +462,7 @@ pub fn quiescence_classify_step<W: WedgeProbe>(
     }
 
     let mismatch_reason = resolve_mismatch_reason(&snapshot_after);
-    let wedge_class = mismatch_is_wedge_class(&mismatch_reason);
+    let wedge_class = mismatch_is_wedge_class(&snapshot_after);
 
     // Track consecutive identical wedge-class non-prompt evaluations.
     // The counter increments ONLY for wedge-class mismatches; empty-pane
@@ -559,7 +564,13 @@ pub fn quiescence_classify_step<W: WedgeProbe>(
         }
     }
 
-    QuiescenceAction::NeedsWait(prime_deadline.unwrap_or_else(unbounded_deadline))
+    let deadline = if wedge_detection && quiescent && wedge_class {
+        let recheck = Instant::now() + quiet_window;
+        prime_deadline.map_or(recheck, |prime| prime.min(recheck))
+    } else {
+        prime_deadline.unwrap_or_else(unbounded_deadline)
+    };
+    QuiescenceAction::NeedsWait(deadline)
 }
 
 /// Returns a one-year deadline used when the caller passes `None` for
