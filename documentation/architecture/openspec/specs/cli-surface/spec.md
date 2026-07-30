@@ -872,8 +872,8 @@ same identifier in a later one.
 
 The command SHALL inherit the global runtime flags
 (`--configuration-directory`, `--state-directory`,
-`--inscriptions-directory`/`--logs-directory`, `--repository-root`), including
-the repeatability of `--configuration-directory`.
+`--inscriptions-directory`/`--logs-directory`), including the repeatability of
+`--configuration-directory`.
 
 The command SHALL additionally accept `-q`/`--quiet`, which suppresses all
 success output — source reporting, per-bundle confirmations, and the summary —
@@ -1027,12 +1027,6 @@ located a configuration root inside the project being worked on, and
 configuration no longer lives there; an explicit layer names the target instead
 of inferring it.
 
-`--repository-root` SHALL NOT influence configuration-root resolution. It SHALL
-retain its existing role in state and inscriptions root resolution until the
-deferred runtime-instance work replaces it, so repository-local runtime data
-remains reachable and a source-tree relay does not collide with an installed
-one.
-
 #### Scenario: Select a configuration layer in any build profile
 
 - **WHEN** an operator passes `--configuration-directory <path>`
@@ -1056,16 +1050,6 @@ one.
 
 - **WHEN** an operator passes a relative `--configuration-directory`
 - **THEN** it resolves against the current working directory
-
-#### Scenario: Repository root no longer selects configuration layers
-
-- **WHEN** an operator passes `--repository-root`
-- **THEN** the layer list is unaffected
-
-#### Scenario: Repository root still selects state and inscriptions roots
-
-- **WHEN** an operator passes `--repository-root`
-- **THEN** state and inscriptions root resolution continue to honor it
 
 ### Requirement: Default Bundle Selector for MCP Hosting
 
