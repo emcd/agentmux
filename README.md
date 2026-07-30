@@ -380,6 +380,32 @@ directory = "/home/me/src/WORKTREES/myproject/tui"
 coder = "codex"
 ```
 
+## Known Security Limitations
+
+This is alpha software under active development. The following gaps are
+known and deliberately deferred past the 0.9.0 release rather than fixed
+now:
+
+- **Credential expiry/revocation does not terminate already-connected
+  sessions.** Expiry and revocation are enforced only at connection time --
+  the Hello handshake rejects an expired or revoked credential up front. A
+  session that is already connected when its credential expires or is
+  explicitly revoked keeps running until it happens to reconnect; there is no
+  active teardown trigger for a live session.
+- **No forced-takeover path for identity claims.** There is no
+  operator-controlled mechanism to force a stale or compromised session off a
+  claimed identity ahead of its own reconnect.
+- **Credential configuration writes can follow symlinked ancestor
+  directories.** `new peer --write-config` and `change psk --write-config`
+  derive their destination beneath the state root, and the final write uses
+  `O_NOFOLLOW`, but the directory-creation, permission-change, and rename
+  steps leading up to it still follow symlinks in the ancestor path. A
+  symlink placed beneath the state tree can redirect a credential write
+  outside it. Avoid symlinks beneath your configured state root until this
+  is fixed.
+
+These are prioritized for the 0.10.0 release.
+
 ## Planned Features
 
 - Bundle/session `about` surfaces with human-readable descriptions for operators
