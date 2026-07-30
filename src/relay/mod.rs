@@ -117,7 +117,6 @@ fn handle_request_with_principal(
         RelayRequest::Look { .. } => {
             return handlers::handle_look_routed(
                 bundle_name,
-                Some(runtime_directory),
                 request,
                 configuration_roots,
                 bundle_catalog,
@@ -130,7 +129,6 @@ fn handle_request_with_principal(
             // stream path supplies the manager for real forwarding.
             return handlers::handle_raww_routed(
                 bundle_name,
-                Some(runtime_directory),
                 request,
                 configuration_roots,
                 bundle_catalog,
@@ -402,16 +400,12 @@ pub(in crate::relay) fn dispatch_look(
     principal: Option<RequestPrincipal>,
     bundle_catalog: &BundleCatalog,
 ) -> RelayResponse {
-    let (home_namespace, home_runtime) = match bound_bundle {
-        Some(paths) => (
-            paths.bundle_name.clone(),
-            Some(paths.runtime_directory.clone()),
-        ),
-        None => (GLOBAL_NAMESPACE.to_string(), None),
+    let home_namespace = match bound_bundle {
+        Some(paths) => paths.bundle_name.clone(),
+        None => GLOBAL_NAMESPACE.to_string(),
     };
     match handlers::handle_look_routed(
         home_namespace.as_str(),
-        home_runtime.as_deref(),
         request,
         configuration_roots,
         bundle_catalog,
@@ -437,16 +431,12 @@ pub(in crate::relay) fn dispatch_raww(
     bundle_catalog: &BundleCatalog,
     peer_connection_manager: &PeerConnectionManager,
 ) -> RelayResponse {
-    let (home_namespace, home_runtime) = match bound_bundle {
-        Some(paths) => (
-            paths.bundle_name.clone(),
-            Some(paths.runtime_directory.clone()),
-        ),
-        None => (GLOBAL_NAMESPACE.to_string(), None),
+    let home_namespace = match bound_bundle {
+        Some(paths) => paths.bundle_name.clone(),
+        None => GLOBAL_NAMESPACE.to_string(),
     };
     match handlers::handle_raww_routed(
         home_namespace.as_str(),
-        home_runtime.as_deref(),
         request,
         configuration_roots,
         bundle_catalog,

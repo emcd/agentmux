@@ -40,8 +40,7 @@ pub(super) fn reconcile_bundle(
     configuration_roots: &ConfigurationRoots,
     paths: &BundleRuntimePaths,
 ) -> Result<ReconciliationReport, RelayError> {
-    let bundle = load_bundle_configuration(configuration_roots, paths.bundle_name.as_str())
-        .map_err(map_config)?;
+    let bundle = load_hosted_bundle(configuration_roots, paths)?;
     let _authorization = load_authorization_context(configuration_roots, Some(&bundle))?;
     reconcile_loaded_bundle(&bundle, paths)
 }
@@ -83,20 +82,49 @@ pub(super) fn shutdown_bundle_runtime(tmux_socket: &Path) -> Result<ShutdownRepo
     Ok(report)
 }
 
-/// Overwrites `AGENTMUX_STATE_DIRECTORY` in every member of `bundle` with the
-/// spawning relay's `state_root`.
+/// Stamps `bundle` for the relay hosting `paths`, overwriting
+/// `AGENTMUX_STATE_DIRECTORY` in every member with that relay's state root.
 ///
-/// The single definition of that overwrite, applied wherever a bundle is loaded
-/// on a path that can end in a spawn. There are three such paths and they must
-/// agree: first startup, `up`/reconcile, and the lazy Pty spawn a delivery
-/// triggers, which loads its own copy of the bundle at delivery time. A member
-/// spawned by one and a member spawned by another must be pointed at the same
-/// relay, or which path an operator happened to take decides whether the child
-/// can find it.
-pub(super) fn inject_bundle_state_root(bundle: &mut BundleConfiguration, state_root: &Path) {
+/// The single definition of that overwrite, applied wherever a bundle is
+/// prepared on a path that can end in a spawn. There are three such paths and
+/// they must agree: first startup, `up`/reconcile, and the lazy Pty spawn a
+/// delivery triggers, which loads its own copy of the bundle at delivery time. A
+/// member spawned by one and a member spawned by another must be pointed at the
+/// same relay, or which path an operator happened to take decides whether the
+/// child can find it.
+///
+/// Takes the bundle by value and requires the hosting relay's
+/// [`BundleRuntimePaths`] rather than a bare state root: a caller holding an
+/// unstamped configuration cannot reach a spawn without moving it through here,
+/// and cannot call this without having established which relay is hosting.
+/// Idempotent, so a bundle that arrives already stamped is unharmed.
+pub(super) fn stamp_hosted_bundle(
+    mut bundle: BundleConfiguration,
+    paths: &BundleRuntimePaths,
+) -> BundleConfiguration {
     for member in &mut bundle.members {
-        inject_spawn_state_directory(&mut member.environment, state_root);
+        inject_spawn_state_directory(&mut member.environment, paths.state_root.as_path());
     }
+    bundle
+}
+
+/// Loads the bundle named by `paths`, stamped for the relay hosting it.
+///
+/// Every relay path that loads a bundle it may spawn from loads through here.
+/// The signature is what carries the requirement: the authoritative paths are
+/// not optional and there is no name-only form, so a new spawn path cannot be
+/// written that silently keeps a member's own state-root declaration.
+///
+/// # Errors
+///
+/// Returns the structured configuration errors bundle loading raises.
+pub(super) fn load_hosted_bundle(
+    configuration_roots: &ConfigurationRoots,
+    paths: &BundleRuntimePaths,
+) -> Result<BundleConfiguration, RelayError> {
+    let bundle = load_bundle_configuration(configuration_roots, paths.bundle_name.as_str())
+        .map_err(map_config)?;
+    Ok(stamp_hosted_bundle(bundle, paths))
 }
 
 /// Returns `bundle`'s members prepared for spawning by the relay owning
@@ -105,17 +133,14 @@ fn members_for_spawn(
     bundle: &BundleConfiguration,
     paths: &BundleRuntimePaths,
 ) -> Vec<BundleMember> {
-    let mut bundle = bundle.clone();
-    inject_bundle_state_root(&mut bundle, paths.state_root.as_path());
-    bundle.members
+    stamp_hosted_bundle(bundle.clone(), paths).members
 }
 
 pub(super) fn startup_bundle(
     configuration_roots: &ConfigurationRoots,
     paths: &BundleRuntimePaths,
 ) -> Result<BundleStartupReport, RelayError> {
-    let bundle = load_bundle_configuration(configuration_roots, paths.bundle_name.as_str())
-        .map_err(map_config)?;
+    let bundle = load_hosted_bundle(configuration_roots, paths)?;
     let authorization = load_authorization_context(configuration_roots, Some(&bundle))?;
     startup_loaded_bundle(&bundle, paths, choices_pending_max(&authorization))
 }

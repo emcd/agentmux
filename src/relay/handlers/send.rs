@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::{
-    configuration::{BundleConfiguration, ConfigurationRoots, load_bundle_configuration},
+    configuration::{BundleConfiguration, ConfigurationRoots},
     runtime::inscriptions::emit_inscription,
 };
 
@@ -16,7 +16,7 @@ use super::super::authorization::{
 use super::super::connection::BundleCatalog;
 use super::super::delivery::{QuiescenceOptions, enqueue_async_delivery};
 use super::super::identity::{PrincipalType, classify_principal_id};
-use super::super::lifecycle::inject_bundle_state_root;
+use super::super::lifecycle::load_hosted_bundle;
 use super::super::routing::{
     Addressing, Capability, OperationProfile, ResolvedRoute, ResolvedTarget as RouteTarget,
     resolve_send_route,
@@ -25,7 +25,7 @@ use super::super::{
     AsyncDeliveryTask, DeliveryPayloadMode, GLOBAL_NAMESPACE, PeerConnectionManager,
     RELAY_NAMESPACE, RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
     SendOutcome, SendRequestContext, SendResult, SenderReturnRoute, bare_session_id,
-    canonical_session_id, map_config, relay_error,
+    canonical_session_id, relay_error,
 };
 use super::routed::{load_home_context, run_target_operation};
 use super::sender::{SenderIdentity, resolve_sender_in_namespace};
@@ -835,12 +835,13 @@ fn ensure_bundle_group(
     let Some(paths) = bundle_catalog.lookup(namespace) else {
         return Err(BundleGroupError::UnknownBundle);
     };
-    let mut bundle = load_bundle_configuration(configuration_roots, namespace)
-        .map_err(|error| BundleGroupError::Relay(map_config(error)))?;
     // Delivery loads its own copy of the bundle, so it needs the same
-    // authoritative overwrite bring-up applies. A Pty member started lazily by
-    // this delivery is spawned from exactly these members.
-    inject_bundle_state_root(&mut bundle, paths.state_root.as_path());
+    // authoritative stamp bring-up applies: a Pty member started lazily by this
+    // delivery is spawned from exactly these members. Loading through
+    // `load_hosted_bundle` is what ties the two together — the catalog's paths
+    // are required to get a bundle at all.
+    let bundle =
+        load_hosted_bundle(configuration_roots, &paths).map_err(BundleGroupError::Relay)?;
     let authorization = load_authorization_context(configuration_roots, Some(&bundle))
         .map_err(BundleGroupError::Relay)?;
     let choice_decider_sessions = choose_authorized_ui_sessions(&authorization, &bundle);

@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde_json::json;
 use uuid::Uuid;
@@ -41,7 +41,6 @@ struct RawwPrepared {
 /// target bundle. See `dispatch_raww`.
 pub(in crate::relay) fn handle_raww_routed(
     home_namespace: &str,
-    home_runtime_directory: Option<&Path>,
     request: RelayRequest,
     configuration_roots: &ConfigurationRoots,
     bundle_catalog: &BundleCatalog,
@@ -178,7 +177,6 @@ pub(in crate::relay) fn handle_raww_routed(
                 route,
                 home_namespace,
                 home_bundle.as_ref(),
-                home_runtime_directory,
                 configuration_roots,
                 bundle_catalog,
             )
@@ -291,7 +289,6 @@ fn prepare_raww(
     route: &ResolvedRoute,
     home_namespace: &str,
     home_bundle: Option<&BundleConfiguration>,
-    home_runtime_directory: Option<&Path>,
     configuration_roots: &ConfigurationRoots,
     bundle_catalog: &BundleCatalog,
 ) -> Result<RawwPrepared, RelayError> {
@@ -324,7 +321,6 @@ fn prepare_raww(
     let (bundle, runtime_directory) = resolve_target_bundle(
         home_namespace,
         home_bundle,
-        home_runtime_directory,
         target_namespace,
         configuration_roots,
         bundle_catalog,

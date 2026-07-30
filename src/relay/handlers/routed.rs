@@ -7,7 +7,7 @@
 //! the target's bundle is loaded separately for existence validation and
 //! delivery. No operation borrows a peer/target bundle as the requester's home.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde_json::json;
 
@@ -17,7 +17,7 @@ use super::super::authorization::{
     AuthorizationContext, RouteAuthorization, load_authorization_context,
 };
 use super::super::connection::BundleCatalog;
-use super::super::lifecycle::inject_bundle_state_root;
+use super::super::lifecycle::{load_hosted_bundle, stamp_hosted_bundle};
 use super::super::routing::{OperationProfile, ResolvedRoute};
 use super::super::{
     GLOBAL_NAMESPACE, RELAY_NAMESPACE, RelayError, RelayResponse, map_config, relay_error,
@@ -68,46 +68,39 @@ pub(super) fn load_home_context(
 
 /// Loads the bundle hosting a single resolved target, with its runtime directory.
 ///
-/// A same-namespace target reuses the already-loaded home bundle; a peer target
-/// (or any target of a relay-wide requester, which has no home bundle) is loaded
-/// from the catalog. An unconfigured target bundle is rejected with
-/// `validation_unknown_bundle`.
+/// One rule for every target: the bundle must be in the relay's current catalog,
+/// or the request is rejected with `validation_unknown_bundle`. A same-namespace
+/// target then reuses the already-loaded home bundle rather than re-reading it;
+/// a peer target (or any target of a relay-wide requester, which has no home
+/// bundle) is loaded fresh. Both go through the hosting relay's paths, so the
+/// state root reaching a member this delivery spawns does not depend on which
+/// kind of target it was.
+///
+/// The catalog is authoritative here rather than the requester's bound paths,
+/// which a connection holds as a clone from the time it bound. Those two
+/// diverge: a failed watcher reload drops a bundle from the catalog while open
+/// connections keep their copy. Serving a delivery from the stale copy would
+/// spawn members for a bundle the relay is no longer hosting, so the absent
+/// entry fails closed — the same way the Send path treats it.
 pub(super) fn resolve_target_bundle(
     home_namespace: &str,
     home_bundle: Option<&BundleConfiguration>,
-    home_runtime_directory: Option<&Path>,
     target_namespace: &str,
     configuration_roots: &ConfigurationRoots,
     bundle_catalog: &BundleCatalog,
 ) -> Result<(BundleConfiguration, PathBuf), RelayError> {
-    // The catalog entry is consulted for every target, including a
-    // same-namespace one that reuses the already-loaded home bundle, because it
-    // carries the hosting relay's state root and that has to reach any member
-    // this delivery ends up spawning.
-    let paths = bundle_catalog.lookup(target_namespace);
-    if target_namespace == home_namespace
-        && let Some(home_bundle) = home_bundle
-    {
-        let runtime = paths
-            .as_ref()
-            .map(|paths| paths.runtime_directory.clone())
-            .or_else(|| home_runtime_directory.map(Path::to_path_buf))
-            .unwrap_or_default();
-        let mut bundle = home_bundle.clone();
-        if let Some(paths) = paths.as_ref() {
-            inject_bundle_state_root(&mut bundle, paths.state_root.as_path());
-        }
-        return Ok((bundle, runtime));
-    }
-    let Some(paths) = paths else {
+    let Some(paths) = bundle_catalog.lookup(target_namespace) else {
         return Err(relay_error(
             "validation_unknown_bundle",
             "target bundle is not configured on this relay",
             Some(json!({ "bundle_name": target_namespace })),
         ));
     };
-    let mut bundle =
-        load_bundle_configuration(configuration_roots, target_namespace).map_err(map_config)?;
-    inject_bundle_state_root(&mut bundle, paths.state_root.as_path());
+    let bundle = match home_bundle {
+        Some(home_bundle) if target_namespace == home_namespace => {
+            stamp_hosted_bundle(home_bundle.clone(), &paths)
+        }
+        _ => load_hosted_bundle(configuration_roots, &paths)?,
+    };
     Ok((bundle, paths.runtime_directory.clone()))
 }

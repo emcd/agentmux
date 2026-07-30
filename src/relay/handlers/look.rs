@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use serde_json::json;
@@ -45,7 +45,6 @@ struct LookPrepared {
 /// `dispatch_look`.
 pub(in crate::relay) fn handle_look_routed(
     home_namespace: &str,
-    home_runtime_directory: Option<&Path>,
     request: RelayRequest,
     configuration_roots: &ConfigurationRoots,
     bundle_catalog: &BundleCatalog,
@@ -117,7 +116,6 @@ pub(in crate::relay) fn handle_look_routed(
                 route,
                 home_namespace,
                 home_bundle.as_ref(),
-                home_runtime_directory,
                 configuration_roots,
                 bundle_catalog,
             )
@@ -145,7 +143,6 @@ fn prepare_look(
     route: &ResolvedRoute,
     home_namespace: &str,
     home_bundle: Option<&BundleConfiguration>,
-    home_runtime_directory: Option<&Path>,
     configuration_roots: &ConfigurationRoots,
     bundle_catalog: &BundleCatalog,
 ) -> Result<LookPrepared, RelayError> {
@@ -178,7 +175,6 @@ fn prepare_look(
     let (bundle, runtime_directory) = resolve_target_bundle(
         home_namespace,
         home_bundle,
-        home_runtime_directory,
         target_namespace,
         configuration_roots,
         bundle_catalog,
