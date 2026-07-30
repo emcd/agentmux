@@ -248,27 +248,43 @@ echo "== D1. Both profiles place inscriptions under the same state root =="
 # process inscriptions sink; a plain CLI query writes none. Each profile is
 # given only a state directory, so the inscriptions path is derived rather than
 # named, which is the behavior under test.
+#
+# The SAME state directory for both, run sequentially and emptied between runs,
+# because the property is that identical arguments yield an identical
+# destination. Two profile-specific roots could only ever be compared by their
+# relative suffix, which agrees whenever the derivation is *shaped* alike --
+# including when a resurrected branch pointed one profile at a different root
+# entirely. Emptying between runs is what keeps the second observation from
+# reading the first profile's file.
 mcp_init='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"verify","version":"0"}}}'
-inscriptions_relative() { # binary, state-directory  -> echoes path relative to the state dir
-  local binary="$1" state="$2"
-  mkdir -p "$state"
+D1_STATE="$PWD/$ROOT/insc-shared"
+# Sets `insc` (absolute path of the derived log, empty if none) and `inscstatus`.
+# The two are separate variables rather than one echoed string because the
+# process status has to survive: taking it from a function whose last command is
+# the `find` would report on the search, not on the run.
+inscriptions_under() { # binary
+  local binary="$1"
+  rm -rf "$D1_STATE"; mkdir -p "$D1_STATE"
   printf '%s\n' "$mcp_init" \
     | timeout 20 "$binary" host mcp "${LAYERS[@]}" \
-        --state-directory "$state" --default-bundle does-not-exist >/dev/null 2>&1
-  ( cd "$state" && find inscriptions -type f -name '*.log' 2>/dev/null | sort | head -1 )
+        --state-directory "$D1_STATE" --default-bundle does-not-exist >/dev/null 2>&1
+  inscstatus=$?
+  insc=$(find "$D1_STATE/inscriptions" -type f -name '*.log' 2>/dev/null | sort | head -1)
 }
 
-relinsc=$(inscriptions_relative "$RELEASE" "$PWD/$ROOT/insc-release")
-dbginsc=$(inscriptions_relative "$DEBUG"   "$PWD/$ROOT/insc-debug")
+inscriptions_under "$RELEASE"; relinsc="$insc"; relstatus=$inscstatus
+inscriptions_under "$DEBUG";   dbginsc="$insc"; dbgstatus=$inscstatus
 
-check "release derives an inscriptions path under its state root" "inscriptions/" "$relinsc"
-check "debug derives an inscriptions path under its state root"   "inscriptions/" "$dbginsc"
+check "release derives an inscriptions path under its state root" "$D1_STATE/inscriptions/" "$relinsc"
+check "debug derives an inscriptions path under its state root"   "$D1_STATE/inscriptions/" "$dbginsc"
 if [ -n "$relinsc" ] && [ "$relinsc" = "$dbginsc" ]; then
   pass=$((pass+1)); echo "  PASS  both profiles derive the same inscriptions path"
 else
   fail=$((fail+1)); echo "  FAIL  both profiles derive the same inscriptions path"
   echo "        release=$relinsc debug=$dbginsc"
 fi
+status=$relstatus; expect_status "release serves the protocol while deriving inscriptions" 0
+status=$dbgstatus; expect_status "debug serves the protocol while deriving inscriptions"   0
 
 echo
 echo "== E. Green MCP startup on an unknown bundle (release) =="
