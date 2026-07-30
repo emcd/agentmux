@@ -69,6 +69,7 @@ fn write_rendezvous_bundle(
     config_root: &std::path::Path,
     report: &std::path::Path,
     member_directory: &std::path::Path,
+    declared: &str,
 ) {
     write_bundle_configuration_with_options(config_root, "alpha", None, &["a"], Some(false));
     // The descendant is a real `agentmux host mcp`, driven over stdio the way a
@@ -126,35 +127,48 @@ resume-command = "sh -lc 'exec sleep 45'"
         );
     fs::write(config_root.join("bundles").join("alpha.toml"), bundle)
         .expect("write rendezvous bundle config");
+    // The member declares its own state root, which the relay must overwrite. The
+    // descendant inherits whatever the member was spawned with, so this is the
+    // value that reaches the process doing the resolving.
+    declare_member_state_directory(config_root, "alpha", declared);
 }
 
-/// Waits for the spawned member's client to write its report.
+/// Waits for the spawned member's client to finish its second exchange.
+///
+/// Waiting on a non-empty file is not enough: the `initialize` response arrives
+/// first, and returning on it tears the relay down before the `tools/call` the
+/// assertions read. The `tools/call` carries `id` 2, and it arrives either way —
+/// an unreachable relay yields a successful call reporting the bundle down — so
+/// this is a wait for the exchange to finish rather than for it to succeed.
 fn await_rendezvous_report(report: &std::path::Path) -> String {
     let deadline = Instant::now() + Duration::from_secs(30);
+    let mut last_seen = String::new();
     while Instant::now() < deadline {
-        if let Ok(contents) = fs::read_to_string(report)
-            && !contents.trim().is_empty()
-        {
-            return contents;
+        if let Ok(contents) = fs::read_to_string(report) {
+            if contents.contains(r#""id":2"#) {
+                return contents;
+            }
+            last_seen = contents;
         }
         thread::sleep(Duration::from_millis(100));
     }
     panic!(
-        "the spawned member's agentmux client never reported at {}",
+        "the spawned member's agentmux client never answered the tools/call at {}; \
+         it reported:\n{last_seen}",
         report.display()
     );
 }
 
 /// A relay-spawned member's own agentmux client reaches the relay that spawned
-/// it, resolving the state root from inherited environment alone.
+/// it, resolving the state root from inherited environment alone, whatever the
+/// member declared for itself.
 ///
 /// This is the propagation contract end to end rather than by argv inspection:
 /// the child is a real process, started by the relay through tmux, given no
 /// state directory of its own, and it has to arrive at the right socket. If the
 /// stamp were missing the child would resolve the XDG or home default, find no
 /// relay, and report the bundle down.
-#[test]
-fn a_relay_spawned_member_client_reaches_the_spawning_relay() {
+fn assert_rendezvous_survives_declaration(declared: &str) {
     let temporary = TempDir::new().expect("temporary");
     let config_root = temporary.path().join("config");
     let state_root = temporary.path().join("named-state");
@@ -173,11 +187,17 @@ fn a_relay_spawned_member_client_reaches_the_spawning_relay() {
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
     fs::create_dir_all(&member_directory).expect("create member directory");
     fs::create_dir_all(&isolated_fallback).expect("create fallback state root");
-    write_rendezvous_bundle(&config_root, &report, &member_directory);
+    write_rendezvous_bundle(&config_root, &report, &member_directory, declared);
 
     // Real tmux, not the fake: the stamp has to reach a live child, and the fake
     // records invocations without executing the member's command.
-    let host_child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+    let mut relay_command = Command::new(env!("CARGO_BIN_EXE_agentmux"));
+    // Inherited Agentmux context is stripped before the fixture's own values are
+    // applied. `XDG_STATE_HOME` below contains only the *default* tier; an
+    // inherited `AGENTMUX_STATE_DIRECTORY` outranks it, so leaving one in place
+    // would let a suite run from an Agentmux-launched coder send this test's
+    // descendant to the developer's own live relay.
+    let host_child = process::strip_bring_up_context_std(&mut relay_command)
         .args([
             "host",
             "relay",
@@ -249,6 +269,20 @@ fn a_relay_spawned_member_client_reaches_the_spawning_relay() {
         "the descendant should have found the bundle hosted on the relay that \
          spawned it; it reported:\n{reported}"
     );
+}
+
+#[test]
+fn a_relay_spawned_member_client_reaches_the_spawning_relay() {
+    assert_rendezvous_survives_declaration(MEMBER_DECLARED_STATE_ROOT);
+}
+
+// The blank case run for real rather than by argv alone. Blank reads as absent
+// in every other tier, so an upsert-if-absent implementation passes the
+// conflicting case above and fails here — and it fails as a child that cannot
+// find its relay, which is the consequence that matters.
+#[test]
+fn a_blank_declaration_still_leaves_the_member_able_to_reach_the_relay() {
+    assert_rendezvous_survives_declaration(MEMBER_BLANK_STATE_ROOT);
 }
 
 /// Brings a relay up with `declared` as the member's own
@@ -409,6 +443,11 @@ fn a_spawned_member_receives_the_relays_state_root_over_its_own_declaration() {
 /// Builds a state root deep enough that `<state_root>/bundles/alpha/tmux.sock`
 /// overshoots `sun_path`, rather than merely approaching it — a fixture near
 /// the boundary passes whether or not the fix is present.
+///
+/// Gated with its caller: on a non-Linux target the deep-root bring-up is not
+/// expected to succeed and the test is absent, which would leave this dead under
+/// `clippy --all-targets -D warnings`.
+#[cfg(target_os = "linux")]
 fn deep_state_root(base: &std::path::Path) -> std::path::PathBuf {
     // The crate's own constant rather than a literal: the limit is 107 on Linux
     // and 103 on Darwin, and a fixture hardcoding one of them would overshoot by
@@ -577,6 +616,87 @@ fn a_relative_tmux_wrapper_still_resolves_against_the_launch_directory() {
 
     let log = fs::read_to_string(fake_tmux_log_path(&fake_tmux))
         .expect("the relative wrapper must have run and recorded its invocations");
+    assert!(
+        log.contains("new-session"),
+        "the wrapper must have been reached for session creation; got:\n{log}"
+    );
+
+    shutdown_relay_if_present(&state_root, "alpha");
+    process::wait_with_output_bounded(host_child, process::HARNESS_CHILD_WAIT_DEFAULT).ok();
+}
+
+#[test]
+fn a_bare_tmux_command_resolves_through_the_launch_directorys_path() {
+    // The companion to the relative-wrapper case, for the other kind of relative
+    // reference. A bare name carries no separator and goes through `PATH`, but a
+    // `PATH` *entry* may itself be relative, so it moves with the working
+    // directory just as a `./wrapper.sh` would. Configuring an absolute wrapper —
+    // what every other test here does — cannot see it.
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("named-state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(false));
+
+    let wrapper_directory = temporary.path().join("wrappers");
+    fs::create_dir_all(&wrapper_directory).expect("create wrapper directory");
+    let fake_tmux = wrapper_directory.join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    // A relative first entry, resolved against the relay's own working directory.
+    // The rest of the inherited `PATH` is kept because the wrapper's `env`
+    // shebang needs it.
+    let inherited_path = std::env::var("PATH").unwrap_or_default();
+    let search_path = format!("wrappers:{inherited_path}");
+
+    let host_child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .current_dir(temporary.path())
+        .args([
+            "host",
+            "relay",
+            "--no-autostart",
+            "--configuration-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", "fake-tmux.sh")
+        .env("PATH", &search_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay --no-autostart");
+    wait_for_relay_ready(&state_root, "alpha");
+
+    let up = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .current_dir(temporary.path())
+        .args([
+            "up",
+            "alpha",
+            "--configuration-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", "fake-tmux.sh")
+        .env("PATH", &search_path)
+        .output()
+        .expect("run agentmux up");
+    assert!(
+        up.status.success(),
+        "a bare command on a relative PATH entry must still be found; stderr:\n{}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+
+    let log = fs::read_to_string(fake_tmux_log_path(&fake_tmux))
+        .expect("the wrapper on the relative PATH entry must have run and recorded");
     assert!(
         log.contains("new-session"),
         "the wrapper must have been reached for session creation; got:\n{log}"

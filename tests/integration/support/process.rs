@@ -37,6 +37,19 @@ pub(crate) fn strip_bring_up_context(
     command
 }
 
+/// [`strip_bring_up_context`] for a blocking [`std::process::Command`].
+///
+/// Two functions rather than one because the two `Command` builders share no
+/// trait; the reasoning above applies unchanged to both.
+pub(crate) fn strip_bring_up_context_std(
+    command: &mut std::process::Command,
+) -> &mut std::process::Command {
+    for name in INHERITED_CONTEXT_VARIABLE_NAMES {
+        command.env_remove(name);
+    }
+    command
+}
+
 /// Default budget for waiting on a test-spawned child to exit. Sized
 /// so that even on heavily loaded CI a stuck child fails the test
 /// quickly rather than hanging the suite. On timeout, the child is
