@@ -339,8 +339,9 @@ SHALL be the authoritative result for a queued message.
 - **THEN** relay delivers a terminal-outcome receipt naming that `message_id`,
   target, and the expiry `reason_code` to the sender
 - **BECAUSE** this replaces `pane_wedged` as what a Tmux sender learns when the
-  target never became ready, and the reason code is the only thing telling them
-  whether the bound was short or the target was stuck
+  target never became ready, and the reason code is the only record of which
+  observation the wait ended on — it names the state, not its cause, which the
+  transport cannot determine
 
 #### Scenario: No receipt for a delivered outcome
 

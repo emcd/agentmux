@@ -213,8 +213,10 @@ opting in, the relay stopping, a probe erroring), and the bound is what
 guarantees that one of them arrives.
 
 The reason attached to a timeout is diagnostic only — every arm below is the same
-outcome, and the distinction exists so an operator can tell a short bound from a
-stuck target, not so the transport can decide differently:
+outcome. The distinction records *which observation the wait ended on*, so an
+operator has something to calibrate the bound against; it does not report why the
+target was in that state, which the transport cannot determine. It exists to be
+read, not so the transport can decide differently:
 
 | Most recent observation at expiry | `reason_code` |
 |---|---|

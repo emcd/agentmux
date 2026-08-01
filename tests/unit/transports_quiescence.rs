@@ -17,12 +17,11 @@
 //! `tests/unit/tmux_transport.rs` and `tests/unit/pty_transport.rs`.
 use std::time::{Duration, Instant};
 
-use agentmux::envelope::AddressIdentity;
 use agentmux::transports::{
-    DIAGNOSTIC_MESSAGE_IDS_MAXIMUM, DeliveryDiagnosticContext, DeliveryEnvelope, DeliveryMessage,
-    DeliveryWaitError, QuiescenceAction, QuiescenceBounds, QuiescenceState, ReadinessMismatch,
-    ReadinessTimeoutReason, WEDGE_CONSECUTIVE_TICKS, WedgeObservation, WedgeProbe,
-    classify_readiness_timeout_reason, quiescence_classify_step,
+    DIAGNOSTIC_MESSAGE_IDS_MAXIMUM, DeliveryDiagnosticContext, DeliveryWaitError, QuiescenceAction,
+    QuiescenceBounds, QuiescenceState, ReadinessMismatch, ReadinessTimeoutReason,
+    WEDGE_CONSECUTIVE_TICKS, WedgeObservation, WedgeProbe, classify_readiness_timeout_reason,
+    quiescence_classify_step,
 };
 
 const TEST_TARGET_SESSION: &str = "test-session";
@@ -985,79 +984,4 @@ fn both_bounds_derive_from_one_anchor() {
         Some(started_at + Duration::from_millis(5_000)),
     );
     assert_eq!(bounds.started_at, started_at);
-}
-
-/// Builds an envelope carrying the quiescence hints a flush group anchors on.
-fn hinted_envelope(
-    message_id: &str,
-    quiet_window: Duration,
-    prime_timeout_ms: Option<u64>,
-    readiness_timeout_ms: Option<u64>,
-) -> DeliveryEnvelope {
-    DeliveryEnvelope {
-        message_id: message_id.to_string(),
-        message: DeliveryMessage {
-            body: "body".to_string(),
-            created_at: "2026-08-01T00:00:00Z".to_string(),
-            namespace: "test-namespace".to_string(),
-            sender: AddressIdentity {
-                session_name: "sender".to_string(),
-                display_name: None,
-            },
-            target: AddressIdentity {
-                session_name: TEST_TARGET_SESSION.to_string(),
-                display_name: None,
-            },
-            cc: Vec::new(),
-            authenticated_identity: None,
-            on_behalf_of: None,
-        },
-        append_enter: true,
-        choice_decider_sessions: Vec::new(),
-        quiet_window,
-        prime_timeout_ms,
-        readiness_timeout_ms,
-        is_receipt: false,
-    }
-}
-
-/// Task 4.12, production shape — the head envelope owns the group's bounds and
-/// a later one absorbed by coalesce-during-wait cannot shift them.
-///
-/// The anchoring rule used to live as a bare `group[0]` index at the Tmux call
-/// site, where nothing could observe it: every later envelope's hints were
-/// discarded by an expression, not by a rule. Deriving the bounds from the whole
-/// group and discarding the tail makes head-ownership the function's behavior,
-/// so this test can state it. Every later hint here differs from the head's in
-/// both directions, so a `last()`, a `min`, or a `max` would each be caught.
-#[test]
-fn a_groups_bounds_come_from_its_head_envelope_only() {
-    let started_at = Instant::now();
-    let group = [
-        hinted_envelope("head", TEST_QUIET_WINDOW, Some(1_000), Some(5_000)),
-        hinted_envelope("later-shorter", Duration::from_secs(9), Some(10), Some(30)),
-        hinted_envelope(
-            "later-longer",
-            Duration::from_secs(99),
-            Some(900_000),
-            Some(3_600_000),
-        ),
-    ];
-    let bounds = QuiescenceBounds::from_group(group.iter(), started_at)
-        .expect("a non-empty group has a head");
-
-    assert_eq!(bounds.quiet_window, TEST_QUIET_WINDOW);
-    assert_eq!(bounds.prime_timeout_ms, Some(1_000));
-    assert_eq!(
-        bounds.prime_deadline,
-        Some(started_at + Duration::from_millis(1_000)),
-    );
-    assert_eq!(
-        bounds.readiness_deadline,
-        Some(started_at + Duration::from_millis(5_000)),
-    );
-
-    // A group with nothing in it has no head to anchor to, which is how the
-    // production call site subsumes its own emptiness check.
-    assert!(QuiescenceBounds::from_group(&[], started_at).is_none());
 }

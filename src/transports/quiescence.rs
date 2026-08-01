@@ -461,8 +461,14 @@ impl QuiescenceBounds {
     /// later envelopes carry different hints and the result is unchanged.
     ///
     /// Returns `None` for an empty group, which has no head to anchor to.
+    ///
+    /// Crate-private: its only caller is the Tmux transport, and nothing
+    /// outside this crate constructs a flush group. Its coverage is the single
+    /// inline test at the bottom of this module rather than one in
+    /// `tests/unit`, which would require widening this to `pub` — publishing an
+    /// internal grouping rule as API to observe it.
     #[must_use]
-    pub fn from_group<'a>(
+    pub(crate) fn from_group<'a>(
         envelopes: impl IntoIterator<Item = &'a DeliveryEnvelope>,
         started_at: Instant,
     ) -> Option<Self> {
@@ -972,5 +978,93 @@ pub fn wait_for_quiescent_three_state<W: WedgeProbe>(
                 }
             }
         }
+    }
+}
+
+/// Inline because [`QuiescenceBounds::from_group`] is crate-private: its only
+/// caller is the Tmux transport, and nothing outside this crate constructs a
+/// flush group. Covering it from `tests/unit` would mean widening it to `pub`,
+/// publishing an internal grouping rule as API to observe it.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::envelope::AddressIdentity;
+    use crate::transports::contract::DeliveryMessage;
+
+    /// Builds an envelope carrying the quiescence hints a flush group anchors on.
+    fn hinted_envelope(
+        message_id: &str,
+        quiet_window: Duration,
+        prime_timeout_ms: Option<u64>,
+        readiness_timeout_ms: Option<u64>,
+    ) -> DeliveryEnvelope {
+        DeliveryEnvelope {
+            message_id: message_id.to_string(),
+            message: DeliveryMessage {
+                body: "body".to_string(),
+                created_at: "2026-08-01T00:00:00Z".to_string(),
+                namespace: "test-namespace".to_string(),
+                sender: AddressIdentity {
+                    session_name: "sender".to_string(),
+                    display_name: None,
+                },
+                target: AddressIdentity {
+                    session_name: "target".to_string(),
+                    display_name: None,
+                },
+                cc: Vec::new(),
+                authenticated_identity: None,
+                on_behalf_of: None,
+            },
+            append_enter: true,
+            choice_decider_sessions: Vec::new(),
+            quiet_window,
+            prime_timeout_ms,
+            readiness_timeout_ms,
+            is_receipt: false,
+        }
+    }
+
+    /// Task 4.12, production shape — the head envelope owns the group's bounds
+    /// and a later one absorbed by coalesce-during-wait cannot shift them.
+    ///
+    /// The anchoring rule used to live as a bare `group[0]` index at the Tmux
+    /// call site, where nothing could observe it: every later envelope's hints
+    /// were discarded by an expression, not by a rule. Deriving the bounds from
+    /// the whole group and discarding the tail makes head-ownership the
+    /// function's behavior, so this test can state it. Every later hint here
+    /// differs from the head's in both directions, so a `last()`, a `min`, or a
+    /// `max` would each be caught.
+    #[test]
+    fn a_groups_bounds_come_from_its_head_envelope_only() {
+        let head_quiet_window = Duration::from_millis(1);
+        let started_at = Instant::now();
+        let group = [
+            hinted_envelope("head", head_quiet_window, Some(1_000), Some(5_000)),
+            hinted_envelope("later-shorter", Duration::from_secs(9), Some(10), Some(30)),
+            hinted_envelope(
+                "later-longer",
+                Duration::from_secs(99),
+                Some(900_000),
+                Some(3_600_000),
+            ),
+        ];
+        let bounds = QuiescenceBounds::from_group(group.iter(), started_at)
+            .expect("a non-empty group has a head");
+
+        assert_eq!(bounds.quiet_window, head_quiet_window);
+        assert_eq!(bounds.prime_timeout_ms, Some(1_000));
+        assert_eq!(
+            bounds.prime_deadline,
+            Some(started_at + Duration::from_millis(1_000)),
+        );
+        assert_eq!(
+            bounds.readiness_deadline,
+            Some(started_at + Duration::from_millis(5_000)),
+        );
+
+        // A group with nothing in it has no head to anchor to, which is how the
+        // production call site subsumes its own emptiness check.
+        assert!(QuiescenceBounds::from_group(&[], started_at).is_none());
     }
 }
